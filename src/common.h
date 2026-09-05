@@ -131,6 +131,7 @@ struct can {
     char opener[PATH_MAX];         /* dir/.can/opener */
     unsigned long opener_dev, opener_ino; long opener_size;
     char program[PATH_MAX];        /* virtual path of the program this process runs */
+    char exe[PATH_MAX];            /* what /proc/self/exe answers: the program, or a wrapped script's interpreter (F3-22) */
     int loader_mode;               /* 1: re-exec'd with CAN_EXEC; program is not a wrapper */
     int boundary;                  /* 1: this process installed the filter (can boundary) */
     /* index (6.3) */
@@ -145,6 +146,7 @@ struct can {
     /* diagnostics */
     int logfd;
     unsigned long text_lo, text_hi;   /* the opener's own text range, for the nesting rule (7.5.3) */
+    unsigned long root_dev, root_ino; /* the tree's root directory, so that any spelling of it is recognised (F3-13) */
 };
 extern struct can C;
 
@@ -175,10 +177,10 @@ struct scratch {
     char extra[8192];              /* argv vectors, masks, headers */
     pid_t pid, tid;                /* the owner, looked up once per trap */
 };
-struct scratch *scratch_get(pid_t pid, pid_t tid);
+struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame);
 void scratch_put(struct scratch *s);
 void scratch_release_all_mine(void);   /* before execve */
-int  nest_enter(pid_t pid, pid_t tid); /* returns depth, 1 for outermost */
+int  nest_enter(pid_t pid, pid_t tid, unsigned long frame); /* returns depth, 1 for outermost; releases frames left by longjmp */
 void nest_leave(void);
 
 /* ---------- visibility (vis.c) ---------- */
@@ -208,7 +210,7 @@ int is_self_exe(const char *p, pid_t pid);   /* /proc/self/exe in any spelling, 
 
 /* ---------- loader (loader.c) ---------- */
 __attribute__((noreturn)) void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp, unsigned long *auxv);
-int elf_probe(const char *real, char *interp, int *is_opener);   /* 1 has interp, 0 none, <0 error */
+int elf_probe(const char *real, char *interp, int *is_opener, void *buf);   /* 1 has interp, 0 none, <0 error; buf >= 4096 bytes */
 
 /* ---------- filter (filter.c) ---------- */
 int  filter_probe(void);      /* 1 if an equal-or-newer filter is inherited */

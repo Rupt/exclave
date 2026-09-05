@@ -75,6 +75,8 @@ enum {
     NR_fchmodat = 268, NR_utimensat = 280, NR_name_to_handle_at = 303, NR_renameat2 = 316,
     NR_execveat = 322, NR_statx = 332, NR_openat2 = 437, NR_faccessat2 = 439, NR_fchmodat2 = 452,
     NR_close_range = 436, NR_dup2 = 33, NR_fanotify_mark = 301, NR_writev = 20, NR_process_vm_writev = 311,
+    NR_setxattrat = 463, NR_getxattrat = 464, NR_listxattrat = 465, NR_removexattrat = 466, NR_open_tree_attr = 467,
+    NR_file_getattr = 468, NR_file_setattr = 469,
 };
 #define ARCH_NAME "x86_64"
 #else

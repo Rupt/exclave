@@ -82,7 +82,7 @@ static char **env_prepare(char **envp, int boundary)
         }
         if (!find_env(out, "PATH") || 1) {
             long j; for (j = 0; j < k; j++) if (xstarts(out[j], "PATH=")) break;
-            if (j == k) out[k++] = "PATH=/usr/local/bin:/usr/bin:/bin";
+            if (j == k) out[k++] = (char *)arena_str("PATH=/usr/local/bin:/usr/bin:/bin", 33);   /* writable: bash writes into its environment strings (F3-23) */
         }
     }
     out[k] = 0;
@@ -106,6 +106,7 @@ static void find_can(const char *exe)
     if (sys_stat(C.opener, &st) < 0) die("can has no opener", C.opener, 0);
     C.opener_dev = st.st_dev; C.opener_ino = st.st_ino; C.opener_size = st.st_size;
     if (sys_stat(C.root, &st) < 0 || (st.st_mode & S_IFMT) != S_IFDIR) die("can has no root/", C.root, 0);
+    C.root_dev = st.st_dev; C.root_ino = st.st_ino;
 }
 
 static void read_index(void)
@@ -135,7 +136,7 @@ static __attribute__((noreturn)) void run(const char *v, long argc, char **argv,
     if (is_wrapper_real(real, payload) && payload_of(real, payload)) scpy(real, payload, PATH_MAX);
     long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) die("cannot open program", v, fd);
     char *line = arena_alloc(256); long n = sys_read((int)fd, line, 255); sys_close((int)fd);
-    if (n >= 4 && line[0] == 0x7f && line[1] == 'E' && line[2] == 'L' && line[3] == 'F') loader_run(v, real, argc, argv, envp, auxv);
+    if (n >= 4 && line[0] == 0x7f && line[1] == 'E' && line[2] == 'L' && line[3] == 'F') { scpy(C.exe, v, PATH_MAX); loader_run(v, real, argc, argv, envp, auxv); }
     if (n < 0) n = 0;
     line[n] = 0;
     /* a script: the kernel's argv convention, with buffers that outlive this level of the interpreter chain */
@@ -147,7 +148,7 @@ static __attribute__((noreturn)) void run(const char *v, long argc, char **argv,
     long k = shebang_argv(line, script, argv, argc, nargv, cap);
     if (k == -1) die("not an executable", v, ENOEXEC);
     if (k == -2) die("argument list too long", v, E2BIG);
-    struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid()); if (!S) die("out of memory", 0, ENOMEM);
+    struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0); if (!S) die("out of memory", 0, ENOMEM);
     char *iv = arena_alloc(PATH_MAX);
     if (canon(S, nargv[0], AT_FDCWD, 1, iv) < 0) die("cannot resolve interpreter", nargv[0], 0);
     scratch_put(S);

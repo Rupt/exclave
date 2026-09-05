@@ -67,9 +67,9 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         int last = (*rp == 0);
         if (last && !follow_last && !trailing) break;          /* a trailing slash means "a directory": the kernel follows */
         /* the process's own exe on the loader path names the program, not the opener (7.6) */
-        if (C.loader_mode && is_self_exe(cur, S->pid)) {
+        if ((C.loader_mode || xstrcmp(C.exe, C.program) != 0) && is_self_exe(cur, S->pid)) {   /* loader path, or a script whose exe is its interpreter */
             if (++hops > 40) return -ELOOP;
-            scpy(tmp, C.program, PATH_MAX); scat(tmp, "/", PATH_MAX); scat(tmp, rp, PATH_MAX);
+            scpy(tmp, C.exe, PATH_MAX); scat(tmp, "/", PATH_MAX); scat(tmp, rp, PATH_MAX);
             scpy(rest, tmp, PATH_MAX); rp = rest; cur[0] = 0; continue;
         }
         /* classify the component: a directory, a symlink (text in tmp), absent, or something else */
@@ -89,8 +89,20 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
             else {
                 long n = sys_readlink(real, tmp, PATH_MAX - 1);
                 if (n < 0) kind = CK_FILE;
-                else { tmp[n] = 0; kind = CK_LINK; if (xstrncmp(cur, "/proc/", 6) == 0) from_real(tmp); }   /* procfs links report real paths */
+                else {
+                    tmp[n] = 0; kind = CK_LINK;
+                    if (xstrncmp(cur, "/proc/", 6) == 0) {
+                        /* a procfs magic link to something that has no path (a pipe, a socket, an unlinked
+                         * file) is reachable only through the link itself: the walk ends here (review F3-11) */
+                        if ((tmp[0] != '/' && xstrchr(tmp, ':') && xstrchr(tmp, '[')) || (n > 10 && xstrcmp(tmp + n - 10, " (deleted)") == 0)) {   /* pipe:[n], socket:[n], anon_inode:[x], a deleted file */
+                            if (!last) return -ENOTDIR;
+                            kind = CK_FILE;
+                        } else from_real(tmp);                 /* procfs links report real paths */
+                    }
+                }
             }
+            /* any spelling of the tree's root directory, through a bind mount or another link, is / (F3-13) */
+            if (kind == CK_DIR && C.root_ino && st.st_dev == C.root_dev && st.st_ino == C.root_ino) { cur[0] = 0; continue; }
         }
         if (kind != CK_LINK) {
             /* an intermediate component must be a directory: the kernel says so before it looks further, and

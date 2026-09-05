@@ -118,28 +118,52 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
 /* ---------- exec (7.6): scripts and host programs run inside the can's world ---------- */
 static long exec_target(struct scratch *S, const char *v, char **argv, char **envp, int depth, struct scratch **Sp);
 
-/* a pointer vector of n entries: the scratch chunk's tail when it fits, an anonymous mapping otherwise
- * (F3-2: vectors are sized from their counts). A mapping made by a vfork child stays in the parent, unused. */
-static char **vector(struct scratch *S, long n, void **big)
+/* A pointer vector of n entries: a scratch region when it fits, an anonymous mapping otherwise (F3-2:
+ * vectors are sized from their counts). A mapping made by a vfork child stays in the parent, unused. */
+static char **vector(void *region, size_t region_size, long n, void **big)
 {
     *big = 0;
-    if (n <= (long)(sizeof S->extra / sizeof(char *))) return (char **)S->extra;
+    if ((size_t)n * sizeof(char *) <= region_size) return (char **)region;
     long m = sys_mmap(0, ((size_t)n * sizeof(char *) + 0xfff) & ~(size_t)0xfff, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m < 0 && m > -4096) return 0;
     *big = (void *)m; return (char **)m;
 }
 static void vector_free(void *big, long n) { if (big) SC2(NR_munmap, big, ((size_t)n * sizeof(char *) + 0xfff) & ~(size_t)0xfff); }
 
+/* The program's argv or envp, read through copy_in as the paths are (review O3-11, F3-14): a NULL vector is
+ * empty, a bad pointer is EFAULT, an unterminated one is E2BIG. Returns the count; *out has count + extra + 1
+ * slots, the entries first, then a NULL. S->tmp is the probe buffer. */
+#define VEC_MAX (1L << 20)
+static long vec_read(struct scratch *S, void *region, size_t region_size, char **user, long extra, char ***out, void **big)
+{
+    long n = 0;
+    if (user) for (;;) {
+        long got = copy_in(S->tmp, user + n, PATH_MAX); if (got < (long)sizeof(char *)) return -EFAULT;
+        long k = got / (long)sizeof(char *), i; char **p = (char **)S->tmp;
+        for (i = 0; i < k && p[i]; i++) ;
+        n += i;
+        if (i < k) break;
+        if (n > VEC_MAX) return -E2BIG;
+    }
+    char **v = vector(region, region_size, n + extra + 1, big); if (!v) return -ENOMEM;
+    if (n && copy_in(v, user, (size_t)n * sizeof(char *)) != n * (long)sizeof(char *)) { vector_free(*big, n + extra + 1); return -EFAULT; }
+    v[n] = 0; *out = v; return n;
+}
+
 static long exec_loader_mode(struct scratch *S, const char *v, char **argv, char **envp, struct scratch **Sp)
 {
-    long envc = 0; while (envp[envc]) envc++;
-    void *big; char **nenv = vector(S, envc + 2, &big); if (!nenv) return -ENOMEM;
+    void *big; char **env; long envc = vec_read(S, S->extra, sizeof S->extra, envp, 1, &env, &big);
+    if (envc < 0) return envc;
     scpy(S->b1, "CAN_EXEC=", PATH_MAX); scat(S->b1, v, PATH_MAX);
-    long n = 0; nenv[n++] = S->b1;
-    for (long i = 0; i < envc; i++) if (!xstarts(envp[i], "CAN_EXEC=")) nenv[n++] = envp[i];
-    nenv[n] = 0;
+    long n = 0; char head[10];
+    for (long i = 0; i < envc; i++) {                        /* drop an inherited CAN_EXEC; the strings are the kernel's to validate */
+        if (copy_in(head, env[i], 9) == 9 && xmemcmp(head, "CAN_EXEC=", 9) == 0) continue;
+        env[n++] = env[i];
+    }
+    for (long i = n; i > 0; i--) env[i] = env[i - 1];
+    env[0] = S->b1; env[n + 1] = 0;
     log_line("exec", 0, v);
-    long r = RE5(NR_execve, C.opener, argv, nenv, 0, 0);
+    long r = RE5(NR_execve, C.opener, argv, env, 0, 0);
     vector_free(big, envc + 2);                              /* only reached when execve failed */
     return r;
 }
@@ -148,11 +172,13 @@ static long exec_loader_mode(struct scratch *S, const char *v, char **argv, char
  * the script is passed by its virtual path. Kernel convention: argv = interp [arg] script args... */
 static long exec_script(struct scratch *S, const char *v, char **argv, char **envp, int depth, struct scratch **Sp)
 {
-    struct scratch *S2 = scratch_get(S->pid, S->tid); if (!S2) return -ENOMEM;
+    struct scratch *S2 = scratch_get(S->pid, S->tid, (unsigned long)__builtin_frame_address(0)); if (!S2) return -ENOMEM;
     char *line = S2->b1, *vcopy = S2->b2;
-    long argc = 0; while (argv[argc]) argc++;
-    void *big; char **nargv = vector(S2, argc + 4, &big);
-    if (!nargv) { scratch_put(S2); return -ENOMEM; }
+    void *big1, *big2; char **av, **nargv;
+    long argc = vec_read(S, S->extra, sizeof S->extra, argv, 0, &av, &big1);
+    if (argc < 0) { scratch_put(S2); return argc; }
+    nargv = vector(S2->rest, 6 * PATH_MAX, argc + 4, &big2);
+    if (!nargv) { vector_free(big1, argc + 1); scratch_put(S2); return -ENOMEM; }
     long fd = sys_open(S->real, O_RDONLY | O_CLOEXEC, 0);
     long n = fd < 0 ? fd : sys_read((int)fd, line, 255); if (fd >= 0) sys_close((int)fd);
     long r = -ENOEXEC;
@@ -160,11 +186,11 @@ static long exec_script(struct scratch *S, const char *v, char **argv, char **en
     else {
         line[n < 0 ? 0 : n] = 0;
         scpy(vcopy, v, PATH_MAX);
-        long k = shebang_argv(line, vcopy, argv, argc, nargv, argc + 4);
+        long k = shebang_argv(line, vcopy, av, argc, nargv, argc + 4);
         if (k == -1) r = -ENOEXEC; else if (k == -2) r = -E2BIG;
         else if ((r = canon(S, nargv[0], AT_FDCWD, 1, S->v)) >= 0) r = exec_target(S, S->v, nargv, envp, depth + 1, Sp);
     }
-    vector_free(big, argc + 4);
+    vector_free(big2, argc + 4); vector_free(big1, argc + 1);
     scratch_put(S2);                                         /* only reached when no exec happened */
     return r;
 }
@@ -191,7 +217,7 @@ static long exec_target(struct scratch *S, const char *v, char **argv, char **en
     if (n >= 2 && h[0] == '#' && h[1] == '!') return exec_script(S, v, argv, envp, depth, Sp);
     if (n == 4 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F') {
         int another;                                         /* 7.4.5: a file carrying .note.cont is another opener: exec it as it is */
-        if (elf_probe(S->real, S->tmp, &another) >= 0 && another) { log_line("exec", 0, v); return RE5(NR_execve, S->real, argv, envp, 0, 0); }
+        if (elf_probe(S->real, S->tmp, &another, S->extra) >= 0 && another) { log_line("exec", 0, v); return RE5(NR_execve, S->real, argv, envp, 0, 0); }
         return exec_loader_mode(S, v, argv, envp, Sp);
     }
     return -ENOEXEC;
@@ -202,6 +228,10 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
     long r = resolve(S, a, pi, di, !(flags & AT_SYMLINK_NOFOLLOW), (flags & AT_EMPTY_PATH) != 0);
     if (r < 0) return r;
     if (r == 1) { r = fd_virtual((int)a[di], S->v); if (r < 0) return r; }
+    else if (flags & AT_SYMLINK_NOFOLLOW) {                    /* the kernel refuses to run a symlink itself (F3-20) */
+        struct kstat st; to_real_exec(S->v, S->real);
+        if (sys_lstat(S->real, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK) return -ELOOP;
+    }
     return exec_target(S, S->v, argv, envp, 0, Sp);
 }
 
@@ -216,7 +246,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         if (r < 0) return r;
         S->tmp[r] = 0; if (starts_dir(S->tmp, C.root)) from_real(S->tmp); ans = S->tmp;
     }
-    if (C.loader_mode && is_self_exe(S->v, S->pid)) ans = C.program;
+    if ((C.loader_mode || xstrcmp(C.exe, C.program) != 0) && is_self_exe(S->v, S->pid)) ans = C.exe;
     if (!ans) {
         r = vis_readlink_identity(S->v, S->tmp);
         if (r < 0) return r;
@@ -229,6 +259,22 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         S->tmp[r] = 0;
         if (xstrncmp(S->v, "/proc/", 6) == 0 || starts_dir(S->tmp, C.root)) from_real(S->tmp);
         ans = S->tmp;
+        /* another process's exe link that names a wrapped script: that process runs the script's interpreter,
+         * which is what the kernel would report natively (F3-22) */
+        if (xstrncmp(S->v, "/proc/", 6) == 0 && xstrlen(S->v) > 4 && xstrcmp(S->v + xstrlen(S->v) - 4, "/exe") == 0 && is_can_owned(ans)) {
+            scpy(S->v2, ans, PATH_MAX);
+            to_real_exec(S->v2, S->real);
+            if (is_wrapper_real(S->real, S->b2) && payload_of(S->real, S->b2)) {
+                long fd = sys_open(S->b2, O_RDONLY | O_CLOEXEC, 0);
+                long n = fd < 0 ? -1 : sys_read((int)fd, S->b2, 255); if (fd >= 0) sys_close((int)fd);
+                if (n > 2 && S->b2[0] == '#' && S->b2[1] == '!') {
+                    S->b2[n] = 0; char *p = S->b2 + 2; while (*p == ' ' || *p == '\t') p++;
+                    char *e = p; while (*e && *e != ' ' && *e != '\t' && *e != '\n') e++; *e = 0;
+                    scpy(S->b1, p, PATH_MAX);
+                    if (canon(S, S->b1, AT_FDCWD, 1, S->v) == 0) { scpy(S->tmp, S->v, PATH_MAX); ans = S->tmp; }
+                }
+            }
+        }
     }
     long l = (long)xstrlen(ans); if (l > bufsiz) l = bufsiz;
     if (l && copy_out(buf, ans, (size_t)l)) return -EFAULT;   /* the program's buffer is never validated by the kernel here */
@@ -445,6 +491,23 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if (nr == NR_futimesat) return RE5(NR_futimesat, AT_FDCWD, S->real, a[2], 0, 0);
         return RE5(NR_utimensat, AT_FDCWD, S->real, a[2], fl | AT_SYMLINK_NOFOLLOW, 0);
     }
+    case NR_setxattrat: case NR_removexattrat:               /* (dfd, path, at_flags, name, [value, size]) */
+        if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) != 0)) < 0) return r;
+        if (r == 1) return fd_can(S, (int)a[0]) ? -EROFS : RE6(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
+        if ((r = ro_attr(S, S->v))) return r;
+        to_real(S->v, S->real, S->tmp);
+        return RE6(nr, AT_FDCWD, S->real, a[2] | AT_SYMLINK_NOFOLLOW, a[3], a[4], a[5]);
+    case NR_getxattrat: case NR_listxattrat:
+        if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) != 0)) < 0) return r;
+        if (r == 1) return RE6(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
+        to_real(S->v, S->real, S->tmp);
+        return RE6(nr, AT_FDCWD, S->real, a[2] | AT_SYMLINK_NOFOLLOW, a[3], a[4], a[5]);
+    case NR_file_getattr: case NR_file_setattr:              /* (dfd, path, attr, size, at_flags): the chattr ioctls as syscalls */
+        if ((r = resolve(S, a, 1, 0, !(a[4] & AT_SYMLINK_NOFOLLOW), (a[4] & AT_EMPTY_PATH) != 0)) < 0) return r;
+        if (r == 1) return (nr == NR_file_setattr && fd_can(S, (int)a[0])) ? -EROFS : RE5(nr, a[0], a[1], a[2], a[3], a[4]);
+        if (nr == NR_file_setattr && (r = ro_attr(S, S->v))) return r;
+        to_real(S->v, S->real, S->tmp);
+        return RE5(nr, AT_FDCWD, S->real, a[2], a[3], a[4] | AT_SYMLINK_NOFOLLOW);
     case NR_setxattr: case NR_lsetxattr: case NR_removexattr: case NR_lremovexattr:
         if ((r = resolve(S, a, 0, -1, nr == NR_setxattr || nr == NR_removexattr, 0)) < 0) return r;
         if ((r = ro_attr(S, S->v))) return r;
@@ -528,11 +591,12 @@ static void on_sigsys(int sig, void *info, void *uc)
     int nr = *(int *)((char *)info + SI_SYSCALL_OFF);
     unsigned long ip = *(unsigned long *)((char *)info + SI_CALL_ADDR_OFF);
     pid_t pid = (pid_t)sys_getpid(), tid = (pid_t)sys_gettid();
-    int depth = nest_enter(pid, tid);
+    unsigned long frame = (unsigned long)__builtin_frame_address(0);
+    int depth = nest_enter(pid, tid, frame);
     if (depth > 1 && ip >= C.text_lo && ip < C.text_hi) die("the opener trapped its own syscall", 0, nr);
-    if (depth > 64) die("signal handlers nested too deep", 0, 0);
+    if (depth > 64) die("signal handlers nested too deep (or left behind by longjmp on another stack)", 0, 0);
     long a[6] = { g[REG_RDI], g[REG_RSI], g[REG_RDX], g[REG_R10], g[REG_R8], g[REG_R9] };
-    struct scratch *S = scratch_get(pid, tid);
+    struct scratch *S = scratch_get(pid, tid, frame);
     cur_pid = pid;
     if (S) S->v[0] = 0;
     long r = S ? dispatch(S, nr, a, uc, &S) : -ENOMEM;

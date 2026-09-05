@@ -18,6 +18,8 @@ struct sock_fprog { unsigned short len; struct sock_filter *filter; };
 #define JSET_K  0x45
 #define RET_K   0x06
 #define AND_K   0x54      /* BPF_ALU | BPF_AND | BPF_K */
+#define JGT_K   0x25      /* BPF_JMP | BPF_JGT | BPF_K */
+#define HIGHEST_KNOWN_SYSCALL 469      /* file_setattr, 6.17; test/syscalls.py probes the running kernel above it */
 #define OFF_NR   0
 #define OFF_ARCH 4
 #define OFF_IP   8
@@ -56,7 +58,7 @@ const int path_syscalls[] = {
     NR_removexattr, NR_lremovexattr, NR_utimes, NR_inotify_add_watch, NR_openat, NR_mkdirat, NR_mknodat,
     NR_fchownat, NR_futimesat, NR_newfstatat, NR_unlinkat, NR_renameat, NR_linkat, NR_symlinkat, NR_readlinkat,
     NR_fchmodat, NR_faccessat, NR_utimensat, NR_renameat2, NR_execveat, NR_statx, NR_faccessat2, NR_fchmodat2,
-    NR_fanotify_mark,
+    NR_fanotify_mark, NR_setxattrat, NR_getxattrat, NR_listxattrat, NR_removexattrat, NR_file_getattr, NR_file_setattr,
 };
 const int n_path_syscalls = sizeof path_syscalls / sizeof path_syscalls[0];
 
@@ -66,7 +68,8 @@ static const int fd_syscalls[] = { NR_fchmod, NR_fchown, NR_fsetxattr, NR_fremov
 static const int mask_syscalls[] = { NR_rt_sigprocmask, NR_rt_sigsuspend };
 /* closed rather than emulated in milestone 1a: each would bypass or confuse translation */
 static const int enosys_syscalls[] = { NR_clone3, NR_io_uring_setup, NR_openat2, NR_name_to_handle_at, NR_uselib,
-    428 /* open_tree */, 429 /* move_mount */, 430 /* fsopen */, 431 /* fsconfig */, 432 /* fsmount */, 433 /* fspick */, NR_mount_setattr };
+    428 /* open_tree */, 429 /* move_mount */, 430 /* fsopen */, 431 /* fsconfig */, 432 /* fsmount */, 433 /* fspick */, NR_mount_setattr,
+    NR_open_tree_attr };
 static const int eperm_syscalls[] = { NR_chroot, NR_acct, NR_pivot_root, NR_mount, NR_umount2 };
 /* the hot path: answered before anything else is examined */
 static const int fast_allow[] = { NR_read, NR_write, NR_close, NR_fstat, NR_lseek, NR_mmap, NR_mprotect, NR_munmap,
@@ -120,6 +123,9 @@ static void build(void)
     emit(LD_ABS, 0, 0, OFF_NR);
     for (unsigned i = 0; i < sizeof enosys_syscalls / sizeof enosys_syscalls[0]; i++) on_nr(enosys_syscalls[i], SECCOMP_RET_ERRNO | ENOSYS);
     for (unsigned i = 0; i < sizeof eperm_syscalls / sizeof eperm_syscalls[0]; i++) on_nr(eperm_syscalls[i], SECCOMP_RET_ERRNO | EPERM);
+    /* a syscall newer than this filter knows is trapped, and the handler answers ENOSYS (7.4.2, review O3-5):
+     * a future path-taking syscall must not reach the host untranslated */
+    emit(JGT_K, 0, 1, HIGHEST_KNOWN_SYSCALL); ret(SECCOMP_RET_TRAP);
     ret(SECCOMP_RET_ALLOW);
 }
 

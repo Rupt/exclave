@@ -23,6 +23,7 @@ all: $(OUT)
 # build/opener is stripped for shipping (every wrapper is a link to it); build/opener.debug keeps the symbols
 $(OUT): $(SRC) $(HDR) Makefile
 	@mkdir -p build
+	@rm -f build/*.su
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@.debug $(SRC)
 	@mv -f *.su build/ 2>/dev/null || true
 	objcopy --strip-all $@.debug $@
@@ -32,7 +33,7 @@ $(OUT): $(SRC) $(HDR) Makefile
 # stack budget (7.5.4): no frame on the handler path above 512 bytes, and the
 # summed frames of the handler path under 2048.
 stack: $(OUT)
-	python3 test/stackcheck.py build/*.su
+	python3 test/stackcheck.py build/opener.debug-*.su
 
 # host-side unit tests: the index parser compiled with a libc
 unit:
