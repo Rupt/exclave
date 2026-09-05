@@ -2,3 +2,4 @@
 /spike/spike2
 /spike/tests/*.o
 /build/
+__pycache__/
