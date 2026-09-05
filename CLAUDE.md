@@ -40,11 +40,27 @@ finding them inconvenient.
   `CONT_TREE=<tree> make test` and the oracles before committing opener
   changes; all must stay at zero failures. After rebuilding the opener,
   refresh a can with `cannery.py reopen CAN`: replacing `.can/opener`
-  alone leaves the wrappers linked to the old file.
+  alone leaves the wrappers linked to the old file. A change to the
+  cannery's output must keep `test/dogfood.py` passing. A syscall the
+  handler re-issues must exist on the oldest kernel of the matrix
+  (`renameat`, not `renameat2`, for a plain rename).
+- **Shell commands in this repository use absolute paths.** The shell's
+  working directory persists between commands and has drifted into
+  scratch directories before; `pkill -f` must use an anchored pattern
+  or it kills the shell that runs it.
 - **Handler code takes its buffers from `struct scratch`**, never the
   stack: the handler runs on whatever alternate stack a program set up,
   and Rust's is 8 KB including the kernel's frame. `make stack` lists
-  every function on the handler path; add new ones to it.
+  every function on the handler path; add new ones to it. The handler
+  reads program memory only through `copy_in` and writes it only
+  through `copy_out`, paths and vectors alike: a plain dereference of a
+  program pointer is a `SIGSEGV` where the kernel would say `EFAULT`.
+  Environment strings the opener hands a program must be writable.
+- **A new syscall the kernel adds** is trapped by the filter's ceiling
+  and answered `ENOSYS` until it is classified in `test/syscalls.py`
+  and, if it takes a path, handled in `src/handler.c` and listed in
+  `src/filter.c`; the test probes the running kernel, so a newer kernel
+  will say so.
 
 ## Reference machine facts
 
@@ -63,4 +79,6 @@ never the repository. A can is made with `cannery.py from-packages
 --cache <scratch>/cannery-cache`; a plain tree with `spike/make-tree.sh`;
 the suite and the oracles make their own copies under `build/` (ignored
 by git). The archive mirror configured on this machine is
-`http://gb.archive.ubuntu.com/ubuntu`.
+`http://gb.archive.ubuntu.com/ubuntu`. Cloud images for the matrix live
+in `~/.cache/cont-images`; QEMU with KVM and `cloud-image-utils` are
+installed, and this user can open `/dev/kvm`.
