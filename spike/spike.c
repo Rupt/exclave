@@ -1,3 +1,7 @@
+/* STATUS: prototype evidence for docs/PROPOSAL.md, sections 15 and 16. Not the
+ * opener. It predates revision 6 and still contains defects the reviews found;
+ * see spike/README.md before reusing any of it. Do not modify: the proposal cites
+ * its measurements. */
 /* spike.c — prototype of the cont "trap" backend.
  *
  *   spike [-d] [-r ROOT] [-p P1:P2:...] [-t TRACEFILE] -- /virtual/prog args...

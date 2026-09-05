@@ -1,3 +1,7 @@
+/* STATUS: prototype evidence for docs/PROPOSAL.md, sections 15 and 16. Not the
+ * opener. It predates revision 6 and still contains defects the reviews found;
+ * see spike/README.md before reusing any of it. Do not modify: the proposal cites
+ * its measurements. */
 /* spike2.c — second spike: the opener as the can's ELF interpreter.
  *
  * Built as an ET_DYN object with no PT_INTERP (like ld.so itself), so it can be
