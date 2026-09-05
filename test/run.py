@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """run.py — the regression suite for milestone 1a (PROPOSAL.md 17.4, the subset a single machine can run).
 
-    test/run.py [--tree DIR] [--work DIR] [--keep] [-k SUBSTRING] [-v]
+    test/run.py [--tree DIR | --can CAN] [--work DIR] [--keep] [-k SUBSTRING] [-v]
 
-Makes a can from TREE (default $CONT_TREE) under WORK (default build/test-work) with a few test files added to
-the tree, compiles test/progs/*.c with the can's own gcc, and runs every named test. Needs python3 and a
-Debian/Ubuntu gcc tree (see README.md). Optional: strace for the isolation test, /usr/bin/gcc-13 for the
-identical-object test. Exit status is the number of failures.
+Makes a can from TREE (default $CONT_TREE), or from the unwrapped root of an existing CAN, under WORK
+(default build/test-work) with a few test files added to the tree, compiles test/progs/*.c with the can's
+own gcc, and runs every named test. Needs python3 and a Debian/Ubuntu gcc tree (see README.md). Optional:
+strace for the isolation test, /usr/bin/gcc-13 for the identical-object test. Exit status is the number of
+failures.
 """
 import argparse
 import os
@@ -21,6 +22,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO, "cannery"))
+import build  # noqa: E402
 import cannery  # noqa: E402
 
 GCC = "x86_64-linux-gnu-gcc-13"
@@ -76,6 +78,10 @@ def make_can(ctx):
     shutil.copy2(ctx.opener_src, os.path.join(can, ".can", "opener"))
     os.chmod(os.path.join(can, ".can", "opener"), 0o755)
     shutil.copytree(ctx.tree, root, symlinks=True, copy_function=cannery.link_or_copy)
+    if ctx.from_can:
+        build.unwrap(can, log=lambda *a: None)
+        for name in os.listdir(root):                  # a packaged can's placeholders are recreated below
+            pass
     # test additions to the tree
     with open(os.path.join(root, "usr", "share", "cont-test-marker"), "w") as f:
         f.write("marker\n")
@@ -185,7 +191,8 @@ def isolation(ctx):
             seen += 1
             p = os.path.normpath(p) if p.startswith("/") else p
             ok = (not p.startswith("/") or p.startswith(ctx.root) or p.startswith(VOLATILE) or p.startswith(ctx.work)
-                  or p in allowed_files or p.startswith("/usr/share/zoneinfo/") or p == "/etc/localtime")
+                  or p in allowed_files or p.startswith("/usr/share/zoneinfo/") or p == "/etc/localtime"
+                  or ctx.work.startswith(p + "/"))     # a directory on the way to the working directory (8.1.4)
             if not ok:
                 bad.append("%s %s" % (name, p))
     expect(seen > 50, "trace looks empty (%d paths)" % seen)
@@ -406,9 +413,44 @@ def gconv_and_locale(ctx):
 @test
 def cannery_check(ctx):
     rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", ctx.can])
-    expect(rc == 0 and "0 problems" in out, out + err)
+    expect(rc == 0 and "0 wrapper problems" in out and "0 errors" in out, out + err)
     rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "fmt", "--check", os.path.join(ctx.can, ".can", "index")])
     expect(rc == 0, "index not canonical: " + out + err)
+
+
+@test
+def mixed_tree_refused(ctx):
+    """10.3: a tree whose ELF files name two loaders is refused by the cannery."""
+    d = os.path.join(ctx.work, "mixed")
+    os.makedirs(os.path.join(d, "usr", "bin"), exist_ok=True)
+    src = open(os.path.join(ctx.root, "usr", "bin", ".real", "true"), "rb").read()
+    interp = b"/lib64/ld-linux-x86-64.so.2\0"
+    i = src.index(interp)
+    other = b"/lib/ld-musl-x86_64.so.1\0".ljust(len(interp), b"\0")
+    with open(os.path.join(d, "usr", "bin", "true"), "wb") as f:
+        f.write(src[:i] + other + src[i + len(interp):])
+    with open(os.path.join(d, "usr", "bin", "false"), "wb") as f:
+        f.write(src)
+    for n in ("true", "false"):
+        os.chmod(os.path.join(d, "usr", "bin", n), 0o755)
+    try:
+        cannery.detect(d)
+    except build.BuildError as e:
+        expect("mixes loaders" in str(e), str(e))
+        return
+    raise AssertionError("a tree with two loaders was not refused")
+
+
+@test
+def rust(ctx):
+    rustc = shutil.which("rustc") or shutil.which("rustc", path=os.path.expanduser("~/.cargo/bin"))
+    if not rustc:
+        return "no rustc"
+    exe = os.path.join(ctx.progs, "rs")
+    rc, out, err = run([rustc, "-O", "-o", exe, os.path.join(ctx.work, "src", "rs.rs")], cwd=ctx.work)
+    expect(rc == 0, "rustc: " + err[-600:])
+    rc, out, err = inside(ctx, exe)
+    expect(rc == 0 and "FAIL" not in out, out + err)
 
 
 @test
@@ -431,14 +473,18 @@ def stat_bench(ctx):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tree", default=os.environ.get("CONT_TREE"))
+    ap.add_argument("--can", help="use the unwrapped root of this can as the tree")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "test-work"))
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("-k", default="")
     ap.add_argument("-v", action="store_true")
     a = ap.parse_args()
+    if a.can:
+        a.tree = os.path.join(a.can, "root")
     if not a.tree or not os.path.isdir(a.tree):
-        sys.exit("need --tree DIR (or $CONT_TREE): a gcc tree to can; see README.md")
+        sys.exit("need --tree DIR (or $CONT_TREE) or --can CAN: a gcc tree to can; see README.md")
     ctx = Ctx()
+    ctx.from_can = bool(a.can)
     ctx.tree = os.path.abspath(a.tree)
     ctx.work = os.path.abspath(a.work)
     ctx.opener_src = os.path.join(REPO, "build", "opener")

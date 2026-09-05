@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""bench.py — the performance table (PROPOSAL.md 13 item 2, 16). Best of three, native against the can.
+
+    test/bench.py --can CAN [--sqlite PATH] [--work DIR]
+
+The can must contain gcc-13; the host's /usr/bin/gcc-13 gives the native column where present.
+"""
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+GCC = "x86_64-linux-gnu-gcc-13"
+
+STAT_C = r'''
+#include <sys/stat.h>
+#include <stdio.h>
+#include <time.h>
+int main(int c, char **v) { struct stat st; struct timespec a, b; const char *p = v[1]; int n = 200000;
+  clock_gettime(CLOCK_MONOTONIC, &a); for (int i = 0; i < n; i++) stat(p, &st); clock_gettime(CLOCK_MONOTONIC, &b);
+  printf("%.0f\n", ((b.tv_sec - a.tv_sec) * 1e9 + (b.tv_nsec - a.tv_nsec)) / n); return 0; }
+'''
+SPAWN_C = r'''
+#include <spawn.h>
+#include <stdio.h>
+#include <sys/wait.h>
+#include <time.h>
+extern char **environ;
+int main(void) { struct timespec a, b; int n = 300; char *av[] = { "true", 0 };
+  clock_gettime(CLOCK_MONOTONIC, &a);
+  for (int i = 0; i < n; i++) { pid_t p; if (posix_spawn(&p, "/usr/bin/true", 0, 0, av, environ)) return 1; int st; waitpid(p, &st, 0); }
+  clock_gettime(CLOCK_MONOTONIC, &b); printf("%.0f\n", ((b.tv_sec - a.tv_sec) * 1e6 + (b.tv_nsec - a.tv_nsec) / 1e3) / n); return 0; }
+'''
+
+
+def run(cmd, cwd, env=None, executable=None):
+    return subprocess.run(cmd, cwd=cwd, env=env, executable=executable, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def best(fn, n=3):
+    return min(fn() for _ in range(n))
+
+
+def timed(cmd, cwd, env, executable=None):
+    t = time.time()
+    p = run(cmd, cwd, env, executable)
+    if p.returncode:
+        raise SystemExit("failed: %s\n%s" % (cmd, p.stderr.decode(errors="replace")[-400:]))
+    return time.time() - t
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--can", required=True)
+    ap.add_argument("--sqlite", help="sqlite3.c amalgamation for the compute-bound compile")
+    ap.add_argument("--work", default=os.path.join(REPO, "build", "bench-work"))
+    a = ap.parse_args()
+    can, work = os.path.abspath(a.can), os.path.abspath(a.work)
+    if os.path.exists(work):
+        shutil.rmtree(work)
+    os.makedirs(work)
+    cgcc, hgcc = os.path.join(can, "root", "usr", "bin", GCC), shutil.which("gcc-13") or shutil.which("gcc")
+    opener = os.path.join(can, ".can", "opener")
+    env = {"PATH": "/usr/bin:/bin"}
+    rows = []
+
+    def native(prog, *args):
+        return run([prog] + list(args), work, env).stdout.decode().strip()
+
+    def inside(prog, *args):
+        return run([prog] + list(args), work, dict(env, CAN_EXEC=prog), executable=opener).stdout.decode().strip()
+
+    for name, src in (("statb", STAT_C), ("spawnb", SPAWN_C)):
+        with open(os.path.join(work, name + ".c"), "w") as f:
+            f.write(src)
+        p = run([cgcc, "-O2", "-o", os.path.join(work, name), os.path.join(work, name + ".c")], work, env)
+        if p.returncode:
+            raise SystemExit(p.stderr.decode())
+    statb, spawnb = os.path.join(work, "statb"), os.path.join(work, "spawnb")
+    rows.append(("stat(), three-component can path, ns per call", best(lambda: int(native(statb, "/usr/include/stdio.h"))), best(lambda: int(inside(statb, "/usr/include/stdio.h")))))
+    rows.append(("stat(), seven-component can path, ns per call", best(lambda: int(native(statb, "/usr/lib/gcc/x86_64-linux-gnu/13/include/stddef.h"))), best(lambda: int(inside(statb, "/usr/lib/gcc/x86_64-linux-gnu/13/include/stddef.h")))))
+    hostfile = os.path.join(work, "statb.c")
+    rows.append(("stat(), %d-component host path, ns per call" % hostfile.count("/"), best(lambda: int(native(statb, hostfile))), best(lambda: int(inside(statb, hostfile)))))
+    rows.append(("posix_spawn of /usr/bin/true, us per spawn", best(lambda: int(native(spawnb))), best(lambda: int(inside(spawnb)))))
+    with open(os.path.join(work, "hello.c"), "w") as f:
+        f.write('#include <stdio.h>\nint main(void) { printf("hello\\n"); return 0; }\n')
+
+    def thirty(gcc):
+        for i in range(30):
+            p = run([gcc, "-O0", "hello.c", "-o", "h%d" % i], work, env)
+            if p.returncode:
+                raise SystemExit(p.stderr.decode())
+    rows.append(("thirty gcc -O0 hello.c, s", best(lambda: (lambda t: time.time() - t)(time.time()) if False else _time(lambda: thirty(hgcc))) if hgcc else None, best(lambda: _time(lambda: thirty(cgcc)))))
+    # a small project: 60 files, compile each, link
+    proj = os.path.join(work, "proj")
+    os.makedirs(proj)
+    for i in range(60):
+        with open(os.path.join(proj, "f%d.c" % i), "w") as f:
+            f.write("int f%d(int x) { int s = 0; for (int i = 0; i < x; i++) s += i * %d; return s; }\n" % (i, i + 1))
+    with open(os.path.join(proj, "main.c"), "w") as f:
+        f.write("".join("int f%d(int);\n" % i for i in range(60)) + "int main(void) { int s = 0;\n" + "".join(" s += f%d(10);\n" % i for i in range(60)) + " return s & 1; }\n")
+
+    def project(gcc):
+        objs = []
+        for i in range(61):
+            src = "f%d.c" % i if i < 60 else "main.c"
+            p = run([gcc, "-O1", "-c", src, "-o", src[:-2] + ".o"], proj, env)
+            if p.returncode:
+                raise SystemExit(p.stderr.decode())
+            objs.append(src[:-2] + ".o")
+        p = run([gcc, "-o", "prog"] + objs, proj, env)
+        if p.returncode:
+            raise SystemExit(p.stderr.decode())
+    rows.append(("61-file project, -O1 -c each then link, s", best(lambda: _time(lambda: project(hgcc))) if hgcc else None, best(lambda: _time(lambda: project(cgcc)))))
+    if a.sqlite and os.path.exists(a.sqlite) and hgcc:
+        rows.append(("gcc -O2 -c sqlite3.c, s", best(lambda: timed([hgcc, "-O2", "-c", a.sqlite, "-o", "sq_host.o"], work, env)), best(lambda: timed([cgcc, "-O2", "-c", a.sqlite, "-o", "sq_can.o"], work, env))))
+        same = open(os.path.join(work, "sq_host.o"), "rb").read() == open(os.path.join(work, "sq_can.o"), "rb").read()
+        rows.append(("sqlite3.o identical", "yes" if same else "no", ""))
+    if shutil.which("strace"):
+        def count(gcc):
+            p = subprocess.run(["strace", "-f", "-c", "-o", "sc.txt", gcc, "-O0", "hello.c", "-o", "h_sc"], cwd=work, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return int(open(os.path.join(work, "sc.txt")).read().strip().splitlines()[-1].split()[3])
+        rows.append(("syscalls for one gcc -O0 hello.c, all processes", count(hgcc) if hgcc else None, count(cgcc)))
+    print("| Workload | native | can |")
+    print("|---|---|---|")
+    for name, n, c in rows:
+        fmt = lambda x: ("%.2f" % x if isinstance(x, float) else str(x)) if x is not None else ""
+        print("| %s | %s | %s |" % (name, fmt(n), fmt(c)))
+    shutil.rmtree(work, ignore_errors=True)
+
+
+def _time(fn):
+    t = time.time()
+    fn()
+    return time.time() - t
+
+
+if __name__ == "__main__":
+    sys.exit(main())

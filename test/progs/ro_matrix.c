@@ -59,7 +59,9 @@ int main(int argc, char **argv)
     CHECK(rename(marker, missing), EROFS);
     CHECK(rename(marker, hnew), EXDEV);
     CHECK(rename(hfile, missing), EXDEV);
-    CHECK(rename(missing, hnew), ENOENT);
+    CHECK(rename(missing, hnew), EXDEV);
+    CHECK(rename(missing, "/usr/share/cont-missing2"), EROFS);
+    CHECK(link(missing, hnew), ENOENT);
     /* attributes */
     CHECK(truncate(marker, 0), EROFS);
     CHECK(truncate(missing, 0), ENOENT);
