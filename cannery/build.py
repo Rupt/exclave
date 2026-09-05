@@ -105,7 +105,7 @@ def extract(root, debs, log=print):
 
 
 # ---------------------------------------------------------------- synthesis (step 4)
-_UA = re.compile(r"update-alternatives\s+--install\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)((?:\s*\\?\s*--slave\s+\S+\s+\S+\s+\S+)*)", re.S)
+_UA = re.compile(r"update-alternatives\s+(?:--(?:quiet|verbose|force)\s+)*--install\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)((?:\s+--slave\s+\S+\s+\S+\s+\S+)*)")
 _SLAVE = re.compile(r"--slave\s+(\S+)\s+(\S+)\s+(\S+)")
 
 
@@ -129,7 +129,7 @@ def synthesise(root, debs, log=print):
     groups = {}
     for name, path, st in debs:
         fields, scripts = deb.control(path)
-        for m in _UA.finditer(scripts.get("postinst", "")):
+        for m in _UA.finditer(scripts.get("postinst", "").replace("\\\n", " ")):     # join continuation lines
             link, gname, target, prio = m.group(1), m.group(2), m.group(3), int(m.group(4))
             if not os.path.lexists(_v(root, target)):
                 continue
@@ -160,6 +160,12 @@ def synthesise(root, debs, log=print):
         with open(_v(root, "/etc/ssl/certs/ca-certificates.crt"), "wb") as f:
             f.writelines(certs)
         log("synthesised /etc/ssl/certs/ca-certificates.crt from %d certificates" % len(certs))
+    # libssl: OpenSSL's compiled-in trust paths are /usr/lib/ssl/cert.pem and /usr/lib/ssl/certs, symlinks the
+    # openssl and ca-certificates packages ship and a library's closure lacks; without them the host's bundle
+    # at the identity path (8.4) is never consulted
+    if any(n.startswith("libssl") for n in names):
+        _link(root, "/usr/lib/ssl/certs", "/etc/ssl/certs", log)
+        _link(root, "/usr/lib/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt", log)
     # base-passwd: /etc/passwd and /etc/group come from update-passwd, not the package; the host's are used
     # unless the manifest claims them (8.4), but the files must exist for tools that list /etc
     for name_, master in (("passwd", "passwd.master"), ("group", "group.master")):
@@ -180,22 +186,40 @@ def synthesise(root, debs, log=print):
             log("ldconfig failed: " + r.stderr.decode(errors="replace").strip())
         else:
             log("synthesised /etc/ld.so.cache with the can's ldconfig")
+        aux = _v(root, "/var/cache/ldconfig")                 # records inodes and mtimes: never reproducible, never needed
+        if os.path.isdir(aux):
+            shutil.rmtree(aux)
     elif "libc-bin" in names:
         log("libc-bin present but no static ldconfig found; no ld.so.cache")
 
 
 def synthesise_in_can(can, debs, log=print):
-    """Synthesis steps that run canned programs, after wrapping: python compileall."""
+    """Synthesis steps that run canned programs, after wrapping: python compileall. The tree is read-only from
+    inside the can, so the bytecode goes to a host directory through PYTHONPYCACHEPREFIX and is moved in."""
+    import tempfile
     root = os.path.join(can, "root")
+    done = set()
     for name, _, _ in debs:
-        m = re.match(r"^(libpython3\.\d+-minimal|python3\.\d+-minimal)$", name)
-        if m:
-            ver = re.search(r"3\.\d+", name).group(0)
-            py = os.path.join(root, "usr", "bin", "python" + ver)
-            if os.path.exists(py):
-                r = subprocess.run([py, "-m", "compileall", "-q", "/usr/lib/python" + ver], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   env={"PATH": "/usr/bin:/bin"})
-                log("compileall python%s: %s" % (ver, "ok" if r.returncode == 0 else r.stderr.decode(errors="replace")[-300:]))
+        m = re.search(r"python(3\.\d+)-minimal$", name)
+        if not m or m.group(1) in done:
+            continue
+        ver = m.group(1)
+        done.add(ver)
+        py = os.path.join(root, "usr", "bin", "python" + ver)
+        if not os.path.exists(py):
+            continue
+        with tempfile.TemporaryDirectory(prefix="cont-pyc-") as tmp:
+            r = subprocess.run([py, "-m", "compileall", "-q", "/usr/lib/python" + ver], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               env={"PATH": "/usr/bin:/bin", "PYTHONPYCACHEPREFIX": tmp}, cwd=tmp)
+            n = 0
+            for dirpath, dirnames, filenames in os.walk(tmp):
+                for f in filenames:
+                    src = os.path.join(dirpath, f)
+                    dst = os.path.join(root, os.path.relpath(src, tmp))
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.move(src, dst)
+                    n += 1
+            log("compileall python%s: %s, %d files" % (ver, "ok" if r.returncode == 0 else r.stderr.decode(errors="replace")[-300:], n))
 
 
 # ---------------------------------------------------------------- placeholders (step 5)

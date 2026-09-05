@@ -15,7 +15,7 @@
                              [--mirror URL | --snapshot DATE] [--cache DIR]
                              [--no-essential] [--choose VIRTUAL=PKG]...
                              [--entry NAME=/PATH]... [--manifest FILE]
-                             --out CAN PACKAGE...
+                             [--add HOSTPATH=/VIRTUAL]... --out CAN PACKAGE...
                                Resolve, fetch, verify, extract, synthesise,
                                wrap, index, lock (10.1).
     cannery.py unwrap CAN      Move every payload back over its wrapper.
@@ -459,10 +459,18 @@ def cmd_index(can, manifest=None, quiet=False):
               (arch, interp.decode() if interp else "-", libc, sorted(own), sum(1 for r in recs if r.key == "wrap")))
 
 
+def default_opener():
+    """build/opener beside a checkout, or the opener shipped next to this file in the cannery can (10.5)."""
+    for p in (os.path.join(HERE, "..", "build", "opener"), os.path.join(HERE, "opener")):
+        if os.path.isfile(p):
+            return p
+    return os.path.join(HERE, "..", "build", "opener")
+
+
 def cmd_mkcan(src, out, manifest=None, opener=None, link=False):
     if os.path.exists(out):
         sys.exit("refusing: %s exists" % out)
-    opener = opener or os.path.join(HERE, "..", "build", "opener")
+    opener = opener or default_opener()
     if not os.path.isfile(opener):
         sys.exit("no opener at %s (run make)" % opener)
     if manifest:
@@ -517,7 +525,7 @@ def cmd_from_packages(a):
     """10.1: resolve, fetch and verify, extract, synthesise, strip, wrap, check, index, entries, lockfile."""
     if os.path.exists(a.out):
         sys.exit("refusing: %s exists" % a.out)
-    opener = a.opener or os.path.join(HERE, "..", "build", "opener")
+    opener = a.opener or default_opener()
     if not os.path.isfile(opener):
         sys.exit("no opener at %s (run make)" % opener)
     suites = [s for x in a.suite for s in x.split(",")] or {"ubuntu": ["noble", "noble-updates", "noble-security"], "debian": ["bookworm"]}[a.distro]
@@ -541,6 +549,14 @@ def cmd_from_packages(a):
         build.extract(root, debs)
         build.synthesise(root, debs)
         build.placeholders(root)
+        for spec in a.add:                                    # 10.5: files of our own into the tree, e.g. the cannery
+            src_, _, vpath = spec.partition("=")
+            dst = os.path.join(root, vpath.lstrip("/"))
+            if os.path.isdir(src_):
+                shutil.copytree(src_, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+            else:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src_, dst)
     except build.BuildError as e:
         shutil.rmtree(a.out)
         sys.exit("refusing: %s" % e)
@@ -676,6 +692,7 @@ def main(argv):
     p.add_argument("--mirror"); p.add_argument("--snapshot"); p.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "cont-cannery"))
     p.add_argument("--no-essential", action="store_true"); p.add_argument("--choose", action="append", default=[], metavar="VIRTUAL=PKG")
     p.add_argument("--entry", action="append", default=[], metavar="NAME=/PATH"); p.add_argument("--manifest"); p.add_argument("--opener")
+    p.add_argument("--add", action="append", default=[], metavar="HOSTPATH=/VIRTUAL", help="copy a file or directory into the tree")
     p = sub.add_parser("unwrap"); p.add_argument("can")
     p = sub.add_parser("reopen"); p.add_argument("can"); p.add_argument("--opener")
     p = sub.add_parser("hash"); p.add_argument("can")
