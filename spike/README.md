@@ -18,3 +18,19 @@ Options: `-d` debug to stderr, `-t FILE` append every translated path,
 
 Results on 2026-09-05, Ubuntu 24.04, kernel 7.0, 16 cores: see PROPOSAL.md
 section 17.
+
+## Spike 2: the opener as the can's ELF interpreter
+
+`spike2.c` is built as an `ET_DYN` object with no `PT_INTERP` (`build2.sh`),
+so the same file runs as the entry program, serves as the `PT_INTERP` of every
+patched ELF in the tree through `/proc/self/fd/999`, and loads itself for
+targets that have no usable interpreter. `patch-interp.py ROOT` rewrites the
+interpreter string of every ELF under ROOT in place and prints the originals.
+
+    cp -a /tmp/gccroot /tmp/gccroot2 && ./patch-interp.py /tmp/gccroot2 > interp.txt
+    ./build2.sh
+    aa-exec -p unconfined env -i PATH=/usr/bin:/bin ./spike2 -r /tmp/gccroot2 \
+      -p /tmp:/proc:/dev:/sys:/run:/etc/localtime -- /usr/bin/gcc-13 tests/hello.c -o /tmp/h
+
+`-i INTERP` names the can's real `ld.so` (default `/lib64/ld-linux-x86-64.so.2`;
+use `/lib/ld-musl-x86_64.so.1` for a musl tree). Results: PROPOSAL.md section 16.
