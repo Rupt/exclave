@@ -192,6 +192,7 @@ int  vis_leads_to_host_file(const char *v);   /* v is a proper ancestor of a hos
 int  is_wrapper_real(const char *real, char *tmp);   /* tmp PATH_MAX */
 int  payload_of(const char *real, char *out);         /* 1 if real is a wrapper; out = payload */
 int  vis_readlink_identity(const char *v, char *out); /* 1 if v is an identity file; out = host link text */
+int  vis_is_identity_file(const char *v);              /* 1 if v is exactly a host identity file */
 
 /* ---------- the canonicalisation cache (cache.c, 7.4.4) ---------- */
 enum { CK_NONE = 1, CK_DIR, CK_LINK, CK_FILE, CK_WRAPPER };

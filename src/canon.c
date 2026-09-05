@@ -74,7 +74,8 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         }
         /* classify the component: a directory, a symlink (text in tmp), absent, or something else */
         int kind, err = -ENOENT;
-        if (!last && vis_leads_to_host_file(cur)) kind = CK_DIR;   /* on the way to an identity file: a directory (8.4) */
+        if (vis_is_identity_file(cur)) kind = CK_FILE;         /* 8.4: resolved on the host at startup; its host symlinks are not ours to follow */
+        else if (!last && vis_leads_to_host_file(cur)) kind = CK_DIR;   /* on the way to an identity file: a directory (8.4) */
         else if (is_can_owned(cur)) {                          /* 7.4.4: can-owned components are remembered for the process's life */
             to_real_exec(cur, real);
             kind = cache_classify(cur, real, tmp);
@@ -93,7 +94,8 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         }
         if (kind != CK_LINK) {
             /* an intermediate component must be a directory: the kernel says so before it looks further, and
-             * a textual ".." must not hide that (oracle 17.2); the final component is the kernel's business */
+             * a textual ".." must not hide that (oracle 17.2); the final component is the kernel's business.
+             * A directory the can lacks on the way to a host identity file is the host's (8.4). */
             if (!last) { if (kind == CK_NONE) return err; if (kind != CK_DIR) return -ENOTDIR; }
             continue;
         }

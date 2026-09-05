@@ -58,11 +58,19 @@ void vis_init(char **envp)
     C.nhost = n;
     /* the zone file /etc/localtime names, which the can may lack, like the TZ rule below (F3-9) */
     for (int i = 0; i < n && C.nhost < (int)(sizeof C.host / sizeof C.host[0]); i++) {
-        if (!id_link[i] || xstrncmp(id_link[i], "/usr/share/zoneinfo/", 20) != 0) continue;
-        static char zreal[PATH_MAX]; struct kstat zst;
-        scpy(zreal, C.root, PATH_MAX); scat(zreal, id_link[i], PATH_MAX);
-        if (sys_stat(zreal, &zst) == 0 || sys_stat(id_link[i], &zst) < 0) continue;
-        C.host[C.nhost].v = id_link[i]; C.host[C.nhost].r = id_link[i]; C.host[C.nhost].is_file = 1; id_link[C.nhost] = 0; C.nhost++;
+        if (!id_link[i]) continue;
+        static char zone[PATH_MAX], zreal[PATH_MAX]; struct kstat zst;
+        if (id_link[i][0] == '/') scpy(zone, id_link[i], PATH_MAX);
+        else {                                                 /* relative to the identity file's directory: /etc */
+            const char *b = xstrrchr(C.host[i].v, '/'); size_t dl = (size_t)(b - C.host[i].v);
+            xmemcpy(zone, C.host[i].v, dl); zone[dl] = 0; scat(zone, "/", PATH_MAX); scat(zone, id_link[i], PATH_MAX);
+            /* collapse the ".." a relative zone link usually starts with: /etc/../usr/share/zoneinfo/X */
+            char *p; while ((p = xstrstr(zone, "/../")) != 0) { char *s = p; if (s > zone) { s--; while (s > zone && *s != '/') s--; } memmove(s, p + 3, xstrlen(p + 3) + 1); }
+        }
+        if (xstrncmp(zone, "/usr/share/zoneinfo/", 20) != 0) continue;
+        scpy(zreal, C.root, PATH_MAX); scat(zreal, zone, PATH_MAX);
+        if (sys_stat(zreal, &zst) == 0 || sys_stat(zone, &zst) < 0) continue;
+        C.host[C.nhost].v = arena_str(zone, xstrlen(zone)); C.host[C.nhost].r = C.host[C.nhost].v; C.host[C.nhost].is_file = 1; id_link[C.nhost] = 0; C.nhost++;
     }
     /* TZ names a zone the can may lack (8.4) */
     for (char **e = envp; *e; e++) {
@@ -166,6 +174,12 @@ void from_real(char *r)
     /* a payload seen through /proc reports the wrapper's name: drop a final "/.real" directory */
     char *b = xstrrchr(r, '/');
     if (b && b - r >= 6 && xmemcmp(b - 6, "/.real", 6) == 0) memmove(b - 6, b, xstrlen(b) + 1);
+}
+int vis_is_identity_file(const char *v)
+{
+    for (int i = 0; i < C.nhost; i++)
+        if (C.host[i].is_file && xstrcmp(v, C.host[i].v) == 0) return 1;
+    return 0;
 }
 int vis_readlink_identity(const char *v, char *out)
 {

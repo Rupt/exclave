@@ -277,6 +277,7 @@ static inline int xstrncmp(const char *a, const char *b, size_t n) { while (n &&
 static inline int xstarts(const char *s, const char *pfx) { return xstrncmp(s, pfx, xstrlen(pfx)) == 0; }
 static inline char *xstrchr(const char *s, int c) { for (; *s; s++) if (*s == c) return (char *)s; return c == 0 ? (char *)s : 0; }
 static inline char *xstrrchr(const char *s, int c) { const char *r = 0; for (; *s; s++) if (*s == c) r = s; return (char *)r; }
+static inline char *xstrstr(const char *h, const char *n) { size_t l = xstrlen(n); for (; *h; h++) if (xstrncmp(h, n, l) == 0) return (char *)h; return 0; }
 static inline void *xmemcpy(void *d, const void *s, size_t n) { char *dd = d; const char *ss = s; while (n--) *dd++ = *ss++; return d; }
 static inline void *xmemset(void *d, int c, size_t n) { char *dd = d; while (n--) *dd++ = (char)c; return d; }
 static inline int xmemcmp(const void *a, const void *b, size_t n) { const unsigned char *x = a, *y = b; for (; n; n--, x++, y++) if (*x != *y) return *x - *y; return 0; }

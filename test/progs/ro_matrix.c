@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <utime.h>
 #include <sys/syscall.h>
+#include <sys/utsname.h>
 #include <linux/fs.h>
 
 static int fails;
@@ -85,8 +86,9 @@ int main(int argc, char **argv)
     { int fl = 0; CHECK(ioctl(fd, FS_IOC_SETFLAGS, &fl), EROFS); }
     { struct stat a, b; CHECK(fstatat(fd, "", &a, AT_EMPTY_PATH), 0); stat(marker, &b); if (a.st_ino != b.st_ino) { fails++; printf("FAIL fstatat AT_EMPTY_PATH inode\n"); }
       /* F3-5: NULL with AT_EMPTY_PATH is the kernel's own fast form since 6.11 */
+      struct utsname u; uname(&u); int maj = 0, min = 0; sscanf(u.release, "%d.%d", &maj, &min); int newform = maj > 6 || (maj == 6 && min >= 11);
       errno = 0; long r = syscall(SYS_newfstatat, fd, (char *)0, &a, AT_EMPTY_PATH);
-      if (!(r == 0 || errno == EINVAL || errno == EFAULT && 0)) { fails++; printf("FAIL fstatat(fd, NULL, AT_EMPTY_PATH): %ld errno %d\n", r, errno); }
+      if (newform ? r != 0 : !(r == 0 || errno == EFAULT || errno == EINVAL)) { fails++; printf("FAIL fstatat(fd, NULL, AT_EMPTY_PATH): %ld errno %d on %s\n", r, errno, u.release); }
       if (r == 0 && a.st_ino != b.st_ino) { fails++; printf("FAIL fstatat NULL inode\n"); } }
     { /* F3-7 */ CHECK(open(dir, O_RDONLY | O_CREAT, 0644), EISDIR); }
     { /* F3-8: readlinkat(fd, "") of an O_PATH|O_NOFOLLOW descriptor on a symlink */
