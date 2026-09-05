@@ -138,41 +138,76 @@ def _expand(s, origin):
     return s.replace("$ORIGIN", origin).replace("${ORIGIN}", origin).replace("$LIB", "lib/x86_64-linux-gnu").replace("${LIB}", "lib/x86_64-linux-gnu").replace("$PLATFORM", "x86_64").replace("${PLATFORM}", "x86_64")
 
 
-def ld_conf_dirs(tree):
-    """Directories ldconfig indexes: /etc/ld.so.conf and ld.so.conf.d, plus the trusted defaults."""
-    dirs = []
+def read_cache(tree):
+    """/etc/ld.so.cache in the glibc-ld.so.cache1.1 format: {soname: [paths in file order]}. None if absent."""
+    real = tree.real("/etc/ld.so.cache")
+    if not os.path.isfile(real):
+        return None
+    data = open(real, "rb").read()
+    off = data.find(b"glibc-ld.so.cache1.1")
+    if off < 0:
+        return {}
+    nlibs, len_strings = struct.unpack_from("<II", data, off + 20)
+    entries = off + 48
+    table = {}
+    for base in (off, entries + 24 * nlibs):                     # offsets are from the header; fall back to the string table
+        table = {}
+        ok = True
+        for i in range(nlibs):
+            flags, key, value = struct.unpack_from("<iII", data, entries + 24 * i)
+            hwcap = struct.unpack_from("<Q", data, entries + 24 * i + 16)[0]
+            try:
+                k = data[base + key:data.index(b"\0", base + key)].decode()
+                v = data[base + value:data.index(b"\0", base + value)].decode()
+            except (ValueError, UnicodeDecodeError):
+                ok = False
+                break
+            if not v.startswith("/"):
+                ok = False
+                break
+            if hwcap == 0:
+                table.setdefault(k, []).append(v)
+        if ok:
+            break
+    return table
 
-    def read(vpath):
-        real = tree.real(vpath)
-        if not os.path.isfile(real):
-            return
-        for line in open(real, encoding="utf-8", errors="replace"):
-            line = line.split("#", 1)[0].strip()
-            if not line:
-                continue
-            if line.startswith("include "):
-                import glob
-                pat = line[8:].strip()
-                for m in sorted(glob.glob(tree.real(pat))):
-                    read("/" + os.path.relpath(m, tree.root))
-            elif line.startswith("/"):
-                dirs.append(line)
-    read("/etc/ld.so.conf")
-    return dirs + DEFAULT_DIRS
+
+VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
 
 
-def find_library(tree, name, elf, vpath, conf_dirs):
-    """The virtual path ld.so would load for DT_NEEDED name from the object at vpath, or None."""
+def host_owned(vdir, own):
+    """The opener's ownership rule for a directory: volatile, or under no own prefix (8.1)."""
+    if any(vdir == v or vdir.startswith(v + "/") for v in VOLATILE):
+        return True
+    return not any(vdir == o or vdir.startswith(o.rstrip("/") + "/") for o in own)
+
+
+def find_library(tree, name, elf, vpath, rpaths, cache, own=(), host_hits=None):
+    """The virtual path ld.so would load for DT_NEEDED name from the object at vpath, or None.
+    rpaths: the DT_RPATH of every object on the chain that led here (inherited when the object has no RUNPATH).
+    A search directory the can does not own is the host's at run time: such a directory is recorded in
+    host_hits, since the loader would take the host's library from it (review F3-17)."""
     if "/" in name:
         return tree.resolve(name) if name.startswith("/") else None
     origin = os.path.dirname(vpath)
     search = []
-    if elf.rpath and not elf.runpath:
-        search += [_expand(p, origin) for p in elf.rpath.split(":") if p]
+    if not elf.runpath:
+        for r in ([elf.rpath] if elf.rpath else []) + rpaths:
+            search += [_expand(p, origin) for p in r.split(":") if p]
     if elf.runpath:
         search += [_expand(p, origin) for p in elf.runpath.split(":") if p]
-    search += conf_dirs
     for d in search:
+        if own and host_owned(os.path.normpath(d), own) and host_hits is not None:
+            host_hits.append(d)
+        for sub in HWCAPS + [""]:
+            cand = tree.resolve(os.path.join(d, sub, name) if sub else os.path.join(d, name))
+            if cand and os.path.isfile(tree.payload(cand)):
+                return cand
+    for p in (cache or {}).get(name, []):
+        cand = tree.resolve(p)
+        if cand and os.path.isfile(tree.payload(cand)):
+            return cand
+    for d in DEFAULT_DIRS:
         for sub in HWCAPS + [""]:
             cand = tree.resolve(os.path.join(d, sub, name) if sub else os.path.join(d, name))
             if cand and os.path.isfile(tree.payload(cand)):
@@ -188,27 +223,23 @@ def static_check(can, index, data_prefixes=(), log=print):
     interp_resolved = tree.resolve(interp) if interp else None
     if interp and not interp_resolved:
         rep.errors.append("interp %s does not resolve in the tree" % interp)
-    conf_dirs = ld_conf_dirs(tree)
+    own = index.get("own", [])
+    cache = read_cache(tree)
+    if cache is None:
+        rep.warnings.append("no /etc/ld.so.cache: only the loader's default directories are searched at run time")
+    else:
+        for soname, paths in cache.items():                       # no cache entry may name the opener (10.3)
+            for p in paths:
+                r = tree.resolve(p)
+                if r and os.path.isfile(tree.payload(r)):
+                    try:
+                        e = Elf(tree.payload(r))
+                    except (ValueError, OSError):
+                        continue
+                    if e.soname is None and e.type == ET_DYN and not e.needed:
+                        rep.errors.append("ld.so.cache entry %s names %s, which is not a shared library (the opener?)" % (soname, p))
     seen = rep.seen
-
-    def check_lib(vpath, chain):
-        if vpath in seen:
-            return
-        seen[vpath] = True
-        try:
-            e = Elf(tree.payload(vpath))
-        except (ValueError, OSError) as ex:
-            rep.errors.append("%s: %s" % (vpath, ex))
-            return
-        for n in e.needed:
-            found = find_library(tree, n, e, vpath, conf_dirs)
-            if not found:
-                rep.errors.append("%s needs %s, which does not resolve in the tree (chain %s)" % (vpath, n, " > ".join(chain)))
-                continue
-            if n.startswith("libc.") and n != libc_soname:
-                rep.errors.append("%s needs %s: a libc other than the index's %s" % (vpath, n, libc_soname))
-            check_lib(found, chain + [vpath])
-
+    executables, libraries = [], []
     for dirpath, dirnames, filenames in os.walk(tree.root):
         rel = "/" + os.path.relpath(dirpath, tree.root).replace(os.sep, "/")
         rel = "" if rel == "/." else rel
@@ -245,7 +276,39 @@ def static_check(can, index, data_prefixes=(), log=print):
                     rep.errors.append("%s wants interpreter %s but the index names none" % (vpath, e.interp))
                 elif r != interp_resolved:
                     rep.errors.append("%s wants interpreter %s, not the can's %s (one libc per can, 7.3)" % (vpath, e.interp, interp))
-            check_lib(vpath, [])
+            (executables if e.interp is not None or e.type != ET_DYN else libraries).append((vpath, e))
+
+    reached = set()
+
+    def check(vpath, e, rpaths, chain):
+        key = (vpath, tuple(rpaths))
+        if key in seen:
+            return
+        seen[key] = True
+        if chain:
+            reached.add(vpath)
+        below = rpaths if e.runpath else ([e.rpath] if e.rpath else []) + rpaths
+        for n in e.needed:
+            host_hits = []
+            found = find_library(tree, n, e, vpath, rpaths, cache, own, host_hits)
+            for d in host_hits:
+                rep.errors.append("%s searches %s for %s, a directory the can does not own: the host's library would load" % (vpath, d, n))
+            if not found:
+                rep.errors.append("%s needs %s, which does not resolve in the tree (chain %s)" % (vpath, n, " > ".join(chain + [vpath])))
+                continue
+            if n.startswith("libc.") and n != libc_soname:
+                rep.errors.append("%s needs %s: a libc other than the index's %s" % (vpath, n, libc_soname))
+            try:
+                fe = Elf(tree.payload(found))
+            except (ValueError, OSError) as ex:
+                rep.errors.append("%s: %s" % (found, ex))
+                continue
+            check(found, fe, below, chain + [vpath])
+    for vpath, e in executables:                                   # executables first, so that RPATH inheritance is seen
+        check(vpath, e, [], [])
+    for vpath, e in libraries:                                     # a library nothing reaches is a dlopen candidate: checked alone
+        if vpath not in reached:
+            check(vpath, e, [], [])
     return rep
 
 

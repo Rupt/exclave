@@ -175,8 +175,10 @@ class Repo:
     def download(self, st):
         """Fetch one package, verify it against the index, return (path, blake2b)."""
         url = "%s/%s" % (self.mirror, st["Filename"])
+        if "SHA256" not in st:
+            raise RepoError("%s: the index carries no SHA256 for it; refusing an unverifiable download" % st["Filename"])
         data = self._get(url)
-        if "SHA256" in st and hashlib.sha256(data).hexdigest() != st["SHA256"]:
+        if hashlib.sha256(data).hexdigest() != st["SHA256"]:
             raise RepoError("%s: SHA256 does not match the index" % st["Filename"])
         if "Size" in st and len(data) != int(st["Size"]):
             raise RepoError("%s: size does not match the index" % st["Filename"])

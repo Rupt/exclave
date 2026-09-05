@@ -33,11 +33,23 @@ def _safe_rel(name):
     return "/".join(parts)
 
 
+_ALIAS = re.compile(r"^(bin|sbin|lib|lib32|lib64|libx32)(/|$)")
+
+
+def _inside(root_real, dst):
+    """The parent of dst, once the kernel has resolved every symlink, must be the tree (review O3-8)."""
+    parent = os.path.realpath(os.path.dirname(dst))
+    if parent != root_real and not parent.startswith(root_real + os.sep):
+        raise BuildError("%s escapes the tree through a symlink (resolves under %s)" % (dst, parent))
+
+
 def extract(root, debs, log=print):
     """debs: [(name, path, stanza)]. Extracts every data.tar into root/ after the merged-usr links.
-    A regular file shipped by two packages is an error unless one declares Replaces on the other;
-    diversions in maintainer scripts are refused. Returns {relpath: owning package}."""
+    A regular file shipped by two packages is an error unless one declares Replaces on the other, with the
+    merged-usr spellings of a path treated as one path; diversions in maintainer scripts are refused; a
+    member whose path resolves outside the tree through a symlink is refused. Returns {relpath: owner}."""
     os.makedirs(os.path.join(root, "usr"), exist_ok=True)
+    root_real = os.path.realpath(root)
     for d in MERGED_USR:
         os.makedirs(os.path.join(root, "usr", d), exist_ok=True)
         p = os.path.join(root, d)
@@ -63,6 +75,8 @@ def extract(root, debs, log=print):
                 if not rel:
                     continue
                 dst = os.path.join(root, rel)
+                key = _ALIAS.sub(r"usr/\1\2", rel)                    # /lib/x and /usr/lib/x are one file (O3-9)
+                _inside(root_real, dst)
                 if m.isdir():
                     if os.path.islink(dst) and os.path.isdir(dst):
                         continue
@@ -70,7 +84,7 @@ def extract(root, debs, log=print):
                     os.chmod(dst, (m.mode & 0o777) | 0o700)                # the tar's mode; a tree must stay traversable by its owner
                     continue
                 if os.path.lexists(dst) and (os.path.islink(dst) or not os.path.isdir(dst)):
-                    prev = owner.get(rel)
+                    prev = owner.get(key)
                     if m.issym() and os.path.islink(dst) and os.readlink(dst) == m.linkname:
                         continue                                            # identical symlink from two packages, or a merged-usr link: normal
                     if os.path.islink(dst) and os.path.isdir(dst) and not m.issym():
@@ -89,15 +103,17 @@ def extract(root, debs, log=print):
                 elif m.islnk():
                     hardlinks_pending.append((os.path.join(root, _safe_rel(m.linkname)), dst))
                 elif m.isfile():
-                    with open(dst, "wb") as f:
+                    fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    with os.fdopen(fd, "wb") as f:
                         shutil.copyfileobj(t.extractfile(m), f)
                     os.chmod(dst, m.mode & 0o777)                           # setuid and setgid are meaningless under no_new_privs
                     os.utime(dst, (m.mtime, m.mtime))
                 else:
                     log("skipping special file /%s from %s" % (rel, name))
                     continue
-                owner[rel] = name
+                owner[key] = name
     for src, dst in hardlinks_pending:
+        _inside(root_real, dst)
         if os.path.lexists(dst):
             os.remove(dst)
         os.link(src, dst)
