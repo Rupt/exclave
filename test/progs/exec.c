@@ -12,13 +12,14 @@
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <unistd.h>
 extern char **environ;
 
 int main(int argc, char **argv)
 {
     const char *mode = argc > 1 ? argv[1] : "";
-    if (!strcmp(mode, "child")) { printf("child ok argv0=%s\n", argv[0]); return 0; }
+    if (!strcmp(mode, "child") || argc == 1) { printf("child ok argv0=%s\n", argc ? argv[0] : "(none)"); return 0; }
     if (!strcmp(mode, "self")) { execl("/proc/self/exe", argv[0], "child", (char *)0); perror("execl /proc/self/exe"); return 1; }
     if (!strcmp(mode, "header")) {
         char exe[4096]; ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1); if (n < 0) { perror("readlink"); return 1; } exe[n] = 0;
@@ -45,6 +46,31 @@ int main(int argc, char **argv)
     }
     if (!strcmp(mode, "personality")) { personality(ADDR_NO_RANDOMIZE); execl("/proc/self/exe", argv[0], "child", (char *)0); perror("execl"); return 1; }
     if (!strcmp(mode, "script")) { execl(argv[2], argv[2], "arg1", (char *)0); perror("execl script"); return 1; }
+    if (!strcmp(mode, "vectors")) {                          /* O3-11, F3-14: NULL and bad vectors behave as the kernel makes them */
+        int fails = 0; extern char **environ;
+        for (int t = 2; t < argc; t++) {
+            struct { const char *name; char **av; char **ev; int want; } cases[] = {
+                { "null/null", 0, 0, 0 }, { "null/env", 0, environ, 0 }, { "argv/null", (char *[]){ "x", "child", 0 }, 0, 0 },
+                { "bad argv", (char **)1, environ, EFAULT }, { "bad envp", (char *[]){ "x", "child", 0 }, (char **)1, EFAULT } };
+            for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+                pid_t p = fork(); if (p == 0) { execve(argv[t], cases[i].av, cases[i].ev); _exit(errno == EFAULT ? 77 : 78); }
+                int st; waitpid(p, &st, 0);
+                int got = WIFSIGNALED(st) ? -WTERMSIG(st) : WEXITSTATUS(st) == 77 ? EFAULT : WEXITSTATUS(st) == 78 ? -1 : 0;
+                if (got != cases[i].want) { fails++; printf("FAIL %s %s: got %d wanted %d\n", argv[t], cases[i].name, got, cases[i].want); }
+            }
+        }
+        printf("vectors: %d failures\n", fails); return fails ? 1 : 0;
+    }
+    if (!strcmp(mode, "nofollow")) {                         /* F3-20: execveat of a symlink itself is ELOOP */
+        errno = 0; syscall(SYS_execveat, AT_FDCWD, "/usr/bin/sh", (char *[]){ "sh", "-c", "echo RAN", 0 }, environ, AT_SYMLINK_NOFOLLOW);
+        printf("%d\n", errno); return errno == ELOOP ? 0 : 1;
+    }
+    if (!strcmp(mode, "closefds")) {                         /* F3-18: close everything, open a file, trap: the log must not land in it */
+        for (int fd = 3; fd < 1024; fd++) close(fd);
+        int fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644); write(fd, "line one\n", 9);
+        struct stat st; stat("/usr/share", &st); stat("/usr/bin/sh", &st);
+        write(fd, "line two\n", 9); close(fd); printf("closefds done fd=%d\n", fd); return 0;
+    }
     if (!strcmp(mode, "perm")) {                             /* O3-4: the kernel's permission triads, not "anyone may execute" */
         int fails = 0;
         for (int i = 2; i < argc; i++) { errno = 0; execl(argv[i], argv[i], (char *)0); if (errno != EACCES) { fails++; printf("FAIL exec %s: errno %d\n", argv[i], errno); } }

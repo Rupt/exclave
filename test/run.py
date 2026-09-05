@@ -94,7 +94,8 @@ def make_can(ctx):
         f.write("marker\n")
     for name, body in (("cont-test-script", "#!/bin/sh\necho script ok $1 $#\n"),
                        ("cont-test-noshebang", "echo noshebang ok\n"),
-                       ("cont-test-script2", "#!/usr/bin/cont-test-script\n")):
+                       ("cont-test-script2", "#!/usr/bin/cont-test-script\n"),
+                       ("cont-test-exe", "#!/bin/sh\nreadlink /proc/$$/exe\n")):
         p = os.path.join(root, "usr", "bin", name)
         with open(p, "w") as f:
             f.write(body)
@@ -120,7 +121,7 @@ def compile_progs(ctx):
     shutil.copytree(os.path.join(HERE, "progs"), src)
     os.makedirs(ctx.progs, exist_ok=True)
     gcc = wrapper(ctx, GCC)
-    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo"):
+    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp"):
         rc, out, err = run([gcc, "-O1", "-g", "-pthread", "-o", os.path.join(ctx.progs, name), os.path.join(src, name + ".c"), "-lm", "-ldl"], cwd=ctx.work, env=ctx.env)
         if rc:
             sys.exit("cannot compile %s with the can's gcc:\n%s" % (name, err))
@@ -277,6 +278,11 @@ def exec_modes(ctx):
     for mode in ("fexecve", "fexecve_opath", "fexecve_payload", "seccomp"):
         rc, out, err = inside(ctx, p, [mode]); expect(rc == 0, "%s: rc=%d %r %r" % (mode, rc, out, err))
     rc, out, err = inside(ctx, p, ["personality"]); expect(rc == 0 and out.startswith("child ok"), "personality: %r %r" % (out, err))
+    rc, out, err = inside(ctx, p, ["nofollow"]); expect(rc == 0, "execveat AT_SYMLINK_NOFOLLOW on a symlink: %r %r" % (out, err))
+    log = os.path.join(ctx.work, "closefds.log")
+    target = os.path.join(ctx.work, "closefds.out")
+    rc, out, err = inside(ctx, p, ["closefds", target], env=dict(ctx.env, CAN_LOG=log))
+    expect(rc == 0 and open(target).read() == "line one\nline two\n", "log lines in the program's file (F3-18): %r %r" % (open(target).read()[:200], err))
     ne = os.path.join(ctx.work, "nonexec")
     os.makedirs(ne, exist_ok=True)
     with open(os.path.join(ne, "true"), "w") as f:
@@ -319,6 +325,10 @@ def scripts(ctx):
     expect(rc == 0 and out == "noshebang ok\n", "ENOEXEC fallback: %r %r" % (out, err))
     rc, out, err = run([wrapper(ctx, "cont-test-noshebang")], cwd=ctx.work, env=ctx.env)
     expect(rc == 127 and "not an executable" in err, "noshebang direct: rc=%d %r" % (rc, err))
+    rc, out, err = run([wrapper(ctx, "cont-test-exe")], cwd=ctx.work, env=ctx.env)
+    expect(out == "/usr/bin/dash\n", "a wrapped script's /proc/self/exe is its interpreter (F3-22): %r %r" % (out, err))
+    rc, out, err = run([wrapper(ctx, "bash"), "-c", "echo from bash"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "from bash\n", "bash starts (F3-23): rc=%d %r" % (rc, err))
 
 
 @test
@@ -452,6 +462,193 @@ def identity_link_consistency(ctx):
     resolved = os.path.normpath(os.path.join("/etc", target))
     rc, out, err = run([wrapper(ctx, "sh"), "-c", "test -L /etc/localtime && echo link; readlink /etc/localtime; head -c 4 %s; head -c 4 /etc/localtime" % resolved], cwd=ctx.work, env=ctx.env)
     expect(out == "link\n%s\nTZifTZif" % target, "identity link: %r %r" % (out, err))
+
+
+@test
+def executable_stack(ctx):
+    """7.4.5: a program whose PT_GNU_STACK asks for an executable stack, built by the can's gcc, runs inside (O3-7)."""
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "execstack"))
+    expect(rc == 0 and out == "result 12\n", "nested function trampoline: rc=%d %r %r" % (rc, out, err))
+
+
+@test
+def longjmp_out_of_trapped_open(ctx):
+    """7.5.4: siglongjmp out of a handler that interrupted a trapped blocking open, 200 times (O3-6, F3-15)."""
+    d = os.path.join(ctx.work, "hostdir")
+    os.makedirs(d, exist_ok=True)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "ljmp"), [os.path.join(d, "ljfifo"), "200"], timeout=120)
+    expect(rc == 0 and out == "timed out 200 of 200 rounds\n", "longjmp rounds: rc=%d %r %r" % (rc, out, err))
+
+
+@test
+def exec_vectors(ctx):
+    """7.5.6 for argument vectors: NULL is empty, a bad pointer is EFAULT, for a wrapper, a host ELF and a host script (O3-11, F3-14)."""
+    p = os.path.join(ctx.progs, "exec")
+    hs = os.path.join(ctx.work, "vec-script.sh")
+    with open(hs, "w") as f:
+        f.write("#!/bin/sh\nexit 0\n")
+    os.chmod(hs, 0o755)
+    rc, out, err = inside(ctx, p, ["vectors", "/usr/bin/true", p, hs], timeout=60)
+    expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
+def proc_magic_links(ctx):
+    """/dev/stdin on a pipe, process substitution and /proc/self/fd of a pipe are reachable (F3-11)."""
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "cat /dev/stdin"], cwd=ctx.work, env=ctx.env, inp=b"hi\n")
+    expect(out == "hi\n", "/dev/stdin on a pipe: %r %r" % (out, err))
+    if os.path.exists(wrapper(ctx, "bash")):
+        rc, out, err = run([wrapper(ctx, "bash"), "-c", "cat <(echo psub)"], cwd=ctx.work, env=ctx.env)
+        expect(out == "psub\n", "process substitution: %r %r" % (out, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "exec 3</etc/passwd; head -1 /proc/self/fd/3 | cut -d: -f1"], cwd=ctx.work, env=ctx.env)
+    expect(out == "root\n", "/proc/self/fd of a file: %r %r" % (out, err))
+
+
+@test
+def new_xattr_syscalls(ctx):
+    """O3-5, F3-10: the *at xattr syscalls of 6.13 are translated; on older kernels they are ENOSYS either way."""
+    src = os.path.join(ctx.work, "xat.c")
+    with open(src, "w") as f:
+        f.write('#include <stdio.h>\n#include <errno.h>\n#include <unistd.h>\n#include <sys/syscall.h>\n#include <fcntl.h>\n'
+                'int main(void){char b[64];errno=0;long r=syscall(465,AT_FDCWD,"/etc/hostname",0,b,sizeof b);printf("%ld %d\\n",r,errno);'
+                'errno=0;r=syscall(465,AT_FDCWD,"/usr/share/cont-test-marker",0,b,sizeof b);printf("%ld %d\\n",r,errno);return 0;}\n')
+    exe = os.path.join(ctx.work, "xat")
+    rc, out, err = run([wrapper(ctx, GCC), "-O1", src, "-o", exe], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, err)
+    rc, out, err = inside(ctx, exe)
+    lines = out.splitlines()
+    if lines and lines[0].endswith(" 38"):
+        return "kernel has no listxattrat"
+    expect(lines == ["-1 2", "0 0"], "listxattrat sees the can, not the host: %r %r" % (out, err))
+
+
+@test
+def bind_mount_alias(ctx):
+    """F3-13: a second spelling of the tree's root through a bind mount is the tree, read-only."""
+    if subprocess.run(["unshare", "-Urm", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
+        return "no user namespaces"
+    alias = os.path.join(ctx.work, "alias")
+    os.makedirs(alias, exist_ok=True)
+    cmd = "mount --bind %s %s && %s -c 'touch %s/root/usr/zz-alias; echo rc=$?; cat %s/root/usr/share/cont-test-marker'" % (ctx.can, alias, wrapper(ctx, "sh"), alias, alias)
+    rc, out, err = run(["unshare", "-Urm", "sh", "-c", cmd], cwd=ctx.work, env=dict(ctx.env, PATH="/usr/bin:/bin"))
+    expect(out == "rc=1\nmarker\n" and "Read-only" in err, "bind alias: rc=%d %r %r" % (rc, out, err))
+    expect(not os.path.exists(os.path.join(ctx.root, "usr", "zz-alias")), "the tree was written through a bind mount")
+
+
+def make_deb(path, name, members, control_extra=""):
+    """A minimal .deb: ar(debian-binary, control.tar.gz, data.tar.gz). members: [(tar-name, kind, target_or_bytes, mode)]."""
+    import io
+    import tarfile
+    import time as _t
+
+    def tgz(entries):
+        bio = io.BytesIO()
+        with tarfile.open(fileobj=bio, mode="w:gz") as t:
+            for n, kind, val, mode in entries:
+                ti = tarfile.TarInfo(n)
+                ti.mtime = int(_t.time())
+                ti.mode = mode
+                if kind == "dir":
+                    ti.type = tarfile.DIRTYPE
+                    t.addfile(ti)
+                elif kind == "sym":
+                    ti.type = tarfile.SYMTYPE
+                    ti.linkname = val
+                    t.addfile(ti)
+                else:
+                    ti.size = len(val)
+                    t.addfile(ti, io.BytesIO(val))
+        return bio.getvalue()
+    control = ("Package: %s\nVersion: 1\nArchitecture: amd64\nMaintainer: t\nDescription: t\n%s" % (name, control_extra)).encode()
+    parts = [("debian-binary", b"2.0\n"), ("control.tar.gz", tgz([("./control", "file", control, 0o644)])), ("data.tar.gz", tgz(members))]
+    with open(path, "wb") as f:
+        f.write(b"!<arch>\n")
+        for n, data in parts:
+            f.write(("%-16s%-12d%-6d%-6d%-8s%-10d`\n" % (n, 0, 0, 0, "100644", len(data))).encode())
+            f.write(data)
+            if len(data) % 2:
+                f.write(b"\n")
+
+
+@test
+def cannery_extraction_rules(ctx):
+    """10.1 step 3 after the review: a member reached through a package's own symlink is refused (O3-8); two spellings
+    of one path under merged usr conflict (O3-9); an index entry without a digest is not downloaded (O3-14)."""
+    d = os.path.join(ctx.work, "debs")
+    os.makedirs(d, exist_ok=True)
+    outside = os.path.join(ctx.work, "escaped")
+    os.makedirs(outside, exist_ok=True)
+    with open(os.path.join(outside, "README"), "w") as f:
+        f.write("ORIGINAL\n")
+    make_deb(os.path.join(d, "evil.deb"), "evil", [("./usr", "dir", None, 0o755), ("./usr/share", "dir", None, 0o755),
+                                                     ("./usr/share/doc", "sym", "../../../../escaped", 0o777), ("./usr/share/doc/README", "file", b"ESCAPED\n", 0o644)])
+    root = os.path.join(ctx.work, "root-evil")
+    try:
+        build.extract(root, [("evil", os.path.join(d, "evil.deb"), {})], log=lambda *a: None)
+    except build.BuildError as e:
+        expect("escapes" in str(e), str(e))
+    else:
+        raise AssertionError("a member behind a symlink out of the tree was extracted")
+    expect(open(os.path.join(outside, "README")).read() == "ORIGINAL\n", "the file outside the tree was written")
+    make_deb(os.path.join(d, "a.deb"), "a", [("./usr", "dir", None, 0o755), ("./usr/lib", "dir", None, 0o755), ("./usr/lib/libfoo.so.1", "file", b"A", 0o644)])
+    make_deb(os.path.join(d, "b.deb"), "b", [("./lib", "dir", None, 0o755), ("./lib/libfoo.so.1", "file", b"B", 0o644)])
+    root = os.path.join(ctx.work, "root-alias")
+    try:
+        build.extract(root, [("a", os.path.join(d, "a.deb"), {}), ("b", os.path.join(d, "b.deb"), {})], log=lambda *a: None)
+    except build.BuildError as e:
+        expect("both ship" in str(e), str(e))
+    else:
+        raise AssertionError("the merged-usr spellings of one file were not seen as a conflict")
+    import repo
+    r = repo.Repo("ubuntu", ["noble"], "amd64", ["main"], os.path.join(ctx.work, "cache"), "http://127.0.0.1:1/none")
+    try:
+        r.download({"Package": "x", "Filename": "pool/x.deb", "Size": "1"})
+    except repo.RepoError as e:
+        expect("no SHA256" in str(e), str(e))
+    else:
+        raise AssertionError("a package without a digest was fetched")
+
+
+@test
+def static_check_loader_model(ctx):
+    """10.3 after the review (O3-10, F3-17): DT_RPATH is inherited down the chain, ld.so.cache is read, a search
+    directory the can does not own is refused, an opener in the cache is refused."""
+    import elfcheck
+    x = os.path.join(ctx.root, "usr", "local", "x")
+    base = os.path.join(x, "lib")
+    os.makedirs(base, exist_ok=True)
+    src = os.path.join(ctx.work, "rp")
+    os.makedirs(src, exist_ok=True)
+    with open(os.path.join(src, "bar.c"), "w") as f:
+        f.write("int bar(void) { return 1; }\n")
+    with open(os.path.join(src, "foo.c"), "w") as f:
+        f.write("int bar(void); int foo(void) { return bar(); }\n")
+    with open(os.path.join(src, "prog.c"), "w") as f:
+        f.write("int foo(void); int main(void) { return foo(); }\n")
+    gcc = wrapper(ctx, GCC)
+    built = os.path.join(src, "out")                          # built on the host side, then placed in the tree by hand:
+    os.makedirs(built, exist_ok=True)                         # from inside the can the tree's real path is the read-only can
+    try:
+        for cmd in (["-shared", "-fPIC", "-Wl,-soname,libbar.so.1", "-o", os.path.join(built, "libbar.so.1"), "bar.c"],
+                    ["-shared", "-fPIC", "-Wl,-soname,libfoo.so.1", "-o", os.path.join(built, "libfoo.so.1"), "foo.c", "-L" + built, "-l:libbar.so.1"],
+                    ["-o", os.path.join(built, "prog"), "prog.c", "-L" + built, "-l:libfoo.so.1", "-Wl,-rpath-link," + built, "-Wl,--disable-new-dtags", "-Wl,-rpath,/usr/local/x/lib"],
+                    ["-o", os.path.join(built, "hostprog"), "prog.c", "-L" + built, "-l:libfoo.so.1", "-Wl,-rpath-link," + built, "-Wl,-rpath,/tmp/cont-hostlib"]):
+            rc, out, err = run([gcc] + cmd, cwd=src, env=ctx.env)
+            expect(rc == 0, err)
+        for f in ("libbar.so.1", "libfoo.so.1"):
+            shutil.copy2(os.path.join(built, f), os.path.join(base, f))
+        for f in ("prog", "hostprog"):
+            shutil.copy2(os.path.join(built, f), os.path.join(x, f))
+        idx = cannery.load(os.path.join(ctx.can, ".can", "index"), "index")
+        info = cannery.index_info(idx)
+        rep = elfcheck.static_check(ctx.can, info, info["data"])
+        bad = [e for e in rep.errors if "/usr/local/x/prog" in e or ("libfoo" in e and "hostprog" not in e)]
+        expect(not bad, "RPATH inheritance: " + "; ".join(bad))
+        expect(any("hostprog" in e and "does not own" in e for e in rep.errors), "a host RPATH must be refused (F3-17): %r" % rep.errors[:3])
+        cache = elfcheck.read_cache(elfcheck.Tree(ctx.root))
+        expect(cache and "libc.so.6" in cache and cache["libc.so.6"][0].endswith("/libc.so.6"), "ld.so.cache parsed: %r" % (list(cache.items())[:2] if cache else cache))
+    finally:
+        shutil.rmtree(x, ignore_errors=True)
 
 
 @test
