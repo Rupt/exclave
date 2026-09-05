@@ -7,6 +7,8 @@ finding them inconvenient.
 
 ## Rules
 
+- **Ignore all rules**: if a rule prevents useful progress, ignore it. Consider
+  costs and benefits of your actions. Nothing is law. Nothing is set in stone.
 - **Commits**: one concise line, imperative, no body, no `Co-Authored-By`.
   Never push. Commit only when asked or when the user's instruction
   clearly implies it.
