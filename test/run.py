@@ -1,0 +1,476 @@
+#!/usr/bin/env python3
+"""run.py — the regression suite for milestone 1a (PROPOSAL.md 17.4, the subset a single machine can run).
+
+    test/run.py [--tree DIR] [--work DIR] [--keep] [-k SUBSTRING] [-v]
+
+Makes a can from TREE (default $CONT_TREE) under WORK (default build/test-work) with a few test files added to
+the tree, compiles test/progs/*.c with the can's own gcc, and runs every named test. Needs python3 and a
+Debian/Ubuntu gcc tree (see README.md). Optional: strace for the isolation test, /usr/bin/gcc-13 for the
+identical-object test. Exit status is the number of failures.
+"""
+import argparse
+import os
+import re
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+sys.path.insert(0, os.path.join(REPO, "cannery"))
+import cannery  # noqa: E402
+
+GCC = "x86_64-linux-gnu-gcc-13"
+VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
+NR = {"open": 2, "stat": 4, "lstat": 6, "access": 21, "execve": 59, "readlink": 89, "openat": 257, "newfstatat": 262,
+      "readlinkat": 267, "faccessat": 269, "faccessat2": 439, "statx": 332, "execveat": 322, "chdir": 80, "mkdir": 83,
+      "mkdirat": 258, "unlink": 87, "unlinkat": 263, "rename": 82, "renameat": 264, "renameat2": 316, "link": 86,
+      "linkat": 265, "symlink": 88, "symlinkat": 266}
+
+TESTS = []
+
+
+def test(f):
+    TESTS.append(f)
+    return f
+
+
+class Ctx:
+    pass
+
+
+def sh_quote(s):
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+def run(cmd, cwd=None, env=None, inp=None, timeout=300, executable=None, preexec=None):
+    p = subprocess.run(cmd, cwd=cwd, env=env, input=inp, timeout=timeout, executable=executable, preexec_fn=preexec,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
+
+
+def wrapper(ctx, name):
+    return os.path.join(ctx.root, "usr", "bin", name)
+
+
+def inside(ctx, prog, args=(), cwd=None, env=None, inp=None, argv0=None, timeout=300):
+    """Run a program by virtual/host path inside the can in loader mode (CAN_EXEC)."""
+    e = dict(env if env is not None else ctx.env)
+    e["CAN_EXEC"] = prog
+    return run([argv0 or prog] + list(args), cwd=cwd or ctx.work, env=e, inp=inp, executable=ctx.opener, timeout=timeout)
+
+
+def expect(cond, msg):
+    if not cond:
+        raise AssertionError(msg)
+
+
+# ------------------------------------------------------------------ setup
+def make_can(ctx):
+    can = os.path.join(ctx.work, "can")
+    root = os.path.join(can, "root")
+    os.makedirs(os.path.join(can, ".can"))
+    shutil.copy2(ctx.opener_src, os.path.join(can, ".can", "opener"))
+    os.chmod(os.path.join(can, ".can", "opener"), 0o755)
+    shutil.copytree(ctx.tree, root, symlinks=True, copy_function=cannery.link_or_copy)
+    # test additions to the tree
+    with open(os.path.join(root, "usr", "share", "cont-test-marker"), "w") as f:
+        f.write("marker\n")
+    for name, body in (("cont-test-script", "#!/bin/sh\necho script ok $1 $#\n"),
+                       ("cont-test-noshebang", "echo noshebang ok\n"),
+                       ("cont-test-script2", "#!/usr/bin/cont-test-script\n")):
+        p = os.path.join(root, "usr", "bin", name)
+        with open(p, "w") as f:
+            f.write(body)
+        os.chmod(p, 0o755)
+    manifest = os.path.join(ctx.work, "test.can")
+    top = "/" + ctx.work.split("/")[1]
+    lines = ['can 1']
+    ctx.claim = top not in VOLATILE
+    if ctx.claim:
+        lines.append("own %s" % cannery.quote(top.encode()))
+    with open(manifest, "w") as f:
+        f.write("\n\n".join(lines) + "\n")
+    cannery.cmd_wrap(can, quiet=True)
+    cannery.cmd_index(can, manifest, quiet=True)
+    ctx.can, ctx.root, ctx.opener = can, root, os.path.join(can, ".can", "opener")
+
+
+def compile_progs(ctx):
+    """The sources are copied into the work directory: with the work directory's top-level directory claimed
+    for the can (8.1), only the working directory's subtree is the host's."""
+    ctx.progs = os.path.join(ctx.work, "progs")
+    src = os.path.join(ctx.work, "src")
+    shutil.copytree(os.path.join(HERE, "progs"), src)
+    os.makedirs(ctx.progs, exist_ok=True)
+    gcc = wrapper(ctx, GCC)
+    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo"):
+        rc, out, err = run([gcc, "-O1", "-g", "-pthread", "-o", os.path.join(ctx.progs, name), os.path.join(src, name + ".c"), "-lm", "-ldl"], cwd=ctx.work, env=ctx.env)
+        if rc:
+            sys.exit("cannot compile %s with the can's gcc:\n%s" % (name, err))
+    rc, out, err = run([gcc, "-shared", "-fPIC", "-o", os.path.join(ctx.progs, "liborigin.so"), os.path.join(src, "origin_lib.c")], cwd=ctx.work, env=ctx.env)
+    rc2, out, err2 = run([gcc, "-o", os.path.join(ctx.progs, "origin_main"), os.path.join(src, "origin_main.c"), "-L" + ctx.progs, "-lorigin", "-Wl,-rpath,$ORIGIN"], cwd=ctx.work, env=ctx.env)
+    if rc or rc2:
+        sys.exit("cannot build the origin test:\n%s%s" % (err, err2))
+
+
+# ------------------------------------------------------------------ tests
+@test
+def version(ctx):
+    rc, out, err = run([wrapper(ctx, "gcc-13"), "--version"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and "13." in out, "gcc --version: rc=%d out=%r err=%r" % (rc, out, err))
+
+
+@test
+def hello(ctx):
+    src = os.path.join(ctx.work, "hello.c")
+    with open(src, "w") as f:
+        f.write('#include <stdio.h>\nint main(int c, char **v) { printf("hello %s %d\\n", v[0], c); return 0; }\n')
+    exe = os.path.join(ctx.work, "hello")
+    rc, out, err = run([wrapper(ctx, GCC), "-O2", src, "-o", exe], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "compile: " + err)
+    rc, out, err = run([exe, "a"], cwd=ctx.work)
+    expect(rc == 0 and out == "hello %s 2\n" % exe, "host run: %r %r" % (out, err))
+    rc, out, err = inside(ctx, exe, ["a", "b"])
+    expect(rc == 0 and out == "hello %s 3\n" % exe, "loader-mode run: %r %r" % (out, err))
+    ctx.hello_src, ctx.hello = src, exe
+
+
+@test
+def identical_object(ctx):
+    host = "/usr/bin/gcc-13"
+    if not os.path.exists(host):
+        return "no host gcc-13"
+    a, b = os.path.join(ctx.work, "h_host.o"), os.path.join(ctx.work, "h_can.o")
+    run([host, "-O2", "-c", ctx.hello_src, "-o", a], cwd=ctx.work)
+    rc, out, err = run([wrapper(ctx, "gcc-13"), "-O2", "-c", ctx.hello_src, "-o", b], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, err)
+    expect(open(a, "rb").read() == open(b, "rb").read(), "objects differ")
+
+
+@test
+def isolation(ctx):
+    if not shutil.which("strace"):
+        return "no strace"
+    tr = os.path.join(ctx.work, "trace")
+    calls = ",".join(NR)
+    rc, out, err = run(["strace", "-f", "-s", "4096", "-o", tr, "-e", "trace=" + calls, wrapper(ctx, GCC), "-O1", ctx.hello_src, "-o", os.path.join(ctx.work, "hello2")], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "compile under strace failed: " + err)
+    bad, seen = [], 0
+    allowed_files = set(cannery.IDENTITY_FILES)
+    for f in cannery.IDENTITY_FILES:          # the opener resolves each identity file's host symlink chain at startup
+        p = f
+        for _ in range(40):
+            if not os.path.islink(p):
+                break
+            t = os.readlink(p)
+            p = os.path.normpath(t if t.startswith("/") else os.path.join(os.path.dirname(p), t))
+            allowed_files.add(p)
+    for line in open(tr):
+        m = re.match(r"^\d+\s+(\w+)\((.*)\)\s+=\s+(-?\d+)", line)
+        if not m:
+            continue
+        name, args, res = m.group(1), m.group(2), int(m.group(3))
+        if res == NR.get(name):
+            continue                      # the trapped syscall the kernel skipped; the handler re-issues it
+        if res < 0:
+            continue
+        paths = re.findall(r'"((?:[^"\\]|\\.)*)"', args)
+        if name in ("execve", "execveat") and paths:
+            paths = paths[:1]
+        for p in paths:
+            seen += 1
+            p = os.path.normpath(p) if p.startswith("/") else p
+            ok = (not p.startswith("/") or p.startswith(ctx.root) or p.startswith(VOLATILE) or p.startswith(ctx.work)
+                  or p in allowed_files or p.startswith("/usr/share/zoneinfo/") or p == "/etc/localtime")
+            if not ok:
+                bad.append("%s %s" % (name, p))
+    expect(seen > 50, "trace looks empty (%d paths)" % seen)
+    expect(not bad, "host paths touched: " + ", ".join(sorted(set(bad))[:10]))
+
+
+@test
+def ro_matrix(ctx):
+    d = os.path.join(ctx.work, "hostdir")
+    os.makedirs(d, exist_ok=True)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "ro_matrix"), [d, "/usr/bin/" + GCC])
+    expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
+def coreutils_ro(ctx):
+    def w(name, *args):
+        return run([wrapper(ctx, name)] + list(args), cwd=ctx.work, env=ctx.env)
+    rc, out, err = w("touch", "/usr/newfile"); expect(rc and "Read-only" in err, err)
+    rc, out, err = w("mkdir", "-p", "/usr/lib"); expect(rc == 0, err)
+    rc, out, err = w("install", "-d", "/usr/lib"); expect(rc == 0, err)
+    rc, out, err = w("mkdir", "/usr/lib"); expect(rc and "exists" in err, err)
+    rc, out, err = w("rm", "/usr/bin/gcc-13"); expect(rc and "Read-only" in err, err)
+    rc, out, err = w("ln", "/usr/bin/" + GCC, os.path.join(ctx.work, "lnk-x")); expect(rc and "cross-device" in err, err)
+    rc, out, err = w("cp", "/usr/bin/gcc-13", os.path.join(ctx.work, "gcc-copy")); expect(rc == 0, err)
+    payload = os.path.join(ctx.root, "usr", "bin", ".real", GCC)
+    expect(os.path.getsize(os.path.join(ctx.work, "gcc-copy")) == os.path.getsize(payload), "cp of a wrapper did not copy the payload")
+    expect(open(os.path.join(ctx.work, "gcc-copy"), "rb").read(4) == b"\x7fELF", "copy is not ELF")
+    rc, out, err = w("cat", "/usr/share/cont-test-marker"); expect(out == "marker\n", out + err)
+
+
+@test
+def signals(ctx):
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "signals"))
+    expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
+def threads(ctx):
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "threads"))
+    expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
+def spawn(ctx):
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "spawn"), timeout=600)
+    expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
+def fifo(ctx):
+    d = os.path.join(ctx.work, "hostdir")
+    os.makedirs(d, exist_ok=True)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "fifo"), [d], timeout=60)
+    expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
+def exec_modes(ctx):
+    p = os.path.join(ctx.progs, "exec")
+    rc, out, err = inside(ctx, p, ["self"]); expect(rc == 0 and out == "child ok argv0=%s\n" % p, "self: %r %r" % (out, err))
+    rc, out, err = inside(ctx, p, ["header", p]); expect(rc == 0 and out.startswith("header ok"), "header: %r %r" % (out, err))
+    for mode in ("fexecve", "fexecve_opath", "fexecve_payload", "seccomp"):
+        rc, out, err = inside(ctx, p, [mode]); expect(rc == 0, "%s: rc=%d %r %r" % (mode, rc, out, err))
+    rc, out, err = inside(ctx, p, ["personality"]); expect(rc == 0 and out.startswith("child ok"), "personality: %r %r" % (out, err))
+    ne = os.path.join(ctx.work, "nonexec")
+    os.makedirs(ne, exist_ok=True)
+    with open(os.path.join(ne, "true"), "w") as f:
+        f.write("not executable\n")
+    env = dict(ctx.env, PATH=ne + ":/usr/bin")
+    rc, out, err = inside(ctx, p, ["execvp"], env=env); expect(rc == 0, "execvp past non-executable: rc=%d %r" % (rc, err))
+    hs = os.path.join(ctx.work, "host-script.sh")
+    with open(hs, "w") as f:
+        f.write("#!/bin/sh\necho host script ok $1 $0\n")
+    os.chmod(hs, 0o755)
+    rc, out, err = inside(ctx, p, ["script", hs]); expect(rc == 0 and out == "host script ok arg1 %s\n" % hs, "host script: %r %r" % (out, err))
+    rc, out, err = inside(ctx, hs, ["z"]); expect(rc == 0 and out == "host script ok z %s\n" % hs, "host script direct: %r %r" % (out, err))
+
+
+@test
+def scripts(ctx):
+    rc, out, err = run([wrapper(ctx, "cont-test-script"), "hello"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "script ok hello 1\n", "direct: %r %r" % (out, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "cont-test-script a b"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "script ok a 2\n", "via sh PATH: %r %r" % (out, err))
+    rc, out, err = run([wrapper(ctx, "cont-test-script2"), "q"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out.startswith("script ok /usr/bin/cont-test-script2"), "interpreter chain: %r %r" % (out, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "/usr/bin/cont-test-noshebang"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "noshebang ok\n", "sh file: %r %r" % (out, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "/usr/bin/cont-test-noshebang"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "noshebang ok\n", "ENOEXEC fallback: %r %r" % (out, err))
+    rc, out, err = run([wrapper(ctx, "cont-test-noshebang")], cwd=ctx.work, env=ctx.env)
+    expect(rc == 127 and "not an executable" in err, "noshebang direct: rc=%d %r" % (rc, err))
+
+
+@test
+def identity(ctx):
+    rc, out, err = run([wrapper(ctx, "cat"), "/etc/passwd"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == open("/etc/passwd").read(), "passwd differs from the host")
+    if os.path.islink("/etc/localtime"):
+        rc, out, err = run([wrapper(ctx, "readlink"), "/etc/localtime"], cwd=ctx.work, env=ctx.env)
+        expect(out.strip() == os.readlink("/etc/localtime"), "localtime link: %r" % out)
+    rc, out, err = run([wrapper(ctx, "cat"), "/etc/hostname"], cwd=ctx.work, env=ctx.env)
+    expect(rc != 0 and "No such file" in err, "host /etc/hostname must be invisible: %r" % err)
+    if os.path.exists("/usr/share/zoneinfo/Asia/Tokyo") and not os.path.exists(os.path.join(ctx.root, "usr/share/zoneinfo/Asia/Tokyo")):
+        rc, out, err = run([wrapper(ctx, "date"), "+%Z"], cwd=ctx.work, env=dict(ctx.env, TZ="Asia/Tokyo"))
+        expect(out.strip() == "JST", "TZ zone from the host: %r %r" % (out, err))
+
+
+@test
+def environment(ctx):
+    env = dict(ctx.env, LD_PRELOAD="/nonexistent", LD_LIBRARY_PATH="/x", GCONV_PATH="/x", LOCPATH="/x", CAN_TESTVAR="1")
+    rc, out, err = run([wrapper(ctx, "env")], cwd=ctx.work, env=env)
+    expect(rc == 0 and "LD_" not in out and "GCONV_PATH" not in out and "LOCPATH" not in out, "denied variables leaked: " + out)
+    expect("CAN_TESTVAR=1" in out, "pass-through lost")
+    rc, out, err = run([wrapper(ctx, "env")], cwd=ctx.work, env={})
+    expect("PATH=/usr/local/bin:/usr/bin:/bin\n" in out, "default PATH: %r" % out)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "LD_FOO=1 env"], cwd=ctx.work, env=ctx.env)
+    expect("LD_FOO=1" in out, "inside a can the environment must pass untouched")
+    rc, out, err = inside(ctx, "/usr/bin/env")
+    expect(rc == 0 and "CAN_EXEC" not in out, "CAN_EXEC leaked: " + out)
+
+
+@test
+def cwd_rules(ctx):
+    rc, out, err = run([wrapper(ctx, "pwd")], cwd=os.path.join(ctx.root, "usr", "bin"), env=ctx.env)
+    expect(out == "/usr/bin\n", "cwd inside root/: %r" % out)
+    rc, out, err = run([wrapper(ctx, "touch"), "x"], cwd=os.path.join(ctx.root, "usr", "bin"), env=ctx.env)
+    expect(rc and "Read-only" in err, "write in root/ cwd: %r" % err)
+    sub = os.path.join(ctx.work, "sub", "sub2")
+    os.makedirs(sub, exist_ok=True)
+    with open(os.path.join(sub, "file"), "w") as f:
+        f.write("deep\n")
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "pwd; cd sub && pwd && cat sub2/file"], cwd=ctx.work, env=ctx.env)
+    expect(out == "%s\n%s/sub\ndeep\n" % (ctx.work, ctx.work), "claimed cwd: %r %r" % (out, err))
+    inc, outd = os.path.join(ctx.work, "inc"), os.path.join(ctx.work, "out")
+    os.makedirs(inc, exist_ok=True); os.makedirs(outd, exist_ok=True)
+    with open(os.path.join(inc, "x.h"), "w") as f:
+        f.write("#define X 41\n")
+    with open(os.path.join(ctx.work, "sub", "y.c"), "w") as f:
+        f.write('#include "x.h"\n#include <stdio.h>\nint main(void){printf("%d\\n", X+1);return 0;}\n')
+    rc, out, err = run([wrapper(ctx, GCC), "-Iinc", "sub/y.c", "-o", "out/y"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "compile with subdirectory include and output: " + err)
+    rc, out, err = run([os.path.join(outd, "y")], cwd=ctx.work)
+    expect(out == "42\n", out)
+    if not ctx.claim:
+        return "work dir under a volatile prefix; claim not exercised"
+
+
+@test
+def host_symlink_into_usr(ctx):
+    lnk = os.path.join(ctx.work, "lnk")
+    if os.path.lexists(lnk):
+        os.remove(lnk)
+    os.symlink("/usr/share", lnk)
+    rc, out, err = run([wrapper(ctx, "cat"), os.path.join(lnk, "cont-test-marker")], cwd=ctx.work, env=ctx.env)
+    expect(out == "marker\n", "host symlink into /usr resolves in the can: %r %r" % (out, err))
+
+
+@test
+def ld_so(ctx):
+    ld = "/lib64/ld-linux-x86-64.so.2"
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s --list /usr/bin/%s" % (ld, GCC)], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and "libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6" in out and ctx.root not in out, "ld.so --list: %r %r" % (out, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s --verify /usr/bin/%s" % (ld, GCC)], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "ld.so --verify rc=%d" % rc)
+    rc, out, err = run([os.path.join(ctx.root, "lib64", "ld-linux-x86-64.so.2"), "--verify", "/usr/bin/" + GCC], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "ld.so run by its real path from the host: rc=%d %r" % (rc, err))
+
+
+@test
+def nested_and_log(ctx):
+    log = os.path.join(ctx.work, "can.log")
+    if os.path.exists(log):
+        os.remove(log)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", GCC + " --version"], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log))
+    expect(rc == 0 and "13." in out, out + err)
+    text = open(log).read()
+    expect("opener 0 boundary /usr/bin/dash" in text and "opener 0 inside /usr/bin/" + GCC in text, "log: " + text[:400])
+
+
+@test
+def sigsys_blocked_at_launch(ctx):
+    def block():
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGSYS})
+    rc, out, err = run([wrapper(ctx, "gcc-13"), "--version"], cwd=ctx.work, env=ctx.env, preexec=block)
+    expect(rc == 0 and "13." in out, "launch with SIGSYS blocked: rc=%d %r" % (rc, err))
+
+
+@test
+def kill_sys(ctx):
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "kill -SYS $$"], cwd=ctx.work, env=ctx.env)
+    expect(rc == -signal.SIGSYS, "kill -SYS: rc=%d %r" % (rc, err))
+
+
+@test
+def origin(ctx):
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "origin_main"), cwd=ctx.work)
+    expect(rc == 0 and out == "origin 42\n", "RUNPATH=$ORIGIN: %r %r" % (out, err))
+
+
+@test
+def gconv_and_locale(ctx):
+    notes = []
+    if os.path.exists(wrapper(ctx, "iconv")):
+        p = subprocess.run([wrapper(ctx, "iconv"), "-f", "utf-8", "-t", "cp1252"], input="caf\xe9".encode(), env=ctx.env, cwd=ctx.work, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        expect(p.returncode == 0 and p.stdout == b"caf\xe9", "iconv via gconv: rc=%d %r %r" % (p.returncode, p.stdout, p.stderr))
+    else:
+        notes.append("no iconv in the tree")
+    if os.path.isdir(os.path.join(ctx.root, "usr", "lib", "locale", "C.utf8")):
+        rc, out, err = run([wrapper(ctx, "wc"), "-m"], cwd=ctx.work, env=dict(ctx.env, LC_ALL="C.UTF-8"), inp="caf\xe9".encode())
+        expect(out.strip() == "4", "wc -m under C.UTF-8: %r" % out)
+    else:
+        notes.append("no C.utf8 locale in the tree")
+    return "; ".join(notes)
+
+
+@test
+def cannery_check(ctx):
+    rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", ctx.can])
+    expect(rc == 0 and "0 problems" in out, out + err)
+    rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "fmt", "--check", os.path.join(ctx.can, ".can", "index")])
+    expect(rc == 0, "index not canonical: " + out + err)
+
+
+@test
+def stat_bench(ctx):
+    src = os.path.join(ctx.work, "bench.c")
+    with open(src, "w") as f:
+        f.write('#include <sys/stat.h>\n#include <stdio.h>\n#include <time.h>\nint main(void){struct stat st;struct timespec a,b;'
+                'clock_gettime(CLOCK_MONOTONIC,&a);for(int i=0;i<100000;i++)stat("/usr/share/cont-test-marker",&st);'
+                'clock_gettime(CLOCK_MONOTONIC,&b);printf("%.0f\\n",((b.tv_sec-a.tv_sec)*1e9+(b.tv_nsec-a.tv_nsec))/100000);return 0;}\n')
+    exe = os.path.join(ctx.work, "bench")
+    rc, out, err = run([wrapper(ctx, GCC), "-O2", src, "-o", exe], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, err)
+    rc, out, err = inside(ctx, exe)
+    expect(rc == 0, err)
+    ctx.stat_ns = int(out.strip())
+    return "stat of a can path: %d ns per call" % ctx.stat_ns
+
+
+# ------------------------------------------------------------------ main
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--tree", default=os.environ.get("CONT_TREE"))
+    ap.add_argument("--work", default=os.path.join(REPO, "build", "test-work"))
+    ap.add_argument("--keep", action="store_true")
+    ap.add_argument("-k", default="")
+    ap.add_argument("-v", action="store_true")
+    a = ap.parse_args()
+    if not a.tree or not os.path.isdir(a.tree):
+        sys.exit("need --tree DIR (or $CONT_TREE): a gcc tree to can; see README.md")
+    ctx = Ctx()
+    ctx.tree = os.path.abspath(a.tree)
+    ctx.work = os.path.abspath(a.work)
+    ctx.opener_src = os.path.join(REPO, "build", "opener")
+    if not os.path.exists(ctx.opener_src):
+        sys.exit("build/opener missing: run make")
+    if os.path.exists(ctx.work):
+        shutil.rmtree(ctx.work)
+    os.makedirs(ctx.work)
+    ctx.env = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/"), "LANG": "C"}
+    t0 = time.time()
+    make_can(ctx)
+    compile_progs(ctx)
+    print("can made and programs compiled in %.1fs" % (time.time() - t0))
+    fails = 0
+    for t in TESTS:
+        if a.k and a.k not in t.__name__:
+            continue
+        t0 = time.time()
+        try:
+            note = t(ctx)
+            print("PASS %-26s %5.1fs %s" % (t.__name__, time.time() - t0, note or ""))
+        except AssertionError as e:
+            fails += 1
+            print("FAIL %-26s %5.1fs %s" % (t.__name__, time.time() - t0, str(e).strip().replace("\n", "\n     ")))
+        except Exception as e:  # noqa: BLE001
+            fails += 1
+            print("FAIL %-26s %5.1fs %s: %s" % (t.__name__, time.time() - t0, type(e).__name__, e))
+    print("%d tests, %d failures" % (len([t for t in TESTS if not a.k or a.k in t.__name__]), fails))
+    if not a.keep and not fails:
+        shutil.rmtree(ctx.work, ignore_errors=True)
+    return fails
+
+
+if __name__ == "__main__":
+    sys.exit(main())
