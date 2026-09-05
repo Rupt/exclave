@@ -20,11 +20,14 @@ LDFLAGS := -shared -nostdlib -Wl,-e,_start -Wl,--no-relax -Wl,-z,noexecstack -Wl
 
 all: $(OUT)
 
+# build/opener is stripped for shipping (every wrapper is a link to it); build/opener.debug keeps the symbols
 $(OUT): $(SRC) $(HDR) Makefile
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SRC)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@.debug $(SRC)
 	@mv -f *.su build/ 2>/dev/null || true
-	@readelf -h $@ | grep -q 'DYN' && echo "built $@ ($$(stat -c %s $@) bytes, ET_DYN)"
+	objcopy --strip-all $@.debug $@
+	@readelf -n $@ | grep -q cont || (echo "the note was stripped" && false)
+	@readelf -h $@ | grep -q 'DYN' && echo "built $@ ($$(stat -c %s $@) bytes stripped, ET_DYN; symbols in $@.debug)"
 
 # stack budget (7.5.4): no frame on the handler path above 512 bytes, and the
 # summed frames of the handler path under 2048.

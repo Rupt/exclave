@@ -343,6 +343,19 @@ def cwd_rules(ctx):
 
 
 @test
+def can_directory_visible(ctx):
+    """8.1: the can's real location resolves as a host path from any working directory, even under a prefix the
+    can owns (/home here), so a program can reach its files relative to its executable's real path."""
+    real = os.path.join(ctx.root, "usr", "bin", "true")
+    rc, out, err = run([wrapper(ctx, "ls"), real], cwd="/", env=ctx.env)
+    expect(rc == 0 and out.strip() == real, "real can path from cwd /: rc=%d %r %r" % (rc, out, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "cd %s && pwd && ls root/usr/bin/true" % ctx.can], cwd="/", env=ctx.env)
+    expect(rc == 0 and out == "%s\nroot/usr/bin/true\n" % ctx.can, "cd into the can dir: rc=%d %r %r" % (rc, out, err))
+    rc, out, err = run([wrapper(ctx, "cat"), os.path.join(ctx.root, "usr", "share", "cont-test-marker")], cwd="/", env=ctx.env)
+    expect(out == "marker\n", "a file inside root/ by its real path: %r %r" % (out, err))
+
+
+@test
 def host_symlink_into_usr(ctx):
     lnk = os.path.join(ctx.work, "lnk")
     if os.path.lexists(lnk):

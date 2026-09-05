@@ -27,14 +27,17 @@ static int host_resolve(const char *p, char *out, char *link)
     return 0;
 }
 
+static int base_is_host(const char *v, const char **real);
+
 static void claim_cwd(void)
 {
     char real[PATH_MAX];
     C.cwdclaim[0] = 0; C.cwdclaim_len = 0;
     long n = sys_getcwd(real, PATH_MAX); if (n <= 0) return;
     if (starts_dir(real, C.root)) return;                       /* inside the tree: virtual path, no claim (8.1.4) */
-    /* a real host path: claim it as a subtree if the rule would otherwise hand it to the can */
-    const char *r; if (vis_is_host(real, &r)) return;
+    /* a real host path: claim it as a subtree if the base rule would otherwise hand it to the can; the claims
+     * themselves do not count, or a cwd above the can's directory would never be claimed */
+    const char *r; if (base_is_host(real, &r)) return;
     scpy(C.cwdclaim, real, PATH_MAX); C.cwdclaim_len = (long)xstrlen(real);
     log_msg("cwd claimed for the host", real);
 }
@@ -73,23 +76,35 @@ void vis_init(char **envp)
     claim_cwd();
 }
 
-/* 8.1: identity file > volatile > cwd claim > host records > own > default host; longest prefix wins among prefixes */
-int vis_is_host(const char *v, const char **real)
+/* 8.1 without the two claims: identity file > volatile > host records > own > default host; longest prefix wins */
+static int base_is_host(const char *v, const char **real)
 {
     for (int i = 0; i < C.nhost; i++)
         if (C.host[i].is_file && xstrcmp(v, C.host[i].v) == 0) { *real = C.host[i].r; return 1; }
     for (int i = 0; volatile_dirs[i]; i++)
         if (starts_dir(v, volatile_dirs[i])) { *real = v; return 1; }
     long best_host = -1, best_own = -1;
-    /* 8.1.4: a claimed working directory is the host's as a subtree, and so is every directory on the way to
-     * it, or realpath and pwd -P could not walk the path the process was started in */
-    if (C.cwdclaim_len && (starts_dir(v, C.cwdclaim) || starts_dir(C.cwdclaim, v))) { *real = v; return 1; }
     for (int i = 0; i < C.nhost; i++)
         if (!C.host[i].is_file && starts_dir(v, C.host[i].v)) { long l = (long)xstrlen(C.host[i].v); if (l > best_host) best_host = l; }
     for (int i = 0; i < C.nown; i++)
         if (starts_dir(v, C.own[i])) { long l = (long)xstrlen(C.own[i]); if (l > best_own) best_own = l; }
     if (best_host >= best_own) { *real = v; return 1; }      /* includes the default: nothing owns it */
     return 0;
+}
+
+/* the full rule: the two claims first (8.1.4 and the can's own directory), then the base rule */
+int vis_is_host(const char *v, const char **real)
+{
+    for (int i = 0; i < C.nhost; i++)
+        if (C.host[i].is_file && xstrcmp(v, C.host[i].v) == 0) { *real = C.host[i].r; return 1; }
+    /* 8.1.4: a claimed working directory is the host's as a subtree, and so is every directory on the way to
+     * it, or realpath and pwd -P could not walk the path the process was started in */
+    if (C.cwdclaim_len && (starts_dir(v, C.cwdclaim) || starts_dir(C.cwdclaim, v))) { *real = v; return 1; }
+    /* 8.1: the can's own directory is the host's as a subtree, and so are the directories on the way to it: a
+     * program that locates its files relative to its real executable path, as gcc does, must reach them
+     * wherever the can lives, including under a prefix its own tree owns */
+    if (starts_dir(v, C.dir) || starts_dir(C.dir, v)) { *real = v; return 1; }
+    return base_is_host(v, real);
 }
 int is_can_owned(const char *v) { const char *r; return !vis_is_host(v, &r); }
 

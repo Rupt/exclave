@@ -137,5 +137,6 @@ void filter_install(void)
     struct sock_fprog fp = { (unsigned short)np, prog };
     if (sys_prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) die("PR_SET_NO_NEW_PRIVS failed", 0, 0);
     long r = SC3(NR_seccomp, SECCOMP_SET_MODE_FILTER, 0, &fp);
+    if (r == -ENOSYS) r = sys_prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, (unsigned long)&fp, 0, 0);   /* kernels before 3.17 */
     if (r < 0) die("cannot install the seccomp filter", 0, r);
 }
