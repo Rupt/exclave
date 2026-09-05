@@ -11,6 +11,17 @@
     cannery.py check CAN       Verify wrappers, payloads and index agree.
     cannery.py fmt FILE...     Parse with the strict grammar and rewrite in
                                canonical form (--check: only report).
+    cannery.py from-packages [--distro ubuntu] [--suite S]... [--arch amd64]
+                             [--mirror URL | --snapshot DATE] [--cache DIR]
+                             [--no-essential] [--choose VIRTUAL=PKG]...
+                             [--entry NAME=/PATH]... [--manifest FILE]
+                             --out CAN PACKAGE...
+                               Resolve, fetch, verify, extract, synthesise,
+                               wrap, index, lock (10.1).
+    cannery.py unwrap CAN      Move every payload back over its wrapper.
+    cannery.py reopen CAN [--opener PATH]
+                               Replace the opener and relink every wrapper.
+    cannery.py hash CAN        The tree hash of 6.4.
 
 Standard library only. Python 3.8 or later.
 """
@@ -21,6 +32,12 @@ import shutil
 import stat
 import struct
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import build  # noqa: E402
+import deb  # noqa: E402
+import elfcheck  # noqa: E402
+import repo  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # canonical key order per file kind (6.2, 6.3)
@@ -37,8 +54,10 @@ SCHEMA = {
     "index": (1, 1, "t"), "can": (1, 1, "t"), "lock": (1, 1, "t"), "entry": (2, 2, "ss"), "arch": (1, 1, "s"), "isa": (1, 1, "s"),
     "libc": (2, 2, "ss"), "interp": (1, 1, "s"), "own": (1, 1, "s"), "host": (1, 1, "s"), "data": (1, 1, "s"),
     "env": (2, 2, "ss"), "wrap": (1, 1, "s"), "use": (1, 2, "ss"),
+    "cannery": (1, 1, "s"), "source": (1, 8, "ssssssss"), "pkg": (3, 3, "sss"), "recipe": (2, 2, "ss"),
+    "tree": (1, 1, "s"), "modified": (1, 1, "t"),
 }
-ONCE = {"index", "can", "lock", "arch", "isa", "libc", "interp"}
+ONCE = {"index", "can", "lock", "arch", "isa", "libc", "interp", "cannery", "source", "tree", "modified"}
 
 
 class GrammarError(Exception):
@@ -365,9 +384,9 @@ def detect(root):
             if info[1]:
                 interps.add(info[1])
     if len(machines) > 1:
-        sys.exit("refusing: the tree mixes machines %s" % sorted(machines))
+        raise build.BuildError("the tree mixes machines %s" % sorted(machines))
     if len(interps) > 1:
-        sys.exit("refusing: the tree mixes loaders %s (one world inside a can, 7.3)" % sorted(interps))
+        raise build.BuildError("the tree mixes loaders %s (one world inside a can, 7.3)" % sorted(interps))
     arch = {62: "x86_64", 183: "aarch64"}.get(next(iter(machines), 62), "unknown")
     interp = next(iter(interps), None)
     libc = None
@@ -454,12 +473,126 @@ def cmd_mkcan(src, out, manifest=None, opener=None, link=False):
     shutil.copytree(src, os.path.join(out, "root"), symlinks=True, copy_function=link_or_copy if link else shutil.copy2)
     cmd_wrap(out)
     cmd_index(out, manifest)
-    for name, vpath in values(load(manifest, "can"), "entry") if manifest else []:
-        os.symlink(os.path.join("root", vpath.decode("utf-8", "surrogateescape").lstrip("/")), os.path.join(out, name.decode("utf-8", "surrogateescape")))
+    make_entries(out, manifest)
     print("made", out)
 
 
-def cmd_check(can):
+def make_entries(can, manifest):
+    """6.1: entry symlinks beside root/."""
+    for name, vpath in values(load(manifest, "can"), "entry") if manifest else []:
+        p = os.path.join(can, name.decode("utf-8", "surrogateescape"))
+        if os.path.lexists(p):
+            os.remove(p)
+        os.symlink(os.path.join("root", vpath.decode("utf-8", "surrogateescape").lstrip("/")), p)
+
+
+def cmd_reopen(can, opener=None):
+    """Replace a can's opener and relink every wrapper to it (wrappers are hard links, 6.1)."""
+    opener = opener or os.path.join(HERE, "..", "build", "opener")
+    if not os.path.isfile(opener):
+        sys.exit("no opener at %s" % opener)
+    root = os.path.join(can, "root")
+    new = os.path.join(can, ".can", "opener.new")
+    shutil.copy2(opener, new)
+    os.chmod(new, 0o755)
+    n = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        if os.path.basename(dirpath) != ".real":
+            continue
+        parent = os.path.dirname(dirpath)
+        for name in filenames:
+            w = os.path.join(parent, name)
+            if os.path.lexists(w):
+                os.remove(w)
+            try:
+                os.link(new, w)
+            except OSError:
+                shutil.copy2(new, w)
+            n += 1
+    os.replace(new, os.path.join(can, ".can", "opener"))
+    print("relinked %d wrappers to the new opener" % n)
+
+
+def cmd_from_packages(a):
+    """10.1: resolve, fetch and verify, extract, synthesise, strip, wrap, check, index, entries, lockfile."""
+    if os.path.exists(a.out):
+        sys.exit("refusing: %s exists" % a.out)
+    opener = a.opener or os.path.join(HERE, "..", "build", "opener")
+    if not os.path.isfile(opener):
+        sys.exit("no opener at %s (run make)" % opener)
+    suites = [s for x in a.suite for s in x.split(",")] or {"ubuntu": ["noble", "noble-updates", "noble-security"], "debian": ["bookworm"]}[a.distro]
+    comps = a.components.split(",")
+    r = repo.Repo(a.distro, suites, a.arch, comps, a.cache, a.mirror, a.snapshot)
+    r.load_index()
+    choose = dict(x.split("=", 1) for x in a.choose)
+    selected, notes = r.resolve(a.packages, essential=not a.no_essential, choose=choose)
+    print("closure: %d packages" % len(selected))
+    debs, lock_pkgs = [], []
+    for name in sorted(selected):
+        st = selected[name]
+        path, h = r.download(st)
+        debs.append((name, path, st))
+        lock_pkgs.append((name, st["Version"], h))
+    os.makedirs(os.path.join(a.out, ".can"))
+    shutil.copy2(opener, os.path.join(a.out, ".can", "opener"))
+    os.chmod(os.path.join(a.out, ".can", "opener"), 0o755)
+    root = os.path.join(a.out, "root")
+    try:
+        build.extract(root, debs)
+        build.synthesise(root, debs)
+        build.placeholders(root)
+    except build.BuildError as e:
+        shutil.rmtree(a.out)
+        sys.exit("refusing: %s" % e)
+    manifest = os.path.join(a.out, ".can", "manifest")
+    if a.manifest:
+        shutil.copy2(a.manifest, manifest)
+    else:
+        recs = [Record("can", [("t", b"1")])]
+        for e in a.entry:
+            name, _, vpath = e.partition("=")
+            recs.append(Record("entry", [("s", name.encode()), ("s", vpath.encode())]))
+        with open(manifest, "wb") as f:
+            f.write(dump(recs, "can"))
+    load(manifest, "can")
+    cmd_wrap(a.out)
+    cmd_index(a.out, manifest)
+    make_entries(a.out, manifest)
+    build.synthesise_in_can(a.out, debs)
+    rep = static_report(a.out)
+    if rep.errors:
+        shutil.rmtree(a.out)
+        sys.exit("refusing: the static check failed; the can is not kept")
+    source = ["deb", a.distro, ",".join(suites), a.arch, "snapshot=" + a.snapshot if a.snapshot else "mirror=" + r.mirror]
+    build.write_lock(a.out, source, lock_pkgs)
+    print("made", a.out)
+
+
+def index_info(idx):
+    """interp, libc and data prefixes from parsed index records, for the checks."""
+    interp = values(idx, "interp")
+    libc = values(idx, "libc")
+    return {"interp": interp[0][0].decode("utf-8", "surrogateescape") if interp else None,
+            "libc": (libc[0][0].decode(), libc[0][1].decode()) if libc else ("glibc", "unknown"),
+            "own": [d[0].decode("utf-8", "surrogateescape") for d in values(idx, "own")],
+            "data": [d[0].decode("utf-8", "surrogateescape") for d in values(idx, "data")]}
+
+
+def static_report(can, quiet=False):
+    """10.3 static check; returns the Report."""
+    idx = load(os.path.join(can, ".can", "index"), "index")
+    info = index_info(idx)
+    rep = elfcheck.static_check(can, info, info["data"])
+    if not quiet:
+        for w in rep.warnings:
+            print("warning: " + w)
+        for e in rep.errors:
+            print("error: " + e)
+        print("static check: %d ELF files, %d static executables, %d warnings, %d errors" % (len(rep.seen), len(rep.static), len(rep.warnings), len(rep.errors)))
+    return rep
+
+
+def cmd_check(can, run=None):
     root = os.path.join(can, "root")
     oi = opener_ino(can)
     idx = load(os.path.join(can, ".can", "index"), "index")
@@ -470,7 +603,10 @@ def cmd_check(can):
         if not stat.S_ISREG(st.st_mode):
             continue
         w = is_wrapper(real, oi)
-        if st.st_mode & 0o111 and not w:
+        d_, n_ = os.path.split(real)
+        if not w and os.path.exists(os.path.join(d_, ".real", n_)):
+            problems.append("stale wrapper (not this can's opener): " + v)
+        elif st.st_mode & 0o111 and not w:
             problems.append("executable not wrapped: " + v)
         if w:
             seen.add(v)
@@ -487,8 +623,18 @@ def cmd_check(can):
                     problems.append("payload without wrapper: " + os.path.join(dirpath, n))
     for p in problems:
         print(p)
-    print("%d problems" % len(problems))
-    return 1 if problems else 0
+    print("%d wrapper problems" % len(problems))
+    rep = static_report(can)
+    rc = 1 if problems or rep.errors else 0
+    if run:
+        drep, status = elfcheck.dynamic_check(can, index_info(idx), run, index_info(idx)["own"])
+        for w in drep.warnings:
+            print("warning: " + w)
+        for e in drep.errors:
+            print("error: " + e)
+        print("dynamic check: command exited %d, %d errors" % (status, len(drep.errors)))
+        rc = rc or (1 if drep.errors else 0)
+    return rc
 
 
 def cmd_fmt(paths, check):
@@ -521,8 +667,18 @@ def main(argv):
     p = sub.add_parser("mkcan"); p.add_argument("src"); p.add_argument("out"); p.add_argument("--manifest"); p.add_argument("--opener"); p.add_argument("--link", action="store_true")
     p = sub.add_parser("wrap"); p.add_argument("can")
     p = sub.add_parser("index"); p.add_argument("can"); p.add_argument("--manifest")
-    p = sub.add_parser("check"); p.add_argument("can")
+    p = sub.add_parser("check"); p.add_argument("can"); p.add_argument("--run", nargs=argparse.REMAINDER)
     p = sub.add_parser("fmt"); p.add_argument("files", nargs="+"); p.add_argument("--check", action="store_true")
+    p = sub.add_parser("from-packages")
+    p.add_argument("packages", nargs="+"); p.add_argument("--out", required=True)
+    p.add_argument("--distro", default="ubuntu", choices=["ubuntu", "debian"]); p.add_argument("--suite", action="append", default=[])
+    p.add_argument("--arch", default="amd64"); p.add_argument("--components", default="main,universe")
+    p.add_argument("--mirror"); p.add_argument("--snapshot"); p.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "cont-cannery"))
+    p.add_argument("--no-essential", action="store_true"); p.add_argument("--choose", action="append", default=[], metavar="VIRTUAL=PKG")
+    p.add_argument("--entry", action="append", default=[], metavar="NAME=/PATH"); p.add_argument("--manifest"); p.add_argument("--opener")
+    p = sub.add_parser("unwrap"); p.add_argument("can")
+    p = sub.add_parser("reopen"); p.add_argument("can"); p.add_argument("--opener")
+    p = sub.add_parser("hash"); p.add_argument("can")
     a = ap.parse_args(argv)
     try:
         if a.cmd == "mkcan":
@@ -532,11 +688,21 @@ def main(argv):
         elif a.cmd == "index":
             cmd_index(a.can, a.manifest)
         elif a.cmd == "check":
-            return cmd_check(a.can)
+            return cmd_check(a.can, a.run or None)
         elif a.cmd == "fmt":
             return cmd_fmt(a.files, a.check)
+        elif a.cmd == "from-packages":
+            cmd_from_packages(a)
+        elif a.cmd == "unwrap":
+            build.unwrap(a.can)
+        elif a.cmd == "reopen":
+            cmd_reopen(a.can, a.opener)
+        elif a.cmd == "hash":
+            print(build.tree_hash(os.path.join(a.can, "root")))
     except GrammarError as e:
         sys.exit("grammar: %s" % e)
+    except (repo.RepoError, build.BuildError, deb.DebError) as e:
+        sys.exit("cannery: %s" % e)
     return 0
 
 
