@@ -56,6 +56,12 @@ finding them inconvenient.
   through `copy_out`, paths and vectors alike: a plain dereference of a
   program pointer is a `SIGSEGV` where the kernel would say `EFAULT`.
   Environment strings the opener hands a program must be writable.
+- **Tests are independent.** A test in `test/run.py` makes everything
+  it needs and leaves the shared context alone; the fixtures are the
+  can, the compiled programs and the environment made at setup, never
+  another test's files or results. `test/run.py --order random` and
+  `--order reverse` must pass like the given order, and `-k NAME` must
+  run any single test.
 - **A new syscall the kernel adds** is trapped by the filter's ceiling
   and answered `ENOSYS` until it is classified in `test/syscalls.py`
   and, if it takes a path, handled in `src/handler.c` and listed in

@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """run.py — the regression suite for milestone 1a (PROPOSAL.md 17.4, the subset a single machine can run).
 
-    test/run.py [--tree DIR | --can CAN] [--work DIR] [--keep] [-k SUBSTRING] [-v]
+    test/run.py [--tree DIR | --can CAN] [--work DIR] [--keep] [-k SUBSTRING] [--order given|reverse|random]
 
 Makes a can from TREE (default $CONT_TREE), or from the unwrapped root of an existing CAN, under WORK
 (default build/test-work) with a few test files added to the tree, compiles test/progs/*.c with the can's
 own gcc, and runs every named test. Needs python3 and a Debian/Ubuntu gcc tree (see README.md). Optional:
 strace for the isolation test, /usr/bin/gcc-13 for the identical-object test. Exit status is the number of
 failures.
+
+Tests are independent: every test makes what it needs (the fixtures made at setup are the can, the compiled
+programs and the environment, never another test's output), so any subset runs in any order; `--order
+reverse` and `--order random` are how that is checked.
 """
 import argparse
 import os
@@ -68,6 +72,15 @@ def inside(ctx, prog, args=(), cwd=None, env=None, inp=None, argv0=None, timeout
 def expect(cond, msg):
     if not cond:
         raise AssertionError(msg)
+
+
+def hello_source(ctx):
+    """hello.c in the work directory: a fixture any test may make, made once."""
+    src = os.path.join(ctx.work, "hello.c")
+    if not os.path.exists(src):
+        with open(src, "w") as f:
+            f.write('#include <stdio.h>\nint main(int c, char **v) { printf("hello %s %d\\n", v[0], c); return 0; }\n')
+    return src
 
 
 # ------------------------------------------------------------------ setup
@@ -140,11 +153,8 @@ def version(ctx):
 
 @test
 def hello(ctx):
-    src = os.path.join(ctx.work, "hello.c")
-    with open(src, "w") as f:
-        f.write('#include <stdio.h>\nint main(int c, char **v) { printf("hello %s %d\\n", v[0], c); return 0; }\n')
+    src = hello_source(ctx)
     exe = os.path.join(ctx.work, "hello")
-    ctx.hello_src, ctx.hello = src, exe
     rc, out, err = run([wrapper(ctx, GCC), "-O2", src, "-o", exe], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "compile: " + err)
     rc, out, err = inside(ctx, exe, ["a", "b"])
@@ -153,8 +163,7 @@ def hello(ctx):
         rc, out, err = run([exe, "a"], cwd=ctx.work)
     except OSError:                                           # no glibc loader on this host at all (a musl host): exec itself fails
         rc, err = 1, "GLIBC_"
-    if rc != 0 and "GLIBC_" in err:
-        ctx.old_host = True                                   # the host's libc cannot load the output: it runs inside the can only (9)
+    if rc != 0 and "GLIBC_" in err:                           # the host's libc cannot load the output: it runs inside the can only (9)
         return "host cannot load the can's output; it runs inside the can only"
     expect(rc == 0 and out == "hello %s 2\n" % exe, "host run: %r %r" % (out, err))
 
@@ -164,9 +173,10 @@ def identical_object(ctx):
     host = "/usr/bin/gcc-13"
     if not os.path.exists(host):
         return "no host gcc-13"
+    src = hello_source(ctx)
     a, b = os.path.join(ctx.work, "h_host.o"), os.path.join(ctx.work, "h_can.o")
-    run([host, "-O2", "-c", ctx.hello_src, "-o", a], cwd=ctx.work)
-    rc, out, err = run([wrapper(ctx, "gcc-13"), "-O2", "-c", ctx.hello_src, "-o", b], cwd=ctx.work, env=ctx.env)
+    run([host, "-O2", "-c", src, "-o", a], cwd=ctx.work)
+    rc, out, err = run([wrapper(ctx, "gcc-13"), "-O2", "-c", src, "-o", b], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, err)
     expect(open(a, "rb").read() == open(b, "rb").read(), "objects differ")
 
@@ -176,9 +186,10 @@ def isolation(ctx):
     if not shutil.which("strace"):
         return "no strace"
     tr = os.path.join(ctx.work, "trace")
+    src = hello_source(ctx)
     names = list(NR)
     while True:                                               # an older strace may not know the newest names
-        rc, out, err = run(["strace", "-f", "-s", "4096", "-o", tr, "-e", "trace=" + ",".join(names), wrapper(ctx, GCC), "-O1", ctx.hello_src, "-o", os.path.join(ctx.work, "hello2")], cwd=ctx.work, env=ctx.env)
+        rc, out, err = run(["strace", "-f", "-s", "4096", "-o", tr, "-e", "trace=" + ",".join(names), wrapper(ctx, GCC), "-O1", src, "-o", os.path.join(ctx.work, "hello2")], cwd=ctx.work, env=ctx.env)
         m = re.search(r"invalid system call '(\w+)'", err)
         if m and m.group(1) in names:
             names.remove(m.group(1))
@@ -787,8 +798,7 @@ def stat_bench(ctx):
     expect(rc == 0, err)
     rc, out, err = inside(ctx, exe)
     expect(rc == 0, err)
-    ctx.stat_ns = int(out.strip())
-    return "stat of a can path: %d ns per call" % ctx.stat_ns
+    return "stat of a can path: %d ns per call" % int(out.strip())
 
 
 # ------------------------------------------------------------------ main
@@ -799,6 +809,8 @@ def main():
     ap.add_argument("--work", default=os.path.join(REPO, "build", "test-work"))
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("-k", default="")
+    ap.add_argument("--order", default="given", choices=["given", "reverse", "random"], help="run order; reverse and random expose tests that depend on one another")
+    ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("-v", action="store_true")
     a = ap.parse_args()
     if a.can:
@@ -816,15 +828,20 @@ def main():
         shutil.rmtree(ctx.work)
     os.makedirs(ctx.work)
     ctx.env = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/"), "LANG": "C"}
-    ctx.old_host = False
     t0 = time.time()
     make_can(ctx)
     compile_progs(ctx)
     print("can made and programs compiled in %.1fs" % (time.time() - t0))
     fails = 0
-    for t in TESTS:
-        if a.k and a.k not in t.__name__:
-            continue
+    order = [t for t in TESTS if not a.k or a.k in t.__name__]
+    if a.order == "reverse":
+        order.reverse()
+    elif a.order == "random":
+        import random
+        seed = a.seed if a.seed is not None else int(time.time()) % 100000
+        random.Random(seed).shuffle(order)
+        print("random order, seed %d" % seed)
+    for t in order:
         t0 = time.time()
         try:
             note = t(ctx)
@@ -835,7 +852,7 @@ def main():
         except Exception as e:  # noqa: BLE001
             fails += 1
             print("FAIL %-26s %5.1fs %s: %s" % (t.__name__, time.time() - t0, type(e).__name__, e))
-    print("%d tests, %d failures" % (len([t for t in TESTS if not a.k or a.k in t.__name__]), fails))
+    print("%d tests, %d failures" % (len(order), fails))
     if not a.keep and not fails:
         shutil.rmtree(ctx.work, ignore_errors=True)
     return fails
