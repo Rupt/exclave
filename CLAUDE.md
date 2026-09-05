@@ -35,9 +35,16 @@ finding them inconvenient.
   proposal has a named regression in 17.4; implementing a rule means
   implementing its test in `test/run.py` or `test/progs/`. The
   user-namespace bind mount and `openat2(RESOLVE_IN_ROOT)` are the
-  oracles (milestone 1c). Run `make unit`, `make stack` and
-  `CONT_TREE=<tree> make test` before committing opener changes; the
-  suite must stay at zero failures.
+  oracles: `test/oracle_ns.py` and `test/oracle_resolve.py`, run by
+  `CONT_CAN=<can> make oracles`. Run `make unit`, `make stack`,
+  `CONT_TREE=<tree> make test` and the oracles before committing opener
+  changes; all must stay at zero failures. After rebuilding the opener,
+  refresh a can with `cannery.py reopen CAN`: replacing `.can/opener`
+  alone leaves the wrappers linked to the old file.
+- **Handler code takes its buffers from `struct scratch`**, never the
+  stack: the handler runs on whatever alternate stack a program set up,
+  and Rust's is 8 KB including the kernel's frame. `make stack` lists
+  every function on the handler path; add new ones to it.
 
 ## Reference machine facts
 
@@ -51,6 +58,9 @@ profile was checked syscall by syscall; the results are in
 
 ## Scratch space
 
-Use the session scratchpad for trees, cans and traces, never the
-repository. A test tree is made with `spike/make-tree.sh`; the suite
-makes its own can under `build/test-work` (ignored by git).
+Use the session scratchpad for trees, cans, package caches and traces,
+never the repository. A can is made with `cannery.py from-packages
+--cache <scratch>/cannery-cache`; a plain tree with `spike/make-tree.sh`;
+the suite and the oracles make their own copies under `build/` (ignored
+by git). The archive mirror configured on this machine is
+`http://gb.archive.ubuntu.com/ubuntu`.

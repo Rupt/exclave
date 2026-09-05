@@ -16,35 +16,49 @@ a tree, later from packages and source, and eventually as a can itself.
 
 ## Status
 
-Milestone 1a is built: the opener and a minimal cannery. A can made from
-the stock Ubuntu 24.04 gcc 13 packages compiles and links C on this
-machine with byte-identical objects and no host file touched, and the
-regression suite (24 named tests, proposal section 17.4) passes. The
-next milestones are 1b (the cannery from packages) and 1c (oracles,
-kernel matrix, performance work). Section 18 of the proposal has the
-table.
+Milestones 1a, 1b and 1c are built: the opener, the cannery from
+packages, and the oracles. `cannery.py from-packages gcc-13 libc6-dev`
+makes a gcc can from the Ubuntu archive in under a minute; it compiles
+and links C with byte-identical objects and no host file touched. The
+regression suite (26 named tests), the kernel oracles for the read-only
+rule and for path resolution, Docker's default seccomp profile and the
+plain-terminal AppArmor label all pass on the reference machine. The
+kernel matrix in virtual machines is the one 1c item not run here.
+Section 18 of the proposal has the table; 16.2 the measurements.
 
 ## Build, make a can, run
 
 ```
 make                      # build/opener, a freestanding ET_DYN, x86-64 only for now
-make unit                 # the index grammar tests, compiled with the host libc
+make unit                 # the index grammar tests and the syscall table test
 make stack                # the handler's stack budget from gcc -fstack-usage
-spike/make-tree.sh DIR    # a gcc 13 tree from Ubuntu packages, no root needed
-cannery/cannery.py mkcan DIR mycan.can --link
-mycan.can/root/usr/bin/gcc-13 -O2 hello.c -o hello     # any executable in root/ runs by path
-CAN_EXEC=/path/to/host/program mycan.can/.can/opener args...   # a host program inside the can
-CAN_LOG=/tmp/can.log ...  # the one knob: one line per translated operation
-CONT_TREE=DIR make test   # the regression suite; makes its own can under build/test-work
+cannery/cannery.py from-packages --entry gcc=/usr/bin/gcc-13 --out gcc.can gcc-13 libc6-dev
+gcc.can/gcc -O2 hello.c -o hello                        # an entry symlink; any executable in root/ runs by path
+gcc.can/root/usr/bin/sh -c 'cc1 --version'              # the can's own shell
+CAN_EXEC=/path/to/host/program gcc.can/.can/opener args...   # a host program inside the can
+CAN_LOG=/tmp/can.log ...  # the one knob: one line per trapped syscall
+cannery/cannery.py check gcc.can --run gcc.can/gcc -c x.c    # static check of every ELF, dynamic check of a run
+CONT_TREE=DIR make test   # the suite on a plain tree (spike/make-tree.sh makes one)
+CONT_CAN=gcc.can make oracles   # bwrap and openat2 oracles, Docker's profile; needs user namespaces
+CONT_CAN=gcc.can CONT_SQLITE=sqlite3.c make bench       # the performance table
 ```
 
-`cannery.py check CAN` verifies wrappers, payloads and index agree;
-`cannery.py fmt FILE` rewrites a manifest or index in canonical form.
+`from-packages` resolves the closure from the archive's `Packages`
+index (with the Essential set unless `--no-essential`), verifies every
+download against the index digests, extracts in Python, synthesises
+what maintainer scripts would have done (alternatives, `ld.so.cache`
+with the can's own `ldconfig`, the CA bundle, `/etc/passwd`), wraps,
+checks, and writes the index and the lockfile. `--distro debian`,
+`--suite`, `--mirror`, `--snapshot DATE` and `--cache DIR` select the
+source. Other commands: `mkcan` from a plain tree, `wrap`, `index`,
+`reopen` to swap a can's opener and relink its wrappers, `unwrap`,
+`hash` for the lockfile's tree hash, `fmt`.
 
 ## Read in this order
 
 1. `docs/PROPOSAL.md`: the design, self-contained. Sections 6 to 8 are
-   the specification; 17 the tests; 18 the milestones; 19 the decisions.
+   the specification; 10 the cannery; 17 the tests; 18 the milestones;
+   19 the decisions.
 2. `src/`: the opener, one module per section of the proposal (below).
 3. `docs/REVIEW-RESPONSE.md`: every review finding and where it landed.
 4. `docs/PRIOR-ART.md`: twenty related systems and the primary sources
@@ -62,14 +76,23 @@ src/loader.c     userland ELF loader and the .note.cont probe (7.3)
 src/filter.c     the seccomp program (7.4.2)
 src/handler.c    the SIGSYS handler: translation, read-only rule, exec, signal masks (7.4.3, 7.5, 8.2)
 src/canon.c      canonicalisation in virtual space (7.4.4)
+src/cache.c      the per-process component cache (7.4.4)
 src/vis.c        the visibility rule, identity files, wrapper redirect (8)
 src/scratch.c    handler memory: mmap'd chunks with liveness reclamation (7.5.4)
 src/isa.c        x86-64 psABI level check (7.7)
 src/str.c        string helpers, arena, the shebang parser
 src/log.c        CAN_LOG and fatal messages
-cannery/cannery.py   grammar, wrap, index, mkcan, check, fmt (10, milestone 1a subset)
-test/run.py      the regression suite; test/progs/ its C programs; test/index_test.c; test/stackcheck.py
-docs/            proposal (revision 7), review response, prior art, review reports
+cannery/cannery.py   the command line: grammar, fmt, wrap, index, mkcan, from-packages, check, reopen, unwrap, hash
+cannery/deb.py       ar, tar, compression, Packages stanzas, dependency fields, Debian version order
+cannery/repo.py      indexes, closure resolution, fetch and verify
+cannery/build.py     extraction rules, synthesis, placeholders, tree hash, lockfile, unwrap
+cannery/elfcheck.py  the static and dynamic checks of 10.3
+test/run.py          the regression suite; test/progs/ its C and Rust programs
+test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the openat2 oracle
+test/docker_profile.py   a can under Docker's default seccomp profile; test/docker-seccomp.json the profile
+test/syscalls.py     every kernel syscall classified; test/bench.py the performance table
+test/index_test.c    grammar tests; test/stackcheck.py the stack budget
+docs/            proposal (revision 8), review response, prior art, review reports
 spike/           frozen prototypes and their tests
 ```
 
