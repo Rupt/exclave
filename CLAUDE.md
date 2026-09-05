@@ -20,8 +20,9 @@ finding them inconvenient.
   add flags, modes, or manifest keys to solve a problem; find the rule
   that makes the option unnecessary, or state a limitation.
 - **The opener is freestanding C**: no libc, raw syscalls from
-  `spike/sys.h`, every syscall carrying the magic register. The cannery
-  is Python and is shipped as a can. No `curl`.
+  `src/sys.h`, every syscall issued through the syscall page (never a
+  bare `syscall` instruction outside the bootstrap and the restorer).
+  The cannery is Python and is shipped as a can. No `curl`.
 - **Hashes are BLAKE2b-256.** Manifest, index and lockfile use the strict
   grammar of proposal 6.2; `fmt` output is the only accepted spelling.
 - **`spike/` is frozen evidence.** Do not edit the spikes; their numbers
@@ -32,8 +33,11 @@ finding them inconvenient.
   quote a number the current filter has not produced.
 - **Tests before features.** Every rule in sections 7 and 8 of the
   proposal has a named regression in 17.4; implementing a rule means
-  implementing its test. The user-namespace bind mount and
-  `openat2(RESOLVE_IN_ROOT)` are the oracles.
+  implementing its test in `test/run.py` or `test/progs/`. The
+  user-namespace bind mount and `openat2(RESOLVE_IN_ROOT)` are the
+  oracles (milestone 1c). Run `make unit`, `make stack` and
+  `CONT_TREE=<tree> make test` before committing opener changes; the
+  suite must stay at zero failures.
 
 ## Reference machine facts
 
@@ -47,5 +51,6 @@ profile was checked syscall by syscall; the results are in
 
 ## Scratch space
 
-Use the session scratchpad for trees, builds and traces, never the
-repository. A test tree is made with `spike/make-tree.sh`.
+Use the session scratchpad for trees, cans and traces, never the
+repository. A test tree is made with `spike/make-tree.sh`; the suite
+makes its own can under `build/test-work` (ignored by git).

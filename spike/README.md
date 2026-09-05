@@ -11,7 +11,7 @@ list at the end before copying anything.
 
 | File | Role |
 |---|---|
-| `sys.h` | Freestanding syscall layer, x86-64 and aarch64 numbers, no libc. Every `SC0`..`SC5` call carries the magic in the sixth register. The opener starts from this. |
+| `sys.h` | Freestanding syscall layer, x86-64 and aarch64 numbers, no libc. Every `SC0`..`SC5` call carries the magic in the sixth register; the opener's `src/sys.h` started from this but issues its syscalls through the syscall page instead (proposal 7.4.2, revision 7). |
 | `spike.c` | Spike 1: the seccomp trap translator and the userland ELF loader, as a non-PIE static binary at a fixed address. |
 | `build.sh` | Builds `spike`. |
 | `spike2.c` | Spike 2: the same translator and loader as an `ET_DYN` object with self-relocation and a `.note.cont`, plus the retired `/proc/self/fd/999` interpreter mode. |
