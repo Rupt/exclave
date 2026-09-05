@@ -81,7 +81,9 @@ int vis_is_host(const char *v, const char **real)
     for (int i = 0; volatile_dirs[i]; i++)
         if (starts_dir(v, volatile_dirs[i])) { *real = v; return 1; }
     long best_host = -1, best_own = -1;
-    if (C.cwdclaim_len && starts_dir(v, C.cwdclaim)) best_host = C.cwdclaim_len;
+    /* 8.1.4: a claimed working directory is the host's as a subtree, and so is every directory on the way to
+     * it, or realpath and pwd -P could not walk the path the process was started in */
+    if (C.cwdclaim_len && (starts_dir(v, C.cwdclaim) || starts_dir(C.cwdclaim, v))) { *real = v; return 1; }
     for (int i = 0; i < C.nhost; i++)
         if (!C.host[i].is_file && starts_dir(v, C.host[i].v)) { long l = (long)xstrlen(C.host[i].v); if (l > best_host) best_host = l; }
     for (int i = 0; i < C.nown; i++)
@@ -90,6 +92,15 @@ int vis_is_host(const char *v, const char **real)
     return 0;
 }
 int is_can_owned(const char *v) { const char *r; return !vis_is_host(v, &r); }
+
+/* 8.4: the directories on the way to a host file (an identity file, a TZ zone) exist on the host whether or
+ * not the can ships them; a path walk treats them as directories so that the file itself can be reached */
+int vis_leads_to_host_file(const char *v)
+{
+    for (int i = 0; i < C.nhost; i++)
+        if (C.host[i].is_file && starts_dir(C.host[i].v, v) && xstrcmp(C.host[i].v, v) != 0) return 1;
+    return 0;
+}
 
 int is_wrapper_real(const char *real, char *tmp)
 {
@@ -119,7 +130,8 @@ char *to_real(const char *v, char *out, char *tmp)
 {
     to_real_exec(v, out);
     if (!C.rootlen || !starts_dir(out, C.root)) return out;
-    if (is_wrapper_real(out, tmp) && payload_of(out, tmp)) scpy(out, tmp, PATH_MAX);
+    int k = cache_classify(v, out, tmp);                       /* the wrapper check, remembered (7.4.4) */
+    if (k == CK_WRAPPER || (!k && is_wrapper_real(out, tmp))) { if (payload_of(out, tmp)) scpy(out, tmp, PATH_MAX); }
     return out;
 }
 void from_real(char *r)

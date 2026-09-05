@@ -173,11 +173,12 @@ struct scratch {
     char b1[PATH_MAX], b2[PATH_MAX], rest[PATH_MAX], cur[PATH_MAX], real[PATH_MAX], tmp[PATH_MAX], v[PATH_MAX];
     char v2[PATH_MAX];             /* the first path of a two-path syscall; canon never touches it */
     char extra[8192];              /* argv vectors, masks, headers */
+    pid_t pid, tid;                /* the owner, looked up once per trap */
 };
-struct scratch *scratch_get(void);
+struct scratch *scratch_get(pid_t pid, pid_t tid);
 void scratch_put(struct scratch *s);
 void scratch_release_all_mine(void);   /* before execve */
-int  nest_enter(void);                 /* returns depth, 1 for outermost */
+int  nest_enter(pid_t pid, pid_t tid); /* returns depth, 1 for outermost */
 void nest_leave(void);
 
 /* ---------- visibility (vis.c) ---------- */
@@ -187,15 +188,22 @@ char *to_real(const char *v, char *out, char *tmp);   /* v -> real, with wrapper
 char *to_real_exec(const char *v, char *out);         /* v -> real, no wrapper redirect */
 void from_real(char *r);                              /* in place, no buffer */
 int  is_can_owned(const char *v);
+int  vis_leads_to_host_file(const char *v);   /* v is a proper ancestor of a host-resolved file */
 int  is_wrapper_real(const char *real, char *tmp);   /* tmp PATH_MAX */
 int  payload_of(const char *real, char *out);         /* 1 if real is a wrapper; out = payload */
 int  vis_readlink_identity(const char *v, char *out); /* 1 if v is an identity file; out = host link text */
+
+/* ---------- the canonicalisation cache (cache.c, 7.4.4) ---------- */
+enum { CK_NONE = 1, CK_DIR, CK_LINK, CK_FILE, CK_WRAPPER };
+int  cache_get(const char *v, char *link_out);        /* 0 on a miss; link_out PATH_MAX gets a symlink's text */
+void cache_put(const char *v, int kind, const char *link);
+int  cache_classify(const char *v, const char *real, char *tmp);   /* one lstat on a miss; 0 only if the lstat raced */
 
 /* ---------- canonicalisation (canon.c) ---------- */
 int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *out);  /* 0 or -errno */
 int fd_virtual(int fd, char *out);
 int cwd_virtual(char *out);
-int is_self_exe(const char *p);   /* /proc/self/exe in any spelling, for this process */
+int is_self_exe(const char *p, pid_t pid);   /* /proc/self/exe in any spelling, for this process */
 
 /* ---------- loader (loader.c) ---------- */
 __attribute__((noreturn)) void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp, unsigned long *auxv);

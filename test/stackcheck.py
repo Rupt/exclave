@@ -9,11 +9,12 @@ is_wrapper_real -> payload_of, plus copy_str_in/copy_in and scratch_get.
 import sys, re, collections
 
 LIMIT_FRAME = 512
-LIMIT_PATH = 2048
+LIMIT_PATH = 2048   # beyond the kernel's frame of AT_MINSIGSTKSZ bytes (7.5.4)
 PATH = [
     ["on_sigsys"], ["dispatch"], ["do_open", "do_execve", "do_readlink", "do_sigprocmask", "do_pselect6", "exec_target", "exec_script", "exec_loader_mode"],
-    ["resolve", "canon", "fd_virtual", "cwd_virtual", "ro_create", "ro_attr", "exists_can", "to_real", "to_real_exec", "vis_is_host"],
-    ["copy_str_in", "copy_in", "scratch_get", "is_wrapper_real", "payload_of", "from_real", "wrapper_of_payload", "log_line"],
+    ["resolve", "canon", "fd_virtual", "cwd_virtual", "ro_create", "ro_attr", "exists_can", "to_real", "to_real_exec", "vis_is_host", "is_self_exe"],
+    ["cache_classify", "cache_get", "cache_put", "is_can_owned", "vis_leads_to_host_file", "copy_str_in", "copy_in", "scratch_get", "nest_enter"],
+    ["is_wrapper_real", "payload_of", "from_real", "log_line", "hash_str", "starts_dir", "scpy"],
 ]
 frames = {}
 for f in sys.argv[1:]:

@@ -34,11 +34,10 @@ static struct chunk *try_claim(pid_t pid, pid_t tid)
     return 0;
 }
 
-struct scratch *scratch_get(void)
+struct scratch *scratch_get(pid_t pid, pid_t tid)
 {
-    pid_t pid = (pid_t)sys_getpid(), tid = (pid_t)sys_gettid();
     struct chunk *c = try_claim(pid, tid);
-    if (c) return &c->s;
+    if (c) { c->s.pid = pid; c->s.tid = tid; return &c->s; }
     /* sweep: reclaim chunks whose owner is gone (a thread that exited, a longjmp'd frame in a dead process) */
     int n = nchunks;
     for (int i = 0; i < n; i++) {
@@ -46,14 +45,14 @@ struct scratch *scratch_get(void)
         if (k->busy && !owner_alive(k, pid)) k->busy = 0;
     }
     c = try_claim(pid, tid);
-    if (c) return &c->s;
+    if (c) { c->s.pid = pid; c->s.tid = tid; return &c->s; }
     /* grow */
     lock(&growlock);
     if (nchunks >= MAX_CHUNKS) { unlock(&growlock); return 0; }
     size_t sz = (sizeof(struct chunk) + 0xfff) & ~(size_t)0xfff;
     long m = sys_mmap(0, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m < 0 && m > -4096) { unlock(&growlock); return 0; }
-    c = (struct chunk *)m; c->busy = 1; c->pid = pid; c->tid = tid;
+    c = (struct chunk *)m; c->busy = 1; c->pid = pid; c->tid = tid; c->s.pid = pid; c->s.tid = tid;
     chunks[nchunks] = c;
     __sync_synchronize();
     nchunks++;
@@ -77,9 +76,8 @@ void scratch_release_all_mine(void)
 }
 
 /* nesting depth of this thread = chunks it currently holds, plus one */
-int nest_enter(void)
+int nest_enter(pid_t pid, pid_t tid)
 {
-    pid_t pid = (pid_t)sys_getpid(), tid = (pid_t)sys_gettid();
     int n = nchunks, d = 1;
     for (int i = 0; i < n; i++) { struct chunk *c = chunks[i]; if (c->busy && c->pid == pid && c->tid == tid) d++; }
     return d;

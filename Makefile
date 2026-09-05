@@ -4,7 +4,7 @@
 # program (a wrapper, PROPOSAL.md 6.1) and loads programs itself (7.3).
 
 CC      ?= gcc
-SRC     := src/opener.c src/index.c src/loader.c src/scratch.c src/vis.c src/canon.c \
+SRC     := src/opener.c src/index.c src/loader.c src/scratch.c src/vis.c src/canon.c src/cache.c \
            src/filter.c src/handler.c src/isa.c src/str.c src/log.c
 HDR     := src/sys.h src/common.h src/elf.h
 OUT     := build/opener
@@ -16,7 +16,7 @@ CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-fun
 LDFLAGS := -shared -nostdlib -Wl,-e,_start -Wl,--no-relax -Wl,-z,noexecstack -Wl,-z,norelro \
            -Wl,-z,nopack-relative-relocs -Wl,-Bsymbolic -Wl,--build-id=none
 
-.PHONY: all clean stack test unit
+.PHONY: all clean stack test unit oracles bench
 
 all: $(OUT)
 
@@ -36,10 +36,22 @@ unit:
 	@mkdir -p build
 	$(CC) -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o build/index_test test/index_test.c src/index.c src/str.c
 	build/index_test
+	python3 test/syscalls.py
 
 # the regression suite (17.4); needs a gcc tree: CONT_TREE=dir make test
 test: $(OUT)
 	python3 test/run.py --tree $(CONT_TREE)
+
+# the oracles and the container profile (17.1, 17.2, 12); need a packaged gcc can: CONT_CAN=x.can make oracles
+oracles: $(OUT)
+	python3 cannery/cannery.py reopen $(CONT_CAN)
+	python3 test/oracle_resolve.py --can $(CONT_CAN)
+	python3 test/oracle_ns.py --can $(CONT_CAN)
+	python3 test/docker_profile.py --can $(CONT_CAN) --profile test/docker-seccomp.json
+
+# the performance table (16): CONT_CAN=x.can make bench
+bench: $(OUT)
+	python3 test/bench.py --can $(CONT_CAN) --sqlite $(CONT_SQLITE)
 
 clean:
 	rm -rf build

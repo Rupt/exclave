@@ -143,7 +143,7 @@ static __attribute__((noreturn)) void run(const char *v, long argc, char **argv,
     long k = shebang_argv(line, script, argv, argc, nargv, cap);
     if (k == -1) die("not an executable", v, ENOEXEC);
     if (k == -2) die("argument list too long", v, E2BIG);
-    struct scratch *S = scratch_get(); if (!S) die("out of memory", 0, ENOMEM);
+    struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid()); if (!S) die("out of memory", 0, ENOMEM);
     char *iv = arena_alloc(PATH_MAX);
     if (canon(S, nargv[0], AT_FDCWD, 1, iv) < 0) die("cannot resolve interpreter", nargv[0], 0);
     scratch_put(S);

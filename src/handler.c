@@ -24,6 +24,7 @@ static inline unsigned long *frame_mask(void *uc) { return (unsigned long *)((ch
 
 /* ---------- copying from the program's memory with EFAULT fidelity (7.5.4) ---------- */
 static int no_readv;                                         /* process_vm_readv refused: direct reads, a bad pointer faults (13) */
+static pid_t cur_pid;                                        /* set per trap; one pid per process, so a plain static; no TLS in the opener */
 static long copy_in(void *dst, const void *src, size_t n)
 {
     unsigned long p = (unsigned long)src;
@@ -33,7 +34,7 @@ static long copy_in(void *dst, const void *src, size_t n)
     unsigned long first = 4096 - (p & 4095); if (first > n) first = n;
     r[0].iov_base = (void *)p; r[0].iov_len = first;
     if (first < n) { r[1].iov_base = (void *)(p + first); r[1].iov_len = n - first; rn = 2; }
-    long got = sys_process_vm_readv((pid_t)sys_getpid(), &l, 1, r, rn, 0);
+    long got = sys_process_vm_readv(cur_pid, &l, 1, r, rn, 0);
     if (got == -ENOSYS || got == -EPERM) { no_readv = 1; log_msg("process_vm_readv refused; direct reads", 0); return copy_in(dst, src, n); }
     return got < 0 ? -EFAULT : got;
 }
@@ -59,7 +60,15 @@ static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int 
     return canon(S, S->b1, di < 0 ? AT_FDCWD : (int)a[di], follow, S->v);
 }
 static int exists_can(struct scratch *S, const char *v, struct kstat *st)
-{ to_real_exec(v, S->real); return sys_lstat(S->real, st) == 0; }
+{
+    to_real_exec(v, S->real);
+    if (is_can_owned(v)) {                                     /* 7.4.4: the answer is stable for a can-owned path */
+        int k = cache_classify(v, S->real, S->tmp);
+        if (k == CK_NONE) return 0;
+        if (k) { st->st_mode = k == CK_DIR ? S_IFDIR : k == CK_LINK ? S_IFLNK : S_IFREG; return 1; }
+    }
+    return sys_lstat(S->real, st) == 0;
+}
 
 /* 8.2: the kernel-matching answers for a read-only can; S->real is set either way for the re-issue */
 static long ro_create(struct scratch *S, const char *v)
@@ -87,9 +96,7 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     }
     to_real(S->v, S->real, S->tmp);
     if (!follow) flags |= O_NOFOLLOW;
-    r = RE5(NR_openat, AT_FDCWD, S->real, flags, mode, 0);
-    log_line("open", r, S->v);
-    return r;
+    return RE5(NR_openat, AT_FDCWD, S->real, flags, mode, 0);
 }
 
 /* ---------- exec (7.6): scripts and host programs run inside the can's world ---------- */
@@ -100,7 +107,7 @@ static long exec_loader_mode(struct scratch *S, const char *v, char **argv, char
     long envc = 0; while (envp[envc]) envc++;
     char **nenv = (char **)S->extra; long cap = (long)(sizeof S->extra / sizeof(char *));
     struct scratch *S2 = 0;
-    if (envc + 2 > cap) { S2 = scratch_get(); if (!S2) return -E2BIG; nenv = (char **)S2; cap = (long)(sizeof *S2 / sizeof(char *)); if (envc + 2 > cap) { scratch_put(S2); return -E2BIG; } }
+    if (envc + 2 > cap) { S2 = scratch_get(S->pid, S->tid); if (!S2) return -E2BIG; nenv = (char **)S2; cap = (long)(sizeof *S2 / sizeof(char *)); if (envc + 2 > cap) { scratch_put(S2); return -E2BIG; } }
     scpy(S->b1, "CAN_EXEC=", PATH_MAX); scat(S->b1, v, PATH_MAX);
     long n = 0; nenv[n++] = S->b1;
     for (long i = 0; i < envc; i++) if (!xstarts(envp[i], "CAN_EXEC=")) nenv[n++] = envp[i];
@@ -115,7 +122,7 @@ static long exec_loader_mode(struct scratch *S, const char *v, char **argv, char
  * the script is passed by its virtual path. Kernel convention: argv = interp [arg] script args... */
 static long exec_script(struct scratch *S, const char *v, char **argv, char **envp, int depth, struct scratch **Sp)
 {
-    struct scratch *S2 = scratch_get(); if (!S2) return -ENOMEM;
+    struct scratch *S2 = scratch_get(S->pid, S->tid); if (!S2) return -ENOMEM;
     char *line = S2->b1, *vcopy = S2->b2; char **nargv = (char **)S2->rest;
     long cap = (long)((sizeof *S2 - 2 * PATH_MAX) / sizeof(char *));
     long fd = sys_open(S->real, O_RDONLY | O_CLOEXEC, 0);
@@ -170,7 +177,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
     long r = resolve(S, a, pi, di, 0, 0); if (r < 0) return r;
     if (bufsiz <= 0) return -EINVAL;
     char *ans = 0;
-    if (C.loader_mode && is_self_exe(S->v)) ans = C.program;
+    if (C.loader_mode && is_self_exe(S->v, S->pid)) ans = C.program;
     if (!ans) {
         r = vis_readlink_identity(S->v, S->tmp);
         if (r < 0) return r;
@@ -337,10 +344,11 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if ((r = resolve(S, a, opi, odi, 0, 0)) < 0) return r;
         scpy(S->v2, S->v, PATH_MAX);                         /* old */
         if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
-        if (!exists_can(S, S->v2, &st)) return -ENOENT;
+        /* the kernel's order (oracle 17.1): different mounts first, then the write check, then the lookups */
         int oc = is_can_owned(S->v2), nc = is_can_owned(S->v);
-        if (oc && nc) return -EROFS;
         if (oc != nc) return -EXDEV;
+        if (oc && nc) return -EROFS;
+        (void)st;
         to_real_exec(S->v2, S->b1); to_real_exec(S->v, S->real);
         return RE5(NR_renameat2, AT_FDCWD, S->b1, AT_FDCWD, S->real, fl);
     }
@@ -428,6 +436,33 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     }
 }
 
+/* names for the log: one line per trapped syscall, "<name> <result> <virtual path>" */
+static const char *sysname(int nr)
+{
+    switch (nr) {
+    case NR_open: case NR_openat: case NR_creat: return "open";
+    case NR_stat: case NR_lstat: case NR_newfstatat: case NR_statx: return "stat";
+    case NR_access: case NR_faccessat: case NR_faccessat2: return "access";
+    case NR_readlink: case NR_readlinkat: return "readlink";
+    case NR_execve: case NR_execveat: return "exec";
+    case NR_chdir: return "chdir";
+    case NR_getcwd: return "getcwd";
+    case NR_mkdir: case NR_mkdirat: return "mkdir";
+    case NR_unlink: case NR_unlinkat: case NR_rmdir: return "unlink";
+    case NR_rename: case NR_renameat: case NR_renameat2: return "rename";
+    case NR_link: case NR_linkat: return "link";
+    case NR_symlink: case NR_symlinkat: return "symlink";
+    case NR_chmod: case NR_fchmodat: case NR_fchmodat2: case NR_chown: case NR_lchown: case NR_fchownat:
+    case NR_utime: case NR_utimes: case NR_futimesat: case NR_utimensat: case NR_truncate: return "attr";
+    case NR_setxattr: case NR_lsetxattr: case NR_getxattr: case NR_lgetxattr: case NR_listxattr: case NR_llistxattr:
+    case NR_removexattr: case NR_lremovexattr: return "xattr";
+    case NR_statfs: case NR_fstatfs: return "statfs";
+    case NR_rt_sigaction: case NR_rt_sigprocmask: case NR_rt_sigsuspend: case NR_ppoll: case NR_pselect6:
+    case NR_epoll_pwait: case NR_epoll_pwait2: case NR_io_pgetevents: return "signal";
+    default: return "trap";
+    }
+}
+
 static void on_sigsys(int sig, void *info, void *uc)
 {
     long *g = gregs(uc);
@@ -440,12 +475,16 @@ static void on_sigsys(int sig, void *info, void *uc)
     }
     int nr = *(int *)((char *)info + SI_SYSCALL_OFF);
     unsigned long ip = *(unsigned long *)((char *)info + SI_CALL_ADDR_OFF);
-    int depth = nest_enter();
+    pid_t pid = (pid_t)sys_getpid(), tid = (pid_t)sys_gettid();
+    int depth = nest_enter(pid, tid);
     if (depth > 1 && ip >= C.text_lo && ip < C.text_hi) die("the opener trapped its own syscall", 0, nr);
     if (depth > 64) die("signal handlers nested too deep", 0, 0);
     long a[6] = { g[REG_RDI], g[REG_RSI], g[REG_RDX], g[REG_R10], g[REG_R8], g[REG_R9] };
-    struct scratch *S = scratch_get();
+    struct scratch *S = scratch_get(pid, tid);
+    cur_pid = pid;
+    if (S) S->v[0] = 0;
     long r = S ? dispatch(S, nr, a, uc, &S) : -ENOMEM;
+    if (C.logfd >= 0 && S) log_line(sysname(nr), r, S->v[0] ? S->v : 0);
     if (S) scratch_put(S);
     g[REG_RAX] = r;
     nest_leave();

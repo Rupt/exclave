@@ -111,7 +111,7 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
         /* one loader per can (7.3): the payload's interpreter must be the index's */
         if (xstrcmp(interp_v, C.interp) != 0) die("program wants a different loader than this can's", interp_v, 0);
         static char ireal[PATH_MAX]; Ehdr ih; unsigned long ientry, iphdr; int ii; char dummy[PATH_MAX];
-        struct scratch *S = scratch_get(); if (!S) die("out of memory", 0, ENOMEM);
+        struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid()); if (!S) die("out of memory", 0, ENOMEM);
         if (canon(S, C.interp, AT_FDCWD, 1, S->v) < 0) die("cannot resolve the loader", C.interp, 0);
         to_real(S->v, ireal, S->tmp);                      /* through the wrapper redirect: ld.so is wrapped */
         scratch_put(S);
