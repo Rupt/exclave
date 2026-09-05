@@ -65,8 +65,7 @@ const char *arena_str(const char *s, size_t n)
 long shebang_argv(char *line, const char *script, char **argv, long argc, char **nargv, long cap)
 {
     if (line[0] != '#' || line[1] != '!') return -1;
-    char *e = xstrchr(line, '\n'); if (!e) return -1;
-    *e = 0;
+    char *e = xstrchr(line, '\n'); if (e) *e = 0;      /* no newline within the buffer: the kernel uses what it has (5.1+) */
     char *p = line + 2; while (*p == ' ' || *p == '\t') p++;
     if (!*p) return -1;
     char *interp = p; while (*p && *p != ' ' && *p != '\t') p++;

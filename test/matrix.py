@@ -46,21 +46,39 @@ def log(*a):
     print(time.strftime("%H:%M:%S"), *a, flush=True)
 
 
-def fetch(url, dst):
+def fetch(url, dst, tries=4):
+    """Download with resume and a length check: a connection that closes early must not leave a short image."""
     if os.path.exists(dst):
         return True
-    log("downloading", url)
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "cont-matrix/0.1"})
-        with urllib.request.urlopen(req, timeout=120) as r, open(dst + ".tmp", "wb") as f:
-            shutil.copyfileobj(r, f, 1 << 20)
-        os.replace(dst + ".tmp", dst)
-        return True
-    except Exception as e:  # noqa: BLE001
-        log("failed:", e)
-        if os.path.exists(dst + ".tmp"):
-            os.remove(dst + ".tmp")
-        return False
+    tmp = dst + ".tmp"
+    for attempt in range(tries):
+        have = os.path.getsize(tmp) if os.path.exists(tmp) else 0
+        log("downloading", url, "from byte %d" % have if have else "")
+        try:
+            headers = {"User-Agent": "cont-matrix/0.1"}
+            if have:
+                headers["Range"] = "bytes=%d-" % have
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=120) as r:
+                if have and r.status != 206:
+                    have = 0                                   # no resume support: start over
+                total = r.headers.get("Content-Range", "").split("/")[-1] or r.headers.get("Content-Length")
+                total = int(total) if total and total.isdigit() else None
+                if have == 0 and r.status == 206:
+                    total = None
+                with open(tmp, "ab" if have else "wb") as f:
+                    shutil.copyfileobj(r, f, 1 << 20)
+            size = os.path.getsize(tmp)
+            if total is not None and size != total:
+                log("short download: %d of %d bytes, retrying" % (size, total))
+                continue
+            os.replace(tmp, dst)
+            return True
+        except Exception as e:  # noqa: BLE001
+            log("failed:", e)
+            if attempt == tries - 1 and os.path.exists(tmp) and os.path.getsize(tmp) == 0:
+                os.remove(tmp)
+    return False
 
 
 def free_port():
@@ -86,6 +104,7 @@ class VM:
         self.name, self.user, self.port, self.work = name, user, port, work
         self.overlay = os.path.join(work, name + ".qcow2")
         subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", "-b", image, "-F", "qcow2", self.overlay], check=True)
+        subprocess.run(["qemu-img", "resize", "-q", self.overlay, "+8G"], check=True)   # cloud-init grows the root; some images ship 2 GB
         self.seed = os.path.join(work, name + "-seed.iso")
         self.key = os.path.join(work, "id_ed25519")
         self.proc = subprocess.Popen(["qemu-system-x86_64", "-enable-kvm", "-cpu", "host", "-m", str(memory), "-smp", "2", "-display", "none",
@@ -186,18 +205,25 @@ def main():
             if "unpacked" not in out:
                 results.append((name, uname, "cannot unpack: " + out[-200:], "", notes))
                 continue
-            rc, out = vm.ssh("cd m && python3 cont/test/run.py --can $PWD/can --work $PWD/work 2>&1 | tail -40", timeout=2400)
+            rc, out = vm.ssh("cd m && python3 cont/test/run.py --can $PWD/can --work $PWD/work 2>&1", timeout=2400)
+            with open(os.path.join(work, name + "-suite.log"), "w") as f:
+                f.write(out)
             suite = [l for l in out.splitlines() if "tests," in l]
             suite = suite[-1] if suite else "suite did not finish: " + out[-300:].replace("\n", " | ")
             fails = [l for l in out.splitlines() if l.startswith("FAIL")]
             log(name, suite)
+            for f in fails:
+                log(name, f[:200])
             oracle = ""
             rc, out = vm.ssh("cd m && bwrap --ro-bind / / true 2>&1 && echo bwrap-ok")
             if "bwrap-ok" in out:
-                rc, out = vm.ssh("cd m && python3 cont/test/oracle_resolve.py --can $PWD/can --work $PWD/rw 2>&1 | tail -1; "
-                                 "python3 cont/test/oracle_ns.py --can $PWD/can --work $PWD/nw 2>&1 | tail -1; "
-                                 "python3 cont/test/docker_profile.py --can $PWD/can --profile cont/test/docker-seccomp.json --work $PWD/dw 2>&1 | head -1", timeout=2400)
-                oracle = " / ".join(l.strip() for l in out.splitlines() if l.strip())
+                rc, out = vm.ssh("cd m && python3 cont/test/oracle_resolve.py --can $PWD/can --work $PWD/rw 2>&1 | tail -30; echo ====; "
+                                 "python3 cont/test/oracle_ns.py --can $PWD/can --work $PWD/nw 2>&1 | tail -40; echo ====; "
+                                 "python3 cont/test/docker_profile.py --can $PWD/can --profile cont/test/docker-seccomp.json --work $PWD/dw 2>&1 | tail -20", timeout=2400)
+                with open(os.path.join(work, name + "-oracles.log"), "w") as f:
+                    f.write(out)
+                keep = [l.strip() for l in out.splitlines() if ("paths:" in l or "workloads," in l or l.startswith("PASS can") or l.startswith("FAIL can") or "cannot run" in l)]
+                oracle = " / ".join(keep) or out[-300:].replace("\n", " | ")
                 log(name, oracle)
             else:
                 oracle = "no user namespaces"

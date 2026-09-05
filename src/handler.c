@@ -50,11 +50,26 @@ static long copy_str_in(char *dst, const char *src)
     return more == PATH_MAX - 256 ? -ENAMETOOLONG : -EFAULT;
 }
 static long copy_exact(void *dst, const void *src, size_t n) { long g = copy_in(dst, src, n); return g == (long)n ? 0 : -EFAULT; }
+/* the mirror of copy_in: the only writes into program memory the kernel has not just validated (review O3-1) */
+static long copy_out(void *dst, const void *src, size_t n)
+{
+    unsigned long p = (unsigned long)dst;
+    if (!p) return -EFAULT;
+    if (no_readv) { xmemcpy(dst, src, n); return 0; }
+    struct iovec l = { (void *)src, n }, r[2]; unsigned long rn = 1;
+    unsigned long first = 4096 - (p & 4095); if (first > n) first = n;
+    r[0].iov_base = (void *)p; r[0].iov_len = first;
+    if (first < n) { r[1].iov_base = (void *)(p + first); r[1].iov_len = n - first; rn = 2; }
+    long got = sys_process_vm_writev(cur_pid, &l, 1, r, rn, 0);
+    if (got == -ENOSYS || got == -EPERM) { no_readv = 1; return copy_out(dst, src, n); }
+    return got == (long)n ? 0 : -EFAULT;
+}
 
 /* ---------- path resolution ---------- */
 /* args[pi] relative to args[di] (or the cwd when di < 0) into S->v; 1 means "empty path with AT_EMPTY_PATH: fd-based" */
 static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int allow_empty)
 {
+    if (!a[pi] && allow_empty) return 1;                       /* NULL with AT_EMPTY_PATH: the descriptor itself (6.11+) */
     long r = copy_str_in(S->b1, (const char *)a[pi]); if (r < 0) return r;
     if (S->b1[0] == 0) return allow_empty ? 1 : -ENOENT;
     return canon(S, S->b1, di < 0 ? AT_FDCWD : (int)a[di], follow, S->v);
@@ -90,6 +105,7 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
         struct kstat st; int ex = exists_can(S, S->v, &st);
         if ((flags & O_TMPFILE) == O_TMPFILE) return ex ? -EROFS : -ENOENT;
         if (creat && (flags & O_EXCL)) return ex ? -EEXIST : -EROFS;
+        if (creat && ex && (st.st_mode & S_IFMT) == S_IFDIR) return -EISDIR;
         if (wr) { if (!ex) return creat ? -EROFS : -ENOENT; if ((st.st_mode & S_IFMT) == S_IFDIR) return -EISDIR; return -EROFS; }
         if (creat && !ex) return -EROFS;
         flags &= ~O_CREAT;                                   /* O_CREAT on an existing file, read-only: succeeds */
@@ -102,19 +118,29 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
 /* ---------- exec (7.6): scripts and host programs run inside the can's world ---------- */
 static long exec_target(struct scratch *S, const char *v, char **argv, char **envp, int depth, struct scratch **Sp);
 
+/* a pointer vector of n entries: the scratch chunk's tail when it fits, an anonymous mapping otherwise
+ * (F3-2: vectors are sized from their counts). A mapping made by a vfork child stays in the parent, unused. */
+static char **vector(struct scratch *S, long n, void **big)
+{
+    *big = 0;
+    if (n <= (long)(sizeof S->extra / sizeof(char *))) return (char **)S->extra;
+    long m = sys_mmap(0, ((size_t)n * sizeof(char *) + 0xfff) & ~(size_t)0xfff, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (m < 0 && m > -4096) return 0;
+    *big = (void *)m; return (char **)m;
+}
+static void vector_free(void *big, long n) { if (big) SC2(NR_munmap, big, ((size_t)n * sizeof(char *) + 0xfff) & ~(size_t)0xfff); }
+
 static long exec_loader_mode(struct scratch *S, const char *v, char **argv, char **envp, struct scratch **Sp)
 {
     long envc = 0; while (envp[envc]) envc++;
-    char **nenv = (char **)S->extra; long cap = (long)(sizeof S->extra / sizeof(char *));
-    struct scratch *S2 = 0;
-    if (envc + 2 > cap) { S2 = scratch_get(S->pid, S->tid); if (!S2) return -E2BIG; nenv = (char **)S2; cap = (long)(sizeof *S2 / sizeof(char *)); if (envc + 2 > cap) { scratch_put(S2); return -E2BIG; } }
+    void *big; char **nenv = vector(S, envc + 2, &big); if (!nenv) return -ENOMEM;
     scpy(S->b1, "CAN_EXEC=", PATH_MAX); scat(S->b1, v, PATH_MAX);
     long n = 0; nenv[n++] = S->b1;
     for (long i = 0; i < envc; i++) if (!xstarts(envp[i], "CAN_EXEC=")) nenv[n++] = envp[i];
     nenv[n] = 0;
     log_line("exec", 0, v);
     long r = RE5(NR_execve, C.opener, argv, nenv, 0, 0);
-    if (S2) scratch_put(S2);                                 /* only reached when execve failed */
+    vector_free(big, envc + 2);                              /* only reached when execve failed */
     return r;
 }
 
@@ -123,20 +149,22 @@ static long exec_loader_mode(struct scratch *S, const char *v, char **argv, char
 static long exec_script(struct scratch *S, const char *v, char **argv, char **envp, int depth, struct scratch **Sp)
 {
     struct scratch *S2 = scratch_get(S->pid, S->tid); if (!S2) return -ENOMEM;
-    char *line = S2->b1, *vcopy = S2->b2; char **nargv = (char **)S2->rest;
-    long cap = (long)((sizeof *S2 - 2 * PATH_MAX) / sizeof(char *));
+    char *line = S2->b1, *vcopy = S2->b2;
+    long argc = 0; while (argv[argc]) argc++;
+    void *big; char **nargv = vector(S2, argc + 4, &big);
+    if (!nargv) { scratch_put(S2); return -ENOMEM; }
     long fd = sys_open(S->real, O_RDONLY | O_CLOEXEC, 0);
     long n = fd < 0 ? fd : sys_read((int)fd, line, 255); if (fd >= 0) sys_close((int)fd);
     long r = -ENOEXEC;
     if (n < 0) r = n;
     else {
         line[n < 0 ? 0 : n] = 0;
-        long argc = 0; while (argv[argc]) argc++;
         scpy(vcopy, v, PATH_MAX);
-        long k = shebang_argv(line, vcopy, argv, argc, nargv, cap);
+        long k = shebang_argv(line, vcopy, argv, argc, nargv, argc + 4);
         if (k == -1) r = -ENOEXEC; else if (k == -2) r = -E2BIG;
         else if ((r = canon(S, nargv[0], AT_FDCWD, 1, S->v)) >= 0) r = exec_target(S, S->v, nargv, envp, depth + 1, Sp);
     }
+    vector_free(big, argc + 4);
     scratch_put(S2);                                         /* only reached when no exec happened */
     return r;
 }
@@ -148,7 +176,9 @@ static long exec_target(struct scratch *S, const char *v, char **argv, char **en
     struct kstat st;
     if (sys_stat(S->real, &st) < 0) return -ENOENT;
     if ((st.st_mode & S_IFMT) == S_IFDIR) return -EACCES;
-    if ((st.st_mode & S_IFMT) != S_IFREG || !(st.st_mode & 0111)) return -EACCES;
+    if ((st.st_mode & S_IFMT) != S_IFREG) return -EACCES;
+    long ok = sys_faccessat(AT_FDCWD, S->real, X_OK);           /* the kernel's answer for this process, triads and search included (O3-4) */
+    if (ok < 0) return ok;
     int wrapper = is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp);
     long fd = sys_open(wrapper ? S->tmp : S->real, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) return fd;
     unsigned char h[4]; long n = sys_read((int)fd, h, 4); sys_close((int)fd);
@@ -159,7 +189,11 @@ static long exec_target(struct scratch *S, const char *v, char **argv, char **en
     }
     /* not a wrapper: a host program, or an unwrapped can file */
     if (n >= 2 && h[0] == '#' && h[1] == '!') return exec_script(S, v, argv, envp, depth, Sp);
-    if (n == 4 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F') return exec_loader_mode(S, v, argv, envp, Sp);
+    if (n == 4 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F') {
+        int another;                                         /* 7.4.5: a file carrying .note.cont is another opener: exec it as it is */
+        if (elf_probe(S->real, S->tmp, &another) >= 0 && another) { log_line("exec", 0, v); return RE5(NR_execve, S->real, argv, envp, 0, 0); }
+        return exec_loader_mode(S, v, argv, envp, Sp);
+    }
     return -ENOEXEC;
 }
 
@@ -174,9 +208,14 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
 /* ---------- readlink: /proc links and identity files answer in virtual terms (8.4) ---------- */
 static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, long bufsiz)
 {
-    long r = resolve(S, a, pi, di, 0, 0); if (r < 0) return r;
+    long r = resolve(S, a, pi, di, 0, di >= 0); if (r < 0) return r;
     if (bufsiz <= 0) return -EINVAL;
     char *ans = 0;
+    if (r == 1) {                                             /* readlinkat(fd, ""): the kernel reads the descriptor's own link (F3-8) */
+        r = RE5(NR_readlinkat, a[di], "", S->tmp, PATH_MAX - 1, 0);
+        if (r < 0) return r;
+        S->tmp[r] = 0; if (starts_dir(S->tmp, C.root)) from_real(S->tmp); ans = S->tmp;
+    }
     if (C.loader_mode && is_self_exe(S->v, S->pid)) ans = C.program;
     if (!ans) {
         r = vis_readlink_identity(S->v, S->tmp);
@@ -192,7 +231,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         ans = S->tmp;
     }
     long l = (long)xstrlen(ans); if (l > bufsiz) l = bufsiz;
-    xmemcpy(buf, ans, (size_t)l);                            /* buf was validated by the kernel only in the re-issued case */
+    if (l && copy_out(buf, ans, (size_t)l)) return -EFAULT;   /* the program's buffer is never validated by the kernel here */
     return l;
 }
 
@@ -268,6 +307,14 @@ static long fd_can(struct scratch *S, int fd)
     return S->v[0] == '/' && is_can_owned(S->v);
 }
 
+/* the real path for a stat: with no-follow, an identity file is the host's own symlink, so that lstat and
+ * readlink agree about it (F3-9); otherwise the resolved file, wrapper redirect included */
+static void real_nofollow(struct scratch *S, int nofollow)
+{
+    if (nofollow && vis_readlink_identity(S->v, S->tmp) == 1) { scpy(S->real, S->v, PATH_MAX); return; }
+    to_real(S->v, S->real, S->tmp);
+}
+
 static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratch **Sp)
 {
     long r;
@@ -277,17 +324,17 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_creat:  return do_open(S, a, 0, -1, O_CREAT | O_WRONLY | O_TRUNC, a[1]);
     case NR_stat: case NR_lstat:
         if ((r = resolve(S, a, 0, -1, nr == NR_stat, 0)) < 0) return r;
-        to_real(S->v, S->real, S->tmp);
+        real_nofollow(S, nr == NR_lstat);
         return RE5(NR_newfstatat, AT_FDCWD, S->real, a[1], nr == NR_stat ? 0 : AT_SYMLINK_NOFOLLOW, 0);
     case NR_newfstatat:
         if ((r = resolve(S, a, 1, 0, !(a[3] & AT_SYMLINK_NOFOLLOW), (a[3] & AT_EMPTY_PATH) != 0)) < 0) return r;
         if (r == 1) return RE5(nr, a[0], a[1], a[2], a[3], 0);
-        to_real(S->v, S->real, S->tmp);
+        real_nofollow(S, (a[3] & AT_SYMLINK_NOFOLLOW) != 0);
         return RE5(nr, AT_FDCWD, S->real, a[2], a[3] | AT_SYMLINK_NOFOLLOW, 0);
     case NR_statx:
         if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) != 0)) < 0) return r;
         if (r == 1) return RE5(nr, a[0], a[1], a[2], a[3], a[4]);
-        to_real(S->v, S->real, S->tmp);
+        real_nofollow(S, (a[2] & AT_SYMLINK_NOFOLLOW) != 0);
         return RE5(nr, AT_FDCWD, S->real, a[2] | AT_SYMLINK_NOFOLLOW, a[3], a[4]);
     case NR_access: case NR_faccessat: case NR_faccessat2: {
         int pi = nr == NR_access ? 0 : 1, di = nr == NR_access ? -1 : 0; long mode = a[pi + 1], fl = nr == NR_faccessat2 ? a[3] : 0;
@@ -300,8 +347,12 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_readlink:   return do_readlink(S, a, 0, -1, (char *)a[1], a[2]);
     case NR_readlinkat: return do_readlink(S, a, 1, 0, (char *)a[2], a[3]);
     case NR_getcwd:
-        r = RE5(NR_getcwd, a[0], a[1], 0, 0, 0);
-        if (r > 0) { char *b = (char *)a[0]; if (starts_dir(b, C.root)) { from_real(b); r = (long)xstrlen(b) + 1; } }
+        r = RE5(NR_getcwd, S->tmp, PATH_MAX, 0, 0, 0);
+        if (r <= 0) return r;
+        if (starts_dir(S->tmp, C.root)) from_real(S->tmp);
+        r = (long)xstrlen(S->tmp) + 1;
+        if (r > a[1]) return -ERANGE;
+        if (copy_out((void *)a[0], S->tmp, (size_t)r)) return -EFAULT;
         return r;
     case NR_chdir:
         if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
@@ -350,6 +401,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if (oc && nc) return -EROFS;
         (void)st;
         to_real_exec(S->v2, S->b1); to_real_exec(S->v, S->real);
+        if (nr != NR_renameat2 && fl == 0) return RE5(NR_renameat, AT_FDCWD, S->b1, AT_FDCWD, S->real, 0);   /* renameat2 is 3.15+ */
         return RE5(NR_renameat2, AT_FDCWD, S->b1, AT_FDCWD, S->real, fl);
     }
     case NR_link: case NR_linkat: {

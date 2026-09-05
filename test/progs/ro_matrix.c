@@ -12,6 +12,7 @@
 #include <sys/xattr.h>
 #include <unistd.h>
 #include <utime.h>
+#include <sys/syscall.h>
 #include <linux/fs.h>
 
 static int fails;
@@ -82,7 +83,18 @@ int main(int argc, char **argv)
     CHECK(futimens(fd, 0), EROFS);
     CHECK(fsetxattr(fd, "user.x", "y", 1, 0), EROFS);
     { int fl = 0; CHECK(ioctl(fd, FS_IOC_SETFLAGS, &fl), EROFS); }
-    { struct stat a, b; CHECK(fstatat(fd, "", &a, AT_EMPTY_PATH), 0); stat(marker, &b); if (a.st_ino != b.st_ino) { fails++; printf("FAIL fstatat AT_EMPTY_PATH inode\n"); } }
+    { struct stat a, b; CHECK(fstatat(fd, "", &a, AT_EMPTY_PATH), 0); stat(marker, &b); if (a.st_ino != b.st_ino) { fails++; printf("FAIL fstatat AT_EMPTY_PATH inode\n"); }
+      /* F3-5: NULL with AT_EMPTY_PATH is the kernel's own fast form since 6.11 */
+      errno = 0; long r = syscall(SYS_newfstatat, fd, (char *)0, &a, AT_EMPTY_PATH);
+      if (!(r == 0 || errno == EINVAL || errno == EFAULT && 0)) { fails++; printf("FAIL fstatat(fd, NULL, AT_EMPTY_PATH): %ld errno %d\n", r, errno); }
+      if (r == 0 && a.st_ino != b.st_ino) { fails++; printf("FAIL fstatat NULL inode\n"); } }
+    { /* F3-7 */ CHECK(open(dir, O_RDONLY | O_CREAT, 0644), EISDIR); }
+    { /* F3-8: readlinkat(fd, "") of an O_PATH|O_NOFOLLOW descriptor on a symlink */
+      int lf = open("/usr/bin/sh", O_PATH | O_NOFOLLOW); char lb[64]; errno = 0; long r = readlinkat(lf, "", lb, sizeof lb - 1);
+      if (r <= 0 || strncmp(lb, "dash", 4)) { fails++; printf("FAIL readlinkat(fd, \"\"): %ld errno %d\n", r, errno); } close(lf); }
+    { /* F3-6: getcwd into a buffer that holds the virtual path */
+      char cb[12]; if (chdir("/usr/share") || !getcwd(cb, sizeof cb) || strcmp(cb, "/usr/share")) { fails++; printf("FAIL getcwd with a small buffer: %s\n", strerror(errno)); }
+      char one[2]; errno = 0; if (getcwd(one, sizeof one) || errno != ERANGE) { fails++; printf("FAIL getcwd ERANGE\n"); } }
     { struct statvfs v; CHECK(fstatvfs(fd, &v), 0); if (!(v.f_flag & ST_RDONLY)) { fails++; printf("FAIL fstatvfs lacks ST_RDONLY\n"); } }
     close(fd);
     { struct statvfs v; CHECK(statvfs("/usr", &v), 0); if (!(v.f_flag & ST_RDONLY)) { fails++; printf("FAIL statvfs /usr lacks ST_RDONLY\n"); }

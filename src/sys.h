@@ -74,7 +74,7 @@ enum {
     NR_mknodat = 259, NR_fchownat = 260, NR_futimesat = 261, NR_renameat = 264, NR_linkat = 265,
     NR_fchmodat = 268, NR_utimensat = 280, NR_name_to_handle_at = 303, NR_renameat2 = 316,
     NR_execveat = 322, NR_statx = 332, NR_openat2 = 437, NR_faccessat2 = 439, NR_fchmodat2 = 452,
-    NR_close_range = 436, NR_dup2 = 33, NR_fanotify_mark = 301, NR_writev = 20,
+    NR_close_range = 436, NR_dup2 = 33, NR_fanotify_mark = 301, NR_writev = 20, NR_process_vm_writev = 311,
 };
 #define ARCH_NAME "x86_64"
 #else
@@ -258,6 +258,7 @@ static inline long sys_rt_sigprocmask(int how, const void *set, void *old, size_
 static inline long sys_rt_sigaction(int sig, const void *act, void *old, size_t n) { return SC4(NR_rt_sigaction, sig, act, old, n); }
 struct iovec { void *iov_base; size_t iov_len; };
 static inline long sys_process_vm_readv(pid_t pid, const struct iovec *l, unsigned long ln, const struct iovec *r, unsigned long rn, unsigned long fl) { return SC6(NR_process_vm_readv, pid, l, ln, r, rn, fl); }
+static inline long sys_process_vm_writev(pid_t pid, const struct iovec *l, unsigned long ln, const struct iovec *r, unsigned long rn, unsigned long fl) { return SC6(NR_process_vm_writev, pid, l, ln, r, rn, fl); }
 
 /* fork(): x86_64 has a real fork. */
 static inline long sys_fork(void)

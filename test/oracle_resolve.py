@@ -126,6 +126,10 @@ def main():
     ap.add_argument("--keep", action="store_true")
     a = ap.parse_args()
     rng = random.Random(a.seed)
+    probe = OpenHow(O_PATH, 0, RESOLVE_IN_ROOT)
+    if libc.syscall(SYS_openat2, -100, b".", ctypes.byref(probe), ctypes.sizeof(probe)) < 0 and ctypes.get_errno() == errno.ENOSYS:
+        print("openat2 is not available on this kernel (5.6 and later); the resolution oracle cannot run here")
+        return 0
     work = os.path.abspath(a.work)
     if os.path.exists(work):
         shutil.rmtree(work)

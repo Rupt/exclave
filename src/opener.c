@@ -23,7 +23,9 @@ static void page_init(void)
     if (m != (long)SC_PAGE) {
         if (m >= 0) __sc6_raw(NR_munmap, m, 4096, 0, 0, 0, 0);
         static const char msg[] = "opener: cannot map the syscall page\n";
-        __sc6_raw(NR_write, 2, (long)msg, sizeof msg - 1, 0, 0, 0);
+        static const char busy[] = "opener: another opener is already resident in this process\n";
+        if (m == -EEXIST) __sc6_raw(NR_write, 2, (long)busy, sizeof busy - 1, 0, 0, 0);
+        else __sc6_raw(NR_write, 2, (long)msg, sizeof msg - 1, 0, 0, 0);
         for (;;) __sc6_raw(NR_exit_group, 127, 0, 0, 0, 0, 0);
     }
     unsigned char *p = (unsigned char *)SC_PAGE; p[0] = 0x0f; p[1] = 0x05; p[2] = 0xc3;   /* syscall; ret */
@@ -60,7 +62,7 @@ static const char *denied[] = { "GLIBC_TUNABLES", "GCONV_PATH", "LOCPATH", "NLSP
                                 "TZDIR", "GCC_EXEC_PREFIX", "COMPILER_PATH", "LIBRARY_PATH", 0 };
 static int env_denied(const char *e)
 {
-    if (xstarts(e, "LD_") || xstarts(e, "CAN_EXEC=")) return 1;
+    if (xstarts(e, "LD_") || xstarts(e, "CAN_EXEC=") || xstarts(e, "PATH=")) return 1;   /* PATH is the can's (6.2, 13.7) */
     for (int i = 0; denied[i]; i++) { size_t l = xstrlen(denied[i]); if (xstrncmp(e, denied[i], l) == 0 && e[l] == '=') return 1; }
     return 0;
 }
@@ -138,7 +140,9 @@ static __attribute__((noreturn)) void run(const char *v, long argc, char **argv,
     line[n] = 0;
     /* a script: the kernel's argv convention, with buffers that outlive this level of the interpreter chain */
     long cap = argc + 4;
-    char **nargv = arena_alloc((size_t)cap * sizeof(char *)); char *script = arena_alloc(PATH_MAX);
+    long m = sys_mmap(0, ((size_t)cap * sizeof(char *) + 0xfff) & ~(size_t)0xfff, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (m < 0 && m > -4096) die("out of memory", 0, ENOMEM);
+    char **nargv = (char **)m; char *script = arena_alloc(PATH_MAX);       /* sized from argc, never from a fixed pool (F3-2) */
     scpy(script, v, PATH_MAX);
     long k = shebang_argv(line, script, argv, argc, nargv, cap);
     if (k == -1) die("not an executable", v, ENOEXEC);

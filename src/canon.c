@@ -60,6 +60,9 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         if (comp[0] == '.' && comp[1] == '.' && comp[2] == 0) { char *s = xstrrchr(cur, '/'); if (s) *s = 0; else cur[0] = 0; continue; }
         size_t curl = xstrlen(cur); if (curl + 1 + cl + 1 >= PATH_MAX) return -ENAMETOOLONG;
         cur[curl] = '/'; xmemcpy(cur + curl + 1, comp, cl + 1);
+        /* the tree's real root directory is an alias of /: a path spelt through <can>/root/ is the same path in
+         * virtual space, with the same ownership and the same read-only rule (review F3-1) */
+        if (C.rootlen && xstrcmp(cur, C.root) == 0) { cur[0] = 0; while (*rp == '/') rp++; continue; }
         while (*rp == '/') rp++;
         int last = (*rp == 0);
         if (last && !follow_last && !trailing) break;          /* a trailing slash means "a directory": the kernel follows */

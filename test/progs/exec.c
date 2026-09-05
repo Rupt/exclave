@@ -45,5 +45,10 @@ int main(int argc, char **argv)
     }
     if (!strcmp(mode, "personality")) { personality(ADDR_NO_RANDOMIZE); execl("/proc/self/exe", argv[0], "child", (char *)0); perror("execl"); return 1; }
     if (!strcmp(mode, "script")) { execl(argv[2], argv[2], "arg1", (char *)0); perror("execl script"); return 1; }
+    if (!strcmp(mode, "perm")) {                             /* O3-4: the kernel's permission triads, not "anyone may execute" */
+        int fails = 0;
+        for (int i = 2; i < argc; i++) { errno = 0; execl(argv[i], argv[i], (char *)0); if (errno != EACCES) { fails++; printf("FAIL exec %s: errno %d\n", argv[i], errno); } }
+        printf("perm: %d failures\n", fails); return fails ? 1 : 0;
+    }
     fprintf(stderr, "unknown mode\n"); return 2;
 }

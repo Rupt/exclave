@@ -68,7 +68,7 @@ def run_bwrap(root, work, cmd, extra=()):
     for f in IDENTITY:
         if os.path.exists(f) and os.path.lexists(os.path.join(root, f.lstrip("/"))):
             args += ["--ro-bind", f, f]
-    p = subprocess.run(args + EXTRA_BINDS + list(extra) + ["--", "/bin/sh", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p = subprocess.run(args + EXTRA_BINDS + list(extra) + ["/bin/sh", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE)   # no "--": bwrap 0.2 rejects it
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 

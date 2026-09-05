@@ -56,6 +56,14 @@ void vis_init(char **envp)
         id_link[n] = link[0] ? arena_str(link, xstrlen(link)) : 0; n++;
     }
     C.nhost = n;
+    /* the zone file /etc/localtime names, which the can may lack, like the TZ rule below (F3-9) */
+    for (int i = 0; i < n && C.nhost < (int)(sizeof C.host / sizeof C.host[0]); i++) {
+        if (!id_link[i] || xstrncmp(id_link[i], "/usr/share/zoneinfo/", 20) != 0) continue;
+        static char zreal[PATH_MAX]; struct kstat zst;
+        scpy(zreal, C.root, PATH_MAX); scat(zreal, id_link[i], PATH_MAX);
+        if (sys_stat(zreal, &zst) == 0 || sys_stat(id_link[i], &zst) < 0) continue;
+        C.host[C.nhost].v = id_link[i]; C.host[C.nhost].r = id_link[i]; C.host[C.nhost].is_file = 1; id_link[C.nhost] = 0; C.nhost++;
+    }
     /* TZ names a zone the can may lack (8.4) */
     for (char **e = envp; *e; e++) {
         if (!xstarts(*e, "TZ=")) continue;

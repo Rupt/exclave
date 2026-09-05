@@ -679,7 +679,8 @@ def cmd_fmt(paths, check):
 
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd")
+    sub.required = True                                       # required= is Python 3.7; the matrix runs 3.6
     p = sub.add_parser("mkcan"); p.add_argument("src"); p.add_argument("out"); p.add_argument("--manifest"); p.add_argument("--opener"); p.add_argument("--link", action="store_true")
     p = sub.add_parser("wrap"); p.add_argument("can")
     p = sub.add_parser("index"); p.add_argument("can"); p.add_argument("--manifest")

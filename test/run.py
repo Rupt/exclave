@@ -136,13 +136,16 @@ def hello(ctx):
     with open(src, "w") as f:
         f.write('#include <stdio.h>\nint main(int c, char **v) { printf("hello %s %d\\n", v[0], c); return 0; }\n')
     exe = os.path.join(ctx.work, "hello")
+    ctx.hello_src, ctx.hello = src, exe
     rc, out, err = run([wrapper(ctx, GCC), "-O2", src, "-o", exe], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "compile: " + err)
-    rc, out, err = run([exe, "a"], cwd=ctx.work)
-    expect(rc == 0 and out == "hello %s 2\n" % exe, "host run: %r %r" % (out, err))
     rc, out, err = inside(ctx, exe, ["a", "b"])
     expect(rc == 0 and out == "hello %s 3\n" % exe, "loader-mode run: %r %r" % (out, err))
-    ctx.hello_src, ctx.hello = src, exe
+    rc, out, err = run([exe, "a"], cwd=ctx.work)
+    if rc != 0 and "GLIBC_" in err:
+        ctx.old_host = True                                   # the host's glibc is older than the can's: outputs run inside only (9)
+        return "host glibc older than the can's; the output runs inside the can only"
+    expect(rc == 0 and out == "hello %s 2\n" % exe, "host run: %r %r" % (out, err))
 
 
 @test
@@ -162,8 +165,14 @@ def isolation(ctx):
     if not shutil.which("strace"):
         return "no strace"
     tr = os.path.join(ctx.work, "trace")
-    calls = ",".join(NR)
-    rc, out, err = run(["strace", "-f", "-s", "4096", "-o", tr, "-e", "trace=" + calls, wrapper(ctx, GCC), "-O1", ctx.hello_src, "-o", os.path.join(ctx.work, "hello2")], cwd=ctx.work, env=ctx.env)
+    names = list(NR)
+    while True:                                               # an older strace may not know the newest names
+        rc, out, err = run(["strace", "-f", "-s", "4096", "-o", tr, "-e", "trace=" + ",".join(names), wrapper(ctx, GCC), "-O1", ctx.hello_src, "-o", os.path.join(ctx.work, "hello2")], cwd=ctx.work, env=ctx.env)
+        m = re.search(r"invalid system call '(\w+)'", err)
+        if m and m.group(1) in names:
+            names.remove(m.group(1))
+            continue
+        break
     expect(rc == 0, "compile under strace failed: " + err)
     bad, seen = [], 0
     allowed_files = set(cannery.IDENTITY_FILES)
@@ -262,8 +271,22 @@ def exec_modes(ctx):
     os.makedirs(ne, exist_ok=True)
     with open(os.path.join(ne, "true"), "w") as f:
         f.write("not executable\n")
-    env = dict(ctx.env, PATH=ne + ":/usr/bin")
-    rc, out, err = inside(ctx, p, ["execvp"], env=env); expect(rc == 0, "execvp past non-executable: rc=%d %r" % (rc, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "PATH=%s:/usr/bin exec %s execvp" % (ne, p)], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "execvp past non-executable: rc=%d %r" % (rc, err))
+    # O3-4: files executable for others but not for this user, and a plain data file, are refused as the kernel refuses them
+    perm = os.path.join(ctx.work, "perm")
+    os.makedirs(perm, exist_ok=True)
+    victims = []
+    for name, mode, body in (("victim.sh", 0o455, "#!/bin/sh\necho VICTIM RAN\n"), ("data", 0o644, "#!/bin/sh\necho VICTIM RAN\n")):
+        q = os.path.join(perm, name)
+        with open(q, "w") as f:
+            f.write(body)
+        os.chmod(q, mode)
+        victims.append(q)
+    shutil.copy2(os.path.join(ctx.progs, "exec"), os.path.join(perm, "velf"))
+    os.chmod(os.path.join(perm, "velf"), 0o455)
+    victims.append(os.path.join(perm, "velf"))
+    rc, out, err = inside(ctx, p, ["perm"] + victims); expect(rc == 0 and "FAIL" not in out, "perm: %r %r" % (out, err))
     hs = os.path.join(ctx.work, "host-script.sh")
     with open(hs, "w") as f:
         f.write("#!/bin/sh\necho host script ok $1 $0\n")
@@ -310,6 +333,8 @@ def environment(ctx):
     expect("CAN_TESTVAR=1" in out, "pass-through lost")
     rc, out, err = run([wrapper(ctx, "env")], cwd=ctx.work, env={})
     expect("PATH=/usr/local/bin:/usr/bin:/bin\n" in out, "default PATH: %r" % out)
+    rc, out, err = run([wrapper(ctx, "env")], cwd=ctx.work, env=dict(ctx.env, PATH="/home/x/bin:/opt/tools/bin"))
+    expect("PATH=/usr/local/bin:/usr/bin:/bin\n" in out, "PATH is the can's, not the host's (F3-3): %r" % out)
     rc, out, err = run([wrapper(ctx, "sh"), "-c", "LD_FOO=1 env"], cwd=ctx.work, env=ctx.env)
     expect("LD_FOO=1" in out, "inside a can the environment must pass untouched")
     rc, out, err = inside(ctx, "/usr/bin/env")
@@ -336,8 +361,8 @@ def cwd_rules(ctx):
         f.write('#include "x.h"\n#include <stdio.h>\nint main(void){printf("%d\\n", X+1);return 0;}\n')
     rc, out, err = run([wrapper(ctx, GCC), "-Iinc", "sub/y.c", "-o", "out/y"], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "compile with subdirectory include and output: " + err)
-    rc, out, err = run([os.path.join(outd, "y")], cwd=ctx.work)
-    expect(out == "42\n", out)
+    rc, out, err = inside(ctx, os.path.join(outd, "y"))
+    expect(out == "42\n", "built output run inside: %r %r" % (out, err))
     if not ctx.claim:
         return "work dir under a volatile prefix; claim not exercised"
 
@@ -353,6 +378,82 @@ def can_directory_visible(ctx):
     expect(rc == 0 and out == "%s\nroot/usr/bin/true\n" % ctx.can, "cd into the can dir: rc=%d %r %r" % (rc, out, err))
     rc, out, err = run([wrapper(ctx, "cat"), os.path.join(ctx.root, "usr", "share", "cont-test-marker")], cwd="/", env=ctx.env)
     expect(out == "marker\n", "a file inside root/ by its real path: %r %r" % (out, err))
+
+
+@test
+def cross_can_distinct_openers(ctx):
+    """7.4.5: a program in another can, whose opener is a different file, is exec'd as that opener, which
+    then serves its own tree inside the first can's filter (the dogfooding case of 10.5)."""
+    can2 = os.path.join(ctx.work, "can2")
+    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    padded = os.path.join(ctx.work, "opener2")
+    with open(padded, "wb") as f:
+        f.write(open(ctx.opener, "rb").read() + b"\0" * 64)   # a different file of a different size, still the opener
+    os.chmod(padded, 0o755)
+    cannery.cmd_reopen(can2, padded)
+    rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", can2])
+    expect(rc == 0, "can2 check: " + out[-300:] + err[-300:])
+    true2 = os.path.join(can2, "root", "usr", "bin", "true")
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s && %s/root/usr/bin/sh -c 'echo cross $0 && readlink /proc/self/exe'" % (true2, can2)], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "cross %s/root/usr/bin/sh\n/usr/bin/readlink\n" % can2, "cross-can exec: rc=%d %r %r" % (rc, out, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "cd %s && root/usr/bin/x86_64-linux-gnu-gcc-13 --version | head -1" % can2], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and "13." in out, "gcc of the other can: rc=%d %r %r" % (rc, out, err))
+
+
+@test
+def real_root_is_the_tree(ctx):
+    """The tree's real root is an alias of /: a path spelt through <can>/root/ obeys the same rules (F3-1)."""
+    root = ctx.root
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "touch %s/usr/zz; echo rc=$?; rm %s/usr/bin/true; echo rc=$?; cat %s/usr/share/cont-test-marker; ls -l %s/usr/bin/sh | cut -c1 " % (root, root, root, root)], cwd="/", env=ctx.env)
+    expect(out == "rc=1\nrc=1\nmarker\nl\n" and "Read-only" in err, "real-root spelling: %r %r" % (out, err))
+    expect(not os.path.exists(os.path.join(root, "usr", "zz")) and os.path.exists(os.path.join(root, "usr", "bin", "true")), "the tree was written through its real path")
+
+
+@test
+def argv_unbounded(ctx):
+    """7.4.5: argument vectors are sized from their counts (F3-2): a wrapped script and a host script with many arguments."""
+    rc, out, err = run([wrapper(ctx, "cont-test-script")] + ["a"] * 70000, cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "script ok a 70000\n", "wrapped script with 70000 arguments: rc=%d %r %r" % (rc, out[:80], err[:200]))
+    hs = os.path.join(ctx.work, "many.sh")
+    with open(hs, "w") as f:
+        f.write("#!/bin/sh\necho many $#\n")
+    os.chmod(hs, 0o755)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s $(seq 20000)" % hs], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "many 20000\n", "host script with 20000 arguments: rc=%d %r %r" % (rc, out[:80], err[:200]))
+
+
+@test
+def shebang_without_newline(ctx):
+    """A #! line with no newline runs as the kernel runs it (F3-4)."""
+    p = os.path.join(ctx.work, "nonl.sh")
+    with open(p, "w") as f:
+        f.write("#!/bin/sh")
+    os.chmod(p, 0o755)
+    rc, out, err = inside(ctx, p)
+    expect(rc == 0, "no-newline shebang: rc=%d %r" % (rc, err))
+
+
+@test
+def identity_link_consistency(ctx):
+    """lstat, readlink and the link's target agree for an identity file that is a host symlink (F3-9)."""
+    if not os.path.islink("/etc/localtime"):
+        return "host /etc/localtime is not a symlink"
+    target = os.readlink("/etc/localtime")
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "test -L /etc/localtime && echo link; readlink /etc/localtime; head -c 4 %s" % target], cwd=ctx.work, env=ctx.env)
+    expect(out == "link\n%s\nTZif" % target, "identity link: %r %r" % (out, err))
+
+
+@test
+def readlink_bad_buffer(ctx):
+    """7.5.6: an unwritable readlink buffer answers EFAULT, not SIGSEGV (review O3-1)."""
+    src = os.path.join(ctx.work, "rl.c")
+    with open(src, "w") as f:
+        f.write('#include <unistd.h>\n#include <errno.h>\n#include <stdio.h>\nint main(int c, char **v) { for (int i = 1; i < c; i++) { errno = 0; long r = readlink(v[i], (char *)8, 64); printf("%ld %d\\n", r, errno); } return 0; }\n')
+    exe = os.path.join(ctx.work, "rl")
+    rc, out, err = run([wrapper(ctx, GCC), "-O1", src, "-o", exe], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, err)
+    rc, out, err = inside(ctx, exe, ["/etc/localtime", "/lib", "/proc/self/exe", "/usr/bin/sh", "/nonexistent"])
+    expect(rc == 0 and out == "-1 14\n-1 14\n-1 14\n-1 14\n-1 2\n", "bad buffer: rc=%d %r %r" % (rc, out, err))
 
 
 @test
@@ -507,6 +608,7 @@ def main():
         shutil.rmtree(ctx.work)
     os.makedirs(ctx.work)
     ctx.env = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/"), "LANG": "C"}
+    ctx.old_host = False
     t0 = time.time()
     make_can(ctx)
     compile_progs(ctx)

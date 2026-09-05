@@ -28,8 +28,12 @@ DEFAULT_CAPS = {"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER", "CA
                 "CAP_SETUID", "CAP_SETFCAP", "CAP_SETPCAP", "CAP_NET_BIND_SERVICE", "CAP_SYS_CHROOT", "CAP_KILL", "CAP_AUDIT_WRITE"}
 
 
-def kernel_table():
-    return dict((n, int(v)) for n, v in re.findall(r"__NR_([a-z0-9_]+) (\d+)", open("/usr/include/x86_64-linux-gnu/asm/unistd_64.h").read()))
+def kernel_table(can=None):
+    """The x86-64 syscall table from the host's headers, or from the can's (a gcc can ships linux-libc-dev)."""
+    for p in ([os.path.join(can, "root", "usr", "include", "x86_64-linux-gnu", "asm", "unistd_64.h")] if can else []) + ["/usr/include/x86_64-linux-gnu/asm/unistd_64.h", "/usr/include/asm/unistd_64.h"]:
+        if os.path.exists(p):
+            return dict((n, int(v)) for n, v in re.findall(r"__NR_([a-z0-9_]+) (\d+)", open(p).read()))
+    raise SystemExit("no unistd_64.h on the host or in the can")
 
 
 class BPF:
@@ -136,9 +140,9 @@ def build(profile, table):
     return b
 
 
-def assemble(profile_path):
+def assemble(profile_path, can=None):
     profile = json.load(open(profile_path))
-    table = kernel_table()
+    table = kernel_table(can)
     b = BPF()
     # the NE case above is awkward; the default profile has no NE rules, so refuse rather than guess
     for entry in profile.get("syscalls", []):
@@ -157,7 +161,7 @@ def main():
     if not shutil.which("bwrap") or subprocess.run(["bwrap", "--ro-bind", "/", "/", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
         print("bwrap or user namespaces unavailable; the Docker-profile run cannot happen here")
         return 0
-    prog = assemble(a.profile)
+    prog = assemble(a.profile, os.path.abspath(a.can))
     work = os.path.abspath(a.work)
     if os.path.exists(work):
         shutil.rmtree(work)
@@ -172,7 +176,7 @@ def main():
     os.write(w, prog)
     os.close(w)
     cmd = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--bind", work, work, "--chdir", work, "--seccomp", str(r),
-           "--setenv", "PATH", "/usr/bin:/bin", "--", os.path.join(can, "root", "usr", "bin", "sh"), "-c",
+           "--setenv", "PATH", "/usr/bin:/bin", os.path.join(can, "root", "usr", "bin", "sh"), "-c",
            "gcc-13 -O1 -pthread hello.c -o hello && ./hello && ls /usr/lib/gcc >/dev/null && cat /etc/passwd | head -1 && touch /usr/x 2>&1; readlink /proc/self/exe"]
     p = subprocess.run(cmd, pass_fds=[r], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out, err = p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")

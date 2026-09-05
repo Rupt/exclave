@@ -10,13 +10,14 @@
  */
 #include "common.h"
 
-#define SLOTS 4096
-#define STRINGS (768 * 1024)
+#define SLOTS 16384
+#define STRINGS (1024 * 1024)
 
 struct slot { volatile unsigned long hash; unsigned int off; unsigned char kind; };
 static struct slot table[SLOTS];
 static char strings[STRINGS];
 static volatile unsigned int used;
+static unsigned int filled;
 static volatile int lock;
 static volatile int full;
 
@@ -54,7 +55,8 @@ void cache_put(const char *v, int kind, const char *link)
         if (!table[i].hash) break;
         if (table[i].hash == h && xstrcmp(strings + table[i].off, v) == 0) { __sync_lock_release(&lock); return; }
     }
-    if (n == SLOTS - 64 || used + vl + ll > STRINGS) { full = 1; __sync_lock_release(&lock); return; }
+    /* stop with slack left: a probe must always meet an empty slot, or a miss would scan the whole table (review O3-2) */
+    if (table[i].hash || ++filled > SLOTS - SLOTS / 8 || used + vl + ll > STRINGS) { full = 1; __sync_lock_release(&lock); return; }
     unsigned off = used;
     xmemcpy(strings + off, v, vl);
     if (ll) xmemcpy(strings + off + vl, link, ll);
