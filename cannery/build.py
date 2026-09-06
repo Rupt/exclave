@@ -9,6 +9,7 @@ import stat
 import subprocess
 import tarfile
 
+import apk
 import deb
 
 CANNERY_VERSION = "0.1.0"
@@ -42,6 +43,11 @@ def _inside(root_real, dst):
         raise BuildError("%s escapes the tree through a symlink (resolves under %s)" % (dst, parent))
 
 
+def reader(path):
+    """The reader for a package file, chosen by the file (10.1): deb.py or apk.py, one interface."""
+    return apk if path.endswith(".apk") else deb
+
+
 def extract(root, debs, log=print):
     """debs: [(name, path, stanza)]. Extracts every data.tar into root/ after the merged-usr links.
     A regular file shipped by two packages is an error unless one declares Replaces on the other, with the
@@ -49,14 +55,16 @@ def extract(root, debs, log=print):
     member whose path resolves outside the tree through a symlink is refused. Returns {relpath: owner}."""
     os.makedirs(os.path.join(root, "usr"), exist_ok=True)
     root_real = os.path.realpath(root)
-    for d in MERGED_USR:
-        os.makedirs(os.path.join(root, "usr", d), exist_ok=True)
-        p = os.path.join(root, d)
-        if not os.path.lexists(p):
-            os.symlink("usr/" + d, p)
+    if all(getattr(reader(p), "MERGED_USR", True) for _, p, _ in debs):   # Debian's merged /usr; Alpine's directories are its own
+        for d in MERGED_USR:
+            os.makedirs(os.path.join(root, "usr", d), exist_ok=True)
+            p = os.path.join(root, d)
+            if not os.path.lexists(p):
+                os.symlink("usr/" + d, p)
     owner, replaces, hardlinks_pending = {}, {}, []
     for name, path, st in debs:
-        fields, scripts = deb.control(path)
+        rd = reader(path)
+        fields, scripts = rd.control(path)
         # 10.1 step 3: a diversion that renames a file changes where the tree must hold it, and dpkg's
         # database is not reproduced here; those are refused. Diversions with --no-rename, and the
         # merged-usr and zutils transitions every noble closure carries, leave a fresh tree unchanged.
@@ -67,8 +75,8 @@ def extract(root, debs, log=print):
                 if re.search(r"--(remove|list|listpackage|truename)\b", line) or "--no-rename" in line or ".usr-is-merged" in line:
                     continue
                 raise BuildError("%s adds a renaming diversion in its %s (%s); diversions are refused (10.1)" % (name, sname, line.strip()[:100]))
-        replaces[name] = set(a[0] for alts in deb.parse_deps(fields.get("Replaces", "")) for a in alts)
-        with deb.open_tar(path, "data.tar") as t:
+        replaces[name] = set(a[0] for alts in rd.parse_deps(fields.get("Replaces", "")) for a in alts)
+        with rd.open_tar(path, "data.tar") as t:
             for m in t.getmembers():
                 rel = _safe_rel(m.name)
                 if not rel:
@@ -143,7 +151,7 @@ def synthesise(root, debs, log=print):
     # update-alternatives: every --install line in a postinst, highest priority wins, slaves follow
     groups = {}
     for name, path, st in debs:
-        fields, scripts = deb.control(path)
+        fields, scripts = reader(path).control(path)
         for m in _UA.finditer(scripts.get("postinst", "").replace("\\\n", " ")):     # join continuation lines
             link, gname, target, prio = m.group(1), m.group(2), m.group(3), int(m.group(4))
             if not os.path.lexists(_v(root, target)):
@@ -158,6 +166,21 @@ def synthesise(root, debs, log=print):
             if os.path.lexists(_v(root, starget)):
                 _link(root, "/etc/alternatives/" + sname, starget, log)
                 _link(root, slink, "/etc/alternatives/" + sname, log)
+    # busybox (Alpine): the applet links are made by its post-install from the paths it ships in
+    # /etc/busybox-paths.d, one path per line, each a link to /bin/busybox. The links are relative, as
+    # dash's /bin/sh below is, so that a link run from outside the can reaches the wrapper in the tree and
+    # not a host file of the same name; inside, a relative link resolves in virtual space the same way.
+    bbd = _v(root, "/etc/busybox-paths.d")
+    if os.path.isdir(bbd) and os.path.isfile(_v(root, "/bin/busybox")):
+        n = 0
+        for f in sorted(os.listdir(bbd)):
+            for line in open(os.path.join(bbd, f), encoding="utf-8", errors="replace"):
+                rel = line.strip().lstrip("/")
+                if rel and not os.path.lexists(_v(root, "/" + rel)):
+                    os.makedirs(os.path.dirname(_v(root, "/" + rel)), exist_ok=True)
+                    os.symlink(os.path.relpath("/bin/busybox", os.path.dirname("/" + rel)), _v(root, "/" + rel))
+                    n += 1
+        log("synthesised %d busybox applet links from /etc/busybox-paths.d" % n)
     # dash: /bin/sh is made by its postinst, not shipped
     if "dash" in names and os.path.lexists(_v(root, "/usr/bin/dash")):
         _link(root, "/usr/bin/sh", "dash", log)
@@ -301,21 +324,22 @@ def write_lock(can, pkgs, manifest_hash=None, tree=False, keep_hashes=False):
 def dependency_report(pkgs):
     """pkgs: [(name, control fields)]. Lines naming every Depends or Pre-Depends the set does not satisfy,
     with Provides and version constraints honoured. A report, not a refusal: the set is the user's."""
+    rd = apk if pkgs and pkgs[0][1].get("_format") == "apk" else deb
     have = {n: f.get("Version", "") for n, f in pkgs}
     provides = {}
     for n, f in pkgs:
-        for alts in deb.parse_deps(f.get("Provides", "")):
+        for alts in rd.parse_deps(f.get("Provides", "")):
             for name, op, ver in alts:
                 provides.setdefault(name, []).append(ver if op == "=" else None)
     out = []
     for n, f in sorted(pkgs):
         for field in ("Pre-Depends", "Depends"):
-            for alts in deb.parse_deps(f.get(field, "")):
-                ok = False
+            for alts in rd.parse_deps(f.get(field, "")):
+                ok = any(name.startswith("/") for name, _, _ in alts)   # apk's file dependencies are not checked
                 for name, op, ver in alts:
-                    if name in have and deb.satisfies(have[name], op, ver):
+                    if name in have and rd.satisfies(have[name], op, ver):
                         ok = True
-                    elif name in provides and any(op is None or (pv and deb.satisfies(pv, op, ver)) for pv in provides[name]):
+                    elif name in provides and any(op is None or (pv and rd.satisfies(pv, op, ver)) for pv in provides[name]):
                         ok = True
                 if not ok:
                     want = " | ".join(a[0] + (" (%s %s)" % (a[1], a[2]) if a[1] else "") for a in alts)

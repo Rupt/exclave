@@ -257,6 +257,16 @@ def find_library(tree, name, elf, vpath, rpaths, cache, own=(), host_hits=None, 
     return None
 
 
+def _interps(tree):
+    """The PT_INTERP strings of the tree's dynamic executables, from a bounded look at the conventional loaders."""
+    out = []
+    for cand in ("/lib/ld-musl-x86_64.so.1", "/lib64/ld-linux-x86-64.so.2", "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"):
+        r = tree.resolve(cand)
+        if r and os.path.isfile(tree.payload(r)):
+            out.append(cand)
+    return out
+
+
 def static_check(can, own, data_prefixes=(), log=print):
     """Returns a Report. own: the ownership set of 8.1 as the opener computes it."""
     tree, rep = Tree(os.path.join(can, "root")), Report()
@@ -264,7 +274,8 @@ def static_check(can, own, data_prefixes=(), log=print):
     if host_owned("/etc", own):                                # the loader would read the host's cache and preload list (review F4-9)
         rep.errors.append("/etc is the host's: the loader would read the host's /etc/ld.so.cache and /etc/ld.so.preload; the tree must own /etc")
     elif cache is None:
-        rep.warnings.append("no /etc/ld.so.cache: only the loader's default directories are searched at run time")
+        if not any("musl" in os.path.basename(i) for i in _interps(tree)):   # musl has no cache; glibc without one searches its defaults only
+            rep.warnings.append("no /etc/ld.so.cache: only the loader's default directories are searched at run time")
     else:
         for soname, paths in cache.items():                       # no cache entry may name the opener (10.3)
             for p in paths:

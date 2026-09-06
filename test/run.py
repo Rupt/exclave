@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.join(REPO, "cannery"))
 import build  # noqa: E402
 import cannery  # noqa: E402
 
-GCC = "x86_64-linux-gnu-gcc-13"
+GCC = "x86_64-linux-gnu-gcc-13"      # Debian's name; make_can takes the tree's gcc when that one is absent (an Alpine can)
 VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
 NR = {"open": 2, "stat": 4, "lstat": 6, "access": 21, "execve": 59, "readlink": 89, "openat": 257, "newfstatat": 262,
       "readlinkat": 267, "faccessat": 269, "faccessat2": 439, "statx": 332, "execveat": 322, "chdir": 80, "mkdir": 83,
@@ -59,7 +59,9 @@ def run(cmd, cwd=None, env=None, inp=None, timeout=300, executable=None, preexec
 
 
 def wrapper(ctx, name):
-    return os.path.join(ctx.root, "usr", "bin", name)
+    """A wrapper by name: Debian's /usr/bin, or /bin where the tree is not merged (an Alpine can)."""
+    p = os.path.join(ctx.root, "usr", "bin", name)
+    return p if os.path.lexists(p) else os.path.join(ctx.root, "bin", name)
 
 
 def inside(ctx, prog, args=(), cwd=None, env=None, inp=None, timeout=300):
@@ -83,6 +85,7 @@ def hello_source(ctx):
 
 # ------------------------------------------------------------------ setup
 def make_can(ctx):
+    global GCC
     can = os.path.join(ctx.work, "can")
     root = os.path.join(can, "root")
     os.makedirs(os.path.join(can, ".can"))
@@ -118,6 +121,8 @@ def make_can(ctx):
         f.write(cannery.dump(recs, "can"))
     cannery.wrap_files(can, quiet=True)
     ctx.can, ctx.root, ctx.opener = can, root, os.path.join(can, ".can", "opener")
+    if not os.path.exists(os.path.join(root, "usr", "bin", GCC)) and os.path.exists(os.path.join(root, "usr", "bin", "gcc")):
+        GCC = "gcc"
 
 
 def compile_progs(ctx):
@@ -464,7 +469,7 @@ def nested_older_opener(ctx):
     src = os.path.join(ctx.work, "getattr.c")
     with open(src, "w") as f:
         f.write('#include <stdio.h>\n#include <errno.h>\n#include <string.h>\n#include <unistd.h>\n#include <fcntl.h>\n#include <sys/syscall.h>\n'
-                'int main(void) { char a[24]; long r = syscall(468, AT_FDCWD, "/usr/bin/true", a, sizeof a, 0);\n'
+                'int main(void) { char a[24]; long r = syscall(468, AT_FDCWD, "/etc/passwd", a, sizeof a, 0);\n'
                 ' printf("%ld %d\\n", r, r < 0 ? errno : 0); return 0; }\n')
     prog = os.path.join(ctx.work, "getattr")
     rc, out, err = run([wrapper(ctx, GCC), "-static", "-O0", "-o", prog, src], cwd=ctx.work, env=ctx.env)
@@ -633,6 +638,76 @@ def make_deb(path, name, members, control_extra=""):
             f.write(data)
             if len(data) % 2:
                 f.write(b"\n")
+
+
+def make_apk(path, name, members, pkginfo_extra=""):
+    """A minimal unsigned .apk: two gzip members, the control stream (.PKGINFO) and the data stream, the way
+    apk-tools lays them out. members as for make_deb."""
+    import gzip
+    import io
+    import tarfile
+    import time as _t
+
+    def tgz(entries, trailer):
+        bio = io.BytesIO()
+        with tarfile.open(fileobj=bio, mode="w:") as t:
+            for n, kind, val, mode in entries:
+                ti = tarfile.TarInfo(n)
+                ti.mtime = int(_t.time())
+                ti.mode = mode
+                if kind == "dir":
+                    ti.type = tarfile.DIRTYPE
+                    t.addfile(ti)
+                elif kind == "sym":
+                    ti.type = tarfile.SYMTYPE
+                    ti.linkname = val
+                    t.addfile(ti)
+                else:
+                    ti.size = len(val)
+                    t.addfile(ti, io.BytesIO(val))
+        raw = bio.getvalue()
+        if not trailer:
+            raw = raw.rstrip(b"\0")                           # the control stream carries no end-of-archive blocks
+            raw += b"\0" * (-len(raw) % 512)
+        return gzip.compress(raw)
+    info = ("pkgname = %s\npkgver = 1.0-r0\narch = x86_64\nsize = 1\n%s" % (name, pkginfo_extra)).encode()
+    with open(path, "wb") as f:
+        f.write(tgz([(".PKGINFO", "file", info, 0o644)], False))
+        f.write(tgz(members, True))
+
+
+@test
+def apk_unpack(ctx):
+    """10.1: unpack reads .apk files by the file, with .PKGINFO's depend and provides, so: names and file
+    dependencies; Alpine's directories are its own, not merged /usr; busybox's applet links are synthesised
+    from /etc/busybox-paths.d as relative links; one format per can."""
+    d = os.path.join(ctx.work, "apks")
+    os.makedirs(d, exist_ok=True)
+    make_apk(os.path.join(d, "tool-1.0-r0.apk"), "tool", [("usr", "dir", None, 0o755), ("usr/bin", "dir", None, 0o755),
+                                                          ("usr/bin/tool", "file", b"#!/bin/sh\necho tool ok\n", 0o755)],
+             "depend = so:libfoo.so.1\ndepend = absent-pkg>=2\ndepend = /bin/sh\n")
+    make_apk(os.path.join(d, "libfoo-1.0-r0.apk"), "libfoo", [("bin", "dir", None, 0o755), ("bin/busybox", "file", b"#!/bin/true\n", 0o755),
+                                                            ("etc", "dir", None, 0o755), ("etc/busybox-paths.d", "dir", None, 0o755),
+                                                            ("etc/busybox-paths.d/busybox", "file", b"bin/sh\nusr/bin/tool2\n", 0o644),
+                                                            ("usr", "dir", None, 0o755), ("usr/lib", "dir", None, 0o755), ("usr/lib/libfoo.so.1", "file", b"data\n", 0o644)],
+             "provides = so:libfoo.so.1=1\nprovides = cmd:busybox=1.0-r0\n")
+    out = os.path.join(ctx.work, "apk.can")
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "unpack", out, os.path.join(d, "tool-1.0-r0.apk"), os.path.join(d, "libfoo-1.0-r0.apk")])
+    expect(rc == 0, "unpack: " + o + e)
+    expect("depends: tool needs absent-pkg (>= 2), not in the set" in o, "the versioned dependency was not reported: " + o)
+    expect("libfoo" not in o.replace("libfoo-1.0", "") and "/bin/sh" not in o, "a so: provides in the set or a file dependency was reported: " + o)
+    root = os.path.join(out, "root")
+    expect(os.path.isdir(os.path.join(root, "bin")) and not os.path.islink(os.path.join(root, "bin")), "Alpine's /bin is a directory of its own")
+    expect(os.readlink(os.path.join(root, "bin", "sh")) == "busybox" and os.readlink(os.path.join(root, "usr", "bin", "tool2")) == "../../bin/busybox",
+           "applet links relative to their target: %r" % os.listdir(os.path.join(root, "bin")))
+    lock = cannery.load(os.path.join(out, ".can", "lock"), "lock")
+    pkgs = cannery.values(lock, "pkg")
+    expect([tuple(p[:3]) for p in pkgs] == [(b"libfoo", b"1.0-r0", b"x86_64"), (b"tool", b"1.0-r0", b"x86_64")], "pkg records: %r" % pkgs)
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "wrap", out])
+    expect(rc == 0 and cannery.values(cannery.load(os.path.join(out, ".can", "lock"), "lock"), "tree"), "wrap: " + o + e)
+    make_deb(os.path.join(d, "x.deb"), "x", [("./usr", "dir", None, 0o755)])
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "unpack", out + "2", os.path.join(d, "x.deb"), os.path.join(d, "tool-1.0-r0.apk")])
+    expect(rc != 0 and "one format per can" in o + e, "a mixed set must be refused: " + o + e)
 
 
 @test

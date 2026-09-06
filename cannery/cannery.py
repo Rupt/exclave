@@ -30,6 +30,7 @@ import stat
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import apk  # noqa: E402
 import build  # noqa: E402
 import deb  # noqa: E402
 import elfcheck  # noqa: E402
@@ -397,8 +398,11 @@ def cmd_unpack(out, debs, log=print):
     if not debs:
         sys.exit("unpack needs at least one package file")
     pkgs, seen, arches = [], {}, set()
+    kinds = set(build.reader(p).__name__ for p in debs)
+    if len(kinds) > 1:
+        raise build.BuildError("the package files mix formats %s: one format per can" % sorted(kinds))
     for path in debs:
-        fields, _ = deb.control(path)
+        fields, _ = build.reader(path).control(path)
         name, ver, arch = fields.get("Package"), fields.get("Version"), fields.get("Architecture", "")
         if not name or not ver:
             raise build.BuildError("%s: no Package or Version in its control file" % path)
@@ -680,7 +684,7 @@ def main(argv):
             cmd_reopen(a.can, a.opener)
     except GrammarError as e:
         sys.exit("grammar: %s" % e)
-    except (build.BuildError, deb.DebError) as e:
+    except (build.BuildError, deb.DebError, apk.ApkError) as e:
         sys.exit("cannery: %s" % e)
     return 0
 
