@@ -23,6 +23,18 @@ HWCAPS = ["glibc-hwcaps/x86-64-v4", "glibc-hwcaps/x86-64-v3", "glibc-hwcaps/x86-
 LIBC_SONAME = {"glibc": "libc.so.6", "musl": "libc.musl-x86_64.so.1"}
 
 
+def glibc_version(tree):
+    """(major, minor) of the tree's glibc, from libc.so.6's banner, or None."""
+    for d in DEFAULT_DIRS + ["/lib64", "/usr/lib64"]:
+        r = tree.resolve(d + "/libc.so.6")
+        if r and os.path.isfile(tree.payload(r)):
+            with open(tree.payload(r), "rb") as f:
+                m = re.search(rb"GNU C Library \([^)]*\) (?:\w+ )?release version (\d+)\.(\d+)", f.read())
+            if m:
+                return int(m.group(1)), int(m.group(2))
+    return None
+
+
 def loader_dirs(tree, interp):
     """The default search directories of the loader in the tree: glibc prints them with --list-diagnostics
     (2.33 and later); musl's are fixed; older loaders get Debian's list (review F4-13)."""
@@ -312,6 +324,12 @@ def static_check(can, own, data_prefixes=(), log=print):
     interp = next(iter(interps.values()))[0] if interps else None
     libc_soname = LIBC_SONAME["musl"] if interp and "musl" in os.path.basename(interp) else LIBC_SONAME["glibc"]
     default_dirs = loader_dirs(tree, interp)
+    # 6.2: the locale inside a can is C.UTF-8, built into glibc 2.35 and later and into musl; an older glibc
+    # needs the C.utf8 directory or every program runs in the plain C locale, and bash and perl say so
+    if interp and "musl" not in os.path.basename(interp):
+        ver = glibc_version(tree)
+        if ver and ver < (2, 35) and not any(os.path.isdir(tree.real(d)) for d in ("/usr/lib/locale/C.utf8", "/usr/lib/locale/C.UTF-8")):
+            rep.warnings.append("glibc %d.%d predates the built-in C.UTF-8 locale and the tree has no /usr/lib/locale/C.utf8: programs will run in the plain C locale" % ver)
 
     reached = set()
 

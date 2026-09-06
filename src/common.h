@@ -137,7 +137,7 @@ struct can {
     /* the manifest (6.2) and what the tree says (8.1); the limits are stated in 8.1 and enforced by cannery wrap */
     char isa[32];
     const char *own[512]; int nown;   /* the manifest's claims (at most 256), then every non-empty top-level entry of the tree (at most 256) */
-    struct hostmap host[128]; int nhost;   /* the manifest's host records (at most 32), then the identity files and zones (8.4) */
+    struct hostmap host[128]; int nhost;   /* the manifest's host records (at most 32), then the identity files (8.4) */
     const char *data[32]; int ndata;  /* data prefixes: never executed, never a loader (6.2) */
     /* cwd rule (8.1.4) */
     char cwdclaim[PATH_MAX]; long cwdclaim_len;   /* subtree claimed for the host; empty if none */
@@ -182,7 +182,7 @@ int  nest_enter(pid_t pid, pid_t tid, unsigned long frame); /* returns depth, 1 
 void nest_leave(void);
 
 /* ---------- visibility (vis.c) ---------- */
-void vis_init(char **envp);
+void vis_init(void);
 int  vis_is_host(const char *v, const char **real);   /* 1 if host-owned; *real = host path */
 char *to_real(const char *v, char *out, char *tmp);   /* v -> real, with wrapper redirect; tmp PATH_MAX */
 char *to_real_exec(const char *v, char *out);         /* v -> real, no wrapper redirect */

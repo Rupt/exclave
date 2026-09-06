@@ -218,7 +218,7 @@ def isolation(ctx):
             seen += 1
             p = os.path.normpath(p) if p.startswith("/") else p
             ok = (not p.startswith("/") or p.startswith(ctx.root) or p.startswith(VOLATILE) or p.startswith(ctx.work)
-                  or p in allowed_files or p.startswith("/usr/share/zoneinfo/") or p == "/etc/localtime"
+                  or p in allowed_files
                   or ctx.work.startswith(p + "/"))     # a directory on the way to the working directory (8.1.4)
             if not ok:
                 bad.append("%s %s" % (name, p))
@@ -342,14 +342,14 @@ def scripts(ctx):
 def identity(ctx):
     rc, out, err = run([wrapper(ctx, "cat"), "/etc/passwd"], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and out == open("/etc/passwd").read(), "passwd differs from the host")
-    if os.path.islink("/etc/localtime"):
-        rc, out, err = run([wrapper(ctx, "readlink"), "/etc/localtime"], cwd=ctx.work, env=ctx.env)
-        expect(out.strip() == os.readlink("/etc/localtime"), "localtime link: %r" % out)
     rc, out, err = run([wrapper(ctx, "cat"), "/etc/hostname"], cwd=ctx.work, env=ctx.env)
     expect(rc != 0 and "No such file" in err, "host /etc/hostname must be invisible: %r" % err)
-    if os.path.exists("/usr/share/zoneinfo/Asia/Tokyo") and not os.path.exists(os.path.join(ctx.root, "usr/share/zoneinfo/Asia/Tokyo")):
-        rc, out, err = run([wrapper(ctx, "date"), "+%Z"], cwd=ctx.work, env=dict(ctx.env, TZ="Asia/Tokyo"))
-        expect(out.strip() == "JST", "TZ zone from the host: %r %r" % (out, err))
+    # 6.2: the time zone is not the host's: UTC inside, whatever TZ and /etc/localtime say outside
+    rc, out, err = run([wrapper(ctx, "date"), "+%Z"], cwd=ctx.work, env=dict(ctx.env, TZ="Asia/Tokyo"))
+    expect(out.strip() == "UTC", "the zone inside a can is UTC: %r %r" % (out, err))
+    if not os.path.lexists(os.path.join(ctx.root, "etc", "localtime")):
+        rc, out, err = run([wrapper(ctx, "cat"), "/etc/localtime"], cwd=ctx.work, env=ctx.env)
+        expect(rc != 0 and "No such file" in err, "the host's /etc/localtime must be invisible: %r" % err)
 
 
 @test
@@ -364,6 +364,16 @@ def environment(ctx):
     expect("PATH=/usr/local/bin:/usr/bin:/bin\n" in out, "PATH is the can's, not the host's (F3-3): %r" % out)
     rc, out, err = run([wrapper(ctx, "sh"), "-c", "LD_FOO=1 env"], cwd=ctx.work, env=ctx.env)
     expect("LD_FOO=1" in out, "inside a can the environment must pass untouched")
+    # 6.2: four values are the can's at the boundary, always the same; the user's are dropped
+    loud = dict(ctx.env, LANG="en_GB.UTF-8", LC_ALL="de_DE.UTF-8", LC_TIME="fr_FR.UTF-8", LANGUAGE="de", TZ="Asia/Tokyo", SHELL="/usr/bin/zsh")
+    rc, out, err = run([wrapper(ctx, "env")], cwd=ctx.work, env=loud)
+    lines = set(out.splitlines())
+    expect({"LANG=C.UTF-8", "TZ=UTC0", "SHELL=/bin/sh", "PATH=/usr/local/bin:/usr/bin:/bin"} <= lines, "the four constants: %r" % sorted(l for l in lines if l.split("=")[0] in ("LANG", "TZ", "SHELL", "PATH")))
+    expect(not any(l.startswith(("LC_", "LANGUAGE=")) for l in lines), "LC_* and LANGUAGE must be dropped: %r" % sorted(l for l in lines if l.startswith(("LC_", "LANGUAGE"))))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "LANG=C TZ=Europe/Paris env | grep -E '^(LANG|TZ)='"], cwd=ctx.work, env=loud)
+    expect(sorted(out.split()) == ["LANG=C", "TZ=Europe/Paris"], "inside the boundary a wrapper script may set its own: %r" % out)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "printf 'caf\\303\\251' | wc -m; echo b a | tr ' ' '\\n' | sort | head -1"], cwd=ctx.work, env=loud)
+    expect(out == "4\na\n", "C.UTF-8 counts characters and sorts by code point: %r" % out)
     rc, out, err = inside(ctx, "/usr/bin/env")
     expect(rc == 0 and "CAN_EXEC" not in out, "CAN_EXEC leaked: " + out)
 
@@ -463,12 +473,13 @@ def shebang_without_newline(ctx):
 @test
 def identity_link_consistency(ctx):
     """lstat, readlink and the link's target agree for an identity file that is a host symlink (F3-9)."""
-    if not os.path.islink("/etc/localtime"):
-        return "host /etc/localtime is not a symlink"
-    target = os.readlink("/etc/localtime")
-    resolved = os.path.normpath(os.path.join("/etc", target))
-    rc, out, err = run([wrapper(ctx, "sh"), "-c", "test -L /etc/localtime && echo link; readlink /etc/localtime; head -c 4 %s; head -c 4 /etc/localtime" % resolved], cwd=ctx.work, env=ctx.env)
-    expect(out == "link\n%s\nTZifTZif" % target, "identity link: %r %r" % (out, err))
+    link = next((f for f in ("/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf") if os.path.islink(f)), None)
+    if not link:
+        return "no host identity file is a symlink"
+    target = os.readlink(link)
+    head = open(link, "rb").read(8)                             # the content is reached through the identity name; its host target is not a can path (8.4)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "test -L %s && echo link; readlink %s; head -c 8 %s" % (link, link, link)], cwd=ctx.work, env=ctx.env)
+    expect(out.encode() == b"link\n" + target.encode() + b"\n" + head, "identity link %s: %r %r" % (link, out, err))
 
 
 @test

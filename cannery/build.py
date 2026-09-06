@@ -209,7 +209,7 @@ def synthesise(root, debs, log=print):
 
 
 # ---------------------------------------------------------------- placeholders (step 5)
-IDENTITY_FILES = ["/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf", "/etc/localtime", "/etc/resolv.conf", "/etc/hosts",
+IDENTITY_FILES = ["/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf", "/etc/resolv.conf", "/etc/hosts",
                   "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]
 
 

@@ -56,26 +56,30 @@ static const char *find_env(char **envp, const char *name)
     return 0;
 }
 
-/* 6.2: at the boundary the host's environment passes through minus the variables that would rebind
- * the loader, the libc or the compiler to the host; PATH is the can's, always the same: what a can wants
- * on it lives in its own /usr/local/bin. */
+/* 6.2: at the boundary the host's environment passes through minus the variables that would rebind the
+ * loader, the libc or the compiler to the host, and minus four that name what the can decides for itself:
+ * the search path, the locale, the time zone and the shell. Those four are set to the same values in every
+ * can on every host, what a reproducible build fixes by hand; what a can wants on PATH lives in its own
+ * /usr/local/bin, and a can that wants another locale or zone ships the data and a wrapper script. */
 static const char *denied[] = { "GLIBC_TUNABLES", "GCONV_PATH", "LOCPATH", "NLSPATH", "RESOLV_HOST_CONF", "HOSTALIASES",
-                                "TZDIR", "GCC_EXEC_PREFIX", "COMPILER_PATH", "LIBRARY_PATH", 0 };
+                                "TZDIR", "GCC_EXEC_PREFIX", "COMPILER_PATH", "LIBRARY_PATH",
+                                "PATH", "LANG", "LANGUAGE", "TZ", "SHELL", 0 };
+static const char *fixed[] = { "PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "TZ=UTC0", "SHELL=/bin/sh", 0 };
 static int env_denied(const char *e)
 {
-    if (xstarts(e, "LD_") || xstarts(e, "CAN_EXEC=") || xstarts(e, "PATH=")) return 1;   /* PATH is the can's (6.2, 13.7) */
+    if (xstarts(e, "LD_") || xstarts(e, "LC_") || xstarts(e, "CAN_EXEC=")) return 1;
     for (int i = 0; denied[i]; i++) { size_t l = xstrlen(denied[i]); if (xstrncmp(e, denied[i], l) == 0 && e[l] == '=') return 1; }
     return 0;
 }
 static char **env_prepare(char **envp, int boundary)
 {
     long n = 0; while (envp[n]) n++;
-    char **out = arena_alloc((size_t)(n + 2) * sizeof(char *)); long k = 0;
+    char **out = arena_alloc((size_t)(n + 6) * sizeof(char *)); long k = 0;
     for (long i = 0; i < n; i++) {
         if (boundary ? env_denied(envp[i]) : xstarts(envp[i], "CAN_EXEC=")) continue;
         out[k++] = envp[i];
     }
-    if (boundary) out[k++] = (char *)arena_str("PATH=/usr/local/bin:/usr/bin:/bin", 33);   /* writable: bash writes into its environment strings (F3-23) */
+    if (boundary) for (int i = 0; fixed[i]; i++) out[k++] = (char *)arena_str(fixed[i], xstrlen(fixed[i]));   /* writable: bash writes into its environment strings (F3-23) */
     out[k] = 0;
     return out;
 }
@@ -175,7 +179,7 @@ void start_c(unsigned long *sp)
     int have = filter_probe();
     C.boundary = have == 0;
     char **env2 = env_prepare(envp, C.boundary);
-    vis_init(env2);
+    vis_init();
     C.text_lo = (unsigned long)__ehdr_start; C.text_hi = (unsigned long)_etext;
     handler_install();
     if (have < FILTER_VERSION) filter_install();

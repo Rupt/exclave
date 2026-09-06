@@ -126,4 +126,8 @@ spike/           frozen prototypes and their tests
 directory suffix. `opener` is the launcher. `cannery` is the build tool.
 The environment knob is `CAN_LOG`; `CAN_EXEC` is the loader-mode target
 and is set by the opener itself, or by hand to run a host program inside
-a can.
+a can. At the can boundary four variables are the can's, always the
+same: `PATH=/usr/local/bin:/usr/bin:/bin`, `LANG=C.UTF-8`, `TZ=UTC0`
+and `SHELL=/bin/sh`; the loader and libc variables are dropped;
+everything else passes through, and inside the boundary nothing is
+touched.

@@ -7,8 +7,9 @@
 #include "common.h"
 
 static const char *volatile_dirs[] = { "/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run", 0 };
-/* 8.1 rule 5: the host's by default; an own record naming one exactly removes it */
-static const char *identity_files[] = { "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf", "/etc/localtime",
+/* 8.1 rule 5: the host's by default; an own record naming one exactly removes it. The time zone is not
+ * among them: inside a can it is UTC, set at the boundary (6.2). */
+static const char *identity_files[] = { "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf",
                                         "/etc/resolv.conf", "/etc/hosts", "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", 0 };
 
 struct dirent64 { unsigned long d_ino; long d_off; unsigned short d_reclen; unsigned char d_type; char d_name[]; };
@@ -120,7 +121,7 @@ static void claim_cwd(void)
     log_msg("cwd claimed for the host", real);
 }
 
-void vis_init(char **envp)
+void vis_init(void)
 {
     identity_defaults();
     own_from_tree();
@@ -136,39 +137,6 @@ void vis_init(char **envp)
         id_link[n] = link[0] ? arena_str(link, xstrlen(link)) : 0; n++;
     }
     C.nhost = n;
-    /* the zone file /etc/localtime names, which the can may lack, like the TZ rule below (F3-9) */
-    for (int i = 0; i < n && C.nhost < (int)(sizeof C.host / sizeof C.host[0]); i++) {
-        if (!id_link[i]) continue;
-        static char zone[PATH_MAX], zreal[PATH_MAX]; struct kstat zst;
-        if (id_link[i][0] == '/') scpy(zone, id_link[i], PATH_MAX);
-        else {                                                 /* relative to the identity file's directory: /etc */
-            const char *b = xstrrchr(C.host[i].v, '/'); size_t dl = (size_t)(b - C.host[i].v);
-            xmemcpy(zone, C.host[i].v, dl); zone[dl] = 0; scat(zone, "/", PATH_MAX); scat(zone, id_link[i], PATH_MAX);
-            /* collapse the ".." a relative zone link usually starts with: /etc/../usr/share/zoneinfo/X */
-            char *p; while ((p = xstrstr(zone, "/../")) != 0) { char *s = p; if (s > zone) { s--; while (s > zone && *s != '/') s--; } memmove(s, p + 3, xstrlen(p + 3) + 1); }
-        }
-        if (xstrncmp(zone, "/usr/share/zoneinfo/", 20) != 0) continue;
-        scpy(zreal, C.root, PATH_MAX); scat(zreal, zone, PATH_MAX);
-        if (sys_stat(zreal, &zst) == 0 || sys_stat(zone, &zst) < 0) continue;
-        C.host[C.nhost].v = arena_str(zone, xstrlen(zone)); C.host[C.nhost].r = C.host[C.nhost].v; C.host[C.nhost].is_file = 1; id_link[C.nhost] = 0; C.nhost++;
-    }
-    /* TZ names a zone the can may lack (8.4) */
-    for (char **e = envp; *e; e++) {
-        if (!xstarts(*e, "TZ=")) continue;
-        const char *z = *e + 3; if (*z == ':') z++;
-        if (!*z || *z == '/' || xstrchr(z, '.')) break;                 /* absolute or POSIX-format TZ: not a zone file */
-        static char v[PATH_MAX], real[PATH_MAX];
-        scpy(v, "/usr/share/zoneinfo/", PATH_MAX); scat(v, z, PATH_MAX);
-        scpy(real, C.root, PATH_MAX); scat(real, v, PATH_MAX);
-        struct kstat st;
-        if (sys_stat(real, &st) == 0) break;                            /* the can has it */
-        static char out[PATH_MAX], link[PATH_MAX];
-        if (host_resolve(v, out, link) && C.nhost < (int)(sizeof C.host / sizeof C.host[0])) {
-            C.host[C.nhost].v = arena_str(v, xstrlen(v)); C.host[C.nhost].r = arena_str(out, xstrlen(out)); C.host[C.nhost].is_file = 1;
-            id_link[C.nhost] = link[0] ? arena_str(link, xstrlen(link)) : 0; C.nhost++;
-        }
-        break;
-    }
     claim_cwd();
 }
 
@@ -207,8 +175,8 @@ int vis_is_host(const char *v, const char **real)
 }
 int is_can_owned(const char *v) { const char *r; return !vis_is_host(v, &r); }
 
-/* 8.4: the directories on the way to a host file (an identity file, a TZ zone) exist on the host whether or
- * not the can ships them; a path walk treats them as directories so that the file itself can be reached */
+/* 8.4: the directories on the way to a host identity file exist on the host whether or not the can ships
+ * them; a path walk treats them as directories so that the file itself can be reached */
 int vis_leads_to_host_file(const char *v)
 {
     for (int i = 0; i < C.nhost; i++)
