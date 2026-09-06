@@ -39,6 +39,10 @@ def kernel_resolve(rootfd, root, path, follow):
     if path.startswith("/") and rel == ".":
         rel = "."
     fd = libc.syscall(SYS_openat2, rootfd, rel.encode(), ctypes.byref(how), ctypes.sizeof(how))
+    for _ in range(20):                                       # EAGAIN under RESOLVE_IN_ROOT means "retry": the kernel saw what it
+        if fd >= 0 or ctypes.get_errno() != errno.EAGAIN:    # took for a concurrent rename or mount (openat2(2)); RHEL 8's 4.18 says so for ..
+            break
+        fd = libc.syscall(SYS_openat2, rootfd, rel.encode(), ctypes.byref(how), ctypes.sizeof(how))
     if fd < 0:
         return None, ctypes.get_errno()
     real = os.readlink("/proc/self/fd/%d" % fd)
