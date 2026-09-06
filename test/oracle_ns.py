@@ -82,8 +82,7 @@ def run_bwrap(root, work, cmd, extra=()):
 def run_opener(can, work, cmd, prog=None):
     env = {"PATH": "/usr/bin:/bin", "HOME": work, "W": work, "LANG": "en_GB.UTF-8", "TZ": "Asia/Tokyo"}   # replaced at the boundary (6.2)
     if prog:
-        env["CAN_EXEC"] = prog
-        p = subprocess.run([prog] + cmd, cwd=work, env=env, executable=os.path.join(can, ".can", "opener"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.run([os.path.join(can, ".can", "opener"), prog] + cmd, cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     else:
         p = subprocess.run([os.path.join(can, "root", "usr", "bin", "sh"), "-c", cmd], cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")

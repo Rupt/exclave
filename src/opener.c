@@ -5,7 +5,7 @@
  * can boundary (no filter inherited) and prepares the environment
  * accordingly, installs the handler and, at the boundary, the filter, then
  * loads the program it stands for: the payload of the wrapper it was run as,
- * or the CAN_EXEC target when re-exec'd in loader mode.
+ * or the CAN_EXEC target when re-exec'd in loader mode, by a handler or by its own positional entry.
  */
 #include "common.h"
 
@@ -121,6 +121,32 @@ static void read_manifest(void)
     if (ok == 0) die("this CPU lacks the can's ISA level", C.isa, 0);
 }
 
+/* 7.2: the opener run as a program rather than as a wrapper, `.can/opener PROGRAM ARGS...`, takes the program
+ * as its first argument and re-execs itself once the way a handler does for a program on the loader path
+ * (7.4.5): the target carried in CAN_EXEC, which is the opener's own protocol and never reaches a program, and
+ * argv shifted, so that the program's argv, cmdline and comm are its own. A relative program path is taken
+ * from the working directory as execve would take it. */
+static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **envp)
+{
+    if (argc < 2) die("usage: .can/opener PROGRAM [ARGS...]; or run a wrapper inside root/", 0, 0);
+    char *t = arena_alloc(PATH_MAX);
+    if (argv[1][0] == '/') scpy(t, argv[1], PATH_MAX);
+    else {
+        if (cwd_virtual(t) < 0) die("cannot read the working directory", 0, 0);
+        if (xstrlen(t) + xstrlen(argv[1]) + 2 > PATH_MAX) die("program path too long", argv[1], 0);
+        if (xstrcmp(t, "/") != 0) scat(t, "/", PATH_MAX);
+        scat(t, argv[1], PATH_MAX);
+    }
+    char *var = arena_alloc(PATH_MAX + 9); scpy(var, "CAN_EXEC=", PATH_MAX + 9); scat(var, t, PATH_MAX + 9);
+    long n = 0; while (envp[n]) n++;
+    char **env = arena_alloc((size_t)(n + 2) * sizeof(char *)); long k = 0;
+    env[k++] = var;
+    for (long i = 0; i < n; i++) if (!xstarts(envp[i], "CAN_EXEC=")) env[k++] = envp[i];
+    env[k] = 0;
+    long r = sys_execve(C.opener, argv + 1, env);
+    die("cannot re-exec the opener", C.opener, r);
+}
+
 /* 7.6: load the program at virtual path v; scripts go through their interpreter (kernel convention) */
 static __attribute__((noreturn)) void run(const char *v, long argc, char **argv, char **envp, unsigned long *auxv, int depth)
 {
@@ -168,18 +194,24 @@ void start_c(unsigned long *sp)
     read_manifest();
 
     const char *target = find_env(envp, "CAN_EXEC");
-    if (target) {
+    if (target) {                                             /* the internal protocol of 7.4.5: re-exec'd by a handler, or by entry_exec below */
         if (target[0] != '/') die("CAN_EXEC must be an absolute path", target, 0);
-        C.loader_mode = 1; scpy(C.program, target, PATH_MAX);
+        C.loader_mode = 1; scpy(C.program, target, PATH_MAX); scpy(C.execfn, target, PATH_MAX);
+    } else if (starts_dir(exe, C.root)) {                     /* a wrapper: the kernel ran the opener under the program's name */
+        scpy(C.program, exe, PATH_MAX); from_real(C.program); scpy(C.execfn, C.program, PATH_MAX);
     } else {
-        if (!starts_dir(exe, C.root)) die("run a wrapper inside root/, or set CAN_EXEC", exe, 0);
-        scpy(C.program, exe, PATH_MAX); from_real(C.program);
+        entry_exec(argc, argv, envp);                          /* the opener run by hand: .can/opener PROGRAM ARGS... */
     }
 
     int have = filter_probe();
     C.boundary = have == 0;
     char **env2 = env_prepare(envp, C.boundary);
     vis_init();
+    if (C.loader_mode) {                                      /* the target as given may spell the program through symlinks, /bin/sh: resolve it as an exec would */
+        struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0); if (!S) die("out of memory", 0, ENOMEM);
+        long r = canon(S, C.program, AT_FDCWD, 1, S->v); if (r < 0) die("cannot open program", C.program, r);
+        scpy(C.program, S->v, PATH_MAX); scratch_put(S);
+    }
     C.text_lo = (unsigned long)__ehdr_start; C.text_hi = (unsigned long)_etext;
     handler_install();
     if (have < FILTER_VERSION) filter_install();

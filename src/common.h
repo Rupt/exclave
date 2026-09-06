@@ -132,6 +132,7 @@ struct can {
     unsigned long opener_dev, opener_ino; long opener_size;
     char program[PATH_MAX];        /* virtual path of the program this process runs */
     char exe[PATH_MAX];            /* what /proc/self/exe answers: the program, or a wrapped script's interpreter (F3-22) */
+    char execfn[PATH_MAX];         /* the path the program was exec'd by, as given: AT_EXECFN and comm, the script's for a script (7.6) */
     int loader_mode;               /* 1: re-exec'd with CAN_EXEC; program is not a wrapper */
     int boundary;                  /* 1: this process installed the filter (can boundary) */
     /* the manifest (6.2) and what the tree says (8.1); the limits are stated in 8.1 and enforced by cannery wrap */

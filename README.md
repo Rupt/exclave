@@ -49,7 +49,7 @@ cannery/cannery.py wrap gcc.can                         # close it: wrap, check,
 ln -s root/usr/bin/gcc-13 gcc.can/gcc                   # an entry, if you want one
 gcc.can/gcc -O2 hello.c -o hello                        # any executable in root/ runs by path
 gcc.can/root/usr/bin/sh -c 'cc1 --version'              # the can's own shell
-CAN_EXEC=/path/to/host/program gcc.can/.can/opener args...   # a host program inside the can
+gcc.can/.can/opener /path/to/host/program args...        # a program without a wrapper, a host tool or a built output, inside the can
 CAN_LOG=/tmp/can.log ...  # the one knob: one line per trapped syscall
 cannery/cannery.py check gcc.can /tmp/can.log           # static check of every ELF, dynamic check of the logged run
 cannery/cannery.py prune gcc.can /tmp/can.log           # keep what the logged runs touched
@@ -124,9 +124,11 @@ spike/           frozen prototypes and their tests
 
 `cont` is the codename and repository. `can` is the format and the
 directory suffix. `opener` is the launcher. `cannery` is the build tool.
-The environment knob is `CAN_LOG`; `CAN_EXEC` is the loader-mode target
-and is set by the opener itself, or by hand to run a host program inside
-a can. At the can boundary four variables are the can's, always the
+The environment knob is `CAN_LOG`, the only one. `CAN_EXEC` is the
+opener's own protocol: set by an opener when it re-execs itself for a
+program on the loader path, removed before any program runs, never an
+interface; `.can/opener PROGRAM ARGS...` is how a program without a
+wrapper is run from outside. At the can boundary four variables are the can's, always the
 same: `PATH=/usr/local/bin:/usr/bin:/bin`, `LANG=C.UTF-8`, `TZ=UTC0`
 and `SHELL=/bin/sh`; the loader and libc variables are dropped;
 everything else passes through, and inside the boundary nothing is

@@ -62,11 +62,9 @@ def wrapper(ctx, name):
     return os.path.join(ctx.root, "usr", "bin", name)
 
 
-def inside(ctx, prog, args=(), cwd=None, env=None, inp=None, argv0=None, timeout=300):
-    """Run a program by virtual/host path inside the can in loader mode (CAN_EXEC)."""
-    e = dict(env if env is not None else ctx.env)
-    e["CAN_EXEC"] = prog
-    return run([argv0 or prog] + list(args), cwd=cwd or ctx.work, env=e, inp=inp, executable=ctx.opener, timeout=timeout)
+def inside(ctx, prog, args=(), cwd=None, env=None, inp=None, timeout=300):
+    """Run a program by virtual or host path inside the can through the opener's positional entry (7.2)."""
+    return run([ctx.opener, prog] + list(args), cwd=cwd or ctx.work, env=dict(env if env is not None else ctx.env), inp=inp, timeout=timeout)
 
 
 def expect(cond, msg):
@@ -376,6 +374,24 @@ def environment(ctx):
     expect(out == "4\na\n", "C.UTF-8 counts characters and sorts by code point: %r" % out)
     rc, out, err = inside(ctx, "/usr/bin/env")
     expect(rc == 0 and "CAN_EXEC" not in out, "CAN_EXEC leaked: " + out)
+
+
+@test
+def positional_entry(ctx):
+    """7.2: `.can/opener PROGRAM ARGS...` runs PROGRAM inside the can with its own argv, cmdline and comm, by an
+    absolute or a relative path; CAN_EXEC is the opener's own protocol and is never an interface."""
+    rc, out, err = run([ctx.opener, "./progs/exec", "self"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "child ok argv0=./progs/exec\n", "relative program path: %r %r" % (out, err))
+    rc, out, err = run([ctx.opener, "/bin/sh", "-c", "cat /proc/$$/comm; tr '\\0' '\\n' < /proc/$$/cmdline | head -1"], cwd=ctx.work, env=ctx.env)
+    expect(out == "sh\n/bin/sh\n", "cmdline and comm are the program's: %r %r" % (out, err))
+    rc, out, err = run([ctx.opener, "/usr/bin/env"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and "CAN_EXEC" not in out and "PATH=/usr/local/bin:/usr/bin:/bin" in out, "the boundary policy applies after the re-exec and CAN_EXEC never reaches the program: %r" % out)
+    rc, out, err = run([ctx.opener], cwd=ctx.work, env=ctx.env)
+    expect(rc == 127 and "PROGRAM" in err, "no program named: rc=%d %r" % (rc, err))
+    rc, out, err = run([ctx.opener, "/nonexistent/prog"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 127 and "/nonexistent/prog" in err, "a missing program is named: %r" % err)
+    rc, out, err = run([ctx.opener, "progs/../progs/exec", "self"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "child ok argv0=progs/../progs/exec\n", "argv[0] is the path as given: %r %r" % (out, err))
 
 
 @test

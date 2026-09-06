@@ -171,13 +171,13 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
         case AT_PHNUM: v = eh.e_phnum; break;
         case AT_BASE: v = base; break;
         case AT_ENTRY: v = entry; break;
-        case AT_EXECFN: v = (unsigned long)vpath; seen = 1; break;
+        case AT_EXECFN: v = (unsigned long)C.execfn; seen = 1; break;   /* the path the program was exec'd by, the script's for a script, as the kernel gives it */
         }
         *w++ = k; *w++ = v;
     }
-    if (!seen) { *w++ = AT_EXECFN; *w++ = (unsigned long)vpath; }
+    if (!seen) { *w++ = AT_EXECFN; *w++ = (unsigned long)C.execfn; }
     *w++ = AT_NULL; *w++ = 0;
-    char nm[16]; scpy(nm, base_name(vpath), sizeof nm);
+    char nm[16]; scpy(nm, base_name(C.execfn), sizeof nm);   /* comm as the kernel sets it: from the exec'd path, not the interpreter's */
     sys_prctl(PR_SET_NAME, (unsigned long)nm, 0, 0, 0);
     log_line("load", 0, vpath);
     __asm__ volatile ("mov %0, %%rsp\n xor %%rdx, %%rdx\n xor %%rbp, %%rbp\n jmp *%1\n" : : "r"(sp), "r"(jump) : "memory");

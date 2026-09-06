@@ -72,7 +72,7 @@ def main():
         return run([prog] + list(args), work, env).stdout.decode().strip()
 
     def inside(prog, *args):
-        return run([prog] + list(args), work, dict(env, CAN_EXEC=prog), executable=opener).stdout.decode().strip()
+        return run([opener, prog] + list(args), work, env).stdout.decode().strip()
 
     for name, src in (("statb", STAT_C), ("spawnb", SPAWN_C)):
         with open(os.path.join(work, name + ".c"), "w") as f:

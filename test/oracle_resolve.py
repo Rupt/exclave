@@ -147,8 +147,8 @@ def main():
     if r.returncode:
         sys.exit("cannot compile resolve.c: " + r.stderr.decode(errors="replace"))
     paths = gen_paths(rng, dirs, files, links, a.paths)
-    p = subprocess.run([prog], input="\n".join(paths).encode() + b"\n", cwd=work, env={"PATH": "/usr/bin:/bin", "CAN_EXEC": prog},
-                       executable=os.path.join(can, ".can", "opener"), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p = subprocess.run([os.path.join(can, ".can", "opener"), prog], input="\n".join(paths).encode() + b"\n", cwd=work, env={"PATH": "/usr/bin:/bin"},
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     answers = p.stdout.decode(errors="replace").splitlines()
     if len(answers) != len(paths):
         sys.exit("the opener answered %d of %d paths: %s" % (len(answers), len(paths), p.stderr.decode(errors="replace")[-500:]))
