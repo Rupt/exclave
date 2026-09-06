@@ -11,6 +11,7 @@ import tarfile
 
 import apk
 import deb
+import rpm
 
 CANNERY_VERSION = "0.1.0"
 MERGED_USR = ["bin", "sbin", "lib", "lib32", "lib64", "libx32"]
@@ -45,7 +46,7 @@ def _inside(root_real, dst):
 
 def reader(path):
     """The reader for a package file, chosen by the file (10.1): deb.py or apk.py, one interface."""
-    return apk if path.endswith(".apk") else deb
+    return apk if path.endswith(".apk") else rpm if path.endswith(".rpm") else deb
 
 
 def extract(root, debs, log=print):
@@ -113,7 +114,8 @@ def extract(root, debs, log=print):
                     fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                     with os.fdopen(fd, "wb") as f:
                         shutil.copyfileobj(t.extractfile(m), f)
-                    os.chmod(dst, m.mode & 0o777)                           # setuid and setgid are meaningless under no_new_privs
+                    os.chmod(dst, (m.mode & 0o777) | 0o400)                 # setuid and setgid are meaningless under no_new_privs; a tree stays
+                                                                            # readable by its owner (Fedora ships /etc/gshadow as 0000)
                     os.utime(dst, (m.mtime, m.mtime))
                 else:
                     log("skipping special file /%s from %s" % (rel, name))
@@ -128,7 +130,7 @@ def extract(root, debs, log=print):
 
 
 # ---------------------------------------------------------------- synthesis (step 4)
-_UA = re.compile(r"update-alternatives\s+(?:--(?:quiet|verbose|force)\s+)*--install\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)((?:\s+--slave\s+\S+\s+\S+\s+\S+)*)")
+_UA = re.compile(r"(?:update-)?alternatives\s+(?:--(?:quiet|verbose|force)\s+)*--install\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)((?:\s+--slave\s+\S+\s+\S+\s+\S+)*)")   # Debian's and rpm's spellings
 _SLAVE = re.compile(r"--slave\s+(\S+)\s+(\S+)\s+(\S+)")
 
 
@@ -219,7 +221,7 @@ def synthesise(root, debs, log=print):
             ld = p
             break
     if ld:
-        r = subprocess.run([ld, "-r", root], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        r = subprocess.run([ld, "-r", root, "-f", "/etc/ld.so.conf"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)   # glibc 2.17 wants the path spelt out under -r
         if r.returncode:
             log("ldconfig failed: " + r.stderr.decode(errors="replace").strip())
         else:
@@ -248,8 +250,15 @@ def placeholders(root, strip=True, log=print):
         p = os.path.join(root, d)
         if not os.path.lexists(p):
             os.makedirs(p)
+    import elfcheck
+    tree = elfcheck.Tree(root)
     for f in IDENTITY_FILES:                                  # 8.4: shipped empty, the host's answer at run time
-        p = _v(root, f)
+        d, b = os.path.split(f)
+        rd = tree.resolve(d)                                  # the directory as the tree resolves it: Fedora's /etc/ssl/certs is a link into /etc/pki
+        if rd is None and os.path.islink(_v(root, d)):
+            log("identity file %s not placed: its directory is a dangling link in the tree" % f)
+            continue
+        p = os.path.join(_v(root, rd if rd else d), b)
         if not os.path.lexists(p):
             os.makedirs(os.path.dirname(p), exist_ok=True)
             open(p, "wb").close()
@@ -283,6 +292,8 @@ def tree_hash(root):
             elif stat.S_ISREG(st.st_mode):
                 kind = b"x" if st.st_mode & 0o111 else b"f"
                 h = hashlib.blake2b(digest_size=32)
+                if not os.access(_payload(real), os.R_OK):
+                    raise BuildError("cannot read %s: the tree hash needs every file readable" % _payload(real))
                 with open(_payload(real), "rb") as f:
                     for chunk in iter(lambda: f.read(1 << 20), b""):
                         h.update(chunk)
@@ -324,7 +335,7 @@ def write_lock(can, pkgs, manifest_hash=None, tree=False, keep_hashes=False):
 def dependency_report(pkgs):
     """pkgs: [(name, control fields)]. Lines naming every Depends or Pre-Depends the set does not satisfy,
     with Provides and version constraints honoured. A report, not a refusal: the set is the user's."""
-    rd = apk if pkgs and pkgs[0][1].get("_format") == "apk" else deb
+    rd = {"apk": apk, "rpm": rpm}.get(pkgs[0][1].get("_format") if pkgs else None, deb)
     have = {n: f.get("Version", "") for n, f in pkgs}
     provides = {}
     for n, f in pkgs:

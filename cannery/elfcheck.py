@@ -17,7 +17,7 @@ import struct
 PT_LOAD, PT_DYNAMIC, PT_INTERP = 1, 2, 3
 DT_NULL, DT_NEEDED, DT_STRTAB, DT_STRSZ, DT_SONAME, DT_RPATH, DT_RUNPATH = 0, 1, 5, 10, 14, 15, 29
 ET_DYN = 3
-DEFAULT_DIRS = ["/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu", "/lib", "/usr/lib"]   # Debian's glibc; the tree's loader is asked (review F4-13)
+DEFAULT_DIRS = ["/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu", "/lib64", "/usr/lib64", "/lib", "/usr/lib"]   # Debian's and Fedora's glibc; the tree's loader is asked when it can answer (review F4-13)
 MUSL_DIRS = ["/lib", "/usr/local/lib", "/usr/lib"]
 HWCAPS = ["glibc-hwcaps/x86-64-v4", "glibc-hwcaps/x86-64-v3", "glibc-hwcaps/x86-64-v2"]
 LIBC_SONAME = {"glibc": "libc.so.6", "musl": "libc.musl-x86_64.so.1"}
@@ -53,6 +53,10 @@ def loader_dirs(tree, interp):
     return list(DEFAULT_DIRS)
 
 
+class ForeignElf(ValueError):
+    """A well-formed ELF file of another class, byte order or machine: not this can's to run, not checked."""
+
+
 class Elf:
     """The parts of an ELF64 file the checks need."""
 
@@ -60,8 +64,12 @@ class Elf:
         self.path = path
         with open(path, "rb") as f:
             h = f.read(64)
-            if len(h) < 64 or h[:4] != b"\x7fELF" or h[4] != 2 or h[5] != 1:
+            if len(h) < 16 or h[:4] != b"\x7fELF":
                 raise ValueError("not ELF64 LE")
+            if h[4] != 2 or h[5] != 1:
+                raise ForeignElf("ELF32 or big-endian: a foreign object, not checked (13)")
+            if len(h) < 64:
+                raise ValueError("truncated ELF header")
             try:
                 self._parse(f, h)
             except struct.error as e:
@@ -307,16 +315,24 @@ def static_check(can, own, data_prefixes=(), log=print):
             if not stat.S_ISREG(st.st_mode):
                 continue
             pay = tree.payload(vpath)
+            try:
+                head = open(pay, "rb").read(4)
+            except PermissionError:
+                rep.warnings.append("unreadable file %s: not checked, and no copy of the can can carry it" % vpath)
+                continue
             with open(pay, "rb") as f:
-                if f.read(4) != b"\x7fELF":
+                if head != b"\x7fELF":
                     continue
             try:
                 e = Elf(pay)
+            except ForeignElf as ex:                          # Fedora's gcc ships 32-bit crt objects beside the 64-bit ones
+                rep.warnings.append("%s: %s" % (vpath, ex))
+                continue
             except ValueError as ex:
                 rep.errors.append("%s: %s" % (vpath, ex))
                 continue
             if e.machine != 62:
-                rep.errors.append("%s: not x86-64" % vpath)
+                rep.warnings.append("%s: not x86-64: a foreign object, not checked (13)" % vpath)
                 continue
             if e.interp is None and e.type != ET_DYN:
                 rep.static.append(vpath)

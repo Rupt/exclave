@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import apk  # noqa: E402
 import build  # noqa: E402
 import deb  # noqa: E402
+import rpm  # noqa: E402
 import elfcheck  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -684,7 +685,7 @@ def main(argv):
             cmd_reopen(a.can, a.opener)
     except GrammarError as e:
         sys.exit("grammar: %s" % e)
-    except (build.BuildError, deb.DebError, apk.ApkError) as e:
+    except (build.BuildError, deb.DebError, apk.ApkError, rpm.RpmError) as e:
         sys.exit("cannery: %s" % e)
     return 0
 

@@ -699,6 +699,98 @@ def make_apk(path, name, members, pkginfo_extra=""):
         f.write(tgz(members, True))
 
 
+def make_rpm(path, name, members, requires=(), provides=(), postin=""):
+    """A minimal binary rpm: lead, a signature header, a header with the tags the reader uses, a gzip newc cpio
+    payload. members as for make_deb; requires and provides are (name, flags, version) triples."""
+    import gzip
+    import struct
+    import time as _t
+
+    def header(entries):                                        # entries: [(tag, type, values)]; types 4 int32, 6 string, 8 string array
+        index, data = b"", b""
+        for tag, typ, vals in entries:
+            if typ == 4:
+                data += b"\0" * (-len(data) % 4)
+                off = len(data)
+                data += b"".join(struct.pack(">i", v) for v in vals)
+                index += struct.pack(">IIII", tag, 4, off, len(vals))
+            else:
+                off = len(data)
+                data += b"".join(v.encode() + b"\0" for v in vals)
+                index += struct.pack(">IIII", tag, typ, off, len(vals))
+        return b"\x8e\xad\xe8\x01" + b"\0" * 4 + struct.pack(">II", len(entries), len(data)) + index + data
+
+    def cpio(entries):
+        out, ino = b"", 1
+        for n, kind, val, mode in entries:
+            body = b""
+            if kind == "dir":
+                m = 0o040000 | mode
+            elif kind == "sym":
+                m, body = 0o120000 | mode, val.encode()
+            else:
+                m, body = 0o100000 | mode, val
+            nm = ("./" + n).encode() + b"\0"
+            h = b"070701" + b"".join(b"%08x" % v for v in (ino, m, 0, 0, 1, int(_t.time()), len(body), 0, 0, 0, 0, len(nm), 0))
+            rec = h + nm
+            rec += b"\0" * (-len(rec) % 4) + body
+            rec += b"\0" * (-len(rec) % 4)
+            out += rec
+            ino += 1
+        nm = b"TRAILER!!!\0"
+        h = b"070701" + b"".join(b"%08x" % v for v in (0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, len(nm), 0))
+        out += h + nm
+        return out + b"\0" * (-len(out) % 512)
+    payload = gzip.compress(cpio(members))
+    entries = [(1000, 6, [name]), (1001, 6, ["1.0"]), (1002, 6, ["1"]), (1022, 6, ["x86_64"]), (1125, 6, ["gzip"]), (1124, 6, ["cpio"])]
+    if requires:
+        entries += [(1049, 8, [r[0] for r in requires]), (1048, 4, [r[1] for r in requires]), (1050, 8, [r[2] for r in requires])]
+    if provides:
+        entries += [(1047, 8, [p[0] for p in provides]), (1112, 4, [p[1] for p in provides]), (1113, 8, [p[2] for p in provides])]
+    if postin:
+        entries += [(1024, 6, [postin])]
+    sig = header([(1000, 4, [len(payload)])])
+    lead = b"\xed\xab\xee\xdb" + bytes([3, 0]) + struct.pack(">hh", 0, 1) + name.encode().ljust(66, b"\0")[:66] + struct.pack(">hh", 1, 5) + b"\0" * 16
+    with open(path, "wb") as f:
+        f.write(lead + sig + b"\0" * (-len(sig) % 8) + header(entries) + payload)
+
+
+@test
+def rpm_unpack(ctx):
+    """10.1: unpack reads .rpm files by the file: lead, headers, cpio payload; Requires and Provides with rpm's
+    flags, so-called provides and file dependencies, rpmlib features and rich dependencies skipped; hard links;
+    the merged-usr links; alternatives --install lines in %post synthesised; one format per can."""
+    d = os.path.join(ctx.work, "rpms")
+    os.makedirs(d, exist_ok=True)
+    EQ, GE = 8, 12
+    make_rpm(os.path.join(d, "tool-1.0-1.x86_64.rpm"), "tool",
+             [("usr", "dir", None, 0o755), ("usr/bin", "dir", None, 0o755), ("usr/bin/tool-2", "file", b"#!/bin/sh\necho tool ok\n", 0o755)],
+             requires=[("libfoo.so.1()(64bit)", 0, ""), ("absent-pkg", GE, "2"), ("/bin/sh", 0, ""), ("rpmlib(CompressedFileNames)", (1 << 24) | 10, "3.0.4-1"), ("(a or b)", 0, "")],
+             postin="/usr/sbin/alternatives --install /usr/bin/tool tool /usr/bin/tool-2 20\n")
+    make_rpm(os.path.join(d, "libfoo-1.0-1.x86_64.rpm"), "libfoo",
+             [("usr", "dir", None, 0o755), ("usr/lib64", "dir", None, 0o755), ("usr/lib64/libfoo.so.1", "file", b"data\n", 0o644),
+              ("usr/share", "dir", None, 0o755), ("usr/share/doc", "file", b"doc\n", 0o644)],
+             provides=[("libfoo.so.1()(64bit)", 0, ""), ("libfoo", EQ, "1.0-1")])
+    out = os.path.join(ctx.work, "rpm.can")
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "unpack", out, os.path.join(d, "tool-1.0-1.x86_64.rpm"), os.path.join(d, "libfoo-1.0-1.x86_64.rpm")])
+    expect(rc == 0, "unpack: " + o + e)
+    expect("depends: tool needs absent-pkg (>= 2), not in the set" in o, "the versioned dependency was not reported: " + o)
+    expect("libfoo" not in o.replace("libfoo-1.0", "") and "/bin/sh" not in o and "rpmlib" not in o and "(a or b)" not in o, "a provide in the set, a file dependency, an rpmlib feature or a rich dependency was reported: " + o)
+    root = os.path.join(out, "root")
+    expect(os.readlink(os.path.join(root, "bin")) == "usr/bin" and os.readlink(os.path.join(root, "lib64")) == "usr/lib64", "the merged-usr links")
+    expect(os.path.exists(os.path.join(root, "usr", "lib64", "libfoo.so.1")) and os.path.exists(os.path.join(root, "usr", "bin", "tool-2")), "payload extracted")
+    expect(os.readlink(os.path.join(root, "usr", "bin", "tool")) == "/etc/alternatives/tool" and os.readlink(os.path.join(root, "etc", "alternatives", "tool")) == "/usr/bin/tool-2",
+           "alternatives from %%post: %r" % os.listdir(os.path.join(root, "usr", "bin")))
+    lock = cannery.load(os.path.join(out, ".can", "lock"), "lock")
+    pkgs = cannery.values(lock, "pkg")
+    expect([tuple(p[:3]) for p in pkgs] == [(b"libfoo", b"1.0-1", b"x86_64"), (b"tool", b"1.0-1", b"x86_64")], "pkg records: %r" % pkgs)
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "wrap", out])
+    expect(rc == 0 and cannery.values(cannery.load(os.path.join(out, ".can", "lock"), "lock"), "tree"), "wrap: " + o + e)
+    make_apk(os.path.join(d, "x-1.0-r0.apk"), "x", [("usr", "dir", None, 0o755)])
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "unpack", out + "2", os.path.join(d, "x-1.0-r0.apk"), os.path.join(d, "tool-1.0-1.x86_64.rpm")])
+    expect(rc != 0 and "one format per can" in o + e, "a mixed set must be refused: " + o + e)
+
+
 @test
 def apk_unpack(ctx):
     """10.1: unpack reads .apk files by the file, with .PKGINFO's depend and provides, so: names and file

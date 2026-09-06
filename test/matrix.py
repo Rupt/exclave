@@ -178,6 +178,8 @@ def main():
             t.add(os.path.join(REPO, "build", "opener"), arcname="cont/build/opener")
             if os.path.exists(os.path.join(REPO, "build", "opener-old")):
                 t.add(os.path.join(REPO, "build", "opener-old"), arcname="cont/build/opener-old")
+            if os.path.exists(os.path.join(REPO, "build", "sysroot-hello")):          # test/sysroot.py's output: runs natively on every glibc
+                t.add(os.path.join(REPO, "build", "sysroot-hello"), arcname="cont/build/sysroot-hello")
     results = []
     for name, kernel, user, urls, family, notes in VMS:
         if a.only and name not in a.only.split(","):
@@ -227,6 +229,11 @@ def main():
             noexec = noexec[-1] if noexec else "noexec: " + out[-120:].replace("\n", " | ")
             log(name, noexec)
             notes = (notes + "; " if notes else "") + noexec
+            # 9: an output built inside the gcc can against an older glibc's sysroot (test/sysroot.py) runs natively here
+            rc, out = vm.ssh("test -x m/cont/build/sysroot-hello && { m/cont/build/sysroot-hello 2>&1 | head -1; echo sysroot-rc=$?; } || echo no-sysroot-hello; ldd --version 2>&1 | head -1", timeout=60)
+            sysroot = " ".join(l.strip() for l in out.splitlines() if l.strip())
+            log(name, "sysroot output:", sysroot)
+            notes += "; sysroot: " + sysroot
             oracle = ""
             rc, out = vm.ssh("cd m && bwrap --ro-bind / / true 2>&1 && echo bwrap-ok")
             if "bwrap-ok" in out:
