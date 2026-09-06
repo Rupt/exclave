@@ -1,4 +1,4 @@
-/* loader.c — userland ELF loader (PROPOSAL.md 7.3).
+/* loader.c — userland ELF loader (PROPOSAL.md 7.3) and the debugger hooks (7.6).
  *
  * Maps the payload and the loader its header names the way the kernel would, builds
  * the initial stack from the opener's own auxiliary vector, and jumps. Used
@@ -9,6 +9,27 @@
 #include "elf.h"
 
 static Phdr ph_main[128], ph_interp[64];
+
+/* 7.6: what a debugger needs, exported for the script the opener carries in .debug_gdb_scripts (src/gdb.py):
+ * where the program and its loader were mapped and which files they are, and a function gdb breakpoints to
+ * learn them. The script adds the program's symbols at its base, walks the loader's link map for the
+ * libraries and finds their payloads through .real/, so gdb needs no manual command. The exported names are
+ * aliases so that the code reaches the variables directly, without a GOT slot to relocate. */
+static unsigned long payload_base, payload_entry, interp_base;
+static char payload_path[PATH_MAX], interp_path[PATH_MAX];
+static __attribute__((noinline, used)) void debug_hook(void) { __asm__ volatile ("" ::: "memory"); }
+extern unsigned long cont_payload_base __attribute__((alias("payload_base"), visibility("default")));
+extern unsigned long cont_payload_entry __attribute__((alias("payload_entry"), visibility("default")));
+extern unsigned long cont_interp_base __attribute__((alias("interp_base"), visibility("default")));
+extern char cont_payload_path[PATH_MAX] __attribute__((alias("payload_path"), visibility("default")));
+extern char cont_interp_path[PATH_MAX] __attribute__((alias("interp_path"), visibility("default")));
+extern void cont_debug_hook(void) __attribute__((alias("debug_hook"), visibility("default")));
+__asm__(".pushsection .debug_gdb_scripts,\"MS\",@progbits,1\n"
+        " .byte 4\n"                                       /* SECTION_SCRIPT_ID_PYTHON_TEXT: the script's name, a newline, the text */
+        " .ascii \"cont-opener.py\\n\"\n"
+        " .incbin \"src/gdb.py\"\n"
+        " .byte 0\n"
+        ".popsection\n");
 
 static int open_elf(const char *real, Ehdr *eh, Phdr *ph, int maxph)
 {
@@ -132,9 +153,9 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
 {
     Ehdr eh; unsigned long entry, phdr_va, base = 0, jump; int has_interp; char interp_v[PATH_MAX];
     int fd = open_elf(real, &eh, ph_main, 128);
-    map_elf(fd, &eh, ph_main, &entry, &phdr_va, &has_interp, interp_v, real);
+    payload_base = map_elf(fd, &eh, ph_main, &entry, &phdr_va, &has_interp, interp_v, real);
     sys_close(fd);
-    jump = entry;
+    jump = entry; payload_entry = entry; scpy(payload_path, real, PATH_MAX);
     if (has_interp) {
         /* the program's own PT_INTERP, resolved in the can as the kernel would resolve it in a chroot (7.3);
          * that every ELF in a can names one loader is the cannery's static check, not a run-time rule */
@@ -150,7 +171,7 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
         int ifd = open_elf(ireal, &ih, ph_interp, 64);
         base = map_elf(ifd, &ih, ph_interp, &ientry, &iphdr, &ii, dummy, ireal);
         sys_close(ifd);
-        jump = ientry;
+        jump = ientry; interp_base = base; scpy(interp_path, ireal, PATH_MAX);
     }
     if (wants_exec_stack(ph_main, eh.e_phnum)) stack_make_exec();
     long auxc = 0; while (auxv[auxc * 2] != AT_NULL) auxc++;
@@ -180,6 +201,7 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
     char nm[16]; scpy(nm, base_name(C.execfn), sizeof nm);   /* comm as the kernel sets it: from the exec'd path, not the interpreter's */
     sys_prctl(PR_SET_NAME, (unsigned long)nm, 0, 0, 0);
     log_line("load", 0, vpath);
+    debug_hook();                                             /* 7.6: gdb, if present, learns the mappings here */
     __asm__ volatile ("mov %0, %%rsp\n xor %%rdx, %%rdx\n xor %%rbp, %%rbp\n jmp *%1\n" : : "r"(sp), "r"(jump) : "memory");
     __builtin_unreachable();
 }

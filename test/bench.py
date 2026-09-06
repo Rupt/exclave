@@ -36,6 +36,22 @@ int main(void) { struct timespec a, b; int n = 300; char *av[] = { "true", 0 };
   clock_gettime(CLOCK_MONOTONIC, &b); printf("%.0f\n", ((b.tv_sec - a.tv_sec) * 1e6 + (b.tv_nsec - a.tv_nsec) / 1e3) / n); return 0; }
 '''
 
+SPAWN100K_C = r'''
+#include <spawn.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <time.h>
+extern char **environ;
+static long rss(void) { FILE *f = fopen("/proc/self/status", "r"); char l[256]; long v = -1; while (f && fgets(l, 256, f)) if (!strncmp(l, "VmRSS:", 6)) v = atol(l + 6); if (f) fclose(f); return v; }
+int main(void) { struct timespec a, b; int n = 100000; char *av[] = { "true", 0 };
+  long r0 = rss(); clock_gettime(CLOCK_MONOTONIC, &a);
+  for (int i = 0; i < n; i++) { pid_t p; if (posix_spawn(&p, "/usr/bin/true", 0, 0, av, environ)) return 1; int st; waitpid(p, &st, 0); }
+  clock_gettime(CLOCK_MONOTONIC, &b); long r1 = rss();
+  printf("%.1f s, RSS %+ld kB\n", (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) / 1e9, r1 - r0); return 0; }
+'''
+
 
 def run(cmd, cwd, env=None, executable=None):
     return subprocess.run(cmd, cwd=cwd, env=env, executable=executable, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -74,7 +90,7 @@ def main():
     def inside(prog, *args):
         return run([opener, prog] + list(args), work, env).stdout.decode().strip()
 
-    for name, src in (("statb", STAT_C), ("spawnb", SPAWN_C)):
+    for name, src in (("statb", STAT_C), ("spawnb", SPAWN_C), ("spawn100k", SPAWN100K_C)):
         with open(os.path.join(work, name + ".c"), "w") as f:
             f.write(src)
         p = run([cgcc, "-O2", "-o", os.path.join(work, name), os.path.join(work, name + ".c")], work, env)
@@ -86,6 +102,8 @@ def main():
     hostfile = os.path.join(work, "statb.c")
     rows.append(("stat(), %d-component host path, ns per call" % hostfile.count("/"), best(lambda: int(native(statb, hostfile))), best(lambda: int(inside(statb, hostfile)))))
     rows.append(("posix_spawn of /usr/bin/true, us per spawn", best(lambda: int(native(spawnb))), best(lambda: int(inside(spawnb)))))
+    spawn100k = os.path.join(work, "spawn100k")                          # 17.4: 100 000 spawns from one process, RSS before and after, one run
+    rows.append(("100 000 posix_spawns of /usr/bin/true from one process", native(spawn100k), inside(spawn100k)))
     with open(os.path.join(work, "hello.c"), "w") as f:
         f.write('#include <stdio.h>\nint main(void) { printf("hello\\n"); return 0; }\n')
 

@@ -505,12 +505,14 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if (r == 1) return RE6(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
         to_real(S->v, S->real, S->tmp);
         return RE6(nr, AT_FDCWD, S->real, a[2] | AT_SYMLINK_NOFOLLOW, a[3], a[4], a[5]);
+#ifndef CONT_TEST_OLD                                        /* build/opener-old: the previous version, which does not know these (17.4) */
     case NR_file_getattr: case NR_file_setattr:              /* (dfd, path, attr, size, at_flags): the chattr ioctls as syscalls */
         if ((r = resolve(S, a, 1, 0, !(a[4] & AT_SYMLINK_NOFOLLOW), (a[4] & AT_EMPTY_PATH) != 0)) < 0) return r;
         if (r == 1) return (nr == NR_file_setattr && fd_can(S, (int)a[0])) ? -EROFS : RE5(nr, a[0], a[1], a[2], a[3], a[4]);
         if (nr == NR_file_setattr && (r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);
         return RE5(nr, AT_FDCWD, S->real, a[2], a[3], a[4] | AT_SYMLINK_NOFOLLOW);
+#endif
     case NR_setxattr: case NR_lsetxattr: case NR_removexattr: case NR_lremovexattr:
         if ((r = resolve(S, a, 0, -1, nr == NR_setxattr || nr == NR_removexattr, 0)) < 0) return r;
         if ((r = ro_attr(S, S->v))) return r;

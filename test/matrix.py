@@ -176,6 +176,8 @@ def main():
             for d in ("test", "cannery"):
                 t.add(os.path.join(REPO, d), arcname="cont/" + d)
             t.add(os.path.join(REPO, "build", "opener"), arcname="cont/build/opener")
+            if os.path.exists(os.path.join(REPO, "build", "opener-old")):
+                t.add(os.path.join(REPO, "build", "opener-old"), arcname="cont/build/opener-old")
     results = []
     for name, kernel, user, urls, family, notes in VMS:
         if a.only and name not in a.only.split(","):
@@ -214,6 +216,16 @@ def main():
             log(name, suite)
             for f in fails:
                 log(name, f[:200])
+            # 12, 17.4: a noexec mount, made as root. Natively the shell answers EACCES; the opener's loader cannot map
+            # a program there and says so; a can's shell answers EACCES as the kernel would (7.4.5).
+            rc, out = vm.ssh("S=sudo; command -v sudo >/dev/null 2>&1 || S=doas; $S mkdir -p /mnt/nx && $S mount -t tmpfs -o noexec tmpfs /mnt/nx && "
+                             "$S cp m/work/progs/exec /mnt/nx/prog && $S chmod 755 /mnt/nx/prog && "
+                             "/mnt/nx/prog self >/dev/null 2>&1; a=$?; m/can/.can/opener /mnt/nx/prog self >/dev/null 2>&1; b=$?; "
+                             "m/can/root/usr/bin/sh -c '/mnt/nx/prog self' >/dev/null 2>&1; c=$?; $S umount /mnt/nx; echo noexec native=$a opener=$b inside=$c", timeout=120)
+            noexec = [l for l in out.splitlines() if l.startswith("noexec ")]
+            noexec = noexec[-1] if noexec else "noexec: " + out[-120:].replace("\n", " | ")
+            log(name, noexec)
+            notes = (notes + "; " if notes else "") + noexec
             oracle = ""
             rc, out = vm.ssh("cd m && bwrap --ro-bind / / true 2>&1 && echo bwrap-ok")
             if "bwrap-ok" in out:

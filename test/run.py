@@ -454,6 +454,36 @@ def cross_can_distinct_openers(ctx):
 
 
 @test
+def nested_older_opener(ctx):
+    """7.4.2: an older opener nested inside a newer one reuses the newer filter and answers ENOSYS for a trap
+    it does not know, never re-issuing it to the host. build/opener-old is the current opener built with the
+    previous filter version and without file_getattr in its handler (make builds it beside build/opener)."""
+    old = os.path.join(os.path.dirname(ctx.opener_src), "opener-old")
+    if not os.path.exists(old):
+        return "no build/opener-old"
+    src = os.path.join(ctx.work, "getattr.c")
+    with open(src, "w") as f:
+        f.write('#include <stdio.h>\n#include <errno.h>\n#include <string.h>\n#include <unistd.h>\n#include <fcntl.h>\n#include <sys/syscall.h>\n'
+                'int main(void) { char a[24]; long r = syscall(468, AT_FDCWD, "/usr/bin/true", a, sizeof a, 0);\n'
+                ' printf("%ld %d\\n", r, r < 0 ? errno : 0); return 0; }\n')
+    prog = os.path.join(ctx.work, "getattr")
+    rc, out, err = run([wrapper(ctx, GCC), "-static", "-O0", "-o", prog, src], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "compile: " + err)
+    rc, kernel, err = run([prog], cwd=ctx.work, env=ctx.env)              # the kernel's own answer, static so any host runs it
+    rc, outer, err = run([wrapper(ctx, "sh"), "-c", prog], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and outer == kernel, "inside the current opener the kernel's answer comes back: kernel %r can %r %r" % (kernel, outer, err))
+    can2 = os.path.join(ctx.work, "old-can")
+    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    cannery.cmd_reopen(can2, old)
+    log = os.path.join(ctx.work, "nested-old.log")
+    rc, inner, err = run([wrapper(ctx, "sh"), "-c", "%s/root/usr/bin/sh -c %s" % (can2, prog)], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log))
+    expect(rc == 0 and inner == "-1 38\n", "the older opener nested in the newer one answers ENOSYS (38) for the trap it does not know: %r %r" % (inner, err))
+    text = open(log).read()
+    expect("opener 0 inside %s" % prog in text and "trap -38 -" in text and "boundary" not in text.split("opener 0 inside", 1)[1],
+           "the inner opener reused the newer filter and answered the trap itself: %r" % text[-400:])
+
+
+@test
 def real_root_is_the_tree(ctx):
     """The tree's real root is an alias of /: a path spelt through <can>/root/ obeys the same rules (F3-1)."""
     root = ctx.root
@@ -1174,6 +1204,32 @@ def rust(ctx):
     expect(rc == 0, "rustc: " + err[-600:])
     rc, out, err = inside(ctx, exe)
     expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
+def gdb_hooks(ctx):
+    """7.6, 13.1: gdb needs no manual command. The opener carries a script gdb auto-loads; a breakpoint in a
+    library hits with the can's own symbols, the program's source line is known, a wrapped program's libc
+    frames resolve, and the positional entry's re-exec does not confuse gdb."""
+    gdb = shutil.which("gdb")
+    if not gdb:
+        return "no gdb"
+    rc, out, err = run([gdb, "-batch", "-nx", "-ex", "python print(gdb.VERSION)"])
+    if rc or not out.strip():
+        return "gdb without Python"
+    src = hello_source(ctx)
+    exe = os.path.join(ctx.work, "hello-g")
+    rc, out, err = run([wrapper(ctx, GCC), "-g", "-O0", "-o", exe, src], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "compile -g: " + err)
+    base = [gdb, "-batch", "-nx", "-iex", "set auto-load safe-path /", "-iex", "set debuginfod enabled off", "-ex", "set breakpoint pending on"]
+    rc, out, err = run(base + ["-ex", "break main", "-ex", "break write", "-ex", "run", "-ex", "bt", "-ex", "continue", "-ex", "bt", "-ex", "info auto-load python-scripts", "--args", ctx.opener, exe], cwd=ctx.work, env=ctx.env, timeout=300)
+    expect(re.search(r"^Breakpoint 1, main \(.*\) at \S*hello\.c:\d+", out, re.M), "the program's own breakpoint hits with its source line: %r %r" % (out[-800:], err[-400:]))
+    expect("Breakpoint 2, " in out and "write" in out.split("Breakpoint 2, ", 1)[1].split("\n")[0], "a breakpoint in the can's libc hits with its name: %r %r" % (out[-800:], err[-400:]))
+    expect("__libc_start" in out.split("Breakpoint 2, ", 1)[1], "the libc frames below the program resolve: %r" % out[-800:])
+    expect("cont-opener.py" in out and "Python Exception" not in out and "Cannot insert" not in out, "the script loaded once and quietly: %r %r" % (out[-600:], err[-400:]))
+    rc, out, err = run(base + ["-ex", "break write", "-ex", "run", "-ex", "bt", "--args", wrapper(ctx, "echo"), "hi"], cwd=ctx.work, env=ctx.env, timeout=300)
+    expect("Breakpoint 1, " in out and "__libc_start" in out, "a wrapped program's libc frames resolve: %r %r" % (out[-800:], err[-400:]))
+    expect("Python Exception" not in out and "Cannot insert" not in out, "quiet for a wrapper: %r" % out[-600:])
 
 
 @test

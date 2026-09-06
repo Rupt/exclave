@@ -6,8 +6,9 @@
 CC      ?= gcc
 SRC     := src/opener.c src/manifest.c src/loader.c src/scratch.c src/vis.c src/canon.c src/cache.c \
            src/filter.c src/handler.c src/isa.c src/str.c src/log.c
-HDR     := src/sys.h src/common.h src/elf.h
+HDR     := src/sys.h src/common.h src/elf.h src/gdb.py
 OUT     := build/opener
+OLD     := build/opener-old
 
 CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
            -nostdlib -nostartfiles -ffreestanding -fno-stack-protector -fno-builtin \
@@ -18,17 +19,28 @@ LDFLAGS := -shared -nostdlib -Wl,-e,_start -Wl,--no-relax -Wl,-z,noexecstack -Wl
 
 .PHONY: all clean stack test unit oracles bench
 
-all: $(OUT)
+all: $(OUT) $(OLD)
 
-# build/opener is stripped for shipping (every wrapper is a link to it); build/opener.debug keeps the symbols
+# build/opener is stripped for shipping (every wrapper is a link to it); build/opener.debug keeps the symbols.
+# The strip keeps .debug_gdb_scripts, the script gdb auto-loads (7.6), and .dynsym, the six names it reads.
 $(OUT): $(SRC) $(HDR) Makefile
 	@mkdir -p build
 	@rm -f build/*.su
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@.debug $(SRC)
 	@mv -f *.su build/ 2>/dev/null || true
-	objcopy --strip-all $@.debug $@
+	objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
 	@readelf -n $@ | grep -q cont || (echo "the note was stripped" && false)
+	@readelf -S -W $@ | grep -q debug_gdb_scripts || (echo "the gdb script was stripped" && false)
+	@readelf --dyn-syms $@ | grep -q cont_debug_hook || (echo "the gdb hook is not exported" && false)
 	@readelf -h $@ | grep -q 'DYN' && echo "built $@ ($$(stat -c %s $@) bytes stripped, ET_DYN; symbols in $@.debug)"
+
+# the previous opener for the nesting regression of 17.4: the same sources with the filter version before this
+# one and without the syscalls that version did not know, so that a trap for one of them reaches a handler
+# that must answer ENOSYS rather than re-issue it
+$(OLD): $(SRC) $(HDR) Makefile
+	@mkdir -p build
+	$(CC) $(filter-out -fstack-usage,$(CFLAGS)) -DFILTER_VERSION=1 -DCONT_TEST_OLD $(LDFLAGS) -o $@.debug $(SRC)
+	objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
 
 # stack budget (7.5.4): no frame on the handler path above 512 bytes, and the
 # summed frames of the handler path under 2048.
@@ -44,7 +56,7 @@ unit:
 	python3 test/syscalls.py
 
 # the regression suite (17.4); needs a gcc tree: CONT_TREE=dir make test
-test: $(OUT)
+test: $(OUT) $(OLD)
 	python3 test/run.py --tree $(CONT_TREE)
 
 # the oracles and the container profile (17.1, 17.2, 12); need a packaged gcc can: CONT_CAN=x.can make oracles

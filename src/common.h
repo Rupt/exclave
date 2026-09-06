@@ -8,7 +8,9 @@
 #include "sys.h"
 
 #define OPENER_VERSION "0.1"
-#define FILTER_VERSION 1                 /* 7.4.2: versioned reuse */
+#ifndef FILTER_VERSION
+#define FILTER_VERSION 2                 /* 7.4.2: versioned reuse; bumped whenever the trap set grows (2: the *xattrat and file_*attr syscalls) */
+#endif
 #define PATH_MAX 4096
 #define NAME_MAX 255
 
