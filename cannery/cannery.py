@@ -600,6 +600,8 @@ def cmd_check(can, logs=()):
                 problems.append("the tree differs from the lock: recorded %s, now %s" % (recorded[0][0].decode(), actual))
         else:
             problems.append("an open can: the lock has no tree hash; run cannery wrap")
+    elif any(is_wrapper(real, oi) for real, v, st in walk_files(root) if stat.S_ISREG(st.st_mode)):
+        problems.append("wrapped but never closed: no lock; run cannery wrap")   # the third state (review F5-3, N4)
     for p in problems:
         print(p)
     print("%d wrapper problems" % len(problems))

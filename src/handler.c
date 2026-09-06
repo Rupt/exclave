@@ -118,7 +118,7 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
 }
 
 /* ---------- exec (7.6): scripts and host programs run inside the can's world ---------- */
-static long exec_target(struct scratch *S, const char *v, char **argv, char **envp, int depth, struct scratch **Sp);
+static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, struct scratch **Sp);
 
 /* A pointer vector of n entries: a scratch region when it fits, an anonymous mapping otherwise (F3-2:
  * vectors are sized from their counts). A mapping made by a vfork child stays in the parent, unused. */
@@ -172,7 +172,7 @@ static long exec_loader_mode(struct scratch *S, const char *v, char **argv, char
 
 /* a script that is not a wrapper (a host script, 7.6): the interpreter is resolved in the can's world,
  * the script is passed by its virtual path. Kernel convention: argv = interp [arg] script args... */
-static long exec_script(struct scratch *S, const char *v, char **argv, char **envp, int depth, struct scratch **Sp)
+static long exec_script(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, struct scratch **Sp)
 {
     struct scratch *S2 = scratch_get(S->pid, S->tid, (unsigned long)__builtin_frame_address(0)); if (!S2) return -ENOMEM;
     char *line = S2->b1, *vcopy = S2->b2;
@@ -187,17 +187,17 @@ static long exec_script(struct scratch *S, const char *v, char **argv, char **en
     if (n < 0) r = n;
     else {
         line[n < 0 ? 0 : n] = 0;
-        scpy(vcopy, v, PATH_MAX);
+        scpy(vcopy, given, PATH_MAX);                        /* the script's path as the caller spelt it, as the kernel passes it (7.4.5, review F5-8) */
         long k = shebang_argv(line, vcopy, av, argc, nargv, argc + 4);
         if (k == -1) r = -ENOEXEC; else if (k == -2) r = -E2BIG;
-        else if ((r = canon(S, nargv[0], AT_FDCWD, 1, S->v)) >= 0) r = exec_target(S, S->v, nargv, envp, depth + 1, Sp);
+        else if ((r = canon(S, nargv[0], AT_FDCWD, 1, S->v)) >= 0) r = exec_target(S, S->v, nargv[0], nargv, envp, depth + 1, Sp);
     }
     vector_free(big2, argc + 4); vector_free(big1, argc + 1);
     scratch_put(S2);                                         /* only reached when no exec happened */
     return r;
 }
 
-static long exec_target(struct scratch *S, const char *v, char **argv, char **envp, int depth, struct scratch **Sp)
+static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, struct scratch **Sp)
 {
     if (depth > 4) return -ELOOP;
     if (vis_in_data(v)) return -EACCES;                          /* 6.2: a data prefix is never executed (review O4-3) */
@@ -217,7 +217,7 @@ static long exec_target(struct scratch *S, const char *v, char **argv, char **en
         return RE5(NR_execve, S->real, argv, envp, 0, 0);    /* the kernel runs the opener under the program's name */
     }
     /* not a wrapper: a host program, or an unwrapped can file */
-    if (n >= 2 && h[0] == '#' && h[1] == '!') return exec_script(S, v, argv, envp, depth, Sp);
+    if (n >= 2 && h[0] == '#' && h[1] == '!') return exec_script(S, v, given, argv, envp, depth, Sp);
     if (n == 4 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F') {
         int another;                                         /* 7.4.5: a file carrying .note.cont is another opener: exec it as it is */
         if (elf_probe(S->real, S->tmp, &another, S->extra) >= 0 && another) { log_line("exec", 0, v); return RE5(NR_execve, S->real, argv, envp, 0, 0); }
@@ -235,7 +235,7 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
         struct kstat st; to_real_exec(S->v, S->real);
         if (sys_lstat(S->real, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK) return -ELOOP;
     }
-    return exec_target(S, S->v, argv, envp, 0, Sp);
+    return exec_target(S, S->v, r == 1 ? S->v : S->b1, argv, envp, 0, Sp);   /* S->b1: the path as given (resolve); a descriptor exec has none */
 }
 
 /* ---------- readlink: /proc links and identity files answer in virtual terms (8.4) ---------- */

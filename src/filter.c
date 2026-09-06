@@ -58,7 +58,10 @@ const int path_syscalls[] = {
     NR_removexattr, NR_lremovexattr, NR_utimes, NR_inotify_add_watch, NR_openat, NR_mkdirat, NR_mknodat,
     NR_fchownat, NR_futimesat, NR_newfstatat, NR_unlinkat, NR_renameat, NR_linkat, NR_symlinkat, NR_readlinkat,
     NR_fchmodat, NR_faccessat, NR_utimensat, NR_renameat2, NR_execveat, NR_statx, NR_faccessat2, NR_fchmodat2,
-    NR_fanotify_mark, NR_setxattrat, NR_getxattrat, NR_listxattrat, NR_removexattrat, NR_file_getattr, NR_file_setattr,
+    NR_fanotify_mark, NR_setxattrat, NR_getxattrat, NR_listxattrat, NR_removexattrat,
+#ifndef CONT_TEST_OLD
+    NR_file_getattr, NR_file_setattr,                     /* version 2's additions: absent from build/opener-old's filter and handler alike */
+#endif
 };
 const int n_path_syscalls = sizeof path_syscalls / sizeof path_syscalls[0];
 

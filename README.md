@@ -29,7 +29,7 @@ compiles C and C++; a CentOS 7 glibc as a data prefix in the gcc can
 gives outputs that run on every glibc since 2.17, which the kernel
 matrix checks natively on each VM. gdb debugs a canned program with no
 manual command: the opener carries the script gdb needs. The
-regression suite (54 named tests), the kernel oracles,
+regression suite (56 named tests), the kernel oracles,
 Docker's default seccomp profile and the plain-terminal AppArmor label
 all pass on the reference machine, and the kernel matrix in QEMU
 virtual machines passes on nine distributions from CentOS 7 at kernel

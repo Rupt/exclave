@@ -308,6 +308,7 @@ static inline const char *strerr(long e)
     case EPERM:  return "Operation not permitted";
     case ENOENT: return "No such file or directory";
     case EACCES: return "Permission denied";
+    case 8:      return "Exec format error";
     case EEXIST: return "File exists";
     case ENOTDIR: return "Not a directory";
     case EINVAL: return "Invalid argument";

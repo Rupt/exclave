@@ -90,11 +90,18 @@ def copy_can(src, dst):
 
 
 def shared_state(ctx):
-    """What every test shares and none may change: the can's manifest, its lock, its top level and the names in
-    its /usr/bin, cheap enough to compare after every test."""
+    """What every test shares and none may change: the can's manifest, its lock, and for every entry of its tree the
+    path, size, mode and mtime, which an added file, a removed one or a write through a hard link changes (review
+    O5-5); a walk of some thousand lstats, cheap enough to compare after every test."""
     can = ctx.can
+    entries = []
+    for dirpath, dirnames, filenames in os.walk(ctx.root):
+        for n in dirnames + filenames:
+            st = os.lstat(os.path.join(dirpath, n))
+            isdir = stat.S_ISDIR(st.st_mode)                  # a directory's mtime moves when a test makes and removes a file there: not a residue
+            entries.append((os.path.relpath(os.path.join(dirpath, n), ctx.root), 0 if isdir else st.st_size, st.st_mode, 0 if isdir else st.st_mtime_ns))
     return (open(os.path.join(can, ".can", "manifest"), "rb").read(), open(os.path.join(can, ".can", "lock"), "rb").read() if os.path.exists(os.path.join(can, ".can", "lock")) else b"",
-            tuple(sorted(os.listdir(ctx.root))), len(os.listdir(os.path.join(ctx.root, "usr", "bin"))))
+            tuple(sorted(entries)))
 
 
 def hello_source(ctx):
@@ -143,6 +150,7 @@ def make_can(ctx):
     with open(os.path.join(can, ".can", "manifest"), "wb") as f:
         f.write(cannery.dump(recs, "can"))
     cannery.wrap_files(can, quiet=True)
+    build.write_lock(can, [], manifest_hash=cannery.b2_file(os.path.join(can, ".can", "manifest")), tree=True)   # closed: a lock with the hashes (6.4)
     ctx.can, ctx.root, ctx.opener = can, root, os.path.join(can, ".can", "opener")
     if not os.path.exists(os.path.join(root, "usr", "bin", GCC)) and os.path.exists(os.path.join(root, "usr", "bin", "gcc")):
         GCC = "gcc"
@@ -357,11 +365,31 @@ def scripts(ctx):
     rc, out, err = run([wrapper(ctx, "sh"), "-c", "/usr/bin/cont-test-noshebang"], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and out == "noshebang ok\n", "ENOEXEC fallback: %r %r" % (out, err))
     rc, out, err = run([wrapper(ctx, "cont-test-noshebang")], cwd=ctx.work, env=ctx.env)
-    expect(rc == 127 and "not an executable" in err, "noshebang direct: rc=%d %r" % (rc, err))
+    expect(rc == 126 and "not an executable" in err, "noshebang direct: rc=%d %r" % (rc, err))   # a shell's 126: found, not executable
     rc, out, err = run([wrapper(ctx, "cont-test-exe")], cwd=ctx.work, env=ctx.env)
     expect(out == "/usr/bin/dash\n", "a wrapped script's /proc/self/exe is its interpreter (F3-22): %r %r" % (out, err))
     rc, out, err = run([wrapper(ctx, "bash"), "-c", "echo from bash"], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and out == "from bash\n", "bash starts (F3-23): rc=%d %r" % (rc, err))
+
+
+@test
+def script_argv0_as_given(ctx):
+    """7.4.5: a script's interpreter gets the script path as the caller spelt it, as the kernel passes it: for a host
+    script run inside by a relative path, and through the positional entry; a wrapped script run from outside by a
+    relative path likewise (review F5-8). A wrapped script exec'd from inside gets its canonical virtual path (13)."""
+    d = os.path.join(ctx.work, "argv0")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "s.sh"), "w") as f:
+        f.write('#!/bin/sh\necho "argv0=$0 n=$#"\n')
+    os.chmod(os.path.join(d, "s.sh"), 0o755)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "./s.sh a b"], cwd=d, env=ctx.env)
+    expect(out == "argv0=./s.sh n=2\n", "a host script inside, by a relative path: %r %r" % (out, err))
+    rc, out, err = run([ctx.opener, "./s.sh", "a"], cwd=d, env=ctx.env)
+    expect(out == "argv0=./s.sh n=1\n", "through the positional entry: %r %r" % (out, err))
+    rc, out, err = run(["./cont-test-script", "x"], cwd=os.path.join(ctx.root, "usr", "bin"), env=ctx.env)
+    expect(out == "script ok x 1\n", "a wrapped script from outside by a relative path runs: %r %r" % (out, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "cd /usr/bin && ./cont-test-exe"], cwd=ctx.work, env=ctx.env)
+    expect(out == "/usr/bin/dash\n", "a wrapped script inside: exe is its interpreter (F3-22): %r %r" % (out, err))
 
 
 @test
@@ -420,6 +448,38 @@ def positional_entry(ctx):
     expect(rc == 127 and "/nonexistent/prog" in err, "a missing program is named: %r" % err)
     rc, out, err = run([ctx.opener, "progs/../progs/exec", "self"], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and out == "child ok argv0=progs/../progs/exec\n", "argv[0] is the path as given: %r %r" % (out, err))
+    # review O5-1, F5-1: the entry makes the checks an exec inside makes, with a shell's exit status
+    nx = os.path.join(ctx.work, "exec644")
+    shutil.copy2(os.path.join(ctx.progs, "exec"), nx)
+    os.chmod(nx, 0o644)
+    rc, out, err = run([ctx.opener, nx, "self"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 126 and "Permission denied" in err and "child ok" not in out, "a file without execute permission is refused as inside: rc=%d %r" % (rc, err))
+    rc, out, err = run([ctx.opener, ctx.work], cwd=ctx.work, env=ctx.env)
+    expect(rc == 126 and "Permission denied" in err, "a directory: rc=%d %r" % (rc, err))
+    dp = os.path.join(ctx.work, "dp-entry.can")
+    copy_can(ctx.can, dp)
+    os.makedirs(os.path.join(dp, "root", "opt", "sdk", "bin"))
+    shutil.copy2(os.path.join(ctx.progs, "exec"), os.path.join(dp, "root", "opt", "sdk", "bin", "prog"))
+    with open(os.path.join(dp, ".can", "manifest"), "wb") as f:
+        f.write(cannery.dump([cannery.Record("can", [("t", b"1")]), cannery.Record("data", [("s", b"/opt/sdk")])], "can"))
+    rc, out, err = run([os.path.join(dp, ".can", "opener"), "/opt/sdk/bin/prog", "self"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 126 and "Permission denied" in err and "child ok" not in out, "a program under a data prefix is never executed (6.2): rc=%d %r %r" % (rc, out, err))
+    # review O5-3, F5-4: CAN_EXEC in anyone's environment is inert for a wrapper, from outside and from inside
+    rc, out, err = run([wrapper(ctx, "echo"), "still echo"], cwd=ctx.work, env=dict(ctx.env, CAN_EXEC="/usr/bin/env"))
+    expect(rc == 0 and out == "still echo\n", "CAN_EXEC from the host must not replace a wrapped program: %r %r" % (out, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "export CAN_EXEC=/usr/bin/env; /usr/bin/echo still echo"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "still echo\n", "CAN_EXEC exported inside must not replace a wrapped program: %r %r" % (out, err))
+    # review F5-2: the can's own opener runs from inside its can (another opener, 7.4.5)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s /usr/bin/echo from inside" % ctx.opener], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "from inside\n", "the opener exec'd from inside: rc=%d %r %r" % (rc, out, err))
+    # review F5-9: a wrapped program started through the entry is exec'd as its wrapper, so its identity is the kernel's
+    rc, out, err = run([ctx.opener, "/usr/bin/sh", "-c", "readlink /proc/$$/exe"], cwd=ctx.work, env=ctx.env)
+    expect(out == "/usr/bin/dash\n", "a wrapper through the entry keeps the wrapper's identity: %r %r" % (out, err))
+    p = subprocess.Popen([ctx.opener, "/usr/bin/sleep", "2"], cwd=ctx.work, env=ctx.env)
+    time.sleep(0.5)
+    exe = os.readlink("/proc/%d/exe" % p.pid)
+    p.kill(); p.wait()
+    expect(exe == os.path.realpath(wrapper(ctx, "sleep")), "from outside, exe names the wrapper, not the opener: %r" % exe)
 
 
 @test
@@ -764,9 +824,10 @@ def rpm_unpack(ctx):
     os.makedirs(d, exist_ok=True)
     EQ, GE = 8, 12
     make_rpm(os.path.join(d, "tool-1.0-1.x86_64.rpm"), "tool",
-             [("usr", "dir", None, 0o755), ("usr/bin", "dir", None, 0o755), ("usr/bin/tool-2", "file", b"#!/bin/sh\necho tool ok\n", 0o755)],
+             [("usr", "dir", None, 0o755), ("usr/bin", "dir", None, 0o755), ("usr/bin/tool-2", "file", b"#!/bin/sh\necho tool ok\n", 0o755),
+              ("usr/bin/tool", "file", b"#!/bin/sh\necho the shipped file, which %post removes\n", 0o755)],
              requires=[("libfoo.so.1()(64bit)", 0, ""), ("absent-pkg", GE, "2"), ("/bin/sh", 0, ""), ("rpmlib(CompressedFileNames)", (1 << 24) | 10, "3.0.4-1"), ("(a or b)", 0, "")],
-             postin="/usr/sbin/alternatives --install /usr/bin/tool tool /usr/bin/tool-2 20\n")
+             postin="/usr/bin/rm -f /usr/bin/tool\n/usr/sbin/alternatives --install /usr/bin/tool tool /usr/bin/tool-2 20\n")
     make_rpm(os.path.join(d, "libfoo-1.0-1.x86_64.rpm"), "libfoo",
              [("usr", "dir", None, 0o755), ("usr/lib64", "dir", None, 0o755), ("usr/lib64/libfoo.so.1", "file", b"data\n", 0o644),
               ("usr/share", "dir", None, 0o755), ("usr/share/doc", "file", b"doc\n", 0o644)],
@@ -779,8 +840,9 @@ def rpm_unpack(ctx):
     root = os.path.join(out, "root")
     expect(os.readlink(os.path.join(root, "bin")) == "usr/bin" and os.readlink(os.path.join(root, "lib64")) == "usr/lib64", "the merged-usr links")
     expect(os.path.exists(os.path.join(root, "usr", "lib64", "libfoo.so.1")) and os.path.exists(os.path.join(root, "usr", "bin", "tool-2")), "payload extracted")
-    expect(os.readlink(os.path.join(root, "usr", "bin", "tool")) == "/etc/alternatives/tool" and os.readlink(os.path.join(root, "etc", "alternatives", "tool")) == "/usr/bin/tool-2",
-           "alternatives from %%post: %r" % os.listdir(os.path.join(root, "usr", "bin")))
+    expect(os.path.islink(os.path.join(root, "usr", "bin", "tool")) and os.readlink(os.path.join(root, "usr", "bin", "tool")) == "/etc/alternatives/tool"
+           and os.readlink(os.path.join(root, "etc", "alternatives", "tool")) == "/usr/bin/tool-2",
+           "alternatives from %%post replace the shipped file at the link path (review F5-5): %r" % os.listdir(os.path.join(root, "usr", "bin")))
     lock = cannery.load(os.path.join(out, ".can", "lock"), "lock")
     pkgs = cannery.values(lock, "pkg")
     expect([tuple(p[:3]) for p in pkgs] == [(b"libfoo", b"1.0-1", b"x86_64"), (b"tool", b"1.0-1", b"x86_64")], "pkg records: %r" % pkgs)
@@ -1027,6 +1089,34 @@ def wrap_refusals(ctx):
 
 
 @test
+def wrap_refuses_unreadable(ctx):
+    """10.1, 10.3: a file the user cannot read is an error of the static check, so wrap refuses before it wraps anything and
+    the can stays the directory it was; check names the third state, a wrapped can without a lock (review O5-2, F5-3, N4)."""
+    can = os.path.join(ctx.work, "unread.can")
+    shutil.rmtree(can, ignore_errors=True)
+    os.makedirs(os.path.join(can, "root", "usr", "bin"))
+    os.makedirs(os.path.join(can, "root", "etc"))
+    with open(os.path.join(can, "root", "usr", "bin", "hi"), "w") as f:
+        f.write("#!/bin/sh\necho hi\n")
+    os.chmod(os.path.join(can, "root", "usr", "bin", "hi"), 0o755)
+    with open(os.path.join(can, "root", "etc", "private"), "w") as f:
+        f.write("secret\n")
+    os.chmod(os.path.join(can, "root", "etc", "private"), 0)
+    try:
+        rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "wrap", can])
+        expect(rc != 0 and "unreadable file /etc/private" in o + e and "nothing was wrapped" in o + e, "an unreadable file must refuse the close: %d %s %s" % (rc, o[-300:], e[-300:]))
+        expect(not os.path.exists(os.path.join(can, "root", "usr", "bin", ".real")) and not os.path.exists(os.path.join(can, ".can", "lock")), "a refused wrap leaves the tree as it was")
+        os.chmod(os.path.join(can, "root", "etc", "private"), 0o600)
+        rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "wrap", can])
+        expect(rc == 0, "readable again, the can closes: " + o + e)
+        os.remove(os.path.join(can, ".can", "lock"))
+        rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", can])
+        expect(rc != 0 and "never closed" in o + e, "a wrapped can without a lock is reported: %d %s" % (rc, o[-300:]))
+    finally:
+        os.chmod(os.path.join(can, "root", "etc", "private"), 0o600)
+
+
+@test
 def ownership_fails_closed(ctx):
     """8.1: a top-level directory the opener cannot list is the can's, not a placeholder (O4-8 B, F4-4); a spawn with
     no descriptor to spare fails loudly instead of running on the host (O4-8 A)."""
@@ -1186,6 +1276,7 @@ def static_check_loader_model(ctx):
     import elfcheck
     x = os.path.join(ctx.root, "usr", "local", "x")
     base = os.path.join(x, "lib")
+    made_local = not os.path.exists(os.path.dirname(x))
     os.makedirs(base, exist_ok=True)
     src = os.path.join(ctx.work, "rp")
     os.makedirs(src, exist_ok=True)
@@ -1217,6 +1308,8 @@ def static_check_loader_model(ctx):
         expect(cache and "libc.so.6" in cache and cache["libc.so.6"][0].endswith("/libc.so.6"), "ld.so.cache parsed: %r" % (list(cache.items())[:2] if cache else cache))
     finally:
         shutil.rmtree(x, ignore_errors=True)
+        if made_local:
+            os.rmdir(os.path.dirname(x))                      # the shared can is left as it was (17)
     # F4-13: a hand-made tree with the loader at /usr/lib64 and no ld.so.cache closes; the loader satisfies its own
     # soname and its default directories come from the loader itself. F4-9: without /lib the host's would be searched.
     lib = os.path.join(ctx.root, "usr", "lib", "x86_64-linux-gnu")
@@ -1266,6 +1359,20 @@ def static_check_loader_model(ctx):
     expect(out == "42\n", "usefoo: %r %r" % (out, err))
     rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", ctx.can, log])
     expect(rc == 0 and "working directory" in out and "0 errors" in out.splitlines()[-1], "a build-directory library is a note, not an error (F4-10): " + out[-500:])
+    # review O5-4: the same library, in a directory the host owns by rule 3, opened by a workload run from /: the check
+    # must still report it (nothing is claimed from /), where a run from that directory would note it as the build's own
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="cont-bld-", dir="/tmp")
+    try:
+        for f in ("libfoo.so", "usefoo"):
+            shutil.copy2(os.path.join(bld, f), os.path.join(tmp, f))
+        log2 = os.path.join(ctx.work, "bld-root.log")
+        rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s/usefoo" % tmp], cwd="/", env=dict(ctx.env, CAN_LOG=log2))
+        expect(out == "42\n", "usefoo from /: %r %r" % (out, err))
+        rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", ctx.can, log2])
+        expect(rc != 0 and "library opened on the host" in out and tmp + "/libfoo.so" in out, "a workload run from / must not excuse a host library: " + out[-500:])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 @test
@@ -1420,6 +1527,10 @@ def gdb_hooks(ctx):
     rc, out, err = run(base + ["-ex", "break write", "-ex", "run", "-ex", "bt", "--args", wrapper(ctx, "echo"), "hi"], cwd=ctx.work, env=ctx.env, timeout=300)
     expect("Breakpoint 1, " in out and "__libc_start" in out, "a wrapped program's libc frames resolve: %r %r" % (out[-800:], err[-400:]))
     expect("Python Exception" not in out and "Cannot insert" not in out, "quiet for a wrapper: %r" % out[-600:])
+    spaced = os.path.join(ctx.work, "space dir", "can")           # review O5-6: a can under a path with a space
+    copy_can(ctx.can, spaced)
+    rc, out, err = run(base + ["-ex", "break main", "-ex", "run", "-ex", "bt", "--args", os.path.join(spaced, ".can", "opener"), exe], cwd=ctx.work, env=ctx.env, timeout=300)
+    expect(re.search(r"^Breakpoint 1, main \(.*\) at \S*hello\.c:\d+", out, re.M) and "Python Exception" not in out, "a can under a path with a space: %r %r" % (out[-600:], err[-300:]))
 
 
 @test
@@ -1483,18 +1594,21 @@ def main():
         try:
             note = t(ctx)
             print("PASS %-26s %5.1fs %s" % (t.__name__, time.time() - t0, note or ""))
-            now = shared_state(ctx)                            # a test must leave the fixtures alone (tests are independent)
-            changed = [n for n, a, b in zip(("manifest", "lock", "top level", "/usr/bin"), ctx.shared, now) if a != b]
-            if changed:
-                print("FAIL %-26s %5.1fs the test changed the shared can: %s" % (t.__name__, time.time() - t0, ", ".join(changed)))
-                fails += 1
-                ctx.shared = shared_state(ctx)
         except AssertionError as e:
             fails += 1
             print("FAIL %-26s %5.1fs %s" % (t.__name__, time.time() - t0, str(e).strip().replace("\n", "\n     ")))
         except Exception as e:  # noqa: BLE001
             fails += 1
             print("FAIL %-26s %5.1fs %s: %s" % (t.__name__, time.time() - t0, type(e).__name__, e))
+        now = shared_state(ctx)                                # a test must leave the fixtures alone, whether it passed or not (17)
+        changed = [n for n, a, b in zip(("manifest", "lock", "tree"), ctx.shared, now) if a != b]
+        if "tree" in changed:
+            d = sorted(set(now[2]) ^ set(ctx.shared[2]))
+            changed[changed.index("tree")] = "tree: " + ", ".join(sorted(set(e[0] for e in d))[:6])
+        if changed:
+            print("FAIL %-26s %5.1fs the test changed the shared can: %s" % (t.__name__, time.time() - t0, ", ".join(changed)))
+            fails += 1
+            ctx.shared = now
     print("%d tests, %d failures" % (len(order), fails))
     if not a.keep and not fails:
         shutil.rmtree(ctx.work, ignore_errors=True)

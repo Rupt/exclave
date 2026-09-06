@@ -22,6 +22,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO, "cannery"))
+sys.path.insert(0, HERE)
 import build  # noqa: E402
 import cannery  # noqa: E402
 
@@ -47,13 +48,8 @@ def main():
     os.makedirs(work)
     can, sysroot_can = os.path.join(work, "gcc.can"), os.path.join(work, "sysroot.can")
     cannery_py = os.path.join(REPO, "cannery", "cannery.py")
-    shutil.copytree(a.can, can, symlinks=True, copy_function=cannery.link_or_copy)   # the tree is shared by hard links; .can/ is rewritten below
-    for f in os.listdir(os.path.join(can, ".can")):
-        p = os.path.join(can, ".can", f)
-        data = open(p, "rb").read()
-        os.remove(p)
-        open(p, "wb").write(data)
-        os.chmod(p, 0o755 if f == "opener" else 0o644)
+    from run import copy_can                                   # the harness's rule: the tree by hard links, .can/ copied
+    copy_can(a.can, can)
     rc, out, err = run([sys.executable, cannery_py, "unwrap", can])
     if rc:
         sys.exit("unwrap: " + out + err)
@@ -80,11 +76,14 @@ def main():
         sys.exit("compile against the sysroot: " + err)
     rc, out, err = run([os.path.join(can, "root", "usr", "bin", "objdump"), "-T", prog], cwd=work, env=env)
     versions = sorted(set(re.findall(r"GLIBC_([0-9.]+)", out)), key=lambda v: [int(x) for x in v.split(".")])
-    libc = glob.glob(os.path.join(sysroot_can, "root", "usr", "lib64", "libc-*.so")) + glob.glob(os.path.join(sysroot_can, "root", "lib64", "libc-*.so"))
-    have = re.search(r"libc-([0-9.]+)\.so", libc[0]).group(1) if libc else None
+    import elfcheck
+    gv = elfcheck.glibc_version(elfcheck.Tree(os.path.join(sysroot_can, "root")))   # the banner in libc.so.6, any glibc (review O5-7)
+    if gv is None:
+        sys.exit("cannot read the sysroot's glibc version from its libc.so.6")
+    have = "%d.%d" % gv
     print("symbol versions bound: %s; the sysroot's glibc: %s" % (" ".join(versions), have))
-    if have and versions and [int(x) for x in versions[-1].split(".")] > [int(x) for x in have.split(".")]:
-        sys.exit("the output binds a glibc newer than the sysroot's")
+    if not versions or [int(x) for x in versions[-1].split(".")] > [int(x) for x in have.split(".")]:
+        sys.exit("the output binds a glibc newer than the sysroot's, or none")
     rc, inside, err = run([os.path.join(can, "root", "usr", "bin", "sh"), "-c", prog], cwd=work, env=env)
     rc2, native, err2 = run([prog], cwd=work, env=env)
     print("inside the can: %r; on this host: %r" % (inside.strip(), native.strip()))

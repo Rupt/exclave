@@ -188,9 +188,11 @@ int is_wrapper_real(const char *real, char *tmp)
 {
     struct kstat st;
     if (sys_lstat(real, &st) < 0 || (st.st_mode & S_IFMT) != S_IFREG) return 0;
-    if (st.st_dev == C.opener_dev && st.st_ino == C.opener_ino) return 1;
-    if (st.st_size != C.opener_size) return 0;
-    return payload_of(real, tmp) && sys_lstat(tmp, &st) == 0;   /* a copy of the opener: real only if its payload exists */
+    if (st.st_dev != C.opener_dev || st.st_ino != C.opener_ino) {
+        if (st.st_size != C.opener_size) return 0;
+    }
+    return payload_of(real, tmp) && sys_lstat(tmp, &st) == 0;   /* the opener's inode or a copy: a wrapper only where its payload exists;
+                                                                    .can/opener itself is not one (review F5-2) */
 }
 int payload_of(const char *real, char *out)
 {

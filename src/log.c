@@ -60,12 +60,13 @@ void log_msg(const char *a, const char *b)
     SC3(NR_writev, C.logfd, io, 5);                          /* one write, no buffer: this runs on the handler's stack too */
 }
 
-void die(const char *what, const char *detail, long err)
+void die_status(int status, const char *what, const char *detail, long err)
 {
     outs(2, "opener: "); outs(2, what);
     if (detail) { outs(2, ": "); outs(2, detail); }
     if (err) { outs(2, ": "); outs(2, strerr(err)); }
     outs(2, "\n");
     log_msg("fatal", what);
-    sys_exit(127);
+    sys_exit(status);
 }
+void die(const char *what, const char *detail, long err) { die_status(127, what, detail, err); }

@@ -318,7 +318,7 @@ def static_check(can, own, data_prefixes=(), log=print):
             try:
                 head = open(pay, "rb").read(4)
             except PermissionError:
-                rep.warnings.append("unreadable file %s: not checked, and no copy of the can can carry it" % vpath)
+                rep.errors.append("unreadable file %s: chmod u+r it; no copy of the can can carry it and the tree hash needs it (10.3)" % vpath)
                 continue
             with open(pay, "rb") as f:
                 if head != b"\x7fELF":
@@ -441,8 +441,10 @@ def dynamic_check(can, logs, own, log=print):
     libs, cwds = set(), set()
     for what, r, path in build.log_lines(logs):
         rep.lines += 1
-        if what == "opener" and path.startswith("cwd "):
-            cwds.add(path[len("cwd claimed for the host "):] if path.startswith("cwd claimed for the host ") else path[4:])
+        if what == "opener" and path.startswith("cwd claimed for the host "):   # 8.1 rule 4 as the opener applied it; the plain
+            c = path[len("cwd claimed for the host "):]                           # "cwd" line is a diagnostic and claims nothing (review O5-4)
+            if c != "/":
+                cwds.add(c)
         if what == "open" and r >= 0 and re.search(r"\.so(\.\d+)*$", path):
             libs.add(path)
     for lib in sorted(libs):

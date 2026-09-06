@@ -167,6 +167,7 @@ void log_open(char **envp);
 void log_line(const char *what, long result, const char *path);
 void log_msg(const char *a, const char *b);
 __attribute__((noreturn)) void die(const char *what, const char *detail, long err);
+__attribute__((noreturn)) void die_status(int status, const char *what, const char *detail, long err);   /* 126 where a shell says so: found but not executable */
 
 /* ---------- manifest (manifest.c) ---------- */
 int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t errn);

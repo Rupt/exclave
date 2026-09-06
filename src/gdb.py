@@ -82,7 +82,7 @@ def _add(state, path, bias):
     if bias in state["loaded"] or not path:
         return
     state["loaded"].add(bias)
-    _quiet("add-symbol-file %s -o %#x" % (path, bias))
+    _quiet('add-symbol-file "%s" -o %#x' % (path.replace("\\", "\\\\").replace('"', '\\"'), bias))   # a can may live under a path with a space
 
 
 def _r_debug():
@@ -119,7 +119,7 @@ class _Reload(gdb.Breakpoint):
         self.state = state
 
     def stop(self):
-        _libraries(self.state)
+        _guarded(_libraries, self.state)
         return False
 
 
@@ -130,8 +130,16 @@ class _Entry(gdb.Breakpoint):
         self.state = state
 
     def stop(self):
-        _libraries(self.state)
+        _guarded(_libraries, self.state)
         return False
+
+
+def _guarded(fn, *args):
+    """A failure of this script must never stop the program: gdb stops on an exception in a breakpoint's stop."""
+    try:
+        fn(*args)
+    except (gdb.error, gdb.MemoryError, OSError, ValueError) as e:
+        gdb.write("cont-opener.py: %s\n" % e, gdb.STDERR)
 
 
 class _Hook(gdb.Breakpoint):
@@ -140,13 +148,16 @@ class _Hook(gdb.Breakpoint):
         super().__init__("cont_debug_hook", internal=True)
 
     def stop(self):
+        _guarded(self._hook)
+        return False
+
+    def _hook(self):
         state = {"root": _can_root(), "loaded": set(), "brk": None}
         _add(state, _path("cont_payload_path"), _var("cont_payload_base"))
         interp = _path("cont_interp_path")
         if interp:
             _add(state, interp, _var("cont_interp_base"))
         _Entry(_var("cont_payload_entry"), state)
-        return False
 
 
 def _arm():

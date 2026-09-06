@@ -230,10 +230,14 @@ def main():
             log(name, noexec)
             notes = (notes + "; " if notes else "") + noexec
             # 9: an output built inside the gcc can against an older glibc's sysroot (test/sysroot.py) runs natively here
-            rc, out = vm.ssh("test -x m/cont/build/sysroot-hello && { m/cont/build/sysroot-hello 2>&1 | head -1; echo sysroot-rc=$?; } || echo no-sysroot-hello; ldd --version 2>&1 | head -1", timeout=60)
+            rc, out = vm.ssh("if test -x m/cont/build/sysroot-hello; then o=$(m/cont/build/sysroot-hello 2>&1); r=$?; echo \"sysroot-rc=$r $o\"; else echo no-sysroot-hello; fi; "
+                             "ldd --version 2>&1 | head -1", timeout=60)
             sysroot = " ".join(l.strip() for l in out.splitlines() if l.strip())
-            log(name, "sysroot output:", sysroot)
-            notes += "; sysroot: " + sysroot
+            ok = "sysroot-rc=0 hello from a sysroot build" in sysroot or "no-sysroot-hello" in sysroot
+            log(name, "sysroot output:", sysroot, "" if ok else "FAIL")
+            notes += "; sysroot: " + sysroot + ("" if ok else " FAIL")
+            if not ok:
+                fails.append("FAIL sysroot output did not run natively: " + sysroot)
             oracle = ""
             rc, out = vm.ssh("cd m && bwrap --ro-bind / / true 2>&1 && echo bwrap-ok")
             if "bwrap-ok" in out:

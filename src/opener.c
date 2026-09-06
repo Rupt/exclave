@@ -147,11 +147,39 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
     die("cannot re-exec the opener", C.opener, r);
 }
 
+/* 7.4.5 for a target that arrived by CAN_EXEC, the positional entry's or a handler's: the checks exec_target makes before
+ * loading anything, in its order, so that the entry refuses what an exec inside refuses (review O5-1, F5-1): the target is
+ * resolved as an exec resolves it, a data prefix is EACCES, a directory or a special file EACCES, the kernel's own answer
+ * to X_OK is final, and a wrapper is exec'd as itself so that the kernel gives the program its identity (F5-9). The exit
+ * status is a shell's: 126 for a file that exists and cannot run, 127 for one that does not. */
+static void loader_mode_check(char **argv, char **env2)
+{
+    struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0); if (!S) die("out of memory", 0, ENOMEM);
+    scpy(S->b1, C.program, PATH_MAX);                         /* the target as given, for the wrapper exec below */
+    long r = canon(S, C.program, AT_FDCWD, 1, S->v); if (r < 0) die_status(r == -ENOENT ? 127 : 126, "cannot execute", C.program, r);
+    scpy(C.program, S->v, PATH_MAX);
+    if (vis_in_data(C.program)) die_status(126, "cannot execute", C.program, EACCES);   /* 6.2: a data prefix is never executed */
+    to_real_exec(C.program, S->real);
+    struct kstat st;
+    if (sys_stat(S->real, &st) < 0) die_status(127, "cannot execute", C.program, ENOENT);
+    if ((st.st_mode & S_IFMT) != S_IFREG) die_status(126, "cannot execute", C.program, EACCES);
+    long ok = sys_faccessat(AT_FDCWD, S->real, X_OK); if (ok < 0) die_status(126, "cannot execute", C.program, ok);
+    if (is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp)) {   /* a wrapper: the kernel runs the opener under the program's name,
+                                                                              * exec'd by the name the caller spelt, /bin/sh, so that comm is the
+                                                                              * kernel's answer for that name; the kernel follows the last link */
+        if (canon(S, S->b1, AT_FDCWD, 0, S->v2) < 0) scpy(S->v2, C.program, PATH_MAX);
+        to_real_exec(S->v2, S->b2);
+        long e = sys_execve(S->b2, argv, env2);
+        die("cannot exec the wrapper", C.program, e);
+    }
+    scratch_put(S);
+}
+
 /* 7.6: load the program at virtual path v; scripts go through their interpreter (kernel convention) */
-static __attribute__((noreturn)) void run(const char *v, long argc, char **argv, char **envp, unsigned long *auxv, int depth)
+static __attribute__((noreturn)) void run(const char *v, const char *given, long argc, char **argv, char **envp, unsigned long *auxv, int depth)
 {
     static char real[PATH_MAX], payload[PATH_MAX];
-    if (depth > 4) die("interpreter chain too deep", v, ELOOP);
+    if (depth > 4) die_status(126, "interpreter chain too deep", v, ELOOP);
     to_real_exec(v, real);
     if (is_wrapper_real(real, payload) && payload_of(real, payload)) scpy(real, payload, PATH_MAX);
     long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) die("cannot open program", v, fd);
@@ -164,15 +192,15 @@ static __attribute__((noreturn)) void run(const char *v, long argc, char **argv,
     long m = sys_mmap(0, ((size_t)cap * sizeof(char *) + 0xfff) & ~(size_t)0xfff, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m < 0 && m > -4096) die("out of memory", 0, ENOMEM);
     char **nargv = (char **)m; char *script = arena_alloc(PATH_MAX);       /* sized from argc, never from a fixed pool (F3-2) */
-    scpy(script, v, PATH_MAX);
+    scpy(script, given, PATH_MAX);                            /* the script's path as it was spelt, as the kernel passes it (7.4.5) */
     long k = shebang_argv(line, script, argv, argc, nargv, cap);
-    if (k == -1) die("not an executable", v, ENOEXEC);
-    if (k == -2) die("argument list too long", v, E2BIG);
+    if (k == -1) die_status(126, "not an executable", v, ENOEXEC);
+    if (k == -2) die_status(126, "argument list too long", v, E2BIG);
     struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0); if (!S) die("out of memory", 0, ENOMEM);
     char *iv = arena_alloc(PATH_MAX);
-    if (canon(S, nargv[0], AT_FDCWD, 1, iv) < 0) die("cannot resolve interpreter", nargv[0], 0);
+    if (canon(S, nargv[0], AT_FDCWD, 1, iv) < 0) die_status(127, "cannot resolve interpreter", nargv[0], 0);
     scratch_put(S);
-    run(iv, k, nargv, envp, auxv, depth + 1);
+    run(iv, nargv[0], k, nargv, envp, auxv, depth + 1);
 }
 
 void start_c(unsigned long *sp)
@@ -193,12 +221,16 @@ void start_c(unsigned long *sp)
     find_can(exe);
     read_manifest();
 
-    const char *target = find_env(envp, "CAN_EXEC");
-    if (target) {                                             /* the internal protocol of 7.4.5: re-exec'd by a handler, or by entry_exec below */
+    const char *target;
+    if (starts_dir(exe, C.root)) {                            /* a wrapper: the kernel ran the opener under the program's name. Decided first,
+                                                              * so that CAN_EXEC in anyone's environment is inert for the whole tree (review O5-3, F5-4) */
+        scpy(C.program, exe, PATH_MAX); from_real(C.program);
+        const char *fn = 0;                                   /* the path the kernel was given, as the kernel passes it to a script (7.4.5) */
+        for (long i = 0; auxv[i * 2] != AT_NULL; i++) if (auxv[i * 2] == AT_EXECFN) fn = (const char *)auxv[i * 2 + 1];
+        scpy(C.execfn, fn ? fn : C.program, PATH_MAX); if (fn) from_real(C.execfn);
+    } else if ((target = find_env(envp, "CAN_EXEC"))) {       /* the internal protocol of 7.4.5: re-exec'd by a handler, or by entry_exec below */
         if (target[0] != '/') die("CAN_EXEC must be an absolute path", target, 0);
-        C.loader_mode = 1; scpy(C.program, target, PATH_MAX); scpy(C.execfn, target, PATH_MAX);
-    } else if (starts_dir(exe, C.root)) {                     /* a wrapper: the kernel ran the opener under the program's name */
-        scpy(C.program, exe, PATH_MAX); from_real(C.program); scpy(C.execfn, C.program, PATH_MAX);
+        C.loader_mode = 1; scpy(C.program, target, PATH_MAX); scpy(C.execfn, argv[0] ? argv[0] : target, PATH_MAX);
     } else {
         entry_exec(argc, argv, envp);                          /* the opener run by hand: .can/opener PROGRAM ARGS... */
     }
@@ -207,14 +239,10 @@ void start_c(unsigned long *sp)
     C.boundary = have == 0;
     char **env2 = env_prepare(envp, C.boundary);
     vis_init();
-    if (C.loader_mode) {                                      /* the target as given may spell the program through symlinks, /bin/sh: resolve it as an exec would */
-        struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0); if (!S) die("out of memory", 0, ENOMEM);
-        long r = canon(S, C.program, AT_FDCWD, 1, S->v); if (r < 0) die("cannot open program", C.program, r);
-        scpy(C.program, S->v, PATH_MAX); scratch_put(S);
-    }
+    if (C.loader_mode) loader_mode_check(argv, env2);
     C.text_lo = (unsigned long)__ehdr_start; C.text_hi = (unsigned long)_etext;
     handler_install();
     if (have < FILTER_VERSION) filter_install();
     log_msg(C.boundary ? "boundary" : "inside", C.program);
-    run(C.program, argc, argv, env2, auxv, 0);
+    run(C.program, C.execfn, argc, argv, env2, auxv, 0);
 }

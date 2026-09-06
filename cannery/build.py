@@ -1,6 +1,7 @@
 """build.py — extraction, synthesis, placeholders, the dependency report, pruning and the lockfile
 (PROPOSAL.md 10.1, 10.4, 6.4).
 """
+import glob
 import hashlib
 import os
 import re
@@ -161,10 +162,17 @@ def _v(root, vpath):
     return os.path.join(root, vpath.lstrip("/"))
 
 
-def _link(root, link, target, log):
+def _link(root, link, target, log, replace=False):
+    """A link at a virtual path. With replace, as alternatives --install does, a file or link standing there gives
+    way (Fedora's binutils ships gold at /usr/bin/ld and removes it in %post before installing the alternative,
+    review F5-5); a directory never does."""
     p = _v(root, link)
     if os.path.lexists(p):
-        return
+        if not replace or (os.path.isdir(p) and not os.path.islink(p)):
+            return
+        if os.path.islink(p) and os.readlink(p) == target:
+            return
+        os.remove(p)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     os.symlink(target, p)
     log("synthesised %s -> %s" % (link, target))
@@ -185,12 +193,12 @@ def synthesise(root, debs, log=print):
             groups.setdefault(gname, []).append((prio, link, target, slaves))
     for gname, cands in groups.items():
         prio, link, target, slaves = max(cands)
-        _link(root, "/etc/alternatives/" + gname, target, log)
-        _link(root, link, "/etc/alternatives/" + gname, log)
+        _link(root, "/etc/alternatives/" + gname, target, log, replace=True)
+        _link(root, link, "/etc/alternatives/" + gname, log, replace=True)
         for slink, sname, starget in slaves:
             if os.path.lexists(_v(root, starget)):
-                _link(root, "/etc/alternatives/" + sname, starget, log)
-                _link(root, slink, "/etc/alternatives/" + sname, log)
+                _link(root, "/etc/alternatives/" + sname, starget, log, replace=True)
+                _link(root, slink, "/etc/alternatives/" + sname, log, replace=True)
     # busybox (Alpine): the applet links are made by its post-install from the paths it ships in
     # /etc/busybox-paths.d, one path per line, each a link to /bin/busybox. The links are relative, as
     # dash's /bin/sh below is, so that a link run from outside the can reaches the wrapper in the tree and
@@ -242,6 +250,30 @@ def synthesise(root, debs, log=print):
         with open(_v(root, "/etc/ssl/certs/ca-certificates.crt"), "wb") as f:
             f.writelines(certs)
         log("synthesised /etc/ssl/certs/ca-certificates.crt from %d certificates" % len(certs))
+    # ca-certificates (Fedora, RHEL): the consumers' paths are links to /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem,
+    # which update-ca-trust extracts in %post from the p11-kit trust source; the CA anchors trusted there are
+    # concatenated the same way (review F5-6). The bundle is an identity file (8.4): the host's where it has one.
+    extracted = _v(root, "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem")
+    sources = sorted(glob.glob(_v(root, "/usr/share/pki/ca-trust-source/*.p11-kit")) + glob.glob(_v(root, "/etc/pki/ca-trust/source/anchors/*")))
+    if sources and not os.path.lexists(extracted):
+        certs = []
+        for src in sources:
+            text = open(src, encoding="utf-8", errors="replace").read()
+            if "[p11-kit-object-v1]" not in text:
+                if "-----BEGIN CERTIFICATE-----" in text:
+                    certs.append(text.strip() + "\n")
+                continue
+            for obj in text.split("[p11-kit-object-v1]")[1:]:          # a certificate object: trust attributes, then its PEM
+                head = obj.split("-----BEGIN", 1)[0]
+                if "trusted: true" not in head or "x-distrusted: true" in head:
+                    continue
+                m = re.search(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", obj, re.S)
+                if m and m.group(0) + "\n" not in certs:            # one object per purpose in the source: one PEM in the bundle
+                    certs.append(m.group(0) + "\n")
+        os.makedirs(os.path.dirname(extracted), exist_ok=True)
+        with open(extracted, "w", encoding="utf-8") as f:
+            f.writelines(certs)
+        log("synthesised /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem from %d trusted certificates" % len(certs))
     # libssl: OpenSSL's compiled-in trust paths are /usr/lib/ssl/cert.pem and /usr/lib/ssl/certs, symlinks the
     # openssl and ca-certificates packages ship and a library's closure lacks; without them the host's bundle
     # at the identity path (8.4) is never consulted
