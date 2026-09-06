@@ -74,6 +74,29 @@ def expect(cond, msg):
         raise AssertionError(msg)
 
 
+def copy_can(src, dst):
+    """A copy of a can for a test to alter: the tree's files are hard-linked, the files under .can/ are copied,
+    since a manifest or lock written through a hard link would change the shared can's (tests are independent)."""
+    shutil.copytree(src, dst, symlinks=True, copy_function=cannery.link_or_copy)
+    for name in os.listdir(os.path.join(dst, ".can")):
+        p = os.path.join(dst, ".can", name)
+        if os.path.isfile(p) and not os.path.islink(p):
+            data = open(p, "rb").read()
+            mode = os.stat(p).st_mode
+            os.remove(p)
+            with open(p, "wb") as f:
+                f.write(data)
+            os.chmod(p, mode)
+
+
+def shared_state(ctx):
+    """What every test shares and none may change: the can's manifest, its lock, its top level and the names in
+    its /usr/bin, cheap enough to compare after every test."""
+    can = ctx.can
+    return (open(os.path.join(can, ".can", "manifest"), "rb").read(), open(os.path.join(can, ".can", "lock"), "rb").read() if os.path.exists(os.path.join(can, ".can", "lock")) else b"",
+            tuple(sorted(os.listdir(ctx.root))), len(os.listdir(os.path.join(ctx.root, "usr", "bin"))))
+
+
 def hello_source(ctx):
     """hello.c in the work directory: a fixture any test may make, made once."""
     src = os.path.join(ctx.work, "hello.c")
@@ -443,7 +466,7 @@ def cross_can_distinct_openers(ctx):
     """7.4.5: a program in another can, whose opener is a different file, is exec'd as that opener, which
     then serves its own tree inside the first can's filter (the dogfooding case of 10.5)."""
     can2 = os.path.join(ctx.work, "can2")
-    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    copy_can(ctx.can, can2)
     padded = os.path.join(ctx.work, "opener2")
     with open(padded, "wb") as f:
         f.write(open(ctx.opener, "rb").read() + b"\0" * 64)   # a different file of a different size, still the opener
@@ -478,7 +501,7 @@ def nested_older_opener(ctx):
     rc, outer, err = run([wrapper(ctx, "sh"), "-c", prog], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and outer == kernel, "inside the current opener the kernel's answer comes back: kernel %r can %r %r" % (kernel, outer, err))
     can2 = os.path.join(ctx.work, "old-can")
-    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    copy_can(ctx.can, can2)
     cannery.cmd_reopen(can2, old)
     log = os.path.join(ctx.work, "nested-old.log")
     rc, inner, err = run([wrapper(ctx, "sh"), "-c", "%s/root/usr/bin/sh -c %s" % (can2, prog)], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log))
@@ -888,14 +911,14 @@ def wrap_refusals(ctx):
     rc, o, e = run([sys.executable, cannery_py, "wrap", g])
     expect(rc != 0 and "40 host records" in o + e, "40 host records must be refused: " + (o + e)[-300:])
     can2 = os.path.join(ctx.work, "hosts30.can")
-    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    copy_can(ctx.can, can2)
     with open(os.path.join(can2, ".can", "manifest"), "wb") as f:
         f.write(b"can 1\n\n" + b"".join(b'host "/hostpath%03d"\n' % i for i in range(30)))
     rc, out, err = run([os.path.join(can2, "root", "usr", "bin", "cat"), "/etc/hosts"], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and out == open("/etc/hosts").read(), "30 host records leave the identity files the host's: %r %r" % (out[:80], err))
     # O4-1, O4-3: a data prefix is neither wrapped nor executed
     dp = os.path.join(ctx.work, "data.can")
-    shutil.copytree(ctx.can, dp, symlinks=True, copy_function=cannery.link_or_copy)
+    copy_can(ctx.can, dp)
     sys_ = os.path.join(dp, "root", "opt", "sysroot", "bin")
     os.makedirs(sys_)
     with open(os.path.join(sys_, "true"), "wb") as f:
@@ -916,7 +939,7 @@ def ownership_fails_closed(ctx):
     """8.1: a top-level directory the opener cannot list is the can's, not a placeholder (O4-8 B, F4-4); a spawn with
     no descriptor to spare fails loudly instead of running on the host (O4-8 A)."""
     can2 = os.path.join(ctx.work, "perm.can")
-    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    copy_can(ctx.can, can2)
     secret = os.path.join(can2, "root", "secret")
     os.makedirs(secret)
     with open(os.path.join(secret, "file"), "w") as f:
@@ -958,7 +981,7 @@ def log_names_and_escapes(ctx):
     text = open(log).read()
     expect("open -2 /usr/share/no/such/file" in text, "a failed intermediate component must be logged by name: " + text[-300:])
     can2 = os.path.join(ctx.work, "odd.can")
-    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    copy_can(ctx.can, can2)
     odd = os.path.join(can2, "root", "usr", "share", "odd")
     os.makedirs(odd)
     for name in ("with\nnewline", "back\\slash"):
@@ -988,7 +1011,7 @@ def ownership_from_tree(ctx):
     """8.1: the ownership set is read from the tree at startup, so a file added under a placeholder makes the
     directory the can's with nothing to refresh; an empty placeholder stays the host's."""
     can2 = os.path.join(ctx.work, "own.can")
-    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    copy_can(ctx.can, can2)
     sh = os.path.join(can2, "root", "usr", "bin", "sh")
     rc, out, err = run([sh, "-c", "cat /opt/cont-probe 2>&1; ls /srv"], cwd=ctx.work, env=ctx.env)
     expect("No such file" in out, "before: /opt is the host's, the probe does not exist there: %r" % out)
@@ -1047,7 +1070,7 @@ def prune_and_check_with_logs(ctx):
     rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", ctx.can, log])
     expect(rc == 0 and "0 errors" in out and "dynamic check:" in out and "log lines" in out, "check with a log: " + out[-500:] + err)
     can2 = os.path.join(ctx.work, "pruned.can")
-    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    copy_can(ctx.can, can2)
     before = sum(1 for _ in cannery.walk_files(os.path.join(can2, "root")))
     rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "prune", can2, log])
     expect(rc == 0 and "pruned" in out, "prune: " + out + err)
@@ -1352,6 +1375,7 @@ def main():
     t0 = time.time()
     make_can(ctx)
     compile_progs(ctx)
+    ctx.shared = shared_state(ctx)
     print("can made and programs compiled in %.1fs" % (time.time() - t0))
     fails = 0
     order = [t for t in TESTS if not a.k or a.k in t.__name__]
@@ -1367,6 +1391,12 @@ def main():
         try:
             note = t(ctx)
             print("PASS %-26s %5.1fs %s" % (t.__name__, time.time() - t0, note or ""))
+            now = shared_state(ctx)                            # a test must leave the fixtures alone (tests are independent)
+            changed = [n for n, a, b in zip(("manifest", "lock", "top level", "/usr/bin"), ctx.shared, now) if a != b]
+            if changed:
+                print("FAIL %-26s %5.1fs the test changed the shared can: %s" % (t.__name__, time.time() - t0, ", ".join(changed)))
+                fails += 1
+                ctx.shared = shared_state(ctx)
         except AssertionError as e:
             fails += 1
             print("FAIL %-26s %5.1fs %s" % (t.__name__, time.time() - t0, str(e).strip().replace("\n", "\n     ")))

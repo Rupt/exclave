@@ -430,10 +430,10 @@ def dynamic_check(can, logs, own, log=print):
         if what == "open" and r >= 0 and re.search(r"\.so(\.\d+)*$", path):
             libs.add(path)
     for lib in sorted(libs):
-        if any(lib == o or lib.startswith(o.rstrip("/") + "/") for o in own):
+        if any(lib.startswith(c.rstrip("/") + "/") for c in cwds):   # the workload's own build directory (review F4-10): the
+            rep.warnings.append("library opened under the workload's working directory, its own output presumably: " + lib)   # host's by 8.1 rule 4, whatever prefix it lies under
+        elif any(lib == o or lib.startswith(o.rstrip("/") + "/") for o in own):
             continue
-        if any(lib.startswith(c.rstrip("/") + "/") for c in cwds):   # the workload's own build directory (review F4-10)
-            rep.warnings.append("library opened under the workload's working directory, its own output presumably: " + lib)
         else:
             rep.errors.append("library opened on the host: " + lib)
     tree = Tree(os.path.join(can, "root"))
