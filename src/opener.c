@@ -1,7 +1,7 @@
 /* opener.c — entry point (PROPOSAL.md 7.2, 7.6, 9).
  *
  * The opener is an ET_DYN object with no interpreter: it relocates itself,
- * finds its can from its own path, reads the index, decides whether it is the
+ * finds its can from its own path, reads the manifest, decides whether it is the
  * can boundary (no filter inherited) and prepares the environment
  * accordingly, installs the handler and, at the boundary, the filter, then
  * loads the program it stands for: the payload of the wrapper it was run as,
@@ -56,8 +56,9 @@ static const char *find_env(char **envp, const char *name)
     return 0;
 }
 
-/* 9: at the boundary the host's environment passes through minus the variables that would rebind
- * the loader, the libc or the compiler to the host; env records are applied; PATH is always set. */
+/* 6.2: at the boundary the host's environment passes through minus the variables that would rebind
+ * the loader, the libc or the compiler to the host; PATH is the can's, always the same: what a can wants
+ * on it lives in its own /usr/local/bin. */
 static const char *denied[] = { "GLIBC_TUNABLES", "GCONV_PATH", "LOCPATH", "NLSPATH", "RESOLV_HOST_CONF", "HOSTALIASES",
                                 "TZDIR", "GCC_EXEC_PREFIX", "COMPILER_PATH", "LIBRARY_PATH", 0 };
 static int env_denied(const char *e)
@@ -69,22 +70,12 @@ static int env_denied(const char *e)
 static char **env_prepare(char **envp, int boundary)
 {
     long n = 0; while (envp[n]) n++;
-    char **out = arena_alloc((size_t)(n + C.nenv + 2) * sizeof(char *)); long k = 0;
+    char **out = arena_alloc((size_t)(n + 2) * sizeof(char *)); long k = 0;
     for (long i = 0; i < n; i++) {
         if (boundary ? env_denied(envp[i]) : xstarts(envp[i], "CAN_EXEC=")) continue;
         out[k++] = envp[i];
     }
-    if (boundary) {
-        for (int i = 0; i < C.nenv; i++) {
-            const char *eq = xstrchr(C.envset[i], '='); size_t l = (size_t)(eq - C.envset[i]); long j;
-            for (j = 0; j < k; j++) if (xstrncmp(out[j], C.envset[i], l) == 0 && out[j][l] == '=') break;
-            out[j] = (char *)C.envset[i]; if (j == k) k++;
-        }
-        if (!find_env(out, "PATH") || 1) {
-            long j; for (j = 0; j < k; j++) if (xstarts(out[j], "PATH=")) break;
-            if (j == k) out[k++] = (char *)arena_str("PATH=/usr/local/bin:/usr/bin:/bin", 33);   /* writable: bash writes into its environment strings (F3-23) */
-        }
-    }
+    if (boundary) out[k++] = (char *)arena_str("PATH=/usr/local/bin:/usr/bin:/bin", 33);   /* writable: bash writes into its environment strings (F3-23) */
     out[k] = 0;
     return out;
 }
@@ -95,7 +86,7 @@ static void find_can(const char *exe)
     for (;;) {
         char *s = xstrrchr(d, '/'); if (!s || s == d) die("not inside a can", exe, 0);
         *s = 0;
-        char p[PATH_MAX]; scpy(p, d, PATH_MAX); scat(p, "/.can/index", PATH_MAX);
+        char p[PATH_MAX]; scpy(p, d, PATH_MAX); scat(p, "/.can/manifest", PATH_MAX);
         struct kstat st;
         if (sys_stat(p, &st) == 0) break;
     }
@@ -109,19 +100,18 @@ static void find_can(const char *exe)
     C.root_dev = st.st_dev; C.root_ino = st.st_ino;
 }
 
-static void read_index(void)
+static void read_manifest(void)
 {
-    char p[PATH_MAX]; scpy(p, C.dir, PATH_MAX); scat(p, "/.can/index", PATH_MAX);
-    long fd = sys_open(p, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) die("cannot open index", p, fd);
-    struct kstat st; if (SC2(NR_fstat, fd, &st) < 0) die("cannot stat index", p, 0);
-    if (st.st_size == 0) die("index is empty", p, 0);
+    char p[PATH_MAX]; scpy(p, C.dir, PATH_MAX); scat(p, "/.can/manifest", PATH_MAX);
+    long fd = sys_open(p, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) die("cannot open manifest", p, fd);
+    struct kstat st; if (SC2(NR_fstat, fd, &st) < 0) die("cannot stat manifest", p, 0);
+    if (st.st_size == 0) die("manifest is empty", p, 0);
     long m = sys_mmap(0, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, (int)fd, 0);
-    if (m < 0 && m > -4096) die("cannot map index", p, m);
+    if (m < 0 && m > -4096) die("cannot map manifest", p, m);
     sys_close((int)fd);
     char err[256];
-    if (index_parse((const char *)m, (size_t)st.st_size, &C, err, sizeof err) < 0) die("bad index", err, 0);
+    if (manifest_parse((const char *)m, (size_t)st.st_size, &C, err, sizeof err) < 0) die("bad manifest", err, 0);
     SC2(NR_munmap, m, st.st_size);
-    if (xstrcmp(C.arch, ARCH_NAME) != 0) die("can is for another architecture", C.arch, 0);
     int ok = isa_supported(C.isa);
     if (ok < 0) die("can names an ISA level this opener does not know", C.isa, 0);
     if (ok == 0) die("this CPU lacks the can's ISA level", C.isa, 0);
@@ -171,7 +161,7 @@ void start_c(unsigned long *sp)
     long n = sys_readlink("/proc/self/exe", exe, PATH_MAX - 1); if (n < 0) die("cannot read /proc/self/exe", 0, n);
     exe[n] = 0;
     find_can(exe);
-    read_index();
+    read_manifest();
 
     const char *target = find_env(envp, "CAN_EXEC");
     if (target) {

@@ -1,5 +1,5 @@
-"""build.py — extraction, synthesis, placeholders, lockfile and the from-packages orchestration
-(PROPOSAL.md 10.1 steps 3 to 7, 6.4).
+"""build.py — extraction, synthesis, placeholders, the dependency report, pruning and the lockfile
+(PROPOSAL.md 10.1, 10.4, 6.4).
 """
 import hashlib
 import os
@@ -7,7 +7,6 @@ import re
 import shutil
 import stat
 import subprocess
-import sys
 import tarfile
 
 import deb
@@ -15,7 +14,7 @@ import deb
 CANNERY_VERSION = "0.1.0"
 MERGED_USR = ["bin", "sbin", "lib", "lib32", "lib64", "libx32"]
 # 8.1 / 6.1: volatile directories stripped, conventional host names shipped empty
-PLACEHOLDERS = ["proc", "dev", "sys", "tmp", "run", "var/tmp", "home", "root", "mnt", "media", "opt", "srv"]
+PLACEHOLDERS = ["proc", "dev", "sys", "tmp", "run", "var/tmp", "home", "root", "boot", "mnt", "media", "opt", "srv"]
 VOLATILE = ["proc", "dev", "sys", "tmp", "run", "var/tmp"]
 
 
@@ -209,45 +208,19 @@ def synthesise(root, debs, log=print):
         log("libc-bin present but no static ldconfig found; no ld.so.cache")
 
 
-def synthesise_in_can(can, debs, log=print):
-    """Synthesis steps that run canned programs, after wrapping: python compileall. The tree is read-only from
-    inside the can, so the bytecode goes to a host directory through PYTHONPYCACHEPREFIX and is moved in."""
-    import tempfile
-    root = os.path.join(can, "root")
-    done = set()
-    for name, _, _ in debs:
-        m = re.search(r"python(3\.\d+)-minimal$", name)
-        if not m or m.group(1) in done:
-            continue
-        ver = m.group(1)
-        done.add(ver)
-        py = os.path.join(root, "usr", "bin", "python" + ver)
-        if not os.path.exists(py):
-            continue
-        with tempfile.TemporaryDirectory(prefix="cont-pyc-") as tmp:
-            r = subprocess.run([py, "-m", "compileall", "-q", "/usr/lib/python" + ver], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               env={"PATH": "/usr/bin:/bin", "PYTHONPYCACHEPREFIX": tmp}, cwd=tmp)
-            n = 0
-            for dirpath, dirnames, filenames in os.walk(tmp):
-                for f in filenames:
-                    src = os.path.join(dirpath, f)
-                    dst = os.path.join(root, os.path.relpath(src, tmp))
-                    os.makedirs(os.path.dirname(dst), exist_ok=True)
-                    shutil.move(src, dst)
-                    n += 1
-            log("compileall python%s: %s, %d files" % (ver, "ok" if r.returncode == 0 else r.stderr.decode(errors="replace")[-300:], n))
-
-
 # ---------------------------------------------------------------- placeholders (step 5)
 IDENTITY_FILES = ["/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf", "/etc/localtime", "/etc/resolv.conf", "/etc/hosts",
                   "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]
 
 
-def placeholders(root, log=print):
-    for d in VOLATILE:
-        p = os.path.join(root, d)
-        if os.path.lexists(p) and not os.path.islink(p):
-            shutil.rmtree(p)
+def placeholders(root, strip=True, log=print):
+    """8.1: the conventional names as empty directories and the identity files as empty files, where the
+    tree lacks them; with strip, the volatile directories are emptied first (unpack does, wrap does not)."""
+    if strip:
+        for d in VOLATILE:
+            p = os.path.join(root, d)
+            if os.path.lexists(p) and not os.path.islink(p):
+                shutil.rmtree(p)
     for d in PLACEHOLDERS:
         p = os.path.join(root, d)
         if not os.path.lexists(p):
@@ -267,11 +240,16 @@ def _payload(real):
 
 
 def tree_hash(root):
-    """BLAKE2b-256 of the serialised listing of 6.4: payloads in place of wrappers, .real/ excluded."""
+    """BLAKE2b-256 of the serialised listing of 6.4: payloads in place of wrappers, .real/ excluded, except
+    that a payload without a wrapper is hashed under its own name so that nothing is ever invisible
+    (review F4-5, O4-11)."""
     entries = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d != ".real")
-        for name in dirnames + filenames:
+        strays = []
+        if os.path.isdir(os.path.join(dirpath, ".real")):
+            strays = [os.path.join(".real", n) for n in sorted(os.listdir(os.path.join(dirpath, ".real"))) if not os.path.lexists(os.path.join(dirpath, n))]
+        for name in dirnames + filenames + strays:
             real = os.path.join(dirpath, name)
             rel = os.path.relpath(real, root).encode("utf-8", "surrogateescape")
             st = os.lstat(real)
@@ -290,21 +268,178 @@ def tree_hash(root):
     return "b2:" + hashlib.blake2b(b"".join(entries), digest_size=32).hexdigest()
 
 
-def write_lock(can, source, pkgs, recipes=(), modified=0):
-    """pkgs: [(name, version, b2)]. source: list of strings."""
+def write_lock(can, pkgs, manifest_hash=None, tree=False, keep_hashes=False):
+    """6.4: the lock is a record of inputs and output. pkgs: [(name, version, arch, b2)], or None to keep the
+    pkg records of the lock already there. The closing step writes the opener, manifest and tree hashes;
+    keep_hashes rewrites them from the can as it stands (after prune or reopen); otherwise they are dropped
+    (after unwrap: an open can has no output yet)."""
     import cannery
     R = cannery.Record
-    recs = [R("lock", [("t", b"1")]), R("cannery", [("s", CANNERY_VERSION.encode())]), R("source", [("s", s.encode()) for s in source])]
-    for name, ver, h in sorted(pkgs):
-        recs.append(R("pkg", [("s", name.encode()), ("s", ver.encode()), ("s", h.encode())]))
-    for path, h in recipes:
-        recs.append(R("recipe", [("s", path.encode()), ("s", h.encode())]))
-    recs.append(R("tree", [("s", tree_hash(os.path.join(can, "root")).encode())]))
-    recs.append(R("modified", [("t", str(modified).encode())]))
+    lock = os.path.join(can, ".can", "lock")
+    old = cannery.load(lock, "lock") if os.path.exists(lock) else []
+    if pkgs is None:
+        pkgs = [tuple(f.decode("utf-8", "surrogateescape") for f in v) for v in cannery.values(old, "pkg")]
+    if keep_hashes:
+        m = cannery.values(old, "manifest")
+        manifest_hash, tree = (m[0][0].decode() if m else None), bool(cannery.values(old, "tree"))
+    recs = [R("lock", [("t", b"1")]), R("cannery", [("s", CANNERY_VERSION.encode())])]
+    if manifest_hash or tree:
+        recs.append(R("opener", [("s", cannery.b2_file(os.path.join(can, ".can", "opener")).encode())]))
+    for name, ver, arch, h in sorted(pkgs):
+        recs.append(R("pkg", [("s", name.encode()), ("s", ver.encode()), ("s", arch.encode()), ("s", h.encode())]))
+    if manifest_hash:
+        recs.append(R("manifest", [("s", manifest_hash.encode())]))
+    if tree:
+        recs.append(R("tree", [("s", tree_hash(os.path.join(can, "root")).encode())]))
     data = cannery.dump(recs, "lock")
     cannery.parse(data, "lock")
-    with open(os.path.join(can, ".can", "lock"), "wb") as f:
+    with open(lock, "wb") as f:
         f.write(data)
+
+
+# ---------------------------------------------------------------- the dependency report (10.1)
+def dependency_report(pkgs):
+    """pkgs: [(name, control fields)]. Lines naming every Depends or Pre-Depends the set does not satisfy,
+    with Provides and version constraints honoured. A report, not a refusal: the set is the user's."""
+    have = {n: f.get("Version", "") for n, f in pkgs}
+    provides = {}
+    for n, f in pkgs:
+        for alts in deb.parse_deps(f.get("Provides", "")):
+            for name, op, ver in alts:
+                provides.setdefault(name, []).append(ver if op == "=" else None)
+    out = []
+    for n, f in sorted(pkgs):
+        for field in ("Pre-Depends", "Depends"):
+            for alts in deb.parse_deps(f.get(field, "")):
+                ok = False
+                for name, op, ver in alts:
+                    if name in have and deb.satisfies(have[name], op, ver):
+                        ok = True
+                    elif name in provides and any(op is None or (pv and deb.satisfies(pv, op, ver)) for pv in provides[name]):
+                        ok = True
+                if not ok:
+                    want = " | ".join(a[0] + (" (%s %s)" % (a[1], a[2]) if a[1] else "") for a in alts)
+                    out.append("%s needs %s, not in the set" % (n, want))
+    return out
+
+
+# ---------------------------------------------------------------- CAN_LOG as an input (10.3, 10.4)
+def log_lines(logs):
+    """Yield (what, result, path) from CAN_LOG files; the path's \\n and \\\\ escapes undone (6.2)."""
+    for lp in logs:
+        for line in open(lp, encoding="utf-8", errors="surrogateescape"):
+            parts = line.rstrip("\n").split(" ", 2)
+            if len(parts) != 3:
+                continue
+            try:
+                r = int(parts[1])
+            except ValueError:
+                continue
+            yield parts[0], r, parts[2].replace("\\n", "\n").replace("\\\\", "\\")
+
+
+# ---------------------------------------------------------------- pruning (10.4)
+def _resolve_keep(root, vpath, keep, hops=0):
+    """Walk vpath in the tree, adding every symlink met to keep; returns the final virtual path, or None."""
+    cur = ""
+    parts = [p for p in vpath.split("/") if p]
+    while parts:
+        comp = parts.pop(0)
+        if comp == ".":
+            continue
+        if comp == "..":
+            cur = cur.rsplit("/", 1)[0] if "/" in cur else ""
+            continue
+        cand = cur + "/" + comp
+        real = os.path.join(root, cand.lstrip("/"))
+        if os.path.islink(real):
+            if hops > 40:
+                return None
+            hops += 1
+            keep.add(cand)
+            t = os.readlink(real)
+            parts = [p for p in t.split("/") if p] + parts
+            cur = "" if t.startswith("/") else cur
+            continue
+        if not os.path.lexists(real):
+            return None
+        cur = cand
+    return cur or "/"
+
+
+def prune(can, logs, own, log=print):
+    """Keep what the logged workloads touched, whole directories they opened, the symlink chains that reach
+    kept files, the libraries kept ELF files need, and the placeholders; drop every other file and symlink.
+    Directories are never removed, so ownership and `ls` do not change. Returns (kept, removed, bytes)."""
+    import cannery
+    import elfcheck
+    root = os.path.join(can, "root")
+    keep, whole, programs = set(), set(), 0
+    for what, r, v in log_lines(logs):
+        if what == "opener" or not v.startswith("/") or r < 0:
+            continue
+        if elfcheck.host_owned(v, own):
+            continue
+        final = _resolve_keep(root, v, keep)
+        if final is None:
+            continue
+        real = os.path.join(root, final.lstrip("/"))
+        if os.path.isdir(real):
+            if what == "open":                                # a directory a program opened may be listed: keep it whole
+                whole.add(final)
+        else:
+            keep.add(final)
+            if what in ("exec", "load"):
+                programs += 1
+    if not programs:                                          # an empty, foreign or failed log would empty the can (review O4-4, F4-11)
+        raise BuildError("the logs name no program in this can; nothing to prune to")
+    for f in IDENTITY_FILES + ["/etc/ld.so.cache"]:
+        if os.path.lexists(_v(root, f)):
+            keep.add(f)
+    for d in whole:
+        for dirpath, dirnames, filenames in os.walk(_v(root, d)):
+            for name in filenames + [x for x in dirnames if os.path.islink(os.path.join(dirpath, x))]:
+                keep.add("/" + os.path.relpath(os.path.join(dirpath, name), root))
+    # the libraries every kept ELF needs, by the loader's own search (10.3)
+    tree = elfcheck.Tree(root)
+    elfs = []
+    for v in sorted(keep):
+        real = os.path.join(root, v.lstrip("/"))
+        if os.path.isfile(real) and not os.path.islink(real) and "/.real/" not in v:
+            with open(tree.payload(v), "rb") as f:
+                if f.read(4) == b"\x7fELF":
+                    elfs.append(v)
+    for lib in elfcheck.needed_closure(tree, elfs, own):
+        final = _resolve_keep(root, lib, keep)                 # the chain of links, then the file they reach
+        if final:
+            keep.add(final)
+    # the log names canonical paths, so every alias a program used is a symlink to keep: every symlink in
+    # the tree that reaches a kept file, or a directory, stays with its chain; the rest go
+    for real, v, st in cannery.walk_files(root):
+        if not stat.S_ISLNK(st.st_mode) or v in keep:
+            continue
+        chain = set()
+        final = _resolve_keep(root, v, chain)
+        if final and (final in keep or os.path.isdir(os.path.join(root, final.lstrip("/")))):
+            keep |= chain
+            keep.add(v)
+    kept = removed = freed = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        in_real = os.path.basename(dirpath) == ".real"
+        for name in filenames + [x for x in dirnames if os.path.islink(os.path.join(dirpath, x))]:
+            real = os.path.join(dirpath, name)
+            v = "/" + os.path.relpath(real, root)
+            w = "/" + os.path.relpath(os.path.join(os.path.dirname(dirpath), name), root) if in_real else v
+            if w in keep:
+                kept += 1
+                continue
+            st = os.lstat(real)
+            is_wrap = not in_real and os.path.exists(os.path.join(dirpath, ".real", name))
+            if stat.S_ISREG(st.st_mode) and not is_wrap:      # payloads and plain files; a wrapper is a link to the opener (review O4-15)
+                freed += st.st_size
+            os.remove(real)
+            removed += 1
+    return kept, removed, freed
 
 
 def unwrap(can, log=print):

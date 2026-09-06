@@ -30,14 +30,28 @@ static int log_ok(void)
     return 1;
 }
 
-/* one line, one write: "<what> <result> <path>\n"; atomic under O_APPEND */
+/* one line, one write: "<what> <result> <path>\n"; atomic under O_APPEND. A path may hold any byte: a newline is
+ * written as \n and a backslash as \\, the two escapes the cannery undoes when it reads a log (review O4-5); the
+ * escaped pieces go out as iovecs, no buffer, since this runs on the handler's stack */
 void log_line(const char *what, long result, const char *path)
 {
     if (!log_ok()) return;
     char n[24]; ltoa_(result, n);
     if (!path) path = "-";
-    struct iovec io[6] = { { (void *)what, xstrlen(what) }, { " ", 1 }, { n, xstrlen(n) }, { " ", 1 }, { (void *)path, xstrlen(path) }, { "\n", 1 } };
-    SC3(NR_writev, C.logfd, io, 6);
+    struct iovec io[12]; int k = 0;
+    io[k++] = (struct iovec){ (void *)what, xstrlen(what) }; io[k++] = (struct iovec){ " ", 1 };
+    io[k++] = (struct iovec){ n, xstrlen(n) }; io[k++] = (struct iovec){ " ", 1 };
+    const char *seg = path;
+    for (const char *p = path;; p++) {
+        if (*p && *p != '\n' && *p != '\\') continue;
+        if (p > seg) io[k++] = (struct iovec){ (void *)seg, (size_t)(p - seg) };
+        if (!*p) break;
+        io[k++] = (struct iovec){ (void *)(*p == '\n' ? "\\n" : "\\\\"), 2 };
+        seg = p + 1;
+        if (k >= 10) { SC3(NR_writev, C.logfd, io, k); k = 0; }   /* a pathological path costs a second write */
+    }
+    io[k++] = (struct iovec){ "\n", 1 };
+    SC3(NR_writev, C.logfd, io, k);
 }
 void log_msg(const char *a, const char *b)
 {

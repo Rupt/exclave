@@ -1,6 +1,6 @@
 /* loader.c — userland ELF loader (PROPOSAL.md 7.3).
  *
- * Maps the payload and the can's one loader the way the kernel would, builds
+ * Maps the payload and the loader its header names the way the kernel would, builds
  * the initial stack from the opener's own auxiliary vector, and jumps. Used
  * for every program: wrappers after the kernel has exec'd the opener under the
  * program's name, and loader-path programs re-exec'd with CAN_EXEC.
@@ -136,19 +136,16 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
     sys_close(fd);
     jump = entry;
     if (has_interp) {
-        /* one loader per can (7.3): the payload's interpreter must be the index's, by file rather than by
-         * spelling, since /lib64/ld-linux-x86-64.so.2 and its target are one loader (review F3-19) */
-        static char ireal[PATH_MAX], preal[PATH_MAX]; Ehdr ih; unsigned long ientry, iphdr; int ii; char dummy[PATH_MAX];
+        /* the program's own PT_INTERP, resolved in the can as the kernel would resolve it in a chroot (7.3);
+         * that every ELF in a can names one loader is the cannery's static check, not a run-time rule */
+        static char ireal[PATH_MAX]; Ehdr ih; unsigned long ientry, iphdr; int ii; char dummy[PATH_MAX];
         struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0); if (!S) die("out of memory", 0, ENOMEM);
-        if (canon(S, C.interp, AT_FDCWD, 1, S->v) < 0) die("cannot resolve the loader", C.interp, 0);
-        to_real(S->v, ireal, S->tmp);                      /* through the wrapper redirect: ld.so is wrapped */
-        if (xstrcmp(interp_v, C.interp) != 0) {
-            struct kstat a, b;
-            if (canon(S, interp_v, AT_FDCWD, 1, S->v) < 0) die("program wants a loader this can does not have", interp_v, 0);
-            to_real(S->v, preal, S->tmp);
-            if (sys_stat(preal, &a) < 0 || sys_stat(ireal, &b) < 0 || a.st_dev != b.st_dev || a.st_ino != b.st_ino)
-                die("program wants a different loader than this can's", interp_v, 0);
-        }
+        struct kstat ist;
+        if (canon(S, interp_v, AT_FDCWD, 1, S->v) < 0 || sys_stat(to_real(S->v, ireal, S->tmp), &ist) < 0)   /* through the wrapper redirect: ld.so is wrapped */
+            die("program wants a loader this can does not have", interp_v, 0);
+        /* one world (7.4.5): the loader must be the can's own file, not one the visibility rule found on the
+         * host (a Nix or --dynamic-linker binary, review F4-1, O4-2) and not one parked in a data prefix (O4-3) */
+        if (!is_can_owned(S->v) || vis_in_data(S->v)) die("program wants a loader this can does not have", interp_v, 0);
         scratch_put(S);
         int ifd = open_elf(ireal, &ih, ph_interp, 64);
         base = map_elf(ifd, &ih, ph_interp, &ientry, &iphdr, &ii, dummy, ireal);

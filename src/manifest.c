@@ -1,8 +1,10 @@
-/* index.c — strict parser for the index (PROPOSAL.md 6.2, 6.3).
+/* manifest.c — strict parser for the manifest (PROPOSAL.md 6.2).
  *
  * No syscalls: takes a buffer, fills struct can, reports "line L col C: why".
- * Compiled into the opener and, with HOST_TEST, into test/index_test.c.
+ * Compiled into the opener and, with HOST_TEST, into test/manifest_test.c.
  * The opener enforces the lexical and typing rules, not the canonical order.
+ * The manifest is the one file the opener reads: an ISA declaration and the
+ * visibility overrides; everything else it needs it observes in the tree.
  */
 #include "common.h"
 
@@ -52,6 +54,8 @@ static int is_token_char(unsigned char c)
 
 /* field kinds */
 enum { F_STR = 1, F_TOK = 2 };
+#define MANIFEST_MAX_OWN 256
+#define MANIFEST_MAX_HOST 32
 struct field { int kind; const char *s; size_t n; };
 
 /* parse one string literal starting at the opening quote; decodes into out (arena) */
@@ -105,19 +109,12 @@ static int valid_abs_path(const char *s, size_t n)
     for (size_t i = 0; i < n; i++) if (s[i] == 0) return 0;
     return 1;
 }
-static int valid_name(const char *s, size_t n)
-{
-    if (n == 0 || n > NAME_MAX) return 0;
-    if ((n == 1 && s[0] == '.') || (n == 2 && s[0] == '.' && s[1] == '.')) return 0;
-    for (size_t i = 0; i < n; i++) if (s[i] == '/' || s[i] == 0) return 0;
-    return 1;
-}
 
-int index_parse(const char *buf, size_t len, struct can *c, char *err, size_t errn)
+int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t errn)
 {
     struct cur cu = { (const unsigned char *)buf, (const unsigned char *)buf + len, 1, 1 };
     struct cur *K = &cu;
-    int seen_index = 0, seen_arch = 0, seen_isa = 0, seen_libc = 0, seen_interp = 0, nrec = 0;
+    int seen_can = 0, seen_isa = 0, nrec = 0;
     int pending_comment = 0;
 
     if (len == 0 || buf[len - 1] != '\n') return fail(err, errn, K, "file must end with LF");
@@ -162,59 +159,35 @@ int index_parse(const char *buf, size_t len, struct can *c, char *err, size_t er
         /* typing */
 #define WANT(n_, ...) do { int kinds[] = { __VA_ARGS__ }; if (nf != (n_)) return fail(err, errn, K, "wrong field count"); \
         for (int i = 0; i < nf; i++) if (f[i].kind != kinds[i]) return fail(err, errn, K, "wrong field type"); } while (0)
-        if (xstrcmp(key, "index") == 0) {
+        if (xstrcmp(key, "can") == 0) {
             WANT(1, F_TOK);
-            if (nrec != 1) return fail(err, errn, K, "index must be the first record");
-            if (xstrcmp(f[0].s, "1") != 0) return fail(err, errn, K, "unsupported index version");
-            seen_index = 1;
+            if (nrec != 1) return fail(err, errn, K, "can must be the first record");
+            if (xstrcmp(f[0].s, "1") != 0) return fail(err, errn, K, "unsupported can version");
+            seen_can = 1;
         } else if (nrec == 1) {
-            return fail(err, errn, K, "first record must be index");
-        } else if (xstrcmp(key, "arch") == 0) {
-            WANT(1, F_STR); if (seen_arch++) return fail(err, errn, K, "duplicate arch");
-            scpy(c->arch, f[0].s, sizeof c->arch);
+            return fail(err, errn, K, "first record must be can");
         } else if (xstrcmp(key, "isa") == 0) {
             WANT(1, F_STR); if (seen_isa++) return fail(err, errn, K, "duplicate isa");
             scpy(c->isa, f[0].s, sizeof c->isa);
-        } else if (xstrcmp(key, "libc") == 0) {
-            WANT(2, F_STR, F_STR); if (seen_libc++) return fail(err, errn, K, "duplicate libc");
-            scpy(c->libc_name, f[0].s, sizeof c->libc_name); scpy(c->libc_ver, f[1].s, sizeof c->libc_ver);
-        } else if (xstrcmp(key, "interp") == 0) {
-            WANT(1, F_STR); if (seen_interp++) return fail(err, errn, K, "duplicate interp");
-            if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "interp must be an absolute path");
-            scpy(c->interp, f[0].s, sizeof c->interp);
         } else if (xstrcmp(key, "own") == 0) {
             WANT(1, F_STR); if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "own must be an absolute path");
-            if (c->nown >= (int)(sizeof c->own / sizeof c->own[0])) return fail(err, errn, K, "too many own records");
+            if (c->nown >= MANIFEST_MAX_OWN) return fail(err, errn, K, "more than 256 own records");
             c->own[c->nown++] = f[0].s;
         } else if (xstrcmp(key, "host") == 0) {
             WANT(1, F_STR); if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "host must be an absolute path");
-            if (c->nhost >= (int)(sizeof c->host / sizeof c->host[0])) return fail(err, errn, K, "too many host records");
+            if (c->nhost >= MANIFEST_MAX_HOST) return fail(err, errn, K, "more than 32 host records");
             c->host[c->nhost].v = f[0].s; c->host[c->nhost].r = f[0].s; c->host[c->nhost].is_file = 0; c->nhost++;
         } else if (xstrcmp(key, "data") == 0) {
             WANT(1, F_STR); if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "data must be an absolute path");
-            if (c->ndata >= (int)(sizeof c->data / sizeof c->data[0])) return fail(err, errn, K, "too many data records");
-            c->data[c->ndata++] = f[0].s;
-        } else if (xstrcmp(key, "env") == 0) {
-            WANT(2, F_STR, F_STR);
-            if (f[0].n == 0 || xstrchr(f[0].s, '=')) return fail(err, errn, K, "env name must be non-empty and contain no '='");
-            if (c->nenv >= (int)(sizeof c->envset / sizeof c->envset[0])) return fail(err, errn, K, "too many env records");
-            char *kv = arena_alloc(f[0].n + 1 + f[1].n + 1);
-            xmemcpy(kv, f[0].s, f[0].n); kv[f[0].n] = '='; xmemcpy(kv + f[0].n + 1, f[1].s, f[1].n); kv[f[0].n + 1 + f[1].n] = 0;
-            c->envset[c->nenv++] = kv;
-        } else if (xstrcmp(key, "wrap") == 0) {
-            WANT(1, F_STR);                                              /* used by cannery check, skipped here */
-        } else if (xstrcmp(key, "use") == 0) {
-            if (nf < 1 || nf > 2) return fail(err, errn, K, "use takes one or two fields");
-            for (int i = 0; i < nf; i++) if (f[i].kind != F_STR) return fail(err, errn, K, "wrong field type");
-            /* layers are milestone 4; accepted and ignored */
+            if (c->ndata >= (int)(sizeof c->data / sizeof c->data[0])) return fail(err, errn, K, "more than 32 data records");
+            c->data[c->ndata++] = f[0].s;                            /* never executed, never a loader (6.2); enforced in the handler and the loader */
         } else {
             return fail(err, errn, K, "unknown key");
         }
 #undef WANT
     }
     if (pending_comment) return fail(err, errn, K, "comment after the last record");
-    if (!seen_index) return fail(err, errn, K, "empty index");
-    if (!seen_arch || !seen_isa) return fail(err, errn, K, "arch and isa are required");
-    (void)valid_name; (void)seen_interp;
+    if (!seen_can) return fail(err, errn, K, "empty manifest");
+    if (!seen_isa) scpy(c->isa, "x86-64", sizeof c->isa);      /* the baseline: a can that says nothing runs anywhere */
     return 0;
 }

@@ -1,16 +1,28 @@
-"""repo.py — package indexes, closure resolution, fetching and verification (PROPOSAL.md 10.1 steps 1 and 2).
+#!/usr/bin/env python3
+"""fetch-debs.py — an example of the step before the cannery: resolve a package closure from a Debian-family
+archive and download it into a directory of .deb files (PROPOSAL.md 10.1).
 
-Fetches with urllib only. The `Packages` files are verified against the suite's `Release` digests and
-the packages against the index digests; BLAKE2b-256 of every fetched .deb is recorded for the lockfile.
-The `Release` signature is not verified (a GPG implementation is out of scope); trust is the mirror's.
+    tools/fetch-debs.py [--distro ubuntu|debian] [--suite S]... [--arch amd64] [--components main,universe]
+                        [--mirror URL | --snapshot DATE] [--cache DIR] [--no-essential] [--choose VIRTUAL=PKG]...
+                        --out DIR PACKAGE...
+
+The closure of Depends and Pre-Depends is resolved against the archive's Packages index, the Essential
+set added unless --no-essential, virtual packages satisfied by the provider of highest priority unless
+--choose says otherwise. Packages files are verified against the suite's Release digests and every
+package against the index's SHA256; the Release signature is not verified, so the mirror is trusted.
+The cannery itself never fetches: `cannery unpack OUT DIR/*.deb` takes what this tool, apt, a mirror or
+a hand-made directory has put on disk. Not part of the cannery can.
 """
+import argparse
 import hashlib
 import os
 import re
+import shutil
 import sys
 import urllib.request
 
-import deb
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cannery"))
+import deb  # noqa: E402
 
 
 class RepoError(Exception):
@@ -19,10 +31,6 @@ class RepoError(Exception):
 
 DEFAULT_MIRROR = {"ubuntu": "http://archive.ubuntu.com/ubuntu", "debian": "http://deb.debian.org/debian"}
 SNAPSHOT_BASE = {"ubuntu": "https://snapshot.ubuntu.com/ubuntu", "debian": "https://snapshot.debian.org/archive/debian"}
-
-
-def b2(data):
-    return "b2:" + hashlib.blake2b(data, digest_size=32).hexdigest()
 
 
 class Repo:
@@ -173,7 +181,7 @@ class Repo:
 
     # ------------------------------------------------------------ packages
     def download(self, st):
-        """Fetch one package, verify it against the index, return (path, blake2b)."""
+        """Fetch one package, verify it against the index, return its path in the cache."""
         url = "%s/%s" % (self.mirror, st["Filename"])
         if "SHA256" not in st:
             raise RepoError("%s: the index carries no SHA256 for it; refusing an unverifiable download" % st["Filename"])
@@ -183,7 +191,7 @@ class Repo:
         if "Size" in st and len(data) != int(st["Size"]):
             raise RepoError("%s: size does not match the index" % st["Filename"])
         key = re.sub(r"[^A-Za-z0-9._-]", "_", url)
-        return os.path.join(self.cache, key), b2(data)
+        return os.path.join(self.cache, key)
 
 
 _PRIORITY = {"required": 0, "important": 1, "standard": 2, "optional": 3, "extra": 4}
@@ -200,3 +208,42 @@ class _VersionKey:
 
     def __eq__(self, o):
         return deb.vercmp(self.v, o.v) == 0
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("packages", nargs="+")
+    ap.add_argument("--out", required=True, help="directory to fill with .deb files")
+    ap.add_argument("--distro", default="ubuntu", choices=["ubuntu", "debian"])
+    ap.add_argument("--suite", action="append", default=[])
+    ap.add_argument("--arch", default="amd64")
+    ap.add_argument("--components", default="main,universe")
+    ap.add_argument("--mirror")
+    ap.add_argument("--snapshot")
+    ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "cont-debs"))
+    ap.add_argument("--no-essential", action="store_true")
+    ap.add_argument("--choose", action="append", default=[], metavar="VIRTUAL=PKG")
+    a = ap.parse_args(argv)
+    suites = [s for x in a.suite for s in x.split(",")] or {"ubuntu": ["noble", "noble-updates", "noble-security"], "debian": ["bookworm"]}[a.distro]
+    r = Repo(a.distro, suites, a.arch, a.components.split(","), a.cache, a.mirror, a.snapshot)
+    r.load_index()
+    selected, notes = r.resolve(a.packages, essential=not a.no_essential, choose=dict(x.split("=", 1) for x in a.choose))
+    os.makedirs(a.out, exist_ok=True)
+    for name in sorted(selected):
+        src = r.download(selected[name])
+        dst = os.path.join(a.out, os.path.basename(selected[name]["Filename"]))
+        if os.path.exists(dst):
+            os.remove(dst)
+        try:
+            os.link(src, dst)
+        except OSError:
+            shutil.copy2(src, dst)
+    print("%d packages in %s" % (len(selected), a.out))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except (RepoError, deb.DebError) as e:
+        sys.exit("fetch-debs: %s" % e)

@@ -134,13 +134,11 @@ struct can {
     char exe[PATH_MAX];            /* what /proc/self/exe answers: the program, or a wrapped script's interpreter (F3-22) */
     int loader_mode;               /* 1: re-exec'd with CAN_EXEC; program is not a wrapper */
     int boundary;                  /* 1: this process installed the filter (can boundary) */
-    /* index (6.3) */
-    char arch[32], isa[32], libc_name[32], libc_ver[32];
-    char interp[PATH_MAX];         /* virtual path of the one loader */
-    const char *own[128]; int nown;
-    struct hostmap host[64]; int nhost;
-    const char *data[32]; int ndata;
-    const char *envset[64]; int nenv;   /* "NAME=value" */
+    /* the manifest (6.2) and what the tree says (8.1); the limits are stated in 8.1 and enforced by cannery wrap */
+    char isa[32];
+    const char *own[512]; int nown;   /* the manifest's claims (at most 256), then every non-empty top-level entry of the tree (at most 256) */
+    struct hostmap host[128]; int nhost;   /* the manifest's host records (at most 32), then the identity files and zones (8.4) */
+    const char *data[32]; int ndata;  /* data prefixes: never executed, never a loader (6.2) */
     /* cwd rule (8.1.4) */
     char cwdclaim[PATH_MAX]; long cwdclaim_len;   /* subtree claimed for the host; empty if none */
     /* diagnostics */
@@ -167,8 +165,8 @@ void log_line(const char *what, long result, const char *path);
 void log_msg(const char *a, const char *b);
 __attribute__((noreturn)) void die(const char *what, const char *detail, long err);
 
-/* ---------- index (index.c) ---------- */
-int index_parse(const char *buf, size_t len, struct can *c, char *err, size_t errn);
+/* ---------- manifest (manifest.c) ---------- */
+int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t errn);
 
 /* ---------- scratch (scratch.c) ---------- */
 struct scratch {
@@ -195,6 +193,7 @@ int  is_wrapper_real(const char *real, char *tmp);   /* tmp PATH_MAX */
 int  payload_of(const char *real, char *out);         /* 1 if real is a wrapper; out = payload */
 int  vis_readlink_identity(const char *v, char *out); /* 1 if v is an identity file; out = host link text */
 int  vis_is_identity_file(const char *v);              /* 1 if v is exactly a host identity file */
+int  vis_in_data(const char *v);                       /* 1 if v lies under a data prefix (6.2) */
 
 /* ---------- the canonicalisation cache (cache.c, 7.4.4) ---------- */
 enum { CK_NONE = 1, CK_DIR, CK_LINK, CK_FILE, CK_WRAPPER };

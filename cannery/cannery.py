@@ -1,63 +1,53 @@
 #!/usr/bin/env python3
-"""cannery — builds cans (PROPOSAL.md sections 6 and 10). Milestone 1a subset.
+"""cannery — builds cans from files (PROPOSAL.md sections 6 and 10).
 
-    cannery.py mkcan SRC OUT [--manifest FILE] [--opener PATH] [--link]
-        Make the can OUT from the tree SRC: copy (or hard-link with --link) SRC
-        to OUT/root, install the opener as OUT/.can/opener, wrap every
-        executable file, write OUT/.can/index.
-    cannery.py wrap CAN        Wrap executables not yet wrapped (idempotent).
-    cannery.py index CAN [--manifest FILE]
-                               Rewrite OUT/.can/index from the tree.
-    cannery.py check CAN       Verify wrappers, payloads and index agree.
-    cannery.py fmt FILE...     Parse with the strict grammar and rewrite in
-                               canonical form (--check: only report).
-    cannery.py from-packages [--distro ubuntu] [--suite S]... [--arch amd64]
-                             [--mirror URL | --snapshot DATE] [--cache DIR]
-                             [--no-essential] [--choose VIRTUAL=PKG]...
-                             [--entry NAME=/PATH]... [--manifest FILE]
-                             [--add HOSTPATH=/VIRTUAL]... --out CAN PACKAGE...
-                               Resolve, fetch, verify, extract, synthesise,
-                               wrap, index, lock (10.1).
-    cannery.py unwrap CAN      Move every payload back over its wrapper.
-    cannery.py reopen CAN [--opener PATH]
-                               Replace the opener and relink every wrapper.
-    cannery.py hash CAN        The tree hash of 6.4.
+A can is a directory at every stage, and every command takes paths and nothing else:
 
-Standard library only. Python 3.8 or later.
+    cannery.py unpack OUT DEB...   Make the open can OUT from package files: extract, synthesise what
+                                   maintainer scripts would have done, add the placeholders, record every
+                                   input in OUT/.can/lock, report dependencies the set does not satisfy.
+    cannery.py wrap CAN            Close a can: wrap every executable, check the manifest (written as
+                                   `can 1` if absent) and every ELF, write the tree hash to the lock.
+                                   Idempotent; a bare directory holding root/ becomes a can.
+    cannery.py unwrap CAN          Open a can: move every payload back over its wrapper.
+    cannery.py check CAN [LOG...]  Wrappers, payloads and the static check; with CAN_LOG files, the
+                                   dynamic check of what a workload actually opened.
+    cannery.py prune CAN LOG...    Drop every file no logged workload touched (10.4).
+    cannery.py fmt FILE...         Parse with the strict grammar and rewrite in canonical form
+                                   (--check: only report).
+    cannery.py hash CAN            The tree hash of 6.4.
+    cannery.py reopen CAN [OPENER] Replace the opener and relink every wrapper.
+
+The cannery never opens a network connection: the files it is given are its inputs, whoever fetched
+them. Standard library only. Python 3.6 or later.
 """
 import argparse
+import hashlib
 import os
 import re
 import shutil
 import stat
-import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build  # noqa: E402
 import deb  # noqa: E402
 import elfcheck  # noqa: E402
-import repo  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# canonical key order per file kind (6.2, 6.3)
+# canonical key order per file kind (6.2, 6.4)
 KEY_ORDER = {
-    "can": ["can", "entry", "data", "host", "own", "env", "use"],
-    "index": ["index", "arch", "isa", "libc", "interp", "own", "host", "data", "env", "wrap", "use"],
-    "lock": ["lock", "cannery", "source", "pkg", "recipe", "tree", "modified"],
+    "can": ["can", "isa", "data", "host", "own"],
+    "lock": ["lock", "cannery", "opener", "pkg", "manifest", "tree"],
 }
-# 8.4: identity files the host answers unless the manifest claims them with own
-IDENTITY_FILES = ["/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf", "/etc/localtime",
-                  "/etc/resolv.conf", "/etc/hosts", "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]
 # key -> (min fields, max fields, kinds) ; kinds: s string, t token
 SCHEMA = {
-    "index": (1, 1, "t"), "can": (1, 1, "t"), "lock": (1, 1, "t"), "entry": (2, 2, "ss"), "arch": (1, 1, "s"), "isa": (1, 1, "s"),
-    "libc": (2, 2, "ss"), "interp": (1, 1, "s"), "own": (1, 1, "s"), "host": (1, 1, "s"), "data": (1, 1, "s"),
-    "env": (2, 2, "ss"), "wrap": (1, 1, "s"), "use": (1, 2, "ss"),
-    "cannery": (1, 1, "s"), "source": (1, 8, "ssssssss"), "pkg": (3, 3, "sss"), "recipe": (2, 2, "ss"),
-    "tree": (1, 1, "s"), "modified": (1, 1, "t"),
+    "can": (1, 1, "t"), "isa": (1, 1, "s"), "data": (1, 1, "s"), "host": (1, 1, "s"), "own": (1, 1, "s"),
+    "lock": (1, 1, "t"), "cannery": (1, 1, "s"), "opener": (1, 1, "s"), "pkg": (4, 4, "ssss"), "manifest": (1, 1, "s"), "tree": (1, 1, "s"),
 }
-ONCE = {"index", "can", "lock", "arch", "isa", "libc", "interp", "cannery", "source", "tree", "modified"}
+ONCE = {"can", "isa", "lock", "cannery", "opener", "manifest", "tree"}
+# the opener's tables (8.1): the manifest may carry this many records, the tree this many top-level entries
+LIMITS = {"own": 256, "host": 32, "data": 32, "top": 256}
 
 
 class GrammarError(Exception):
@@ -99,8 +89,8 @@ def _utf8_len(b, i):
     return 0
 
 
-def parse(data, kind="manifest"):
-    """Strict parse of the bytes of a manifest, index or lockfile. Returns [Record]."""
+def parse(data, kind="can"):
+    """Strict parse of the bytes of a manifest or lockfile. Returns [Record]."""
     if not isinstance(data, bytes):
         raise TypeError("bytes expected")
     if not data or data[-1:] != b"\n":
@@ -211,7 +201,7 @@ def _parse_string(raw, col, line):
 
 
 def _check_record(rec, kind):
-    if rec.key not in SCHEMA:
+    if rec.key not in SCHEMA or rec.key not in KEY_ORDER[kind]:
         _fail(rec.line, 1, "unknown key " + rec.key)
     lo, hi, kinds = SCHEMA[rec.key]
     if not lo <= len(rec.fields) <= hi:
@@ -219,13 +209,9 @@ def _check_record(rec, kind):
     for (k, v), want in zip(rec.fields, kinds):
         if k != want:
             _fail(rec.line, 1, "wrong field type for " + rec.key)
-    for k in ("own", "host", "data", "interp"):
-        if rec.key == k and not rec.fields[0][1].startswith(b"/"):
+    for k in ("own", "host", "data"):
+        if rec.key == k and (not rec.fields[0][1].startswith(b"/") or b"\0" in rec.fields[0][1]):
             _fail(rec.line, 1, k + " must be an absolute path")
-    if rec.key == "entry" and (not rec.fields[1][1].startswith(b"/") or b"/" in rec.fields[0][1] or not rec.fields[0][1]):
-        _fail(rec.line, 1, "entry needs a bare name and an absolute path")
-    if rec.key == "env" and (not rec.fields[0][1] or b"=" in rec.fields[0][1]):
-        _fail(rec.line, 1, "env name must be non-empty and contain no '='")
 
 
 def quote(b):
@@ -258,8 +244,8 @@ def quote(b):
 
 
 def dump(records, kind="can"):
-    """Canonical form (6.2): key groups in fixed order, one blank line between groups, sorted within a group
-    (use keeps its order), comments attached to their records."""
+    """Canonical form (6.2): key groups in fixed order, one blank line between groups, sorted within a group,
+    comments attached to their records."""
     groups = {}
     for r in records:
         groups.setdefault(r.key, []).append(r)
@@ -267,9 +253,7 @@ def dump(records, kind="can"):
     for key in KEY_ORDER[kind]:
         if key not in groups:
             continue
-        recs = groups[key]
-        if key != "use":
-            recs = sorted(recs, key=lambda r: [v for _, v in r.fields])
+        recs = sorted(groups[key], key=lambda r: [v for _, v in r.fields])
         if out:
             out.append("")
         for r in recs:
@@ -288,24 +272,60 @@ def values(records, key):
     return [[v for _, v in r.fields] for r in records if r.key == key]
 
 
-# ---------------------------------------------------------------- ELF
-def elf_info(path):
-    """(machine, interp or None) for an ELF file, or None if not ELF."""
+def b2_file(path):
+    h = hashlib.blake2b(digest_size=32)
     with open(path, "rb") as f:
-        h = f.read(64)
-        if len(h) < 64 or h[:4] != b"\x7fELF" or h[4] != 2 or h[5] != 1:
-            return None
-        machine = struct.unpack_from("<H", h, 18)[0]
-        phoff, phentsize, phnum = struct.unpack_from("<Q", h, 32)[0], struct.unpack_from("<H", h, 54)[0], struct.unpack_from("<H", h, 56)[0]
-        f.seek(phoff)
-        ph = f.read(phentsize * phnum)
-        interp = None
-        for i in range(phnum):
-            p_type, _, p_offset, _, _, p_filesz = struct.unpack_from("<IIQQQQ", ph, i * phentsize)
-            if p_type == 3:
-                f.seek(p_offset)
-                interp = f.read(p_filesz).rstrip(b"\0")
-        return machine, interp
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return "b2:" + h.hexdigest()
+
+
+# ---------------------------------------------------------------- the can as the opener sees it
+def manifest_path(can):
+    return os.path.join(can, ".can", "manifest")
+
+
+def manifest(can):
+    """The manifest's records; `can 1` alone when the file is absent."""
+    p = manifest_path(can)
+    return load(p, "can") if os.path.exists(p) else [Record("can", [("t", b"1")])]
+
+
+def owned(can):
+    """8.1: the can's ownership set as the opener computes it at startup: the manifest's own records plus
+    every top-level entry of root/ that is not an empty directory; a directory that cannot be listed is not
+    a placeholder (review O4-8)."""
+    root = os.path.join(can, "root")
+    own = set(o[0].decode("utf-8", "surrogateescape") for o in values(manifest(can), "own"))
+    for name in sorted(os.listdir(root)):
+        p = os.path.join(root, name)
+        try:
+            empty = not os.path.islink(p) and os.path.isdir(p) and not os.listdir(p)
+        except PermissionError:
+            empty = False
+        if not empty:
+            own.add("/" + name)
+    return sorted(own)
+
+
+def check_limits(can):
+    """The opener's fixed tables (8.1): refuse what it would refuse, before closing (review O4-9, O4-10)."""
+    m = manifest(can)
+    for key in ("own", "host", "data"):
+        n = len(values(m, key))
+        if n > LIMITS[key]:
+            raise build.BuildError("the manifest has %d %s records; the opener holds %d" % (n, key, LIMITS[key]))
+    top = len(os.listdir(os.path.join(can, "root")))
+    if top > LIMITS["top"]:
+        raise build.BuildError("root/ has %d top-level entries; the opener holds %d" % (top, LIMITS["top"]))
+
+
+def in_data(vpath, data):
+    return any(vpath == d or vpath.startswith(d.rstrip("/") + "/") for d in data)
+
+
+def data_prefixes(can):
+    return [d[0].decode("utf-8", "surrogateescape") for d in values(manifest(can), "data")]
 
 
 # ---------------------------------------------------------------- tree walk
@@ -342,20 +362,115 @@ def is_wrapper(real, oi):
     return st.st_size == oi[2] and os.path.exists(os.path.join(d, ".real", n))
 
 
+def payload_path(real):
+    d, n = os.path.split(real)
+    p = os.path.join(d, ".real", n)
+    return p if os.path.exists(p) else real
+
+
+def default_opener():
+    """build/opener beside a checkout, or the opener shipped next to this file in the cannery can (10.5)."""
+    for p in (os.path.join(HERE, "..", "build", "opener"), os.path.join(HERE, "opener")):
+        if os.path.isfile(p):
+            return p
+    return os.path.join(HERE, "..", "build", "opener")
+
+
+def install_opener(can, opener=None):
+    """Put an opener at CAN/.can/opener unless one is there already."""
+    dst = os.path.join(can, ".can", "opener")
+    if os.path.exists(dst):
+        return
+    opener = opener or default_opener()
+    if not os.path.isfile(opener):
+        sys.exit("no opener at %s (run make)" % opener)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copy2(opener, dst)
+    os.chmod(dst, 0o755)
+
+
 # ---------------------------------------------------------------- commands
-def cmd_wrap(can, quiet=False):
-    """6.1: every executable file in root/ becomes a hard link to the opener; the original moves to .real/."""
+def cmd_unpack(out, debs, log=print):
+    """10.1: package files into an open can: extract, synthesise, placeholders, opener, lock inputs, dependency report."""
+    if os.path.exists(out):
+        sys.exit("refusing: %s exists" % out)
+    if not debs:
+        sys.exit("unpack needs at least one package file")
+    pkgs, seen, arches = [], {}, set()
+    for path in debs:
+        fields, _ = deb.control(path)
+        name, ver, arch = fields.get("Package"), fields.get("Version"), fields.get("Architecture", "")
+        if not name or not ver:
+            raise build.BuildError("%s: no Package or Version in its control file" % path)
+        if name in seen:
+            raise build.BuildError("%s and %s both carry package %s: one version of a package per can" % (seen[name], path, name))
+        seen[name] = path
+        if arch and arch != "all":
+            arches.add(arch)
+        pkgs.append((name, path, fields, ver, arch))
+    if len(arches) > 1:
+        raise build.BuildError("the packages mix architectures %s" % sorted(arches))
+    for line in build.dependency_report([(n, f) for n, _, f, _, _ in pkgs]):
+        log("depends: " + line)
+    os.makedirs(os.path.join(out, ".can"))
+    root = os.path.join(out, "root")
+    triples = [(n, p, f) for n, p, f, _, _ in pkgs]
+    try:
+        build.extract(root, triples, log=log)
+        build.synthesise(root, triples, log=log)
+        build.placeholders(root, log=log)
+    except build.BuildError:
+        shutil.rmtree(out)
+        raise
+    install_opener(out)
+    build.write_lock(out, [(n, v, a, b2_file(p)) for n, p, _, v, a in pkgs])
+    log("unpacked %d packages into %s" % (len(pkgs), out))
+
+
+def wrapper_problems(can, data=()):
+    """6.1 as the tree stands: a wrapper of another opener (stale), a wrapper without a payload, a payload
+    without a wrapper (a stray under the reserved name), an executable not wrapped outside data prefixes,
+    an executable its user cannot run. Returns the list of problems."""
+    root = os.path.join(can, "root")
+    oi = opener_ino(can)
+    problems = []
+    for real, v, st in walk_files(root):
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        if in_data(v, data):
+            continue
+        w = is_wrapper(real, oi)
+        d_, n_ = os.path.split(real)
+        if not w and os.path.exists(os.path.join(d_, ".real", n_)):
+            problems.append("stale wrapper (not this can's opener): %s; run cannery reopen" % v)
+        elif st.st_mode & 0o111 and not w and not os.access(real, os.X_OK):
+            problems.append("executable file its user cannot execute: %s (mode %o); a wrapper would run as the opener's mode" % (v, st.st_mode & 0o7777))
+        if w and (not os.path.exists(payload_path(real)) or payload_path(real) == real):
+            problems.append("wrapper without payload: " + v)
+    for dirpath, dirnames, filenames in os.walk(root):
+        if os.path.basename(dirpath) == ".real":
+            for n in filenames:
+                if not os.path.lexists(os.path.join(os.path.dirname(dirpath), n)):
+                    problems.append("payload without wrapper: /%s (.real is reserved for payloads, 6.1)" % os.path.relpath(os.path.join(dirpath, n), root))
+    return problems
+
+
+def wrap_files(can, data=(), quiet=False):
+    """6.1: every executable file in root/ outside data prefixes becomes a hard link to the opener; the
+    original moves to .real/. Never over an existing payload (review F4-2)."""
     root = os.path.join(can, "root")
     opener = os.path.join(can, ".can", "opener")
     oi = opener_ino(can)
     n = 0
     for real, v, st in list(walk_files(root)):
-        if not stat.S_ISREG(st.st_mode) or not st.st_mode & 0o111:
+        if not stat.S_ISREG(st.st_mode) or not st.st_mode & 0o111 or in_data(v, data):
             continue
         if is_wrapper(real, oi):
             continue
         d, name = os.path.split(real)
         rd = os.path.join(d, ".real")
+        if os.path.lexists(os.path.join(rd, name)):
+            raise build.BuildError("%s has a payload in .real/ already: a stale wrapper; run cannery reopen" % v)
         os.makedirs(rd, exist_ok=True)
         os.rename(real, os.path.join(rd, name))
         try:
@@ -368,237 +483,89 @@ def cmd_wrap(can, quiet=False):
     return n
 
 
-def detect(root):
-    """arch, interp, libc for the index by looking at the tree. Refuses mixed loaders or machines (7.3)."""
-    machines, interps = set(), set()
-    for real, v, st in walk_files(root):
-        if not stat.S_ISREG(st.st_mode):
-            continue
-        p = payload_path(real)
-        try:
-            info = elf_info(p)
-        except OSError:
-            continue
-        if info:
-            machines.add(info[0])
-            if info[1]:
-                interps.add(info[1])
-    if len(machines) > 1:
-        raise build.BuildError("the tree mixes machines %s" % sorted(machines))
-    if len(interps) > 1:
-        raise build.BuildError("the tree mixes loaders %s (one world inside a can, 7.3)" % sorted(interps))
-    arch = {62: "x86_64", 183: "aarch64"}.get(next(iter(machines), 62), "unknown")
-    interp = next(iter(interps), None)
-    libc = None
-    for real, v, st in walk_files(root):
-        if os.path.basename(v) == "libc.so.6" and stat.S_ISREG(st.st_mode):
-            with open(payload_path(real), "rb") as f:
-                m = re.search(rb"GNU C Library \([^)]*\) (?:\w+ )?release version (\d+\.\d+)", f.read())
-            if m:
-                libc = ("glibc", m.group(1).decode())
-                break
-        if os.path.basename(v).startswith("ld-musl-"):
-            libc = ("musl", "unknown")
-    return arch, interp, libc
-
-
-def payload_path(real):
-    d, n = os.path.split(real)
-    p = os.path.join(d, ".real", n)
-    return p if os.path.exists(p) else real
-
-
-def top_level_owned(root):
-    """8.1: the can owns a top-level directory when its tree ships at least one file in it."""
-    owned = []
-    for name in sorted(os.listdir(root)):
-        p = os.path.join(root, name)
-        if os.path.islink(p):
-            owned.append("/" + name)
-        elif os.path.isdir(p):
-            if any(walk_files(p)):
-                owned.append("/" + name)
-        else:
-            owned.append("/" + name)
-    return owned
-
-
-def cmd_index(can, manifest=None, quiet=False):
+def cmd_wrap(can, quiet=False):
+    """Close a can: opener, placeholders, manifest, the wrapper and static checks on the tree as it stands,
+    then the wrappers, then the lock's opener, manifest and tree hashes. A refusal happens before anything
+    is wrapped, so a refused can is still the directory it was (review F4-8, O4-7)."""
     root = os.path.join(can, "root")
-    man = load(manifest, "can") if manifest else []
-    arch, interp, libc = detect(root)
-    recs = [Record("index", [("t", b"1")]), Record("arch", [("s", arch.encode())])]
-    recs.append(Record("isa", [("s", b"x86-64")]))       # package trees are generic; ISA levels come with from-source (milestone 3)
-    if libc:
-        recs.append(Record("libc", [("s", libc[0].encode()), ("s", libc[1].encode())]))
-    if interp:
-        recs.append(Record("interp", [("s", interp)]))
-    own = set(v.encode() for v in top_level_owned(root)) | set(f[0] for f in values(man, "own"))
-    for o in sorted(own):
-        recs.append(Record("own", [("s", o)]))
-    hosts = set(f.encode() for f in IDENTITY_FILES) - set(f[0] for f in values(man, "own"))
-    hosts |= set(f[0] for f in values(man, "host"))
-    for h in sorted(hosts):
-        recs.append(Record("host", [("s", h)]))
-    for d in values(man, "data"):
-        recs.append(Record("data", [("s", d[0])]))
-    for e in values(man, "env"):
-        recs.append(Record("env", [("s", e[0]), ("s", e[1])]))
-    oi = opener_ino(can)
-    for real, v, st in walk_files(root):
-        if stat.S_ISREG(st.st_mode) and is_wrapper(real, oi):
-            recs.append(Record("wrap", [("s", v.encode())]))
-    for u in values(man, "use"):
-        recs.append(Record("use", [("s", x) for x in u]))
-    data = dump(recs, "index")
-    parse(data, "index")  # the writer must produce what the reader accepts
-    with open(os.path.join(can, ".can", "index"), "wb") as f:
-        f.write(data)
+    if not os.path.isdir(root):
+        sys.exit("refusing: %s has no root/ directory" % can)
+    install_opener(can)
+    build.placeholders(root, strip=False, log=lambda *a: None)   # 8.1: the conventional names and the identity files, if the tree lacks them
+    mp = manifest_path(can)
+    if not os.path.exists(mp):
+        with open(mp, "wb") as f:
+            f.write(b"can 1\n")
+    with open(mp, "rb") as f:
+        mdata = f.read()
+    recs = parse(mdata, "can")
+    if dump(recs, "can") != mdata:
+        sys.exit("refusing: %s is not canonical; run cannery fmt on it" % mp)
+    check_limits(can)
+    data = data_prefixes(can)
+    problems = wrapper_problems(can, data)
+    for p in problems:
+        print("error: " + p)
+    rep = static_report(can, quiet)
+    if problems or rep.errors:
+        print("refused; %s is not closed and nothing was wrapped" % can)
+        return 1
+    wrap_files(can, data, quiet)
+    build.write_lock(can, None, "b2:" + hashlib.blake2b(mdata, digest_size=32).hexdigest(), tree=True)
     if not quiet:
-        print("index: arch %s, interp %s, libc %s, own %s, %d wrappers" %
-              (arch, interp.decode() if interp else "-", libc, sorted(own), sum(1 for r in recs if r.key == "wrap")))
+        print("closed %s" % can)
+    return 0
 
 
-def default_opener():
-    """build/opener beside a checkout, or the opener shipped next to this file in the cannery can (10.5)."""
-    for p in (os.path.join(HERE, "..", "build", "opener"), os.path.join(HERE, "opener")):
-        if os.path.isfile(p):
-            return p
-    return os.path.join(HERE, "..", "build", "opener")
-
-
-def cmd_mkcan(src, out, manifest=None, opener=None, link=False):
-    if os.path.exists(out):
-        sys.exit("refusing: %s exists" % out)
-    opener = opener or default_opener()
-    if not os.path.isfile(opener):
-        sys.exit("no opener at %s (run make)" % opener)
-    if manifest:
-        load(manifest, "can")
-    os.makedirs(os.path.join(out, ".can"))
-    shutil.copy2(opener, os.path.join(out, ".can", "opener"))
-    os.chmod(os.path.join(out, ".can", "opener"), 0o755)
-    shutil.copytree(src, os.path.join(out, "root"), symlinks=True, copy_function=link_or_copy if link else shutil.copy2)
-    cmd_wrap(out)
-    cmd_index(out, manifest)
-    make_entries(out, manifest)
-    print("made", out)
-
-
-def make_entries(can, manifest):
-    """6.1: entry symlinks beside root/."""
-    for name, vpath in values(load(manifest, "can"), "entry") if manifest else []:
-        p = os.path.join(can, name.decode("utf-8", "surrogateescape"))
-        if os.path.lexists(p):
-            os.remove(p)
-        os.symlink(os.path.join("root", vpath.decode("utf-8", "surrogateescape").lstrip("/")), p)
+def cmd_unwrap(can):
+    """Open a can: payloads back over their wrappers; the lock keeps its inputs and loses the hashes of a
+    closed can (review F4-6). A payload without a wrapper is refused, since it is not this can's (F4-5)."""
+    strays = [p for p in wrapper_problems(can) if p.startswith("payload without wrapper")]
+    if strays:
+        raise build.BuildError("; ".join(strays))
+    build.unwrap(can)
+    build.write_lock(can, None)
 
 
 def cmd_reopen(can, opener=None):
-    """Replace a can's opener and relink every wrapper to it (wrappers are hard links, 6.1)."""
-    opener = opener or os.path.join(HERE, "..", "build", "opener")
+    """Replace a can's opener and relink every wrapper to it (wrappers are hard links, 6.1). A payload
+    without a wrapper is reported, not given one (review F4-5, O4-11); the lock's opener record follows."""
+    opener = opener or default_opener()
     if not os.path.isfile(opener):
         sys.exit("no opener at %s" % opener)
     root = os.path.join(can, "root")
     new = os.path.join(can, ".can", "opener.new")
     shutil.copy2(opener, new)
     os.chmod(new, 0o755)
-    n = 0
+    n, strays = 0, []
     for dirpath, dirnames, filenames in os.walk(root):
         if os.path.basename(dirpath) != ".real":
             continue
         parent = os.path.dirname(dirpath)
         for name in filenames:
             w = os.path.join(parent, name)
-            if os.path.lexists(w):
-                os.remove(w)
+            if not os.path.lexists(w):
+                strays.append("/" + os.path.relpath(os.path.join(dirpath, name), root))
+                continue
+            os.remove(w)
             try:
                 os.link(new, w)
             except OSError:
                 shutil.copy2(new, w)
             n += 1
     os.replace(new, os.path.join(can, ".can", "opener"))
+    for s in strays:
+        print("payload without wrapper, left alone: " + s)
+    if os.path.exists(os.path.join(can, ".can", "lock")):
+        recs = load(os.path.join(can, ".can", "lock"), "lock")
+        if values(recs, "tree"):
+            build.write_lock(can, None, keep_hashes=True)
     print("relinked %d wrappers to the new opener" % n)
-
-
-def cmd_from_packages(a):
-    """10.1: resolve, fetch and verify, extract, synthesise, strip, wrap, check, index, entries, lockfile."""
-    if os.path.exists(a.out):
-        sys.exit("refusing: %s exists" % a.out)
-    opener = a.opener or default_opener()
-    if not os.path.isfile(opener):
-        sys.exit("no opener at %s (run make)" % opener)
-    suites = [s for x in a.suite for s in x.split(",")] or {"ubuntu": ["noble", "noble-updates", "noble-security"], "debian": ["bookworm"]}[a.distro]
-    comps = a.components.split(",")
-    r = repo.Repo(a.distro, suites, a.arch, comps, a.cache, a.mirror, a.snapshot)
-    r.load_index()
-    choose = dict(x.split("=", 1) for x in a.choose)
-    selected, notes = r.resolve(a.packages, essential=not a.no_essential, choose=choose)
-    print("closure: %d packages" % len(selected))
-    debs, lock_pkgs = [], []
-    for name in sorted(selected):
-        st = selected[name]
-        path, h = r.download(st)
-        debs.append((name, path, st))
-        lock_pkgs.append((name, st["Version"], h))
-    os.makedirs(os.path.join(a.out, ".can"))
-    shutil.copy2(opener, os.path.join(a.out, ".can", "opener"))
-    os.chmod(os.path.join(a.out, ".can", "opener"), 0o755)
-    root = os.path.join(a.out, "root")
-    try:
-        build.extract(root, debs)
-        build.synthesise(root, debs)
-        build.placeholders(root)
-        for spec in a.add:                                    # 10.5: files of our own into the tree, e.g. the cannery
-            src_, _, vpath = spec.partition("=")
-            dst = os.path.join(root, vpath.lstrip("/"))
-            if os.path.isdir(src_):
-                shutil.copytree(src_, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
-            else:
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.copy2(src_, dst)
-    except build.BuildError as e:
-        shutil.rmtree(a.out)
-        sys.exit("refusing: %s" % e)
-    manifest = os.path.join(a.out, ".can", "manifest")
-    if a.manifest:
-        shutil.copy2(a.manifest, manifest)
-    else:
-        recs = [Record("can", [("t", b"1")])]
-        for e in a.entry:
-            name, _, vpath = e.partition("=")
-            recs.append(Record("entry", [("s", name.encode()), ("s", vpath.encode())]))
-        with open(manifest, "wb") as f:
-            f.write(dump(recs, "can"))
-    load(manifest, "can")
-    cmd_wrap(a.out)
-    cmd_index(a.out, manifest)
-    make_entries(a.out, manifest)
-    build.synthesise_in_can(a.out, debs)
-    rep = static_report(a.out)
-    if rep.errors:
-        shutil.rmtree(a.out)
-        sys.exit("refusing: the static check failed; the can is not kept")
-    source = ["deb", a.distro, ",".join(suites), a.arch, "snapshot=" + a.snapshot if a.snapshot else "mirror=" + r.mirror]
-    build.write_lock(a.out, source, lock_pkgs)
-    print("made", a.out)
-
-
-def index_info(idx):
-    """interp, libc and data prefixes from parsed index records, for the checks."""
-    interp = values(idx, "interp")
-    libc = values(idx, "libc")
-    return {"interp": interp[0][0].decode("utf-8", "surrogateescape") if interp else None,
-            "libc": (libc[0][0].decode(), libc[0][1].decode()) if libc else ("glibc", "unknown"),
-            "own": [d[0].decode("utf-8", "surrogateescape") for d in values(idx, "own")],
-            "data": [d[0].decode("utf-8", "surrogateescape") for d in values(idx, "data")]}
 
 
 def static_report(can, quiet=False):
     """10.3 static check; returns the Report."""
-    idx = load(os.path.join(can, ".can", "index"), "index")
-    info = index_info(idx)
-    rep = elfcheck.static_check(can, info, info["data"])
+    rep = elfcheck.static_check(can, owned(can), data_prefixes(can))
     if not quiet:
         for w in rep.warnings:
             print("warning: " + w)
@@ -608,49 +575,50 @@ def static_report(can, quiet=False):
     return rep
 
 
-def cmd_check(can, run=None):
+def cmd_check(can, logs=()):
+    """A closed can: every executable outside data prefixes wrapped, no stray or stale wrapper, the static
+    check, the tree against the lock's hash (review O4-18), and with logs the dynamic check."""
     root = os.path.join(can, "root")
+    data = data_prefixes(can)
     oi = opener_ino(can)
-    idx = load(os.path.join(can, ".can", "index"), "index")
-    wrapped = set(w[0].decode("utf-8", "surrogateescape") for w in values(idx, "wrap"))
-    problems = []
-    seen = set()
+    problems = wrapper_problems(can, data)
     for real, v, st in walk_files(root):
-        if not stat.S_ISREG(st.st_mode):
-            continue
-        w = is_wrapper(real, oi)
-        d_, n_ = os.path.split(real)
-        if not w and os.path.exists(os.path.join(d_, ".real", n_)):
-            problems.append("stale wrapper (not this can's opener): " + v)
-        elif st.st_mode & 0o111 and not w:
+        if stat.S_ISREG(st.st_mode) and st.st_mode & 0o111 and not in_data(v, data) and not is_wrapper(real, oi) \
+                and not os.path.exists(os.path.join(os.path.dirname(real), ".real", os.path.basename(real))):
             problems.append("executable not wrapped: " + v)
-        if w:
-            seen.add(v)
-            if not os.path.exists(payload_path(real)) or payload_path(real) == real:
-                problems.append("wrapper without payload: " + v)
-            if v not in wrapped:
-                problems.append("wrapper missing from index: " + v)
-    for v in sorted(wrapped - seen):
-        problems.append("index wrap without wrapper: " + v)
-    for dirpath, dirnames, filenames in os.walk(root):
-        if os.path.basename(dirpath) == ".real":
-            for n in filenames:
-                if not os.path.exists(os.path.join(os.path.dirname(dirpath), n)):
-                    problems.append("payload without wrapper: " + os.path.join(dirpath, n))
+    lock = os.path.join(can, ".can", "lock")
+    if os.path.exists(lock):
+        recorded = values(load(lock, "lock"), "tree")
+        if recorded:
+            actual = build.tree_hash(root)
+            if recorded[0][0].decode() != actual:
+                problems.append("the tree differs from the lock: recorded %s, now %s" % (recorded[0][0].decode(), actual))
+        else:
+            problems.append("an open can: the lock has no tree hash; run cannery wrap")
     for p in problems:
         print(p)
     print("%d wrapper problems" % len(problems))
     rep = static_report(can)
     rc = 1 if problems or rep.errors else 0
-    if run:
-        drep, status = elfcheck.dynamic_check(can, index_info(idx), run, index_info(idx)["own"])
+    if logs:
+        drep = elfcheck.dynamic_check(can, logs, owned(can))
         for w in drep.warnings:
             print("warning: " + w)
         for e in drep.errors:
             print("error: " + e)
-        print("dynamic check: command exited %d, %d errors" % (status, len(drep.errors)))
+        print("dynamic check: %d log lines, %d errors" % (drep.lines, len(drep.errors)))
         rc = rc or (1 if drep.errors else 0)
     return rc
+
+
+def cmd_prune(can, logs):
+    kept, removed, freed = build.prune(can, logs, owned(can))
+    print("pruned %s: kept %d files, removed %d, %d bytes freed" % (can, kept, removed, freed))
+    lock = os.path.join(can, ".can", "lock")
+    if os.path.exists(lock) and values(load(lock, "lock"), "tree"):
+        build.write_lock(can, None, keep_hashes=True)         # the lock records the output as it now is (review F4-6)
+    rep = static_report(can)
+    return 1 if rep.errors else 0
 
 
 def cmd_fmt(paths, check):
@@ -658,7 +626,8 @@ def cmd_fmt(paths, check):
     for p in paths:
         with open(p, "rb") as f:
             data = f.read()
-        kind = "index" if os.path.basename(p) == "index" else "lock" if p.endswith(".lock") else "can"
+        first = next((l for l in data.split(b"\n") if l and not l.startswith(b"#")), b"")
+        kind = "lock" if first.startswith(b"lock ") else "can"        # by the first record, not the file's name (review O4-16)
         try:
             recs = parse(data, kind)
         except GrammarError as e:
@@ -681,45 +650,37 @@ def main(argv):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd")
     sub.required = True                                       # required= is Python 3.7; the matrix runs 3.6
-    p = sub.add_parser("mkcan"); p.add_argument("src"); p.add_argument("out"); p.add_argument("--manifest"); p.add_argument("--opener"); p.add_argument("--link", action="store_true")
+    p = sub.add_parser("unpack"); p.add_argument("out"); p.add_argument("debs", nargs="+")
     p = sub.add_parser("wrap"); p.add_argument("can")
-    p = sub.add_parser("index"); p.add_argument("can"); p.add_argument("--manifest")
-    p = sub.add_parser("check"); p.add_argument("can"); p.add_argument("--run", nargs=argparse.REMAINDER)
-    p = sub.add_parser("fmt"); p.add_argument("files", nargs="+"); p.add_argument("--check", action="store_true")
-    p = sub.add_parser("from-packages")
-    p.add_argument("packages", nargs="+"); p.add_argument("--out", required=True)
-    p.add_argument("--distro", default="ubuntu", choices=["ubuntu", "debian"]); p.add_argument("--suite", action="append", default=[])
-    p.add_argument("--arch", default="amd64"); p.add_argument("--components", default="main,universe")
-    p.add_argument("--mirror"); p.add_argument("--snapshot"); p.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "cont-cannery"))
-    p.add_argument("--no-essential", action="store_true"); p.add_argument("--choose", action="append", default=[], metavar="VIRTUAL=PKG")
-    p.add_argument("--entry", action="append", default=[], metavar="NAME=/PATH"); p.add_argument("--manifest"); p.add_argument("--opener")
-    p.add_argument("--add", action="append", default=[], metavar="HOSTPATH=/VIRTUAL", help="copy a file or directory into the tree")
     p = sub.add_parser("unwrap"); p.add_argument("can")
-    p = sub.add_parser("reopen"); p.add_argument("can"); p.add_argument("--opener")
+    p = sub.add_parser("check"); p.add_argument("can"); p.add_argument("logs", nargs="*")
+    p = sub.add_parser("prune"); p.add_argument("can"); p.add_argument("logs", nargs="+")
+    p = sub.add_parser("fmt"); p.add_argument("files", nargs="+"); p.add_argument("--check", action="store_true")
     p = sub.add_parser("hash"); p.add_argument("can")
+    p = sub.add_parser("reopen"); p.add_argument("can"); p.add_argument("opener", nargs="?")
     a = ap.parse_args(argv)
     try:
-        if a.cmd == "mkcan":
-            cmd_mkcan(a.src, a.out, a.manifest, a.opener, a.link)
+        if a.cmd == "unpack":
+            cmd_unpack(a.out, a.debs)
         elif a.cmd == "wrap":
-            cmd_wrap(a.can)
-        elif a.cmd == "index":
-            cmd_index(a.can, a.manifest)
+            return cmd_wrap(a.can)
+        elif a.cmd == "unwrap":
+            cmd_unwrap(a.can)
         elif a.cmd == "check":
-            return cmd_check(a.can, a.run or None)
+            return cmd_check(a.can, a.logs)
+        elif a.cmd == "prune":
+            return cmd_prune(a.can, a.logs)
         elif a.cmd == "fmt":
             return cmd_fmt(a.files, a.check)
-        elif a.cmd == "from-packages":
-            cmd_from_packages(a)
-        elif a.cmd == "unwrap":
-            build.unwrap(a.can)
+        elif a.cmd == "hash":
+            if not os.path.isdir(os.path.join(a.can, "root")):
+                sys.exit("refusing: %s has no root/ directory" % a.can)
+            print(build.tree_hash(os.path.join(a.can, "root")))
         elif a.cmd == "reopen":
             cmd_reopen(a.can, a.opener)
-        elif a.cmd == "hash":
-            print(build.tree_hash(os.path.join(a.can, "root")))
     except GrammarError as e:
         sys.exit("grammar: %s" % e)
-    except (repo.RepoError, build.BuildError, deb.DebError) as e:
+    except (build.BuildError, deb.DebError) as e:
         sys.exit("cannery: %s" % e)
     return 0
 

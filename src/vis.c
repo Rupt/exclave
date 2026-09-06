@@ -2,11 +2,87 @@
  *
  * Decides, for a virtual path, whether it is the host's or the can's, and
  * turns it into a real path. The table is built once at startup from the
- * index, the working directory and the host identity files.
+ * tree, the manifest, the working directory and the host identity files.
  */
 #include "common.h"
 
 static const char *volatile_dirs[] = { "/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run", 0 };
+/* 8.1 rule 5: the host's by default; an own record naming one exactly removes it */
+static const char *identity_files[] = { "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf", "/etc/localtime",
+                                        "/etc/resolv.conf", "/etc/hosts", "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", 0 };
+
+struct dirent64 { unsigned long d_ino; long d_off; unsigned short d_reclen; unsigned char d_type; char d_name[]; };
+#define DT_UNKNOWN 0
+#define DT_DIR 4
+#define DT_LNK 10
+
+/* one getdents64: does the directory hold anything but . and ..? A directory that cannot be listed is not a
+ * placeholder: it counts as the can's (review O4-8, F4-4), and a failure that is not the directory's own, no
+ * descriptor left or an I/O error, is fatal rather than a silent answer of "the host's" */
+static int dir_nonempty(const char *real)
+{
+    static char buf[4096];
+    long fd = sys_open(real, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+    if (fd == -EACCES || fd == -EPERM) return 1;
+    if (fd < 0) die("cannot read a top-level directory of root/", real, fd);
+    for (;;) {
+        long n = sys_getdents64((int)fd, buf, sizeof buf);
+        if (n < 0) die("cannot read a top-level directory of root/", real, n);
+        if (n == 0) { sys_close((int)fd); return 0; }
+        for (long o = 0; o < n;) {
+            struct dirent64 *d = (struct dirent64 *)(buf + o);
+            if (!(d->d_name[0] == '.' && (d->d_name[1] == 0 || (d->d_name[1] == '.' && d->d_name[2] == 0)))) { sys_close((int)fd); return 1; }
+            o += d->d_reclen;
+        }
+    }
+}
+
+/* 8.1 rule 1: the can owns every top-level entry of its tree that is not an empty directory. Read from the
+ * tree at startup, so an edited tree needs no index to be refreshed; the manifest's own records are added
+ * by the parser before this runs. About one directory read per top-level entry. */
+static void own_from_tree(void)
+{
+    static char buf[16384]; static char real[PATH_MAX];
+    long fd = sys_open(C.root, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0); if (fd < 0) die("cannot read root/", C.root, fd);
+    for (;;) {
+        long n = sys_getdents64((int)fd, buf, sizeof buf);
+        if (n < 0) die("cannot read root/", C.root, n);
+        if (n == 0) break;
+        for (long o = 0; o < n;) {
+            struct dirent64 *d = (struct dirent64 *)(buf + o); o += d->d_reclen;
+            if (d->d_name[0] == '.' && (d->d_name[1] == 0 || (d->d_name[1] == '.' && d->d_name[2] == 0))) continue;
+            scpy(real, C.root, PATH_MAX); scat(real, "/", PATH_MAX); scat(real, d->d_name, PATH_MAX);
+            int type = d->d_type;
+            if (type == DT_UNKNOWN) { struct kstat st; if (sys_lstat(real, &st) < 0) continue; type = (st.st_mode & S_IFMT) == S_IFDIR ? DT_DIR : (st.st_mode & S_IFMT) == S_IFLNK ? DT_LNK : 8; }
+            if (type == DT_DIR && !dir_nonempty(real)) continue;      /* a placeholder: ls / shows it, the host owns it */
+            if (C.nown >= (int)(sizeof C.own / sizeof C.own[0])) die("more than 256 top-level entries in root/", C.root, 0);
+            size_t l = xstrlen(d->d_name);
+            char *v = arena_alloc(l + 2); v[0] = '/'; xmemcpy(v + 1, d->d_name, l + 1);
+            C.own[C.nown++] = v;
+        }
+    }
+    sys_close((int)fd);
+}
+
+/* 8.1 rule 5: the identity files join the host table unless the manifest claims one by name; the table has
+ * room for them after the manifest's 32 by construction (review O4-10) */
+static void identity_defaults(void)
+{
+    for (int i = 0; identity_files[i]; i++) {
+        int claimed = 0;
+        for (int j = 0; j < C.nown; j++) if (xstrcmp(C.own[j], identity_files[i]) == 0) claimed = 1;
+        if (claimed) continue;
+        if (C.nhost >= (int)(sizeof C.host / sizeof C.host[0])) die("host table full", identity_files[i], 0);
+        C.host[C.nhost].v = identity_files[i]; C.host[C.nhost].r = identity_files[i]; C.host[C.nhost].is_file = 0; C.nhost++;
+    }
+}
+
+/* 6.2: a data prefix is never executed and never a loader */
+int vis_in_data(const char *v)
+{
+    for (int i = 0; i < C.ndata; i++) if (starts_dir(v, C.data[i])) return 1;
+    return 0;
+}
 
 /* identity files: link text recorded at startup for readlink fidelity (8.4) */
 static const char *id_link[64];
@@ -34,7 +110,9 @@ static void claim_cwd(void)
     char real[PATH_MAX];
     C.cwdclaim[0] = 0; C.cwdclaim_len = 0;
     long n = sys_getcwd(real, PATH_MAX); if (n <= 0) return;
+    if (C.boundary) log_msg("cwd", real);                       /* the workload's directory, for the dynamic check (10.3) */
     if (starts_dir(real, C.root)) return;                       /* inside the tree: virtual path, no claim (8.1.4) */
+    if (real[0] == '/' && real[1] == 0) return;                 /* the root itself is the tree's (8.3): nothing to claim */
     /* a real host path: claim it as a subtree if the base rule would otherwise hand it to the can; the claims
      * themselves do not count, or a cwd above the can's directory would never be claimed */
     const char *r; if (base_is_host(real, &r)) return;
@@ -44,6 +122,8 @@ static void claim_cwd(void)
 
 void vis_init(char **envp)
 {
+    identity_defaults();
+    own_from_tree();
     /* identity files and host records: resolve each on the host; drop the ones the host lacks */
     int n = 0;
     for (int i = 0; i < C.nhost; i++) {
@@ -92,9 +172,11 @@ void vis_init(char **envp)
     claim_cwd();
 }
 
-/* 8.1 without the two claims: identity file > volatile > host records > own > default host; longest prefix wins */
+/* 8.1 without the two claims: identity file > volatile > host records > own > default host; longest prefix wins.
+ * The root directory itself is the tree's, so ls / lists the tree and its placeholders (8.3, review O4-17). */
 static int base_is_host(const char *v, const char **real)
 {
+    if (v[0] == '/' && v[1] == 0) return 0;
     for (int i = 0; i < C.nhost; i++)
         if (C.host[i].is_file && xstrcmp(v, C.host[i].v) == 0) { *real = C.host[i].r; return 1; }
     for (int i = 0; volatile_dirs[i]; i++)
@@ -111,6 +193,7 @@ static int base_is_host(const char *v, const char **real)
 /* the full rule: the two claims first (8.1.4 and the can's own directory), then the base rule */
 int vis_is_host(const char *v, const char **real)
 {
+    if (v[0] == '/' && v[1] == 0) return 0;                    /* the root itself is the tree's (8.3), before the claims that pass through it */
     for (int i = 0; i < C.nhost; i++)
         if (C.host[i].is_file && xstrcmp(v, C.host[i].v) == 0) { *real = C.host[i].r; return 1; }
     /* 8.1.4: a claimed working directory is the host's as a subtree, and so is every directory on the way to

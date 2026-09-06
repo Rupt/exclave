@@ -100,8 +100,6 @@ def make_can(ctx):
                     os.chmod(p, m & 0o777)
     if ctx.from_can:
         build.unwrap(can, log=lambda *a: None)
-        for name in os.listdir(root):                  # a packaged can's placeholders are recreated below
-            pass
     # test additions to the tree
     with open(os.path.join(root, "usr", "share", "cont-test-marker"), "w") as f:
         f.write("marker\n")
@@ -113,16 +111,14 @@ def make_can(ctx):
         with open(p, "w") as f:
             f.write(body)
         os.chmod(p, 0o755)
-    manifest = os.path.join(ctx.work, "test.can")
     top = "/" + ctx.work.split("/")[1]
-    lines = ['can 1']
+    recs = [cannery.Record("can", [("t", b"1")])]
     ctx.claim = top not in VOLATILE
     if ctx.claim:
-        lines.append("own %s" % cannery.quote(top.encode()))
-    with open(manifest, "w") as f:
-        f.write("\n\n".join(lines) + "\n")
-    cannery.cmd_wrap(can, quiet=True)
-    cannery.cmd_index(can, manifest, quiet=True)
+        recs.append(cannery.Record("own", [("s", top.encode())]))
+    with open(os.path.join(can, ".can", "manifest"), "wb") as f:
+        f.write(cannery.dump(recs, "can"))
+    cannery.wrap_files(can, quiet=True)
     ctx.can, ctx.root, ctx.opener = can, root, os.path.join(can, ".can", "opener")
 
 
@@ -134,7 +130,7 @@ def compile_progs(ctx):
     shutil.copytree(os.path.join(HERE, "progs"), src)
     os.makedirs(ctx.progs, exist_ok=True)
     gcc = wrapper(ctx, GCC)
-    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp"):
+    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress"):
         rc, out, err = run([gcc, "-O1", "-g", "-pthread", "-o", os.path.join(ctx.progs, name), os.path.join(src, name + ".c"), "-lm", "-ldl"], cwd=ctx.work, env=ctx.env)
         if rc:
             sys.exit("cannot compile %s with the can's gcc:\n%s" % (name, err))
@@ -197,8 +193,8 @@ def isolation(ctx):
         break
     expect(rc == 0, "compile under strace failed: " + err)
     bad, seen = [], 0
-    allowed_files = set(cannery.IDENTITY_FILES)
-    for f in cannery.IDENTITY_FILES:          # the opener resolves each identity file's host symlink chain at startup
+    allowed_files = set(build.IDENTITY_FILES)
+    for f in build.IDENTITY_FILES:          # the opener resolves each identity file's host symlink chain at startup
         p = f
         for _ in range(40):
             if not os.path.islink(p):
@@ -584,8 +580,8 @@ def make_deb(path, name, members, control_extra=""):
 
 @test
 def cannery_extraction_rules(ctx):
-    """10.1 step 3 after the review: a member reached through a package's own symlink is refused (O3-8); two spellings
-    of one path under merged usr conflict (O3-9); an index entry without a digest is not downloaded (O3-14)."""
+    """10.1 after the review: a member reached through a package's own symlink is refused (O3-8); two spellings
+    of one path under merged usr conflict (O3-9)."""
     d = os.path.join(ctx.work, "debs")
     os.makedirs(d, exist_ok=True)
     outside = os.path.join(ctx.work, "escaped")
@@ -611,14 +607,329 @@ def cannery_extraction_rules(ctx):
         expect("both ship" in str(e), str(e))
     else:
         raise AssertionError("the merged-usr spellings of one file were not seen as a conflict")
-    import repo
-    r = repo.Repo("ubuntu", ["noble"], "amd64", ["main"], os.path.join(ctx.work, "cache"), "http://127.0.0.1:1/none")
+
+
+@test
+def unpack_and_wrap(ctx):
+    """10.1 as files: unpack takes package files and nothing else, records every input by hash, reports what the
+    set's own control files say it lacks, refuses two versions of one package; wrap closes the can and records
+    the manifest and tree hashes; the closed can runs; a tree assembled by hand becomes a can by wrap alone."""
+    import elfcheck
+    d = os.path.join(ctx.work, "updebs")
+    os.makedirs(d, exist_ok=True)
+    true_bytes = open(os.path.join(ctx.root, "usr", "bin", ".real", "true"), "rb").read()
+    make_deb(os.path.join(d, "tool.deb"), "tool", [("./usr", "dir", None, 0o755), ("./usr/bin", "dir", None, 0o755),
+                                                    ("./usr/bin/tool", "file", b"#!/bin/sh\necho tool ok\n", 0o755)],
+             "Depends: libfoo1 (>= 2), virt | missing-alt\nPre-Depends: absent-pkg\n")
+    make_deb(os.path.join(d, "libfoo1.deb"), "libfoo1", [("./usr", "dir", None, 0o755), ("./usr/share", "dir", None, 0o755),
+                                                          ("./usr/share/foo", "file", b"data\n", 0o644)], "Provides: virt\n")
+    out = os.path.join(ctx.work, "up.can")
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "unpack", out, os.path.join(d, "tool.deb"), os.path.join(d, "libfoo1.deb")])
+    expect(rc == 0, "unpack: " + o + e)
+    expect("depends: tool needs absent-pkg, not in the set" in o, "the missing Pre-Depends was not reported: " + o)
+    expect("depends: tool needs libfoo1 (>= 2), not in the set" in o, "the version constraint was not checked: " + o)
+    expect("virt" not in o, "a Provides in the set was reported missing: " + o)
+    lock = cannery.load(os.path.join(out, ".can", "lock"), "lock")
+    pkgs = cannery.values(lock, "pkg")
+    expect([p[0] for p in pkgs] == [b"libfoo1", b"tool"] and pkgs[1][1] == b"1" and pkgs[1][2] == b"amd64", "pkg records: %r" % pkgs)
+    expect(pkgs[1][3].decode() == cannery.b2_file(os.path.join(d, "tool.deb")), "the input hash is the file's")
+    expect(not cannery.values(lock, "tree"), "an open can has no tree hash yet")
+    expect(os.path.exists(os.path.join(out, "root", "opt")) and os.path.exists(os.path.join(out, "root", "etc", "passwd")), "placeholders")
+    expect(os.path.exists(os.path.join(out, ".can", "opener")) and not os.path.exists(os.path.join(out, ".can", "manifest")), "an open can: opener yes, manifest not yet")
+    # the can is a directory between the two steps: put an ELF in by hand, then close it
+    with open(os.path.join(out, "root", "usr", "bin", "t2"), "wb") as f:
+        f.write(true_bytes)
+    os.chmod(os.path.join(out, "root", "usr", "bin", "t2"), 0o755)
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "wrap", out])
+    expect(rc == 1 and "does not resolve" in o, "an ELF whose loader the tree lacks must refuse the close: rc=%d %s" % (rc, o[-400:]))
+    os.remove(os.path.join(out, "root", "usr", "bin", "t2"))
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "wrap", out])
+    expect(rc == 0 and "closed" in o, "wrap: " + o + e)
+    lock = cannery.load(os.path.join(out, ".can", "lock"), "lock")
+    expect(len(cannery.values(lock, "pkg")) == 2 and cannery.values(lock, "tree") and cannery.values(lock, "manifest"), "the closed lock keeps its inputs and adds the hashes: %r" % [(r.key) for r in lock])
+    expect(open(os.path.join(out, ".can", "manifest"), "rb").read() == b"can 1\n", "the default manifest")
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "hash", out])
+    expect(o.strip().encode() == cannery.values(lock, "tree")[0][0], "hash agrees with the lock")
+    expect(cannery.is_wrapper(os.path.join(out, "root", "usr", "bin", "tool"), cannery.opener_ino(out)), "the script was wrapped")
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "unpack", os.path.join(ctx.work, "dup.can"), os.path.join(d, "tool.deb"), os.path.join(d, "tool.deb")])
+    expect(rc != 0 and "one version of a package" in e, "two files of one package must be refused: %s %s" % (o, e))
+    # a hand-made tree closes by wrap alone: no manifest, no lock inputs
+    hand = os.path.join(ctx.work, "hand.can")
+    os.makedirs(os.path.join(hand, "root", "usr", "bin"))
+    with open(os.path.join(hand, "root", "usr", "bin", "hi"), "w") as f:
+        f.write("#!/bin/sh\necho hi\n")
+    os.chmod(os.path.join(hand, "root", "usr", "bin", "hi"), 0o755)
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "wrap", hand])
+    expect(rc == 0, "wrap of a bare tree: " + o + e)
+    lock = cannery.load(os.path.join(hand, ".can", "lock"), "lock")
+    expect(not cannery.values(lock, "pkg") and cannery.values(lock, "tree") and cannery.values(lock, "opener"), "a hand-made can's lock has no inputs, an opener hash and a tree hash")
+    rep = elfcheck.static_check(hand, cannery.owned(hand), [])
+    expect(not rep.errors, "static check of a tree with no ELF: %r" % rep.errors)
+    expect(os.path.exists(os.path.join(hand, "root", "etc", "passwd")) and os.path.isdir(os.path.join(hand, "root", "opt")), "wrap adds the placeholders a hand-made tree lacks")
+    # the lock through the life of a can (F4-6, O4-18)
+    closed = open(os.path.join(out, ".can", "lock"), "rb").read()
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "unwrap", out])
+    expect(rc == 0, "unwrap: " + o + e)
+    lock = cannery.load(os.path.join(out, ".can", "lock"), "lock")
+    expect(len(cannery.values(lock, "pkg")) == 2 and not cannery.values(lock, "tree") and not cannery.values(lock, "manifest") and not cannery.values(lock, "opener"), "an open can's lock keeps its inputs and has no hashes: %r" % [r.key for r in lock])
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", out])
+    expect(rc == 1 and "an open can" in o, "check names an open can: " + o[-300:])
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "wrap", out])
+    expect(rc == 0 and open(os.path.join(out, ".can", "lock"), "rb").read() == closed, "wrap after unwrap reproduces the lock byte for byte")
+    os.remove(os.path.join(out, "root", "usr", "share", "foo"))
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", out])
+    expect(rc == 1 and "differs from the lock" in o, "a file removed from a closed can must show against the lock (O4-18): " + o[-300:])
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "hash", os.path.join(ctx.work, "not-a-can")])
+    expect(rc != 0 and "no root" in e, "hash of a non-can is refused (O4-16)")
+    lockcopy = os.path.join(ctx.work, "some.lock.txt")
+    shutil.copy2(os.path.join(out, ".can", "lock"), lockcopy)
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "fmt", "--check", lockcopy])
+    expect(rc == 0, "fmt recognises a lockfile by its first record, not its name (O4-16): " + o + e)
+
+
+@test
+def wrap_refusals(ctx):
+    """wrap refuses, and wraps nothing when it refuses: a stale wrapper of another opener (F4-2), a file its user
+    cannot execute (F4-7), a payload without a wrapper (F4-5, O4-11), an ELF whose loader the tree lacks (F4-8,
+    O4-7), a manifest beyond the opener's tables (O4-9, O4-10); executables in a data prefix are left alone (O4-1)."""
+    cannery_py = os.path.join(REPO, "cannery", "cannery.py")
+
+    def hand(name, files, manifest=None):
+        can = os.path.join(ctx.work, name)
+        shutil.rmtree(can, ignore_errors=True)
+        for v, body, mode in files:
+            p = os.path.join(can, "root", v.lstrip("/"))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(body)
+            os.chmod(p, mode)
+        if manifest is not None:
+            os.makedirs(os.path.join(can, ".can"), exist_ok=True)
+            with open(os.path.join(can, ".can", "manifest"), "wb") as f:
+                f.write(manifest)
+        return can
+    script = b"#!/bin/sh\necho hi\n"
+    true_bytes = open(os.path.join(ctx.root, "usr", "bin", ".real", "true"), "rb").read()
+    # F4-2: a copy whose opener differs by a byte, then wrap: the payload must survive
+    a = hand("st.can", [("/usr/bin/hi", script, 0o755)])
+    rc, o, e = run([sys.executable, cannery_py, "wrap", a])
+    expect(rc == 0, o + e)
+    b = os.path.join(ctx.work, "st2.can")
+    shutil.rmtree(b, ignore_errors=True)
+    shutil.copytree(a, b, symlinks=True)                       # plain copies: the hard links are broken
+    with open(os.path.join(b, ".can", "opener"), "ab") as f:
+        f.write(b"\0")
+    rc, o, e = run([sys.executable, cannery_py, "wrap", b])
+    expect(rc != 0 and "stale wrapper" in o + e and "reopen" in o + e, "a stale wrapper must be refused: %d %s %s" % (rc, o[-300:], e[-300:]))
+    expect(open(os.path.join(b, "root", "usr", "bin", ".real", "hi"), "rb").read() == script, "the payload was overwritten")
+    rc, o, e = run([sys.executable, cannery_py, "reopen", b, ctx.opener_src])
+    rc, o, e = run([sys.executable, cannery_py, "wrap", b])
+    expect(rc == 0, "after reopen the copy closes: " + o + e)
+    # F4-7: an executable its user cannot execute
+    c = hand("nx.can", [("/usr/bin/gx", script, 0o601)])
+    rc, o, e = run([sys.executable, cannery_py, "wrap", c])
+    expect(rc != 0 and "cannot execute" in o + e and not os.path.exists(os.path.join(c, "root", "usr", "bin", ".real")), "a 0601 file must not become a 0755 opener: %s %s" % (o[-300:], e[-300:]))
+    # F4-5: a payload without a wrapper
+    d = hand("stray.can", [("/usr/bin/hi", script, 0o755)])
+    rc, o, e = run([sys.executable, cannery_py, "wrap", d])
+    expect(rc == 0, o + e)
+    h1 = run([sys.executable, cannery_py, "hash", d])[1].strip()
+    with open(os.path.join(d, "root", "usr", "bin", ".real", "stray"), "wb") as f:
+        f.write(true_bytes)
+    os.chmod(os.path.join(d, "root", "usr", "bin", ".real", "stray"), 0o755)
+    h2 = run([sys.executable, cannery_py, "hash", d])[1].strip()
+    expect(h1 != h2, "a stray payload must change the tree hash")
+    for cmd in ("wrap", "unwrap", "check"):
+        rc, o, e = run([sys.executable, cannery_py, cmd, d])
+        expect(rc != 0 and "payload without wrapper" in o + e, "%s must refuse a stray payload: %s %s" % (cmd, o[-300:], e[-300:]))
+    rc, o, e = run([sys.executable, cannery_py, "reopen", d, ctx.opener_src])
+    expect(rc == 0 and "left alone" in o and not os.path.exists(os.path.join(d, "root", "usr", "bin", "stray")), "reopen must not make a wrapper for a stray: " + o)
+    # F4-8: a refused wrap wraps nothing
+    e_ = hand("noloader.can", [("/usr/bin/hi", script, 0o755), ("/usr/bin/t", true_bytes, 0o755)])
+    rc, o, e = run([sys.executable, cannery_py, "wrap", e_])
+    expect(rc == 1 and "nothing was wrapped" in o and not os.path.exists(os.path.join(e_, "root", "usr", "bin", ".real")), "a refused wrap must leave the tree unwrapped: " + o[-400:])
+    # O4-9, O4-10: the opener's tables
+    f_ = hand("lim.can", [("/usr/bin/hi", script, 0o755)], b"can 1\n\n" + b"".join(b'own "/claim%03d"\n' % i for i in range(300)))
+    rc, o, e = run([sys.executable, cannery_py, "wrap", f_])
+    expect(rc != 0 and "300 own records" in o + e, "300 own records must be refused: " + (o + e)[-300:])
+    g = hand("lim2.can", [("/usr/bin/hi", script, 0o755)], b"can 1\n\n" + b"".join(b'host "/hostpath%03d"\n' % i for i in range(40)))
+    rc, o, e = run([sys.executable, cannery_py, "wrap", g])
+    expect(rc != 0 and "40 host records" in o + e, "40 host records must be refused: " + (o + e)[-300:])
+    can2 = os.path.join(ctx.work, "hosts30.can")
+    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    with open(os.path.join(can2, ".can", "manifest"), "wb") as f:
+        f.write(b"can 1\n\n" + b"".join(b'host "/hostpath%03d"\n' % i for i in range(30)))
+    rc, out, err = run([os.path.join(can2, "root", "usr", "bin", "cat"), "/etc/hosts"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == open("/etc/hosts").read(), "30 host records leave the identity files the host's: %r %r" % (out[:80], err))
+    # O4-1, O4-3: a data prefix is neither wrapped nor executed
+    dp = os.path.join(ctx.work, "data.can")
+    shutil.copytree(ctx.can, dp, symlinks=True, copy_function=cannery.link_or_copy)
+    sys_ = os.path.join(dp, "root", "opt", "sysroot", "bin")
+    os.makedirs(sys_)
+    with open(os.path.join(sys_, "true"), "wb") as f:
+        f.write(true_bytes)
+    os.chmod(os.path.join(sys_, "true"), 0o755)
+    with open(os.path.join(dp, ".can", "manifest"), "wb") as f:
+        f.write(b'can 1\n\ndata "/opt/sysroot"\n')
+    rc, o, e = run([sys.executable, cannery_py, "wrap", dp])
+    expect(rc == 0 and not os.path.exists(os.path.join(sys_, ".real")), "the data prefix was wrapped or the can refused: " + (o + e)[-400:])
+    rc, o, e = run([sys.executable, cannery_py, "check", dp])
+    expect(rc == 0, "check with a data prefix: " + o[-300:])
+    rc, out, err = run([os.path.join(dp, "root", "usr", "bin", "sh"), "-c", "/opt/sysroot/bin/true; echo rc=$?"], cwd=ctx.work, env=ctx.env)
+    expect("Permission denied" in out + err and "rc=126" in out, "a data prefix is never executed (O4-3): %r %r" % (out, err))
+
+
+@test
+def ownership_fails_closed(ctx):
+    """8.1: a top-level directory the opener cannot list is the can's, not a placeholder (O4-8 B, F4-4); a spawn with
+    no descriptor to spare fails loudly instead of running on the host (O4-8 A)."""
+    can2 = os.path.join(ctx.work, "perm.can")
+    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    secret = os.path.join(can2, "root", "secret")
+    os.makedirs(secret)
+    with open(os.path.join(secret, "file"), "w") as f:
+        f.write("data\n")
+    cat = os.path.join(can2, "root", "usr", "bin", "cat")
+    os.chmod(secret, 0)
     try:
-        r.download({"Package": "x", "Filename": "pool/x.deb", "Size": "1"})
-    except repo.RepoError as e:
-        expect("no SHA256" in str(e), str(e))
-    else:
-        raise AssertionError("a package without a digest was fetched")
+        rc, out, err = run([cat, "/secret/file"], cwd=ctx.work, env=ctx.env)
+        expect("Permission denied" in err and "No such file" not in err, "an unlistable directory must be the can's: %r" % err)
+        expect("/secret" in cannery.owned(can2), "the cannery's ownership must agree")
+    finally:
+        os.chmod(secret, 0o755)
+    press = os.path.join(ctx.progs, "fdpress")                 # built by the can's gcc: runs inside, like every built program
+    rc, out, err = inside(ctx, press, ["1", cat, "/proc/self/maps"])
+    expect(rc == 127 and "Too many open files" in err and ".real/libc.so.6" not in out, "with one spare descriptor the opener must fail loudly, never run the host's libc: rc=%d %r %r" % (rc, out[:200], err))
+    rc, out, err = inside(ctx, press, ["4", cat, "/proc/self/maps"])
+    expect(rc == 0 and ".real/libc.so.6" in out, "with four spare descriptors the can runs: rc=%d %r" % (rc, err))
+
+
+@test
+def root_listing_is_the_tree(ctx):
+    """8.3: the root directory itself is the tree's, so ls / lists the tree's entries and cd into a placeholder
+    works whether or not the host has the name (O4-17)."""
+    rc, out, err = run([wrapper(ctx, "ls"), "-A", "/"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and sorted(out.split()) == sorted(os.listdir(ctx.root)), "ls / must list the tree: %r" % out)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "cd /srv && pwd && cd / && pwd && touch /x 2>&1 || echo refused"], cwd=ctx.work, env=ctx.env)
+    expect(out.startswith("/srv\n/\n") and "refused" in out, "cd into a placeholder and the read-only root: %r %r" % (out, err))
+
+
+@test
+def log_names_and_escapes(ctx):
+    """6.2: a failed resolution logs the path as given (O4-6); a path with a newline or backslash is escaped in the
+    log and undone by the cannery, so prune keeps the file the workload opened (O4-5); prune refuses a log that
+    names no program (O4-4, F4-11)."""
+    log = os.path.join(ctx.work, "names.log")
+    if os.path.exists(log):
+        os.remove(log)
+    rc, out, err = run([wrapper(ctx, "cat"), "/usr/share/no/such/file"], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log))
+    text = open(log).read()
+    expect("open -2 /usr/share/no/such/file" in text, "a failed intermediate component must be logged by name: " + text[-300:])
+    can2 = os.path.join(ctx.work, "odd.can")
+    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    odd = os.path.join(can2, "root", "usr", "share", "odd")
+    os.makedirs(odd)
+    for name in ("with\nnewline", "back\\slash"):
+        with open(os.path.join(odd, name), "w") as f:
+            f.write(name)
+    log2 = os.path.join(ctx.work, "odd.log")
+    for name in ("with\nnewline", "back\\slash"):
+        rc, out, err = run([os.path.join(can2, "root", "usr", "bin", "cat"), "/usr/share/odd/" + name], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log2))
+        expect(out == name, "cat of the odd name: %r %r" % (out, err))
+    lines = open(log2).read().split("\n")
+    expect(any(l == "open 3 /usr/share/odd/with\\nnewline" for l in lines) and any(l == "open 3 /usr/share/odd/back\\\\slash" for l in lines), "escapes in the log: %r" % [l for l in lines if "odd" in l])
+    src = hello_source(ctx)
+    rc, out, err = run([os.path.join(can2, "root", "usr", "bin", GCC), "-O1", src, "-o", os.path.join(ctx.work, "hello-odd")], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log2))
+    expect(rc == 0, err)
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "prune", can2, log2])
+    expect(rc == 0, "prune: " + o + e)
+    expect(sorted(os.listdir(odd)) == sorted(["with\nnewline", "back\\slash"]), "the odd names must survive pruning: %r" % os.listdir(odd))
+    empty = os.path.join(ctx.work, "empty.log")
+    open(empty, "w").close()
+    before = sum(1 for _ in cannery.walk_files(os.path.join(can2, "root")))
+    rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "prune", can2, empty])
+    expect(rc != 0 and "name no program" in o + e and sum(1 for _ in cannery.walk_files(os.path.join(can2, "root"))) == before, "an empty log must be refused: %s %s" % (o[-200:], e[-200:]))
+
+
+@test
+def ownership_from_tree(ctx):
+    """8.1: the ownership set is read from the tree at startup, so a file added under a placeholder makes the
+    directory the can's with nothing to refresh; an empty placeholder stays the host's."""
+    can2 = os.path.join(ctx.work, "own.can")
+    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    sh = os.path.join(can2, "root", "usr", "bin", "sh")
+    rc, out, err = run([sh, "-c", "cat /opt/cont-probe 2>&1; ls /srv"], cwd=ctx.work, env=ctx.env)
+    expect("No such file" in out, "before: /opt is the host's, the probe does not exist there: %r" % out)
+    os.makedirs(os.path.join(can2, "root", "opt"), exist_ok=True)
+    with open(os.path.join(can2, "root", "opt", "cont-probe"), "w") as f:
+        f.write("probe\n")
+    rc, out, err = run([sh, "-c", "cat /opt/cont-probe; touch /opt/x 2>&1 || echo refused"], cwd=ctx.work, env=ctx.env)
+    expect(out.startswith("probe\n") and "refused" in out, "after: /opt is the can's, read-only, with no index refreshed: %r %r" % (out, err))
+    rc, out, err = run([sh, "-c", "ls -d /srv && touch /srv/cont-probe-%d && rm /srv/cont-probe-%d && echo host" % (os.getpid(), os.getpid())], cwd=ctx.work, env=ctx.env)
+    expect(out.strip().endswith("host") or "Permission denied" in err, "an empty placeholder stays the host's: %r %r" % (out, err))
+
+
+@test
+def interp_from_payload(ctx):
+    """7.3: the loader honours each program's own PT_INTERP, resolved in the can; a program naming a loader the can
+    lacks fails with a message naming it, before anything runs."""
+    src = open(os.path.join(ctx.root, "usr", "bin", ".real", "true"), "rb").read()
+    interp = b"/lib64/ld-linux-x86-64.so.2\0"
+    i = src.index(interp)
+    other = b"/lib/ld-musl-x86_64.so.1\0".ljust(len(interp), b"\0")
+    exe = os.path.join(ctx.work, "musl-true")
+    with open(exe, "wb") as f:
+        f.write(src[:i] + other + src[i + len(interp):])
+    os.chmod(exe, 0o755)
+    rc, out, err = inside(ctx, exe)
+    expect(rc == 127 and "ld-musl" in err and "does not have" in err, "a loader the can lacks: rc=%d %r" % (rc, err))
+    same = os.path.join(ctx.work, "glibc-true")
+    shutil.copy2(os.path.join(ctx.root, "usr", "bin", ".real", "true"), same)
+    rc, out, err = inside(ctx, same)
+    expect(rc == 0, "a program naming the can's loader by its own header runs: rc=%d %r" % (rc, err))
+    # one world (7.4.5): a loader on a host path, the shape of a Nix or --dynamic-linker binary, is refused (F4-1, O4-2)
+    hostlib = os.path.join(ctx.work, "hostworld")
+    os.makedirs(hostlib, exist_ok=True)
+    for f in ("ld-linux-x86-64.so.2", "libc.so.6"):
+        shutil.copy2(os.path.join(ctx.root, "usr", "lib", "x86_64-linux-gnu", ".real", f), os.path.join(hostlib, f))
+    src = hello_source(ctx)
+    world = os.path.join(ctx.work, "world")
+    rc, out, err = run([wrapper(ctx, GCC), "-O1", src, "-o", world, "-Wl,--dynamic-linker=" + os.path.join(hostlib, "ld-linux-x86-64.so.2"), "-Wl,-rpath," + hostlib], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, err)
+    rc, out, err = inside(ctx, world)
+    expect(rc == 127 and "does not have" in err and hostlib in err, "a host-path loader must be refused: rc=%d %r %r" % (rc, out, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", world], cwd=ctx.work, env=ctx.env)
+    expect(rc == 127 and "does not have" in err, "the same from the can's shell: rc=%d %r" % (rc, err))
+
+
+@test
+def prune_and_check_with_logs(ctx):
+    """10.3 and 10.4 take files: the dynamic check reads CAN_LOG files a workload wrote; prune keeps what the logs
+    touched plus the libraries kept ELF files need and drops the rest, and the pruned can still compiles."""
+    log = os.path.join(ctx.work, "prune.log")
+    if os.path.exists(log):
+        os.remove(log)
+    src = hello_source(ctx)
+    rc, out, err = run([wrapper(ctx, GCC), "-O1", src, "-o", os.path.join(ctx.work, "hello-prune")], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log))
+    expect(rc == 0, err)
+    rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", ctx.can, log])
+    expect(rc == 0 and "0 errors" in out and "dynamic check:" in out and "log lines" in out, "check with a log: " + out[-500:] + err)
+    can2 = os.path.join(ctx.work, "pruned.can")
+    shutil.copytree(ctx.can, can2, symlinks=True, copy_function=cannery.link_or_copy)
+    before = sum(1 for _ in cannery.walk_files(os.path.join(can2, "root")))
+    rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "prune", can2, log])
+    expect(rc == 0 and "pruned" in out, "prune: " + out + err)
+    after = sum(1 for _ in cannery.walk_files(os.path.join(can2, "root")))
+    expect(after < before // 2, "pruning removed little: %d of %d files remain" % (after, before))
+    expect(os.path.isdir(os.path.join(can2, "root", "usr", "share")) and os.path.exists(os.path.join(can2, "root", "etc", "passwd")), "directories and placeholders stay")
+    gcc2 = os.path.join(can2, "root", "usr", "bin", GCC)
+    rc, out, err = run([gcc2, "-O1", src, "-o", os.path.join(ctx.work, "hello-pruned")], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "the pruned can compiles: " + err[-500:])
+    rc, out, err = inside(ctx, os.path.join(ctx.work, "hello-pruned"))
+    expect(rc == 0 and out.startswith("hello "), "the output runs: %r %r" % (out, err))
+    rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", can2])
+    expect(rc == 0, "the pruned can passes the static check: " + out[-600:])
+    return "%d of %d files kept" % (after, before)
 
 
 @test
@@ -651,9 +962,7 @@ def static_check_loader_model(ctx):
             shutil.copy2(os.path.join(built, f), os.path.join(base, f))
         for f in ("prog", "hostprog"):
             shutil.copy2(os.path.join(built, f), os.path.join(x, f))
-        idx = cannery.load(os.path.join(ctx.can, ".can", "index"), "index")
-        info = cannery.index_info(idx)
-        rep = elfcheck.static_check(ctx.can, info, info["data"])
+        rep = elfcheck.static_check(ctx.can, cannery.owned(ctx.can), cannery.data_prefixes(ctx.can))
         bad = [e for e in rep.errors if "/usr/local/x/prog" in e or ("libfoo" in e and "hostprog" not in e)]
         expect(not bad, "RPATH inheritance: " + "; ".join(bad))
         expect(any("hostprog" in e and "does not own" in e for e in rep.errors), "a host RPATH must be refused (F3-17): %r" % rep.errors[:3])
@@ -661,6 +970,55 @@ def static_check_loader_model(ctx):
         expect(cache and "libc.so.6" in cache and cache["libc.so.6"][0].endswith("/libc.so.6"), "ld.so.cache parsed: %r" % (list(cache.items())[:2] if cache else cache))
     finally:
         shutil.rmtree(x, ignore_errors=True)
+    # F4-13: a hand-made tree with the loader at /usr/lib64 and no ld.so.cache closes; the loader satisfies its own
+    # soname and its default directories come from the loader itself. F4-9: without /lib the host's would be searched.
+    lib = os.path.join(ctx.root, "usr", "lib", "x86_64-linux-gnu")
+    hand2 = os.path.join(ctx.work, "hand2.can")
+    shutil.rmtree(hand2, ignore_errors=True)
+    for d in ("usr/lib64", "usr/lib/x86_64-linux-gnu", "usr/bin", "etc"):
+        os.makedirs(os.path.join(hand2, "root", d))
+    os.symlink("usr/lib64", os.path.join(hand2, "root", "lib64"))
+    os.symlink("usr/lib", os.path.join(hand2, "root", "lib"))
+    shutil.copy2(os.path.join(lib, ".real", "ld-linux-x86-64.so.2"), os.path.join(hand2, "root", "usr", "lib64", "ld-linux-x86-64.so.2"))
+    shutil.copy2(os.path.join(lib, ".real", "libc.so.6"), os.path.join(hand2, "root", "usr", "lib", "x86_64-linux-gnu", "libc.so.6"))
+    shutil.copy2(os.path.join(ctx.root, "usr", "bin", ".real", "true"), os.path.join(hand2, "root", "usr", "bin", "true"))
+    rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "wrap", hand2])
+    expect(rc == 0, "a tree with the loader in /usr/lib64 and no cache must close (F4-13): " + out[-500:])
+    rc, out, err = run([os.path.join(hand2, "root", "usr", "bin", "true")], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "and run: %r" % err)
+    os.remove(os.path.join(hand2, "root", "lib"))
+    rep = elfcheck.static_check(hand2, cannery.owned(hand2), [])
+    expect(any("/lib/x86_64-linux-gnu" in e_ and "does not own" in e_ for e_ in rep.errors), "a tree without /lib searches the host's /lib (F4-9): %r" % rep.errors[:3])
+    os.symlink("usr/lib", os.path.join(hand2, "root", "lib"))
+    shutil.rmtree(os.path.join(hand2, "root", "etc"))
+    os.makedirs(os.path.join(hand2, "root", "etc"))
+    rep = elfcheck.static_check(hand2, cannery.owned(hand2), [])
+    expect(any("/etc is the host's" in e_ for e_ in rep.errors), "a tree without /etc would read the host's ld.so.cache (F4-9): %r" % rep.errors[:3])
+    # a truncated ELF is an error by name, not a traceback (F4-11)
+    bad = os.path.join(hand2, "root", "usr", "bin", "broken")
+    with open(bad, "wb") as f:
+        f.write(b"\x7fELF\x02\x01\x01\x00garbage")
+    os.chmod(bad, 0o755)
+    rep = elfcheck.static_check(hand2, cannery.owned(hand2), [])
+    expect(any("broken" in e_ and ("malformed" in e_ or "not ELF64" in e_) for e_ in rep.errors), "a truncated ELF must be reported by name: %r" % rep.errors[:3])
+    # F4-10: a library the workload built in its own directory is a note, not an error
+    bld = os.path.join(ctx.work, "bld")
+    os.makedirs(bld, exist_ok=True)
+    with open(os.path.join(bld, "foo.c"), "w") as f:
+        f.write("int foo(void) { return 42; }\n")
+    with open(os.path.join(bld, "usefoo.c"), "w") as f:
+        f.write('#include <stdio.h>\nint foo(void); int main(void) { printf("%d\\n", foo()); return 0; }\n')
+    gcc = wrapper(ctx, GCC)
+    rc, out, err = run([gcc, "-shared", "-fPIC", "-o", "libfoo.so", "foo.c"], cwd=bld, env=ctx.env)
+    rc2, out, err2 = run([gcc, "usefoo.c", "-L.", "-lfoo", "-Wl,-rpath,$ORIGIN", "-o", "usefoo"], cwd=bld, env=ctx.env)
+    expect(rc == 0 and rc2 == 0, err + err2)
+    log = os.path.join(ctx.work, "bld.log")
+    if os.path.exists(log):
+        os.remove(log)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "./usefoo"], cwd=bld, env=dict(ctx.env, CAN_LOG=log))
+    expect(out == "42\n", "usefoo: %r %r" % (out, err))
+    rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", ctx.can, log])
+    expect(rc == 0 and "working directory" in out and "0 errors" in out.splitlines()[-1], "a build-directory library is a note, not an error (F4-10): " + out[-500:])
 
 
 @test
@@ -748,14 +1106,17 @@ def gconv_and_locale(ctx):
 def cannery_check(ctx):
     rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", ctx.can])
     expect(rc == 0 and "0 wrapper problems" in out and "0 errors" in out, out + err)
-    rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "fmt", "--check", os.path.join(ctx.can, ".can", "index")])
-    expect(rc == 0, "index not canonical: " + out + err)
+    rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "fmt", "--check", os.path.join(ctx.can, ".can", "manifest")])
+    expect(rc == 0, "manifest not canonical: " + out + err)
 
 
 @test
 def mixed_tree_refused(ctx):
-    """10.3: a tree whose ELF files name two loaders is refused by the cannery."""
-    d = os.path.join(ctx.work, "mixed")
+    """10.3: a tree whose ELF files name two loaders is refused by the static check, which reads the loaders from
+    the files; nothing declares one."""
+    import elfcheck
+    mixed = os.path.join(ctx.work, "mixed.can")
+    d = os.path.join(mixed, "root")
     os.makedirs(os.path.join(d, "usr", "bin"), exist_ok=True)
     src = open(os.path.join(ctx.root, "usr", "bin", ".real", "true"), "rb").read()
     interp = b"/lib64/ld-linux-x86-64.so.2\0"
@@ -767,12 +1128,13 @@ def mixed_tree_refused(ctx):
         f.write(src)
     for n in ("true", "false"):
         os.chmod(os.path.join(d, "usr", "bin", n), 0o755)
-    try:
-        cannery.detect(d)
-    except build.BuildError as e:
-        expect("mixes loaders" in str(e), str(e))
-        return
-    raise AssertionError("a tree with two loaders was not refused")
+    os.symlink("/lib64/ld-linux-x86-64.so.2", os.path.join(d, "usr", "bin", "ld-glibc"))   # so that one loader resolves
+    os.makedirs(os.path.join(d, "lib64"))
+    shutil.copy2(os.path.join(ctx.root, "lib64", "ld-linux-x86-64.so.2"), os.path.join(d, "lib64", "ld-linux-x86-64.so.2"), follow_symlinks=True)
+    os.makedirs(os.path.join(d, "lib"))
+    shutil.copy2(os.path.join(ctx.root, "lib64", "ld-linux-x86-64.so.2"), os.path.join(d, "lib", "ld-musl-x86_64.so.1"), follow_symlinks=True)
+    rep = elfcheck.static_check(mixed, ["/usr", "/lib", "/lib64"], [])
+    expect(any("mixes loaders" in e for e in rep.errors), "a tree with two loaders was not refused: %r" % rep.errors[:4])
 
 
 @test

@@ -72,7 +72,9 @@ static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int 
     if (!a[pi] && allow_empty) return 1;                       /* NULL with AT_EMPTY_PATH: the descriptor itself (6.11+) */
     long r = copy_str_in(S->b1, (const char *)a[pi]); if (r < 0) return r;
     if (S->b1[0] == 0) return allow_empty ? 1 : -ENOENT;
-    return canon(S, S->b1, di < 0 ? AT_FDCWD : (int)a[di], follow, S->v);
+    r = canon(S, S->b1, di < 0 ? AT_FDCWD : (int)a[di], follow, S->v);
+    if (r < 0) scpy(S->v, S->b1, PATH_MAX);                    /* the log names what was asked for, as given (review O4-6) */
+    return r;
 }
 static int exists_can(struct scratch *S, const char *v, struct kstat *st)
 {
@@ -198,6 +200,7 @@ static long exec_script(struct scratch *S, const char *v, char **argv, char **en
 static long exec_target(struct scratch *S, const char *v, char **argv, char **envp, int depth, struct scratch **Sp)
 {
     if (depth > 4) return -ELOOP;
+    if (vis_in_data(v)) return -EACCES;                          /* 6.2: a data prefix is never executed (review O4-3) */
     to_real_exec(v, S->real);
     struct kstat st;
     if (sys_stat(S->real, &st) < 0) return -ENOENT;

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""dogfood.py — the cannery as a can, and a cross-can build that must reproduce (PROPOSAL.md 10.5).
+"""dogfood.py — the cannery as a can, and a can built from inside it (PROPOSAL.md 10.5).
 
     test/dogfood.py --cache DIR [--work DIR] [--mirror URL] [--keep]
 
-Builds the cannery can (python3, zstd, xz-utils, ca-certificates, the cannery source and the opener), then
-builds a gcc can twice: with the checkout's cannery on the host, and with the cannery running inside its
-can (two openers, a cross-can invocation). The two lockfiles, and so the two tree hashes, must be identical.
-Needs the network; the package cache makes repeats fast.
+Fetches two package sets with tools/fetch-debs.py (the one step that touches the network, and not the
+cannery's), makes the cannery can from python3, zstd and xz-utils plus this checkout's cannery and opener,
+then makes the same gcc can twice from the same files: once with the checkout's cannery on the host, once
+with the cannery can's own entry from inside its can. The two lockfiles must be identical, tree hash
+included. Exit status 0 on success.
 """
 import argparse
 import os
@@ -18,11 +19,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
 
-def run(cmd, cwd):
+def run(cmd, cwd, check=True):
     p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    if p.returncode:
-        sys.exit("failed: %s\n%s" % (" ".join(cmd), p.stdout.decode(errors="replace")[-1500:]))
-    return p.stdout.decode(errors="replace")
+    out = p.stdout.decode(errors="replace")
+    if check and p.returncode:
+        sys.exit("FAIL %s\n%s" % (" ".join(cmd), out[-2000:]))
+    return out
+
+
+def debs(d):
+    return sorted(os.path.join(d, f) for f in os.listdir(d) if f.endswith(".deb"))
 
 
 def main():
@@ -37,28 +43,36 @@ def main():
         shutil.rmtree(work)
     os.makedirs(work)
     cannery = os.path.join(REPO, "cannery", "cannery.py")
-    entry = os.path.join(work, "cannery-entry.sh")
+    fetch = [sys.executable, os.path.join(REPO, "tools", "fetch-debs.py"), "--mirror", a.mirror, "--cache", a.cache]
+    print("fetching the package sets")
+    run(fetch + ["--out", os.path.join(work, "debs-cannery"), "python3", "zstd", "xz-utils"], work)
+    run(fetch + ["--out", os.path.join(work, "debs-gcc"), "gcc-13", "libc6-dev"], work)
+    print("building the cannery can")
+    ccan = os.path.join(work, "cannery.can")
+    run([sys.executable, cannery, "unpack", ccan] + debs(os.path.join(work, "debs-cannery")), work)
+    lib = os.path.join(ccan, "root", "usr", "lib", "cont")                # the cannery's own source and the opener, by hand: the can is a directory
+    shutil.copytree(os.path.join(REPO, "cannery"), lib, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy2(os.path.join(REPO, "build", "opener"), os.path.join(lib, "opener"))
+    entry = os.path.join(ccan, "root", "usr", "bin", "cannery")
     with open(entry, "w") as f:
         f.write('#!/bin/sh\nexec python3 /usr/lib/cont/cannery.py "$@"\n')
     os.chmod(entry, 0o755)
-    common = ["--mirror", a.mirror, "--cache", a.cache]
-    ccan = os.path.join(work, "cannery.can")
-    print("building the cannery can")
-    run([sys.executable, cannery, "from-packages"] + common + ["--add", os.path.join(REPO, "cannery") + "=/usr/lib/cont", "--add", os.path.join(REPO, "build", "opener") + "=/usr/lib/cont/opener",
-         "--add", entry + "=/usr/bin/cannery", "--entry", "cannery=/usr/bin/cannery", "--entry", "sh=/usr/bin/sh", "--out", ccan,
-         "python3", "zstd", "xz-utils", "ca-certificates"], work)
-    out = run([os.path.join(ccan, "cannery"), "fmt", "--check", os.path.join(ccan, ".can", "index")], work)
-    gcc_args = common + ["--entry", "gcc=/usr/bin/gcc-13", "--out"]
+    run([sys.executable, cannery, "wrap", ccan], work)
+    os.symlink("root/usr/bin/cannery", os.path.join(ccan, "cannery"))
+    run([os.path.join(ccan, "cannery"), "fmt", "--check", os.path.join(ccan, ".can", "manifest")], work)
+    gcc_debs = debs(os.path.join(work, "debs-gcc"))
     print("building the gcc can on the host")
-    run([sys.executable, cannery, "from-packages"] + gcc_args + [os.path.join(work, "gcc-host.can"), "gcc-13", "libc6-dev"], work)
+    run([sys.executable, cannery, "unpack", os.path.join(work, "gcc-host.can")] + gcc_debs, work)
+    run([sys.executable, cannery, "wrap", os.path.join(work, "gcc-host.can")], work)
     print("building the gcc can inside the cannery can")
-    run([os.path.join(ccan, "cannery"), "from-packages"] + gcc_args + [os.path.join(work, "gcc-can.can"), "gcc-13", "libc6-dev"], work)
+    run([os.path.join(ccan, "cannery"), "unpack", os.path.join(work, "gcc-can.can")] + gcc_debs, work)
+    run([os.path.join(ccan, "cannery"), "wrap", os.path.join(work, "gcc-can.can")], work)
     a_lock = open(os.path.join(work, "gcc-host.can", ".can", "lock"), "rb").read()
     b_lock = open(os.path.join(work, "gcc-can.can", ".can", "lock"), "rb").read()
     tree = [l for l in a_lock.decode().splitlines() if l.startswith("tree")]
     if a_lock == b_lock:
         print("PASS lockfiles identical; %s" % tree[0])
-        out = run([os.path.join(work, "gcc-can.can", "gcc"), "--version"], work)
+        out = run([os.path.join(work, "gcc-can.can", "root", "usr", "bin", "gcc-13"), "--version"], work)
         print("     " + out.splitlines()[0])
         if not a.keep:
             shutil.rmtree(work, ignore_errors=True)

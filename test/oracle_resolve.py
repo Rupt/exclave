@@ -139,10 +139,8 @@ def main():
     root = os.path.join(can, "root")
     shutil.copytree(os.path.join(a.can, "root"), root, symlinks=True, copy_function=cannery.link_or_copy)
     dirs, files, links = make_maze(root, rng)
-    manifest = os.path.join(can, ".can", "manifest")
-    with open(manifest, "w") as f:
-        f.write("can 1\n")
-    cannery.cmd_index(can, manifest, quiet=True)                # /maze becomes can-owned
+    with open(os.path.join(can, ".can", "manifest"), "w") as f:
+        f.write("can 1\n")                                       # /maze is a non-empty top-level directory: can-owned by the tree alone (8.1)
     gcc = os.path.join(root, "usr", "bin", "x86_64-linux-gnu-gcc-13")
     prog = os.path.join(work, "resolve")
     r = subprocess.run([gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "resolve.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

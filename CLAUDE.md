@@ -16,15 +16,22 @@ finding them inconvenient.
   must read without the conversation that produced it. When the design
   changes, change the proposal, not a side note. Earlier revisions live
   in git history, not in archive files.
-- **No options.** The opener has one environment knob, `CAN_LOG`. Do not
-  add flags, modes, or manifest keys to solve a problem; find the rule
-  that makes the option unnecessary, or state a limitation.
+- **No options.** The opener has one environment knob, `CAN_LOG`; the
+  cannery's commands take paths and nothing else. Do not add flags,
+  modes, or manifest keys to solve a problem; find the rule that makes
+  the option unnecessary, or state a limitation. A can is a directory
+  at every stage: what a user can do to it with `cp`, `ln` and an
+  editor between `unpack` and `wrap` is not a cannery feature.
 - **The opener is freestanding C**: no libc, raw syscalls from
   `src/sys.h`, every syscall issued through the syscall page (never a
   bare `syscall` instruction outside the bootstrap and the restorer).
-  The cannery is Python and is shipped as a can. No `curl`.
-- **Hashes are BLAKE2b-256.** Manifest, index and lockfile use the strict
+  The cannery is Python, is shipped as a can, takes files and never
+  opens a network connection; `tools/fetch-debs.py` is the example of
+  the step before it and is not part of the cannery. No `curl`.
+- **Hashes are BLAKE2b-256.** Manifest and lockfile use the strict
   grammar of proposal 6.2; `fmt` output is the only accepted spelling.
+  There is no index: the opener reads the manifest and the tree, and
+  anything the tree can say is not written down anywhere else.
 - **`spike/` is frozen evidence.** Do not edit the spikes; their numbers
   are cited. Build the opener in `src/` from the mechanisms, not by
   copying the code, and read the defect list in `spike/README.md` first.
@@ -81,8 +88,10 @@ profile was checked syscall by syscall; the results are in
 ## Scratch space
 
 Use the session scratchpad for trees, cans, package caches and traces,
-never the repository. A can is made with `cannery.py from-packages
---cache <scratch>/cannery-cache`; a plain tree with `spike/make-tree.sh`;
+never the repository. A can is made with `tools/fetch-debs.py --cache
+<scratch>/cannery-cache --out <scratch>/debs PACKAGES...`, then
+`cannery.py unpack CAN <scratch>/debs/*.deb` and `cannery.py wrap CAN`;
+a plain tree with `spike/make-tree.sh`;
 the suite and the oracles make their own copies under `build/` (ignored
 by git). The archive mirror configured on this machine is
 `http://gb.archive.ubuntu.com/ubuntu`. Cloud images for the matrix live

@@ -4,7 +4,7 @@
 # program (a wrapper, PROPOSAL.md 6.1) and loads programs itself (7.3).
 
 CC      ?= gcc
-SRC     := src/opener.c src/index.c src/loader.c src/scratch.c src/vis.c src/canon.c src/cache.c \
+SRC     := src/opener.c src/manifest.c src/loader.c src/scratch.c src/vis.c src/canon.c src/cache.c \
            src/filter.c src/handler.c src/isa.c src/str.c src/log.c
 HDR     := src/sys.h src/common.h src/elf.h
 OUT     := build/opener
@@ -35,11 +35,12 @@ $(OUT): $(SRC) $(HDR) Makefile
 stack: $(OUT)
 	python3 test/stackcheck.py build/opener.debug-*.su
 
-# host-side unit tests: the index parser compiled with a libc
+# host-side unit tests: the manifest parser compiled with a libc
 unit:
 	@mkdir -p build
-	$(CC) -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o build/index_test test/index_test.c src/index.c src/str.c
-	build/index_test
+	$(CC) -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o build/manifest_test test/manifest_test.c src/manifest.c src/str.c
+	build/manifest_test
+	python3 test/grammar_test.py
 	python3 test/syscalls.py
 
 # the regression suite (17.4); needs a gcc tree: CONT_TREE=dir make test
