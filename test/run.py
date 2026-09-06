@@ -246,8 +246,8 @@ def isolation(ctx):
         if res < 0:
             continue
         paths = re.findall(r'"((?:[^"\\]|\\.)*)"', args)
-        if name in ("execve", "execveat") and paths:
-            paths = paths[:1]
+        if name in ("execve", "execveat", "readlink", "readlinkat") and paths:
+            paths = paths[:1]                                 # the rest are argv strings, or the link's text (Fedora's /usr/bin/ld -> /etc/alternatives/ld)
         for p in paths:
             seen += 1
             p = os.path.normpath(p) if p.startswith("/") else p

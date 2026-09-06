@@ -233,7 +233,7 @@ def main():
             rc, out = vm.ssh("if test -x m/cont/build/sysroot-hello; then o=$(m/cont/build/sysroot-hello 2>&1); r=$?; echo \"sysroot-rc=$r $o\"; else echo no-sysroot-hello; fi; "
                              "ldd --version 2>&1 | head -1", timeout=60)
             sysroot = " ".join(l.strip() for l in out.splitlines() if l.strip())
-            ok = "sysroot-rc=0 hello from a sysroot build" in sysroot or "no-sysroot-hello" in sysroot
+            ok = "sysroot-rc=0 hello from a sysroot build" in sysroot or "no-sysroot-hello" in sysroot or "musl libc" in sysroot   # a glibc program has no loader on a musl host (9)
             log(name, "sysroot output:", sysroot, "" if ok else "FAIL")
             notes += "; sysroot: " + sysroot + ("" if ok else " FAIL")
             if not ok:
