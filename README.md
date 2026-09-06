@@ -16,16 +16,20 @@ package files it is handed, or any root tree, and is itself a can.
 
 ## Status
 
-Milestones 1a to 2 are built and milestone 3 has begun. The cannery
-takes files and never fetches, the lockfile records inputs and output
-by hash and locates nothing, the opener reads the manifest and the
-tree and nothing generated, and a can is a directory at every stage.
-A gcc can from Ubuntu or Debian packages builds zlib, Lua, SQLite and
-re2c from source with their configure scripts, at native speed for the
-compiles and about a third more for the configure scripts; an Alpine
-can from `.apk` files compiles and runs C on musl. gdb debugs a canned
-program with no manual command: the opener carries the script gdb
-needs. The regression suite (53 named tests), the kernel oracles,
+Milestones 1a to 2 are built and milestone 3 has one item left, the
+aarch64 opener. The cannery takes files and never fetches, the
+lockfile records inputs and output by hash and locates nothing, the
+opener reads the manifest and the tree and nothing generated, and a
+can is a directory at every stage. A gcc can from Ubuntu or Debian
+packages builds zlib, Lua, SQLite and re2c from source with their
+configure scripts, at native speed for the compiles and about a third
+more for the configure scripts; an Alpine can from `.apk` files and a
+Fedora can from `.rpm` files compile and run C inside; a clang can
+compiles C and C++; a CentOS 7 glibc as a data prefix in the gcc can
+gives outputs that run on every glibc since 2.17, which the kernel
+matrix checks natively on each VM. gdb debugs a canned program with no
+manual command: the opener carries the script gdb needs. The
+regression suite (54 named tests), the kernel oracles,
 Docker's default seccomp profile and the plain-terminal AppArmor label
 all pass on the reference machine, and the kernel matrix in QEMU
 virtual machines passes on nine distributions from CentOS 7 at kernel
@@ -45,6 +49,8 @@ make unit                 # the manifest grammar tests and the syscall table tes
 make stack                # the handler's stack budget from gcc -fstack-usage
 tools/fetch-debs.py --out debs gcc-13 libc6-dev         # the step before the cannery: apt, a mirror, this tool, anything
 tools/fetch-apks.py --out apks gcc musl-dev binutils     # the same for Alpine
+tools/fetch-rpms.py --repo URL --out rpms gcc glibc-devel   # and for Fedora, Rocky, CentOS: any repository with repodata/
+test/sysroot.py --can gcc.can --rpms el7/ --out hello     # a CentOS 7 glibc as a data prefix; the output runs on every glibc since 2.17
 cannery/cannery.py unpack gcc.can debs/*.deb            # package files -> an open can, a directory you may edit; .apk files likewise
 cannery/cannery.py wrap gcc.can                         # close it: wrap, check, hash
 ln -s root/usr/bin/gcc-13 gcc.can/gcc                   # an entry, if you want one
@@ -110,10 +116,13 @@ src/log.c        CAN_LOG and fatal messages
 cannery/cannery.py   the command line: grammar, unpack, wrap, unwrap, check, prune, fmt, hash, reopen
 cannery/deb.py       ar, tar, compression, control stanzas, dependency fields, Debian version order
 cannery/apk.py       the Alpine reader with deb.py's interface: gzip streams, .PKGINFO, apk's dependency and version syntax
+cannery/rpm.py       the rpm reader with the same interface: lead and headers, the cpio payload, rpm's flags and version order
 cannery/build.py     extraction rules, synthesis, placeholders, dependency report, pruning, tree hash, lockfile, unwrap
 cannery/elfcheck.py  the static and dynamic checks of 10.3
 tools/fetch-debs.py  an example of the step before the cannery: resolve a closure from an archive and download it
 tools/fetch-apks.py  the same for an Alpine repository, verified as apk verifies
+tools/fetch-rpms.py  the same for a yum or dnf repository, verified by the index's SHA-256
+test/sysroot.py      a glibc sysroot as a data prefix and an output built against it, for the matrix to run natively
 test/run.py          the regression suite; test/progs/ its C and Rust programs
 test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the openat2 oracle
 test/docker_profile.py   a can under Docker's default seccomp profile; test/docker-seccomp.json the profile
@@ -121,7 +130,7 @@ test/syscalls.py     every kernel syscall classified; test/bench.py the performa
 test/realsoft.py     real projects built inside and outside a can; test/matrix.py the kernel matrix in VMs
 test/dogfood.py      the cannery can building a can that must reproduce the host-built lockfile
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/stackcheck.py the stack budget
-docs/            proposal (revision 11), review response, prior art, review reports
+docs/            proposal (revision 12), review response, prior art, review reports
 spike/           frozen prototypes and their tests
 ```
 

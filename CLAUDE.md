@@ -26,10 +26,11 @@ finding them inconvenient.
   `src/sys.h`, every syscall issued through the syscall page (never a
   bare `syscall` instruction outside the bootstrap and the restorer).
   The cannery is Python, is shipped as a can, takes files and never
-  opens a network connection; `tools/fetch-debs.py` and
-  `tools/fetch-apks.py` are the examples of the step before it and are
-  not part of the cannery. No `curl`. A package reader (`deb.py`,
-  `apk.py`) has one interface and is chosen by the file. `src/gdb.py`
+  opens a network connection; `tools/fetch-debs.py`,
+  `tools/fetch-apks.py` and `tools/fetch-rpms.py` are the examples of
+  the step before it and are not part of the cannery. No `curl`. A
+  package reader (`deb.py`, `apk.py`, `rpm.py`) has one interface and
+  is chosen by the file. `src/gdb.py`
   is data the opener carries for gdb, not code it runs: plain Python
   gdb's API accepts, kept through the strip.
 - **Hashes are BLAKE2b-256.** Manifest and lockfile use the strict
@@ -100,7 +101,13 @@ never the repository. A can is made with `tools/fetch-debs.py --cache
 `cannery.py unpack CAN <scratch>/debs/*.deb` and `cannery.py wrap CAN`;
 an Alpine can with `tools/fetch-apks.py --out <scratch>/apks gcc
 musl-dev binutils make linux-headers` and the same `unpack` and
-`wrap`; a plain tree with `spike/make-tree.sh`;
+`wrap`; a Fedora can with `tools/fetch-rpms.py --repo
+<archive>/42/Everything/x86_64/os --choose
+glibc-langpack=glibc-minimal-langpack --out <scratch>/rpms gcc
+glibc-devel binutils make`; the sysroot can and its output with
+`test/sysroot.py --can <gcc can> --rpms <centos 7 rpms> --out
+build/sysroot-hello`, which the matrix then runs natively; a plain
+tree with `spike/make-tree.sh`;
 the suite and the oracles make their own copies under `build/` (ignored
 by git). The archive mirror configured on this machine is
 `http://gb.archive.ubuntu.com/ubuntu`. Cloud images for the matrix live

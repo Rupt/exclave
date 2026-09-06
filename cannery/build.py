@@ -56,12 +56,35 @@ def extract(root, debs, log=print):
     member whose path resolves outside the tree through a symlink is refused. Returns {relpath: owner}."""
     os.makedirs(os.path.join(root, "usr"), exist_ok=True)
     root_real = os.path.realpath(root)
-    if all(getattr(reader(p), "MERGED_USR", True) for _, p, _ in debs):   # Debian's merged /usr; Alpine's directories are its own
+    # A symlink one package ships at a path other packages ship files under, Fedora 42's usr/sbin -> bin, is made
+    # before anything is extracted, as the merged-usr links are, so that those files land where the link points
+    # whatever the order of the packages; a package's own files under its own link count too.
+    links, parents = {}, set()
+    for name, path, st in debs:
+        with reader(path).open_tar(path, "data.tar") as t:
+            for m in t.getmembers():
+                rel = _safe_rel(m.name)
+                if not rel:
+                    continue
+                if m.issym():
+                    links[rel] = m.linkname
+                elif not m.isdir():
+                    parts = rel.split("/")
+                    parents.update("/".join(parts[:i]) for i in range(1, len(parts)))
+    merged = {"usr/" + d for d in MERGED_USR}
+    if all(getattr(reader(p), "MERGED_USR", True) for _, p, _ in debs):   # Debian's and Fedora's merged /usr; Alpine's directories are its own
         for d in MERGED_USR:
-            os.makedirs(os.path.join(root, "usr", d), exist_ok=True)
+            if "usr/" + d not in links:                       # unless a package ships usr/<d> itself as a link (Fedora 42's usr/sbin -> bin)
+                os.makedirs(os.path.join(root, "usr", d), exist_ok=True)
             p = os.path.join(root, d)
             if not os.path.lexists(p):
                 os.symlink("usr/" + d, p)
+    for rel in sorted(links):
+        if (rel in parents or rel in merged) and not links[rel].startswith("/") and ".." not in links[rel].split("/"):
+            dst = os.path.join(root, rel)
+            if not os.path.lexists(dst):
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                os.symlink(links[rel], dst)
     owner, replaces, hardlinks_pending = {}, {}, []
     for name, path, st in debs:
         rd = reader(path)
@@ -183,6 +206,25 @@ def synthesise(root, debs, log=print):
                     os.symlink(os.path.relpath("/bin/busybox", os.path.dirname("/" + rel)), _v(root, "/" + rel))
                     n += 1
         log("synthesised %d busybox applet links from /etc/busybox-paths.d" % n)
+    # Fedora 42's filesystem: its %posttrans merges sbin into bin, replacing /usr/sbin and /usr/local/sbin by a link
+    # to bin when every entry there is a link ../bin/<name>; the script says so in Lua, and this is its effect
+    for name, path, st in debs:
+        if name != "filesystem":
+            continue
+        fields, scripts = reader(path).control(path)
+        if 'posix.symlink("bin", path)' not in scripts.get("posttrans", ""):
+            continue
+        for sb in ("/usr/sbin", "/usr/local/sbin"):
+            d = _v(root, sb)
+            if not os.path.isdir(d) or os.path.islink(d):
+                continue
+            entries = os.listdir(d)
+            if all(os.path.islink(os.path.join(d, e)) and os.readlink(os.path.join(d, e)) == "../bin/" + e for e in entries):
+                for e in entries:
+                    os.remove(os.path.join(d, e))
+                os.rmdir(d)
+                os.symlink("bin", d)
+                log("synthesised %s -> bin as filesystem's %%posttrans does" % sb)
     # dash: /bin/sh is made by its postinst, not shipped
     if "dash" in names and os.path.lexists(_v(root, "/usr/bin/dash")):
         _link(root, "/usr/bin/sh", "dash", log)
@@ -215,13 +257,27 @@ def synthesise(root, debs, log=print):
             log("synthesised /etc/%s from base-passwd" % name_)
     # ldconfig: the can's own, static, before wrapping so the cache never indexes the opener
     ld = None
-    for cand in ("/usr/sbin/ldconfig.real", "/sbin/ldconfig.real", "/usr/sbin/ldconfig", "/sbin/ldconfig"):
+    for cand in ("/usr/sbin/ldconfig.real", "/sbin/ldconfig.real", "/usr/sbin/ldconfig", "/sbin/ldconfig", "/usr/bin/ldconfig"):   # Fedora 42 merged sbin into bin
         p = _v(root, cand)
         if os.path.isfile(p) and open(p, "rb").read(4) == b"\x7fELF":
             ld = p
             break
     if ld:
-        r = subprocess.run([ld, "-r", root, "-f", "/etc/ld.so.conf"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)   # glibc 2.17 wants the path spelt out under -r
+        conf, tmp = _v(root, "/etc/ld.so.conf"), None
+        if os.path.isfile(conf):                              # ldconfig -r refuses a relative include, which Red Hat's ld.so.conf has:
+            lines, changed = [], False                        # a copy with the pattern spelt from /etc is written in the tree for the run
+            for line in open(conf, encoding="utf-8", errors="replace"):
+                m = re.match(r"^(\s*include\s+)([^/\s][^\s]*)(.*)$", line)
+                if m:
+                    line, changed = m.group(1) + "/etc/" + m.group(2) + m.group(3) + "\n", True
+                lines.append(line)
+            if changed:
+                tmp = _v(root, "/etc/ld.so.conf.cannery")
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+        r = subprocess.run([ld, "-r", root, "-f", "/etc/ld.so.conf.cannery" if tmp else "/etc/ld.so.conf"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if tmp:
+            os.remove(tmp)
         if r.returncode:
             log("ldconfig failed: " + r.stderr.decode(errors="replace").strip())
         else:
