@@ -16,40 +16,42 @@ package files it is handed, or any root tree, and is itself a can.
 
 ## Status
 
-Milestones 1a to 1c are built and milestone 2 has one item left, gdb.
-Revision 10 of the proposal is a simplification: the cannery takes
-files and never fetches, the lockfile records inputs and output by hash
-and locates nothing, there is no generated index (the opener reads the
-manifest and the tree), no from-source, no layers, no entries or
-environment records, and a can is a directory at every stage. A gcc
-can from Ubuntu or Debian packages builds zlib, Lua, SQLite and re2c
-from source with their configure scripts, at native speed for the
-compiles and about a third more for the configure scripts. The
-regression suite (49 named tests), the kernel oracles, Docker's default
-seccomp profile and the plain-terminal AppArmor label all pass on the
-reference machine, and the kernel matrix in QEMU virtual machines
-passes on nine distributions from CentOS 7 at kernel 3.10 to Fedora 42,
-Alpine's musl userland and SELinux included. The cannery ships as a can
-and the gcc can it builds from inside its can reproduces the host-built
-lockfile byte for byte. Trace pruning keeps 120 of a gcc can's 4 851
-files for a hello-world compile. Section 18 of the proposal has the
-milestone table; 16.2 and 16.3 the measurements; 12 the matrix;
-`docs/REVIEW-RESPONSE.md` every review finding, including the fourth
-round's thirty-one against revision 10 itself.
+Milestones 1a to 2 are built and milestone 3 has begun. The cannery
+takes files and never fetches, the lockfile records inputs and output
+by hash and locates nothing, the opener reads the manifest and the
+tree and nothing generated, and a can is a directory at every stage.
+A gcc can from Ubuntu or Debian packages builds zlib, Lua, SQLite and
+re2c from source with their configure scripts, at native speed for the
+compiles and about a third more for the configure scripts; an Alpine
+can from `.apk` files compiles and runs C on musl. gdb debugs a canned
+program with no manual command: the opener carries the script gdb
+needs. The regression suite (53 named tests), the kernel oracles,
+Docker's default seccomp profile and the plain-terminal AppArmor label
+all pass on the reference machine, and the kernel matrix in QEMU
+virtual machines passes on nine distributions from CentOS 7 at kernel
+3.10 to Fedora 42, Alpine's musl userland and SELinux included. The
+cannery ships as a can and the gcc can it builds from inside its can
+reproduces the host-built lockfile byte for byte. Trace pruning keeps
+120 of a gcc can's 4 851 files for a hello-world compile. Section 18
+of the proposal has the milestone table; 16 the measurements; 12 the
+matrix and the Alpine can; `docs/REVIEW-RESPONSE.md` every review
+finding.
 
 ## Build, make a can, run
 
 ```
-make                      # build/opener, a freestanding ET_DYN, x86-64 only for now
+make                      # build/opener, a freestanding ET_DYN, x86-64 only for now; build/opener-old for the nesting test
 make unit                 # the manifest grammar tests and the syscall table test
 make stack                # the handler's stack budget from gcc -fstack-usage
 tools/fetch-debs.py --out debs gcc-13 libc6-dev         # the step before the cannery: apt, a mirror, this tool, anything
-cannery/cannery.py unpack gcc.can debs/*.deb            # package files -> an open can, a directory you may edit
+tools/fetch-apks.py --out apks gcc musl-dev binutils     # the same for Alpine
+cannery/cannery.py unpack gcc.can debs/*.deb            # package files -> an open can, a directory you may edit; .apk files likewise
 cannery/cannery.py wrap gcc.can                         # close it: wrap, check, hash
 ln -s root/usr/bin/gcc-13 gcc.can/gcc                   # an entry, if you want one
 gcc.can/gcc -O2 hello.c -o hello                        # any executable in root/ runs by path
 gcc.can/root/usr/bin/sh -c 'cc1 --version'              # the can's own shell
 gcc.can/.can/opener /path/to/host/program args...        # a program without a wrapper, a host tool or a built output, inside the can
+gdb -iex 'set auto-load safe-path /' --args gcc.can/gcc -c x.c   # gdb: the opener carries the script; break, bt, source lines
 CAN_LOG=/tmp/can.log ...  # the one knob: one line per trapped syscall
 cannery/cannery.py check gcc.can /tmp/can.log           # static check of every ELF, dynamic check of the logged run
 cannery/cannery.py prune gcc.can /tmp/can.log           # keep what the logged runs touched
@@ -94,7 +96,8 @@ src/sys.h        syscall numbers, the syscall page, raw wrappers, a tiny libc su
 src/common.h     constants, the run-time state (struct can), every module's interface
 src/opener.c     entry: syscall page, self-relocation, find the can, manifest, boundary, env, load
 src/manifest.c   the strict grammar parser (6.2); also built for the host by make unit
-src/loader.c     userland ELF loader and the .note.cont probe (7.3)
+src/loader.c     userland ELF loader and the .note.cont probe (7.3); the facts exported for gdb (7.6)
+src/gdb.py       the script the opener carries in .debug_gdb_scripts and gdb auto-loads (7.6, 13.1)
 src/filter.c     the seccomp program (7.4.2)
 src/handler.c    the SIGSYS handler: translation, read-only rule, exec, signal masks (7.4.3, 7.5, 8.2)
 src/canon.c      canonicalisation in virtual space (7.4.4)
@@ -106,9 +109,11 @@ src/str.c        string helpers, arena, the shebang parser
 src/log.c        CAN_LOG and fatal messages
 cannery/cannery.py   the command line: grammar, unpack, wrap, unwrap, check, prune, fmt, hash, reopen
 cannery/deb.py       ar, tar, compression, control stanzas, dependency fields, Debian version order
+cannery/apk.py       the Alpine reader with deb.py's interface: gzip streams, .PKGINFO, apk's dependency and version syntax
 cannery/build.py     extraction rules, synthesis, placeholders, dependency report, pruning, tree hash, lockfile, unwrap
 cannery/elfcheck.py  the static and dynamic checks of 10.3
 tools/fetch-debs.py  an example of the step before the cannery: resolve a closure from an archive and download it
+tools/fetch-apks.py  the same for an Alpine repository, verified as apk verifies
 test/run.py          the regression suite; test/progs/ its C and Rust programs
 test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the openat2 oracle
 test/docker_profile.py   a can under Docker's default seccomp profile; test/docker-seccomp.json the profile
@@ -116,7 +121,7 @@ test/syscalls.py     every kernel syscall classified; test/bench.py the performa
 test/realsoft.py     real projects built inside and outside a can; test/matrix.py the kernel matrix in VMs
 test/dogfood.py      the cannery can building a can that must reproduce the host-built lockfile
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/stackcheck.py the stack budget
-docs/            proposal (revision 10), review response, prior art, review reports
+docs/            proposal (revision 11), review response, prior art, review reports
 spike/           frozen prototypes and their tests
 ```
 
