@@ -16,12 +16,16 @@ typedef unsigned int gid_t;
 typedef unsigned int mode_t;
 
 /* ---------- architecture: syscall instruction + numbers ---------- */
-#if defined(__x86_64__)
-/* The syscall page (PROPOSAL.md 7.4.2): one page at a fixed address holding "syscall; ret". Every syscall
- * the opener makes goes through it, and the filter allows a syscall by that instruction address alone.
- * The address is the same in every process, so one filter serves the whole tree. The page is mapped by
- * page_init() before anything else runs; only the bootstrap and the signal restorer use a raw instruction. */
+/* The syscall page (PROPOSAL.md 7.4.2): one page at a fixed address holding the syscall instruction and a return.
+ * Every syscall the opener makes goes through it, and the filter allows a syscall by that instruction address
+ * alone. The address is the same in every process, so one filter serves the whole tree. The page is mapped by
+ * page_init() before anything else runs; only the bootstrap and the signal restorer use a raw instruction. It
+ * lies below the classic ET_EXEC base of both architectures and is 64K-aligned for kernels with 64K pages. */
 #define SC_PAGE 0x3f0000UL
+/* A syscall the architecture lacks gets a sentinel below zero, unique so that the handler's switch compiles, and
+ * the filter skips it (a legacy form the kernel of the other architecture has: open, stat, fork, ...). */
+#define ABSENT(k) (-1000 - (k))
+#if defined(__x86_64__)
 static inline long __sc6(long n, long a, long b, long c, long d, long e, long f)
 {
     long ret;
@@ -58,7 +62,6 @@ enum {
     NR_faccessat = 269, NR_unshare = 272, NR_dup3 = 292,
     NR_mount_setattr = 442, NR_rt_sigaction = 13, NR_rt_sigprocmask = 14,
     NR_ptrace = 101, NR_fork = 57,
-    /* milestone 1a additions */
     NR_uname = 63, NR_tgkill = 234, NR_gettid = 186, NR_process_vm_readv = 310, NR_fchmod = 91,
     NR_fchown = 93, NR_ftruncate = 77, NR_fsetxattr = 190, NR_fremovexattr = 199, NR_fgetxattr = 193,
     NR_rt_sigsuspend = 130, NR_ppoll = 271, NR_pselect6 = 270, NR_select = 23, NR_epoll_pwait = 281,
@@ -77,10 +80,95 @@ enum {
     NR_close_range = 436, NR_dup2 = 33, NR_fanotify_mark = 301, NR_writev = 20, NR_process_vm_writev = 311,
     NR_setxattrat = 463, NR_getxattrat = 464, NR_listxattrat = 465, NR_removexattrat = 466, NR_open_tree_attr = 467,
     NR_file_getattr = 468, NR_file_setattr = 469,
+    /* the hot path of the filter (7.4.2) */
+    NR_brk = 12, NR_futex = 202, NR_madvise = 28, NR_clock_gettime = 228, NR_pipe2 = 293, NR_vfork = 58, NR_readv = 19,
+    NR_set_tid_address = 218, NR_set_robust_list = 273, NR_prlimit64 = 302, NR_getrandom = 318, NR_rseq = 334,
+    NR_arch_prctl = 158, NR_sched_getaffinity = 204,
 };
 #define ARCH_NAME "x86_64"
+#define ARCH_ISA_DEFAULT "x86-64"
+#define EM_NATIVE 62
+#define AUDIT_ARCH_NATIVE 0xC000003Eu
+#define R_NATIVE_RELATIVE 8                 /* R_X86_64_RELATIVE */
+#define O_DIRECTORY 0200000
+#define O_NOFOLLOW  0400000
+#elif defined(__aarch64__)
+/* svc #0 with the number in x8 and the arguments in x0 to x5; the result in x0. Through the page: a branch with
+ * link to the page, whose svc executes with the program counter inside it, which is what the filter checks. */
+static inline long __sc6(long n, long a, long b, long c, long d, long e, long f)
+{
+    register long x8 __asm__("x8") = n;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    register long x2 __asm__("x2") = c;
+    register long x3 __asm__("x3") = d;
+    register long x4 __asm__("x4") = e;
+    register long x5 __asm__("x5") = f;
+    register long x9 __asm__("x9") = (long)SC_PAGE;
+    __asm__ volatile ("blr x9"
+                      : "+r"(x0)
+                      : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x9)
+                      : "x30", "memory");
+    return x0;
+}
+static inline long __sc6_raw(long n, long a, long b, long c, long d, long e, long f)
+{
+    register long x8 __asm__("x8") = n;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    register long x2 __asm__("x2") = c;
+    register long x3 __asm__("x3") = d;
+    register long x4 __asm__("x4") = e;
+    register long x5 __asm__("x5") = f;
+    __asm__ volatile ("svc #0"
+                      : "+r"(x0)
+                      : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
+                      : "memory");
+    return x0;
+}
+enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absent */
+    NR_read = 63, NR_write = 64, NR_close = 57, NR_fstat = 80, NR_lseek = 62,
+    NR_mmap = 222, NR_munmap = 215, NR_ioctl = 29, NR_pread64 = 67,
+    NR_getpid = 172, NR_clone = 220, NR_execve = 221, NR_wait4 = 260,
+    NR_kill = 129, NR_fchdir = 50, NR_chdir = 49, NR_getcwd = 17,
+    NR_getuid = 174, NR_getgid = 176, NR_statfs = 43, NR_pivot_root = 41,
+    NR_prctl = 167, NR_mount = 40, NR_umount2 = 39, NR_getdents64 = 61,
+    NR_exit_group = 94, NR_openat = 56, NR_mkdirat = 34, NR_newfstatat = 79,
+    NR_unlinkat = 35, NR_symlinkat = 36, NR_readlinkat = 78,
+    NR_faccessat = 48, NR_unshare = 97, NR_dup3 = 24,
+    NR_mount_setattr = 442, NR_rt_sigaction = 134, NR_rt_sigprocmask = 135,
+    NR_ptrace = 117, NR_fork = ABSENT(1),
+    NR_uname = 160, NR_tgkill = 131, NR_gettid = 178, NR_process_vm_readv = 270, NR_fchmod = 52,
+    NR_fchown = 55, NR_ftruncate = 46, NR_fsetxattr = 7, NR_fremovexattr = 16, NR_fgetxattr = 10,
+    NR_rt_sigsuspend = 133, NR_ppoll = 73, NR_pselect6 = 72, NR_select = ABSENT(2), NR_epoll_pwait = 22,
+    NR_epoll_pwait2 = 441, NR_epoll_wait = ABSENT(3), NR_io_pgetevents = 292, NR_io_getevents = 4,
+    NR_io_uring_setup = 425, NR_seccomp = 277, NR_fstatfs = 44, NR_sigaltstack = 132, NR_exit = 93,
+    NR_rt_sigreturn = 139, NR_clone3 = 435, NR_mprotect = 226, NR_dup = 23, NR_fcntl = 25,
+    NR_open = ABSENT(4), NR_stat = ABSENT(5), NR_lstat = ABSENT(6), NR_access = ABSENT(7), NR_truncate = 45, NR_rename = ABSENT(8),
+    NR_mkdir = ABSENT(9), NR_rmdir = ABSENT(10), NR_creat = ABSENT(11), NR_link = ABSENT(12), NR_unlink = ABSENT(13), NR_symlink = ABSENT(14),
+    NR_readlink = ABSENT(15), NR_chmod = ABSENT(16), NR_chown = ABSENT(17), NR_lchown = ABSENT(18), NR_utime = ABSENT(19), NR_mknod = ABSENT(20),
+    NR_uselib = ABSENT(21), NR_chroot = 51, NR_acct = 89, NR_setxattr = 5, NR_lsetxattr = 6,
+    NR_getxattr = 8, NR_lgetxattr = 9, NR_listxattr = 11, NR_llistxattr = 12,
+    NR_removexattr = 14, NR_lremovexattr = 15, NR_utimes = ABSENT(22), NR_inotify_add_watch = 27,
+    NR_mknodat = 33, NR_fchownat = 54, NR_futimesat = ABSENT(23), NR_renameat = 38, NR_linkat = 37,
+    NR_fchmodat = 53, NR_utimensat = 88, NR_name_to_handle_at = 264, NR_renameat2 = 276,
+    NR_execveat = 281, NR_statx = 291, NR_openat2 = 437, NR_faccessat2 = 439, NR_fchmodat2 = 452,
+    NR_close_range = 436, NR_dup2 = ABSENT(24), NR_fanotify_mark = 263, NR_writev = 66, NR_process_vm_writev = 271,
+    NR_setxattrat = 463, NR_getxattrat = 464, NR_listxattrat = 465, NR_removexattrat = 466, NR_open_tree_attr = 467,
+    NR_file_getattr = 468, NR_file_setattr = 469,
+    NR_brk = 214, NR_futex = 98, NR_madvise = 233, NR_clock_gettime = 113, NR_pipe2 = 59, NR_vfork = ABSENT(25), NR_readv = 65,
+    NR_set_tid_address = 96, NR_set_robust_list = 99, NR_prlimit64 = 261, NR_getrandom = 278, NR_rseq = 293,
+    NR_arch_prctl = ABSENT(26), NR_sched_getaffinity = 123,
+};
+#define ARCH_NAME "aarch64"
+#define ARCH_ISA_DEFAULT "aarch64"
+#define EM_NATIVE 183
+#define AUDIT_ARCH_NATIVE 0xC00000B7u
+#define R_NATIVE_RELATIVE 1027              /* R_AARCH64_RELATIVE */
+#define O_DIRECTORY 040000
+#define O_NOFOLLOW  0100000
 #else
-#error "milestone 1a is x86-64 only; aarch64 is milestone 4"
+#error "the opener is built for x86-64 or aarch64"
 #endif
 
 /* MAGIC marks the filter probe (uname with MAGIC as its argument, 7.4.2); nothing else. */
@@ -106,8 +194,6 @@ enum {
 #define O_CREAT     0100
 #define O_EXCL      0200
 #define O_TRUNC     01000
-#define O_DIRECTORY 0200000
-#define O_NOFOLLOW  0400000
 #define O_CLOEXEC   02000000
 #define O_PATH      010000000
 
@@ -262,7 +348,7 @@ struct iovec { void *iov_base; size_t iov_len; };
 static inline long sys_process_vm_readv(pid_t pid, const struct iovec *l, unsigned long ln, const struct iovec *r, unsigned long rn, unsigned long fl) { return SC6(NR_process_vm_readv, pid, l, ln, r, rn, fl); }
 static inline long sys_process_vm_writev(pid_t pid, const struct iovec *l, unsigned long ln, const struct iovec *r, unsigned long rn, unsigned long fl) { return SC6(NR_process_vm_writev, pid, l, ln, r, rn, fl); }
 
-/* fork(): x86_64 has a real fork. */
+/* fork(): x86_64 has a real fork; aarch64 clones. */
 static inline long sys_fork(void)
 {
 #if defined(__x86_64__)

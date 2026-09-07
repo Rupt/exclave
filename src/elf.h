@@ -12,6 +12,7 @@ typedef struct { uint32_t p_type, p_flags; uint64_t p_offset, p_vaddr, p_paddr, 
 #define ET_EXEC 2
 #define ET_DYN 3
 #define EM_X86_64 62
+#define EM_AARCH64 183
 #define PT_LOAD 1
 #define PT_INTERP 3
 #define PT_NOTE 4

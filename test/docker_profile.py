@@ -21,7 +21,11 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
-AUDIT_ARCH_X86_64 = 0xC000003E
+# seccomp's architecture word and Docker's names for this machine, whose profile entries name arches
+import platform  # noqa: E402
+MACHINE = platform.machine()
+AUDIT_ARCH = {"x86_64": 0xC000003E, "aarch64": 0xC00000B7}[MACHINE]
+ARCH_NAMES = {"x86_64": ("amd64", "x86_64"), "aarch64": ("arm64", "aarch64")}[MACHINE]
 RET_ALLOW, RET_ERRNO, RET_KILL, RET_LOG = 0x7fff0000, 0x00050000, 0x80000000, 0x7ffc0000
 # the capabilities a default Docker container holds
 DEFAULT_CAPS = {"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER", "CAP_MKNOD", "CAP_NET_RAW", "CAP_SETGID",
@@ -29,11 +33,9 @@ DEFAULT_CAPS = {"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER", "CA
 
 
 def kernel_table(can=None):
-    """The x86-64 syscall table from the host's headers, or from the can's (a gcc can ships linux-libc-dev)."""
-    for p in ([os.path.join(can, "root", "usr", "include", "x86_64-linux-gnu", "asm", "unistd_64.h")] if can else []) + ["/usr/include/x86_64-linux-gnu/asm/unistd_64.h", "/usr/include/asm/unistd_64.h"]:
-        if os.path.exists(p):
-            return dict((n, int(v)) for n, v in re.findall(r"__NR_([a-z0-9_]+) (\d+)", open(p).read()))
-    raise SystemExit("no unistd_64.h on the host or in the can")
+    """The machine's syscall table from the can's headers (a gcc can ships linux-libc-dev) or the host's."""
+    from syscalls import kernel_table as table
+    return table(roots=([os.path.join(can, "root")] if can else []) + ["/"])
 
 
 class BPF:
@@ -67,7 +69,7 @@ def build(profile, table):
     default_errno = int(profile.get("defaultErrnoRet", 1))
     b = BPF()
     b.emit(BPF.LD_ABS, 0, 0, 4)                                  # arch
-    b.emit(BPF.JEQ_K, 1, 0, AUDIT_ARCH_X86_64)
+    b.emit(BPF.JEQ_K, 1, 0, AUDIT_ARCH)
     b.emit(BPF.RET_K, 0, 0, RET_KILL)
     b.emit(BPF.LD_ABS, 0, 0, 0)                                  # nr
     rules = []
@@ -77,9 +79,9 @@ def build(profile, table):
             continue
         if exc.get("caps") and set(exc["caps"]) & DEFAULT_CAPS:
             continue
-        if inc.get("arches") and "amd64" not in inc["arches"] and "x86_64" not in inc["arches"]:
+        if inc.get("arches") and not set(inc["arches"]) & set(ARCH_NAMES):
             continue
-        if exc.get("arches") and ("amd64" in exc["arches"] or "x86_64" in exc["arches"]):
+        if exc.get("arches") and set(exc["arches"]) & set(ARCH_NAMES):
             continue
         action = entry.get("action", "SCMP_ACT_ALLOW")
         ret = {"SCMP_ACT_ALLOW": RET_ALLOW, "SCMP_ACT_LOG": RET_ALLOW, "SCMP_ACT_TRACE": RET_ALLOW,

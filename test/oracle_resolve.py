@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(REPO, "cannery"))
 import cannery  # noqa: E402
 
 SYS_openat2 = 437
-O_PATH, O_NOFOLLOW = 0o10000000, 0o400000
+O_PATH, O_NOFOLLOW = os.O_PATH, os.O_NOFOLLOW                  # this machine's bits: aarch64's O_NOFOLLOW is not x86-64's
 RESOLVE_IN_ROOT = 0x10
 libc = ctypes.CDLL(None, use_errno=True)
 
@@ -145,7 +145,9 @@ def main():
     dirs, files, links = make_maze(root, rng)
     with open(os.path.join(can, ".can", "manifest"), "w") as f:
         f.write("can 1\n")                                       # /maze is a non-empty top-level directory: can-owned by the tree alone (8.1)
-    gcc = os.path.join(root, "usr", "bin", "x86_64-linux-gnu-gcc-13")
+    import platform
+    gcc = next(os.path.join(root, "usr", "bin", n) for n in ("%s-linux-gnu-gcc-13" % platform.machine(), "x86_64-linux-gnu-gcc-13", "gcc")
+               if os.path.exists(os.path.join(root, "usr", "bin", n)))
     prog = os.path.join(work, "resolve")
     r = subprocess.run([gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "resolve.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode:

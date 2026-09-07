@@ -37,10 +37,11 @@ static void emit(uint16_t code, uint8_t jt, uint8_t jf, uint32_t k)
 }
 static void ret(uint32_t action) { emit(RET_K, 0, 0, action); }
 /* "if nr == n then <action>" as a two-instruction pair; A must hold nr */
-static void on_nr(int n, uint32_t action) { emit(JEQ_K, 0, 1, (uint32_t)n); ret(action); }
+static void on_nr(int n, uint32_t action) { if (n < 0) return; emit(JEQ_K, 0, 1, (uint32_t)n); ret(action); }   /* n < 0: not on this architecture */
 /* "if nr == n and arg i != 0 then TRAP" ; A holds nr on entry and on exit */
 static void on_nr_arg_nonzero(int n, int i)
 {
+    if (n < 0) return;
     emit(JEQ_K, 0, 6, (uint32_t)n);
     emit(LD_ABS, 0, 0, OFF_ARG(i));          /* low */
     emit(JEQ_K, 0, 2, 0);
@@ -76,18 +77,20 @@ static const int enosys_syscalls[] = { NR_clone3, NR_io_uring_setup, NR_openat2,
 static const int eperm_syscalls[] = { NR_chroot, NR_acct, NR_pivot_root, NR_mount, NR_umount2 };
 /* the hot path: answered before anything else is examined */
 static const int fast_allow[] = { NR_read, NR_write, NR_close, NR_fstat, NR_lseek, NR_mmap, NR_mprotect, NR_munmap,
-    12 /* brk */, NR_rt_sigreturn, NR_pread64, 202 /* futex */, 28 /* madvise */, NR_getpid, 228 /* clock_gettime */,
-    NR_exit_group, NR_exit, NR_wait4, NR_getdents64, NR_fcntl, NR_dup, NR_dup2, NR_dup3, 293 /* pipe2 */,
-    NR_clone, NR_fork, 58 /* vfork */, 20 /* writev */, 19 /* readv */, 218 /* set_tid_address */, 273 /* set_robust_list */,
-    302 /* prlimit64 */, 318 /* getrandom */, 334 /* rseq */, 158 /* arch_prctl */, 204 /* sched_getaffinity */ };
+    NR_brk, NR_rt_sigreturn, NR_pread64, NR_futex, NR_madvise, NR_getpid, NR_clock_gettime,
+    NR_exit_group, NR_exit, NR_wait4, NR_getdents64, NR_fcntl, NR_dup, NR_dup2, NR_dup3, NR_pipe2,
+    NR_clone, NR_fork, NR_vfork, NR_writev, NR_readv, NR_set_tid_address, NR_set_robust_list,
+    NR_prlimit64, NR_getrandom, NR_rseq, NR_arch_prctl, NR_sched_getaffinity };
 
 static void build(void)
 {
     np = 0;
     emit(LD_ABS, 0, 0, OFF_ARCH);
-    emit(JEQ_K, 1, 0, AUDIT_ARCH_X86_64); ret(SECCOMP_RET_KILL_PROCESS);
+    emit(JEQ_K, 1, 0, AUDIT_ARCH_NATIVE); ret(SECCOMP_RET_KILL_PROCESS);   /* a foreign ABI (x32, arm32 compat) dies loudly (7.4.2) */
     emit(LD_ABS, 0, 0, OFF_NR);
+#if defined(__x86_64__)
     emit(JSET_K, 0, 1, X32_SYSCALL_BIT); ret(SECCOMP_RET_KILL_PROCESS);
+#endif
     /* the probe: uname with MAGIC as its argument answers the filter version */
     emit(JEQ_K, 0, 5, NR_uname);
     emit(LD_ABS, 0, 0, OFF_ARG(0)); emit(JEQ_K, 0, 3, (uint32_t)MAGIC);

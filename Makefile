@@ -10,16 +10,26 @@ HDR     := src/sys.h src/common.h src/elf.h src/gdb.py
 OUT     := build/opener
 OLD     := build/opener-old
 
-CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
+CFLAGS_COMMON := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
            -nostdlib -nostartfiles -ffreestanding -fno-stack-protector -fno-builtin \
-           -fPIC -fvisibility=hidden -fno-plt -fcf-protection=none -mno-red-zone \
-           -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns -fstack-usage
+           -fPIC -fvisibility=hidden -fno-plt \
+           -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns
+CFLAGS  := $(CFLAGS_COMMON) -fcf-protection=none -mno-red-zone -fstack-usage
+# the aarch64 opener (7.1, 12): the same sources, the cross compiler when the machine has one
+AARCH64_CC := $(shell command -v aarch64-linux-gnu-gcc 2>/dev/null)
+CFLAGS_AARCH64 := $(CFLAGS_COMMON) -mgeneral-regs-only -mno-outline-atomics -fstack-usage   # atomics inline: no libgcc to call
 LDFLAGS := -shared -nostdlib -Wl,-e,_start -Wl,--no-relax -Wl,-z,noexecstack -Wl,-z,norelro \
            -Wl,-z,nopack-relative-relocs -Wl,-Bsymbolic -Wl,--build-id=none
 
+# a freestanding link binds nothing: no PLT and no undefined symbol (an outline atomic helper of libgcc, say)
+define linkcheck
+	@$(1)readelf -d $@.debug | grep -q JMPREL && (echo "$@ has a PLT: a call left for a libc or libgcc" && false) || true
+	@$(1)nm -u $@.debug | grep . && (echo "$@ has undefined symbols" && false) || true
+endef
+
 .PHONY: all clean stack test unit oracles bench
 
-all: $(OUT) $(OLD)
+all: $(OUT) $(OLD) $(if $(AARCH64_CC),build/opener-aarch64 build/opener-old-aarch64)
 
 # build/opener is stripped for shipping (every wrapper is a link to it); build/opener.debug keeps the symbols.
 # The strip keeps .debug_gdb_scripts, the script gdb auto-loads (7.6), and .dynsym, the six names it reads.
@@ -28,6 +38,7 @@ $(OUT): $(SRC) $(HDR) Makefile
 	@rm -f build/*.su
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@.debug $(SRC)
 	@mv -f *.su build/ 2>/dev/null || true
+	$(call linkcheck,)
 	objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
 	@readelf -n $@ | grep -q cont || (echo "the note was stripped" && false)
 	@readelf -S -W $@ | grep -q debug_gdb_scripts || (echo "the gdb script was stripped" && false)
@@ -40,12 +51,29 @@ $(OUT): $(SRC) $(HDR) Makefile
 $(OLD): $(SRC) $(HDR) Makefile
 	@mkdir -p build
 	$(CC) $(filter-out -fstack-usage,$(CFLAGS)) -DFILTER_VERSION=1 -DCONT_TEST_OLD $(LDFLAGS) -o $@.debug $(SRC)
+	$(call linkcheck,)
 	objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
 
+build/opener-aarch64: $(SRC) $(HDR) Makefile
+	@mkdir -p build
+	@rm -f build/opener-aarch64.debug-*.su
+	$(AARCH64_CC) $(CFLAGS_AARCH64) $(LDFLAGS) -o $@.debug $(SRC)
+	@mv -f *.su build/ 2>/dev/null || true
+	$(call linkcheck,aarch64-linux-gnu-)
+	aarch64-linux-gnu-objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
+	@aarch64-linux-gnu-readelf -h $@ | grep -q 'AArch64' && echo "built $@ ($$(stat -c %s $@) bytes stripped, ET_DYN aarch64)"
+
+build/opener-old-aarch64: $(SRC) $(HDR) Makefile
+	@mkdir -p build
+	$(AARCH64_CC) $(filter-out -fstack-usage,$(CFLAGS_AARCH64)) -DFILTER_VERSION=1 -DCONT_TEST_OLD $(LDFLAGS) -o $@.debug $(SRC)
+	$(call linkcheck,aarch64-linux-gnu-)
+	aarch64-linux-gnu-objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
+
 # stack budget (7.5.4): no frame on the handler path above 512 bytes, and the
-# summed frames of the handler path under 2048.
-stack: $(OUT)
+# summed frames of the handler path under 2048; the aarch64 build's frames too when it is built.
+stack: $(OUT) $(if $(AARCH64_CC),build/opener-aarch64)
 	python3 test/stackcheck.py build/opener.debug-*.su
+	$(if $(AARCH64_CC),python3 test/stackcheck.py build/opener-aarch64.debug-*.su)
 
 # host-side unit tests: the manifest parser compiled with a libc
 unit:

@@ -11,8 +11,13 @@
 
 extern char __ehdr_start[] __attribute__((visibility("hidden"))), _etext[] __attribute__((visibility("hidden"))), _DYNAMIC[] __attribute__((visibility("hidden")));
 
+#if defined(__x86_64__)
 __asm__(".text\n.globl _start\n.type _start,@function\n_start:\n"
         " mov %rsp, %rdi\n and $-16, %rsp\n call start_c\n hlt\n");
+#elif defined(__aarch64__)
+__asm__(".text\n.globl _start\n.type _start,%function\n_start:\n"
+        " mov x0, sp\n bl start_c\n brk #0\n");
+#endif
 /* 6.1: the note by which the opener recognises itself in a file */
 __asm__(".section .note.cont,\"a\"\n .balign 4\n .long 5\n .long 4\n .long 1\n .asciz \"cont\"\n .balign 4\n .long 1\n .text\n");
 
@@ -28,7 +33,12 @@ static void page_init(void)
         else __sc6_raw(NR_write, 2, (long)msg, sizeof msg - 1, 0, 0, 0);
         for (;;) __sc6_raw(NR_exit_group, 127, 0, 0, 0, 0, 0);
     }
+#if defined(__x86_64__)
     unsigned char *p = (unsigned char *)SC_PAGE; p[0] = 0x0f; p[1] = 0x05; p[2] = 0xc3;   /* syscall; ret */
+#elif defined(__aarch64__)
+    uint32_t *w = (uint32_t *)SC_PAGE; w[0] = 0xd4000001u; w[1] = 0xd65f03c0u;              /* svc #0; ret */
+    __asm__ volatile ("dc cvau, %0\n dsb ish\n ic ivau, %0\n dsb ish\n isb\n" : : "r"(SC_PAGE) : "memory");   /* the written words reach the instruction fetch */
+#endif
     __sc6_raw(NR_mprotect, (long)SC_PAGE, 4096, PROT_READ | PROT_EXEC, 0, 0, 0);
 }
 
@@ -44,7 +54,7 @@ static void reloc_self(void)
     }
     if (!rela) return;
     for (unsigned long i = 0; i < relasz / relaent; i++) {
-        if ((rela[i].r_info & 0xffffffff) != 8) die("unexpected relocation in the opener", 0, 0);   /* R_X86_64_RELATIVE */
+        if ((rela[i].r_info & 0xffffffff) != R_NATIVE_RELATIVE) die("unexpected relocation in the opener", 0, 0);   /* R_*_RELATIVE only */
         *(unsigned long *)(base + rela[i].r_offset) = base + (unsigned long)rela[i].r_addend;
     }
 }
@@ -104,7 +114,7 @@ static void find_can(const char *exe)
     C.root_dev = st.st_dev; C.root_ino = st.st_ino;
 }
 
-static void read_manifest(void)
+static void read_manifest(unsigned long *auxv)
 {
     char p[PATH_MAX]; scpy(p, C.dir, PATH_MAX); scat(p, "/.can/manifest", PATH_MAX);
     long fd = sys_open(p, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) die("cannot open manifest", p, fd);
@@ -116,7 +126,7 @@ static void read_manifest(void)
     char err[256];
     if (manifest_parse((const char *)m, (size_t)st.st_size, &C, err, sizeof err) < 0) die("bad manifest", err, 0);
     SC2(NR_munmap, m, st.st_size);
-    int ok = isa_supported(C.isa);
+    int ok = isa_supported(C.isa, auxv);
     if (ok < 0) die("can names an ISA level this opener does not know", C.isa, 0);
     if (ok == 0) die("this CPU lacks the can's ISA level", C.isa, 0);
 }
@@ -219,7 +229,7 @@ void start_c(unsigned long *sp)
     long n = sys_readlink("/proc/self/exe", exe, PATH_MAX - 1); if (n < 0) die("cannot read /proc/self/exe", 0, n);
     exe[n] = 0;
     find_can(exe);
-    read_manifest();
+    read_manifest(auxv);
 
     const char *target;
     if (starts_dir(exe, C.root)) {                            /* a wrapper: the kernel ran the opener under the program's name. Decided first,

@@ -14,12 +14,13 @@ static long rss(void) { FILE *f = fopen("/proc/self/status", "r"); char l[256]; 
 static int spawn_true(void) { pid_t p; char *av[] = { "true", 0 }; if (posix_spawn(&p, "/usr/bin/true", 0, 0, av, environ)) return -1; int st; waitpid(p, &st, 0); return st; }
 static void *w(void *a) { for (int i = 0; i < 25; i++) if (spawn_true()) return (void *)1; return 0; }
 
-int main(void)
+int main(int argc, char **argv)
 {
-    pid_t pid; int st;
+    pid_t pid; int st; char cmd[4096];
     char *av[] = { "sh", "-c", "exit 7", 0 };
     if (posix_spawn(&pid, "/bin/sh", 0, 0, av, environ) || waitpid(pid, &st, 0) < 0 || WEXITSTATUS(st) != 7) { fails++; printf("FAIL posix_spawn sh -c\n"); }
-    if (system("/usr/bin/x86_64-linux-gnu-gcc-13 --version >/dev/null") != 0) { fails++; printf("FAIL system(gcc --version)\n"); }
+    snprintf(cmd, sizeof cmd, "%s --version >/dev/null", argc > 1 ? argv[1] : "/usr/bin/x86_64-linux-gnu-gcc-13");   /* the can's gcc, by the test */
+    if (system(cmd) != 0) { fails++; printf("FAIL system(gcc --version)\n"); }
     pthread_t t[8]; void *r;
     for (int i = 0; i < 8; i++) pthread_create(&t[i], 0, w, 0);
     for (int i = 0; i < 8; i++) { pthread_join(t[i], &r); if (r) { fails++; printf("FAIL spawning thread %d\n", i); } }

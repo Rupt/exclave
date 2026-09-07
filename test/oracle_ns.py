@@ -21,7 +21,9 @@ sys.path.insert(0, os.path.join(REPO, "cannery"))
 import build  # noqa: E402
 import cannery  # noqa: E402
 
-GCC = "x86_64-linux-gnu-gcc-13"
+import platform  # noqa: E402
+TRIPLET = "%s-linux-gnu" % platform.machine()                     # the can's multiarch directory: the suite runs on the can's own machine
+GCC = TRIPLET + "-gcc-13"
 IDENTITY = ["/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf", "/etc/resolv.conf", "/etc/hosts",
             "/etc/ssl/certs/ca-certificates.crt"]
 
@@ -34,8 +36,8 @@ WORKLOADS = [
     "touch /usr/x; echo $?; touch /usr/lib/x; echo $?; rm /usr/bin/sh; echo $?; rm /usr/nonexistent; echo $?",
     "mv /usr/bin/sh $W/moved; echo $?; ln /usr/bin/dash $W/linked; echo $?; ln -s /usr/bin/dash $W/symlinked; echo $?; ln $W/hello.c /usr/newlink; echo $?",
     "cp /usr/bin/dash $W/dashcopy; echo $?; cmp /usr/bin/dash $W/dashcopy; echo $?",
-    "stat -c '%s %F %a' /usr/bin/dash /usr/lib /usr/bin/sh /usr/lib/x86_64-linux-gnu/libc.so.6",
-    "ls /usr/lib/gcc/x86_64-linux-gnu/13 | grep -v '^\\.real$' | head -20",
+    "stat -c '%s %F %a' /usr/bin/dash /usr/lib /usr/bin/sh /usr/lib/" + TRIPLET + "/libc.so.6",
+    "ls /usr/lib/gcc/" + TRIPLET + "/13 | grep -v '^\\.real$' | head -20",
     "find /usr/lib/gcc -name '*.o' | sort | head -30",
     "cd $W && gcc-13 -O1 hello.c -o hello && ./hello a b; echo $?",
     "cd $W && gcc-13 -O0 -c hello.c -o hello.o && ls -l hello.o | cut -d' ' -f5",

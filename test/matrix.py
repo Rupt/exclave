@@ -24,19 +24,20 @@ REPO = os.path.dirname(HERE)
 
 # name, expected kernel, ssh user, image URL candidates (first that downloads wins), package family, notes
 VMS = [
-    ("centos-7", "3.10", "centos", ["https://cloud.centos.org/centos/7/images/CentOS-7-x86_64-GenericCloud-2211.qcow2"], "centos7", "EOL; yum repos moved to vault"),
-    ("ubuntu-18.04", "4.15", "ubuntu", ["https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg-amd64.img"], "apt", ""),
-    ("rocky-8", "4.18", "rocky", ["https://dl.rockylinux.org/pub/rocky/8/images/x86_64/Rocky-8-GenericCloud.latest.x86_64.qcow2"], "dnf", ""),
-    ("ubuntu-20.04", "5.4", "ubuntu", ["https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img"], "apt", ""),
-    ("debian-11", "5.10", "debian", ["https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2"], "apt", ""),
-    ("ubuntu-22.04", "5.15", "ubuntu", ["https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"], "apt", ""),
-    ("debian-12", "6.1", "debian", ["https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"], "apt", ""),
+    ("centos-7", "3.10", "centos", ["https://cloud.centos.org/centos/7/images/CentOS-7-x86_64-GenericCloud-2211.qcow2"], "centos7", "EOL; yum repos moved to vault", "x86_64"),
+    ("ubuntu-18.04", "4.15", "ubuntu", ["https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg-amd64.img"], "apt", "", "x86_64"),
+    ("rocky-8", "4.18", "rocky", ["https://dl.rockylinux.org/pub/rocky/8/images/x86_64/Rocky-8-GenericCloud.latest.x86_64.qcow2"], "dnf", "", "x86_64"),
+    ("ubuntu-20.04", "5.4", "ubuntu", ["https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img"], "apt", "", "x86_64"),
+    ("debian-11", "5.10", "debian", ["https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2"], "apt", "", "x86_64"),
+    ("ubuntu-22.04", "5.15", "ubuntu", ["https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"], "apt", "", "x86_64"),
+    ("debian-12", "6.1", "debian", ["https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"], "apt", "", "x86_64"),
     ("fedora", "6.x", "fedora", ["https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2",
                                  "https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2",
-                                 "https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2"], "dnf", "SELinux enforcing"),
+                                 "https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2"], "dnf", "SELinux enforcing", "x86_64"),
     ("alpine", "6.x", "alpine", ["https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.3-x86_64-bios-cloudinit-r0.qcow2",
-                                 "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/cloud/nocloud_alpine-3.20.3-x86_64-bios-cloudinit-r0.qcow2"], "apk", "musl host, busybox"),
-]
+                                 "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/cloud/nocloud_alpine-3.20.3-x86_64-bios-cloudinit-r0.qcow2"], "apk", "musl host, busybox", "x86_64"),
+    # aarch64 under TCG (12): the same suite and oracles, the arm64 opener and can, ten to twenty times slower
+    ("noble-arm64", "6.8", "ubuntu", ["https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img"], "apt", "aarch64, TCG emulation", "aarch64"),]
 
 PACKAGES = {"apt": ["python3", "strace", "bubblewrap"], "dnf": ["python3", "strace", "bubblewrap"], "apk": ["python3", "strace", "bubblewrap", "bash"],
             "centos7": ["python3", "strace"]}
@@ -99,20 +100,30 @@ def user_data(family, pubkey):
                      + ["runcmd:", "  - touch /var/tmp/cont-ready", ""])
 
 
+AAVMF = "/usr/share/AAVMF"
+
+
 class VM:
-    def __init__(self, name, image, work, user, port, memory):
-        self.name, self.user, self.port, self.work = name, user, port, work
+    def __init__(self, name, image, work, user, port, memory, arch="x86_64"):
+        self.name, self.user, self.port, self.work, self.arch = name, user, port, work, arch
         self.overlay = os.path.join(work, name + ".qcow2")
         subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", "-b", image, "-F", "qcow2", self.overlay], check=True)
         subprocess.run(["qemu-img", "resize", "-q", self.overlay, "+8G"], check=True)   # cloud-init grows the root; some images ship 2 GB
         self.seed = os.path.join(work, name + "-seed.iso")
         self.key = os.path.join(work, "id_ed25519")
-        self.proc = subprocess.Popen(["qemu-system-x86_64", "-enable-kvm", "-cpu", "host", "-m", str(memory), "-smp", "2", "-display", "none",
-                                      "-serial", "file:" + os.path.join(work, name + "-console.log"),
-                                      "-drive", "file=%s,if=virtio,format=qcow2" % self.overlay,
-                                      "-drive", "file=%s,if=virtio,format=raw" % self.seed,
-                                      "-netdev", "user,id=n0,hostfwd=tcp:127.0.0.1:%d-:22" % port, "-device", "virtio-net-pci,netdev=n0"],
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        common = ["-display", "none", "-serial", "file:" + os.path.join(work, name + "-console.log"),
+                  "-drive", "file=%s,if=virtio,format=qcow2" % self.overlay,
+                  "-drive", "file=%s,if=virtio,format=raw" % self.seed,
+                  "-netdev", "user,id=n0,hostfwd=tcp:127.0.0.1:%d-:22" % port, "-device", "virtio-net-pci,netdev=n0"]
+        if arch == "aarch64":                                   # no KVM for another architecture: TCG, and UEFI firmware, which arm64 images boot from
+            varstore = os.path.join(work, name + "-vars.fd")
+            shutil.copyfile(os.path.join(AAVMF, "AAVMF_VARS.fd"), varstore)
+            cmd = ["qemu-system-aarch64", "-M", "virt", "-accel", "tcg", "-cpu", "max", "-m", str(max(memory, 2048)), "-smp", "4",
+                   "-drive", "if=pflash,format=raw,readonly=on,file=" + os.path.join(AAVMF, "AAVMF_CODE.fd"),
+                   "-drive", "if=pflash,format=raw,file=" + varstore] + common
+        else:
+            cmd = ["qemu-system-x86_64", "-enable-kvm", "-cpu", "host", "-m", str(memory), "-smp", "2"] + common
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def ssh(self, cmd, timeout=1800, quiet=False):
         p = subprocess.run(["ssh", "-p", str(self.port), "-i", self.key, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
@@ -157,6 +168,8 @@ def main():
     ap.add_argument("--images", default=os.path.join(os.path.expanduser("~"), ".cache", "cont-images"))
     ap.add_argument("--memory", type=int, default=1024)
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--arm64", action="store_true", help="include the emulated aarch64 VM (slow); --only names it too")
+    ap.add_argument("--debs-arm64", help="directory of arm64 .deb files the aarch64 VM makes its gcc can from")
     a = ap.parse_args()
     if not shutil.which("qemu-system-x86_64") or not shutil.which("cloud-localds"):
         sys.exit("need qemu-system-x86_64 and cloud-localds")
@@ -167,23 +180,44 @@ def main():
     if not os.path.exists(key):
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
     pubkey = open(key + ".pub").read().strip()
-    # the payload: the can (hard links preserved by tar) and the repository's test tree, cannery and opener
-    payload = os.path.join(work, "payload.tar.gz")
-    if not os.path.exists(payload):
-        log("packing the can and the test tree")
-        with tarfile.open(payload, "w:gz", compresslevel=1) as t:
-            t.add(can, arcname="can")
-            for d in ("test", "cannery"):
-                t.add(os.path.join(REPO, d), arcname="cont/" + d)
-            t.add(os.path.join(REPO, "build", "opener"), arcname="cont/build/opener")
-            if os.path.exists(os.path.join(REPO, "build", "opener-old")):
-                t.add(os.path.join(REPO, "build", "opener-old"), arcname="cont/build/opener-old")
-            if os.path.exists(os.path.join(REPO, "build", "sysroot-hello")):          # test/sysroot.py's output: runs natively on every glibc
-                t.add(os.path.join(REPO, "build", "sysroot-hello"), arcname="cont/build/sysroot-hello")
+    # the payload: the can (hard links preserved by tar) and the repository's test tree, cannery and opener. For the
+    # aarch64 VM the payload carries the arm64 package files and the cross-built openers under the suite's names:
+    # the can is unpacked and closed in the VM, on its own architecture (10.1).
+    payloads = {}
+
+    def payload_for(arch):
+        if arch in payloads:
+            return payloads[arch]
+        payload = os.path.join(work, "payload-%s.tar.gz" % arch)
+        if not os.path.exists(payload):
+            log("packing the test tree for", arch)
+            with tarfile.open(payload, "w:gz", compresslevel=1) as t:
+                for d in ("test", "cannery"):
+                    t.add(os.path.join(REPO, d), arcname="cont/" + d)
+                if arch == "x86_64":
+                    t.add(can, arcname="can")
+                    t.add(os.path.join(REPO, "build", "opener"), arcname="cont/build/opener")
+                    if os.path.exists(os.path.join(REPO, "build", "opener-old")):
+                        t.add(os.path.join(REPO, "build", "opener-old"), arcname="cont/build/opener-old")
+                    if os.path.exists(os.path.join(REPO, "build", "sysroot-hello")):          # test/sysroot.py's output: runs natively on every glibc
+                        t.add(os.path.join(REPO, "build", "sysroot-hello"), arcname="cont/build/sysroot-hello")
+                else:
+                    if not a.debs_arm64:
+                        sys.exit("the aarch64 VM needs --debs-arm64 DIR, a directory of arm64 .deb files for the gcc can")
+                    t.add(a.debs_arm64, arcname="debs")
+                    t.add(os.path.join(REPO, "build", "opener-aarch64"), arcname="cont/build/opener")
+                    if os.path.exists(os.path.join(REPO, "build", "opener-old-aarch64")):
+                        t.add(os.path.join(REPO, "build", "opener-old-aarch64"), arcname="cont/build/opener-old")
+        payloads[arch] = payload
+        return payload
     results = []
-    for name, kernel, user, urls, family, notes in VMS:
+    for name, kernel, user, urls, family, notes, arch in VMS:
         if a.only and name not in a.only.split(","):
             continue
+        if arch != "x86_64" and not a.arm64 and not (a.only and name in a.only.split(",")):
+            continue                                              # the emulated rows run only when asked: ten to twenty times slower
+        slow = 10 if arch != "x86_64" else 1
+        payload = payload_for(arch)
         image = os.path.join(a.images, name + ".qcow2")
         if not any(fetch(u, image) for u in urls):
             results.append((name, kernel, "image not available", "", notes))
@@ -196,20 +230,26 @@ def main():
         subprocess.run(["cloud-localds", seed, os.path.join(work, name + "-user-data"), os.path.join(work, name + "-meta-data")], check=True)
         port = free_port()
         log("booting", name)
-        vm = VM(name, image, work, user, port, a.memory)
+        vm = VM(name, image, work, user, port, a.memory, arch)
         try:
-            if not vm.wait():
+            if not vm.wait(deadline=600 * slow):
                 results.append((name, kernel, "did not come up (see %s-console.log)" % name, "", notes))
                 continue
             rc, uname = vm.ssh("uname -r")
             uname = uname.strip()
             log(name, "kernel", uname)
             vm.scp(payload, "payload.tar.gz")
-            rc, out = vm.ssh("mkdir -p m && cd m && tar xzf ../payload.tar.gz && echo unpacked")
+            rc, out = vm.ssh("mkdir -p m && cd m && tar xzf ../payload.tar.gz && echo unpacked", timeout=600 * slow)
             if "unpacked" not in out:
                 results.append((name, uname, "cannot unpack: " + out[-200:], "", notes))
                 continue
-            rc, out = vm.ssh("cd m && python3 cont/test/run.py --can $PWD/can --work $PWD/work 2>&1", timeout=2400)
+            if arch != "x86_64":                                  # the can is made here, on its own architecture (10.1)
+                rc, out = vm.ssh("cd m && python3 cont/cannery/cannery.py unpack can debs/*.deb 2>&1 | tail -3 && python3 cont/cannery/cannery.py wrap can 2>&1 | tail -3", timeout=3600 * slow)
+                log(name, "can:", " | ".join(l.strip() for l in out.splitlines()[-3:]))
+                if "closed" not in out:
+                    results.append((name, uname, "cannot make the can: " + out[-300:].replace("\n", " | "), "", notes))
+                    continue
+            rc, out = vm.ssh("cd m && python3 cont/test/run.py --can $PWD/can --work $PWD/work 2>&1", timeout=2400 * slow)
             with open(os.path.join(work, name + "-suite.log"), "w") as f:
                 f.write(out)
             suite = [l for l in out.splitlines() if "tests," in l]
@@ -221,7 +261,7 @@ def main():
             # 12, 17.4: a noexec mount, made as root. Natively the shell answers EACCES; the opener's loader cannot map
             # a program there and says so; a can's shell answers EACCES as the kernel would (7.4.5).
             rc, out = vm.ssh("S=sudo; command -v sudo >/dev/null 2>&1 || S=doas; echo 'int main(void){return 0;}' > nx.c && "
-                             "m/can/root/usr/bin/x86_64-linux-gnu-gcc-13 -o nxprog nx.c && $S mkdir -p /mnt/nx && $S mount -t tmpfs -o noexec tmpfs /mnt/nx && "
+                             "m/can/root/usr/bin/$(uname -m)-linux-gnu-gcc-13 -o nxprog nx.c && $S mkdir -p /mnt/nx && $S mount -t tmpfs -o noexec tmpfs /mnt/nx && "
                              "$S cp nxprog /mnt/nx/prog && $S chmod 755 /mnt/nx/prog && mount | grep -q '/mnt/nx .*noexec' || { echo noexec setup failed; exit 0; }; "
                              "/mnt/nx/prog >/dev/null 2>&1; a=$?; m/can/.can/opener /mnt/nx/prog >/dev/null 2>&1; b=$?; "
                              "m/can/root/usr/bin/sh -c /mnt/nx/prog >/dev/null 2>&1; c=$?; $S umount /mnt/nx; echo noexec native=$a opener=$b inside=$c", timeout=120)
@@ -239,11 +279,14 @@ def main():
             if not ok:
                 fails.append("FAIL sysroot output did not run natively: " + sysroot)
             oracle = ""
-            rc, out = vm.ssh("cd m && bwrap --ro-bind / / true 2>&1 && echo bwrap-ok")
+            # Ubuntu 24.04 images deny unprivileged user namespaces through AppArmor (kernel.apparmor_restrict_unprivileged_userns);
+            # the VM is the matrix's own, so it lifts the sysctl where it exists, as the reference machine's permitted session does
+            rc, out = vm.ssh("S=sudo; command -v sudo >/dev/null 2>&1 || S=doas; $S sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null; "
+                             "cd m && bwrap --ro-bind / / true 2>&1 && echo bwrap-ok")
             if "bwrap-ok" in out:
                 rc, out = vm.ssh("cd m && python3 cont/test/oracle_resolve.py --can $PWD/can --work $PWD/rw 2>&1 | tail -30; echo ====; "
                                  "python3 cont/test/oracle_ns.py --can $PWD/can --work $PWD/nw 2>&1 | tail -40; echo ====; "
-                                 "python3 cont/test/docker_profile.py --can $PWD/can --profile cont/test/docker-seccomp.json --work $PWD/dw 2>&1 | tail -20", timeout=2400)
+                                 "python3 cont/test/docker_profile.py --can $PWD/can --profile cont/test/docker-seccomp.json --work $PWD/dw 2>&1 | tail -20", timeout=2400 * slow)
                 with open(os.path.join(work, name + "-oracles.log"), "w") as f:
                     f.write(out)
                 keep = [l.strip() for l in out.splitlines() if ("paths:" in l or "workloads," in l or l.startswith("PASS can") or l.startswith("FAIL can") or "cannot run" in l)]

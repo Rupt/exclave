@@ -36,7 +36,7 @@ static int open_elf(const char *real, Ehdr *eh, Phdr *ph, int maxph)
     long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
     if (fd < 0) die("cannot open program", real, fd);
     if (sys_pread((int)fd, eh, sizeof *eh, 0) != sizeof *eh || eh->e_ident[0] != 0x7f || eh->e_ident[1] != 'E') die("not an ELF file", real, 0);
-    if (eh->e_ident[4] != ELFCLASS64 || eh->e_machine != EM_X86_64) die("not an x86-64 ELF file", real, 0);
+    if (eh->e_ident[4] != ELFCLASS64 || eh->e_machine != EM_NATIVE) die("not an ELF file for " ARCH_NAME, real, 0);
     if (eh->e_phnum > maxph || eh->e_phentsize != sizeof(Phdr)) die("unsupported program headers", real, 0);
     if (sys_pread((int)fd, ph, (size_t)eh->e_phnum * sizeof(Phdr), (long)eh->e_phoff) != (long)(eh->e_phnum * sizeof(Phdr))) die("cannot read program headers", real, 0);
     return (int)fd;
@@ -102,7 +102,7 @@ int elf_probe(const char *real, char *interp, int *is_opener, void *buf)
     long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) return (int)fd;
     Ehdr eh; Phdr *ph = (Phdr *)buf; unsigned char *nb = (unsigned char *)buf + 64 * sizeof(Phdr); int ret = -ENOEXEC;   /* 3584 + 512 bytes */
     if (sys_pread((int)fd, &eh, sizeof eh, 0) == sizeof eh && eh.e_ident[0] == 0x7f && eh.e_ident[1] == 'E'
-        && eh.e_ident[4] == ELFCLASS64 && eh.e_machine == EM_X86_64 && eh.e_phnum <= 64 && eh.e_phentsize == sizeof(Phdr)
+        && eh.e_ident[4] == ELFCLASS64 && eh.e_machine == EM_NATIVE && eh.e_phnum <= 64 && eh.e_phentsize == sizeof(Phdr)
         && sys_pread((int)fd, ph, (size_t)eh.e_phnum * sizeof(Phdr), (long)eh.e_phoff) == (long)(eh.e_phnum * sizeof(Phdr))) {
         ret = 0;
         for (int i = 0; i < eh.e_phnum; i++) {
@@ -202,6 +202,10 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
     sys_prctl(PR_SET_NAME, (unsigned long)nm, 0, 0, 0);
     log_line("load", 0, vpath);
     debug_hook();                                             /* 7.6: gdb, if present, learns the mappings here */
+#if defined(__x86_64__)
     __asm__ volatile ("mov %0, %%rsp\n xor %%rdx, %%rdx\n xor %%rbp, %%rbp\n jmp *%1\n" : : "r"(sp), "r"(jump) : "memory");
+#elif defined(__aarch64__)
+    __asm__ volatile ("mov sp, %0\n mov x0, #0\n mov x29, #0\n mov x30, #0\n br %1\n" : : "r"(sp), "r"(jump) : "memory");   /* x0: no rtld_fini, as the kernel gives */
+#endif
     __builtin_unreachable();
 }

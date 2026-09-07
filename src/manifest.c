@@ -188,6 +188,6 @@ int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t
     }
     if (pending_comment) return fail(err, errn, K, "comment after the last record");
     if (!seen_can) return fail(err, errn, K, "empty manifest");
-    if (!seen_isa) scpy(c->isa, "x86-64", sizeof c->isa);      /* the baseline: a can that says nothing runs anywhere */
+    if (!seen_isa) scpy(c->isa, ARCH_ISA_DEFAULT, sizeof c->isa);      /* the baseline: a can that says nothing runs anywhere */
     return 0;
 }

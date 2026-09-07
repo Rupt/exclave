@@ -29,12 +29,15 @@ sys.path.insert(0, os.path.join(REPO, "cannery"))
 import build  # noqa: E402
 import cannery  # noqa: E402
 
-GCC = "x86_64-linux-gnu-gcc-13"      # Debian's name; make_can takes the tree's gcc when that one is absent (an Alpine can)
+GCC = "x86_64-linux-gnu-gcc-13"      # Debian's name; make_can takes the tree's gcc when that one is absent (an Alpine can, an arm64 one)
+import platform  # noqa: E402
+MACHINE = platform.machine()                                        # the synthetic packages of the cannery tests carry this machine's architecture
+DEB_ARCH = {"x86_64": "amd64", "aarch64": "arm64"}.get(MACHINE, MACHINE)
 VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
-NR = {"open": 2, "stat": 4, "lstat": 6, "access": 21, "execve": 59, "readlink": 89, "openat": 257, "newfstatat": 262,
-      "readlinkat": 267, "faccessat": 269, "faccessat2": 439, "statx": 332, "execveat": 322, "chdir": 80, "mkdir": 83,
-      "mkdirat": 258, "unlink": 87, "unlinkat": 263, "rename": 82, "renameat": 264, "renameat2": 316, "link": 86,
-      "linkat": 265, "symlink": 88, "symlinkat": 266}
+# the path syscalls the isolation test traces; the legacy forms exist on x86-64 only and strace says so elsewhere
+TRACED = ("open", "stat", "lstat", "access", "execve", "readlink", "openat", "newfstatat", "readlinkat", "faccessat",
+          "faccessat2", "statx", "execveat", "chdir", "mkdir", "mkdirat", "unlink", "unlinkat", "rename", "renameat",
+          "renameat2", "link", "linkat", "symlink", "symlinkat")
 
 TESTS = []
 
@@ -152,8 +155,26 @@ def make_can(ctx):
     cannery.wrap_files(can, quiet=True)
     build.write_lock(can, [], manifest_hash=cannery.b2_file(os.path.join(can, ".can", "manifest")), tree=True)   # closed: a lock with the hashes (6.4)
     ctx.can, ctx.root, ctx.opener = can, root, os.path.join(can, ".can", "opener")
-    if not os.path.exists(os.path.join(root, "usr", "bin", GCC)) and os.path.exists(os.path.join(root, "usr", "bin", "gcc")):
-        GCC = "gcc"
+    tree_facts(ctx)
+    for name in ("%s-linux-gnu-gcc-13" % ctx.machine, GCC, "gcc"):
+        if os.path.exists(os.path.join(root, "usr", "bin", name)):
+            GCC = name
+            break
+
+
+def tree_facts(ctx):
+    """What the tree says about its architecture (7.1): the machine, Debian's multiarch triplet, the loader named by
+    the payloads' PT_INTERP and the directory it lives in, and the syscall numbers strace shows for a trapped call."""
+    import platform
+    import elfcheck
+    ctx.machine = platform.machine()
+    ctx.triplet = next((d for d in sorted(os.listdir(os.path.join(ctx.root, "usr", "lib"))) if d.endswith("-linux-gnu")
+                        and os.path.exists(os.path.join(ctx.root, "usr", "lib", d, "libc.so.6"))), "%s-linux-gnu" % ctx.machine)
+    true = os.path.join(ctx.root, "usr", "bin", ".real", "true")
+    ctx.interp = elfcheck.Elf(true).interp if os.path.exists(true) else {"x86_64": "/lib64/ld-linux-x86-64.so.2", "aarch64": "/lib/ld-linux-aarch64.so.1"}[ctx.machine]
+    ctx.ldso_dir, ctx.ldso_name = ctx.interp.split("/")[1], os.path.basename(ctx.interp)
+    ctx.musl_interp = "/lib/ld-musl-%s.so.1" % ctx.machine
+    ctx.deb_arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(ctx.machine, ctx.machine)
 
 
 def compile_progs(ctx):
@@ -217,7 +238,7 @@ def isolation(ctx):
         return "no strace"
     tr = os.path.join(ctx.work, "trace")
     src = hello_source(ctx)
-    names = list(NR)
+    names = list(TRACED)
     while True:                                               # an older strace may not know the newest names
         rc, out, err = run(["strace", "-f", "-s", "4096", "-o", tr, "-e", "trace=" + ",".join(names), wrapper(ctx, GCC), "-O1", src, "-o", os.path.join(ctx.work, "hello2")], cwd=ctx.work, env=ctx.env)
         m = re.search(r"invalid system call '(\w+)'", err)
@@ -236,13 +257,28 @@ def isolation(ctx):
             t = os.readlink(p)
             p = os.path.normpath(t if t.startswith("/") else os.path.join(os.path.dirname(p), t))
             allowed_files.add(p)
+    # A trapped syscall appears in the trace too, at its exit stop, with the registers the kernel rolled back
+    # (x86-64 shows the number as its result, aarch64 the first argument); its SIGSYS line, naming it, follows.
+    # That call is the one the kernel skipped and the handler re-issued, so a line followed by its own SIGSYS
+    # is not judged. A trapped syscall outside the traced set prints no line, only the SIGSYS, hence the name.
+    lines, pending = [], {}
     for line in open(tr):
+        m = re.match(r"^(\d+)\s+(.*)", line)
+        pid, rest = (m.group(1), m.group(2)) if m else ("", line)
+        m = re.match(r"--- SIGSYS .*si_syscall=__NR_(\w+)", rest)
+        if m:
+            if pid in pending and re.match(r"^\d+\s+" + m.group(1) + r"\(", pending[pid]):
+                pending.pop(pid)
+            continue
+        if pid in pending:
+            lines.append(pending.pop(pid))
+        pending[pid] = line
+    lines.extend(pending.values())
+    for line in lines:
         m = re.match(r"^\d+\s+(\w+)\((.*)\)\s+=\s+(-?\d+)", line)
         if not m:
             continue
         name, args, res = m.group(1), m.group(2), int(m.group(3))
-        if res == NR.get(name):
-            continue                      # the trapped syscall the kernel skipped; the handler re-issues it
         if res < 0:
             continue
         paths = re.findall(r'"((?:[^"\\]|\\.)*)"', args)
@@ -299,7 +335,7 @@ def threads(ctx):
 
 @test
 def spawn(ctx):
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "spawn"), timeout=600)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "spawn"), ["/usr/bin/" + GCC], timeout=600)
     expect(rc == 0 and "FAIL" not in out, out + err)
 
 
@@ -537,7 +573,7 @@ def cross_can_distinct_openers(ctx):
     true2 = os.path.join(can2, "root", "usr", "bin", "true")
     rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s && %s/root/usr/bin/sh -c 'echo cross $0 && readlink /proc/self/exe'" % (true2, can2)], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and out == "cross %s/root/usr/bin/sh\n/usr/bin/readlink\n" % can2, "cross-can exec: rc=%d %r %r" % (rc, out, err))
-    rc, out, err = run([wrapper(ctx, "sh"), "-c", "cd %s && root/usr/bin/x86_64-linux-gnu-gcc-13 --version | head -1" % can2], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "cd %s && root/usr/bin/%s --version | head -1" % (can2, GCC)], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and "13." in out, "gcc of the other can: rc=%d %r %r" % (rc, out, err))
 
 
@@ -712,7 +748,7 @@ def make_deb(path, name, members, control_extra=""):
                     ti.size = len(val)
                     t.addfile(ti, io.BytesIO(val))
         return bio.getvalue()
-    control = ("Package: %s\nVersion: 1\nArchitecture: amd64\nMaintainer: t\nDescription: t\n%s" % (name, control_extra)).encode()
+    control = ("Package: %s\nVersion: 1\nArchitecture: %s\nMaintainer: t\nDescription: t\n%s" % (name, DEB_ARCH, control_extra)).encode()
     parts = [("debian-binary", b"2.0\n"), ("control.tar.gz", tgz([("./control", "file", control, 0o644)])), ("data.tar.gz", tgz(members))]
     with open(path, "wb") as f:
         f.write(b"!<arch>\n")
@@ -753,7 +789,7 @@ def make_apk(path, name, members, pkginfo_extra=""):
             raw = raw.rstrip(b"\0")                           # the control stream carries no end-of-archive blocks
             raw += b"\0" * (-len(raw) % 512)
         return gzip.compress(raw)
-    info = ("pkgname = %s\npkgver = 1.0-r0\narch = x86_64\nsize = 1\n%s" % (name, pkginfo_extra)).encode()
+    info = ("pkgname = %s\npkgver = 1.0-r0\narch = %s\nsize = 1\n%s" % (name, MACHINE, pkginfo_extra)).encode()
     with open(path, "wb") as f:
         f.write(tgz([(".PKGINFO", "file", info, 0o644)], False))
         f.write(tgz(members, True))
@@ -802,7 +838,7 @@ def make_rpm(path, name, members, requires=(), provides=(), postin=""):
         out += h + nm
         return out + b"\0" * (-len(out) % 512)
     payload = gzip.compress(cpio(members))
-    entries = [(1000, 6, [name]), (1001, 6, ["1.0"]), (1002, 6, ["1"]), (1022, 6, ["x86_64"]), (1125, 6, ["gzip"]), (1124, 6, ["cpio"])]
+    entries = [(1000, 6, [name]), (1001, 6, ["1.0"]), (1002, 6, ["1"]), (1022, 6, [MACHINE]), (1125, 6, ["gzip"]), (1124, 6, ["cpio"])]
     if requires:
         entries += [(1049, 8, [r[0] for r in requires]), (1048, 4, [r[1] for r in requires]), (1050, 8, [r[2] for r in requires])]
     if provides:
@@ -845,7 +881,7 @@ def rpm_unpack(ctx):
            "alternatives from %%post replace the shipped file at the link path (review F5-5): %r" % os.listdir(os.path.join(root, "usr", "bin")))
     lock = cannery.load(os.path.join(out, ".can", "lock"), "lock")
     pkgs = cannery.values(lock, "pkg")
-    expect([tuple(p[:3]) for p in pkgs] == [(b"libfoo", b"1.0-1", b"x86_64"), (b"tool", b"1.0-1", b"x86_64")], "pkg records: %r" % pkgs)
+    expect([tuple(p[:3]) for p in pkgs] == [(b"libfoo", b"1.0-1", MACHINE.encode()), (b"tool", b"1.0-1", MACHINE.encode())], "pkg records: %r" % pkgs)
     rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "wrap", out])
     expect(rc == 0 and cannery.values(cannery.load(os.path.join(out, ".can", "lock"), "lock"), "tree"), "wrap: " + o + e)
     make_apk(os.path.join(d, "x-1.0-r0.apk"), "x", [("usr", "dir", None, 0o755)])
@@ -879,7 +915,7 @@ def apk_unpack(ctx):
            "applet links relative to their target: %r" % os.listdir(os.path.join(root, "bin")))
     lock = cannery.load(os.path.join(out, ".can", "lock"), "lock")
     pkgs = cannery.values(lock, "pkg")
-    expect([tuple(p[:3]) for p in pkgs] == [(b"libfoo", b"1.0-r0", b"x86_64"), (b"tool", b"1.0-r0", b"x86_64")], "pkg records: %r" % pkgs)
+    expect([tuple(p[:3]) for p in pkgs] == [(b"libfoo", b"1.0-r0", MACHINE.encode()), (b"tool", b"1.0-r0", MACHINE.encode())], "pkg records: %r" % pkgs)
     rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "wrap", out])
     expect(rc == 0 and cannery.values(cannery.load(os.path.join(out, ".can", "lock"), "lock"), "tree"), "wrap: " + o + e)
     make_deb(os.path.join(d, "x.deb"), "x", [("./usr", "dir", None, 0o755)])
@@ -940,7 +976,7 @@ def unpack_and_wrap(ctx):
     expect("virt" not in o, "a Provides in the set was reported missing: " + o)
     lock = cannery.load(os.path.join(out, ".can", "lock"), "lock")
     pkgs = cannery.values(lock, "pkg")
-    expect([p[0] for p in pkgs] == [b"libfoo1", b"tool"] and pkgs[1][1] == b"1" and pkgs[1][2] == b"amd64", "pkg records: %r" % pkgs)
+    expect([p[0] for p in pkgs] == [b"libfoo1", b"tool"] and pkgs[1][1] == b"1" and pkgs[1][2] == DEB_ARCH.encode(), "pkg records: %r" % pkgs)
     expect(pkgs[1][3].decode() == cannery.b2_file(os.path.join(d, "tool.deb")), "the input hash is the file's")
     expect(not cannery.values(lock, "tree"), "an open can has no tree hash yet")
     expect(os.path.exists(os.path.join(out, "root", "opt")) and os.path.exists(os.path.join(out, "root", "etc", "passwd")), "placeholders")
@@ -1211,9 +1247,9 @@ def interp_from_payload(ctx):
     """7.3: the loader honours each program's own PT_INTERP, resolved in the can; a program naming a loader the can
     lacks fails with a message naming it, before anything runs."""
     src = open(os.path.join(ctx.root, "usr", "bin", ".real", "true"), "rb").read()
-    interp = b"/lib64/ld-linux-x86-64.so.2\0"
+    interp = ctx.interp.encode() + b"\0"
     i = src.index(interp)
-    other = b"/lib/ld-musl-x86_64.so.1\0".ljust(len(interp), b"\0")
+    other = (ctx.musl_interp.encode() + b"\0").ljust(len(interp), b"\0")
     exe = os.path.join(ctx.work, "musl-true")
     with open(exe, "wb") as f:
         f.write(src[:i] + other + src[i + len(interp):])
@@ -1227,11 +1263,11 @@ def interp_from_payload(ctx):
     # one world (7.4.5): a loader on a host path, the shape of a Nix or --dynamic-linker binary, is refused (F4-1, O4-2)
     hostlib = os.path.join(ctx.work, "hostworld")
     os.makedirs(hostlib, exist_ok=True)
-    for f in ("ld-linux-x86-64.so.2", "libc.so.6"):
-        shutil.copy2(os.path.join(ctx.root, "usr", "lib", "x86_64-linux-gnu", ".real", f), os.path.join(hostlib, f))
+    for f in (ctx.ldso_name, "libc.so.6"):
+        shutil.copy2(os.path.join(ctx.root, "usr", "lib", ctx.triplet, ".real", f), os.path.join(hostlib, f))
     src = hello_source(ctx)
     world = os.path.join(ctx.work, "world")
-    rc, out, err = run([wrapper(ctx, GCC), "-O1", src, "-o", world, "-Wl,--dynamic-linker=" + os.path.join(hostlib, "ld-linux-x86-64.so.2"), "-Wl,-rpath," + hostlib], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([wrapper(ctx, GCC), "-O1", src, "-o", world, "-Wl,--dynamic-linker=" + os.path.join(hostlib, ctx.ldso_name), "-Wl,-rpath," + hostlib], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, err)
     rc, out, err = inside(ctx, world)
     expect(rc == 127 and "does not have" in err and hostlib in err, "a host-path loader must be refused: rc=%d %r %r" % (rc, out, err))
@@ -1312,15 +1348,16 @@ def static_check_loader_model(ctx):
             os.rmdir(os.path.dirname(x))                      # the shared can is left as it was (17)
     # F4-13: a hand-made tree with the loader at /usr/lib64 and no ld.so.cache closes; the loader satisfies its own
     # soname and its default directories come from the loader itself. F4-9: without /lib the host's would be searched.
-    lib = os.path.join(ctx.root, "usr", "lib", "x86_64-linux-gnu")
+    lib = os.path.join(ctx.root, "usr", "lib", ctx.triplet)
     hand2 = os.path.join(ctx.work, "hand2.can")
     shutil.rmtree(hand2, ignore_errors=True)
-    for d in ("usr/lib64", "usr/lib/x86_64-linux-gnu", "usr/bin", "etc"):
-        os.makedirs(os.path.join(hand2, "root", d))
-    os.symlink("usr/lib64", os.path.join(hand2, "root", "lib64"))
+    for d in ("usr/" + ctx.ldso_dir, "usr/lib/" + ctx.triplet, "usr/bin", "etc"):
+        os.makedirs(os.path.join(hand2, "root", d), exist_ok=True)
+    if ctx.ldso_dir != "lib":
+        os.symlink("usr/" + ctx.ldso_dir, os.path.join(hand2, "root", ctx.ldso_dir))
     os.symlink("usr/lib", os.path.join(hand2, "root", "lib"))
-    shutil.copy2(os.path.join(lib, ".real", "ld-linux-x86-64.so.2"), os.path.join(hand2, "root", "usr", "lib64", "ld-linux-x86-64.so.2"))
-    shutil.copy2(os.path.join(lib, ".real", "libc.so.6"), os.path.join(hand2, "root", "usr", "lib", "x86_64-linux-gnu", "libc.so.6"))
+    shutil.copy2(os.path.join(lib, ".real", ctx.ldso_name), os.path.join(hand2, "root", "usr", ctx.ldso_dir, ctx.ldso_name))   # the loader where PT_INTERP names it
+    shutil.copy2(os.path.join(lib, ".real", "libc.so.6"), os.path.join(hand2, "root", "usr", "lib", ctx.triplet, "libc.so.6"))
     shutil.copy2(os.path.join(ctx.root, "usr", "bin", ".real", "true"), os.path.join(hand2, "root", "usr", "bin", "true"))
     rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "wrap", hand2])
     expect(rc == 0, "a tree with the loader in /usr/lib64 and no cache must close (F4-13): " + out[-500:])
@@ -1328,7 +1365,8 @@ def static_check_loader_model(ctx):
     expect(rc == 0, "and run: %r" % err)
     os.remove(os.path.join(hand2, "root", "lib"))
     rep = elfcheck.static_check(hand2, cannery.owned(hand2), [])
-    expect(any("/lib/x86_64-linux-gnu" in e_ and "does not own" in e_ for e_ in rep.errors), "a tree without /lib searches the host's /lib (F4-9): %r" % rep.errors[:3])
+    expect(any(("/lib/" + ctx.triplet in e_ and "does not own" in e_) or (ctx.ldso_dir == "lib" and "loader" in e_) for e_ in rep.errors),
+           "a tree without /lib searches the host's /lib (F4-9): %r" % rep.errors[:3])
     os.symlink("usr/lib", os.path.join(hand2, "root", "lib"))
     shutil.rmtree(os.path.join(hand2, "root", "etc"))
     os.makedirs(os.path.join(hand2, "root", "etc"))
@@ -1371,6 +1409,12 @@ def static_check_loader_model(ctx):
         expect(out == "42\n", "usefoo from /: %r %r" % (out, err))
         rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", ctx.can, log2])
         expect(rc != 0 and "library opened on the host" in out and tmp + "/libfoo.so" in out, "a workload run from / must not excuse a host library: " + out[-500:])
+        # and a run from that directory, the host's by rule 3 with nothing to claim, notes it as the build's own
+        log3 = os.path.join(ctx.work, "bld-tmp.log")
+        rc, out, err = run([wrapper(ctx, "sh"), "-c", "./usefoo"], cwd=tmp, env=dict(ctx.env, CAN_LOG=log3))
+        expect(out == "42\n", "usefoo from its /tmp directory: %r %r" % (out, err))
+        rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", ctx.can, log3])
+        expect(rc == 0 and "working directory" in out and "0 errors" in out.splitlines()[-1], "a build directory under /tmp is a note, not an error: " + out[-500:])
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1400,12 +1444,12 @@ def host_symlink_into_usr(ctx):
 
 @test
 def ld_so(ctx):
-    ld = "/lib64/ld-linux-x86-64.so.2"
+    ld = ctx.interp
     rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s --list /usr/bin/%s" % (ld, GCC)], cwd=ctx.work, env=ctx.env)
-    expect(rc == 0 and "libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6" in out and ctx.root not in out, "ld.so --list: %r %r" % (out, err))
+    expect(rc == 0 and "libc.so.6 => /lib/%s/libc.so.6" % ctx.triplet in out and ctx.root not in out, "ld.so --list: %r %r" % (out, err))
     rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s --verify /usr/bin/%s" % (ld, GCC)], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "ld.so --verify rc=%d" % rc)
-    rc, out, err = run([os.path.join(ctx.root, "lib64", "ld-linux-x86-64.so.2"), "--verify", "/usr/bin/" + GCC], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([os.path.join(ctx.root, ctx.interp.lstrip("/")), "--verify", "/usr/bin/" + GCC], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "ld.so run by its real path from the host: rc=%d %r" % (rc, err))
 
 
@@ -1473,20 +1517,20 @@ def mixed_tree_refused(ctx):
     d = os.path.join(mixed, "root")
     os.makedirs(os.path.join(d, "usr", "bin"), exist_ok=True)
     src = open(os.path.join(ctx.root, "usr", "bin", ".real", "true"), "rb").read()
-    interp = b"/lib64/ld-linux-x86-64.so.2\0"
+    interp = ctx.interp.encode() + b"\0"
     i = src.index(interp)
-    other = b"/lib/ld-musl-x86_64.so.1\0".ljust(len(interp), b"\0")
+    other = (ctx.musl_interp.encode() + b"\0").ljust(len(interp), b"\0")
     with open(os.path.join(d, "usr", "bin", "true"), "wb") as f:
         f.write(src[:i] + other + src[i + len(interp):])
     with open(os.path.join(d, "usr", "bin", "false"), "wb") as f:
         f.write(src)
     for n in ("true", "false"):
         os.chmod(os.path.join(d, "usr", "bin", n), 0o755)
-    os.symlink("/lib64/ld-linux-x86-64.so.2", os.path.join(d, "usr", "bin", "ld-glibc"))   # so that one loader resolves
-    os.makedirs(os.path.join(d, "lib64"))
-    shutil.copy2(os.path.join(ctx.root, "lib64", "ld-linux-x86-64.so.2"), os.path.join(d, "lib64", "ld-linux-x86-64.so.2"), follow_symlinks=True)
-    os.makedirs(os.path.join(d, "lib"))
-    shutil.copy2(os.path.join(ctx.root, "lib64", "ld-linux-x86-64.so.2"), os.path.join(d, "lib", "ld-musl-x86_64.so.1"), follow_symlinks=True)
+    os.symlink(ctx.interp, os.path.join(d, "usr", "bin", "ld-glibc"))   # so that one loader resolves
+    os.makedirs(os.path.join(d, ctx.ldso_dir), exist_ok=True)
+    shutil.copy2(os.path.join(ctx.root, ctx.interp.lstrip("/")), os.path.join(d, ctx.interp.lstrip("/")), follow_symlinks=True)
+    os.makedirs(os.path.join(d, "lib"), exist_ok=True)                 # the glibc loader's own directory on aarch64
+    shutil.copy2(os.path.join(ctx.root, ctx.interp.lstrip("/")), os.path.join(d, ctx.musl_interp.lstrip("/")), follow_symlinks=True)
     rep = elfcheck.static_check(mixed, ["/usr", "/lib", "/lib64"], [])
     expect(any("mixes loaders" in e for e in rep.errors), "a tree with two loaders was not refused: %r" % rep.errors[:4])
 

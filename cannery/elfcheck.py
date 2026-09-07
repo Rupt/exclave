@@ -17,10 +17,23 @@ import struct
 PT_LOAD, PT_DYNAMIC, PT_INTERP = 1, 2, 3
 DT_NULL, DT_NEEDED, DT_STRTAB, DT_STRSZ, DT_SONAME, DT_RPATH, DT_RUNPATH = 0, 1, 5, 10, 14, 15, 29
 ET_DYN = 3
+# the machines the opener is built for (7.1): ELF e_machine, uname -m, Debian's multiarch triplet
+MACHINES = {62: ("x86_64", "x86_64-linux-gnu"), 183: ("aarch64", "aarch64-linux-gnu")}
+MACHINE = 62                                                 # the can's, set from its opener by static_check
 DEFAULT_DIRS = ["/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu", "/lib64", "/usr/lib64", "/lib", "/usr/lib"]   # Debian's and Fedora's glibc; the tree's loader is asked when it can answer (review F4-13)
 MUSL_DIRS = ["/lib", "/usr/local/lib", "/usr/lib"]
 HWCAPS = ["glibc-hwcaps/x86-64-v4", "glibc-hwcaps/x86-64-v3", "glibc-hwcaps/x86-64-v2"]
 LIBC_SONAME = {"glibc": "libc.so.6", "musl": "libc.musl-x86_64.so.1"}
+
+
+def set_machine(machine):
+    """The can's machine decides the multiarch directory, the hwcaps subdirectories and musl's soname."""
+    global MACHINE, DEFAULT_DIRS, HWCAPS, LIBC_SONAME
+    MACHINE = machine
+    uname, triplet = MACHINES.get(machine, ("unknown", "unknown"))
+    DEFAULT_DIRS = ["/lib/" + triplet, "/usr/lib/" + triplet, "/lib64", "/usr/lib64", "/lib", "/usr/lib"]
+    HWCAPS = ["glibc-hwcaps/x86-64-v4", "glibc-hwcaps/x86-64-v3", "glibc-hwcaps/x86-64-v2"] if machine == 62 else []
+    LIBC_SONAME = {"glibc": "libc.so.6", "musl": "libc.musl-%s.so.1" % uname}
 
 
 def glibc_version(tree):
@@ -277,7 +290,17 @@ def _interps(tree):
 
 def static_check(can, own, data_prefixes=(), log=print):
     """Returns a Report. own: the ownership set of 8.1 as the opener computes it."""
+    import platform
     tree, rep = Tree(os.path.join(can, "root")), Report()
+    native = {v[0]: k for k, v in MACHINES.items()}.get(platform.machine())
+    try:
+        set_machine(Elf(os.path.join(can, ".can", "opener")).machine)   # the can's machine is its opener's
+    except (ValueError, OSError):
+        set_machine(native or 62)                                       # no opener yet: the machine the check runs on
+    if native != MACHINE:                                    # 10.1: a can is closed on a machine of its architecture, where its loader can be asked
+        rep.errors.append("the can's opener is for %s and this machine is %s: close the can on a machine of its architecture (10.1)"
+                          % (MACHINES.get(MACHINE, ("?",))[0], platform.machine()))
+        return rep
     cache = read_cache(tree)
     if host_owned("/etc", own):                                # the loader would read the host's cache and preload list (review F4-9)
         rep.errors.append("/etc is the host's: the loader would read the host's /etc/ld.so.cache and /etc/ld.so.preload; the tree must own /etc")
@@ -331,8 +354,8 @@ def static_check(can, own, data_prefixes=(), log=print):
             except ValueError as ex:
                 rep.errors.append("%s: %s" % (vpath, ex))
                 continue
-            if e.machine != 62:
-                rep.warnings.append("%s: not x86-64: a foreign object, not checked (13)" % vpath)
+            if e.machine != MACHINE:
+                rep.warnings.append("%s: not %s: a foreign object, not checked (13)" % (vpath, MACHINES.get(MACHINE, ("?",))[0]))
                 continue
             if e.interp is None and e.type != ET_DYN:
                 rep.static.append(vpath)
@@ -445,6 +468,10 @@ def dynamic_check(can, logs, own, log=print):
             c = path[len("cwd claimed for the host "):]                           # "cwd" line is a diagnostic and claims nothing (review O5-4)
             if c != "/":
                 cwds.add(c)
+        if what == "opener" and path.startswith("cwd ") and not path.startswith("cwd claimed"):
+            c = path[len("cwd "):]                                                # a working directory under a volatile prefix is the
+            if any(c == v or c.startswith(v + "/") for v in VOLATILE):            # host's by 8.1 rule 3, with nothing to claim: the
+                cwds.add(c)                                                       # build's own directory all the same; never /
         if what == "open" and r >= 0 and re.search(r"\.so(\.\d+)*$", path):
             libs.add(path)
     for lib in sorted(libs):

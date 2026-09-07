@@ -600,18 +600,22 @@ static void on_sigsys(int sig, void *info, void *uc)
     int depth = nest_enter(pid, tid, frame);
     if (depth > 1 && ip >= C.text_lo && ip < C.text_hi) die("the opener trapped its own syscall", 0, nr);
     if (depth > 64) die("signal handlers nested too deep (or left behind by longjmp on another stack)", 0, 0);
-    long a[6] = { g[REG_RDI], g[REG_RSI], g[REG_RDX], g[REG_R10], g[REG_R8], g[REG_R9] };
+    long a[6] = { g[REG_ARG0], g[REG_ARG1], g[REG_ARG2], g[REG_ARG3], g[REG_ARG4], g[REG_ARG5] };
     struct scratch *S = scratch_get(pid, tid, frame);
     cur_pid = pid;
     if (S) S->v[0] = 0;
     long r = S ? dispatch(S, nr, a, uc, &S) : -ENOMEM;
     if (C.logfd >= 0 && S) log_line(sysname(nr), r, S->v[0] ? S->v : 0);
     if (S) scratch_put(S);
-    g[REG_RAX] = r;
+    g[REG_RESULT] = r;
     nest_leave();
 }
 
+#if defined(__x86_64__)
 __asm__(".text\n.globl sig_restorer\n.type sig_restorer,@function\nsig_restorer:\n mov $15, %eax\n syscall\n");
+#elif defined(__aarch64__)
+__asm__(".text\n.globl sig_restorer\n.type sig_restorer,%function\nsig_restorer:\n mov x8, #139\n svc #0\n");
+#endif
 
 void handler_install(void)
 {

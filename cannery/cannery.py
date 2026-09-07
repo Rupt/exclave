@@ -370,20 +370,31 @@ def payload_path(real):
     return p if os.path.exists(p) else real
 
 
-def default_opener():
-    """build/opener beside a checkout, or the opener shipped next to this file in the cannery can (10.5)."""
+MACHINE = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64", "all": None, "noarch": None}   # package spellings -> uname -m
+
+
+def default_opener(arch=None):
+    """build/opener beside a checkout, or the opener shipped next to this file in the cannery can (10.5); for packages
+    of another architecture than this machine's, the cross-built build/opener-<machine> (7.1)."""
+    import platform
+    machine = MACHINE.get(arch, arch)
+    if machine and machine != platform.machine():
+        p = os.path.join(HERE, "..", "build", "opener-" + machine)
+        if not os.path.isfile(p):
+            sys.exit("no opener for %s here: %s is not built (make with the cross compiler), and this machine is %s" % (machine, p, platform.machine()))
+        return p
     for p in (os.path.join(HERE, "..", "build", "opener"), os.path.join(HERE, "opener")):
         if os.path.isfile(p):
             return p
     return os.path.join(HERE, "..", "build", "opener")
 
 
-def install_opener(can, opener=None):
-    """Put an opener at CAN/.can/opener unless one is there already."""
+def install_opener(can, opener=None, arch=None):
+    """Put an opener at CAN/.can/opener unless one is there already: the one for the packages' architecture."""
     dst = os.path.join(can, ".can", "opener")
     if os.path.exists(dst):
         return
-    opener = opener or default_opener()
+    opener = opener or default_opener(arch)
     if not os.path.isfile(opener):
         sys.exit("no opener at %s (run make)" % opener)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -427,7 +438,7 @@ def cmd_unpack(out, debs, log=print):
     except build.BuildError:
         shutil.rmtree(out)
         raise
-    install_opener(out)
+    install_opener(out, arch=next(iter(arches), None))
     build.write_lock(out, [(n, v, a, b2_file(p)) for n, p, _, v, a in pkgs])
     log("unpacked %d packages into %s" % (len(pkgs), out))
 

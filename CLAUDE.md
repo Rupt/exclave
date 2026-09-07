@@ -24,7 +24,13 @@ finding them inconvenient.
   editor between `unpack` and `wrap` is not a cannery feature.
 - **The opener is freestanding C**: no libc, raw syscalls from
   `src/sys.h`, every syscall issued through the syscall page (never a
-  bare `syscall` instruction outside the bootstrap and the restorer).
+  bare `syscall` or `svc` instruction outside the bootstrap and the
+  restorer). One source builds both openers; what differs by
+  architecture lives in `src/sys.h`, `src/common.h` and `#if` blocks
+  named for it, nowhere else. `make` builds `build/opener-aarch64`
+  when `aarch64-linux-gnu-gcc` is installed; it is tested only in the
+  arm64 VM (`test/matrix.py --arm64 --debs-arm64 DIR`), never with
+  user-mode emulation, which has no seccomp.
   The cannery is Python, is shipped as a can, takes files and never
   opens a network connection; `tools/fetch-debs.py`,
   `tools/fetch-apks.py` and `tools/fetch-rpms.py` are the examples of
@@ -85,7 +91,9 @@ finding them inconvenient.
 
 ## Reference machine facts
 
-Ubuntu 24.04, kernel 7.0, x86-64, glibc 2.39. From a plain terminal user
+Ubuntu 24.04, kernel 7.0, x86-64, glibc 2.39; `gcc-aarch64-linux-gnu`,
+`qemu-system-arm` and `qemu-efi-aarch64` are installed for the arm64
+row, which runs under TCG at a tenth of native speed. From a plain terminal user
 namespaces are denied by AppArmor; `aa-exec -p unconfined` reproduces
 that label from a session that is otherwise permitted. `gdb -p` on a
 non-descendant is refused by Yama. `perf` cannot read the maps of a
@@ -108,6 +116,9 @@ glibc-devel binutils make`; the sysroot can and its output with
 `test/sysroot.py --can <gcc can> --rpms <centos 7 rpms> --out
 build/sysroot-hello`, which the matrix then runs natively; a plain
 tree with `spike/make-tree.sh`;
+arm64 packages come from `tools/fetch-debs.py --arch arm64 --mirror
+http://ports.ubuntu.com/ubuntu-ports`, and the arm64 can is made inside
+the VM, since a can is closed on its own architecture;
 the suite and the oracles make their own copies under `build/` (ignored
 by git). The archive mirror configured on this machine is
 `http://gb.archive.ubuntu.com/ubuntu`. Cloud images for the matrix live

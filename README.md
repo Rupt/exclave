@@ -16,8 +16,7 @@ package files it is handed, or any root tree, and is itself a can.
 
 ## Status
 
-Milestones 1a to 2 are built and milestone 3 has one item left, the
-aarch64 opener. The cannery takes files and never fetches, the
+Milestones 1a to 3 are built. The cannery takes files and never fetches, the
 lockfile records inputs and output by hash and locates nothing, the
 opener reads the manifest and the tree and nothing generated, and a
 can is a directory at every stage. A gcc can from Ubuntu or Debian
@@ -27,8 +26,10 @@ more for the configure scripts; an Alpine can from `.apk` files and a
 Fedora can from `.rpm` files compile and run C inside; a clang can
 compiles C and C++; a CentOS 7 glibc as a data prefix in the gcc can
 gives outputs that run on every glibc since 2.17, which the kernel
-matrix checks natively on each VM. gdb debugs a canned program with no
-manual command: the opener carries the script gdb needs. The
+matrix checks natively on each VM; the opener builds for aarch64 from
+the same sources and the matrix has an emulated arm64 row. gdb debugs
+a canned program with no manual command: the opener carries the script
+gdb needs. The
 regression suite (56 named tests), the kernel oracles,
 Docker's default seccomp profile and the plain-terminal AppArmor label
 all pass on the reference machine, and the kernel matrix in QEMU
@@ -44,7 +45,7 @@ finding.
 ## Build, make a can, run
 
 ```
-make                      # build/opener, a freestanding ET_DYN, x86-64 only for now; build/opener-old for the nesting test
+make                      # build/opener, a freestanding ET_DYN; build/opener-old for the nesting test; build/opener-aarch64 with aarch64-linux-gnu-gcc
 make unit                 # the manifest grammar tests and the syscall table test
 make stack                # the handler's stack budget from gcc -fstack-usage
 tools/fetch-debs.py --out debs gcc-13 libc6-dev         # the step before the cannery: apt, a mirror, this tool, anything
@@ -66,6 +67,7 @@ CONT_CAN=gcc.can make oracles   # bwrap and openat2 oracles, Docker's profile; n
 CONT_CAN=gcc.can CONT_SQLITE=sqlite3.c make bench       # the performance table
 test/realsoft.py --can dev.can --src DIR   # build zlib, Lua, SQLite, re2c inside and outside; dev.can needs g++, make, python3
 test/matrix.py --can gcc.can              # the kernel matrix: cloud images under QEMU/KVM, one VM at a time
+test/matrix.py --can gcc.can --arm64 --debs-arm64 DIR   # and the emulated aarch64 row: the arm64 can is made inside the VM
 test/dogfood.py --cache DIR               # the cannery as a can, and a cross-can build that must reproduce
 ```
 
@@ -98,7 +100,7 @@ canonicalises a manifest or lockfile.
 ## Layout
 
 ```
-src/sys.h        syscall numbers, the syscall page, raw wrappers, a tiny libc subset
+src/sys.h        syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
 src/common.h     constants, the run-time state (struct can), every module's interface
 src/opener.c     entry: syscall page, self-relocation, find the can, manifest, boundary, env, load
 src/manifest.c   the strict grammar parser (6.2); also built for the host by make unit
@@ -110,7 +112,7 @@ src/canon.c      canonicalisation in virtual space (7.4.4)
 src/cache.c      the per-process component cache (7.4.4)
 src/vis.c        the visibility rule, ownership read from the tree, identity files, wrapper redirect (8)
 src/scratch.c    handler memory: mmap'd chunks with liveness reclamation (7.5.4)
-src/isa.c        x86-64 psABI level check (7.7)
+src/isa.c        the ISA check (7.7): x86-64 psABI levels by cpuid, aarch64 levels by AT_HWCAP
 src/str.c        string helpers, arena, the shebang parser
 src/log.c        CAN_LOG and fatal messages
 cannery/cannery.py   the command line: grammar, unpack, wrap, unwrap, check, prune, fmt, hash, reopen
@@ -130,7 +132,7 @@ test/syscalls.py     every kernel syscall classified; test/bench.py the performa
 test/realsoft.py     real projects built inside and outside a can; test/matrix.py the kernel matrix in VMs
 test/dogfood.py      the cannery can building a can that must reproduce the host-built lockfile
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/stackcheck.py the stack budget
-docs/            proposal (revision 12), review response, prior art, review reports
+docs/            proposal (revision 13), review response, prior art, review reports
 spike/           frozen prototypes and their tests
 ```
 

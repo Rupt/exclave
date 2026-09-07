@@ -42,7 +42,7 @@
 #define O_NOCTTY   0400
 #define O_APPEND   02000
 #define O_NONBLOCK 04000
-#define O_TMPFILE  020200000
+#define O_TMPFILE  (020000000 | O_DIRECTORY)
 #define AT_EACCESS 0x200
 #define AT_SYMLINK_FOLLOW 0x400
 #define AT_STATX_SYNC_TYPE 0x6000
@@ -80,6 +80,7 @@
 #define SECCOMP_RET_ERRNO 0x00050000u
 #define SECCOMP_RET_ALLOW 0x7fff0000u
 #define AUDIT_ARCH_X86_64 0xC000003Eu
+#define AUDIT_ARCH_AARCH64 0xC00000B7u
 #define X32_SYSCALL_BIT 0x40000000u
 
 /* ---------- mmap ---------- */
@@ -107,16 +108,41 @@
 #define AT_BASE 7
 #define AT_ENTRY 9
 #define AT_RANDOM 25
+#define AT_HWCAP 16
 #define AT_HWCAP2 26
 #define AT_MINSIGSTKSZ 51
 
-/* ---------- x86-64 signal frame (rt_sigframe) ----------
- * uc_mcontext.gregs at +40 from the ucontext, uc_sigmask at +296; verified
- * against a real frame by both first-round reviews. */
+/* ---------- the signal frame (rt_sigframe), by architecture ----------
+ * x86-64: uc_mcontext.gregs at +40 from the ucontext, uc_sigmask at +296; verified against a real frame by both
+ * first-round reviews. The names index the argument registers of the syscall convention and the result register.
+ * aarch64: the ucontext is uc_flags, uc_link, uc_stack (24), uc_sigmask (8) at +40, 120 unused bytes, then
+ * struct sigcontext at +176: fault_address, regs[31] from +184, sp, pc, pstate. The arguments are x0 to x5, the
+ * number x8, the result x0, which is also the first argument: the handler copies the arguments before it writes. */
+#if defined(__x86_64__)
 #define UC_GREGS_OFF 40
 #define UC_SIGMASK_OFF 296
 enum { REG_R8 = 0, REG_R9, REG_R10, REG_R11, REG_R12, REG_R13, REG_R14, REG_R15, REG_RDI, REG_RSI,
        REG_RBP, REG_RBX, REG_RDX, REG_RAX, REG_RCX, REG_RSP, REG_RIP };
+#define REG_ARG0 REG_RDI
+#define REG_ARG1 REG_RSI
+#define REG_ARG2 REG_RDX
+#define REG_ARG3 REG_R10
+#define REG_ARG4 REG_R8
+#define REG_ARG5 REG_R9
+#define REG_RESULT REG_RAX
+#elif defined(__aarch64__)
+#define UC_GREGS_OFF 184
+#define UC_SIGMASK_OFF 40
+#define REG_ARG0 0
+#define REG_ARG1 1
+#define REG_ARG2 2
+#define REG_ARG3 3
+#define REG_ARG4 4
+#define REG_ARG5 5
+#define REG_RESULT 0
+#define REG_SP 31
+#define REG_PC 32
+#endif
 /* siginfo: si_signo@0 si_errno@4 si_code@8; SIGSYS: _call_addr@16 _syscall@24 _arch@28 */
 #define SI_CODE_OFF 8
 #define SI_CALL_ADDR_OFF 16
@@ -225,4 +251,4 @@ void handler_install(void);
 void sig_restorer(void);
 
 /* ---------- ISA (isa.c) ---------- */
-int isa_supported(const char *isa);   /* 1 yes, 0 no, -1 unknown string */
+int isa_supported(const char *isa, unsigned long *auxv);   /* 1 yes, 0 no, -1 unknown string; auxv for AT_HWCAP on aarch64 */

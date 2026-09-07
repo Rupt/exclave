@@ -307,10 +307,16 @@ def synthesise(root, debs, log=print):
                 tmp = _v(root, "/etc/ld.so.conf.cannery")
                 with open(tmp, "w", encoding="utf-8") as f:
                     f.writelines(lines)
-        r = subprocess.run([ld, "-r", root, "-f", "/etc/ld.so.conf.cannery" if tmp else "/etc/ld.so.conf"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            r = subprocess.run([ld, "-r", root, "-f", "/etc/ld.so.conf.cannery" if tmp else "/etc/ld.so.conf"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except OSError as e:                                  # the tree's ldconfig is of another architecture: no cache here (10.1)
+            r = None
+            log("the tree's ldconfig cannot run on this machine (%s): no ld.so.cache; close the can on a machine of its architecture" % e.strerror)
         if tmp:
             os.remove(tmp)
-        if r.returncode:
+        if r is None:
+            pass
+        elif r.returncode:
             log("ldconfig failed: " + r.stderr.decode(errors="replace").strip())
         else:
             log("synthesised /etc/ld.so.cache with the can's ldconfig")
