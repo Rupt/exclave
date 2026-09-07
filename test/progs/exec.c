@@ -29,7 +29,7 @@ int main(int argc, char **argv)
         printf("header ok %s\n", exe); return 0;
     }
     if (!strncmp(mode, "fexecve", 7)) {
-        const char *p = !strcmp(mode, "fexecve_payload") ? "/usr/bin/.real/true" : "/usr/bin/true";
+        const char *p = !strcmp(mode, "fexecve_payload") ? (getenv("CONT_TRUE_PAYLOAD") ? getenv("CONT_TRUE_PAYLOAD") : "/usr/bin/.real/true") : (getenv("CONT_TRUE") ? getenv("CONT_TRUE") : "/usr/bin/true");
         int fd = open(p, !strcmp(mode, "fexecve_opath") ? O_PATH : O_RDONLY); if (fd < 0) { perror(p); return 1; }
         char *av[] = { "true", 0 }; fexecve(fd, av, environ); perror("fexecve"); return 1;
     }
@@ -42,7 +42,7 @@ int main(int argc, char **argv)
         errno = 0; if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &p) != -1 || errno != ENOSYS) { printf("FAIL prctl seccomp: errno=%d\n", errno); return 1; }
         unsigned act = SECCOMP_RET_TRAP; if (syscall(SYS_seccomp, SECCOMP_GET_ACTION_AVAIL, 0, &act) != 0) { printf("FAIL seccomp availability query\n"); return 1; }
         struct stat st; if (stat("/usr/share/cont-test-marker", &st)) { printf("FAIL stat after refused filter\n"); return 1; }
-        execl("/usr/bin/true", "true", (char *)0); perror("execl"); return 1;
+        execl(getenv("CONT_TRUE") ? getenv("CONT_TRUE") : "/usr/bin/true", "true", (char *)0); perror("execl"); return 1;
     }
     if (!strcmp(mode, "personality")) { personality(ADDR_NO_RANDOMIZE); execl("/proc/self/exe", argv[0], "child", (char *)0); perror("execl"); return 1; }
     if (!strcmp(mode, "script")) { execl(argv[2], argv[2], "arg1", (char *)0); perror("execl script"); return 1; }
@@ -62,13 +62,13 @@ int main(int argc, char **argv)
         printf("vectors: %d failures\n", fails); return fails ? 1 : 0;
     }
     if (!strcmp(mode, "nofollow")) {                         /* F3-20: execveat of a symlink itself is ELOOP */
-        errno = 0; syscall(SYS_execveat, AT_FDCWD, "/usr/bin/sh", (char *[]){ "sh", "-c", "echo RAN", 0 }, environ, AT_SYMLINK_NOFOLLOW);
+        errno = 0; syscall(SYS_execveat, AT_FDCWD, getenv("CONT_SH") ? getenv("CONT_SH") : "/usr/bin/sh", (char *[]){ "sh", "-c", "echo RAN", 0 }, environ, AT_SYMLINK_NOFOLLOW);
         printf("%d\n", errno); return errno == ELOOP ? 0 : 1;
     }
     if (!strcmp(mode, "closefds")) {                         /* F3-18: close everything, open a file, trap: the log must not land in it */
         for (int fd = 3; fd < 1024; fd++) close(fd);
         int fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644); write(fd, "line one\n", 9);
-        struct stat st; stat("/usr/share", &st); stat("/usr/bin/sh", &st);
+        struct stat st; stat("/usr/share", &st); stat(getenv("CONT_SH") ? getenv("CONT_SH") : "/usr/bin/sh", &st);
         write(fd, "line two\n", 9); close(fd); printf("closefds done fd=%d\n", fd); return 0;
     }
     if (!strcmp(mode, "perm")) {                             /* O3-4: the kernel's permission triads, not "anyone may execute" */

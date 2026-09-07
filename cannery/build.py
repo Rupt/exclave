@@ -497,8 +497,8 @@ def _resolve_keep(root, vpath, keep, hops=0):
 
 
 def prune(can, logs, own, log=print):
-    """Keep what the logged workloads touched, whole directories they opened, the symlink chains that reach
-    kept files, the libraries kept ELF files need, and the placeholders; drop every other file and symlink.
+    """Keep what the logged workloads touched, the entries of directories they opened, the symlink chains that
+    reach kept files, the libraries kept ELF files need, and the placeholders; drop every other file and symlink.
     Directories are never removed, so ownership and `ls` do not change. Returns (kept, removed, bytes)."""
     import cannery
     import elfcheck
@@ -525,10 +525,10 @@ def prune(can, logs, own, log=print):
     for f in IDENTITY_FILES + ["/etc/ld.so.cache"]:
         if os.path.lexists(_v(root, f)):
             keep.add(f)
-    for d in whole:
-        for dirpath, dirnames, filenames in os.walk(_v(root, d)):
-            for name in filenames + [x for x in dirnames if os.path.islink(os.path.join(dirpath, x))]:
-                keep.add("/" + os.path.relpath(os.path.join(dirpath, name), root))
+    for d in whole:                                               # its own entries: a getdents shows names, nothing below them
+        for name in os.listdir(_v(root, d)):
+            if not os.path.isdir(os.path.join(_v(root, d), name)) or os.path.islink(os.path.join(_v(root, d), name)):
+                keep.add("/" + os.path.relpath(os.path.join(_v(root, d), name), root))
     # the libraries every kept ELF needs, by the loader's own search (10.3)
     tree = elfcheck.Tree(root)
     elfs = []

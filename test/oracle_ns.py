@@ -23,29 +23,30 @@ import cannery  # noqa: E402
 
 import platform  # noqa: E402
 TRIPLET = "%s-linux-gnu" % platform.machine()                     # the can's multiarch directory: the suite runs on the can's own machine
-GCC = TRIPLET + "-gcc-13"
+GCC = TRIPLET + "-gcc-13"                                         # both replaced by what the tree says once the can is known (test/tree.py)
+SH, SHX, LIBC, SH_LINK = "/usr/bin/sh", "/usr/bin/dash", "/lib/x86_64-linux-gnu/libc.so.6", "dash"   # likewise: the shell, the file behind it, libc, the link's text
 IDENTITY = ["/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf", "/etc/resolv.conf", "/etc/hosts",
             "/etc/ssl/certs/ca-certificates.crt"]
 
 # shell workloads by virtual path; $W is the host work directory, writable in both worlds
 WORKLOADS = [
     "cat /etc/passwd | head -3",
-    "for f in /etc/resolv.conf /etc/hosts /etc/nsswitch.conf; do test -L $f && readlink $f; done; head -c 40 /etc/resolv.conf | wc -c; readlink /usr/bin/sh",
+    "for f in /etc/resolv.conf /etc/hosts /etc/nsswitch.conf; do test -L $f && readlink $f; done; head -c 40 /etc/resolv.conf | wc -c; readlink $SH",
     "pwd; cd /usr/lib && pwd; cd gcc && pwd",
     "mkdir -p /usr/lib; echo $?; install -d /usr/lib; echo $?; mkdir /usr/lib; echo $?",
-    "touch /usr/x; echo $?; touch /usr/lib/x; echo $?; rm /usr/bin/sh; echo $?; rm /usr/nonexistent; echo $?",
-    "mv /usr/bin/sh $W/moved; echo $?; ln /usr/bin/dash $W/linked; echo $?; ln -s /usr/bin/dash $W/symlinked; echo $?; ln $W/hello.c /usr/newlink; echo $?",
-    "cp /usr/bin/dash $W/dashcopy; echo $?; cmp /usr/bin/dash $W/dashcopy; echo $?",
-    "stat -c '%s %F %a' /usr/bin/dash /usr/lib /usr/bin/sh /usr/lib/" + TRIPLET + "/libc.so.6",
+    "touch /usr/x; echo $?; touch /usr/lib/x; echo $?; rm $SH; echo $?; rm /usr/nonexistent; echo $?",
+    "mv $SH $W/moved; echo $?; ln $SHX $W/linked; echo $?; ln -s $SHX $W/symlinked; echo $?; ln $W/hello.c /usr/newlink; echo $?",
+    "cp $SHX $W/dashcopy; echo $?; cmp $SHX $W/dashcopy; echo $?",
+    "stat -c '%s %F %a' $SHX $SH $LIBC; stat -c '%F %a' /usr/lib",
     "ls /usr/lib/gcc/" + TRIPLET + "/13 | grep -v '^\\.real$' | head -20",
     "find /usr/lib/gcc -name '*.o' | sort | head -30",
-    "cd $W && gcc-13 -O1 hello.c -o hello && ./hello a b; echo $?",
-    "cd $W && gcc-13 -O0 -c hello.c -o hello.o && ls -l hello.o | cut -d' ' -f5",
-    "cat /nonexistent; echo $?; cat /usr/lib; echo $?; cd /usr/bin/dash; echo $?",
+    "cd $W && $CC -O1 hello.c -o hello && ./hello a b; echo $?",
+    "cd $W && $CC -O0 -c hello.c -o hello.o && ls -l hello.o | cut -d' ' -f5",
+    "cat /nonexistent; echo $?; cat /usr/lib; echo $?; cd $SHX; echo $?",
     "echo x > /dev/null; echo $?; : > /tmp/oracle-file; echo $?; ls /tmp/oracle-file",
     "stat -f -c '%T' /usr; touch /usr/bin/true 2>&1; chmod 600 /usr/bin/true 2>&1; echo $?",
     "date +%Z; TZ=Asia/Tokyo date +%Z; ls /etc/localtime 2>&1 | wc -l",
-    "test -w /usr/bin/dash; echo $?; test -x /usr/bin/dash; echo $?; test -w $W; echo $?",
+    "test -w $SHX; echo $?; test -x $SHX; echo $?; test -w $W; echo $?",
     "cd $W && echo '#!/bin/sh' > s.sh && echo 'echo script $1' >> s.sh && chmod +x s.sh && ./s.sh q; echo $?",
     "cd $W && ln -sf /usr/share lnk && cat lnk/../bin/../share/doc/dash/copyright | head -2",
     "getent passwd root | cut -d: -f1; hostname 2>&1 | head -1 | wc -l",
@@ -67,7 +68,9 @@ def run_bwrap(root, work, cmd, extra=()):
     if top != "/tmp":
         args += ["--tmpfs", top]
     args += ["--bind", work, work, "--chdir", work, "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", work, "--setenv", "W", work,
-             "--setenv", "LANG", "C.UTF-8", "--setenv", "TZ", "UTC0", "--setenv", "SHELL", "/bin/sh"]   # the boundary constants of 6.2
+             "--setenv", "LANG", "C.UTF-8", "--setenv", "TZ", "UTC0", "--setenv", "SHELL", "/bin/sh",    # the boundary constants of 6.2
+             "--setenv", "CC", GCC, "--setenv", "SH", SH, "--setenv", "SHX", SHX, "--setenv", "LIBC", LIBC,
+             "--setenv", "CONT_SH", SH, "--setenv", "CONT_SH_LINK", SH_LINK]                   # the tree's spellings (test/tree.py)
     for f in IDENTITY:
         if os.path.exists(f) and os.path.lexists(os.path.join(root, f.lstrip("/"))):
             if os.path.islink(f):
@@ -82,11 +85,12 @@ def run_bwrap(root, work, cmd, extra=()):
 
 
 def run_opener(can, work, cmd, prog=None):
-    env = {"PATH": "/usr/bin:/bin", "HOME": work, "W": work, "LANG": "en_GB.UTF-8", "TZ": "Asia/Tokyo"}   # replaced at the boundary (6.2)
+    env = {"PATH": "/usr/bin:/bin", "HOME": work, "W": work, "CC": GCC, "SH": SH, "SHX": SHX, "LIBC": LIBC, "CONT_SH": SH, "CONT_SH_LINK": SH_LINK,
+           "LANG": "en_GB.UTF-8", "TZ": "Asia/Tokyo"}                                        # the last two replaced at the boundary (6.2)
     if prog:
         p = subprocess.run([os.path.join(can, ".can", "opener"), prog] + cmd, cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     else:
-        p = subprocess.run([os.path.join(can, "root", "usr", "bin", "sh"), "-c", cmd], cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.run([os.path.join(can, "root", __import__("tree").vbin(os.path.join(can, "root"), "sh").lstrip("/")), "-c", cmd], cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
@@ -128,7 +132,14 @@ def main():
         f.write('#include <stdio.h>\nint main(int c, char **v) { printf("hello %d\\n", c); return 0; }\n')
     fails = 0
     # 1. the read-only matrix against the kernel: the same program, the same expectations, a real read-only bind
-    gcc = os.path.join(can, "root", "usr", "bin", GCC)
+    global GCC, TRIPLET, SH, SHX, LIBC, SH_LINK
+    import tree
+    r = os.path.join(can, "root")
+    GCC = tree.compiler(r, platform.machine()) or GCC
+    TRIPLET = tree.triplet(r, platform.machine())
+    SH, SHX, LIBC = tree.vbin(r, "sh"), tree.resolve(r, tree.vbin(r, "sh")), tree.libc(r, platform.machine())
+    SH_LINK = os.readlink(os.path.join(r, SH.lstrip("/"))) if os.path.islink(os.path.join(r, SH.lstrip("/"))) else ""
+    gcc = os.path.join(can, "root", tree.vbin(os.path.join(can, "root"), GCC).lstrip("/"))
     prog = os.path.join(work, "ro_matrix")
     r = subprocess.run([gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "ro_matrix.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode:

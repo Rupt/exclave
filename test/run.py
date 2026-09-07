@@ -28,6 +28,7 @@ REPO = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO, "cannery"))
 import build  # noqa: E402
 import cannery  # noqa: E402
+import tree  # noqa: E402
 
 GCC = "x86_64-linux-gnu-gcc-13"      # Debian's name; make_can takes the tree's gcc when that one is absent (an Alpine can, an arm64 one)
 import platform  # noqa: E402
@@ -107,6 +108,44 @@ def shared_state(ctx):
             tuple(sorted(entries)))
 
 
+def fixture_key(can):
+    """The pruned fixture (17) depends on the source can, whose lock hashes its tree, and on what the tests touch,
+    which their sources decide; a can without a lock gets no fixture."""
+    import hashlib
+    lock = os.path.join(can, ".can", "lock")
+    if not os.path.isfile(lock):
+        return None
+    h = hashlib.blake2b(digest_size=6)
+    h.update(open(lock, "rb").read())
+    files = [os.path.join(HERE, "run.py")]
+    files += sorted(os.path.join(HERE, "progs", f) for f in os.listdir(os.path.join(HERE, "progs")))
+    files += sorted(os.path.join(REPO, "cannery", f) for f in os.listdir(os.path.join(REPO, "cannery")) if f.endswith(".py"))
+    for f in files:
+        h.update(os.path.basename(f).encode() + b"\0" + open(f, "rb").read() + b"\0")
+    return h.hexdigest()
+
+
+def make_fixture(ctx, dst):
+    """The shared can pruned to what this run touched, from every CAN_LOG file the run wrote, kept for the next
+    run (17): the same tree the tests just passed on, a few hundred files instead of thousands, the cannery's
+    own prune. Made only from a run with no failure, so that a partial log never fixes a partial fixture."""
+    logs = sorted(os.path.join(dp, f) for dp, dn, fn in os.walk(ctx.work) for f in fn if f.endswith(".log"))
+    tmp = "%s.tmp%d" % (dst, os.getpid())                        # two runs may make the same fixture at once (test/gate.sh)
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    copy_can(ctx.can, tmp)
+    if cannery.cmd_prune(tmp, logs):
+        print("fixture not kept: the pruned can does not pass the static check")
+        shutil.rmtree(tmp, ignore_errors=True)
+        return
+    if os.path.isdir(dst):                                        # another run made it meanwhile
+        shutil.rmtree(tmp, ignore_errors=True)
+    else:
+        os.rename(tmp, dst)
+    n = sum(len(fn) for dp, dn, fn in os.walk(os.path.join(dst, "root")))
+    print("fixture: %d files, kept at %s" % (n, dst))
+
+
 def hello_source(ctx):
     """hello.c in the work directory: a fixture any test may make, made once."""
     src = os.path.join(ctx.work, "hello.c")
@@ -156,10 +195,7 @@ def make_can(ctx):
     build.write_lock(can, [], manifest_hash=cannery.b2_file(os.path.join(can, ".can", "manifest")), tree=True)   # closed: a lock with the hashes (6.4)
     ctx.can, ctx.root, ctx.opener = can, root, os.path.join(can, ".can", "opener")
     tree_facts(ctx)
-    for name in ("%s-linux-gnu-gcc-13" % ctx.machine, GCC, "gcc"):
-        if os.path.exists(os.path.join(root, "usr", "bin", name)):
-            GCC = name
-            break
+    GCC = tree.compiler(root, ctx.machine) or GCC                      # the tree's C compiler
 
 
 def tree_facts(ctx):
@@ -168,13 +204,36 @@ def tree_facts(ctx):
     import platform
     import elfcheck
     ctx.machine = platform.machine()
-    ctx.triplet = next((d for d in sorted(os.listdir(os.path.join(ctx.root, "usr", "lib"))) if d.endswith("-linux-gnu")
-                        and os.path.exists(os.path.join(ctx.root, "usr", "lib", d, "libc.so.6"))), "%s-linux-gnu" % ctx.machine)
-    true = os.path.join(ctx.root, "usr", "bin", ".real", "true")
+    ctx.triplet = tree.triplet(ctx.root, ctx.machine)
+    t = elfcheck.Tree(ctx.root)
+
+    def vbin(name):
+        return tree.vbin(ctx.root, name)
+
+    def vreal(vpath):
+        """A virtual path resolved through the tree's links, as a virtual path: the file behind the name."""
+        return t.resolve(vpath) or vpath
+
+    def payload(name):
+        """The real file of a program's payload, behind its wrapper and its links (an applet link to busybox)."""
+        return t.payload(vreal(name if name.startswith("/") else vbin(name)))
+    ctx.vbin, ctx.vreal, ctx.payload = vbin, vreal, payload
+    true = payload("true")
     ctx.interp = elfcheck.Elf(true).interp if os.path.exists(true) else {"x86_64": "/lib64/ld-linux-x86-64.so.2", "aarch64": "/lib/ld-linux-aarch64.so.1"}[ctx.machine]
     ctx.ldso_dir, ctx.ldso_name = ctx.interp.split("/")[1], os.path.basename(ctx.interp)
+    ctx.musl = os.path.basename(ctx.interp).startswith("ld-musl")
     ctx.musl_interp = "/lib/ld-musl-%s.so.1" % ctx.machine
+    ctx.other_interp = "/lib/ld-gnu-%s.so.2" % ctx.machine if ctx.musl else ctx.musl_interp   # a loader this can lacks, no longer than its own
     ctx.deb_arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(ctx.machine, ctx.machine)
+    ctx.sh_exe = vreal(vbin("sh"))                            # what /proc/self/exe reads for a script: dash, bash or busybox by its path
+    ctx.sh_link = os.readlink(os.path.join(ctx.root, vbin("sh").lstrip("/"))) if os.path.islink(os.path.join(ctx.root, vbin("sh").lstrip("/"))) else ""
+    ctx.busybox = os.path.basename(ctx.sh_exe) == "busybox"
+    ctx.libc = next((v for v in ("/lib/%s/libc.so.6" % ctx.triplet, "/lib64/libc.so.6", "/lib/libc.so.6", "/usr/lib/libc.so.6")
+                     if os.path.lexists(os.path.join(ctx.root, v.lstrip("/")))), None)   # libc.so.6 as the loader names it; none on musl
+    ctx.ldso_cache = os.path.exists(os.path.join(ctx.root, "etc", "ld.so.cache"))
+    # the test programs read the tree's spellings from the environment, which the boundary passes through
+    ctx.env.update(CONT_SH=vbin("sh"), CONT_SH_EXE=ctx.sh_exe, CONT_SH_LINK=ctx.sh_link, CONT_TRUE=vbin("true"),
+                   CONT_TRUE_PAYLOAD="/" + os.path.relpath(true, ctx.root))
 
 
 def compile_progs(ctx):
@@ -187,6 +246,8 @@ def compile_progs(ctx):
     gcc = wrapper(ctx, GCC)
     for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress"):
         rc, out, err = run([gcc, "-O1", "-g", "-pthread", "-o", os.path.join(ctx.progs, name), os.path.join(src, name + ".c"), "-lm", "-ldl"], cwd=ctx.work, env=ctx.env)
+        if rc and name == "execstack" and "not allowed here" in err:      # nested functions are gcc's; clang has none
+            continue
         if rc:
             sys.exit("cannot compile %s with the can's gcc:\n%s" % (name, err))
     rc, out, err = run([gcc, "-shared", "-fPIC", "-o", os.path.join(ctx.progs, "liborigin.so"), os.path.join(src, "origin_lib.c")], cwd=ctx.work, env=ctx.env)
@@ -198,8 +259,8 @@ def compile_progs(ctx):
 # ------------------------------------------------------------------ tests
 @test
 def version(ctx):
-    rc, out, err = run([wrapper(ctx, "gcc-13"), "--version"], cwd=ctx.work, env=ctx.env)
-    expect(rc == 0 and "13." in out, "gcc --version: rc=%d out=%r err=%r" % (rc, out, err))
+    rc, out, err = run([wrapper(ctx, GCC), "--version"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out.strip(), "%s --version: rc=%d out=%r err=%r" % (GCC, rc, out, err))
 
 
 @test
@@ -222,12 +283,14 @@ def hello(ctx):
 @test
 def identical_object(ctx):
     host = "/usr/bin/gcc-13"
+    if "gcc-13" not in GCC:
+        return "the can's compiler is %s: no host twin" % GCC
     if not os.path.exists(host):
         return "no host gcc-13"
     src = hello_source(ctx)
     a, b = os.path.join(ctx.work, "h_host.o"), os.path.join(ctx.work, "h_can.o")
     run([host, "-O2", "-c", src, "-o", a], cwd=ctx.work)
-    rc, out, err = run([wrapper(ctx, "gcc-13"), "-O2", "-c", src, "-o", b], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([wrapper(ctx, GCC), "-O2", "-c", src, "-o", b], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, err)
     expect(open(a, "rb").read() == open(b, "rb").read(), "objects differ")
 
@@ -248,6 +311,7 @@ def isolation(ctx):
         break
     expect(rc == 0, "compile under strace failed: " + err)
     bad, seen = [], 0
+    owned = cannery.owned(ctx.can)                            # 8.1 as the opener computes it: a top-level name outside it is the host's
     allowed_files = set(build.IDENTITY_FILES)
     for f in build.IDENTITY_FILES:          # the opener resolves each identity file's host symlink chain at startup
         p = f
@@ -289,7 +353,8 @@ def isolation(ctx):
             p = os.path.normpath(p) if p.startswith("/") else p
             ok = (not p.startswith("/") or p.startswith(ctx.root) or p.startswith(VOLATILE) or p.startswith(ctx.work)
                   or p in allowed_files
-                  or ctx.work.startswith(p + "/"))     # a directory on the way to the working directory (8.1.4)
+                  or ctx.work.startswith(p + "/")      # a directory on the way to the working directory (8.1.4)
+                  or "/" + p.split("/")[1] not in owned)   # a top-level name the can does not own, absent or a placeholder, is the host's (8.1)
             if not ok:
                 bad.append("%s %s" % (name, p))
     expect(seen > 50, "trace looks empty (%d paths)" % seen)
@@ -300,7 +365,7 @@ def isolation(ctx):
 def ro_matrix(ctx):
     d = os.path.join(ctx.work, "hostdir")
     os.makedirs(d, exist_ok=True)
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "ro_matrix"), [d, "/usr/bin/" + GCC])
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "ro_matrix"), [d, ctx.vreal(ctx.vbin(GCC))])   # the wrapper itself, behind a link
     expect(rc == 0 and "FAIL" not in out, out + err)
 
 
@@ -310,12 +375,16 @@ def coreutils_ro(ctx):
         return run([wrapper(ctx, name)] + list(args), cwd=ctx.work, env=ctx.env)
     rc, out, err = w("touch", "/usr/newfile"); expect(rc and "Read-only" in err, err)
     rc, out, err = w("mkdir", "-p", "/usr/lib"); expect(rc == 0, err)
-    rc, out, err = w("install", "-d", "/usr/lib"); expect(rc == 0, err)
+    rc, out, err = w("install", "-d", "/usr/lib")
+    if ctx.busybox:                                           # busybox's install -d chmods an existing directory, which the read-only rule refuses as a mount would
+        expect(rc and "Read-only" in err, err)
+    else:
+        expect(rc == 0, err)
     rc, out, err = w("mkdir", "/usr/lib"); expect(rc and "exists" in err, err)
-    rc, out, err = w("rm", "/usr/bin/gcc-13"); expect(rc and "Read-only" in err, err)
-    rc, out, err = w("ln", "/usr/bin/" + GCC, os.path.join(ctx.work, "lnk-x")); expect(rc and "cross-device" in err, err)
-    rc, out, err = w("cp", "/usr/bin/gcc-13", os.path.join(ctx.work, "gcc-copy")); expect(rc == 0, err)
-    payload = os.path.join(ctx.root, "usr", "bin", ".real", GCC)
+    rc, out, err = w("rm", ctx.vbin(GCC)); expect(rc and "Read-only" in err, err)
+    rc, out, err = w("ln", ctx.vbin(GCC), os.path.join(ctx.work, "lnk-x")); expect(rc and "cross-device" in err.lower(), err)
+    rc, out, err = w("cp", ctx.vbin(GCC), os.path.join(ctx.work, "gcc-copy")); expect(rc == 0, err)
+    payload = ctx.payload(GCC)
     expect(os.path.getsize(os.path.join(ctx.work, "gcc-copy")) == os.path.getsize(payload), "cp of a wrapper did not copy the payload")
     expect(open(os.path.join(ctx.work, "gcc-copy"), "rb").read(4) == b"\x7fELF", "copy is not ELF")
     rc, out, err = w("cat", "/usr/share/cont-test-marker"); expect(out == "marker\n", out + err)
@@ -335,7 +404,7 @@ def threads(ctx):
 
 @test
 def spawn(ctx):
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "spawn"), ["/usr/bin/" + GCC], timeout=600)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "spawn"), [ctx.vbin(GCC), ctx.vbin("true")], timeout=600)
     expect(rc == 0 and "FAIL" not in out, out + err)
 
 
@@ -364,7 +433,7 @@ def exec_modes(ctx):
     os.makedirs(ne, exist_ok=True)
     with open(os.path.join(ne, "true"), "w") as f:
         f.write("not executable\n")
-    rc, out, err = run([wrapper(ctx, "sh"), "-c", "PATH=%s:/usr/bin exec %s execvp" % (ne, p)], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "PATH=%s:%s exec %s execvp" % (ne, os.path.dirname(ctx.vbin("true")), p)], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "execvp past non-executable: rc=%d %r" % (rc, err))
     # O3-4: files executable for others but not for this user, and a plain data file, are refused as the kernel refuses them
     perm = os.path.join(ctx.work, "perm")
@@ -403,9 +472,10 @@ def scripts(ctx):
     rc, out, err = run([wrapper(ctx, "cont-test-noshebang")], cwd=ctx.work, env=ctx.env)
     expect(rc == 126 and "not an executable" in err, "noshebang direct: rc=%d %r" % (rc, err))   # a shell's 126: found, not executable
     rc, out, err = run([wrapper(ctx, "cont-test-exe")], cwd=ctx.work, env=ctx.env)
-    expect(out == "/usr/bin/dash\n", "a wrapped script's /proc/self/exe is its interpreter (F3-22): %r %r" % (out, err))
-    rc, out, err = run([wrapper(ctx, "bash"), "-c", "echo from bash"], cwd=ctx.work, env=ctx.env)
-    expect(rc == 0 and out == "from bash\n", "bash starts (F3-23): rc=%d %r" % (rc, err))
+    expect(out == ctx.sh_exe + "\n", "a wrapped script's /proc/self/exe is its interpreter (F3-22): %r %r" % (out, err))
+    if os.path.lexists(wrapper(ctx, "bash")):
+        rc, out, err = run([wrapper(ctx, "bash"), "-c", "echo from bash"], cwd=ctx.work, env=ctx.env)
+        expect(rc == 0 and out == "from bash\n", "bash starts (F3-23): rc=%d %r" % (rc, err))
 
 
 @test
@@ -425,7 +495,7 @@ def script_argv0_as_given(ctx):
     rc, out, err = run(["./cont-test-script", "x"], cwd=os.path.join(ctx.root, "usr", "bin"), env=ctx.env)
     expect(out == "script ok x 1\n", "a wrapped script from outside by a relative path runs: %r %r" % (out, err))
     rc, out, err = run([wrapper(ctx, "sh"), "-c", "cd /usr/bin && ./cont-test-exe"], cwd=ctx.work, env=ctx.env)
-    expect(out == "/usr/bin/dash\n", "a wrapped script inside: exe is its interpreter (F3-22): %r %r" % (out, err))
+    expect(out == ctx.sh_exe + "\n", "a wrapped script inside: exe is its interpreter (F3-22): %r %r" % (out, err))
 
 
 @test
@@ -433,7 +503,10 @@ def identity(ctx):
     rc, out, err = run([wrapper(ctx, "cat"), "/etc/passwd"], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and out == open("/etc/passwd").read(), "passwd differs from the host")
     rc, out, err = run([wrapper(ctx, "cat"), "/etc/hostname"], cwd=ctx.work, env=ctx.env)
-    expect(rc != 0 and "No such file" in err, "host /etc/hostname must be invisible: %r" % err)
+    if os.path.lexists(os.path.join(ctx.root, "etc", "hostname")):
+        expect(rc == 0 and out == open(os.path.join(ctx.root, "etc", "hostname")).read(), "a can shipping /etc/hostname shows its own: %r %r" % (out, err))
+    else:
+        expect(rc != 0 and "No such file" in err, "host /etc/hostname must be invisible: %r" % err)
     # 6.2: the time zone is not the host's: UTC inside, whatever TZ and /etc/localtime say outside
     rc, out, err = run([wrapper(ctx, "date"), "+%Z"], cwd=ctx.work, env=dict(ctx.env, TZ="Asia/Tokyo"))
     expect(out.strip() == "UTC", "the zone inside a can is UTC: %r %r" % (out, err))
@@ -464,7 +537,7 @@ def environment(ctx):
     expect(sorted(out.split()) == ["LANG=C", "TZ=Europe/Paris"], "inside the boundary a wrapper script may set its own: %r" % out)
     rc, out, err = run([wrapper(ctx, "sh"), "-c", "printf 'caf\\303\\251' | wc -m; echo b a | tr ' ' '\\n' | sort | head -1"], cwd=ctx.work, env=loud)
     expect(out == "4\na\n", "C.UTF-8 counts characters and sorts by code point: %r" % out)
-    rc, out, err = inside(ctx, "/usr/bin/env")
+    rc, out, err = inside(ctx, ctx.vbin("env"))
     expect(rc == 0 and "CAN_EXEC" not in out, "CAN_EXEC leaked: " + out)
 
 
@@ -476,7 +549,7 @@ def positional_entry(ctx):
     expect(rc == 0 and out == "child ok argv0=./progs/exec\n", "relative program path: %r %r" % (out, err))
     rc, out, err = run([ctx.opener, "/bin/sh", "-c", "cat /proc/$$/comm; tr '\\0' '\\n' < /proc/$$/cmdline | head -1"], cwd=ctx.work, env=ctx.env)
     expect(out == "sh\n/bin/sh\n", "cmdline and comm are the program's: %r %r" % (out, err))
-    rc, out, err = run([ctx.opener, "/usr/bin/env"], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([ctx.opener, ctx.vbin("env")], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and "CAN_EXEC" not in out and "PATH=/usr/local/bin:/usr/bin:/bin" in out, "the boundary policy applies after the re-exec and CAN_EXEC never reaches the program: %r" % out)
     rc, out, err = run([ctx.opener], cwd=ctx.work, env=ctx.env)
     expect(rc == 127 and "PROGRAM" in err, "no program named: rc=%d %r" % (rc, err))
@@ -501,17 +574,17 @@ def positional_entry(ctx):
     rc, out, err = run([os.path.join(dp, ".can", "opener"), "/opt/sdk/bin/prog", "self"], cwd=ctx.work, env=ctx.env)
     expect(rc == 126 and "Permission denied" in err and "child ok" not in out, "a program under a data prefix is never executed (6.2): rc=%d %r %r" % (rc, out, err))
     # review O5-3, F5-4: CAN_EXEC in anyone's environment is inert for a wrapper, from outside and from inside
-    rc, out, err = run([wrapper(ctx, "echo"), "still echo"], cwd=ctx.work, env=dict(ctx.env, CAN_EXEC="/usr/bin/env"))
+    rc, out, err = run([wrapper(ctx, "echo"), "still echo"], cwd=ctx.work, env=dict(ctx.env, CAN_EXEC=ctx.vbin("env")))
     expect(rc == 0 and out == "still echo\n", "CAN_EXEC from the host must not replace a wrapped program: %r %r" % (out, err))
-    rc, out, err = run([wrapper(ctx, "sh"), "-c", "export CAN_EXEC=/usr/bin/env; /usr/bin/echo still echo"], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "export CAN_EXEC=%s; %s still echo" % (ctx.vbin("env"), ctx.vbin("echo"))], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and out == "still echo\n", "CAN_EXEC exported inside must not replace a wrapped program: %r %r" % (out, err))
     # review F5-2: the can's own opener runs from inside its can (another opener, 7.4.5)
-    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s /usr/bin/echo from inside" % ctx.opener], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s %s from inside" % (ctx.opener, ctx.vbin("echo"))], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and out == "from inside\n", "the opener exec'd from inside: rc=%d %r %r" % (rc, out, err))
     # review F5-9: a wrapped program started through the entry is exec'd as its wrapper, so its identity is the kernel's
-    rc, out, err = run([ctx.opener, "/usr/bin/sh", "-c", "readlink /proc/$$/exe"], cwd=ctx.work, env=ctx.env)
-    expect(out == "/usr/bin/dash\n", "a wrapper through the entry keeps the wrapper's identity: %r %r" % (out, err))
-    p = subprocess.Popen([ctx.opener, "/usr/bin/sleep", "2"], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([ctx.opener, ctx.vbin("sh"), "-c", "readlink /proc/$$/exe; true"], cwd=ctx.work, env=ctx.env)   # two commands: bash would exec a lone one
+    expect(out == ctx.sh_exe + "\n", "a wrapper through the entry keeps the wrapper's identity: %r %r" % (out, err))
+    p = subprocess.Popen([ctx.opener, ctx.vbin("sleep"), "2"], cwd=ctx.work, env=ctx.env)
     time.sleep(0.5)
     exe = os.readlink("/proc/%d/exe" % p.pid)
     p.kill(); p.wait()
@@ -548,11 +621,11 @@ def cwd_rules(ctx):
 def can_directory_visible(ctx):
     """8.1: the can's real location resolves as a host path from any working directory, even under a prefix the
     can owns (/home here), so a program can reach its files relative to its executable's real path."""
-    real = os.path.join(ctx.root, "usr", "bin", "true")
+    real = os.path.join(ctx.root, ctx.vbin("true").lstrip("/"))
     rc, out, err = run([wrapper(ctx, "ls"), real], cwd="/", env=ctx.env)
     expect(rc == 0 and out.strip() == real, "real can path from cwd /: rc=%d %r %r" % (rc, out, err))
-    rc, out, err = run([wrapper(ctx, "sh"), "-c", "cd %s && pwd && ls root/usr/bin/true" % ctx.can], cwd="/", env=ctx.env)
-    expect(rc == 0 and out == "%s\nroot/usr/bin/true\n" % ctx.can, "cd into the can dir: rc=%d %r %r" % (rc, out, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "cd %s && pwd && ls root%s" % (ctx.can, ctx.vbin("true"))], cwd="/", env=ctx.env)
+    expect(rc == 0 and out == "%s\nroot%s\n" % (ctx.can, ctx.vbin("true")), "cd into the can dir: rc=%d %r %r" % (rc, out, err))
     rc, out, err = run([wrapper(ctx, "cat"), os.path.join(ctx.root, "usr", "share", "cont-test-marker")], cwd="/", env=ctx.env)
     expect(out == "marker\n", "a file inside root/ by its real path: %r %r" % (out, err))
 
@@ -570,11 +643,13 @@ def cross_can_distinct_openers(ctx):
     cannery.cmd_reopen(can2, padded)
     rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "check", can2])
     expect(rc == 0, "can2 check: " + out[-300:] + err[-300:])
-    true2 = os.path.join(can2, "root", "usr", "bin", "true")
-    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s && %s/root/usr/bin/sh -c 'echo cross $0 && readlink /proc/self/exe'" % (true2, can2)], cwd=ctx.work, env=ctx.env)
-    expect(rc == 0 and out == "cross %s/root/usr/bin/sh\n/usr/bin/readlink\n" % can2, "cross-can exec: rc=%d %r %r" % (rc, out, err))
-    rc, out, err = run([wrapper(ctx, "sh"), "-c", "cd %s && root/usr/bin/%s --version | head -1" % (can2, GCC)], cwd=ctx.work, env=ctx.env)
-    expect(rc == 0 and "13." in out, "gcc of the other can: rc=%d %r %r" % (rc, out, err))
+    true2 = os.path.join(can2, "root", ctx.vbin("true").lstrip("/"))
+    sh2 = can2 + "/root" + ctx.vbin("sh")
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s && %s -c 'echo cross $0 && readlink /proc/self/exe'" % (true2, sh2)], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "cross %s\n%s\n" % (sh2, ctx.vreal(ctx.vbin("readlink"))), "cross-can exec: rc=%d %r %r" % (rc, out, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "cd %s && root%s --version | head -1" % (can2, ctx.vbin(GCC))], cwd=ctx.work, env=ctx.env)
+    rc0, out0, _ = run([wrapper(ctx, GCC), "--version"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out.split("(", 1)[-1] == out0.split("\n", 1)[0].split("(", 1)[-1] + "\n", "gcc of the other can: rc=%d %r %r" % (rc, out, err))   # gcc prints argv[0] first
 
 
 @test
@@ -591,16 +666,20 @@ def nested_older_opener(ctx):
                 'int main(void) { char a[24]; long r = syscall(468, AT_FDCWD, "/etc/passwd", a, sizeof a, 0);\n'
                 ' printf("%ld %d\\n", r, r < 0 ? errno : 0); return 0; }\n')
     prog = os.path.join(ctx.work, "getattr")
-    rc, out, err = run([wrapper(ctx, GCC), "-static", "-O0", "-o", prog, src], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([wrapper(ctx, GCC), "-O0", "-o", prog, src], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "compile: " + err)
-    rc, kernel, err = run([prog], cwd=ctx.work, env=ctx.env)              # the kernel's own answer, static so any host runs it
+    import ctypes                                                          # the kernel's own answer, asked from here
+    libc = ctypes.CDLL(None, use_errno=True)
+    buf = ctypes.create_string_buffer(24)
+    r = libc.syscall(468, -100, b"/etc/passwd", buf, 24, 0)
+    kernel = "%d %d\n" % (r, ctypes.get_errno() if r < 0 else 0)
     rc, outer, err = run([wrapper(ctx, "sh"), "-c", prog], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and outer == kernel, "inside the current opener the kernel's answer comes back: kernel %r can %r %r" % (kernel, outer, err))
     can2 = os.path.join(ctx.work, "old-can")
     copy_can(ctx.can, can2)
     cannery.cmd_reopen(can2, old)
     log = os.path.join(ctx.work, "nested-old.log")
-    rc, inner, err = run([wrapper(ctx, "sh"), "-c", "%s/root/usr/bin/sh -c %s" % (can2, prog)], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log))
+    rc, inner, err = run([wrapper(ctx, "sh"), "-c", "%s/root%s -c %s" % (can2, ctx.vbin("sh"), prog)], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log))
     expect(rc == 0 and inner == "-1 38\n", "the older opener nested in the newer one answers ENOSYS (38) for the trap it does not know: %r %r" % (inner, err))
     text = open(log).read()
     expect("opener 0 inside %s" % prog in text and "trap -38 -" in text and "boundary" not in text.split("opener 0 inside", 1)[1],
@@ -611,9 +690,9 @@ def nested_older_opener(ctx):
 def real_root_is_the_tree(ctx):
     """The tree's real root is an alias of /: a path spelt through <can>/root/ obeys the same rules (F3-1)."""
     root = ctx.root
-    rc, out, err = run([wrapper(ctx, "sh"), "-c", "touch %s/usr/zz; echo rc=$?; rm %s/usr/bin/true; echo rc=$?; cat %s/usr/share/cont-test-marker; ls -l %s/usr/bin/sh | cut -c1 " % (root, root, root, root)], cwd="/", env=ctx.env)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "touch %s/usr/zz; echo rc=$?; rm %s%s; echo rc=$?; cat %s/usr/share/cont-test-marker; ls -l %s%s | cut -c1 " % (root, root, ctx.vbin("true"), root, root, ctx.vbin("sh"))], cwd="/", env=ctx.env)
     expect(out == "rc=1\nrc=1\nmarker\nl\n" and "Read-only" in err, "real-root spelling: %r %r" % (out, err))
-    expect(not os.path.exists(os.path.join(root, "usr", "zz")) and os.path.exists(os.path.join(root, "usr", "bin", "true")), "the tree was written through its real path")
+    expect(not os.path.exists(os.path.join(root, "usr", "zz")) and os.path.exists(os.path.join(root, ctx.vbin("true").lstrip("/"))), "the tree was written through its real path")
 
 
 @test
@@ -655,6 +734,8 @@ def identity_link_consistency(ctx):
 @test
 def executable_stack(ctx):
     """7.4.5: a program whose PT_GNU_STACK asks for an executable stack, built by the can's gcc, runs inside (O3-7)."""
+    if not os.path.exists(os.path.join(ctx.progs, "execstack")):
+        return "%s has no nested functions: no trampoline program" % GCC
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "execstack"))
     expect(rc == 0 and out == "result 12\n", "nested function trampoline: rc=%d %r %r" % (rc, out, err))
 
@@ -676,7 +757,7 @@ def exec_vectors(ctx):
     with open(hs, "w") as f:
         f.write("#!/bin/sh\nexit 0\n")
     os.chmod(hs, 0o755)
-    rc, out, err = inside(ctx, p, ["vectors", "/usr/bin/true", p, hs], timeout=60)
+    rc, out, err = inside(ctx, p, ["vectors", ctx.vbin("true"), p, hs], timeout=60)
     expect(rc == 0 and "FAIL" not in out, out + err)
 
 
@@ -707,7 +788,8 @@ def new_xattr_syscalls(ctx):
     lines = out.splitlines()
     if lines and lines[0].endswith(" 38"):
         return "kernel has no listxattrat"
-    ok = len(lines) == 2 and lines[0] == "-1 2" and lines[1].endswith(" 0") and int(lines[1].split()[0]) >= 0   # SELinux hosts label every file
+    own = os.path.lexists(os.path.join(ctx.root, "etc", "hostname"))            # a can that ships the file shows its own
+    ok = len(lines) == 2 and (lines[0] == "-1 2" if not own else int(lines[0].split()[0]) >= 0) and lines[1].endswith(" 0") and int(lines[1].split()[0]) >= 0   # SELinux hosts label every file
     expect(ok, "listxattrat sees the can, not the host: %r %r" % (out, err))
 
 
@@ -962,7 +1044,7 @@ def unpack_and_wrap(ctx):
     import elfcheck
     d = os.path.join(ctx.work, "updebs")
     os.makedirs(d, exist_ok=True)
-    true_bytes = open(os.path.join(ctx.root, "usr", "bin", ".real", "true"), "rb").read()
+    true_bytes = open(ctx.payload("true"), "rb").read()
     make_deb(os.path.join(d, "tool.deb"), "tool", [("./usr", "dir", None, 0o755), ("./usr/bin", "dir", None, 0o755),
                                                     ("./usr/bin/tool", "file", b"#!/bin/sh\necho tool ok\n", 0o755)],
              "Depends: libfoo1 (>= 2), virt | missing-alt\nPre-Depends: absent-pkg\n")
@@ -1054,7 +1136,7 @@ def wrap_refusals(ctx):
                 f.write(manifest)
         return can
     script = b"#!/bin/sh\necho hi\n"
-    true_bytes = open(os.path.join(ctx.root, "usr", "bin", ".real", "true"), "rb").read()
+    true_bytes = open(ctx.payload("true"), "rb").read()
     # F4-2: a copy whose opener differs by a byte, then wrap: the payload must survive
     a = hand("st.can", [("/usr/bin/hi", script, 0o755)])
     rc, o, e = run([sys.executable, cannery_py, "wrap", a])
@@ -1104,7 +1186,7 @@ def wrap_refusals(ctx):
     copy_can(ctx.can, can2)
     with open(os.path.join(can2, ".can", "manifest"), "wb") as f:
         f.write(b"can 1\n\n" + b"".join(b'host "/hostpath%03d"\n' % i for i in range(30)))
-    rc, out, err = run([os.path.join(can2, "root", "usr", "bin", "cat"), "/etc/hosts"], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([os.path.join(can2, "root", ctx.vbin("cat").lstrip("/")), "/etc/hosts"], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and out == open("/etc/hosts").read(), "30 host records leave the identity files the host's: %r %r" % (out[:80], err))
     # O4-1, O4-3: a data prefix is neither wrapped nor executed
     dp = os.path.join(ctx.work, "data.can")
@@ -1120,7 +1202,7 @@ def wrap_refusals(ctx):
     expect(rc == 0 and not os.path.exists(os.path.join(sys_, ".real")), "the data prefix was wrapped or the can refused: " + (o + e)[-400:])
     rc, o, e = run([sys.executable, cannery_py, "check", dp])
     expect(rc == 0, "check with a data prefix: " + o[-300:])
-    rc, out, err = run([os.path.join(dp, "root", "usr", "bin", "sh"), "-c", "/opt/sysroot/bin/true; echo rc=$?"], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([os.path.join(dp, "root", ctx.vbin("sh").lstrip("/")), "-c", "/opt/sysroot/bin/true; echo rc=$?"], cwd=ctx.work, env=ctx.env)
     expect("Permission denied" in out + err and "rc=126" in out, "a data prefix is never executed (O4-3): %r %r" % (out, err))
 
 
@@ -1162,7 +1244,7 @@ def ownership_fails_closed(ctx):
     os.makedirs(secret)
     with open(os.path.join(secret, "file"), "w") as f:
         f.write("data\n")
-    cat = os.path.join(can2, "root", "usr", "bin", "cat")
+    cat = os.path.join(can2, "root", ctx.vbin("cat").lstrip("/"))
     os.chmod(secret, 0)
     try:
         rc, out, err = run([cat, "/secret/file"], cwd=ctx.work, env=ctx.env)
@@ -1171,10 +1253,12 @@ def ownership_fails_closed(ctx):
     finally:
         os.chmod(secret, 0o755)
     press = os.path.join(ctx.progs, "fdpress")                 # built by the can's gcc: runs inside, like every built program
+    libc_real = ".real/" + (os.path.basename(ctx.libc) if ctx.libc else ctx.ldso_name)   # the can's libc as the maps show it
     rc, out, err = inside(ctx, press, ["1", cat, "/proc/self/maps"])
-    expect(rc == 127 and "Too many open files" in err and ".real/libc.so.6" not in out, "with one spare descriptor the opener must fail loudly, never run the host's libc: rc=%d %r %r" % (rc, out[:200], err))
+    loud = rc == 127 and "Too many open files" in err or ctx.musl and "No file descriptors" in err   # musl's posix_spawn wants a pipe first
+    expect(loud and libc_real not in out, "with one spare descriptor the opener must fail loudly, never run the host's libc: rc=%d %r %r" % (rc, out[:200], err))
     rc, out, err = inside(ctx, press, ["4", cat, "/proc/self/maps"])
-    expect(rc == 0 and ".real/libc.so.6" in out, "with four spare descriptors the can runs: rc=%d %r" % (rc, err))
+    expect(rc == 0 and libc_real in out, "with four spare descriptors the can runs: rc=%d %r" % (rc, err))
 
 
 @test
@@ -1207,12 +1291,12 @@ def log_names_and_escapes(ctx):
             f.write(name)
     log2 = os.path.join(ctx.work, "odd.log")
     for name in ("with\nnewline", "back\\slash"):
-        rc, out, err = run([os.path.join(can2, "root", "usr", "bin", "cat"), "/usr/share/odd/" + name], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log2))
+        rc, out, err = run([os.path.join(can2, "root", ctx.vbin("cat").lstrip("/")), "/usr/share/odd/" + name], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log2))
         expect(out == name, "cat of the odd name: %r %r" % (out, err))
     lines = open(log2).read().split("\n")
     expect(any(l == "open 3 /usr/share/odd/with\\nnewline" for l in lines) and any(l == "open 3 /usr/share/odd/back\\\\slash" for l in lines), "escapes in the log: %r" % [l for l in lines if "odd" in l])
     src = hello_source(ctx)
-    rc, out, err = run([os.path.join(can2, "root", "usr", "bin", GCC), "-O1", src, "-o", os.path.join(ctx.work, "hello-odd")], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log2))
+    rc, out, err = run([os.path.join(can2, "root", ctx.vbin(GCC).lstrip("/")), "-O1", src, "-o", os.path.join(ctx.work, "hello-odd")], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log2))
     expect(rc == 0, err)
     rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "prune", can2, log2])
     expect(rc == 0, "prune: " + o + e)
@@ -1230,7 +1314,7 @@ def ownership_from_tree(ctx):
     directory the can's with nothing to refresh; an empty placeholder stays the host's."""
     can2 = os.path.join(ctx.work, "own.can")
     copy_can(ctx.can, can2)
-    sh = os.path.join(can2, "root", "usr", "bin", "sh")
+    sh = os.path.join(can2, "root", ctx.vbin("sh").lstrip("/"))
     rc, out, err = run([sh, "-c", "cat /opt/cont-probe 2>&1; ls /srv"], cwd=ctx.work, env=ctx.env)
     expect("No such file" in out, "before: /opt is the host's, the probe does not exist there: %r" % out)
     os.makedirs(os.path.join(can2, "root", "opt"), exist_ok=True)
@@ -1246,25 +1330,28 @@ def ownership_from_tree(ctx):
 def interp_from_payload(ctx):
     """7.3: the loader honours each program's own PT_INTERP, resolved in the can; a program naming a loader the can
     lacks fails with a message naming it, before anything runs."""
-    src = open(os.path.join(ctx.root, "usr", "bin", ".real", "true"), "rb").read()
+    src = open(ctx.payload("true"), "rb").read()
     interp = ctx.interp.encode() + b"\0"
     i = src.index(interp)
-    other = (ctx.musl_interp.encode() + b"\0").ljust(len(interp), b"\0")
-    exe = os.path.join(ctx.work, "musl-true")
+    other = (ctx.other_interp.encode() + b"\0").ljust(len(interp), b"\0")
+    exe = os.path.join(ctx.work, "other-true")
     with open(exe, "wb") as f:
         f.write(src[:i] + other + src[i + len(interp):])
     os.chmod(exe, 0o755)
     rc, out, err = inside(ctx, exe)
-    expect(rc == 127 and "ld-musl" in err and "does not have" in err, "a loader the can lacks: rc=%d %r" % (rc, err))
-    same = os.path.join(ctx.work, "glibc-true")
-    shutil.copy2(os.path.join(ctx.root, "usr", "bin", ".real", "true"), same)
+    expect(rc == 127 and os.path.basename(ctx.other_interp) in err and "does not have" in err, "a loader the can lacks: rc=%d %r" % (rc, err))
+    os.makedirs(os.path.join(ctx.work, "same"), exist_ok=True)
+    same = os.path.join(ctx.work, "same", "true")               # by its own name: busybox chooses the applet from argv[0]
+    shutil.copy2(ctx.payload("true"), same)
     rc, out, err = inside(ctx, same)
     expect(rc == 0, "a program naming the can's loader by its own header runs: rc=%d %r" % (rc, err))
     # one world (7.4.5): a loader on a host path, the shape of a Nix or --dynamic-linker binary, is refused (F4-1, O4-2)
+    if not ctx.libc:
+        return "musl's libc is its loader; the host-path loader case needs libc.so.6 beside one"
     hostlib = os.path.join(ctx.work, "hostworld")
     os.makedirs(hostlib, exist_ok=True)
-    for f in (ctx.ldso_name, "libc.so.6"):
-        shutil.copy2(os.path.join(ctx.root, "usr", "lib", ctx.triplet, ".real", f), os.path.join(hostlib, f))
+    for f, v in ((ctx.ldso_name, ctx.interp), ("libc.so.6", ctx.libc)):
+        shutil.copy2(ctx.payload(v), os.path.join(hostlib, f))
     src = hello_source(ctx)
     world = os.path.join(ctx.work, "world")
     rc, out, err = run([wrapper(ctx, GCC), "-O1", src, "-o", world, "-Wl,--dynamic-linker=" + os.path.join(hostlib, ctx.ldso_name), "-Wl,-rpath," + hostlib], cwd=ctx.work, env=ctx.env)
@@ -1295,7 +1382,7 @@ def prune_and_check_with_logs(ctx):
     after = sum(1 for _ in cannery.walk_files(os.path.join(can2, "root")))
     expect(after < before // 2, "pruning removed little: %d of %d files remain" % (after, before))
     expect(os.path.isdir(os.path.join(can2, "root", "usr", "share")) and os.path.exists(os.path.join(can2, "root", "etc", "passwd")), "directories and placeholders stay")
-    gcc2 = os.path.join(can2, "root", "usr", "bin", GCC)
+    gcc2 = os.path.join(can2, "root", ctx.vbin(GCC).lstrip("/"))
     rc, out, err = run([gcc2, "-O1", src, "-o", os.path.join(ctx.work, "hello-pruned")], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "the pruned can compiles: " + err[-500:])
     rc, out, err = inside(ctx, os.path.join(ctx.work, "hello-pruned"))
@@ -1341,33 +1428,37 @@ def static_check_loader_model(ctx):
         expect(not bad, "RPATH inheritance: " + "; ".join(bad))
         expect(any("hostprog" in e and "does not own" in e for e in rep.errors), "a host RPATH must be refused (F3-17): %r" % rep.errors[:3])
         cache = elfcheck.read_cache(elfcheck.Tree(ctx.root))
-        expect(cache and "libc.so.6" in cache and cache["libc.so.6"][0].endswith("/libc.so.6"), "ld.so.cache parsed: %r" % (list(cache.items())[:2] if cache else cache))
+        if ctx.ldso_cache:
+            expect(cache and "libc.so.6" in cache and cache["libc.so.6"][0].endswith("/libc.so.6"), "ld.so.cache parsed: %r" % (list(cache.items())[:2] if cache else cache))
     finally:
         shutil.rmtree(x, ignore_errors=True)
         if made_local:
             os.rmdir(os.path.dirname(x))                      # the shared can is left as it was (17)
     # F4-13: a hand-made tree with the loader at /usr/lib64 and no ld.so.cache closes; the loader satisfies its own
     # soname and its default directories come from the loader itself. F4-9: without /lib the host's would be searched.
-    lib = os.path.join(ctx.root, "usr", "lib", ctx.triplet)
+    if not ctx.libc:
+        return "no libc.so.6 in the tree (musl): the hand-made glibc layout is not made"
     hand2 = os.path.join(ctx.work, "hand2.can")
     shutil.rmtree(hand2, ignore_errors=True)
-    for d in ("usr/" + ctx.ldso_dir, "usr/lib/" + ctx.triplet, "usr/bin", "etc"):
+    libdir = os.path.dirname(ctx.vreal(ctx.libc)).lstrip("/")           # where the tree keeps libc: usr/lib/<triplet>, or usr/lib64
+    for d in ("usr/" + ctx.ldso_dir, libdir, "usr/bin", "etc"):
         os.makedirs(os.path.join(hand2, "root", d), exist_ok=True)
-    if ctx.ldso_dir != "lib":
-        os.symlink("usr/" + ctx.ldso_dir, os.path.join(hand2, "root", ctx.ldso_dir))
-    os.symlink("usr/lib", os.path.join(hand2, "root", "lib"))
-    shutil.copy2(os.path.join(lib, ".real", ctx.ldso_name), os.path.join(hand2, "root", "usr", ctx.ldso_dir, ctx.ldso_name))   # the loader where PT_INTERP names it
-    shutil.copy2(os.path.join(lib, ".real", "libc.so.6"), os.path.join(hand2, "root", "usr", "lib", ctx.triplet, "libc.so.6"))
-    shutil.copy2(os.path.join(ctx.root, "usr", "bin", ".real", "true"), os.path.join(hand2, "root", "usr", "bin", "true"))
+    for top in ("lib", "lib64", "lib32"):                               # the tree's own top-level links, as the loader's defaults expect
+        if os.path.islink(os.path.join(ctx.root, top)):
+            os.symlink(os.readlink(os.path.join(ctx.root, top)), os.path.join(hand2, "root", top))
+    shutil.copy2(ctx.payload(ctx.interp), os.path.join(hand2, "root", "usr", ctx.ldso_dir, ctx.ldso_name))   # the loader where PT_INTERP names it
+    shutil.copy2(ctx.payload(ctx.libc), os.path.join(hand2, "root", libdir, "libc.so.6"))
+    shutil.copy2(ctx.payload("true"), os.path.join(hand2, "root", "usr", "bin", "true"))
     rc, out, err = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "wrap", hand2])
     expect(rc == 0, "a tree with the loader in /usr/lib64 and no cache must close (F4-13): " + out[-500:])
     rc, out, err = run([os.path.join(hand2, "root", "usr", "bin", "true")], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "and run: %r" % err)
-    os.remove(os.path.join(hand2, "root", "lib"))
+    top = ctx.libc.split("/")[1]                                        # the top-level link libc is reached through: lib, or lib64
+    os.remove(os.path.join(hand2, "root", top))
     rep = elfcheck.static_check(hand2, cannery.owned(hand2), [])
-    expect(any(("/lib/" + ctx.triplet in e_ and "does not own" in e_) or (ctx.ldso_dir == "lib" and "loader" in e_) for e_ in rep.errors),
-           "a tree without /lib searches the host's /lib (F4-9): %r" % rep.errors[:3])
-    os.symlink("usr/lib", os.path.join(hand2, "root", "lib"))
+    expect(any((os.path.dirname(ctx.libc) in e_ and "does not own" in e_) or (ctx.ldso_dir == top and "loader" in e_) for e_ in rep.errors),
+           "a tree without /%s searches the host's (F4-9): %r" % (top, rep.errors[:3]))
+    os.symlink(os.readlink(os.path.join(ctx.root, top)), os.path.join(hand2, "root", top))
     shutil.rmtree(os.path.join(hand2, "root", "etc"))
     os.makedirs(os.path.join(hand2, "root", "etc"))
     rep = elfcheck.static_check(hand2, cannery.owned(hand2), [])
@@ -1428,7 +1519,8 @@ def readlink_bad_buffer(ctx):
     exe = os.path.join(ctx.work, "rl")
     rc, out, err = run([wrapper(ctx, GCC), "-O1", src, "-o", exe], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, err)
-    rc, out, err = inside(ctx, exe, ["/lib", "/proc/self/exe", "/usr/bin/sh", "/nonexistent"])
+    lib = "/lib" if os.path.islink(os.path.join(ctx.root, "lib")) else ctx.vbin("sh")   # a link in the tree; a directory would be EINVAL before the copy
+    rc, out, err = inside(ctx, exe, [lib, "/proc/self/exe", ctx.vbin("sh"), "/nonexistent"])
     expect(rc == 0 and out == "-1 14\n-1 14\n-1 14\n-1 2\n", "bad buffer: rc=%d %r %r" % (rc, out, err))
 
 
@@ -1445,11 +1537,13 @@ def host_symlink_into_usr(ctx):
 @test
 def ld_so(ctx):
     ld = ctx.interp
-    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s --list /usr/bin/%s" % (ld, GCC)], cwd=ctx.work, env=ctx.env)
-    expect(rc == 0 and "libc.so.6 => /lib/%s/libc.so.6" % ctx.triplet in out and ctx.root not in out, "ld.so --list: %r %r" % (out, err))
-    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s --verify /usr/bin/%s" % (ld, GCC)], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s --list %s" % (ld, ctx.vbin(GCC))], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and (ctx.musl or "libc.so.6 => %s" % ctx.libc in out) and ctx.root not in out, "ld.so --list: %r %r" % (out, err))
+    if ctx.musl:
+        return "musl's loader has no --verify"
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s --verify %s" % (ld, ctx.vbin(GCC))], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "ld.so --verify rc=%d" % rc)
-    rc, out, err = run([os.path.join(ctx.root, ctx.interp.lstrip("/")), "--verify", "/usr/bin/" + GCC], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run([os.path.join(ctx.root, ctx.interp.lstrip("/")), "--verify", ctx.vbin(GCC)], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "ld.so run by its real path from the host: rc=%d %r" % (rc, err))
 
 
@@ -1459,17 +1553,17 @@ def nested_and_log(ctx):
     if os.path.exists(log):
         os.remove(log)
     rc, out, err = run([wrapper(ctx, "sh"), "-c", GCC + " --version"], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log))
-    expect(rc == 0 and "13." in out, out + err)
+    expect(rc == 0 and out.strip(), out + err)
     text = open(log).read()
-    expect("opener 0 boundary /usr/bin/dash" in text and "opener 0 inside /usr/bin/" + GCC in text, "log: " + text[:400])
+    expect("opener 0 boundary " + ctx.sh_exe in text and "opener 0 inside " + ctx.vreal(ctx.vbin(GCC)) in text, "log: " + text[:400])
 
 
 @test
 def sigsys_blocked_at_launch(ctx):
     def block():
         signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGSYS})
-    rc, out, err = run([wrapper(ctx, "gcc-13"), "--version"], cwd=ctx.work, env=ctx.env, preexec=block)
-    expect(rc == 0 and "13." in out, "launch with SIGSYS blocked: rc=%d %r" % (rc, err))
+    rc, out, err = run([wrapper(ctx, GCC), "--version"], cwd=ctx.work, env=ctx.env, preexec=block)
+    expect(rc == 0 and out.strip(), "launch with SIGSYS blocked: rc=%d %r" % (rc, err))
 
 
 @test
@@ -1516,10 +1610,10 @@ def mixed_tree_refused(ctx):
     mixed = os.path.join(ctx.work, "mixed.can")
     d = os.path.join(mixed, "root")
     os.makedirs(os.path.join(d, "usr", "bin"), exist_ok=True)
-    src = open(os.path.join(ctx.root, "usr", "bin", ".real", "true"), "rb").read()
+    src = open(ctx.payload("true"), "rb").read()
     interp = ctx.interp.encode() + b"\0"
     i = src.index(interp)
-    other = (ctx.musl_interp.encode() + b"\0").ljust(len(interp), b"\0")
+    other = (ctx.other_interp.encode() + b"\0").ljust(len(interp), b"\0")
     with open(os.path.join(d, "usr", "bin", "true"), "wb") as f:
         f.write(src[:i] + other + src[i + len(interp):])
     with open(os.path.join(d, "usr", "bin", "false"), "wb") as f:
@@ -1528,9 +1622,9 @@ def mixed_tree_refused(ctx):
         os.chmod(os.path.join(d, "usr", "bin", n), 0o755)
     os.symlink(ctx.interp, os.path.join(d, "usr", "bin", "ld-glibc"))   # so that one loader resolves
     os.makedirs(os.path.join(d, ctx.ldso_dir), exist_ok=True)
-    shutil.copy2(os.path.join(ctx.root, ctx.interp.lstrip("/")), os.path.join(d, ctx.interp.lstrip("/")), follow_symlinks=True)
-    os.makedirs(os.path.join(d, "lib"), exist_ok=True)                 # the glibc loader's own directory on aarch64
-    shutil.copy2(os.path.join(ctx.root, ctx.interp.lstrip("/")), os.path.join(d, ctx.musl_interp.lstrip("/")), follow_symlinks=True)
+    shutil.copy2(ctx.payload(ctx.interp), os.path.join(d, ctx.interp.lstrip("/")))
+    os.makedirs(os.path.dirname(os.path.join(d, ctx.other_interp.lstrip("/"))), exist_ok=True)   # the other loader's directory
+    shutil.copy2(ctx.payload(ctx.interp), os.path.join(d, ctx.other_interp.lstrip("/")))
     rep = elfcheck.static_check(mixed, ["/usr", "/lib", "/lib64"], [])
     expect(any("mixes loaders" in e for e in rep.errors), "a tree with two loaders was not refused: %r" % rep.errors[:4])
 
@@ -1540,6 +1634,8 @@ def rust(ctx):
     rustc = shutil.which("rustc") or shutil.which("rustc", path=os.path.expanduser("~/.cargo/bin"))
     if not rustc:
         return "no rustc"
+    if ctx.musl:
+        return "the host's rustc targets glibc; the can has musl"
     exe = os.path.join(ctx.progs, "rs")
     rc, out, err = run([rustc, "-O", "-o", exe, os.path.join(ctx.work, "src", "rs.rs")], cwd=ctx.work)
     expect(rc == 0, "rustc: " + err[-600:])
@@ -1563,12 +1659,15 @@ def gdb_hooks(ctx):
     rc, out, err = run([wrapper(ctx, GCC), "-g", "-O0", "-o", exe, src], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "compile -g: " + err)
     base = [gdb, "-batch", "-nx", "-iex", "set auto-load safe-path /", "-iex", "set debuginfod enabled off", "-ex", "set breakpoint pending on"]
-    rc, out, err = run(base + ["-ex", "break main", "-ex", "break write", "-ex", "run", "-ex", "bt", "-ex", "continue", "-ex", "bt", "-ex", "info auto-load python-scripts", "--args", ctx.opener, exe], cwd=ctx.work, env=ctx.env, timeout=300)
+    if ctx.musl:
+        return "gdb's breakpoints in a musl libc: the script does not walk musl's link map (13.1)"
+    wr = "write"
+    rc, out, err = run(base + ["-ex", "break main", "-ex", "break " + wr, "-ex", "run", "-ex", "bt", "-ex", "continue", "-ex", "bt", "-ex", "info auto-load python-scripts", "--args", ctx.opener, exe], cwd=ctx.work, env=ctx.env, timeout=300)
     expect(re.search(r"^Breakpoint 1, main \(.*\) at \S*hello\.c:\d+", out, re.M), "the program's own breakpoint hits with its source line: %r %r" % (out[-800:], err[-400:]))
-    expect("Breakpoint 2, " in out and "write" in out.split("Breakpoint 2, ", 1)[1].split("\n")[0], "a breakpoint in the can's libc hits with its name: %r %r" % (out[-800:], err[-400:]))
+    expect("Breakpoint 2, " in out and wr in out.split("Breakpoint 2, ", 1)[1].split("\n")[0], "a breakpoint in the can's libc hits with its name: %r %r" % (out[-800:], err[-400:]))
     expect("__libc_start" in out.split("Breakpoint 2, ", 1)[1], "the libc frames below the program resolve: %r" % out[-800:])
     expect("cont-opener.py" in out and "Python Exception" not in out and "Cannot insert" not in out, "the script loaded once and quietly: %r %r" % (out[-600:], err[-400:]))
-    rc, out, err = run(base + ["-ex", "break write", "-ex", "run", "-ex", "bt", "--args", wrapper(ctx, "echo"), "hi"], cwd=ctx.work, env=ctx.env, timeout=300)
+    rc, out, err = run(base + ["-ex", "break " + wr, "-ex", "run", "-ex", "bt", "--args", wrapper(ctx, "echo"), "hi"], cwd=ctx.work, env=ctx.env, timeout=300)
     expect("Breakpoint 1, " in out and "__libc_start" in out, "a wrapped program's libc frames resolve: %r %r" % (out[-800:], err[-400:]))
     expect("Python Exception" not in out and "Cannot insert" not in out, "quiet for a wrapper: %r" % out[-600:])
     spaced = os.path.join(ctx.work, "space dir", "can")           # review O5-6: a can under a path with a space
@@ -1612,6 +1711,19 @@ def main():
     ctx.from_can = bool(a.can)
     ctx.tree = os.path.abspath(a.tree)
     ctx.work = os.path.abspath(a.work)
+    # the pruned fixture (17): the source can pruned to what the suite touches, made by the first run on a can and
+    # used by every later one until the can or the tests change
+    fixture = None
+    key = fixture_key(a.can) if a.can else None
+    if key:
+        fixture = os.path.join(REPO, "build", "fixtures", os.path.basename(os.path.abspath(a.can)).replace(".can", "") + "-" + key)
+    logging = False
+    if fixture and os.path.isdir(fixture):
+        ctx.tree = os.path.join(fixture, "root")
+        print("fixture: %s" % fixture)
+    elif fixture:
+        logging = True
+        print("fixture: none yet for this can and these tests; this run makes it")
     ctx.opener_src = os.path.join(REPO, "build", "opener")
     if not os.path.exists(ctx.opener_src):
         sys.exit("build/opener missing: run make")
@@ -1621,6 +1733,8 @@ def main():
     ctx.env = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/"), "LANG": "C"}
     t0 = time.time()
     make_can(ctx)
+    if logging:
+        ctx.env["CAN_LOG"] = os.path.join(ctx.work, "fixture.log")   # from here every in-can run of the suite's own is logged, the test programs' compile first
     compile_progs(ctx)
     ctx.shared = shared_state(ctx)
     print("can made and programs compiled in %.1fs" % (time.time() - t0))
@@ -1654,6 +1768,8 @@ def main():
             fails += 1
             ctx.shared = now
     print("%d tests, %d failures" % (len(order), fails))
+    if logging and not fails and not a.k:
+        make_fixture(ctx, fixture)
     if not a.keep and not fails:
         shutil.rmtree(ctx.work, ignore_errors=True)
     return fails

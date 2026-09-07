@@ -30,9 +30,10 @@ matrix checks natively on each VM; the opener builds for aarch64 from
 the same sources and the matrix has an emulated arm64 row. gdb debugs
 a canned program with no manual command: the opener carries the script
 gdb needs. The
-regression suite (56 named tests), the kernel oracles,
-Docker's default seccomp profile and the plain-terminal AppArmor label
-all pass on the reference machine, and the kernel matrix in QEMU
+regression suite (56 named tests), the kernel oracles and Docker's
+default seccomp profile pass on the gcc, Alpine, Fedora and clang cans,
+each pruned to what the suite touches, in one 30-second gate on the
+reference machine, where the plain-terminal AppArmor label passes too, and the kernel matrix in QEMU
 virtual machines passes on nine distributions from CentOS 7 at kernel
 3.10 to Fedora 42, Alpine's musl userland and SELinux included. The
 cannery ships as a can and the gcc can it builds from inside its can
@@ -46,8 +47,7 @@ finding.
 
 ```
 make                      # build/opener, a freestanding ET_DYN; build/opener-old for the nesting test; build/opener-aarch64 with aarch64-linux-gnu-gcc
-make unit                 # the manifest grammar tests and the syscall table test
-make stack                # the handler's stack budget from gcc -fstack-usage
+test/gate.sh gcc.can alpine.can fedora.can clang.can   # the commit gate, 30 s: unit tests, stack budget, the suite on every can in two orders, the oracles; CONT_CACHE=DIR adds dogfood
 tools/fetch-debs.py --out debs gcc-13 libc6-dev         # the step before the cannery: apt, a mirror, this tool, anything
 tools/fetch-apks.py --out apks gcc musl-dev binutils     # the same for Alpine
 tools/fetch-rpms.py --repo URL --out rpms gcc glibc-devel   # and for Fedora, Rocky, CentOS: any repository with repodata/
@@ -62,12 +62,9 @@ gdb -iex 'set auto-load safe-path /' --args gcc.can/gcc -c x.c   # gdb: the open
 CAN_LOG=/tmp/can.log ...  # the one knob: one line per trapped syscall
 cannery/cannery.py check gcc.can /tmp/can.log           # static check of every ELF, dynamic check of the logged run
 cannery/cannery.py prune gcc.can /tmp/can.log           # keep what the logged runs touched
-CONT_TREE=DIR make test   # the suite on a plain tree (spike/make-tree.sh makes one)
-CONT_CAN=gcc.can make oracles   # bwrap and openat2 oracles, Docker's profile; needs user namespaces
-CONT_CAN=gcc.can CONT_SQLITE=sqlite3.c make bench       # the performance table
-test/realsoft.py --can dev.can --src DIR   # build zlib, Lua, SQLite, re2c inside and outside; dev.can needs g++, make, python3
-test/matrix.py --can gcc.can              # the kernel matrix: cloud images under QEMU/KVM, one VM at a time
-test/matrix.py --can gcc.can --arm64 --debs-arm64 DIR   # and the emulated aarch64 row: the arm64 can is made inside the VM
+test/run.py --can gcc.can                 # the suite alone; --tree DIR for a plain tree (spike/make-tree.sh makes one); -k NAME, --order random
+test/matrix.py --can gcc.can              # the kernel matrix: cloud images under QEMU/KVM, one VM at a time, eight minutes
+test/examples.sh gcc.can                  # the example runs, each when its input is set: CONT_SRC (realsoft), CONT_SQLITE (bench), CONT_RPMS (sysroot), CONT_DEBS_ARM64 (the emulated aarch64 row)
 test/dogfood.py --cache DIR               # the cannery as a can, and a cross-can build that must reproduce
 ```
 
@@ -103,7 +100,7 @@ canonicalises a manifest or lockfile.
 src/sys.h        syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
 src/common.h     constants, the run-time state (struct can), every module's interface
 src/opener.c     entry: syscall page, self-relocation, find the can, manifest, boundary, env, load
-src/manifest.c   the strict grammar parser (6.2); also built for the host by make unit
+src/manifest.c   the strict grammar parser (6.2); also built for the host by the gate's unit step
 src/loader.c     userland ELF loader and the .note.cont probe (7.3); the facts exported for gdb (7.6)
 src/gdb.py       the script the opener carries in .debug_gdb_scripts and gdb auto-loads (7.6, 13.1)
 src/filter.c     the seccomp program (7.4.2)
@@ -131,8 +128,10 @@ test/docker_profile.py   a can under Docker's default seccomp profile; test/dock
 test/syscalls.py     every kernel syscall classified; test/bench.py the performance table
 test/realsoft.py     real projects built inside and outside a can; test/matrix.py the kernel matrix in VMs
 test/dogfood.py      the cannery can building a can that must reproduce the host-built lockfile
+test/gate.sh         the commit gate, every step in parallel on copies of the cans given; test/examples.sh the example runs
+test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/stackcheck.py the stack budget
-docs/            proposal (revision 13), review response, prior art, review reports
+docs/            proposal (revision 14), review response, prior art, review reports
 spike/           frozen prototypes and their tests
 ```
 

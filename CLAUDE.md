@@ -53,10 +53,21 @@ finding them inconvenient.
   proposal has a named regression in 17.4; implementing a rule means
   implementing its test in `test/run.py` or `test/progs/`. The
   user-namespace bind mount and `openat2(RESOLVE_IN_ROOT)` are the
-  oracles: `test/oracle_ns.py` and `test/oracle_resolve.py`, run by
-  `CONT_CAN=<can> make oracles`. Run `make unit`, `make stack`,
-  `CONT_TREE=<tree> make test` and the oracles before committing opener
-  changes; all must stay at zero failures. After rebuilding the opener,
+  oracles: `test/oracle_ns.py` and `test/oracle_resolve.py`. The commit
+  gate is `test/gate.sh CAN...` with the gcc, Alpine, Fedora and clang
+  cans (`CONT_CACHE=<cache>` adds dogfood): the unit tests, the stack
+  budget, the suite on every can in two orders, the oracles and the
+  Docker profile, every step in parallel on copies, about 30 s; it must
+  stay at zero failures, and `test/matrix.py --can <can>` (eight
+  minutes) before committing opener changes. A test asserts what the
+  tree says, never what Debian says: the compiler, the shell and the
+  file behind it, where a tool lives and the libc come from
+  `test/tree.py` and `tree_facts`, and a can kind that cannot answer is
+  a skip that prints its reason. The suite runs on the can pruned to
+  what the suite touches, made by the first run on a can and kept under
+  `build/fixtures/` by the can's lock and the test sources; a new test
+  that touches a file the fixture lacks fails once, and the next run
+  remakes the fixture. After rebuilding the opener,
   refresh a can with `cannery.py reopen CAN`: replacing `.can/opener`
   alone leaves the wrappers linked to the old file. A change to the
   cannery's output must keep `test/dogfood.py` passing. `make` also
@@ -71,7 +82,7 @@ finding them inconvenient.
   or it kills the shell that runs it.
 - **Handler code takes its buffers from `struct scratch`**, never the
   stack: the handler runs on whatever alternate stack a program set up,
-  and Rust's is 8 KB including the kernel's frame. `make stack` lists
+  and Rust's is 8 KB including the kernel's frame. `test/stackcheck.py`, the gate's stack step, lists
   every function on the handler path; add new ones to it. The handler
   reads program memory only through `copy_in` and writes it only
   through `copy_out`, paths and vectors alike: a plain dereference of a

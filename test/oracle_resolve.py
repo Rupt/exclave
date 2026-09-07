@@ -146,8 +146,11 @@ def main():
     with open(os.path.join(can, ".can", "manifest"), "w") as f:
         f.write("can 1\n")                                       # /maze is a non-empty top-level directory: can-owned by the tree alone (8.1)
     import platform
-    gcc = next(os.path.join(root, "usr", "bin", n) for n in ("%s-linux-gnu-gcc-13" % platform.machine(), "x86_64-linux-gnu-gcc-13", "gcc")
-               if os.path.exists(os.path.join(root, "usr", "bin", n)))
+    import tree
+    cc = tree.compiler(root, platform.machine())
+    if not cc:
+        sys.exit("no C compiler in the can")
+    gcc = os.path.join(root, tree.vbin(root, cc).lstrip("/"))
     prog = os.path.join(work, "resolve")
     r = subprocess.run([gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "resolve.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode:

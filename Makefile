@@ -27,7 +27,7 @@ define linkcheck
 	@$(1)nm -u $@.debug | grep . && (echo "$@ has undefined symbols" && false) || true
 endef
 
-.PHONY: all clean stack test unit oracles bench
+.PHONY: all clean
 
 all: $(OUT) $(OLD) $(if $(AARCH64_CC),build/opener-aarch64 build/opener-old-aarch64)
 
@@ -69,34 +69,7 @@ build/opener-old-aarch64: $(SRC) $(HDR) Makefile
 	$(call linkcheck,aarch64-linux-gnu-)
 	aarch64-linux-gnu-objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
 
-# stack budget (7.5.4): no frame on the handler path above 512 bytes, and the
-# summed frames of the handler path under 2048; the aarch64 build's frames too when it is built.
-stack: $(OUT) $(if $(AARCH64_CC),build/opener-aarch64)
-	python3 test/stackcheck.py build/opener.debug-*.su
-	$(if $(AARCH64_CC),python3 test/stackcheck.py build/opener-aarch64.debug-*.su)
-
-# host-side unit tests: the manifest parser compiled with a libc
-unit:
-	@mkdir -p build
-	$(CC) -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o build/manifest_test test/manifest_test.c src/manifest.c src/str.c
-	build/manifest_test
-	python3 test/grammar_test.py
-	python3 test/syscalls.py
-
-# the regression suite (17.4); needs a gcc tree: CONT_TREE=dir make test
-test: $(OUT) $(OLD)
-	python3 test/run.py --tree $(CONT_TREE)
-
-# the oracles and the container profile (17.1, 17.2, 12); need a packaged gcc can: CONT_CAN=x.can make oracles
-oracles: $(OUT)
-	python3 cannery/cannery.py reopen $(CONT_CAN)
-	python3 test/oracle_resolve.py --can $(CONT_CAN)
-	python3 test/oracle_ns.py --can $(CONT_CAN)
-	python3 test/docker_profile.py --can $(CONT_CAN) --profile test/docker-seccomp.json
-
-# the performance table (16): CONT_CAN=x.can make bench
-bench: $(OUT)
-	python3 test/bench.py --can $(CONT_CAN) --sqlite $(CONT_SQLITE)
+# the tests are test/gate.sh CAN... (the commit gate) and test/examples.sh CAN (the example runs); see README.md
 
 clean:
 	rm -rf build

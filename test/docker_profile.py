@@ -164,6 +164,9 @@ def main():
         print("bwrap or user namespaces unavailable; the Docker-profile run cannot happen here")
         return 0
     prog = assemble(a.profile, os.path.abspath(a.can))
+    import tree                                                  # the can's compiler and shell as the tree spells them
+    root = os.path.join(os.path.abspath(a.can), "root")
+    cc = tree.compiler(root, MACHINE) or "cc"
     work = os.path.abspath(a.work)
     if os.path.exists(work):
         shutil.rmtree(work)
@@ -172,17 +175,18 @@ def main():
         f.write('#include <stdio.h>\n#include <pthread.h>\n#include <spawn.h>\n#include <sys/wait.h>\nextern char **environ;\n'
                 'static void *t(void *a) { return a; }\n'
                 'int main(void) { pthread_t th; pthread_create(&th, 0, t, 0); pthread_join(th, 0); pid_t p; char *av[] = {"true", 0};\n'
-                ' if (posix_spawn(&p, "/usr/bin/true", 0, 0, av, environ)) return 2; int st; waitpid(p, &st, 0); printf("hello under docker profile %d\\n", st); return st; }\n')
+                ' if (posix_spawn(&p, "TRUEPATH", 0, 0, av, environ)) return 2; int st; waitpid(p, &st, 0); printf("hello under docker profile %d\\n", st); return st; }\n'.replace("TRUEPATH", tree.vbin(root, "true")))
     can = os.path.abspath(a.can)
     r, w = os.pipe()
     os.write(w, prog)
     os.close(w)
     cmd = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--bind", work, work, "--chdir", work, "--seccomp", str(r),
-           "--setenv", "PATH", "/usr/bin:/bin", os.path.join(can, "root", "usr", "bin", "sh"), "-c",
-           "gcc-13 -O1 -pthread hello.c -o hello && ./hello && ls /usr/lib/gcc >/dev/null && cat /etc/passwd | head -1 && touch /usr/x 2>&1; readlink /proc/self/exe"]
+           "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "TMPDIR", work, os.path.join(root, tree.vbin(root, "sh").lstrip("/")), "-c",
+           "%s -O1 -pthread hello.c -o hello && ./hello && ls /usr/lib >/dev/null && cat /etc/passwd | head -1 && touch /usr/x 2>&1; readlink /proc/self/exe" % cc]
     p = subprocess.run(cmd, pass_fds=[r], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out, err = p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
-    ok = p.returncode == 0 and "hello under docker profile 0" in out and "Read-only" in out and out.strip().endswith("/usr/bin/readlink")
+    exe = tree.resolve(root, tree.vbin(root, "readlink"))            # what /proc/self/exe reads for the wrapper, or the applet's busybox
+    ok = p.returncode == 0 and "hello under docker profile 0" in out and "Read-only" in out and out.strip().endswith(exe)
     print(("PASS" if ok else "FAIL") + " can under Docker's default profile (%d BPF instructions): rc=%d\n%s%s" % (len(prog) // 8, p.returncode, out, err))
     if ok:
         shutil.rmtree(work, ignore_errors=True)

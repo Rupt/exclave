@@ -92,8 +92,9 @@ int main(int argc, char **argv)
       if (r == 0 && a.st_ino != b.st_ino) { fails++; printf("FAIL fstatat NULL inode\n"); } }
     { /* F3-7 */ CHECK(open(dir, O_RDONLY | O_CREAT, 0644), EISDIR); }
     { /* F3-8: readlinkat(fd, "") of an O_PATH|O_NOFOLLOW descriptor on a symlink */
-      int lf = open("/usr/bin/sh", O_PATH | O_NOFOLLOW); char lb[64]; errno = 0; long r = readlinkat(lf, "", lb, sizeof lb - 1);
-      if (r <= 0 || strncmp(lb, "dash", 4)) { fails++; printf("FAIL readlinkat(fd, \"\"): %ld errno %d\n", r, errno); } close(lf); }
+      const char *sl = getenv("CONT_SH") ? getenv("CONT_SH") : "/usr/bin/sh", *lt = getenv("CONT_SH_LINK") ? getenv("CONT_SH_LINK") : "dash";
+      int lf = open(sl, O_PATH | O_NOFOLLOW); char lb[64]; errno = 0; long r = readlinkat(lf, "", lb, sizeof lb - 1); if (r > 0) lb[r] = 0;
+      if (r <= 0 || strcmp(lb, lt)) { fails++; printf("FAIL readlinkat(fd, \"\"): %ld errno %d\n", r, errno); } close(lf); }
     { /* F3-6: getcwd into a buffer that holds the virtual path */
       char cb[12]; if (chdir("/usr/share") || !getcwd(cb, sizeof cb) || strcmp(cb, "/usr/share")) { fails++; printf("FAIL getcwd with a small buffer: %s\n", strerror(errno)); }
       char one[2]; errno = 0; if (getcwd(one, sizeof one) || errno != ERANGE) { fails++; printf("FAIL getcwd ERANGE\n"); } }
