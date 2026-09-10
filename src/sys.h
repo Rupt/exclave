@@ -204,7 +204,9 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
 #define EEXIST  17
 #define ENOTDIR 20
 #define EINVAL  22
+#define ETXTBSY 26
 #define EROFS   30
+#define ENOTEMPTY 39
 #define ENOSYS  38
 #define ENAMETOOLONG 36
 

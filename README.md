@@ -30,10 +30,12 @@ matrix checks natively on each VM; the opener builds for aarch64 from
 the same sources and the matrix has an emulated arm64 row. gdb debugs
 a canned program with no manual command: the opener carries the script
 gdb needs. The
-regression suite (56 named tests), the kernel oracles and Docker's
-default seccomp profile pass on the gcc, Alpine, Fedora and clang cans,
-each pruned to what the suite touches, in one 30-second gate on the
-reference machine, where the plain-terminal AppArmor label passes too, and the kernel matrix in QEMU
+regression suite (57 named tests), the kernel oracles, a differential
+syscall probe that agrees with the kernel on 11 407 cases per can, and
+Docker's default seccomp profile pass on the gcc, Alpine, Fedora and
+clang cans, each pruned to what the suite touches, in one 26-second
+gate on the reference machine, where the plain-terminal AppArmor label
+passes too, and the kernel matrix in QEMU
 virtual machines passes on nine distributions from CentOS 7 at kernel
 3.10 to Fedora 42, Alpine's musl userland and SELinux included. The
 cannery ships as a can and the gcc can it builds from inside its can
@@ -47,7 +49,8 @@ finding.
 
 ```
 make                      # build/opener, a freestanding ET_DYN; build/opener-old for the nesting test; build/opener-aarch64 with aarch64-linux-gnu-gcc
-test/gate.sh gcc.can alpine.can fedora.can clang.can   # the commit gate, 30 s: unit tests, stack budget, the suite on every can in two orders, the oracles; CONT_CACHE=DIR adds dogfood
+test/inputs.sh ~/.cache/cont-inputs   # the development inputs from the network: the four cans of the gate, the examples' inputs; skips what is present
+CONT_CACHE=~/.cache/cont-debs test/gate.sh ~/.cache/cont-inputs/*.can   # the commit gate, 26 s: unit tests, stack budget, the suite on every can in two orders, the oracles, the syscall probe; CONT_CACHE adds dogfood
 tools/fetch-debs.py --out debs gcc-13 libc6-dev         # the step before the cannery: apt, a mirror, this tool, anything
 tools/fetch-apks.py --out apks gcc musl-dev binutils     # the same for Alpine
 tools/fetch-rpms.py --repo URL --out rpms gcc glibc-devel   # and for Fedora, Rocky, CentOS: any repository with repodata/
@@ -122,8 +125,10 @@ tools/fetch-debs.py  an example of the step before the cannery: resolve a closur
 tools/fetch-apks.py  the same for an Alpine repository, verified as apk verifies
 tools/fetch-rpms.py  the same for a yum or dnf repository, verified by the index's SHA-256
 test/sysroot.py      a glibc sysroot as a data prefix and an output built against it, for the matrix to run natively
-test/run.py          the regression suite; test/progs/ its C and Rust programs
+test/run.py          the regression suite; test/progs/ its C, Rust and Go programs
 test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the openat2 oracle
+test/oracle_syscalls.py  the differential syscall probe: every trapped syscall with every path form under bwrap and under the opener; test/progs/probe.c its interpreter
+test/inputs.sh       the development inputs, remade from the network through ~/.cache
 test/docker_profile.py   a can under Docker's default seccomp profile; test/docker-seccomp.json the profile
 test/syscalls.py     every kernel syscall classified; test/bench.py the performance table
 test/realsoft.py     real projects built inside and outside a can; test/matrix.py the kernel matrix in VMs
@@ -131,7 +136,7 @@ test/dogfood.py      the cannery can building a can that must reproduce the host
 test/gate.sh         the commit gate, every step in parallel on copies of the cans given; test/examples.sh the example runs
 test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/stackcheck.py the stack budget
-docs/            proposal (revision 14), review response, prior art, review reports
+docs/            proposal (revision 15), review response, prior art, review reports
 spike/           frozen prototypes and their tests
 ```
 

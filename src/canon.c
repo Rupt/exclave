@@ -10,7 +10,7 @@
 int fd_virtual(int fd, char *out)
 {
     char l[64] = "/proc/self/fd/"; char n[24]; ltoa_(fd, n); scat(l, n, sizeof l);
-    long r = sys_readlink(l, out, PATH_MAX - 1); if (r < 0) return (int)r;
+    long r = sys_readlink(l, out, PATH_MAX - 1); if (r < 0) return r == -ENOENT ? -EBADF : (int)r;   /* no such link: no such descriptor */
     out[r] = 0;
     if (r > 10 && xstrcmp(out + r - 10, " (deleted)") == 0) return -ENOENT;   /* let the caller pass it through */
     from_real(out); return 0;

@@ -1,5 +1,5 @@
 // rs.rs — the Rust regressions of PROPOSAL.md 17.4: File::metadata (statx with AT_EMPTY_PATH),
-// Command::spawn (clone3 refused, then clone), std::fs on can and host paths, canonicalize.
+// Command::spawn (clone3 refused, then clone), the F-N12 spawn loop, std::fs on can and host paths, canonicalize.
 // Built by the host's rustc against the host's glibc, run inside a can in loader mode.
 use std::fs;
 use std::io::ErrorKind;
@@ -13,7 +13,15 @@ fn main() {
     let f = fs::File::open(marker).expect("open");
     let m2 = f.metadata().expect("metadata by descriptor");
     if m.ino() != m2.ino() || !m.is_file() || m.len() != 7 { fails += 1; println!("FAIL File::metadata differs from metadata by path"); }
-    match Command::new(std::env::var("CONT_TRUE").unwrap_or("/usr/bin/true".to_string())).status() { Ok(s) if s.success() => {}, other => { fails += 1; println!("FAIL Command::status: {:?}", other); } }
+    let truep = std::env::var("CONT_TRUE").unwrap_or("/usr/bin/true".to_string());
+    match Command::new(&truep).status() { Ok(s) if s.success() => {}, other => { fails += 1; println!("FAIL Command::status: {:?}", other); } }
+    // F-N12 (review round 1): metadata of an identity file, then a loop of spawns by path and one by PATH; the
+    // anomaly seen on the spike was a 127 from the loop
+    fs::metadata("/etc/passwd").expect("metadata of an identity file");
+    for i in 0..20 {
+        match Command::new(&truep).status() { Ok(s) if s.success() => {}, other => { fails += 1; println!("FAIL F-N12 spawn {}: {:?}", i, other); break; } }
+    }
+    match Command::new("true").status() { Ok(s) if s.success() => {}, other => { fails += 1; println!("FAIL F-N12 spawn by PATH: {:?}", other); } }
     match Command::new("sh").arg("-c").arg("echo spawned $0").output() {
         Ok(o) if o.stdout == b"spawned sh\n" => {}
         other => { fails += 1; println!("FAIL Command::output: {:?}", other.map(|o| String::from_utf8_lossy(&o.stdout).into_owned())); }

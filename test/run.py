@@ -1644,6 +1644,23 @@ def rust(ctx):
 
 
 @test
+def go_paths(ctx):
+    """17.4: a Go program doing path syscalls from goroutines. Go issues syscalls raw, makes threads with clone,
+    installs its own handler for every signal, SIGSYS included (7.5.2), and runs on small stacks; built static by
+    the host's go with cgo off and run inside as a host program. Skips with the reason when there is no go."""
+    go = shutil.which("go") or next((g for g in ("/usr/lib/go/bin/go", "/usr/local/go/bin/go") if os.path.exists(g)), None)
+    if not go:
+        return "no go toolchain (golang-go)"
+    exe = os.path.join(ctx.progs, "go_paths")
+    env = dict(ctx.env, GOCACHE=os.path.join(REPO, "build", "gocache"), GOPATH=os.path.join(ctx.work, "gopath"), HOME=ctx.work,
+               GO111MODULE="off", CGO_ENABLED="0", GOFLAGS="", GOTOOLCHAIN="local")
+    rc, out, err = run([go, "build", "-o", exe, os.path.join(ctx.work, "src", "go_paths.go")], cwd=ctx.work, env=env, timeout=600)
+    expect(rc == 0, "go build: " + err[-600:])
+    rc, out, err = inside(ctx, exe)
+    expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
 def gdb_hooks(ctx):
     """7.6, 13.1: gdb needs no manual command. The opener carries a script gdb auto-loads; a breakpoint in a
     library hits with the can's own symbols, the program's source line is known, a wrapped program's libc

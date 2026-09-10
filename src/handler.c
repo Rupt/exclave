@@ -16,6 +16,9 @@
 #define FAN_MARK_DONT_FOLLOW 0x4
 #define SIGSYS_BIT (1UL << (SIGSYS - 1))
 #define STATFS_FLAGS_OFF 80
+#define RENAME_NOREPLACE 1
+#define F_GETFL 3
+#define UTIME_OMIT ((1L << 30) - 2)
 
 static inline long *gregs(void *uc) { return (long *)((char *)uc + UC_GREGS_OFF); }
 static inline unsigned long *frame_mask(void *uc) { return (unsigned long *)((char *)uc + UC_SIGMASK_OFF); }
@@ -66,13 +69,21 @@ static long copy_out(void *dst, const void *src, size_t n)
 }
 
 /* ---------- path resolution ---------- */
-/* args[pi] relative to args[di] (or the cwd when di < 0) into S->v; 1 means "empty path with AT_EMPTY_PATH: fd-based" */
+/* args[pi] relative to args[di] (or the cwd when di < 0) into S->v; 1 means "empty path with AT_EMPTY_PATH: fd-based".
+ * allow_empty: 1 accepts the empty string, 2 also a NULL path, which only newfstatat and statx accept (6.11+);
+ * every other syscall answers EFAULT for NULL, AT_EMPTY_PATH or not (oracle 17.3) */
 static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int allow_empty)
 {
-    if (!a[pi] && allow_empty) return 1;                       /* NULL with AT_EMPTY_PATH: the descriptor itself (6.11+) */
+    if (!a[pi] && allow_empty == 2) return 1;
     long r = copy_str_in(S->b1, (const char *)a[pi]); if (r < 0) return r;
     if (S->b1[0] == 0) return allow_empty ? 1 : -ENOENT;
-    r = canon(S, S->b1, di < 0 ? AT_FDCWD : (int)a[di], follow, S->v);
+    int dfd = di < 0 ? AT_FDCWD : (int)a[di];
+    if (S->b1[0] != '/') {                                     /* a relative path starts with the kernel's search check on the directory it
+                                                                * starts from (link_path_walk): EACCES, ENOTDIR or EBADF before any lookup,
+                                                                * which the absolute re-issue would otherwise skip (oracle 17.3) */
+        r = sys_faccessat(dfd, ".", X_OK); if (r < 0) return r;
+    }
+    r = canon(S, S->b1, dfd, follow, S->v);
     if (r < 0) scpy(S->v, S->b1, PATH_MAX);                    /* the log names what was asked for, as given (review O4-6) */
     return r;
 }
@@ -87,12 +98,47 @@ static int exists_can(struct scratch *S, const char *v, struct kstat *st)
     return sys_lstat(S->real, st) == 0;
 }
 
-/* 8.2: the kernel-matching answers for a read-only can; S->real is set either way for the re-issue */
-static long ro_create(struct scratch *S, const char *v)
-{ struct kstat st; int ex = exists_can(S, v, &st); if (!is_can_owned(v)) return 0; return ex ? -EEXIST : -EROFS; }
+/* the lstat error behind "absent", which the kernel reports before EROFS wherever it looks the name up first:
+ * ENOTDIR for a trailing slash on a file, EILSEQ from a filesystem that refuses the name, ENOENT otherwise */
+static long absent_errno(struct scratch *S)
+{
+    long r = sys_lstat(S->real, (struct kstat *)S->b2);      /* b2: canon's component buffer, free once the path is resolved */
+    return r < 0 && r != -ENOENT ? r : -ENOENT;
+}
+/* the kernel classifies a path's last component before it looks it up (fs/namei.c): "." and ".." are never
+ * created, deleted or renamed, and neither is the root; each syscall has its own answer */
+static int last_special(const char *p)                       /* 0: a name; 1: "."; 2: ".."; 3: the root */
+{
+    size_t n = xstrlen(p);
+    while (n > 1 && p[n - 1] == '/') n--;
+    if (n == 1 && p[0] == '/') return 3;
+    size_t s = n; while (s > 0 && p[s - 1] != '/') s--;
+    if (n - s == 1 && p[s] == '.') return 1;
+    if (n - s == 2 && p[s] == '.' && p[s + 1] == '.') return 2;
+    return 0;
+}
+
+/* 8.2: the kernel-matching answers for a read-only can, in the kernel's order (oracle 17.3); S->real is set
+ * either way for the re-issue. A create (filename_create): the name is looked up first, so EEXIST for what
+ * exists and the name's own error come before EROFS, and a trailing slash on something that is not a directory
+ * being made is ENOENT. An attribute change: the file must exist. A delete: EROFS before the last component
+ * is looked up at all. */
+static long ro_create(struct scratch *S, const char *v, int is_dir)
+{
+    if (!is_can_owned(v)) { to_real_exec(v, S->real); return 0; }
+    scpy(S->cur, v, PATH_MAX);
+    size_t l = xstrlen(S->cur); int slash = l > 1 && S->cur[l - 1] == '/';
+    if (slash) S->cur[l - 1] = 0;                            /* the lookup is of the name; the slash only says "a directory" */
+    int ex = exists_can(S, S->cur, (struct kstat *)S->b2);
+    if (ex) return -EEXIST;
+    long e = absent_errno(S); if (e != -ENOENT) return e;
+    return slash && !is_dir ? -ENOENT : -EROFS;
+}
 static long ro_attr(struct scratch *S, const char *v)
-{ struct kstat st; int ex = exists_can(S, v, &st); if (!is_can_owned(v)) return 0; return ex ? -EROFS : -ENOENT; }
+{ struct kstat st; int ex = exists_can(S, v, &st); if (!is_can_owned(v)) return 0; return ex ? -EROFS : absent_errno(S); }
 static long ro_delete(struct scratch *S, const char *v) { to_real_exec(v, S->real); return is_can_owned(v) ? -EROFS : 0; }
+static void real_nofollow(struct scratch *S, int nofollow);
+static int dfd_virtual(int fd, char *out);
 
 /* ---------- open ---------- */
 static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long mode)
@@ -103,16 +149,22 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     int wr = acc == O_WRONLY || acc == O_RDWR || (flags & O_TRUNC) || (flags & O_TMPFILE) == O_TMPFILE;
     int creat = (flags & O_CREAT) != 0;
     if (flags & O_PATH) wr = creat = 0;
+    size_t vl = xstrlen(S->v);
+    if (creat && vl > 1 && S->v[vl - 1] == '/') return -EISDIR;   /* open_last_lookups: O_CREAT with a trailing slash, before any lookup */
+    if (wr && (flags & O_TMPFILE) != O_TMPFILE && C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;   /* the kernel protects a running program; the opener protects the one it loaded (13) */
+    if ((flags & O_NOFOLLOW) && !(flags & O_PATH) && vis_readlink_identity(S->v, S->tmp) == 1) return -ELOOP;   /* an identity file that is a host symlink (8.4) */
     if (is_can_owned(S->v)) {
         struct kstat st; int ex = exists_can(S, S->v, &st);
-        if ((flags & O_TMPFILE) == O_TMPFILE) return ex ? -EROFS : -ENOENT;
-        if (creat && (flags & O_EXCL)) return ex ? -EEXIST : -EROFS;
-        if (creat && ex && (st.st_mode & S_IFMT) == S_IFDIR) return -EISDIR;
-        if (wr) { if (!ex) return creat ? -EROFS : -ENOENT; if ((st.st_mode & S_IFMT) == S_IFDIR) return -EISDIR; return -EROFS; }
-        if (creat && !ex) return -EROFS;
+        long ae = ex ? 0 : absent_errno(S);                  /* the lookup's own error comes before the read-only answers */
+        int dir = ex && (st.st_mode & S_IFMT) == S_IFDIR;
+        if ((flags & O_TMPFILE) == O_TMPFILE) return !ex ? ae : dir ? -EROFS : -ENOTDIR;
+        if (creat && (flags & O_EXCL)) return ex ? -EEXIST : ae != -ENOENT ? ae : -EROFS;
+        if (creat && dir) return -EISDIR;
+        if (wr) { if (!ex) return ae != -ENOENT ? ae : creat ? -EROFS : -ENOENT; if (dir) return -EISDIR; return -EROFS; }
+        if (creat && !ex) return ae != -ENOENT ? ae : -EROFS;
         flags &= ~O_CREAT;                                   /* O_CREAT on an existing file, read-only: succeeds */
     }
-    to_real(S->v, S->real, S->tmp);
+    real_nofollow(S, !follow);                               /* O_PATH|O_NOFOLLOW on an identity symlink opens the host's link itself */
     if (!follow) flags |= O_NOFOLLOW;
     return RE5(NR_openat, AT_FDCWD, S->real, flags, mode, 0);
 }
@@ -202,8 +254,8 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     if (depth > 4) return -ELOOP;
     if (vis_in_data(v)) return -EACCES;                          /* 6.2: a data prefix is never executed (review O4-3) */
     to_real_exec(v, S->real);
-    struct kstat st;
-    if (sys_stat(S->real, &st) < 0) return -ENOENT;
+    struct kstat st; long e;
+    if ((e = sys_stat(S->real, &st)) < 0) return e;          /* ENOENT, ENOTDIR for a trailing slash, the name's own error */
     if ((st.st_mode & S_IFMT) == S_IFDIR) return -EACCES;
     if ((st.st_mode & S_IFMT) != S_IFREG) return -EACCES;
     long ok = sys_faccessat(AT_FDCWD, S->real, X_OK);           /* the kernel's answer for this process, triads and search included (O3-4) */
@@ -230,7 +282,11 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
 {
     long r = resolve(S, a, pi, di, !(flags & AT_SYMLINK_NOFOLLOW), (flags & AT_EMPTY_PATH) != 0);
     if (r < 0) return r;
-    if (r == 1) { r = fd_virtual((int)a[di], S->v); if (r < 0) return r; }
+    if (r == 1) {
+        struct kstat st;                                     /* a descriptor on a symlink itself (O_PATH|O_NOFOLLOW) cannot be run (fs/exec.c) */
+        if (SC2(NR_fstat, a[di], &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK) return -ELOOP;
+        r = dfd_virtual((int)a[di], S->v); if (r < 0) return r;
+    }
     else if (flags & AT_SYMLINK_NOFOLLOW) {                    /* the kernel refuses to run a symlink itself (F3-20) */
         struct kstat st; to_real_exec(S->v, S->real);
         if (sys_lstat(S->real, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK) return -ELOOP;
@@ -349,9 +405,10 @@ static long do_io_pgetevents(long *a)
 }
 
 /* ---------- descriptors that name can files ---------- */
+static int dfd_virtual(int fd, char *out) { return fd == AT_FDCWD ? cwd_virtual(out) : fd_virtual(fd, out); }   /* a descriptor argument that may be AT_FDCWD */
 static long fd_can(struct scratch *S, int fd)
 {
-    long r = fd_virtual(fd, S->v);
+    long r = dfd_virtual(fd, S->v);
     if (r < 0) return 0;                                     /* pipes, sockets, deleted: the kernel decides */
     return S->v[0] == '/' && is_can_owned(S->v);
 }
@@ -376,12 +433,12 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         real_nofollow(S, nr == NR_lstat);
         return RE5(NR_newfstatat, AT_FDCWD, S->real, a[1], nr == NR_stat ? 0 : AT_SYMLINK_NOFOLLOW, 0);
     case NR_newfstatat:
-        if ((r = resolve(S, a, 1, 0, !(a[3] & AT_SYMLINK_NOFOLLOW), (a[3] & AT_EMPTY_PATH) != 0)) < 0) return r;
+        if ((r = resolve(S, a, 1, 0, !(a[3] & AT_SYMLINK_NOFOLLOW), (a[3] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1) return RE5(nr, a[0], a[1], a[2], a[3], 0);
         real_nofollow(S, (a[3] & AT_SYMLINK_NOFOLLOW) != 0);
         return RE5(nr, AT_FDCWD, S->real, a[2], a[3] | AT_SYMLINK_NOFOLLOW, 0);
     case NR_statx:
-        if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) != 0)) < 0) return r;
+        if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1) return RE5(nr, a[0], a[1], a[2], a[3], a[4]);
         real_nofollow(S, (a[2] & AT_SYMLINK_NOFOLLOW) != 0);
         return RE5(nr, AT_FDCWD, S->real, a[2] | AT_SYMLINK_NOFOLLOW, a[3], a[4]);
@@ -411,42 +468,57 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_execveat: return do_execve(S, a, 1, 0, a[4], (char **)a[2], (char **)a[3], Sp);
     case NR_truncate:
         if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
-        if ((r = ro_attr(S, S->v))) return r;
+        if (C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;
+        if (is_can_owned(S->v)) {                            /* vfs_truncate: EISDIR and EINVAL for what cannot be truncated, then EROFS */
+            struct kstat *st = (struct kstat *)S->b2; int ex = exists_can(S, S->v, st);
+            if (!ex) return absent_errno(S);
+            if ((st->st_mode & S_IFMT) == S_IFDIR) return -EISDIR;
+            if (sys_lstat(S->real, st) == 0 && (st->st_mode & S_IFMT) != S_IFREG) return -EINVAL;
+            return -EROFS;
+        }
+        to_real_exec(S->v, S->real);
         return RE5(nr, S->real, a[1], 0, 0, 0);
     case NR_mkdir: case NR_mkdirat: {
         int pi = nr == NR_mkdir ? 0 : 1, di = nr == NR_mkdir ? -1 : 0;
         if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
-        if ((r = ro_create(S, S->v))) return r;
+        if ((r = ro_create(S, S->v, 1))) return r;
         return RE5(NR_mkdirat, AT_FDCWD, S->real, a[pi + 1], 0, 0);
     }
     case NR_mknod: case NR_mknodat: {
         int pi = nr == NR_mknod ? 0 : 1, di = nr == NR_mknod ? -1 : 0;
         if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
-        if ((r = ro_create(S, S->v))) return r;
+        if ((r = ro_create(S, S->v, 0))) return r;
         return RE5(NR_mknodat, AT_FDCWD, S->real, a[pi + 1], a[pi + 2], 0);
     }
     case NR_rmdir: case NR_unlink: case NR_unlinkat: {
         int pi = nr == NR_unlinkat ? 1 : 0, di = nr == NR_unlinkat ? 0 : -1;
         long fl = nr == NR_rmdir ? AT_REMOVEDIR : nr == NR_unlinkat ? a[2] : 0;
         if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
+        int sp = last_special(S->b1);                        /* do_rmdir, do_unlinkat: answered before any lookup */
+        if (sp) return (fl & AT_REMOVEDIR) ? (sp == 1 ? -EINVAL : sp == 2 ? -ENOTEMPTY : -EBUSY) : -EISDIR;
         if ((r = ro_delete(S, S->v))) return r;
         return RE5(NR_unlinkat, AT_FDCWD, S->real, fl, 0, 0);
     }
     case NR_symlink: case NR_symlinkat: {
         int pi = nr == NR_symlink ? 1 : 2, di = nr == NR_symlink ? -1 : 1;
         if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
-        if ((r = ro_create(S, S->v))) return r;
+        if ((r = ro_create(S, S->v, 0))) return r;
         return RE5(NR_symlinkat, a[0], AT_FDCWD, S->real, 0, 0);
     }
     case NR_rename: case NR_renameat: case NR_renameat2: {
         int opi = nr == NR_rename ? 0 : 1, odi = nr == NR_rename ? -1 : 0, npi = nr == NR_rename ? 1 : 3, ndi = nr == NR_rename ? -1 : 2;
         long fl = nr == NR_renameat2 ? a[4] : 0; struct kstat st;
         if ((r = resolve(S, a, opi, odi, 0, 0)) < 0) return r;
+        int osp = last_special(S->b1);
         scpy(S->v2, S->v, PATH_MAX);                         /* old */
         if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
-        /* the kernel's order (oracle 17.1): different mounts first, then the write check, then the lookups */
+        int nsp = last_special(S->b1);
+        /* the kernel's order (do_renameat2, oracles 17.1 and 17.3): different mounts first, then a last component
+         * that is "." or "..", then the write check, then the lookups */
         int oc = is_can_owned(S->v2), nc = is_can_owned(S->v);
         if (oc != nc) return -EXDEV;
+        if (osp) return -EINVAL;
+        if (nsp) return (fl & RENAME_NOREPLACE) ? -EEXIST : -EINVAL;
         if (oc && nc) return -EROFS;
         (void)st;
         to_real_exec(S->v2, S->b1); to_real_exec(S->v, S->real);
@@ -457,11 +529,16 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         int opi = nr == NR_link ? 0 : 1, odi = nr == NR_link ? -1 : 0, npi = nr == NR_link ? 1 : 3, ndi = nr == NR_link ? -1 : 2;
         long fl = nr == NR_linkat ? a[4] : 0; struct kstat st;
         if ((r = resolve(S, a, opi, odi, (fl & AT_SYMLINK_FOLLOW) != 0, (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
-        if (r == 1) { if ((r = fd_virtual((int)a[odi], S->v)) < 0) return r; }
+        if (r == 1) { if ((r = dfd_virtual((int)a[odi], S->v)) < 0) return r; }
         scpy(S->v2, S->v, PATH_MAX);                         /* old */
+        if (!exists_can(S, S->v2, &st)) return -ENOENT;     /* do_linkat: the old name is looked up before the new one is read at all */
         if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
-        if (!exists_can(S, S->v2, &st)) return -ENOENT;
-        if (is_can_owned(S->v)) return -EROFS;
+        /* then the new name, in either domain (EEXIST, the name's own error), then the read-only rule for a
+         * can-owned new name, then EXDEV for a can-owned old one */
+        scpy(S->cur, S->v, PATH_MAX);
+        { size_t l = xstrlen(S->cur); if (l > 1 && S->cur[l - 1] == '/') S->cur[l - 1] = 0; }
+        if (exists_can(S, S->cur, &st)) return -EEXIST;
+        if ((r = ro_create(S, S->v, 0))) return r;
         if (is_can_owned(S->v2)) return -EXDEV;
         to_real_exec(S->v2, S->b1); to_real_exec(S->v, S->real);
         return RE5(NR_linkat, AT_FDCWD, S->b1, AT_FDCWD, S->real, fl & ~AT_SYMLINK_FOLLOW & ~AT_EMPTY_PATH);
@@ -485,6 +562,10 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_utime: case NR_utimes: case NR_futimesat: case NR_utimensat: {
         int pi = nr == NR_utime || nr == NR_utimes ? 0 : 1, di = nr == NR_utime || nr == NR_utimes ? -1 : 0;
         long fl = nr == NR_utimensat ? a[3] : 0;
+        if (nr == NR_utimensat && a[2]) {                    /* do_utimes: two UTIME_OMITs are a no-op before any lookup; a bad pointer is EFAULT */
+            long ts[4]; if ((r = copy_exact(ts, (const void *)a[2], sizeof ts))) return r;
+            if (ts[1] == UTIME_OMIT && ts[3] == UTIME_OMIT) return 0;
+        }
         if (nr == NR_utimensat && a[1] == 0) return fd_can(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], 0, a[2], a[3], 0);
         if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), 0)) < 0) return r;
         if ((r = ro_attr(S, S->v))) return r;
@@ -542,6 +623,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         to_real(S->v, S->real, S->tmp);
         return RE5(nr, a[0], a[1] | FAN_MARK_DONT_FOLLOW, a[2], AT_FDCWD, S->real);
     case NR_fchmod: case NR_fchown: case NR_fsetxattr: case NR_fremovexattr: case NR_ioctl:
+        r = sys_fcntl((int)a[0], F_GETFL, 0); if (r < 0) return r;
+        if (r & O_PATH) return -EBADF;                       /* an O_PATH descriptor cannot be used for these (open(2)) */
         if (fd_can(S, (int)a[0])) return -EROFS;
         return RE5(nr, a[0], a[1], a[2], a[3], a[4]);
     case NR_rt_sigaction:   return do_sigaction(a, uc);

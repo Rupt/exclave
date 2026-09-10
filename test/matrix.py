@@ -6,7 +6,7 @@
 Each row of VMS names a distribution cloud image. The image is downloaded once, booted under QEMU with
 KVM behind a copy-on-write overlay and a cloud-init seed that installs python3 and strace (and bubblewrap
 where it exists), the can and this repository's test tree and opener are copied in over SSH, and the
-regression suite runs there; the oracles and the Docker-profile run follow where bubblewrap works.
+regression suite runs there; the oracles, the syscall probe and the Docker-profile run follow where bubblewrap works.
 One VM at a time, 1 GB each. Results go to build/matrix-results.md.
 """
 import argparse
@@ -189,7 +189,7 @@ def main():
         if arch in payloads:
             return payloads[arch]
         payload = os.path.join(work, "payload-%s.tar.gz" % arch)
-        if not os.path.exists(payload):
+        if True:                                                  # packed afresh every run: a kept payload once carried a stale test tree
             log("packing the test tree for", arch)
             with tarfile.open(payload, "w:gz", compresslevel=1) as t:
                 for d in ("test", "cannery"):
@@ -249,6 +249,11 @@ def main():
                 if "closed" not in out:
                     results.append((name, uname, "cannot make the can: " + out[-300:].replace("\n", " | "), "", notes))
                     continue
+            else:                                                 # the can given carries the opener that made it: the row tests the checkout's
+                rc, out = vm.ssh("cd m && python3 cont/cannery/cannery.py reopen can cont/build/opener 2>&1 | tail -1", timeout=600 * slow)
+                if "relinked" not in out:
+                    results.append((name, uname, "cannot reopen the can: " + out[-200:].replace("\n", " | "), "", notes))
+                    continue
             rc, out = vm.ssh("cd m && python3 cont/test/run.py --can $PWD/can --work $PWD/work 2>&1", timeout=2400 * slow)
             with open(os.path.join(work, name + "-suite.log"), "w") as f:
                 f.write(out)
@@ -286,10 +291,11 @@ def main():
             if "bwrap-ok" in out:
                 rc, out = vm.ssh("cd m && python3 cont/test/oracle_resolve.py --can $PWD/can --work $PWD/rw 2>&1 | tail -30; echo ====; "
                                  "python3 cont/test/oracle_ns.py --can $PWD/can --work $PWD/nw 2>&1 | tail -40; echo ====; "
+                                 "python3 cont/test/oracle_syscalls.py --can $PWD/can --work $PWD/sw --show 5000 2>&1 | tail -20000; echo ====; "
                                  "python3 cont/test/docker_profile.py --can $PWD/can --profile cont/test/docker-seccomp.json --work $PWD/dw 2>&1 | tail -20", timeout=2400 * slow)
                 with open(os.path.join(work, name + "-oracles.log"), "w") as f:
                     f.write(out)
-                keep = [l.strip() for l in out.splitlines() if ("paths:" in l or "workloads," in l or l.startswith("PASS can") or l.startswith("FAIL can") or "cannot run" in l)]
+                keep = [l.strip() for l in out.splitlines() if ("paths:" in l or "workloads," in l or "cases over" in l or l.startswith("PASS can") or l.startswith("FAIL can") or "cannot run" in l)]
                 oracle = " / ".join(keep) or out[-300:].replace("\n", " | ")
                 log(name, oracle)
             else:

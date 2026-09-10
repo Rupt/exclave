@@ -56,8 +56,9 @@ finding them inconvenient.
   oracles: `test/oracle_ns.py` and `test/oracle_resolve.py`. The commit
   gate is `test/gate.sh CAN...` with the gcc, Alpine, Fedora and clang
   cans (`CONT_CACHE=<cache>` adds dogfood): the unit tests, the stack
-  budget, the suite on every can in two orders, the oracles and the
-  Docker profile, every step in parallel on copies, about 30 s; it must
+  budget, the suite on every can in two orders, the oracles, the
+  syscall probe and the Docker profile, every step in parallel on
+  copies, under a minute; it must
   stay at zero failures, and `test/matrix.py --can <can>` (eight
   minutes) before committing opener changes. A test asserts what the
   tree says, never what Debian says: the compiler, the shell and the
@@ -76,6 +77,13 @@ finding them inconvenient.
   to `FILTER_VERSION` or to the trap set moves that build too. A syscall the
   handler re-issues must exist on the oldest kernel of the matrix
   (`renameat`, not `renameat2`, for a plain rename).
+- **The kernel is the oracle for the handler's answers.**
+  `test/oracle_syscalls.py` runs every trapped syscall with every path
+  form under `bwrap` and under the opener and compares them case by
+  case. A difference is fixed in the handler, in the kernel's order of
+  checks (`fs/namei.c` is the reference), or listed in `EXPECTED` with
+  the rule that makes it right; it is never accepted silently, and the
+  read-only rule of 8.2 is stated in that order.
 - **Shell commands in this repository use absolute paths.** The shell's
   working directory persists between commands and has drifted into
   scratch directories before; `pkill -f` must use an anchored pattern
@@ -114,24 +122,19 @@ profile was checked syscall by syscall; the results are in
 
 ## Scratch space
 
-Use the session scratchpad for trees, cans, package caches and traces,
-never the repository. A can is made with `tools/fetch-debs.py --cache
-<scratch>/cannery-cache --out <scratch>/debs PACKAGES...`, then
-`cannery.py unpack CAN <scratch>/debs/*.deb` and `cannery.py wrap CAN`;
-an Alpine can with `tools/fetch-apks.py --out <scratch>/apks gcc
-musl-dev binutils make linux-headers` and the same `unpack` and
-`wrap`; a Fedora can with `tools/fetch-rpms.py --repo
-<archive>/42/Everything/x86_64/os --choose
-glibc-langpack=glibc-minimal-langpack --out <scratch>/rpms gcc
-glibc-devel binutils make`; the sysroot can and its output with
-`test/sysroot.py --can <gcc can> --rpms <centos 7 rpms> --out
-build/sysroot-hello`, which the matrix then runs natively; a plain
-tree with `spike/make-tree.sh`;
-arm64 packages come from `tools/fetch-debs.py --arch arm64 --mirror
-http://ports.ubuntu.com/ubuntu-ports`, and the arm64 can is made inside
-the VM, since a can is closed on its own architecture;
-the suite and the oracles make their own copies under `build/` (ignored
-by git). The archive mirror configured on this machine is
+Every development input is made by `test/inputs.sh DIR`, which holds
+the exact fetch commands: the gcc, Alpine, Fedora and clang cans of
+the gate, the CentOS 7 rpms for `test/sysroot.py`, the arm64 debs for
+the emulated row, and the sources of `test/realsoft.py` and
+`test/bench.py`. Use `~/.cache/cont-inputs` for `DIR`; the fetchers
+cache under `~/.cache/cont-debs`, `cont-apks` and `cont-rpms`. Nothing
+under `~/.cache` or the session scratchpad is assumed to persist: the
+scratchpad lost every can once, so keep no input only there, never
+put one where a script will remove it, and refetch rather than hunt.
+The scratchpad is for traces and one-off trees (`spike/make-tree.sh`),
+never the repository. The arm64 can is made inside the VM, since a can
+is closed on its own architecture; the suite and the oracles make
+their own copies under `build/` (ignored by git). The archive mirror configured on this machine is
 `http://gb.archive.ubuntu.com/ubuntu`. Cloud images for the matrix live
 in `~/.cache/cont-images`; QEMU with KVM and `cloud-image-utils` are
 installed, and this user can open `/dev/kvm`.

@@ -1,0 +1,128 @@
+// go_paths.go — the Go regression of PROPOSAL.md 17.4: a static Go program doing path syscalls from goroutines.
+// Go issues its syscalls raw, creates threads with clone, installs its own handler for every signal, SIGSYS
+// included (7.5.2), and runs goroutines on small stacks with a signal stack per thread. Built by the host's
+// go with cgo off, run inside a can as a host program.
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+)
+
+func env(name, dflt string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return dflt
+}
+
+func main() {
+	fails := 0
+	fail := func(f string, a ...interface{}) { fails++; fmt.Printf("FAIL "+f+"\n", a...) }
+	marker := "/usr/share/cont-test-marker"
+	sh, shExe, truep := env("CONT_SH", "/usr/bin/sh"), env("CONT_SH_EXE", "/usr/bin/dash"), env("CONT_TRUE", "/usr/bin/true")
+
+	// path syscalls from goroutines, concurrently with a blocked read
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		fail("pipe: %v", err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan string, 64)
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for k := 0; k < 200; k++ {
+				if st, err := os.Stat(marker); err != nil || st.Size() != 7 {
+					errs <- fmt.Sprintf("stat marker in goroutine %d: %v", i, err)
+					return
+				}
+				if _, err := os.Lstat(sh); err != nil {
+					errs <- fmt.Sprintf("lstat %s: %v", sh, err)
+					return
+				}
+				if k%50 == 0 {
+					if ents, err := os.ReadDir("/usr/share"); err != nil || len(ents) == 0 {
+						errs <- fmt.Sprintf("readdir /usr/share: %v", err)
+						return
+					}
+				}
+			}
+		}(i)
+	}
+	go func() { buf := make([]byte, 4); pr.Read(buf); pr.Close() }()
+	wg.Wait()
+	pw.Write([]byte("done"))
+	pw.Close()
+	close(errs)
+	for e := range errs {
+		fail("%s", e)
+	}
+
+	// exec: the can's true and its shell, by path and by PATH
+	if err := exec.Command(truep).Run(); err != nil {
+		fail("exec %s: %v", truep, err)
+	}
+	if err := exec.Command("true").Run(); err != nil {
+		fail("exec true by PATH: %v", err)
+	}
+	if out, err := exec.Command(sh, "-c", "echo spawned $0").Output(); err != nil || strings.TrimSpace(string(out)) != "spawned "+sh {
+		fail("exec %s -c: %q %v", sh, out, err)
+	}
+
+	// the can is read-only, the host is not
+	if err := os.WriteFile("/usr/share/cont-new", []byte("y"), 0644); err == nil || !strings.Contains(err.Error(), syscall.EROFS.Error()) {
+		fail("write to the can: %v", err)
+	}
+	if _, err := os.Open("/usr/share/nonexistent"); !os.IsNotExist(err) {
+		fail("open of a missing can file: %v", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		fail("getwd: %v", err)
+	}
+	host := filepath.Join(cwd, "go-host-file")
+	if err := os.WriteFile(host, []byte("host"), 0644); err != nil {
+		fail("write to the host: %v", err)
+	} else if b, err := os.ReadFile(host); err != nil || string(b) != "host" {
+		fail("host read back: %q %v", b, err)
+	}
+	os.Remove(host)
+
+	// identity: the program's own path, links, the working directory inside the can
+	if exe, err := os.Executable(); err != nil || filepath.Base(exe) != "go_paths" {
+		fail("os.Executable: %q %v", exe, err)
+	}
+	if real, err := filepath.EvalSymlinks(sh); err != nil || real != shExe {
+		fail("EvalSymlinks %s: %q %v", sh, real, err)
+	}
+	if err := os.Chdir("/usr/share"); err != nil {
+		fail("chdir /usr/share: %v", err)
+	} else {
+		if wd, err := os.Getwd(); err != nil || wd != "/usr/share" {
+			fail("getwd in the can: %q %v", wd, err)
+		}
+		if _, err := os.Stat("cont-test-marker"); err != nil {
+			fail("relative stat in the can: %v", err)
+		}
+		if _, err := os.Stat("../share/cont-test-marker"); err != nil {
+			fail("relative stat with ..: %v", err)
+		}
+	}
+	os.Chdir(cwd)
+
+	// a signal handler of Go's own, with every path syscall still translated afterwards
+	if _, err := os.Stat("/etc/passwd"); err != nil {
+		fail("stat an identity file: %v", err)
+	}
+	fmt.Printf("go: %d failures\n", fails)
+	if fails > 0 {
+		os.Exit(1)
+	}
+}
