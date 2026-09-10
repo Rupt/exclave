@@ -112,7 +112,8 @@ finding them inconvenient.
 
 Ubuntu 24.04, kernel 7.0, x86-64, glibc 2.39; `gcc-aarch64-linux-gnu`,
 `qemu-system-arm` and `qemu-efi-aarch64` are installed for the arm64
-row, which runs under TCG at a tenth of native speed. From a plain terminal user
+row, which runs under TCG at a tenth of native speed; `golang-go`
+(Go 1.22) for the Go regression, and rustc from rustup for the Rust one. From a plain terminal user
 namespaces are denied by AppArmor; `aa-exec -p unconfined` reproduces
 that label from a session that is otherwise permitted. `gdb -p` on a
 non-descendant is refused by Yama. `perf` cannot read the maps of a
