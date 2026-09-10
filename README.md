@@ -50,7 +50,7 @@ finding.
 ```
 make                      # build/opener, a freestanding ET_DYN; build/opener-old for the nesting test; build/opener-aarch64 with aarch64-linux-gnu-gcc
 test/inputs.sh ~/.cache/cont-inputs   # the development inputs from the network: the four cans of the gate, the examples' inputs; skips what is present
-CONT_CACHE=~/.cache/cont-debs test/gate.sh ~/.cache/cont-inputs/*.can   # the commit gate, 26 s: unit tests, stack budget, the suite on every can in two orders, the oracles, the syscall probe; CONT_CACHE adds dogfood
+CONT_CACHE=~/.cache/cont-debs test/gate.sh ~/.cache/cont-inputs/*.can   # the commit gate, 30 s: unit tests, stack budget, the suite on every can in two orders and once under the plain terminal's label, the oracles, the syscall probe; CONT_CACHE adds dogfood
 tools/fetch-debs.py --out debs gcc-13 libc6-dev         # the step before the cannery: apt, a mirror, this tool, anything
 tools/fetch-apks.py --out apks gcc musl-dev binutils     # the same for Alpine
 tools/fetch-rpms.py --repo URL --out rpms gcc glibc-devel   # and for Fedora, Rocky, CentOS: any repository with repodata/

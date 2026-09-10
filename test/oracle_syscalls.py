@@ -297,8 +297,8 @@ def generate(forms, nr, uid, gid):
         add("fsetxattr", n, f, S("user.probe"), S("v"), I(1), I(0))
         add("fremovexattr", n, f, S("user.probe"))
         add("fstatfs", n, f, B("raw", 256))
-        if not n.startswith("host"):                                   # a zero flag word on a host file is the filesystem's business, and one
-            add("ioctl", n + "/setflags", f, I(FS_IOC_SETFLAGS), B("raw", 8))   # kernel's ext4 answered it EOPNOTSUPP through the opener alone
+        if not n.startswith("host"):                                   # not on a host file: ext4 on 5.10 to 6.1 refuses to clear the extent flag of
+            add("ioctl", n + "/setflags", f, I(FS_IOC_SETFLAGS), B("raw", 8))   # a file recreated moments after its predecessor was deleted (13), which the reset does
     # relative paths from a can-owned working directory
     rel = ["", ".", "..", os.path.basename(forms.file), "../" + os.path.basename(forms.file), "nonexistent", "../../..", "../../../../etc/passwd", "../../home", "./"]
     group[0] = "cwd_in_can"

@@ -1718,6 +1718,7 @@ def main():
     ap.add_argument("-k", default="")
     ap.add_argument("--order", default="given", choices=["given", "reverse", "random"], help="run order; reverse and random expose tests that depend on one another")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--budget", type=float, default=30, help="seconds a test may take before it fails; the slowest takes 2 natively")
     ap.add_argument("-v", action="store_true")
     a = ap.parse_args()
     if a.can:
@@ -1768,6 +1769,8 @@ def main():
         t0 = time.time()
         try:
             note = t(ctx)
+            if time.time() - t0 > a.budget:                    # a test that hangs is caught by run()'s timeouts; one that crawls, here (17)
+                raise AssertionError("took %.1f s, over the budget of %g s" % (time.time() - t0, a.budget))
             print("PASS %-26s %5.1fs %s" % (t.__name__, time.time() - t0, note or ""))
         except AssertionError as e:
             fails += 1

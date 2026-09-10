@@ -1,7 +1,7 @@
 #!/bin/sh
 # test/gate.sh CAN... — the commit gate (PROPOSAL.md 17): the unit tests, the stack budget, and for every can
-# given the suite in the given and a random order, the resolution oracle, the namespace oracle, the syscall probe and the
-# Docker profile; dogfood when CONT_CACHE names a package cache. Every step runs in parallel on a hard-linked copy of
+# given the suite in the given and a random order (and, for the first can, under the plain terminal's AppArmor label), the
+# resolution oracle, the namespace oracle, the syscall probe and the Docker profile; dogfood when CONT_CACHE names a package cache. Every step runs in parallel on a hard-linked copy of
 # its can reopened with build/opener, so the cans given are never written. One line per step; logs under
 # build/gate/. Exit status: the number of failed steps.
 set -u
@@ -41,6 +41,9 @@ for can in "$@"; do
     copy_can "$can" "$copy" || { echo "cannot copy $can" >&2; exit 2; }
     step "suite-$n" python3 "$here/run.py" --can "$copy" --work "$out/w-$n"
     step "suite-$n-random" python3 "$here/run.py" --can "$copy" --work "$out/w-$n-random" --order random
+    if [ "$can" = "$1" ] && command -v aa-exec > /dev/null 2>&1 && aa-exec -p unconfined true 2> /dev/null; then   # the plain terminal's
+        step "suite-$n-plain" aa-exec -p unconfined python3 "$here/run.py" --can "$copy" --work "$out/w-$n-plain"   # AppArmor label (12), once
+    fi
     step "resolve-$n" python3 "$here/oracle_resolve.py" --can "$copy" --work "$out/r-$n"
     step "ns-$n" python3 "$here/oracle_ns.py" --can "$copy" --work "$out/n-$n"
     step "syscalls-$n" python3 "$here/oracle_syscalls.py" --can "$copy" --work "$out/s-$n"

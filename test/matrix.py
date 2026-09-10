@@ -254,7 +254,7 @@ def main():
                 if "relinked" not in out:
                     results.append((name, uname, "cannot reopen the can: " + out[-200:].replace("\n", " | "), "", notes))
                     continue
-            rc, out = vm.ssh("cd m && python3 cont/test/run.py --can $PWD/can --work $PWD/work 2>&1", timeout=2400 * slow)
+            rc, out = vm.ssh("cd m && python3 cont/test/run.py --can $PWD/can --work $PWD/work --budget %d 2>&1" % (60 * slow), timeout=2400 * slow)
             with open(os.path.join(work, name + "-suite.log"), "w") as f:
                 f.write(out)
             suite = [l for l in out.splitlines() if "tests," in l]

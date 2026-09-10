@@ -56,9 +56,10 @@ finding them inconvenient.
   oracles: `test/oracle_ns.py` and `test/oracle_resolve.py`. The commit
   gate is `test/gate.sh CAN...` with the gcc, Alpine, Fedora and clang
   cans (`CONT_CACHE=<cache>` adds dogfood): the unit tests, the stack
-  budget, the suite on every can in two orders, the oracles, the
+  budget, the suite on every can in two orders and, for the first
+  can, under the plain terminal's AppArmor label, the oracles, the
   syscall probe and the Docker profile, every step in parallel on
-  copies, under a minute; it must
+  copies, under a minute, with a 30 s budget per test; it must
   stay at zero failures, and `test/matrix.py --can <can>` (eight
   minutes) before committing opener changes. A test asserts what the
   tree says, never what Debian says: the compiler, the shell and the
