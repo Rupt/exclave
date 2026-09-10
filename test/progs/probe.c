@@ -19,6 +19,8 @@
  *   v:<hex>,<hex>,...    a NULL-terminated vector of strings (execve's argv and envp); v: is the empty vector
  *   x:<hex>:<flags>      a struct xattr_args whose value is the bytes (setxattrat, getxattrat)
  *   I:                   a descriptor from inotify_init1(0), closed after the call
+ *   h:<flags>:<mode>:<resolve>[:<size>[:<tail>]]   a struct open_how (openat2), in a buffer of <size> bytes (24 by
+ *                        default) whose byte 24 is <tail> when given: the extensible-struct rules
  *
  * execve and execveat run in a forked child (ret is the wait status: the exec'd program's exit, or
  * 100 + errno when the exec returned); a descriptor that open, openat or creat returned is closed.
@@ -71,6 +73,11 @@ static void decode(struct arg *a, char *tok)
                 mprotect((char *)a->map + page, (size_t)page, PROT_NONE); char *at = (char *)a->map + page - n; unhex(p, at); a->v = (long)at; break; }
     case 'n': a->v = 0; break;
     case 'I': a->fd = (int)syscall(SYS_inotify_init1, 0); a->open_errno = a->fd < 0 ? errno : 0; a->v = a->fd; break;
+    case 'h': { unsigned long long f = 0, m = 0, rs = 0; long size = 24, tail = -1; sscanf(p, "%llu:%llu:%llu:%ld:%ld", &f, &m, &rs, &size, &tail);
+                if (size < 24) size = 24;
+                a->buf = calloc(1, (size_t)size + 8); unsigned long long *h = (unsigned long long *)a->buf; h[0] = f; h[1] = m; h[2] = rs;
+                if (tail >= 0 && size > 24) a->buf[24] = (char)tail;
+                a->v = (long)a->buf; break; }
     case 'u': { a->maplen = (size_t)page; a->map = mmap(0, a->maplen, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0); a->v = (long)a->map + 16; break; }
     case 'f': { long fl = strtol(p, &p, 10); char path[8192]; int n = unhex(p + 1, path); path[n] = 0;
                 a->fd = open(path, (int)fl); a->open_errno = a->fd < 0 ? errno : 0; a->v = a->fd; break; }
@@ -138,7 +145,7 @@ int main(void)
             errno = 0;
             ret = syscall(nr, args[0].v, args[1].v, args[2].v, args[3].v, args[4].v, args[5].v);
             err = ret < 0 ? errno : 0;
-            if (ret >= 0 && (nr == SYS_open || nr == SYS_openat || nr == SYS_creat)) { close((int)ret); ret = 0; }
+            if (ret >= 0 && (nr == SYS_open || nr == SYS_openat || nr == SYS_creat || nr == SYS_openat2)) { close((int)ret); ret = 0; }
         }
         printf("%s ret=%ld errno=%d", id, ret, err);
         if (opened) printf(" open=%d", opened);

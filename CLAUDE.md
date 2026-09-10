@@ -74,7 +74,8 @@ finding them inconvenient.
   alone leaves the wrappers linked to the old file. A change to the
   cannery's output must keep `test/dogfood.py` passing. `make` also
   builds `build/opener-old`, the previous filter version without the
-  syscalls the current one added, for the nesting regression; a change
+  syscalls the current one added (version 3's `openat2`), for the
+  nesting regression; a change
   to `FILTER_VERSION` or to the trap set moves that build too. A syscall the
   handler re-issues must exist on the oldest kernel of the matrix
   (`renameat`, not `renameat2`, for a plain rename).

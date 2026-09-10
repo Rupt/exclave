@@ -19,9 +19,9 @@ REPO = os.path.dirname(HERE)
 MACHINE = platform.machine()
 
 # path arguments the handler translates (7.4.3)
-TRAP = set(['file_getattr', 'file_setattr', 'getxattrat', 'listxattrat', 'removexattrat', 'setxattrat'] + ['access', 'chdir', 'chmod', 'chown', 'creat', 'execve', 'execveat', 'faccessat', 'faccessat2', 'fanotify_mark', 'fchmodat', 'fchmodat2', 'fchownat', 'futimesat', 'getcwd', 'getxattr', 'inotify_add_watch', 'lchown', 'lgetxattr', 'link', 'linkat', 'listxattr', 'llistxattr', 'lremovexattr', 'lsetxattr', 'lstat', 'mkdir', 'mkdirat', 'mknod', 'mknodat', 'newfstatat', 'open', 'openat', 'readlink', 'readlinkat', 'removexattr', 'rename', 'renameat', 'renameat2', 'rmdir', 'setxattr', 'stat', 'statfs', 'statx', 'symlink', 'symlinkat', 'truncate', 'unlink', 'unlinkat', 'utime', 'utimensat', 'utimes'])
+TRAP = set(['file_getattr', 'file_setattr', 'getxattrat', 'listxattrat', 'removexattrat', 'setxattrat', 'openat2'] + ['access', 'chdir', 'chmod', 'chown', 'creat', 'execve', 'execveat', 'faccessat', 'faccessat2', 'fanotify_mark', 'fchmodat', 'fchmodat2', 'fchownat', 'futimesat', 'getcwd', 'getxattr', 'inotify_add_watch', 'lchown', 'lgetxattr', 'link', 'linkat', 'listxattr', 'llistxattr', 'lremovexattr', 'lsetxattr', 'lstat', 'mkdir', 'mkdirat', 'mknod', 'mknodat', 'newfstatat', 'open', 'openat', 'readlink', 'readlinkat', 'removexattr', 'rename', 'renameat', 'renameat2', 'rmdir', 'setxattr', 'stat', 'statfs', 'statx', 'symlink', 'symlinkat', 'truncate', 'unlink', 'unlinkat', 'utime', 'utimensat', 'utimes'])
 # taken away by the filter: ENOSYS, EPERM, or deferred to milestone 1c (7.4.3)
-DENIED = set(['open_tree_attr'] + ['acct', 'chroot', 'clone3', 'fsconfig', 'fsmount', 'fsopen', 'fspick', 'io_uring_setup', 'mount', 'mount_setattr', 'move_mount', 'name_to_handle_at', 'open_tree', 'openat2', 'pivot_root', 'umount2', 'uselib'])
+DENIED = set(['open_tree_attr'] + ['acct', 'chroot', 'clone3', 'fsconfig', 'fsmount', 'fsopen', 'fspick', 'io_uring_setup', 'mount', 'mount_setattr', 'move_mount', 'name_to_handle_at', 'open_tree', 'pivot_root', 'umount2', 'uselib'])
 # a path inside a struct or a name that is not a filesystem path: not translated; sockaddr_un paths reach
 # the kernel untranslated, which the visibility rule makes harmless for /tmp, /run and /var/run and which
 # section 13 lists for can-owned paths

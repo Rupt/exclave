@@ -42,13 +42,26 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
     int hops = 0;
     size_t pl = xstrlen(path);
     int trailing = pl > 1 && path[pl - 1] == '/';
-    if (path[0] == '/') scpy(rest, path, PATH_MAX);
-    else {
+    /* openat2's resolve flags (7.4.3): a scoped walk (RESOLVE_IN_ROOT, RESOLVE_BENEATH) cannot leave S->v2, the
+     * descriptor's directory; NO_SYMLINKS and the scoped flags refuse magic links; NO_XDEV refuses to cross between
+     * the can's domain and the host's, which is where the kernel under a bind mount changes mounts */
+    unsigned rf = S->resolve;
+    const char *base = (rf & (RESOLVE_IN_ROOT | RESOLVE_BENEATH)) ? S->v2 : "";
+    if (base[0] == '/' && base[1] == 0) base = "";
+    int nomagic = rf & (RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH | RESOLVE_IN_ROOT);
+    int dom = 1;
+    if (path[0] == '/') {
+        if (rf & RESOLVE_BENEATH) return -EXDEV;               /* nd_jump_root: an absolute path leaves the scope */
+        scpy(rest, path, PATH_MAX); scpy(cur, base, PATH_MAX);
+        if (base[0]) dom = is_can_owned(base);
+    } else {
         int r = (dfd == AT_FDCWD) ? cwd_virtual(rest) : fd_virtual(dfd, rest);
         if (r < 0) return r;
+        if (rf & RESOLVE_NO_XDEV) dom = rest[1] ? is_can_owned(rest) : 1;
         scat(rest, "/", PATH_MAX); scat(rest, path, PATH_MAX);
+        cur[0] = 0;
     }
-    cur[0] = 0; char *rp = rest;
+    char *rp = rest;
     for (;;) {
         while (*rp == '/') rp++;
         if (!*rp) break;
@@ -57,7 +70,13 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         if (cl > NAME_MAX) return -ENAMETOOLONG;
         char *comp = S->b2; xmemcpy(comp, rp, cl); comp[cl] = 0; rp = e;
         if (comp[0] == '.' && comp[1] == 0) continue;
-        if (comp[0] == '.' && comp[1] == '.' && comp[2] == 0) { char *s = xstrrchr(cur, '/'); if (s) *s = 0; else cur[0] = 0; continue; }
+        if (comp[0] == '.' && comp[1] == '.' && comp[2] == 0) {
+            if (base[0] ? xstrcmp(cur, base) == 0 : cur[0] == 0) {   /* at the scope's root: stays there in root, leaves it beneath */
+                if (rf & RESOLVE_BENEATH) return -EXDEV;
+                if (rf & RESOLVE_IN_ROOT) continue;
+            }
+            char *s = xstrrchr(cur, '/'); if (s) *s = 0; else cur[0] = 0; continue;
+        }
         size_t curl = xstrlen(cur); if (curl + 1 + cl + 1 >= PATH_MAX) return -ENAMETOOLONG;
         cur[curl] = '/'; xmemcpy(cur + curl + 1, comp, cl + 1);
         /* the tree's real root directory is an alias of /: a path spelt through <can>/root/ is the same path in
@@ -65,16 +84,26 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         if (C.rootlen && xstrcmp(cur, C.root) == 0) { cur[0] = 0; while (*rp == '/') rp++; continue; }
         while (*rp == '/') rp++;
         int last = (*rp == 0);
+        if (rf & RESOLVE_NO_XDEV) {                            /* the mount changes where the domain does; an identity symlink that is
+                                                                * not followed is the tree's own entry, and its host target is not reached */
+            int d = is_can_owned(cur);
+            if (d != dom && !(last && !follow_last && !trailing && vis_is_identity_file(cur) && vis_readlink_identity(cur, tmp) == 1)) return -EXDEV;
+            dom = d;
+        }
         if (last && !follow_last && !trailing) break;          /* a trailing slash means "a directory": the kernel follows */
         /* the process's own exe on the loader path names the program, not the opener (7.6) */
         if ((C.loader_mode || xstrcmp(C.exe, C.program) != 0) && is_self_exe(cur, S->pid)) {   /* loader path, or a script whose exe is its interpreter */
+            if (nomagic) return -ELOOP;                        /* a magic link, refused by the resolve flags */
             if (++hops > 40) return -ELOOP;
             scpy(tmp, C.exe, PATH_MAX); scat(tmp, "/", PATH_MAX); scat(tmp, rp, PATH_MAX);
             scpy(rest, tmp, PATH_MAX); rp = rest; cur[0] = 0; continue;
         }
         /* classify the component: a directory, a symlink (text in tmp), absent, or something else */
         int kind, err = -ENOENT;
-        if (vis_is_identity_file(cur)) kind = CK_FILE;         /* 8.4: resolved on the host at startup; its host symlinks are not ours to follow */
+        if (vis_is_identity_file(cur)) {                       /* 8.4: resolved on the host at startup; its host symlinks are not ours to follow */
+            if ((rf & RESOLVE_NO_SYMLINKS) && vis_readlink_identity(cur, tmp) == 1) return -ELOOP;   /* it is a symlink where the walk sees it */
+            kind = CK_FILE;
+        }
         else if (!last && vis_leads_to_host_file(cur)) kind = CK_DIR;   /* on the way to an identity file: a directory (8.4) */
         else if (is_can_owned(cur)) {                          /* 7.4.4: can-owned components are remembered for the process's life */
             to_real_exec(cur, real);
@@ -92,6 +121,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
                 else {
                     tmp[n] = 0; kind = CK_LINK;
                     if (xstrncmp(cur, "/proc/", 6) == 0) {
+                        if (nomagic && xstrchr(cur + 6, '/')) return -ELOOP;   /* a link below /proc/<pid>/ is a magic link; one at /proc/ is not */
                         /* a procfs magic link to something that has no path (a pipe, a socket, an unlinked
                          * file) is reachable only through the link itself: the walk ends here (review F3-11) */
                         if ((tmp[0] != '/' && xstrchr(tmp, ':') && xstrchr(tmp, '[')) || (n > 10 && xstrcmp(tmp + n - 10, " (deleted)") == 0)) {   /* pipe:[n], socket:[n], anon_inode:[x], a deleted file */
@@ -111,11 +141,15 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
             if (!last) { if (kind == CK_NONE) return err; if (kind != CK_DIR) return -ENOTDIR; }
             continue;
         }
+        if (rf & RESOLVE_NO_SYMLINKS) return -ELOOP;
         if (++hops > 40) return -ELOOP;
         size_t tl = xstrlen(tmp), rl = xstrlen(rp);
         if (tl + 1 + rl + 1 >= PATH_MAX) return -ENAMETOOLONG;
         memmove(rest + tl + 1, rp, rl + 1); xmemcpy(rest, tmp, tl); rest[tl] = '/'; rp = rest;
-        if (tmp[0] == '/') cur[0] = 0; else { char *s = xstrrchr(cur, '/'); if (s) *s = 0; else cur[0] = 0; }
+        if (tmp[0] == '/') {
+            if (rf & RESOLVE_BENEATH) return -EXDEV;           /* an absolute link target leaves the scope */
+            scpy(cur, base, PATH_MAX);                         /* the scope's root is / for a scoped walk in root */
+        } else { char *s = xstrrchr(cur, '/'); if (s) *s = 0; else cur[0] = 0; }
     }
     if (!cur[0]) { cur[0] = '/'; cur[1] = 0; }
     scpy(out, cur, PATH_MAX);

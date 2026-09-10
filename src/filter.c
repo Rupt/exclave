@@ -59,9 +59,9 @@ const int path_syscalls[] = {
     NR_removexattr, NR_lremovexattr, NR_utimes, NR_inotify_add_watch, NR_openat, NR_mkdirat, NR_mknodat,
     NR_fchownat, NR_futimesat, NR_newfstatat, NR_unlinkat, NR_renameat, NR_linkat, NR_symlinkat, NR_readlinkat,
     NR_fchmodat, NR_faccessat, NR_utimensat, NR_renameat2, NR_execveat, NR_statx, NR_faccessat2, NR_fchmodat2,
-    NR_fanotify_mark, NR_setxattrat, NR_getxattrat, NR_listxattrat, NR_removexattrat,
+    NR_fanotify_mark, NR_setxattrat, NR_getxattrat, NR_listxattrat, NR_removexattrat, NR_file_getattr, NR_file_setattr,
 #ifndef CONT_TEST_OLD
-    NR_file_getattr, NR_file_setattr,                     /* version 2's additions: absent from build/opener-old's filter and handler alike */
+    NR_openat2,                                           /* version 3's addition: absent from build/opener-old's filter and handler alike */
 #endif
 };
 const int n_path_syscalls = sizeof path_syscalls / sizeof path_syscalls[0];
@@ -71,7 +71,7 @@ static const int fd_syscalls[] = { NR_fchmod, NR_fchown, NR_fsetxattr, NR_fremov
 /* signal-mask syscalls the handler scrubs (7.5.2) */
 static const int mask_syscalls[] = { NR_rt_sigprocmask, NR_rt_sigsuspend };
 /* closed rather than emulated in milestone 1a: each would bypass or confuse translation */
-static const int enosys_syscalls[] = { NR_clone3, NR_io_uring_setup, NR_openat2, NR_name_to_handle_at, NR_uselib,
+static const int enosys_syscalls[] = { NR_clone3, NR_io_uring_setup, NR_name_to_handle_at, NR_uselib,
     428 /* open_tree */, 429 /* move_mount */, 430 /* fsopen */, 431 /* fsconfig */, 432 /* fsmount */, 433 /* fspick */, NR_mount_setattr,
     NR_open_tree_attr };
 static const int eperm_syscalls[] = { NR_chroot, NR_acct, NR_pivot_root, NR_mount, NR_umount2 };
@@ -128,6 +128,9 @@ static void build(void)
     ret(SECCOMP_RET_ERRNO | ENOSYS);
     emit(LD_ABS, 0, 0, OFF_NR);
     for (unsigned i = 0; i < sizeof enosys_syscalls / sizeof enosys_syscalls[0]; i++) on_nr(enosys_syscalls[i], SECCOMP_RET_ERRNO | ENOSYS);
+#ifdef CONT_TEST_OLD
+    on_nr(NR_openat2, SECCOMP_RET_ERRNO | ENOSYS);            /* version 2 refused it (7.4.3) */
+#endif
     for (unsigned i = 0; i < sizeof eperm_syscalls / sizeof eperm_syscalls[0]; i++) on_nr(eperm_syscalls[i], SECCOMP_RET_ERRNO | EPERM);
     /* a syscall newer than this filter knows is trapped, and the handler answers ENOSYS (7.4.2, review O3-5):
      * a future path-taking syscall must not reach the host untranslated */

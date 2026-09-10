@@ -141,7 +141,7 @@ static void real_nofollow(struct scratch *S, int nofollow);
 static int dfd_virtual(int fd, char *out);
 
 /* ---------- open ---------- */
-static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long mode)
+static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long mode, int nr)
 {
     int follow = !(flags & O_NOFOLLOW) && !((flags & O_CREAT) && (flags & O_EXCL));
     long r = resolve(S, a, pi, di, follow, 0); if (r < 0) return r;
@@ -166,7 +166,54 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     }
     real_nofollow(S, !follow);                               /* O_PATH|O_NOFOLLOW on an identity symlink opens the host's link itself */
     if (!follow) flags |= O_NOFOLLOW;
+    if (nr == NR_openat2) {                                  /* re-issued as itself, so a kernel without it answers ENOSYS as it would natively */
+        unsigned long *how = (unsigned long *)S->b2; how[0] = (unsigned long)flags; how[1] = (unsigned long)mode; how[2] = 0;
+        return RE5(NR_openat2, AT_FDCWD, S->real, how, 24, 0);
+    }
     return RE5(NR_openat, AT_FDCWD, S->real, flags, mode, 0);
+}
+
+/* openat2 (7.4.3): the kernel's checks on struct open_how first, in its order (build_open_flags), then the
+ * same open as openat with the resolve flags honoured by the walk (canon.c) and dropped from the re-issue;
+ * RESOLVE_CACHED is dropped, which openat2(2) permits, since a resolved path is opened without it */
+static long do_openat2(struct scratch *S, long *a)
+{
+    unsigned long how[3]; long size = a[3], r;
+    if (size < 24) return -EINVAL;
+    if (size > 24) {                                         /* an extended struct: the tail must be zero (copy_struct_from_user) */
+        if (size > 4096) return -E2BIG;
+        if (copy_in(S->extra, (const void *)a[2], (size_t)size) != size) return -EFAULT;
+        for (long i = 24; i < size; i++) if (S->extra[i]) return -E2BIG;
+        xmemcpy(how, S->extra, 24);
+    } else if ((r = copy_exact(how, (const void *)a[2], 24))) return r;
+    unsigned long flags = how[0], mode = how[1], rf = how[2];
+    if (flags & ~VALID_OPEN_FLAGS) return -EINVAL;
+    if (rf & ~RESOLVE_ALL) return -EINVAL;
+    if ((rf & RESOLVE_BENEATH) && (rf & RESOLVE_IN_ROOT)) return -EINVAL;   /* the scoping flags are exclusive */
+    int creating = (flags & O_CREAT) || (flags & O_TMPFILE) == O_TMPFILE;
+    if (creating ? (mode & ~07777UL) != 0 : mode != 0) return -EINVAL;
+    if ((flags & (O_DIRECTORY | O_CREAT)) == (O_DIRECTORY | O_CREAT)) return -EINVAL;
+    if (flags & (O_TMPFILE & ~O_DIRECTORY)) {
+        if ((flags & O_TMPFILE) != O_TMPFILE) return -EINVAL;
+        if ((flags & O_ACCMODE) == O_RDONLY) return -EINVAL;
+    }
+    if ((flags & O_PATH) && (flags & ~O_PATH_FLAGS)) return -EINVAL;
+    if (rf & (RESOLVE_IN_ROOT | RESOLVE_BENEATH)) {         /* the scope: the descriptor's directory, a directory it must be */
+        int dfd = (int)a[0];
+        if ((r = copy_str_in(S->b1, (const char *)a[1])) < 0) return r;   /* getname first: EFAULT, ENAMETOOLONG */
+        if (S->b1[0] == 0) return -ENOENT;                   /* an empty path, before the descriptor is looked at */
+        if ((rf & RESOLVE_BENEATH) && S->b1[0] == '/') return -EXDEV;   /* nd_jump_root: an absolute path, likewise */
+        if (dfd != AT_FDCWD) {
+            struct kstat *st = (struct kstat *)S->b2;
+            if ((r = SC2(NR_fstat, dfd, st)) < 0) return r;
+            if ((st->st_mode & S_IFMT) != S_IFDIR && (rf & RESOLVE_IN_ROOT)) return -ENOTDIR;
+        }
+        if ((r = dfd_virtual(dfd, S->v2)) < 0) return r;
+    }
+    S->resolve = (unsigned)rf;
+    r = do_open(S, a, 1, 0, (long)flags, (long)mode, NR_openat2);
+    S->resolve = 0;
+    return r;
 }
 
 /* ---------- exec (7.6): scripts and host programs run inside the can's world ---------- */
@@ -425,9 +472,12 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
 {
     long r;
     switch (nr) {
-    case NR_open:   return do_open(S, a, 0, -1, a[1], a[2]);
-    case NR_openat: return do_open(S, a, 1, 0, a[2], a[3]);
-    case NR_creat:  return do_open(S, a, 0, -1, O_CREAT | O_WRONLY | O_TRUNC, a[1]);
+    case NR_open:   return do_open(S, a, 0, -1, a[1], a[2], NR_openat);
+    case NR_openat: return do_open(S, a, 1, 0, a[2], a[3], NR_openat);
+#ifndef CONT_TEST_OLD                                        /* build/opener-old: the previous version, which does not know it (17.4) */
+    case NR_openat2: return do_openat2(S, a);
+#endif
+    case NR_creat:  return do_open(S, a, 0, -1, O_CREAT | O_WRONLY | O_TRUNC, a[1], NR_openat);
     case NR_stat: case NR_lstat:
         if ((r = resolve(S, a, 0, -1, nr == NR_stat, 0)) < 0) return r;
         real_nofollow(S, nr == NR_lstat);
@@ -586,14 +636,12 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if (r == 1) return RE6(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
         to_real(S->v, S->real, S->tmp);
         return RE6(nr, AT_FDCWD, S->real, a[2] | AT_SYMLINK_NOFOLLOW, a[3], a[4], a[5]);
-#ifndef CONT_TEST_OLD                                        /* build/opener-old: the previous version, which does not know these (17.4) */
     case NR_file_getattr: case NR_file_setattr:              /* (dfd, path, attr, size, at_flags): the chattr ioctls as syscalls */
         if ((r = resolve(S, a, 1, 0, !(a[4] & AT_SYMLINK_NOFOLLOW), (a[4] & AT_EMPTY_PATH) != 0)) < 0) return r;
         if (r == 1) return (nr == NR_file_setattr && fd_can(S, (int)a[0])) ? -EROFS : RE5(nr, a[0], a[1], a[2], a[3], a[4]);
         if (nr == NR_file_setattr && (r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);
         return RE5(nr, AT_FDCWD, S->real, a[2], a[3], a[4] | AT_SYMLINK_NOFOLLOW);
-#endif
     case NR_setxattr: case NR_lsetxattr: case NR_removexattr: case NR_lremovexattr:
         if ((r = resolve(S, a, 0, -1, nr == NR_setxattr || nr == NR_removexattr, 0)) < 0) return r;
         if ((r = ro_attr(S, S->v))) return r;
@@ -644,6 +692,9 @@ static const char *sysname(int nr)
 {
     switch (nr) {
     case NR_open: case NR_openat: case NR_creat: return "open";
+#ifndef CONT_TEST_OLD
+    case NR_openat2: return "open";
+#endif
     case NR_stat: case NR_lstat: case NR_newfstatat: case NR_statx: return "stat";
     case NR_access: case NR_faccessat: case NR_faccessat2: return "access";
     case NR_readlink: case NR_readlinkat: return "readlink";
@@ -685,6 +736,7 @@ static void on_sigsys(int sig, void *info, void *uc)
     if (depth > 64) die("signal handlers nested too deep (or left behind by longjmp on another stack)", 0, 0);
     long a[6] = { g[REG_ARG0], g[REG_ARG1], g[REG_ARG2], g[REG_ARG3], g[REG_ARG4], g[REG_ARG5] };
     struct scratch *S = scratch_get(pid, tid, frame);
+    if (S) S->resolve = 0;
     cur_pid = pid;
     if (S) S->v[0] = 0;
     long r = S ? dispatch(S, nr, a, uc, &S) : -ENOMEM;

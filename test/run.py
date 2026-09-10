@@ -244,7 +244,7 @@ def compile_progs(ctx):
     shutil.copytree(os.path.join(HERE, "progs"), src)
     os.makedirs(ctx.progs, exist_ok=True)
     gcc = wrapper(ctx, GCC)
-    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress"):
+    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2"):
         rc, out, err = run([gcc, "-O1", "-g", "-pthread", "-o", os.path.join(ctx.progs, name), os.path.join(src, name + ".c"), "-lm", "-ldl"], cwd=ctx.work, env=ctx.env)
         if rc and name == "execstack" and "not allowed here" in err:      # nested functions are gcc's; clang has none
             continue
@@ -656,23 +656,23 @@ def cross_can_distinct_openers(ctx):
 def nested_older_opener(ctx):
     """7.4.2: an older opener nested inside a newer one reuses the newer filter and answers ENOSYS for a trap
     it does not know, never re-issuing it to the host. build/opener-old is the current opener built with the
-    previous filter version and without file_getattr in its handler (make builds it beside build/opener)."""
+    previous filter version and without openat2 in its filter or handler (make builds it beside build/opener)."""
     old = os.path.join(os.path.dirname(ctx.opener_src), "opener-old")
     if not os.path.exists(old):
         return "no build/opener-old"
-    src = os.path.join(ctx.work, "getattr.c")
+    src = os.path.join(ctx.work, "o2.c")
     with open(src, "w") as f:
         f.write('#include <stdio.h>\n#include <errno.h>\n#include <string.h>\n#include <unistd.h>\n#include <fcntl.h>\n#include <sys/syscall.h>\n'
-                'int main(void) { char a[24]; long r = syscall(468, AT_FDCWD, "/etc/passwd", a, sizeof a, 0);\n'
-                ' printf("%ld %d\\n", r, r < 0 ? errno : 0); return 0; }\n')
-    prog = os.path.join(ctx.work, "getattr")
+                'int main(void) { unsigned long long h[3] = { 0, 0, 0 }; long r = syscall(437, AT_FDCWD, "/etc/passwd", h, 24);\n'
+                ' printf("%d %d\\n", r < 0 ? -1 : 0, r < 0 ? errno : 0); return 0; }\n')
+    prog = os.path.join(ctx.work, "o2")
     rc, out, err = run([wrapper(ctx, GCC), "-O0", "-o", prog, src], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "compile: " + err)
     import ctypes                                                          # the kernel's own answer, asked from here
     libc = ctypes.CDLL(None, use_errno=True)
     buf = ctypes.create_string_buffer(24)
-    r = libc.syscall(468, -100, b"/etc/passwd", buf, 24, 0)
-    kernel = "%d %d\n" % (r, ctypes.get_errno() if r < 0 else 0)
+    r = libc.syscall(437, -100, b"/etc/passwd", buf, 24)
+    kernel = "%d %d\n" % (-1 if r < 0 else 0, ctypes.get_errno() if r < 0 else 0)
     rc, outer, err = run([wrapper(ctx, "sh"), "-c", prog], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and outer == kernel, "inside the current opener the kernel's answer comes back: kernel %r can %r %r" % (kernel, outer, err))
     can2 = os.path.join(ctx.work, "old-can")
@@ -1640,6 +1640,20 @@ def rust(ctx):
     rc, out, err = run([rustc, "-O", "-o", exe, os.path.join(ctx.work, "src", "rs.rs")], cwd=ctx.work)
     expect(rc == 0, "rustc: " + err[-600:])
     rc, out, err = inside(ctx, exe)
+    expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
+def openat2_resolve(ctx):
+    """7.4.3: openat2 in the can's world. RESOLVE_IN_ROOT and RESOLVE_BENEATH scope the walk to the descriptor's
+    directory, RESOLVE_NO_SYMLINKS refuses the tree's own links as a bind mount would, magic links are refused by
+    the scoped flags, RESOLVE_NO_XDEV refuses the can-to-host crossing, the read-only rule holds, and the struct's
+    own rules answer EINVAL before any lookup. Skips on a kernel without openat2."""
+    d = os.path.join(ctx.work, "o2host")
+    os.makedirs(d, exist_ok=True)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "openat2"), [d])
+    if rc == 3:
+        return "no openat2 on this kernel (5.6 and later)"
     expect(rc == 0 and "FAIL" not in out, out + err)
 
 

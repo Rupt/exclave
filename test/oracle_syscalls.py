@@ -35,6 +35,7 @@ O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_EXCL, O_TRUNC = 0, 1, 2, os.O_CREAT, os.O
 O_DIRECTORY, O_NOFOLLOW, O_PATH, O_TMPFILE = os.O_DIRECTORY, os.O_NOFOLLOW, os.O_PATH, os.O_TMPFILE   # this machine's bits
 AT_FDCWD, AT_SYMLINK_NOFOLLOW, AT_REMOVEDIR, AT_SYMLINK_FOLLOW, AT_EMPTY_PATH, AT_EACCESS = -100, 0x100, 0x200, 0x400, 0x1000, 0x200
 RENAME_NOREPLACE, RENAME_EXCHANGE, RENAME_WHITEOUT = 1, 2, 4
+RESOLVE_NO_XDEV, RESOLVE_NO_MAGICLINKS, RESOLVE_NO_SYMLINKS, RESOLVE_BENEATH, RESOLVE_IN_ROOT, RESOLVE_CACHED = 1, 2, 4, 8, 0x10, 0x20
 UTIME_NOW, UTIME_OMIT = (1 << 30) - 1, (1 << 30) - 2
 FS_IOC_SETFLAGS = 0x40086602 if MACHINE == "x86_64" else 0x40086602
 IN_MODIFY = 2
@@ -69,6 +70,10 @@ def V(*strings):                  # a string vector
 
 def X(value, flags=0):            # struct xattr_args
     return "x:%s:%d" % (hx(value), flags)
+
+
+def H(flags, mode=0, resolve=0, size=24, tail=None):   # struct open_how
+    return "h:%d:%d:%d:%d%s" % (flags, mode, resolve, size, ":%d" % tail if tail is not None else "")
 
 
 def decode(tok):
@@ -264,6 +269,29 @@ def generate(forms, nr, uid, gid):
         add("removexattrat", n, d, p, I(0), S("user.probe"))
         add("file_getattr", n, d, p, B("raw", 32), I(32), I(0))
         add("file_setattr", n, d, p, B("raw", 32), I(32), I(0))
+    # openat2: the resolve flags over every descriptor-relative form, and the struct's own rules
+    how_flags = [("rd", O_RDONLY), ("wr", O_WRONLY), ("wr_creat", O_WRONLY | O_CREAT), ("path", O_PATH), ("path_nofollow", O_PATH | O_NOFOLLOW),
+                 ("rd_dir", O_RDONLY | O_DIRECTORY), ("tmpfile", O_RDWR | O_TMPFILE)]
+    resolves = [("plain", 0), ("no_xdev", RESOLVE_NO_XDEV), ("no_magic", RESOLVE_NO_MAGICLINKS), ("no_symlinks", RESOLVE_NO_SYMLINKS),
+                ("beneath", RESOLVE_BENEATH), ("in_root", RESOLVE_IN_ROOT), ("cached", RESOLVE_CACHED)]
+    for n, d, p in forms.at:
+        for fn, fl in how_flags:
+            for rn, rs in resolves:
+                add("openat2", "%s/%s/%s" % (n, fn, rn), d, p, H(fl, 0o644 if fl & O_CREAT else 0, rs), I(24))
+    for n, d, p in forms.at_few:
+        add("openat2", n + "/both_scopes", d, p, H(O_RDONLY, 0, RESOLVE_BENEATH | RESOLVE_IN_ROOT), I(24))
+        add("openat2", n + "/bad_resolve", d, p, H(O_RDONLY, 0, 0x100), I(24))
+        add("openat2", n + "/bad_flag", d, p, H(O_RDONLY | (1 << 25)), I(24))
+        add("openat2", n + "/mode_without_creat", d, p, H(O_RDONLY, 0o644), I(24))
+        add("openat2", n + "/creat_bad_mode", d, p, H(O_WRONLY | O_CREAT, 0o10644), I(24))
+        add("openat2", n + "/path_rdwr", d, p, H(O_PATH | O_RDWR), I(24))
+        add("openat2", n + "/dir_creat", d, p, H(O_DIRECTORY | O_CREAT, 0o644), I(24))
+        add("openat2", n + "/tmpfile_rd", d, p, H(O_RDONLY | O_TMPFILE), I(24))
+        add("openat2", n + "/short_struct", d, p, H(O_RDONLY, size=16), I(16))
+        add("openat2", n + "/long_struct_zero", d, p, H(O_RDONLY, size=32), I(32))
+        add("openat2", n + "/long_struct_tail", d, p, H(O_RDONLY, size=32, tail=1), I(32))
+        add("openat2", n + "/null_how", d, p, "n:", I(24))
+        add("openat2", n + "/huge_struct", d, p, H(O_RDONLY, size=24), I(8192))
     add("utimensat", "fd_null_path", F(O_RDONLY, forms.file), "n:", "t:1000,0,2000,0", I(0))
     add("utimensat", "hostfd_null_path", F(O_WRONLY, forms.host + "/hfile"), "n:", "t:1000,0,2000,0", I(0))
     add("newfstatat", "fd_null_empty", F(O_RDONLY, forms.file), "n:", B("stat", 256), I(AT_EMPTY_PATH))
@@ -404,6 +432,14 @@ EXPECTED = [
      "O_CREAT|O_EXCL on '.', '..' or '/': EISDIR before the lookup rework of 5.8, EEXIST since; the handler answers as the newer kernels do"),
     ("linkat", lambda l, b, o: KERNEL < (6, 10) and "empty" in l and errnos(b, o)[0] == 2,
      "linkat with AT_EMPTY_PATH needed CAP_DAC_READ_SEARCH (ENOENT without it) until 6.10 allowed it for files with a link; the handler answers as the newer kernels do"),
+    ("openat2", lambda l, b, o: "cached" in l and errnos(b, o)[0] == 11,
+     "RESOLVE_CACHED: the kernel answers EAGAIN where the lookup would need I/O, and bwrap's fresh mount namespace has a cold cache; the handler drops the flag, as openat2(2) permits, and resolves"),
+    ("openat2", lambda l, b, o: KERNEL < (6, 3) and "dir_creat" in l and errnos(b, o)[1] == 22,
+     "O_DIRECTORY|O_CREAT is EINVAL since 6.3 (open.c); this kernel opens or creates instead; the handler answers as the newer kernels do"),
+    ("openat2", lambda l, b, o: KERNEL < (5, 6) and "no_xdev" in l and "creat" in l and errnos(b, o)[0] == 18,
+     "RHEL 8's 4.18 backport of openat2 answers EXDEV for a create through a symlink under RESOLVE_NO_XDEV; 5.6 and later resolve it"),
+    ("openat2", lambda l, b, o: KERNEL < (5, 12) and "cached" in l and errnos(b, o)[0] == 22,
+     "RESOLVE_CACHED is 5.12+: EINVAL before; the handler drops it, as openat2(2) permits, and answers from the walk"),
     (None, lambda l, b, o: "whiteout" in l and errnos(b, o)[0] == 1,
      "RENAME_WHITEOUT: this kernel checks a capability in the initial user namespace before any lookup (EPERM); later kernels check the caller's, which bwrap's namespace grants"),
     (None, lambda l, b, o: "resolv" in forms_in(l) and errnos(b, o) == (61, 95),

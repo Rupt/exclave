@@ -9,7 +9,7 @@
 
 #define OPENER_VERSION "0.1"
 #ifndef FILTER_VERSION
-#define FILTER_VERSION 2                 /* 7.4.2: versioned reuse; bumped whenever the trap set grows (2: the *xattrat and file_*attr syscalls) */
+#define FILTER_VERSION 3                 /* 7.4.2: versioned reuse; bumped whenever the trap set grows (2: the *xattrat and file_*attr syscalls; 3: openat2) */
 #endif
 #define PATH_MAX 4096
 #define NAME_MAX 255
@@ -43,6 +43,16 @@
 #define O_APPEND   02000
 #define O_NONBLOCK 04000
 #define O_TMPFILE  (020000000 | O_DIRECTORY)
+#define VALID_OPEN_FLAGS 0x7fffc3UL         /* every O_ flag the kernel accepts, the same bits on x86-64 and aarch64 (fs/open.c) */
+#define O_PATH_FLAGS (O_PATH | O_CLOEXEC | O_NOFOLLOW | O_DIRECTORY)
+/* openat2's resolve flags (7.4.3) */
+#define RESOLVE_NO_XDEV       0x01
+#define RESOLVE_NO_MAGICLINKS 0x02
+#define RESOLVE_NO_SYMLINKS   0x04
+#define RESOLVE_BENEATH       0x08
+#define RESOLVE_IN_ROOT       0x10
+#define RESOLVE_CACHED        0x20
+#define RESOLVE_ALL           0x3f
 #define AT_EACCESS 0x200
 #define AT_SYMLINK_FOLLOW 0x400
 #define AT_STATX_SYNC_TYPE 0x6000
@@ -201,9 +211,10 @@ int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t
 /* ---------- scratch (scratch.c) ---------- */
 struct scratch {
     char b1[PATH_MAX], b2[PATH_MAX], rest[PATH_MAX], cur[PATH_MAX], real[PATH_MAX], tmp[PATH_MAX], v[PATH_MAX];
-    char v2[PATH_MAX];             /* the first path of a two-path syscall; canon never touches it */
+    char v2[PATH_MAX];             /* the first path of a two-path syscall, or the directory a scoped openat2 walk may not leave; canon never writes it */
     char extra[8192];              /* argv vectors, masks, headers */
     pid_t pid, tid;                /* the owner, looked up once per trap */
+    unsigned resolve;              /* openat2's resolve flags for the walk (7.4.3); 0 for every other syscall */
 };
 struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame);
 void scratch_put(struct scratch *s);
