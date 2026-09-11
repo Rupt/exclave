@@ -227,9 +227,7 @@ struct scratch {
 };
 struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame);
 void scratch_put(struct scratch *s);
-void scratch_release_all_mine(void);   /* before execve */
 int  nest_enter(pid_t pid, pid_t tid, unsigned long frame); /* returns depth, 1 for outermost; releases frames left by longjmp */
-void nest_leave(void);
 
 /* ---------- visibility (vis.c) ---------- */
 void vis_init(void);

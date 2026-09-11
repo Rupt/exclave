@@ -251,7 +251,7 @@ def compile_progs(ctx):
     shutil.copytree(os.path.join(HERE, "progs"), src)
     os.makedirs(ctx.progs, exist_ok=True)
     gcc = wrapper(ctx, GCC)
-    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2", "unix_socket", "openat2_xdev", "fexec", "exec_identity", "path_length"):
+    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2", "unix_socket", "openat2_xdev", "fexec", "exec_identity", "path_length", "spawn_threads"):
         rc, out, err = run([gcc, "-O1", "-g", "-pthread", "-o", os.path.join(ctx.progs, name), os.path.join(src, name + ".c"), "-lm", "-ldl"], cwd=ctx.work, env=ctx.env)
         if rc and name == "execstack" and "not allowed here" in err:      # nested functions are gcc's; clang has none
             continue
@@ -1799,6 +1799,21 @@ def path_length(ctx):
     want = ["1: stat=ok open=ok", "2: stat=ENAMETOOLONG open=ENAMETOOLONG", "3: stat=ENAMETOOLONG open=ENAMETOOLONG", "4: stat=ENAMETOOLONG open=ENAMETOOLONG", "5: stat=ok open=ok"]
     expect(out.splitlines() == want, "the parent fits, the directory at the limit and its file are ENAMETOOLONG, a relative path past PATH_MAX from a deep working directory is ENAMETOOLONG (13), a short one is fine: %r" % out)
     shutil.rmtree(copy, ignore_errors=True)
+
+
+@test
+def spawn_threads(ctx):
+    """7.5.4: the handler under concurrency. Threads trap throughout posix_spawns from another thread, so a vfork child's
+    handler runs beside the parent's and every copy from program memory names the trap's own pid, never a process-wide one
+    the child overwrote; and a forked child whose traps nest, a timer's handler trapping inside a trapped stat, while every
+    chunk the pool had is held by threads blocked in the parent, so the child's pool grows under nesting, which a lock
+    left held by the fork would have hung (revision 16)."""
+    d = os.path.join(ctx.work, "spawnhost")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "spawn_threads"), [d, ctx.vbin("true")], timeout=120)
+    expect(rc == 0 and "0 failures" in out and "hung" not in out, "spawn_threads: rc=%d %r %r" % (rc, out, err))
+    return out.strip().splitlines()[-1]
 
 
 @test

@@ -2,21 +2,21 @@
  *
  * The handler may use only about 2 KB of the program's stack, so its path
  * buffers live in chunks obtained with mmap on demand. A chunk records its
- * owner (pid, tid); it is released explicitly when the handler returns and
- * before any execve. When nothing is free, chunks whose owner no longer
- * exists are reclaimed by liveness, never by stack position.
+ * owner (pid, tid); it is released explicitly when the handler returns.
+ * When nothing is free, chunks whose owner no longer exists are reclaimed
+ * by liveness, never by stack position. Nothing here takes a lock: a
+ * handler that interrupts a handler, or a fork while another thread is in
+ * one, must never find a lock held by a frame that cannot release it.
  */
 #include "common.h"
 
 struct chunk { struct scratch s; pid_t pid, tid; unsigned long frame; volatile int busy; volatile int ready; };   /* ready: the owner fields are those of the holder of busy */
 
 #define MAX_CHUNKS 4096
-static struct chunk *chunks[MAX_CHUNKS];
+static struct chunk *volatile chunks[MAX_CHUNKS];   /* a slot is reserved by advancing nchunks and filled once its chunk is mapped and claimed */
 static volatile int nchunks;
-static volatile int growlock;
 
-static void lock(volatile int *l) { while (__sync_lock_test_and_set(l, 1)) { for (volatile int i = 0; i < 64; i++) ; } }
-static void unlock(volatile int *l) { __sync_lock_release(l); }
+static int slots(void) { int n = nchunks; return n > MAX_CHUNKS ? MAX_CHUNKS : n; }
 
 static int owner_alive(struct chunk *c, pid_t mypid)
 {
@@ -26,10 +26,10 @@ static int owner_alive(struct chunk *c, pid_t mypid)
 
 static struct chunk *try_claim(pid_t pid, pid_t tid, unsigned long frame)
 {
-    int n = nchunks;
+    int n = slots();
     for (int i = 0; i < n; i++) {
         struct chunk *c = chunks[i];
-        if (!c->busy && !__sync_lock_test_and_set(&c->busy, 1)) { c->pid = pid; c->tid = tid; c->frame = frame; __sync_synchronize(); c->ready = 1; return c; }
+        if (c && !c->busy && !__sync_lock_test_and_set(&c->busy, 1)) { c->pid = pid; c->tid = tid; c->frame = frame; __sync_synchronize(); c->ready = 1; return c; }
     }
     return 0;
 }
@@ -38,25 +38,24 @@ struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame)
 {
     struct chunk *c = try_claim(pid, tid, frame);
     if (c) { c->s.pid = pid; c->s.tid = tid; return &c->s; }
-    /* sweep: reclaim chunks whose owner is gone (a thread that exited, a longjmp'd frame in a dead process) */
-    int n = nchunks;
+    /* sweep: reclaim chunks whose owner is gone (a thread that exited, a longjmp'd frame in a dead process, a vfork
+     * child that has exited; one that still runs keeps its chunk, 13) */
+    int n = slots();
     for (int i = 0; i < n; i++) {
         struct chunk *k = chunks[i];
-        if (k->busy && k->ready && !owner_alive(k, pid)) { k->ready = 0; __sync_lock_release(&k->busy); }
+        if (k && k->busy && k->ready && !owner_alive(k, pid)) { k->ready = 0; __sync_lock_release(&k->busy); }
     }
     c = try_claim(pid, tid, frame);
     if (c) { c->s.pid = pid; c->s.tid = tid; return &c->s; }
-    /* grow */
-    lock(&growlock);
-    if (nchunks >= MAX_CHUNKS) { unlock(&growlock); return 0; }
+    /* grow: reserve a slot, map the chunk already claimed, publish it; a mapping that fails leaves the slot empty */
+    int i = __sync_fetch_and_add(&nchunks, 1);
+    if (i >= MAX_CHUNKS) return 0;                           /* the pool's ceiling (13) */
     size_t sz = (sizeof(struct chunk) + 0xfff) & ~(size_t)0xfff;
     long m = sys_mmap(0, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m < 0 && m > -4096) { unlock(&growlock); return 0; }
+    if (m < 0 && m > -4096) return 0;
     c = (struct chunk *)m; c->busy = 1; c->pid = pid; c->tid = tid; c->frame = frame; c->s.pid = pid; c->s.tid = tid; c->ready = 1;
-    chunks[nchunks] = c;
-    __sync_synchronize();
-    nchunks++;
-    unlock(&growlock);
+    __sync_synchronize();                                    /* the chunk's fields before the pointer that publishes them */
+    chunks[i] = c;
     return &c->s;
 }
 
@@ -68,26 +67,17 @@ void scratch_put(struct scratch *s)
     __sync_lock_release(&c->busy);
 }
 
-/* before execve: nothing this thread holds may survive into a parent's memory (vfork) */
-void scratch_release_all_mine(void)
-{
-    pid_t pid = (pid_t)sys_getpid(), tid = (pid_t)sys_gettid();
-    int n = nchunks;
-    for (int i = 0; i < n; i++) { struct chunk *c = chunks[i]; if (c->busy && c->ready && c->pid == pid && c->tid == tid) { c->ready = 0; __sync_lock_release(&c->busy); } }
-}
-
 /* Nesting depth of this thread: the chunks it still holds, plus one. A chunk whose frame is at or below the
  * current frame cannot belong to a live ancestor on this stack: it was left by a longjmp out of a handler and
  * is released here, so a leak never counts as depth (review O3-6, F3-15). Frames on another stack are
  * above or below only by accident; the rare handler that switches stacks between traps is accepted (13). */
 int nest_enter(pid_t pid, pid_t tid, unsigned long frame)
 {
-    int n = nchunks, d = 1;
+    int n = slots(), d = 1;
     for (int i = 0; i < n; i++) {
         struct chunk *c = chunks[i];
-        if (!c->busy || !c->ready || c->pid != pid || c->tid != tid) continue;   /* ready: a chunk mid-claim by another thread has stale fields */
+        if (!c || !c->busy || !c->ready || c->pid != pid || c->tid != tid) continue;   /* ready: a chunk mid-claim by another thread has stale fields */
         if (c->frame <= frame) { c->ready = 0; __sync_synchronize(); __sync_lock_release(&c->busy); } else d++;
     }
     return d;
 }
-void nest_leave(void) { }

@@ -27,7 +27,8 @@ static inline unsigned long *frame_mask(void *uc) { return (unsigned long *)((ch
 
 /* ---------- copying from the program's memory with EFAULT fidelity (7.5.4) ---------- */
 static int no_readv;                                         /* process_vm_readv refused: copies go through a pipe (13) */
-static pid_t cur_pid;                                        /* set per trap; one pid per process, so a plain static; no TLS in the opener */
+/* every copy names the pid of the trap it serves, recorded in the trap's own chunk: a process-wide value would be a vfork child's
+ * while a thread of the parent is in its handler, and name the child's new image once it has exec'd (7.5.4) */
 /* where process_vm_readv is refused, EPERM under a seccomp profile that gates it on a capability, as Docker's does before
  * kernel 4.8, the copy goes through a pipe: write() from program memory and read() into it fault exactly as the syscall's
  * own copy would, EFAULT or short at the boundary; the pipe lives for the copy alone, a page a step (13) */
@@ -46,7 +47,7 @@ static long pipe_copy(void *dst, const void *src, size_t n)
     sys_close(fds[0]); sys_close(fds[1]);
     return done;
 }
-static long copy_in(void *dst, const void *src, size_t n)
+static long copy_in(pid_t pid, void *dst, const void *src, size_t n)
 {
     unsigned long p = (unsigned long)src;
     if (!p) return -EFAULT;
@@ -55,23 +56,23 @@ static long copy_in(void *dst, const void *src, size_t n)
     unsigned long first = 4096 - (p & 4095); if (first > n) first = n;
     r[0].iov_base = (void *)p; r[0].iov_len = first;
     if (first < n) { r[1].iov_base = (void *)(p + first); r[1].iov_len = n - first; rn = 2; }
-    long got = sys_process_vm_readv(cur_pid, &l, 1, r, rn, 0);
-    if (got == -ENOSYS || got == -EPERM) { no_readv = 1; log_msg("process_vm_readv refused; copies through a pipe", 0); return copy_in(dst, src, n); }
+    long got = sys_process_vm_readv(pid, &l, 1, r, rn, 0);
+    if (got == -ENOSYS || got == -EPERM) { no_readv = 1; log_msg("process_vm_readv refused; copies through a pipe", 0); return copy_in(pid, dst, src, n); }
     return got < 0 ? -EFAULT : got;
 }
 /* NUL-terminated string into dst[PATH_MAX]; returns its length or -EFAULT/-ENAMETOOLONG */
-static long copy_str_in(char *dst, const char *src)
+static long copy_str_in(pid_t pid, char *dst, const char *src)
 {
-    long got = copy_in(dst, src, 256); if (got < 0) return got;
+    long got = copy_in(pid, dst, src, 256); if (got < 0) return got;
     for (long i = 0; i < got; i++) if (!dst[i]) return i;
     if (got < 256) return -EFAULT;
-    long more = copy_in(dst + 256, src + 256, PATH_MAX - 256); if (more < 0) return more;
+    long more = copy_in(pid, dst + 256, src + 256, PATH_MAX - 256); if (more < 0) return more;
     for (long i = 256; i < 256 + more; i++) if (!dst[i]) return i;
     return more == PATH_MAX - 256 ? -ENAMETOOLONG : -EFAULT;
 }
-static long copy_exact(void *dst, const void *src, size_t n) { long g = copy_in(dst, src, n); return g == (long)n ? 0 : -EFAULT; }
+static long copy_exact(pid_t pid, void *dst, const void *src, size_t n) { long g = copy_in(pid, dst, src, n); return g == (long)n ? 0 : -EFAULT; }
 /* the mirror of copy_in: the only writes into program memory the kernel has not just validated (review O3-1) */
-static long copy_out(void *dst, const void *src, size_t n)
+static long copy_out(pid_t pid, void *dst, const void *src, size_t n)
 {
     unsigned long p = (unsigned long)dst;
     if (!p) return -EFAULT;
@@ -80,8 +81,8 @@ static long copy_out(void *dst, const void *src, size_t n)
     unsigned long first = 4096 - (p & 4095); if (first > n) first = n;
     r[0].iov_base = (void *)p; r[0].iov_len = first;
     if (first < n) { r[1].iov_base = (void *)(p + first); r[1].iov_len = n - first; rn = 2; }
-    long got = sys_process_vm_writev(cur_pid, &l, 1, r, rn, 0);
-    if (got == -ENOSYS || got == -EPERM) { no_readv = 1; return copy_out(dst, src, n); }
+    long got = sys_process_vm_writev(pid, &l, 1, r, rn, 0);
+    if (got == -ENOSYS || got == -EPERM) { no_readv = 1; return copy_out(pid, dst, src, n); }
     return got == (long)n ? 0 : -EFAULT;
 }
 
@@ -92,7 +93,7 @@ static long copy_out(void *dst, const void *src, size_t n)
 static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int allow_empty)
 {
     if (!a[pi] && allow_empty == 2) return 1;
-    long r = copy_str_in(S->b1, (const char *)a[pi]); if (r < 0) return r;
+    long r = copy_str_in(S->pid, S->b1, (const char *)a[pi]); if (r < 0) return r;
     if (S->b1[0] == 0) return allow_empty ? 1 : -ENOENT;
     int dfd = di < 0 ? AT_FDCWD : (int)a[di];
     if (S->b1[0] != '/') {                                     /* a relative path starts with the kernel's search check on the directory it
@@ -223,10 +224,10 @@ static long do_openat2(struct scratch *S, long *a)
     if (size < 24) return -EINVAL;
     if (size > 24) {                                         /* an extended struct: the tail must be zero (copy_struct_from_user) */
         if (size > 4096) return -E2BIG;
-        if (copy_in(S->extra, (const void *)a[2], (size_t)size) != size) return -EFAULT;
+        if (copy_in(S->pid, S->extra, (const void *)a[2], (size_t)size) != size) return -EFAULT;
         for (long i = 24; i < size; i++) if (S->extra[i]) return -E2BIG;
         xmemcpy(how, S->extra, 24);
-    } else if ((r = copy_exact(how, (const void *)a[2], 24))) return r;
+    } else if ((r = copy_exact(S->pid, how, (const void *)a[2], 24))) return r;
     unsigned long flags = how[0], mode = how[1], rf = how[2];
     if (flags & ~VALID_OPEN_FLAGS) return -EINVAL;
     if (rf & ~RESOLVE_ALL) return -EINVAL;
@@ -241,7 +242,7 @@ static long do_openat2(struct scratch *S, long *a)
     if ((flags & O_PATH) && (flags & ~O_PATH_FLAGS)) return -EINVAL;
     if (rf & (RESOLVE_IN_ROOT | RESOLVE_BENEATH)) {         /* the scope: the descriptor's directory, a directory it must be */
         int dfd = (int)a[0];
-        if ((r = copy_str_in(S->b1, (const char *)a[1])) < 0) return r;   /* getname first: EFAULT, ENAMETOOLONG */
+        if ((r = copy_str_in(S->pid, S->b1, (const char *)a[1])) < 0) return r;   /* getname first: EFAULT, ENAMETOOLONG */
         if (S->b1[0] == 0) return -ENOENT;                   /* an empty path, before the descriptor is looked at */
         if ((rf & RESOLVE_BENEATH) && S->b1[0] == '/') return -EXDEV;   /* nd_jump_root: an absolute path, likewise */
         if (dfd != AT_FDCWD) {
@@ -281,7 +282,7 @@ static long vec_read(struct scratch *S, void *region, size_t region_size, char *
 {
     long n = 0;
     if (user) for (;;) {
-        long got = copy_in(S->tmp, user + n, PATH_MAX); if (got < (long)sizeof(char *)) return -EFAULT;
+        long got = copy_in(S->pid, S->tmp, user + n, PATH_MAX); if (got < (long)sizeof(char *)) return -EFAULT;
         long k = got / (long)sizeof(char *), i; char **p = (char **)S->tmp;
         for (i = 0; i < k && p[i]; i++) ;
         n += i;
@@ -289,7 +290,7 @@ static long vec_read(struct scratch *S, void *region, size_t region_size, char *
         if (n > VEC_MAX) return -E2BIG;
     }
     char **v = vector(region, region_size, n + extra + 1, big); if (!v) return -ENOMEM;
-    if (n && copy_in(v, user, (size_t)n * sizeof(char *)) != n * (long)sizeof(char *)) { vector_free(*big, n + extra + 1); return -EFAULT; }
+    if (n && copy_in(S->pid, v, user, (size_t)n * sizeof(char *)) != n * (long)sizeof(char *)) { vector_free(*big, n + extra + 1); return -EFAULT; }
     v[n] = 0; *out = v; return n;
 }
 
@@ -304,7 +305,7 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
     if (envc < 0) return envc;
     long n = 0; char head[12];
     for (long i = 0; i < envc; i++) {
-        long got = copy_in(head, env[i], sizeof head);
+        long got = copy_in(S->pid, head, env[i], sizeof head);
         if (got >= 9 && (xmemcmp(head, "CAN_EXEC=", 9) == 0 || xmemcmp(head, "CAN_COMM=", 9) == 0 || (got >= 11 && xmemcmp(head, "CAN_EXECFN=", 11) == 0))) continue;
         env[n++] = env[i];
     }
@@ -497,70 +498,70 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         }
     }
     long l = (long)xstrlen(ans); if (l > bufsiz) l = bufsiz;
-    if (l && copy_out(buf, ans, (size_t)l)) return -EFAULT;   /* the program's buffer is never validated by the kernel here */
+    if (l && copy_out(S->pid, buf, ans, (size_t)l)) return -EFAULT;   /* the program's buffer is never validated by the kernel here */
     return l;
 }
 
 /* ---------- signal masks (7.5.2): SIGSYS is never blocked, never handled by the program ---------- */
-static long do_sigaction(long *a, void *uc)
+static long do_sigaction(struct scratch *S, long *a, void *uc)
 {
     int sig = (int)a[0]; const void *act = (const void *)a[1]; void *old = (void *)a[2]; long size = a[3];
     if (size != 8) return RE5(NR_rt_sigaction, sig, act, old, size, 0);
     if (sig == SIGSYS) return old ? RE5(NR_rt_sigaction, sig, 0, old, size, 0) : 0;   /* accepted, ignored; old reports the truth */
     if (!act) return RE5(NR_rt_sigaction, sig, 0, old, size, 0);
-    unsigned long k[4]; long r = copy_exact(k, act, sizeof k); if (r) return r;
+    unsigned long k[4]; long r = copy_exact(S->pid, k, act, sizeof k); if (r) return r;
     k[3] &= ~SIGSYS_BIT;
     return RE5(NR_rt_sigaction, sig, k, old, size, 0);
 }
-static long do_sigprocmask(long *a, void *uc)
+static long do_sigprocmask(struct scratch *S, long *a, void *uc)
 {
     int how = (int)a[0]; const void *set = (const void *)a[1]; void *old = (void *)a[2]; long size = a[3];
     if (!set || size != 8) return RE5(NR_rt_sigprocmask, how, set, old, size, 0);
-    unsigned long m; long r = copy_exact(&m, set, 8); if (r) return r;
+    unsigned long m; long r = copy_exact(S->pid, &m, set, 8); if (r) return r;
     if (how == SIG_BLOCK || how == SIG_SETMASK) m &= ~SIGSYS_BIT;
     r = RE5(NR_rt_sigprocmask, how, &m, old, size, 0);
     if (r == 0) { unsigned long cur; if (sys_rt_sigprocmask(SIG_BLOCK, 0, &cur, 8) == 0) *frame_mask(uc) = cur; }
     return r;
 }
-static long do_sigsuspend(long *a)
+static long do_sigsuspend(struct scratch *S, long *a)
 {
     unsigned long m; long size = a[1];
     if (size != 8) return -EINVAL;
-    long r = copy_exact(&m, (const void *)a[0], 8); if (r) return r;
+    long r = copy_exact(S->pid, &m, (const void *)a[0], 8); if (r) return r;
     m &= ~SIGSYS_BIT;
     return RE5(NR_rt_sigsuspend, &m, size, 0, 0, 0);
 }
-static long do_ppoll(long *a)
+static long do_ppoll(struct scratch *S, long *a)
 {
     unsigned long m; if (a[4] != 8) return -EINVAL;
-    long r = copy_exact(&m, (const void *)a[3], 8); if (r) return r;
+    long r = copy_exact(S->pid, &m, (const void *)a[3], 8); if (r) return r;
     m &= ~SIGSYS_BIT;
     return RE5(NR_ppoll, a[0], a[1], a[2], &m, a[4]);
 }
-static long do_pselect6(long *a)
+static long do_pselect6(struct scratch *S, long *a)
 {
     struct { const unsigned long *ss; unsigned long len; } sp; unsigned long m;
-    long r = copy_exact(&sp, (const void *)a[5], sizeof sp); if (r) return r;
+    long r = copy_exact(S->pid, &sp, (const void *)a[5], sizeof sp); if (r) return r;
     if (!sp.ss) return RE6(NR_pselect6, a[0], a[1], a[2], a[3], a[4], a[5]);
     if (sp.len != 8) return -EINVAL;
-    r = copy_exact(&m, sp.ss, 8); if (r) return r;
+    r = copy_exact(S->pid, &m, sp.ss, 8); if (r) return r;
     m &= ~SIGSYS_BIT; sp.ss = &m;
     return RE6(NR_pselect6, a[0], a[1], a[2], a[3], a[4], &sp);
 }
-static long do_epoll_pwait(long *a, int nr)          /* epoll_pwait and epoll_pwait2: mask in a[4], size in a[5] */
+static long do_epoll_pwait(struct scratch *S, long *a, int nr)          /* epoll_pwait and epoll_pwait2: mask in a[4], size in a[5] */
 {
     unsigned long m; if (a[5] != 8) return -EINVAL;
-    long r = copy_exact(&m, (const void *)a[4], 8); if (r) return r;
+    long r = copy_exact(S->pid, &m, (const void *)a[4], 8); if (r) return r;
     m &= ~SIGSYS_BIT;
     return RE6(nr, a[0], a[1], a[2], a[3], &m, a[5]);
 }
-static long do_io_pgetevents(long *a)
+static long do_io_pgetevents(struct scratch *S, long *a)
 {
     struct { const unsigned long *ss; unsigned long len; } sp; unsigned long m;
-    long r = copy_exact(&sp, (const void *)a[5], sizeof sp); if (r) return r;
+    long r = copy_exact(S->pid, &sp, (const void *)a[5], sizeof sp); if (r) return r;
     if (!sp.ss) return RE6(NR_io_pgetevents, a[0], a[1], a[2], a[3], a[4], a[5]);
     if (sp.len != 8) return -EINVAL;
-    r = copy_exact(&m, sp.ss, 8); if (r) return r;
+    r = copy_exact(S->pid, &m, sp.ss, 8); if (r) return r;
     m &= ~SIGSYS_BIT; sp.ss = &m;
     return RE6(NR_io_pgetevents, a[0], a[1], a[2], a[3], a[4], &sp);
 }
@@ -598,7 +599,7 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
     long len = a[2];
     scpy(S->v, "-", PATH_MAX);
     if (len < 2 || len > 110 || !a[1]) return RE5(nr, a[0], a[1], a[2], 0, 0);
-    long r = copy_exact(S->extra, (const void *)a[1], (size_t)len); if (r) return r;
+    long r = copy_exact(S->pid, S->extra, (const void *)a[1], (size_t)len); if (r) return r;
     unsigned short fam; xmemcpy(&fam, S->extra, 2);
     if (fam != AF_UNIX || len == 2 || S->extra[2] == 0) return RE5(nr, a[0], a[1], a[2], 0, 0);
     size_t n = (size_t)len - 2; if (n > 108) n = 108;         /* unix_mkname_bsd: the path ends at the length or at a NUL */
@@ -661,7 +662,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if (starts_dir(S->tmp, C.root)) from_real(S->tmp);
         r = (long)xstrlen(S->tmp) + 1;
         if (r > a[1]) return -ERANGE;
-        if (copy_out((void *)a[0], S->tmp, (size_t)r)) return -EFAULT;
+        if (copy_out(S->pid, (void *)a[0], S->tmp, (size_t)r)) return -EFAULT;
         return r;
     case NR_chdir:
         if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
@@ -766,7 +767,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         int pi = nr == NR_utime || nr == NR_utimes ? 0 : 1, di = nr == NR_utime || nr == NR_utimes ? -1 : 0;
         long fl = nr == NR_utimensat ? a[3] : 0;
         if (nr == NR_utimensat && a[2]) {                    /* do_utimes: two UTIME_OMITs are a no-op before any lookup; a bad pointer is EFAULT */
-            long ts[4]; if ((r = copy_exact(ts, (const void *)a[2], sizeof ts))) return r;
+            long ts[4]; if ((r = copy_exact(S->pid, ts, (const void *)a[2], sizeof ts))) return r;
             if (ts[1] == UTIME_OMIT && ts[3] == UTIME_OMIT) return 0;
         }
         if (nr == NR_utimensat && a[1] == 0) return fd_can(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], 0, a[2], a[3], 0);
@@ -828,13 +829,13 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if (r & O_PATH) return -EBADF;                       /* an O_PATH descriptor cannot be used for these (open(2)) */
         if (fd_can(S, (int)a[0])) return -EROFS;
         return RE5(nr, a[0], a[1], a[2], a[3], a[4]);
-    case NR_rt_sigaction:   return do_sigaction(a, uc);
-    case NR_rt_sigprocmask: return do_sigprocmask(a, uc);
-    case NR_rt_sigsuspend:  return do_sigsuspend(a);
-    case NR_ppoll:          return do_ppoll(a);
-    case NR_pselect6:       return do_pselect6(a);
-    case NR_epoll_pwait: case NR_epoll_pwait2: return do_epoll_pwait(a, nr);
-    case NR_io_pgetevents:  return do_io_pgetevents(a);
+    case NR_rt_sigaction:   return do_sigaction(S, a, uc);
+    case NR_rt_sigprocmask: return do_sigprocmask(S, a, uc);
+    case NR_rt_sigsuspend:  return do_sigsuspend(S, a);
+    case NR_ppoll:          return do_ppoll(S, a);
+    case NR_pselect6:       return do_pselect6(S, a);
+    case NR_epoll_pwait: case NR_epoll_pwait2: return do_epoll_pwait(S, a, nr);
+    case NR_io_pgetevents:  return do_io_pgetevents(S, a);
     default:
         return -ENOSYS;                                      /* 7.4.3: a trapped syscall the handler does not know */
     }
@@ -890,14 +891,11 @@ static void on_sigsys(int sig, void *info, void *uc)
     if (depth > 64) die("signal handlers nested too deep (or left behind by longjmp on another stack)", 0, 0);
     long a[6] = { g[REG_ARG0], g[REG_ARG1], g[REG_ARG2], g[REG_ARG3], g[REG_ARG4], g[REG_ARG5] };
     struct scratch *S = scratch_get(pid, tid, frame);
-    if (S) S->resolve = 0;
-    cur_pid = pid;
-    if (S) S->v[0] = 0;
+    if (S) { S->resolve = 0; S->v[0] = 0; }
     long r = S ? dispatch(S, nr, a, uc, &S) : -ENOMEM;
     if (C.logfd >= 0 && S) log_line(sysname(nr), r, S->v[0] ? S->v : 0);
     if (S) scratch_put(S);
     g[REG_RESULT] = r;
-    nest_leave();
 }
 
 #if defined(__x86_64__)
