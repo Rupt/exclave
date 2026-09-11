@@ -33,9 +33,9 @@ gdb needs. The
 regression suite (61 named tests), the kernel oracles, a differential
 syscall probe that agrees with the kernel on 16 916 cases per can, and
 Docker's default seccomp profile pass on the gcc, Alpine, Fedora and
-clang cans, each pruned to what the suite touches, in one 26-second
-gate on the reference machine, where the plain-terminal AppArmor label
-passes too, and the kernel matrix in QEMU
+clang cans, each pruned to what the suite touches, in one gate of
+about a minute on the reference machine, where the plain-terminal
+AppArmor label passes too, and the kernel matrix in QEMU
 virtual machines passes on nine distributions from CentOS 7 at kernel
 3.10 to Fedora 42, Alpine's musl userland and SELinux included. The
 cannery ships as a can and the gcc can it builds from inside its can
@@ -305,9 +305,10 @@ first user meets, with the rule behind each and what to do:
 
 ```
 test/inputs.sh ~/.cache/cont-inputs   # the development inputs from the network: the four cans of the gate, the examples' inputs; skips what is present
-CONT_CACHE=~/.cache/cont-debs test/gate.sh ~/.cache/cont-inputs/*.can   # the commit gate, 30 s: unit tests, stack budget, the suite on every can in two orders and once under the plain terminal's label, the oracles, the syscall probe; CONT_CACHE adds dogfood
+CONT_CACHE=~/.cache/cont-debs test/gate.sh ~/.cache/cont-inputs/*.can   # the commit gate, about a minute: unit tests, stack budget, the suite on every can in two orders and once under the plain terminal's label, the oracles, the syscall probe, the Docker profile; CONT_CACHE adds dogfood
 test/run.py --can gcc.can                 # the suite alone; --tree DIR for a plain tree (spike/make-tree.sh makes one); -k NAME, --order random
-test/matrix.py --can gcc.can              # the kernel matrix: cloud images under QEMU/KVM, one VM at a time, eight minutes
+test/matrix.py --can gcc.can              # the kernel matrix: cloud images under QEMU/KVM, one VM at a time, nine minutes
+test/exercise.py --can gcc.can test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the opener, side by side
 test/examples.sh gcc.can                  # the example runs, each when its input is set: CONT_SRC (realsoft), CONT_SQLITE (bench), CONT_RPMS (sysroot), CONT_DEBS_ARM64 (the emulated aarch64 row)
 test/sysroot.py --can gcc.can --rpms el7/ --out hello     # the sysroot recipe as a test: symbol versions checked, the output run inside and out, then natively by the matrix
 test/dogfood.py --cache DIR               # the cannery as a can, and a cross-can build that must reproduce
@@ -359,6 +360,7 @@ test/run.py          the regression suite; test/progs/ its C, Rust and Go progra
 test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the openat2 oracle
 test/oracle_syscalls.py  the differential syscall probe: every trapped syscall with every path form under bwrap and under the opener; test/progs/probe.c its interpreter
 test/inputs.sh       the development inputs, remade from the network through ~/.cache
+test/exercise.py     one program run under bwrap and under the opener, the answers side by side: how a limitation is measured before it is fixed
 test/docker_profile.py   a can under Docker's default seccomp profile; test/docker-seccomp.json the profile
 test/syscalls.py     every kernel syscall classified; test/bench.py the performance table
 test/realsoft.py     real projects built inside and outside a can; test/matrix.py the kernel matrix in VMs

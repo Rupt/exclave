@@ -88,7 +88,7 @@ static long copy_out(void *dst, const void *src, size_t n)
 /* ---------- path resolution ---------- */
 /* args[pi] relative to args[di] (or the cwd when di < 0) into S->v; 1 means "empty path with AT_EMPTY_PATH: fd-based".
  * allow_empty: 1 accepts the empty string, 2 also a NULL path, which only newfstatat and statx accept (6.11+);
- * every other syscall answers EFAULT for NULL, AT_EMPTY_PATH or not (oracle 17.3) */
+ * every other syscall answers EFAULT for NULL, AT_EMPTY_PATH or not (oracle 17.7) */
 static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int allow_empty)
 {
     if (!a[pi] && allow_empty == 2) return 1;
@@ -97,7 +97,7 @@ static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int 
     int dfd = di < 0 ? AT_FDCWD : (int)a[di];
     if (S->b1[0] != '/') {                                     /* a relative path starts with the kernel's search check on the directory it
                                                                 * starts from (link_path_walk): EACCES, ENOTDIR or EBADF before any lookup,
-                                                                * which the absolute re-issue would otherwise skip (oracle 17.3) */
+                                                                * which the absolute re-issue would otherwise skip (oracle 17.7) */
         r = sys_faccessat(dfd, ".", X_OK); if (r < 0) return r;
     }
     r = canon(S, S->b1, dfd, follow, S->v);
@@ -135,7 +135,7 @@ static int last_special(const char *p)                       /* 0: a name; 1: ".
     return 0;
 }
 
-/* 8.2: the kernel-matching answers for a read-only can, in the kernel's order (oracle 17.3); S->real is set
+/* 8.2: the kernel-matching answers for a read-only can, in the kernel's order (oracle 17.7); S->real is set
  * either way for the re-issue. A create (filename_create): the name is looked up first, so EEXIST for what
  * exists and the name's own error come before EROFS, and a trailing slash on something that is not a directory
  * being made is ENOENT. An attribute change: the file must exist. A delete: EROFS before the last component
@@ -154,7 +154,7 @@ static long ro_create(struct scratch *S, const char *v, int is_dir)
 static long ro_attr(struct scratch *S, const char *v)
 { struct kstat st; int ex = exists_can(S, v, &st); if (!is_can_owned(v)) return 0; return ex ? -EROFS : absent_errno(S); }
 /* an overlong last component of a delete: do_unlinkat and do_rmdir take the write lock on the parent before they look the
- * name up, so a can-owned parent answers EROFS first, where an overlong earlier component fails in the walk (oracle 17.3) */
+ * name up, so a can-owned parent answers EROFS first, where an overlong earlier component fails in the walk (oracle 17.7) */
 static long delete_overlong(struct scratch *S, int dfd)
 {
     char *p = S->b1; size_t n = 0;                              /* the path as given, from resolve */
@@ -549,7 +549,7 @@ static void real_nofollow(struct scratch *S, int nofollow)
 /* ---------- bind and connect (7.4.3, 13 item 31) ---------- */
 /* a sockaddr_un's path is a path like any other, under the visibility rule. The kernel reads the family and the
  * path out of the structure, so the handler does the same and answers for a can-owned path what the kernel answers
- * on a read-only bind mount (oracle 17.3): bind is a create (unix_bind_bsd), the name looked up first, EEXIST read
+ * on a read-only bind mount (oracle 17.7): bind is a create (unix_bind_bsd), the name looked up first, EEXIST read
  * as EADDRINUSE, then EROFS; connect looks the name up (unix_find_bsd), needs write permission on what it finds,
  * and finds no listener behind a file in the tree, ECONNREFUSED, since nothing can bind there. A host path, an
  * abstract name, an unnamed address or another family is re-issued as given; a bad length is the kernel's EINVAL. */
@@ -570,7 +570,7 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
     if (S->b1[0] != '/') { r = sys_faccessat(AT_FDCWD, ".", X_OK); if (r < 0) return r; }
     if ((r = canon(S, S->b1, AT_FDCWD, nr == NR_connect, S->v)) < 0) { scpy(S->v, S->b1, PATH_MAX); return r; }
     if (!is_can_owned(S->v)) {                                /* a host path: the kernel gets the resolved real path, as for every
-                                                              * other syscall, since a can symlink may have led here (oracle 17.3) */
+                                                              * other syscall, since a can symlink may have led here (oracle 17.7) */
         to_real(S->v, S->real, S->tmp);
         size_t rl = xstrlen(S->real), gl = xstrlen(S->b1);
         size_t slash = gl > 1 && S->b1[gl - 1] == '/' && S->real[rl - 1] != '/';   /* a trailing slash is the kernel's to judge (filename_create) */
@@ -680,7 +680,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         scpy(S->v2, S->v, PATH_MAX);                         /* old */
         if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
         int nsp = last_special(S->b1);
-        /* the kernel's order (do_renameat2, oracles 17.1 and 17.3): different mounts first, then a last component
+        /* the kernel's order (do_renameat2, oracles 17.1 and 17.7): different mounts first, then a last component
          * that is "." or "..", then the write check, then the lookups */
         int oc = is_can_owned(S->v2), nc = is_can_owned(S->v);
         if (oc != nc) return -EXDEV;
