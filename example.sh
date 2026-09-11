@@ -1,0 +1,65 @@
+#!/bin/sh
+# example.sh DIR — from a clean checkout to a program that runs on any glibc since 2.17, in one script
+# (README; PROPOSAL.md 9, 10). Everything it makes goes under DIR; the fetchers keep their caches under
+# ~/.cache, so a second run fetches nothing. The steps, each a command you can run by hand:
+#   1. make builds the opener.
+#   2. tools/fetch-debs.py downloads Ubuntu 24.04's gcc-13 closure; cannery unpack makes an open can from the files.
+#   3. tools/fetch-rpms.py downloads CentOS 7's glibc; unpacked into a can of its own, its tree is copied into the
+#      gcc can at /opt/sysroot-el7, and the manifest says `data "/opt/sysroot-el7"`: nothing there is wrapped,
+#      checked or executed. cannery wrap closes the can, and an entry symlink names its gcc.
+#   4. hello.c is compiled inside the can twice, plainly and against the sysroot, with CAN_LOG on; objdump shows
+#      which glibc symbol versions each output binds; the sysroot one runs on this host and inside the can.
+#   5. cannery prune keeps, in a copy of the can, what the compile touched; that copy compiles the program
+#      again, and cannery check reads the new log: the can you would ship, and the check you would run on it.
+set -eu
+here=$(cd "$(dirname "$0")" && pwd)
+[ $# -eq 1 ] || { echo "usage: example.sh DIR" >&2; exit 2; }
+mkdir -p "$1" && cd "$1"
+dir=$(pwd)
+rm -rf gcc.can sysroot.can hello.can hello.c hello hello-plain hello-pruned log && mkdir log   # a rerun keeps only the fetched files
+cannery() { python3 "$here/cannery/cannery.py" "$@"; }
+run() { echo "+ $*" >&2; "$@"; }                                          # every command shown as it runs
+logged() {                                                                # logged NAME CMD...: the long outputs go to log/NAME.log
+    name=$1; shift
+    run "$@" > "log/$name.log" 2>&1 || { echo "$name failed: see $dir/log/$name.log" >&2; exit 1; }
+    echo "  $(tail -1 "log/$name.log") ($(grep -c '^warning' "log/$name.log") warnings; log/$name.log)"
+}
+sysroot="--sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/"       # headers from the sysroot; -B for its start files and libc
+
+echo "== 1. the opener"
+run make -s -C "$here"
+
+echo "== 2. a gcc can from Ubuntu 24.04 packages"
+[ -n "$(ls debs 2>/dev/null)" ] || logged fetch-debs python3 "$here/tools/fetch-debs.py" --out debs gcc-13 libc6-dev
+logged unpack cannery unpack gcc.can debs/*.deb
+
+echo "== 3. CentOS 7's glibc as a sysroot inside it"
+[ -n "$(ls el7 2>/dev/null)" ] || logged fetch-rpms python3 "$here/tools/fetch-rpms.py" --repo https://vault.centos.org/7.9.2009/os/x86_64 --no-base --out el7 glibc glibc-devel glibc-headers kernel-headers libgcc
+logged unpack-el7 cannery unpack sysroot.can el7/*.rpm
+run cp -a sysroot.can/root gcc.can/root/opt/sysroot-el7
+printf 'can 1\n\ndata "/opt/sysroot-el7"\n' > gcc.can/.can/manifest
+logged wrap cannery wrap gcc.can
+run ln -s root/usr/bin/gcc-13 gcc.can/gcc
+
+echo "== 4. a program built inside, run on this host and inside the can"
+cat > hello.c <<'HELLO'
+#include <stdio.h>
+int main(void) { printf("hello from a can\n"); return 0; }
+HELLO
+run env CAN_LOG=log/plain.log gcc.can/gcc -o hello-plain hello.c
+run env CAN_LOG=log/hello.log gcc.can/gcc $sysroot -o hello hello.c
+echo "  log/hello.log: $(wc -l < log/hello.log) lines, one per trapped syscall; the first:"; head -6 log/hello.log | sed "s/^/    /"
+versions() { gcc.can/root/usr/bin/objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -u | tr '\n' ' '; }
+echo "  glibc symbol versions bound: hello-plain: $(versions hello-plain) hello: $(versions hello)"
+run ./hello
+run gcc.can/.can/opener "$dir/hello"
+
+echo "== 5. the can pruned to what the compile touched, and the checks on it"
+run cp -a gcc.can hello.can
+run cannery prune hello.can log/hello.log
+run env CAN_LOG=log/pruned.log hello.can/gcc $sysroot -o hello-pruned hello.c
+run cannery check hello.can log/pruned.log
+run ./hello-pruned
+count() { find "$1/root" -type f -o -type l | wc -l; }
+echo "  files and symlinks under root/: $(count gcc.can) in gcc.can, $(count hello.can) in hello.can"
+echo "example: done; everything is under $dir"

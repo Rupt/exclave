@@ -434,6 +434,8 @@ EXPECTED = [
      "linkat with AT_EMPTY_PATH needed CAP_DAC_READ_SEARCH (ENOENT without it) until 6.10 allowed it for files with a link; the handler answers as the newer kernels do"),
     ("openat2", lambda l, b, o: "cached" in l and errnos(b, o)[0] == 11,
      "RESOLVE_CACHED: the kernel answers EAGAIN where the lookup would need I/O, and bwrap's fresh mount namespace has a cold cache; the handler drops the flag, as openat2(2) permits, and resolves"),
+    ("openat2", lambda l, b, o: "dotdot" in l and ("in_root" in l or "beneath" in l) and errnos(b, o)[0] == 11,
+     "a scoped '..': the kernel answers EAGAIN when a rename or a mount anywhere on the system raced its walk (handle_dots in fs/namei.c, openat2(2)), which the gate's parallel steps provoke now and then; the opener's walk is in user space and sees no such race (13)"),
     ("openat2", lambda l, b, o: KERNEL < (6, 3) and "dir_creat" in l and errnos(b, o)[1] == 22,
      "O_DIRECTORY|O_CREAT is EINVAL since 6.3 (open.c); this kernel opens or creates instead; the handler answers as the newer kernels do"),
     ("openat2", lambda l, b, o: KERNEL < (5, 6) and "no_xdev" in l and "creat" in l and errnos(b, o)[0] == 18,
