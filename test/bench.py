@@ -75,10 +75,12 @@ def main():
     ap.add_argument("--sqlite", help="sqlite3.c amalgamation for the compute-bound compile")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "bench-work"))
     a = ap.parse_args()
-    can, work = os.path.abspath(a.can), os.path.abspath(a.work)
+    work = os.path.abspath(a.work)
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
+    import tree
+    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy reopened with the build (17)
     cgcc, hgcc = os.path.join(can, "root", "usr", "bin", GCC), shutil.which("gcc-13") or shutil.which("gcc")
     opener = os.path.join(can, ".can", "opener")
     env = {"PATH": "/usr/bin:/bin"}

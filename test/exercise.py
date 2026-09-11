@@ -6,9 +6,10 @@ fixed: the program prints one line per case, "<case>: <answer>", and the kernel'
 
     test/exercise.py --can CAN PROG.c [ARGS...]     HOSTDIR in ARGS is replaced by a fresh writable host directory
 
-The work lives under build/exercise/<can>: a copy of the can reopened with build/opener, the unwrapped tree for bwrap,
-both with a socket file at /usr/share/cont-test.sock and the suite's marker. Needs bwrap and user namespaces; says so
-and exits 2 when it cannot run. Exit status: the number of lines that differ."""
+The work lives under build/exercise/<can>: a copy of the can reopened with build/opener, and reopened again whenever the
+build has changed since, the unwrapped tree for bwrap, both with a socket file at /usr/share/cont-test.sock and the
+suite's marker. Needs bwrap and user namespaces; says so and exits 2 when it cannot run. Exit status: the number of
+lines that differ."""
 import argparse
 import hashlib
 import os
@@ -31,17 +32,7 @@ def setup(can0, work):
     """A closed copy for the opener and an unwrapped tree for bwrap, made once per can."""
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
-    can = os.path.join(work, "can")
-    if subprocess.run(["cp", "-al", can0, can], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
-        shutil.rmtree(can, ignore_errors=True)
-        shutil.copytree(can0, can, symlinks=True)
-    for f in os.listdir(os.path.join(can, ".can")):                      # the files under .can/ copied: reopen must not write through a link
-        p = os.path.join(can, ".can", f)
-        if os.path.isfile(p) and not os.path.islink(p):
-            shutil.copy2(p, p + ".copy")
-            os.replace(p + ".copy", p)
-    subprocess.run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "reopen", can, os.path.join(REPO, "build", "opener")],
-                   check=True, stdout=subprocess.DEVNULL)
+    can = tree.fresh_can(can0, os.path.join(work, "can"))                  # a copy reopened with the build (17)
     root = os.path.join(work, "tree", "root")
     shutil.copytree(os.path.join(can, "root"), root, symlinks=True, copy_function=cannery.link_or_copy)
     build.unwrap(os.path.join(work, "tree"), log=lambda *x: None)
@@ -76,6 +67,8 @@ def main():
     work = os.path.join(REPO, "build", "exercise", os.path.basename(can0).replace(".can", "") + "-" + key)
     if not os.path.exists(os.path.join(work, "can", ".can", "lock")):
         setup(can0, work)
+    elif tree.reopen_if_stale(os.path.join(work, "can")):
+        print("the build changed since this copy was made: reopened")
     can, root = os.path.join(work, "can"), os.path.join(work, "tree", "root")
     r = os.path.join(can, "root")
     machine = os.uname().machine

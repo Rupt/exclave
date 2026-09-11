@@ -137,11 +137,9 @@ def main():
     work = os.path.abspath(a.work)
     if os.path.exists(work):
         shutil.rmtree(work)
-    can = os.path.join(work, "can")
-    os.makedirs(os.path.join(can, ".can"))
-    shutil.copy2(os.path.join(a.can, ".can", "opener"), os.path.join(can, ".can", "opener"))
+    import tree
+    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy reopened with the build (17)
     root = os.path.join(can, "root")
-    shutil.copytree(os.path.join(a.can, "root"), root, symlinks=True, copy_function=cannery.link_or_copy)
     dirs, files, links = make_maze(root, rng)
     with open(os.path.join(can, ".can", "manifest"), "w") as f:
         f.write("can 1\n")                                       # /maze is a non-empty top-level directory: can-owned by the tree alone (8.1)

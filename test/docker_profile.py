@@ -169,13 +169,13 @@ def main():
         print("bwrap or user namespaces unavailable; the Docker-profile run cannot happen here")
         return 0
     import tree                                                  # the can's compiler and shell as the tree spells them
-    can = os.path.abspath(a.can)
-    root = os.path.join(can, "root")
-    cc = tree.compiler(root, MACHINE) or "cc"
     work = os.path.abspath(a.work)
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
+    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy reopened with the build (17)
+    root = os.path.join(can, "root")
+    cc = tree.compiler(root, MACHINE) or "cc"
     with open(os.path.join(work, "hello.c"), "w") as f:
         f.write('#include <errno.h>\n#include <stdio.h>\n#include <pthread.h>\n#include <spawn.h>\n#include <sys/wait.h>\n#include <unistd.h>\nextern char **environ;\n'
                 'static void *t(void *a) { return a; }\n'

@@ -550,11 +550,7 @@ def main():
     root = os.path.join(work, "tree", "root")
     shutil.copytree(os.path.join(given, "root"), root, symlinks=True, copy_function=cannery.link_or_copy)
     build.unwrap(os.path.join(work, "tree"), log=lambda *x: None)
-    can = os.path.join(work, "can")
-    os.makedirs(os.path.join(can, ".can"))
-    for f in ("opener", "manifest"):
-        shutil.copy2(os.path.join(given, ".can", f), os.path.join(can, ".can", f))
-    shutil.copytree(os.path.join(given, "root"), os.path.join(can, "root"), symlinks=True, copy_function=cannery.link_or_copy)
+    can = tree.fresh_can(given, os.path.join(work, "can"))                  # the opener's world: a copy reopened with the build (17)
     dirs, files, links = make_maze(root, rng)
     host = os.path.join(work, "area", "host")                              # ".." from the host area is a directory the reset owns
     os.symlink(host + "/hfile", os.path.join(root, "maze", "lH"))          # a can link to a host file, and to a host directory
@@ -583,7 +579,7 @@ def main():
     cc = tree.compiler(root, MACHINE)
     if not cc:
         sys.exit("no C compiler in the can")
-    gcc = os.path.join(given, "root", tree.vbin(root, cc).lstrip("/"))
+    gcc = os.path.join(can, "root", tree.vbin(root, cc).lstrip("/"))       # the probe compiled through the build's opener
     probe = os.path.join(bindir, "probe")
     r = subprocess.run([gcc, "-O1", "-o", probe, os.path.join(HERE, "progs", "probe.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode:

@@ -80,19 +80,7 @@ def expect(cond, msg):
         raise AssertionError(msg)
 
 
-def copy_can(src, dst):
-    """A copy of a can for a test to alter: the tree's files are hard-linked, the files under .can/ are copied,
-    since a manifest or lock written through a hard link would change the shared can's (tests are independent)."""
-    shutil.copytree(src, dst, symlinks=True, copy_function=cannery.link_or_copy)
-    for name in os.listdir(os.path.join(dst, ".can")):
-        p = os.path.join(dst, ".can", name)
-        if os.path.isfile(p) and not os.path.islink(p):
-            data = open(p, "rb").read()
-            mode = os.stat(p).st_mode
-            os.remove(p)
-            with open(p, "wb") as f:
-                f.write(data)
-            os.chmod(p, mode)
+copy_can = tree.copy_can                                     # a copy for a test to alter: the tree hard-linked, .can/ copied
 
 
 def shared_state(ctx):

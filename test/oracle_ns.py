@@ -106,10 +106,12 @@ def main():
     if subprocess.run(["bwrap", "--ro-bind", "/", "/", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
         print("bwrap cannot create namespaces here (user namespaces denied); the oracle cannot run")
         return 0
-    can, work = os.path.abspath(a.can), os.path.abspath(a.work)
+    work = os.path.abspath(a.work)
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
+    import tree
+    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # the opener's world: a copy reopened with the build (17)
     # an unwrapped copy of the tree for bwrap: hard links, then the payloads moved back over the wrappers
     root = os.path.join(work, "tree", "root")
     shutil.copytree(os.path.join(can, "root"), root, symlinks=True, copy_function=cannery.link_or_copy)
@@ -133,7 +135,6 @@ def main():
     fails = 0
     # 1. the read-only matrix against the kernel: the same program, the same expectations, a real read-only bind
     global GCC, TRIPLET, SH, SHX, LIBC, SH_LINK
-    import tree
     r = os.path.join(can, "root")
     GCC = tree.compiler(r, platform.machine()) or GCC
     TRIPLET = tree.triplet(r, platform.machine())

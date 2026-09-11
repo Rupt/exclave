@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.join(REPO, "cannery"))
 sys.path.insert(0, HERE)
 import build  # noqa: E402
 import cannery  # noqa: E402
+import tree  # noqa: E402
 
 HELLO = '#include <stdio.h>\n#include <stdlib.h>\nint main(void) { printf("hello from a sysroot build\\n"); return 0; }\n'
 
@@ -48,8 +49,7 @@ def main():
     os.makedirs(work)
     can, sysroot_can = os.path.join(work, "gcc.can"), os.path.join(work, "sysroot.can")
     cannery_py = os.path.join(REPO, "cannery", "cannery.py")
-    from run import copy_can                                   # the harness's rule: the tree by hard links, .can/ copied
-    copy_can(a.can, can)
+    tree.fresh_can(a.can, can)                                 # a copy of its own, reopened with the build (17)
     rc, out, err = run([sys.executable, cannery_py, "unwrap", can])
     if rc:
         sys.exit("unwrap: " + out + err)

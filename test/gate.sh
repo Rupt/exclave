@@ -1,9 +1,9 @@
 #!/bin/sh
 # test/gate.sh CAN... — the commit gate (PROPOSAL.md 17): the unit tests, the stack budget, and for every can
 # given the suite in the given and a random order (and, for the first can, under the plain terminal's AppArmor label), the
-# resolution oracle, the namespace oracle, the syscall probe and the Docker profile; dogfood when CONT_CACHE names a package cache. Every step runs in parallel on a hard-linked copy of
-# its can reopened with build/opener, so the cans given are never written. One line per step; logs under
-# build/gate/. Exit status: the number of failed steps.
+# resolution oracle, the namespace oracle, the syscall probe and the Docker profile; dogfood when CONT_CACHE names a package cache. Every step runs in parallel; every driver
+# makes its own copy of the can and reopens it with build/opener (test/tree.py fresh_can), so the cans given are never
+# run as they are nor written. One line per step; logs under build/gate/. Exit status: the number of failed steps.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(dirname "$here")
@@ -16,13 +16,6 @@ start=$(date +%s)
 step() {                                                    # step NAME CMD...: in the background, its status and log kept
     name=$1; shift
     ( "$@" > "$out/$name.log" 2>&1; echo $? > "$out/$name.rc" ) &
-}
-copy_can() {                                                # copy_can SRC DST: the tree hard-linked (copied across filesystems), the files
-    cp -al "$1" "$2" 2>/dev/null || { rm -rf "$2"; cp -a "$1" "$2"; } || return 1   # under .can/ copied, since a wrapper is a hard link to the
-    for f in "$2"/.can/*; do                                # opener and reopen must not write through it
-        [ -f "$f" ] && ! [ -L "$f" ] && { cp -p "$f" "$f.copy" && mv -f "$f.copy" "$f" || return 1; }
-    done
-    python3 "$repo/cannery/cannery.py" reopen "$2" > /dev/null
 }
 unit() {
     cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/manifest_test" "$here/manifest_test.c" "$repo/src/manifest.c" "$repo/src/str.c" \
@@ -37,8 +30,7 @@ step unit unit
 step stack stack
 for can in "$@"; do
     n=$(basename "$can" .can)
-    copy=$out/$n.can
-    copy_can "$can" "$copy" || { echo "cannot copy $can" >&2; exit 2; }
+    copy=$can
     step "suite-$n" python3 "$here/run.py" --can "$copy" --work "$out/w-$n"
     step "suite-$n-random" python3 "$here/run.py" --can "$copy" --work "$out/w-$n-random" --order random
     if [ "$can" = "$1" ] && command -v aa-exec > /dev/null 2>&1 && aa-exec -p unconfined true 2> /dev/null; then   # the plain terminal's
