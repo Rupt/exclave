@@ -15,7 +15,7 @@ LIMIT_PATH = 3072                # 7.5.4: under 3 KB with a four-deep chain of h
 # (names, multiplier): the largest frame among the names, times the multiplier
 PATH = [
     (["on_sigsys"], 1), (["dispatch"], 1),
-    (["do_open", "do_execve", "do_readlink", "do_sigprocmask", "do_pselect6", "do_sockaddr", "exec_loader_mode"], 1),
+    (["do_open", "do_execve", "do_readlink", "do_sigprocmask", "do_pselect6", "do_sockaddr", "exec_env"], 1),
     (["exec_descriptor"], 1),
     (["exec_target"], 5), (["exec_script"], 5),
     (["resolve", "canon", "delete_overlong", "fd_virtual", "cwd_virtual", "ro_create", "ro_attr", "exists_can", "to_real", "to_real_exec", "vis_is_host", "elf_probe", "vec_read"], 1),

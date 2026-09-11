@@ -376,11 +376,12 @@ spike/           frozen prototypes and their tests
 
 `cont` is the codename and repository. `can` is the format and the
 directory suffix. `opener` is the launcher. `cannery` is the build tool.
-The environment knob is `CAN_LOG`, the only one. `CAN_EXEC` is the
-opener's own protocol: set by an opener when it re-execs itself for a
-program on the loader path, removed before any program runs, never an
-interface; `.can/opener PROGRAM ARGS...` is how a program without a
-wrapper is run from outside. At the can boundary four variables are the can's, always the
+The environment knob is `CAN_LOG`, the only one. `CAN_EXEC`, `CAN_EXECFN`
+and `CAN_COMM` are the opener's own protocol: set by an opener when it
+execs a wrapper or re-execs itself for a program on the loader path,
+the target and the identity the kernel would give it, removed before
+any program runs, never an interface; `.can/opener PROGRAM ARGS...` is
+how a program without a wrapper is run from outside. At the can boundary four variables are the can's, always the
 same: `PATH=/usr/local/bin:/usr/bin:/bin`, `LANG=C.UTF-8`, `TZ=UTC0`
 and `SHELL=/bin/sh`; the loader and libc variables are dropped;
 everything else passes through, and inside the boundary nothing is

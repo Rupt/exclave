@@ -75,9 +75,12 @@ static const char *denied[] = { "GLIBC_TUNABLES", "GCONV_PATH", "LOCPATH", "NLSP
                                 "TZDIR", "GCC_EXEC_PREFIX", "COMPILER_PATH", "LIBRARY_PATH",
                                 "PATH", "LANG", "LANGUAGE", "TZ", "SHELL", 0 };
 static const char *fixed[] = { "PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "TZ=UTC0", "SHELL=/bin/sh", 0 };
+/* the opener's protocol with itself (7.4.5): CAN_EXEC names a loader-path target, CAN_EXECFN and CAN_COMM the identity the
+ * kernel would give the program; set by a handler or the positional entry, read by the opener they exec, never seen by a program */
+static int internal_var(const char *e) { return xstarts(e, "CAN_EXEC=") || xstarts(e, "CAN_EXECFN=") || xstarts(e, "CAN_COMM="); }
 static int env_denied(const char *e)
 {
-    if (xstarts(e, "LD_") || xstarts(e, "LC_") || xstarts(e, "CAN_EXEC=")) return 1;
+    if (xstarts(e, "LD_") || xstarts(e, "LC_") || internal_var(e)) return 1;
     for (int i = 0; denied[i]; i++) { size_t l = xstrlen(denied[i]); if (xstrncmp(e, denied[i], l) == 0 && e[l] == '=') return 1; }
     return 0;
 }
@@ -86,7 +89,7 @@ static char **env_prepare(char **envp, int boundary)
     long n = 0; while (envp[n]) n++;
     char **out = arena_alloc((size_t)(n + 6) * sizeof(char *)); long k = 0;
     for (long i = 0; i < n; i++) {
-        if (boundary ? env_denied(envp[i]) : xstarts(envp[i], "CAN_EXEC=")) continue;
+        if (boundary ? env_denied(envp[i]) : internal_var(envp[i])) continue;
         out[k++] = envp[i];
     }
     if (boundary) for (int i = 0; fixed[i]; i++) out[k++] = (char *)arena_str(fixed[i], xstrlen(fixed[i]));   /* writable: bash writes into its environment strings (F3-23) */
@@ -139,6 +142,7 @@ static void read_manifest(unsigned long *auxv)
 static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **envp)
 {
     if (argc < 2) die("usage: .can/opener PROGRAM [ARGS...]; or run a wrapper inside root/", 0, 0);
+    if (xstrlen(argv[1]) >= PATH_MAX) die("program path too long", 0, ENAMETOOLONG);
     char *t = arena_alloc(PATH_MAX);
     if (argv[1][0] == '/') scpy(t, argv[1], PATH_MAX);
     else {
@@ -148,10 +152,11 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
         scat(t, argv[1], PATH_MAX);
     }
     char *var = arena_alloc(PATH_MAX + 9); scpy(var, "CAN_EXEC=", PATH_MAX + 9); scat(var, t, PATH_MAX + 9);
+    char *fn = arena_alloc(PATH_MAX + 11); scpy(fn, "CAN_EXECFN=", PATH_MAX + 11); scat(fn, argv[1], PATH_MAX + 11);   /* the name as given: AT_EXECFN, comm, a script's $0 (7.6) */
     long n = 0; while (envp[n]) n++;
-    char **env = arena_alloc((size_t)(n + 2) * sizeof(char *)); long k = 0;
-    env[k++] = var;
-    for (long i = 0; i < n; i++) if (!xstarts(envp[i], "CAN_EXEC=")) env[k++] = envp[i];
+    char **env = arena_alloc((size_t)(n + 3) * sizeof(char *)); long k = 0;
+    env[k++] = var; env[k++] = fn;
+    for (long i = 0; i < n; i++) if (!internal_var(envp[i])) env[k++] = envp[i];
     env[k] = 0;
     long r = sys_execve(C.opener, argv + 1, env);
     die("cannot re-exec the opener", C.opener, r);
@@ -230,17 +235,28 @@ void start_c(unsigned long *sp)
     exe[n] = 0;
     find_can(exe);
     read_manifest(auxv);
+    int have = filter_probe();                                /* a filter inherited: exec'd from inside a can, by a handler or a program */
 
-    const char *target;
+    const char *target, *fn, *cm;
     if (starts_dir(exe, C.root)) {                            /* a wrapper: the kernel ran the opener under the program's name. Decided first,
                                                               * so that CAN_EXEC in anyone's environment is inert for the whole tree (review O5-3, F5-4) */
         scpy(C.program, exe, PATH_MAX); from_real(C.program);
-        const char *fn = 0;                                   /* the path the kernel was given, as the kernel passes it to a script (7.4.5) */
-        for (long i = 0; auxv[i * 2] != AT_NULL; i++) if (auxv[i * 2] == AT_EXECFN) fn = (const char *)auxv[i * 2 + 1];
-        scpy(C.execfn, fn ? fn : C.program, PATH_MAX); if (fn) from_real(C.execfn);
+        /* the identity the kernel would have given the program (7.6): the name a handler exec'd this wrapper by, as the kernel spells it,
+         * carried in CAN_EXECFN and CAN_COMM by that handler, which only an opener sets; from the host, the kernel's own AT_EXECFN, a
+         * real path, and its last component */
+        fn = have ? find_env(envp, "CAN_EXECFN") : 0; cm = have ? find_env(envp, "CAN_COMM") : 0;
+        if (fn) scpy(C.execfn, fn, PATH_MAX);
+        else {
+            for (long i = 0; auxv[i * 2] != AT_NULL; i++) if (auxv[i * 2] == AT_EXECFN) fn = (const char *)auxv[i * 2 + 1];
+            scpy(C.execfn, fn ? fn : C.program, PATH_MAX); if (fn) from_real(C.execfn);
+        }
+        scpy(C.comm, cm ? cm : base_name(C.execfn), sizeof C.comm);
     } else if ((target = find_env(envp, "CAN_EXEC"))) {       /* the internal protocol of 7.4.5: re-exec'd by a handler, or by entry_exec below */
         if (target[0] != '/') die("CAN_EXEC must be an absolute path", target, 0);
-        C.loader_mode = 1; scpy(C.program, target, PATH_MAX); scpy(C.execfn, argv[0] ? argv[0] : target, PATH_MAX);
+        C.loader_mode = 1; scpy(C.program, target, PATH_MAX);
+        fn = find_env(envp, "CAN_EXECFN"); cm = find_env(envp, "CAN_COMM");   /* the name the program was exec'd by, and its comm, as the kernel spells them (7.6) */
+        scpy(C.execfn, fn ? fn : target, PATH_MAX);
+        scpy(C.comm, cm ? cm : base_name(C.execfn), sizeof C.comm);
         C.descfd = -1;
         if (xstarts(target, "/proc/self/fd/")) {               /* a descriptor with no path (13 item 25): the kernel's identity for the
                                                               * program is the link's text; the dup is closed once the segments are mapped */
@@ -252,7 +268,6 @@ void start_c(unsigned long *sp)
         entry_exec(argc, argv, envp);                          /* the opener run by hand: .can/opener PROGRAM ARGS... */
     }
 
-    int have = filter_probe();
     C.boundary = have == 0;
     char **env2 = env_prepare(envp, C.boundary);
     vis_init();

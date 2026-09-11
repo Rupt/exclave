@@ -170,7 +170,8 @@ struct can {
     unsigned long opener_dev, opener_ino; long opener_size;
     char program[PATH_MAX];        /* virtual path of the program this process runs */
     char exe[PATH_MAX];            /* what /proc/self/exe answers: the program, or a wrapped script's interpreter (F3-22) */
-    char execfn[PATH_MAX];         /* the path the program was exec'd by, as given: AT_EXECFN and comm, the script's for a script (7.6) */
+    char execfn[PATH_MAX];         /* the path the program was exec'd by, as the kernel spells it: AT_EXECFN, a script's $0 (7.6) */
+    char comm[NAME_MAX + 1];       /* the name the kernel would set as comm: the exec'd path's last component, a descriptor's file (7.6) */
     int loader_mode;               /* 1: re-exec'd with CAN_EXEC; program is not a wrapper */
     int descfd;                    /* loader mode for a descriptor with no path (13 item 25): the dup to close once the segments are mapped, else -1 */
     int exe_fixed;                 /* exe holds the descriptor's link text, the kernel's identity for such a program; run() leaves it */
@@ -213,7 +214,9 @@ int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t
 /* ---------- scratch (scratch.c) ---------- */
 struct scratch {
     char b1[PATH_MAX], b2[PATH_MAX], rest[PATH_MAX], cur[PATH_MAX], real[PATH_MAX], tmp[PATH_MAX], v[PATH_MAX];
-    char v2[PATH_MAX];             /* the first path of a two-path syscall, or the directory a scoped openat2 walk may not leave; canon never writes it */
+    char v2[PATH_MAX];             /* the first path of a two-path syscall, the directory a scoped openat2 walk may not leave, or the
+                                    * name an exec'd program is exec'd by as the kernel spells it (7.4.5); canon never writes it */
+    char comm[NAME_MAX + 1];       /* the comm the kernel would set for an exec'd program (7.6) */
     char extra[8192];              /* argv vectors, masks, headers */
     pid_t pid, tid;                /* the owner, looked up once per trap */
     unsigned resolve;              /* openat2's resolve flags for the walk (7.4.3); 0 for every other syscall */
@@ -254,7 +257,7 @@ int is_self_exe(const char *p, pid_t pid);   /* /proc/self/exe in any spelling, 
 
 /* ---------- loader (loader.c) ---------- */
 __attribute__((noreturn)) void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp, unsigned long *auxv);
-int elf_probe(const char *real, char *interp, int *is_opener, void *buf);   /* 1 has interp, 0 none, <0 error; buf >= 4096 bytes */
+int elf_probe(const char *real, char *interp, int *is_opener, void *buf);   /* 1 has interp, 0 none, <0 error; buf >= 7680 bytes */
 
 /* ---------- filter (filter.c) ---------- */
 int  filter_probe(void);      /* 1 if an equal-or-newer filter is inherited */

@@ -250,7 +250,7 @@ def compile_progs(ctx):
     shutil.copytree(os.path.join(HERE, "progs"), src)
     os.makedirs(ctx.progs, exist_ok=True)
     gcc = wrapper(ctx, GCC)
-    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2", "unix_socket", "openat2_xdev", "fexec"):
+    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2", "unix_socket", "openat2_xdev", "fexec", "exec_identity"):
         rc, out, err = run([gcc, "-O1", "-g", "-pthread", "-o", os.path.join(ctx.progs, name), os.path.join(src, name + ".c"), "-lm", "-ldl"], cwd=ctx.work, env=ctx.env)
         if rc and name == "execstack" and "not allowed here" in err:      # nested functions are gcc's; clang has none
             continue
@@ -488,7 +488,8 @@ def scripts(ctx):
 def script_argv0_as_given(ctx):
     """7.4.5: a script's interpreter gets the script path as the caller spelt it, as the kernel passes it: for a host
     script run inside by a relative path, and through the positional entry; a wrapped script run from outside by a
-    relative path likewise (review F5-8). A wrapped script exec'd from inside gets its canonical virtual path (13)."""
+    relative path likewise (review F5-8), and a wrapped script exec'd from inside, since the handler carries the spelling to
+    the wrapper it execs (revision 16)."""
     d = os.path.join(ctx.work, "argv0")
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "s.sh"), "w") as f:
@@ -502,6 +503,8 @@ def script_argv0_as_given(ctx):
     expect(out == "script ok x 1\n", "a wrapped script from outside by a relative path runs: %r %r" % (out, err))
     rc, out, err = run([wrapper(ctx, "sh"), "-c", "cd /usr/bin && ./cont-test-exe"], cwd=ctx.work, env=ctx.env)
     expect(out == ctx.sh_exe + "\n", "a wrapped script inside: exe is its interpreter (F3-22): %r %r" % (out, err))
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "cd /usr/bin && ./cont-test-script2 q"], cwd=ctx.work, env=ctx.env)
+    expect(out == "script ok ./cont-test-script2 2\n", "a wrapped script exec'd from inside gets the path as spelt, carried to its wrapper by the handler (7.4.5): %r %r" % (out, err))
 
 
 @test
@@ -1713,6 +1716,28 @@ def openat2_xdev(ctx):
                 "no_xdev cwd to /usr/share (can)": "ret=0 errno=0", "no_xdev host fd to /dev/null (absolute)": "ret=-1 errno=18"}
     bad = ["%s: %s, wanted %s" % (k, got.get(k), v) for k, v in crossing.items() if got.get(k) != v]
     expect(not bad, "the can-to-host crossing under RESOLVE_NO_XDEV: " + "; ".join(bad))
+
+
+@test
+def exec_identity(ctx):
+    """7.4.5, 7.6: the identity a program exec'd from inside gets, as the kernel gives it: comm and AT_EXECFN from the path
+    the program was exec'd by, not from argv[0]; a script's $0, AT_EXECFN and comm spelt /dev/fd/N/name relative to a
+    descriptor and /dev/fd/N through one, comm then the file's own name; a close-on-exec script descriptor refused with
+    ENOENT before anything runs; a header the loader cannot load ENOEXEC and a loader the can lacks ENOENT from execve
+    itself, where the child used to die after a successful exec. The kernel under bwrap measured these answers
+    (build/review, revision 16)."""
+    d = os.path.join(ctx.work, "identhost")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "exec_identity"), [d])
+    expect(rc == 0, "exec_identity: %r %r" % (out, err))
+    got = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
+    want = {"abs comm": "prog2", "abs execfn": d + "/prog2", "abs argv0": "renamed", "rel comm": "prog2", "rel execfn": "prog2", "rel argv0": "renamed",
+            "dfd script argv0": "/dev/fd/N/s.sh", "dfd script comm": "s.sh", "cloexec script": "ENOENT",
+            "fd script argv0": "/dev/fd/N", "fd script comm": "s.sh", "fd elf comm": "prog2", "fd elf execfn": "/dev/fd/N", "fd elf argv0": "renamed",
+            "elf32": "ENOEXEC", "no loader": "ENOENT"}
+    bad = ["%s: got %s, the kernel says %s" % (k, got.get(k), v) for k, v in want.items() if got.get(k) != v]
+    expect(not bad, "; ".join(bad))
 
 
 @test

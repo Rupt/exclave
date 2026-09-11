@@ -100,9 +100,9 @@ int elf_probe(const char *real, char *interp, int *is_opener, void *buf)
 {
     *is_opener = 0; interp[0] = 0;
     long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) return (int)fd;
-    Ehdr eh; Phdr *ph = (Phdr *)buf; unsigned char *nb = (unsigned char *)buf + 64 * sizeof(Phdr); int ret = -ENOEXEC;   /* 3584 + 512 bytes */
+    Ehdr eh; Phdr *ph = (Phdr *)buf; unsigned char *nb = (unsigned char *)buf + 128 * sizeof(Phdr); int ret = -ENOEXEC;   /* 7168 + 512 bytes: the loader's own limit of headers */
     if (sys_pread((int)fd, &eh, sizeof eh, 0) == sizeof eh && eh.e_ident[0] == 0x7f && eh.e_ident[1] == 'E'
-        && eh.e_ident[4] == ELFCLASS64 && eh.e_machine == EM_NATIVE && eh.e_phnum <= 64 && eh.e_phentsize == sizeof(Phdr)
+        && eh.e_ident[4] == ELFCLASS64 && eh.e_machine == EM_NATIVE && eh.e_phnum <= 128 && eh.e_phentsize == sizeof(Phdr)
         && sys_pread((int)fd, ph, (size_t)eh.e_phnum * sizeof(Phdr), (long)eh.e_phoff) == (long)(eh.e_phnum * sizeof(Phdr))) {
         ret = 0;
         for (int i = 0; i < eh.e_phnum; i++) {
@@ -199,8 +199,7 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
     }
     if (!seen) { *w++ = AT_EXECFN; *w++ = (unsigned long)C.execfn; }
     *w++ = AT_NULL; *w++ = 0;
-    char nm[16]; scpy(nm, base_name(C.execfn), sizeof nm);   /* comm as the kernel sets it: from the exec'd path, not the interpreter's */
-    sys_prctl(PR_SET_NAME, (unsigned long)nm, 0, 0, 0);
+    sys_prctl(PR_SET_NAME, (unsigned long)C.comm, 0, 0, 0);   /* comm as the kernel sets it (7.6): the exec'd path's last component, never the interpreter's */
     log_line("load", 0, vpath);
     debug_hook();                                             /* 7.6: gdb, if present, learns the mappings here */
 #if defined(__x86_64__)

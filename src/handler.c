@@ -259,7 +259,7 @@ static long do_openat2(struct scratch *S, long *a)
 }
 
 /* ---------- exec (7.6): scripts and host programs run inside the can's world ---------- */
-static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, struct scratch **Sp);
+static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, int cloexec, struct scratch **Sp);
 
 /* A pointer vector of n entries: a scratch region when it fits, an anonymous mapping otherwise (F3-2:
  * vectors are sized from their counts). A mapping made by a vfork child stays in the parent, unused. */
@@ -293,21 +293,30 @@ static long vec_read(struct scratch *S, void *region, size_t region_size, char *
     v[n] = 0; *out = v; return n;
 }
 
-static long exec_loader_mode(struct scratch *S, const char *v, char **argv, char **envp, struct scratch **Sp)
+/* The exec of a wrapper, or of the opener for a program on the loader path, with the identity the kernel would give
+ * the program carried in the opener's own variables (7.4.5, 7.6): CAN_EXEC names the loader-path target, CAN_EXECFN
+ * the path the program is exec'd by as the kernel spells it, CAN_COMM the name the kernel would set as comm. S->v2
+ * and S->comm hold the last two from do_execve; an inherited copy of any of the three is dropped, and every opener
+ * strips them before a program runs. The strings are the kernel's to validate. */
+static long exec_env(struct scratch *S, const char *path, char **argv, char **envp, const char *v, int loader)
 {
-    void *big; char **env; long envc = vec_read(S, S->extra, sizeof S->extra, envp, 1, &env, &big);
+    void *big; char **env; long envc = vec_read(S, S->extra, sizeof S->extra, envp, 3, &env, &big);
     if (envc < 0) return envc;
-    scpy(S->b1, "CAN_EXEC=", PATH_MAX); scat(S->b1, v, PATH_MAX);
-    long n = 0; char head[10];
-    for (long i = 0; i < envc; i++) {                        /* drop an inherited CAN_EXEC; the strings are the kernel's to validate */
-        if (copy_in(head, env[i], 9) == 9 && xmemcmp(head, "CAN_EXEC=", 9) == 0) continue;
+    long n = 0; char head[12];
+    for (long i = 0; i < envc; i++) {
+        long got = copy_in(head, env[i], sizeof head);
+        if (got >= 9 && (xmemcmp(head, "CAN_EXEC=", 9) == 0 || xmemcmp(head, "CAN_COMM=", 9) == 0 || (got >= 11 && xmemcmp(head, "CAN_EXECFN=", 11) == 0))) continue;
         env[n++] = env[i];
     }
-    for (long i = n; i > 0; i--) env[i] = env[i - 1];
-    env[0] = S->b1; env[n + 1] = 0;
+    int k = loader ? 3 : 2;
+    for (long i = n; i > 0; i--) env[i + k - 1] = env[i - 1];
+    scpy(S->cur, "CAN_EXECFN=", PATH_MAX); scat(S->cur, S->v2, PATH_MAX);
+    scpy(S->rest, "CAN_COMM=", PATH_MAX); scat(S->rest, S->comm, PATH_MAX);
+    if (loader) { scpy(S->b1, "CAN_EXEC=", PATH_MAX); scat(S->b1, v, PATH_MAX); env[0] = S->b1; }
+    env[k - 2] = S->cur; env[k - 1] = S->rest; env[n + k] = 0;
     log_line("exec", 0, v);
-    long r = RE5(NR_execve, C.opener, argv, env, 0, 0);
-    vector_free(big, envc + 2);                              /* only reached when execve failed */
+    long r = RE5(NR_execve, path, argv, env, 0, 0);
+    vector_free(big, envc + 4);                              /* only reached when execve failed */
     return r;
 }
 
@@ -331,40 +340,49 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
         scpy(vcopy, given, PATH_MAX);                        /* the script's path as the caller spelt it, as the kernel passes it (7.4.5, review F5-8) */
         long k = shebang_argv(line, vcopy, av, argc, nargv, argc + 4);
         if (k == -1) r = -ENOEXEC; else if (k == -2) r = -E2BIG;
-        else if ((r = canon(S, nargv[0], AT_FDCWD, 1, S->v)) >= 0) r = exec_target(S, S->v, nargv[0], nargv, envp, depth + 1, Sp);
+        else if ((r = canon(S, nargv[0], AT_FDCWD, 1, S->v)) >= 0) r = exec_target(S, S->v, nargv[0], nargv, envp, depth + 1, 0, Sp);
     }
     vector_free(big2, argc + 4); vector_free(big1, argc + 1);
     scratch_put(S2);                                         /* only reached when no exec happened */
     return r;
 }
 
-static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, struct scratch **Sp)
+/* cloexec: the script came through a close-on-exec descriptor, which its interpreter could not open: the kernel refuses
+ * such an exec with ENOENT before it runs anything (fs/exec.c, BINPRM_FLAGS_PATH_INACCESSIBLE) */
+static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, int cloexec, struct scratch **Sp)
 {
     if (depth > 4) return -ELOOP;
     if (vis_in_data(v)) return -EACCES;                          /* 6.2: a data prefix is never executed (review O4-3) */
     to_real_exec(v, S->real);
     struct kstat st; long e;
     if ((e = sys_stat(S->real, &st)) < 0) return e;          /* ENOENT, ENOTDIR for a trailing slash, the name's own error */
-    if ((st.st_mode & S_IFMT) == S_IFDIR) return -EACCES;
     if ((st.st_mode & S_IFMT) != S_IFREG) return -EACCES;
     long ok = sys_faccessat(AT_FDCWD, S->real, X_OK);           /* the kernel's answer for this process, triads and search included (O3-4) */
     if (ok < 0) return ok;
     int wrapper = is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp);
     long fd = sys_open(wrapper ? S->tmp : S->real, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) return fd;
     unsigned char h[4]; long n = sys_read((int)fd, h, 4); sys_close((int)fd);
+    int script = n >= 2 && h[0] == '#' && h[1] == '!', elf = n == 4 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F';
+    if (script && cloexec) return -ENOENT;
     if (wrapper) {
-        if (!(n >= 2 && h[0] == '#' && h[1] == '!') && !(n == 4 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F')) return -ENOEXEC;
-        log_line("exec", 0, v);
-        return RE5(NR_execve, S->real, argv, envp, 0, 0);    /* the kernel runs the opener under the program's name */
+        if (!script && !elf) return -ENOEXEC;
+        return exec_env(S, S->real, argv, envp, v, 0);      /* the kernel runs the opener under the program's name */
     }
     /* not a wrapper: a host program, or an unwrapped can file */
-    if (n >= 2 && h[0] == '#' && h[1] == '!') return exec_script(S, v, given, argv, envp, depth, Sp);
-    if (n == 4 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F') {
-        int another;                                         /* 7.4.5: a file carrying .note.cont is another opener: exec it as it is */
-        if (elf_probe(S->real, S->tmp, &another, S->extra) >= 0 && another) { log_line("exec", 0, v); return RE5(NR_execve, S->real, argv, envp, 0, 0); }
-        return exec_loader_mode(S, v, argv, envp, Sp);
+    if (script) return exec_script(S, v, given, argv, envp, depth, Sp);
+    if (!elf) return -ENOEXEC;
+    int another;                                             /* 7.4.5: a file carrying .note.cont is another opener: exec it as it is */
+    int pr = elf_probe(S->real, S->tmp, &another, S->extra);
+    if (pr < 0) return -ENOEXEC;                             /* a class, machine or header the loader (7.3) cannot load: the kernel's answer for a foreign file */
+    if (another) { log_line("exec", 0, v); return RE5(NR_execve, S->real, argv, envp, 0, 0); }
+    if (pr == 1) {                                           /* the loader the header names, resolved as loader_run resolves it (7.3): one that is not there
+                                                              * is ENOENT here, as the kernel's open_exec answers; one that exists but is not the can's own
+                                                              * file, a host path or a data prefix, is left to the child opener, which refuses it by name */
+        scpy(S->b1, S->tmp, PATH_MAX);
+        if ((e = canon(S, S->b1, AT_FDCWD, 1, S->tmp)) < 0) return e;
+        if (is_can_owned(S->tmp) && !vis_in_data(S->tmp) && (sys_stat(to_real(S->tmp, S->real, S->b2), &st) < 0 || (st.st_mode & S_IFMT) != S_IFREG)) return -ENOENT;
     }
-    return -ENOEXEC;
+    return exec_env(S, C.opener, argv, envp, v, 1);
 }
 
 /* a descriptor with no path (13 item 25): a memfd, or a file unlinked since it was opened. The kernel runs the file
@@ -385,18 +403,21 @@ static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp,
     if ((e = sys_stat(S->real, st)) < 0) return e;
     if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
     long ok = sys_faccessat(AT_FDCWD, S->real, X_OK); if (ok < 0) return ok;
+    long l = sys_readlink(S->real, S->tmp, PATH_MAX - 1); if (l < 0) return l;   /* comm is the file's own name (7.6), which the link spells with " (deleted)" */
+    S->tmp[l] = 0; if (l > 10 && xstrcmp(S->tmp + l - 10, " (deleted)") == 0) S->tmp[l - 10] = 0;
+    scpy(S->comm, base_name(S->tmp), sizeof S->comm);
     long h = sys_open(S->real, O_RDONLY | O_CLOEXEC, 0); if (h < 0) return h;
     unsigned char *head = (unsigned char *)S->tmp; long k = sys_read((int)h, head, 4); sys_close((int)h);
     if (k >= 2 && head[0] == '#' && head[1] == '!') {
         long fl = sys_fcntl(fd, F_GETFD, 0); if (fl < 0) return fl;
         if (fl & FD_CLOEXEC) return -ENOENT;
-        scpy(S->v, "/dev/fd/", PATH_MAX); scat(S->v, n, PATH_MAX);
-        return exec_script(S, S->v, S->v, argv, envp, 0, Sp);   /* S->real is read; /dev/fd/N is what the interpreter gets */
+        scpy(S->v, S->v2, PATH_MAX);                         /* S->real is read; /dev/fd/N, the kernel's spelling, is what the interpreter gets */
+        return exec_script(S, S->v, S->v, argv, envp, 0, Sp);
     }
     if (!(k == 4 && head[0] == 0x7f && head[1] == 'E' && head[2] == 'L' && head[3] == 'F')) return -ENOEXEC;
     long m = sys_fcntl(fd, F_DUPFD, 3); if (m < 0) return m;   /* inherited by the child opener, which closes it after the mapping */
     ltoa_(m, n); scpy(S->v, "/proc/self/fd/", PATH_MAX); scat(S->v, n, PATH_MAX);
-    long r = exec_loader_mode(S, S->v, argv, envp, Sp);
+    long r = exec_env(S, C.opener, argv, envp, S->v, 1);
     sys_close((int)m);                                       /* only reached when the exec failed */
     return r;
 }
@@ -405,18 +426,33 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
 {
     long r = resolve(S, a, pi, di, !(flags & AT_SYMLINK_NOFOLLOW), (flags & AT_EMPTY_PATH) != 0);
     if (r < 0) return r;
-    if (r == 1) {
+    int dfd = di < 0 ? AT_FDCWD : (int)a[di], byfd = r == 1, cloexec = 0;
+    /* the name the program is exec'd by, spelt as the kernel spells it (fs/exec.c, alloc_bprm): the path as given, or
+     * through a descriptor /dev/fd/N and /dev/fd/N/rel; a script's $0, AT_EXECFN and comm come from it (7.6) */
+    if (dfd != AT_FDCWD && (byfd || S->b1[0] != '/')) {
+        char *num = S->tmp; ltoa_(dfd, num);
+        scpy(S->v2, "/dev/fd/", PATH_MAX); scat(S->v2, num, PATH_MAX);
+        if (!byfd) { if (xstrlen(S->v2) + 1 + xstrlen(S->b1) >= PATH_MAX) return -ENAMETOOLONG; scat(S->v2, "/", PATH_MAX); scat(S->v2, S->b1, PATH_MAX); }
+    } else scpy(S->v2, S->b1, PATH_MAX);
+    if (byfd) {
         struct kstat st;                                     /* a descriptor on a symlink itself (O_PATH|O_NOFOLLOW) cannot be run (fs/exec.c) */
-        if (SC2(NR_fstat, a[di], &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK) return -ELOOP;
-        r = dfd_virtual((int)a[di], S->v);
-        if (r == -ENOENT) return exec_descriptor(S, (int)a[di], argv, envp, Sp);   /* fd_virtual: the link ends " (deleted)": no path */
+        if (dfd != AT_FDCWD) {                               /* AT_FDCWD with an empty path is the working directory, no descriptor */
+            if (SC2(NR_fstat, dfd, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK) return -ELOOP;
+            r = sys_fcntl(dfd, F_GETFD, 0); if (r < 0) return r;
+            cloexec = (r & FD_CLOEXEC) != 0;
+        }
+        r = dfd_virtual(dfd, S->v);
+        if (r == -ENOENT) return exec_descriptor(S, dfd, argv, envp, Sp);   /* fd_virtual: the link ends " (deleted)": no path */
         if (r < 0) return r;
+        scpy(S->comm, base_name(S->v), sizeof S->comm);     /* through a descriptor, comm is the file's own name (fs/exec.c since 6.12) */
+    } else {
+        if (flags & AT_SYMLINK_NOFOLLOW) {                    /* the kernel refuses to run a symlink itself (F3-20) */
+            struct kstat st; to_real_exec(S->v, S->real);
+            if (sys_lstat(S->real, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK) return -ELOOP;
+        }
+        scpy(S->comm, base_name(S->v2), sizeof S->comm);    /* kbasename of the name as spelt */
     }
-    else if (flags & AT_SYMLINK_NOFOLLOW) {                    /* the kernel refuses to run a symlink itself (F3-20) */
-        struct kstat st; to_real_exec(S->v, S->real);
-        if (sys_lstat(S->real, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK) return -ELOOP;
-    }
-    return exec_target(S, S->v, r == 1 ? S->v : S->b1, argv, envp, 0, Sp);   /* S->b1: the path as given (resolve); a descriptor exec has none */
+    return exec_target(S, S->v, S->v2, argv, envp, 0, cloexec, Sp);
 }
 
 /* ---------- readlink: /proc links and identity files answer in virtual terms (8.4) ---------- */
