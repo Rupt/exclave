@@ -212,8 +212,17 @@ def _check_record(rec, kind):
         if k != want:
             _fail(rec.line, 1, "wrong field type for " + rec.key)
     for k in ("own", "host", "data"):
-        if rec.key == k and (not rec.fields[0][1].startswith(b"/") or b"\0" in rec.fields[0][1]):
-            _fail(rec.line, 1, k + " must be an absolute path")
+        if rec.key == k and not _normalised_abs(rec.fields[0][1]):
+            _fail(rec.line, 1, k + " must be a normalised absolute path")
+
+
+def _normalised_abs(b):
+    """An absolute path in its one spelling (6.2): no NUL, no empty, "." or ".." component, no trailing slash but on "/"."""
+    if not b.startswith(b"/") or b"\0" in b:
+        return False
+    if b == b"/":
+        return True
+    return not b.endswith(b"/") and all(c not in (b"", b".", b"..") for c in b[1:].split(b"/"))
 
 
 def quote(b):

@@ -33,7 +33,9 @@ def properties(rng, cases):
     bad = 0
     seen = {}
     for _ in range(cases):
-        b = rand_bytes(rng, path=True)
+        b = rand_bytes(rng, path=True).replace(b"/", b"_")     # the encoding's properties; a path's own spelling rules are the mutations' (6.2)
+        if b in (b".", b".."):
+            b = b"_" + b
         q = cannery.quote(b)
         if seen.setdefault(q, b) != b:
             bad += 1                                              # encode is injective
@@ -58,6 +60,7 @@ MUTATIONS = [
     lambda t, rng: t.replace(b"\n", b"\r\n", 1), lambda t, rng: t[:-1], lambda t, rng: b"\xef\xbb\xbf" + t,
     lambda t, rng: t.replace(b" ", b"  ", 1), lambda t, rng: t.replace(b" ", b"\t", 1), lambda t, rng: t.replace(b'"', b"", 1),
     lambda t, rng: t.replace(b"own", b"Own", 1), lambda t, rng: t + b"# trailing\n", lambda t, rng: t.replace(b"can 1", b"can 2", 1),
+    lambda t, rng: t.replace(b'own "/', b'own "//', 1), lambda t, rng: t.replace(b'own "/', b'own "/./', 1), lambda t, rng: t.replace(b'own "/', b'own "/../', 1),
     lambda t, rng: t.replace(b'"/', b'"', 1), lambda t, rng: t.replace(b"\\x", b"\\X", 1), lambda t, rng: t.replace(b"own", b"env", 1),
     lambda t, rng: t[:rng.randint(0, len(t))] + bytes([rng.randint(0, 31)]) + t[rng.randint(0, len(t)):],
     lambda t, rng: t.replace(b'"\n', b'" \n', 1), lambda t, rng: t.replace(b"own", b"own \"/x\" own", 1),

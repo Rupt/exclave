@@ -36,8 +36,8 @@ static int no_readv;                                         /* process_vm_readv
  * own copy would, EFAULT or short at the boundary; the pipe lives for the copy alone, a page a step (13) */
 static long pipe_copy(void *dst, const void *src, size_t n)
 {
-    int fds[2]; long done = 0;
-    if (sys_pipe2(fds, O_CLOEXEC | O_NONBLOCK) < 0) { xmemcpy(dst, src, n); return (long)n; }   /* no descriptor left: a direct copy */
+    int fds[2]; long done = 0, e = sys_pipe2(fds, O_CLOEXEC | O_NONBLOCK);
+    if (e < 0) return e;                                     /* no descriptor left: the syscall answers that, never a raw copy that could fault the handler */
     while (done < (long)n) {
         size_t chunk = n - (size_t)done; if (chunk > 4096) chunk = 4096;   /* a page always fits an empty pipe */
         long w = sys_write(fds[1], (const char *)src + done, chunk);
@@ -53,7 +53,7 @@ static long copy_in(pid_t pid, void *dst, const void *src, size_t n)
 {
     unsigned long p = (unsigned long)src;
     if (!p) return -EFAULT;
-    if (no_readv) { long g = pipe_copy(dst, src, n); return g > 0 || n == 0 ? g : -EFAULT; }
+    if (no_readv) { long g = pipe_copy(dst, src, n); return g < 0 ? g : g > 0 || n == 0 ? g : -EFAULT; }
     struct iovec l = { dst, n }, r[2]; unsigned long rn = 1;
     unsigned long first = 4096 - (p & 4095); if (first > n) first = n;
     r[0].iov_base = (void *)p; r[0].iov_len = first;
@@ -78,7 +78,7 @@ static long copy_out(pid_t pid, void *dst, const void *src, size_t n)
 {
     unsigned long p = (unsigned long)dst;
     if (!p) return -EFAULT;
-    if (no_readv) return pipe_copy(dst, src, n) == (long)n ? 0 : -EFAULT;
+    if (no_readv) { long g = pipe_copy(dst, src, n); return g == (long)n ? 0 : g < 0 ? g : -EFAULT; }
     struct iovec l = { (void *)src, n }, r[2]; unsigned long rn = 1;
     unsigned long first = 4096 - (p & 4095); if (first > n) first = n;
     r[0].iov_base = (void *)p; r[0].iov_len = first;
@@ -513,7 +513,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         }
     }
     long l = (long)xstrlen(ans); if (l > bufsiz) l = bufsiz;
-    if (l && copy_out(S->pid, buf, ans, (size_t)l)) return -EFAULT;   /* the program's buffer is never validated by the kernel here */
+    if (l && (r = copy_out(S->pid, buf, ans, (size_t)l))) return r;   /* the program's buffer is never validated by the kernel here */
     return l;
 }
 
@@ -582,6 +582,14 @@ static long do_io_pgetevents(struct scratch *S, long *a)
 }
 
 /* ---------- descriptors that name can files ---------- */
+/* ST_RDONLY into the flag word of a statfs the kernel just filled (8.2), through the copies of 7.5.4 like every other write
+ * into program memory: the kernel validated the buffer a moment ago, but another thread may have unmapped it since */
+static long ro_flag(struct scratch *S, void *flags)
+{
+    long f; if (copy_exact(S->pid, &f, flags, sizeof f)) return -EFAULT;
+    f |= ST_RDONLY;
+    return copy_out(S->pid, flags, &f, sizeof f);
+}
 static int dfd_virtual(int fd, char *out) { return fd == AT_FDCWD ? cwd_virtual(out) : fd_virtual(fd, out); }   /* a descriptor argument that may be AT_FDCWD */
 static long fd_can(struct scratch *S, int fd)
 {
@@ -681,7 +689,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if (starts_dir(S->tmp, C.root)) from_real(S->tmp);
         r = (long)xstrlen(S->tmp) + 1;
         if (r > a[1]) return -ERANGE;
-        if (copy_out(S->pid, (void *)a[0], S->tmp, (size_t)r)) return -EFAULT;
+        { long e = copy_out(S->pid, (void *)a[0], S->tmp, (size_t)r); if (e) return e; }
         return r;
     case NR_chdir:
         if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
@@ -852,12 +860,10 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
         to_real(S->v, S->real, S->tmp);
         r = RE5(NR_statfs, S->real, a[1], 0, 0, 0);
-        if (r == 0 && is_can_owned(S->v)) *(long *)((char *)a[1] + STATFS_FLAGS_OFF) |= ST_RDONLY;
-        return r;
+        return r == 0 && is_can_owned(S->v) ? ro_flag(S, (char *)a[1] + STATFS_FLAGS_OFF) : r;
     case NR_fstatfs:
         r = RE5(NR_fstatfs, a[0], a[1], 0, 0, 0);
-        if (r == 0 && fd_can(S, (int)a[0])) *(long *)((char *)a[1] + STATFS_FLAGS_OFF) |= ST_RDONLY;
-        return r;
+        return r == 0 && fd_can(S, (int)a[0]) ? ro_flag(S, (char *)a[1] + STATFS_FLAGS_OFF) : r;
     case NR_inotify_add_watch:
         if ((r = resolve(S, a, 1, -1, !(a[2] & IN_DONT_FOLLOW), 0)) < 0) return r;
         to_real(S->v, S->real, S->tmp);
@@ -894,6 +900,10 @@ static const char *sysname(int nr)
     case NR_connect: return "connect";
 #endif
     case NR_stat: case NR_lstat: case NR_newfstatat: case NR_statx: return "stat";
+    case NR_fchmod: case NR_fchown: case NR_file_getattr: case NR_file_setattr: return "attr";
+    case NR_fsetxattr: case NR_fremovexattr: case NR_setxattrat: case NR_getxattrat: case NR_listxattrat: case NR_removexattrat: return "xattr";
+    case NR_ioctl: return "ioctl";
+    case NR_inotify_add_watch: case NR_fanotify_mark: return "watch";
     case NR_access: case NR_faccessat: case NR_faccessat2: return "access";
     case NR_readlink: case NR_readlinkat: return "readlink";
     case NR_execve: case NR_execveat: return "exec";

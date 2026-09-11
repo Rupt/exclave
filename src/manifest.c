@@ -103,10 +103,20 @@ static int parse_token(struct cur *c, char *err, size_t errn, struct field *f)
     return 0;
 }
 
+/* an absolute path in its one spelling: no NUL, no empty component, none that is "." or "..", no trailing slash but on "/"
+ * itself, so that a record names what the visibility rule will match and never one it silently cannot (6.2) */
 static int valid_abs_path(const char *s, size_t n)
 {
     if (n == 0 || s[0] != '/') return 0;
+    if (n == 1) return 1;
     for (size_t i = 0; i < n; i++) if (s[i] == 0) return 0;
+    if (s[n - 1] == '/') return 0;
+    for (size_t i = 1; i < n;) {
+        size_t j = i; while (j < n && s[j] != '/') j++;
+        size_t l = j - i;
+        if (l == 0 || (l == 1 && s[i] == '.') || (l == 2 && s[i] == '.' && s[i + 1] == '.')) return 0;
+        i = j + 1;
+    }
     return 1;
 }
 
@@ -170,15 +180,15 @@ int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t
             WANT(1, F_STR); if (seen_isa++) return fail(err, errn, K, "duplicate isa");
             scpy(c->isa, f[0].s, sizeof c->isa);
         } else if (xstrcmp(key, "own") == 0) {
-            WANT(1, F_STR); if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "own must be an absolute path");
+            WANT(1, F_STR); if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "own must be a normalised absolute path");
             if (c->nown >= MANIFEST_MAX_OWN) return fail(err, errn, K, "more than 256 own records");
             c->own[c->nown++] = f[0].s;
         } else if (xstrcmp(key, "host") == 0) {
-            WANT(1, F_STR); if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "host must be an absolute path");
+            WANT(1, F_STR); if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "host must be a normalised absolute path");
             if (c->nhost >= MANIFEST_MAX_HOST) return fail(err, errn, K, "more than 32 host records");
             c->host[c->nhost].v = f[0].s; c->host[c->nhost].r = f[0].s; c->host[c->nhost].is_file = 0; c->nhost++;
         } else if (xstrcmp(key, "data") == 0) {
-            WANT(1, F_STR); if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "data must be an absolute path");
+            WANT(1, F_STR); if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "data must be a normalised absolute path");
             if (c->ndata >= (int)(sizeof c->data / sizeof c->data[0])) return fail(err, errn, K, "more than 32 data records");
             c->data[c->ndata++] = f[0].s;                            /* never executed, never a loader (6.2); enforced in the handler and the loader */
         } else {

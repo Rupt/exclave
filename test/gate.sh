@@ -26,7 +26,7 @@ copy_can() {                                                # copy_can SRC DST: 
 }
 unit() {
     cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/manifest_test" "$here/manifest_test.c" "$repo/src/manifest.c" "$repo/src/str.c" \
-        && "$out/manifest_test" && python3 "$here/grammar_test.py" && python3 "$here/syscalls.py"
+        && "$out/manifest_test" && python3 "$here/grammar_test.py" --c-parser "$out/manifest_test" && python3 "$here/syscalls.py"   # the parser just built, not a stale build/manifest_test
 }
 stack() {
     python3 "$here/stackcheck.py" "$repo"/build/opener.debug-*.su || return 1

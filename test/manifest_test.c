@@ -71,6 +71,11 @@ int main(int argc, char **argv)
     BAD("relative own", "can 1\nown \"usr\"\n", "absolute");
     BAD("relative host", "can 1\nhost \"usr\"\n", "absolute");
     BAD("relative data", "can 1\ndata \"opt\"\n", "absolute");
+    BAD("trailing slash", "can 1\nown \"/usr/\"\n", "normalised");
+    BAD("double slash", "can 1\nhost \"/usr//share\"\n", "normalised");
+    BAD("dot component", "can 1\ndata \"/opt/./x\"\n", "normalised");
+    BAD("dotdot component", "can 1\nown \"/usr/../etc\"\n", "normalised");
+    OK("root itself", "can 1\nown \"/\"\n");
     BAD("empty", "", "end with LF");
     BAD("only blank", "\n", "empty manifest");
     BAD("bare quote field", "can 1\nown \"/a\" x\n", "field count");
