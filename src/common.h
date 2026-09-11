@@ -213,7 +213,9 @@ int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t
 
 /* ---------- scratch (scratch.c) ---------- */
 struct scratch {
-    char b1[PATH_MAX], b2[PATH_MAX], rest[PATH_MAX], cur[PATH_MAX], real[PATH_MAX], tmp[PATH_MAX], v[PATH_MAX];
+    char b1[PATH_MAX], b2[PATH_MAX];
+    char rest[2 * PATH_MAX];       /* the walk's remaining path: a directory and a relative path, or a link's text and the rest, each under PATH_MAX */
+    char cur[PATH_MAX], real[PATH_MAX], tmp[PATH_MAX], v[PATH_MAX];
     char v2[PATH_MAX];             /* the first path of a two-path syscall, the directory a scoped openat2 walk may not leave, or the
                                     * name an exec'd program is exec'd by as the kernel spells it (7.4.5); canon never writes it */
     char comm[NAME_MAX + 1];       /* the comm the kernel would set for an exec'd program (7.6) */

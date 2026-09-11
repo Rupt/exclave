@@ -329,7 +329,7 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
     void *big1, *big2; char **av, **nargv;
     long argc = vec_read(S, S->extra, sizeof S->extra, argv, 0, &av, &big1);
     if (argc < 0) { scratch_put(S2); return argc; }
-    nargv = vector(S2->rest, 6 * PATH_MAX, argc + 4, &big2);
+    nargv = vector(S2->rest, 6 * PATH_MAX, argc + 4, &big2);   /* rest, cur, real, tmp and v of S2, contiguous, hold six PATH_MAXes */
     if (!nargv) { vector_free(big1, argc + 1); scratch_put(S2); return -ENOMEM; }
     long fd = sys_open(S->real, O_RDONLY | O_CLOEXEC, 0);
     long n = fd < 0 ? fd : sys_read((int)fd, line, 255); if (fd >= 0) sys_close((int)fd);

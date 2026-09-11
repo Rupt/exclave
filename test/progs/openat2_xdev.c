@@ -53,6 +53,12 @@ int main(int argc, char **argv)
     show("no_xdev /proc fd to self/status", o2(proc, "self/status", O_RDONLY, RESOLVE_NO_XDEV));
     show("no_xdev host fd to file", o2(hd, "file", O_RDONLY, RESOLVE_NO_XDEV));
     show("no_xdev host fd to /dev/null (absolute)", o2(hd, "/dev/null", O_RDONLY, RESOLVE_NO_XDEV));
+    /* .. from the host directory all the way up: the root reached is the tree's, and under no_xdev the last step crosses (revision 16) */
+    char ups[2048] = ""; for (const char *q = host; *q; q++) if (*q == '/') strcat(ups, "../"); strcat(ups, ".");
+    { struct how h = { O_RDONLY | O_DIRECTORY, 0, 0 }; struct stat a, b; long r = syscall(SYS_openat2, hd, ups, &h, sizeof h);
+      if (r < 0) printf("root by .. from host fd is the tree's: errno=%d\n", errno);
+      else { fstat((int)r, &a); stat("/", &b); close((int)r); printf("root by .. from host fd is the tree's: %s\n", a.st_dev == b.st_dev && a.st_ino == b.st_ino ? "yes" : "no"); } }
+    show("no_xdev host fd to the root by ..", o2(hd, ups, O_RDONLY | O_DIRECTORY, RESOLVE_NO_XDEV));
     /* the other flags on host-only walks */
     show("no_symlinks host fd to lnk", o2(hd, "lnk", O_RDONLY, RESOLVE_NO_SYMLINKS));
     show("no_symlinks host fd to file", o2(hd, "file", O_RDONLY, RESOLVE_NO_SYMLINKS));

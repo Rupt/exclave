@@ -42,6 +42,7 @@ TRACED = ("open", "stat", "lstat", "access", "execve", "readlink", "openat", "ne
           "renameat2", "link", "linkat", "symlink", "symlinkat")
 
 TESTS = []
+PATH_MAX = 4096
 
 
 def test(f):
@@ -250,7 +251,7 @@ def compile_progs(ctx):
     shutil.copytree(os.path.join(HERE, "progs"), src)
     os.makedirs(ctx.progs, exist_ok=True)
     gcc = wrapper(ctx, GCC)
-    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2", "unix_socket", "openat2_xdev", "fexec", "exec_identity"):
+    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2", "unix_socket", "openat2_xdev", "fexec", "exec_identity", "path_length"):
         rc, out, err = run([gcc, "-O1", "-g", "-pthread", "-o", os.path.join(ctx.progs, name), os.path.join(src, name + ".c"), "-lm", "-ldl"], cwd=ctx.work, env=ctx.env)
         if rc and name == "execstack" and "not allowed here" in err:      # nested functions are gcc's; clang has none
             continue
@@ -1713,7 +1714,8 @@ def openat2_xdev(ctx):
             os.close(fd)
     expect(not bad, "; ".join(bad))
     crossing = {"no_xdev cwd to /dev/null": "ret=-1 errno=18", "no_xdev cwd to /dev/shm": "ret=-1 errno=18", "no_xdev cwd to /proc/self/status": "ret=-1 errno=18",
-                "no_xdev cwd to /usr/share (can)": "ret=0 errno=0", "no_xdev host fd to /dev/null (absolute)": "ret=-1 errno=18"}
+                "no_xdev cwd to /usr/share (can)": "ret=0 errno=0", "no_xdev host fd to /dev/null (absolute)": "ret=-1 errno=18",
+                "root by .. from host fd is the tree's": "yes", "no_xdev host fd to the root by ..": "ret=-1 errno=18"}   # a .. that reaches the root is the walk's (revision 16)
     bad = ["%s: %s, wanted %s" % (k, got.get(k), v) for k, v in crossing.items() if got.get(k) != v]
     expect(not bad, "the can-to-host crossing under RESOLVE_NO_XDEV: " + "; ".join(bad))
 
@@ -1738,6 +1740,65 @@ def exec_identity(ctx):
             "elf32": "ENOEXEC", "no loader": "ENOENT"}
     bad = ["%s: got %s, the kernel says %s" % (k, got.get(k), v) for k, v in want.items() if got.get(k) != v]
     expect(not bad, "; ".join(bad))
+
+
+@test
+def path_length(ctx):
+    """13 item 13, 7.4.4: a can-owned path whose real spelling, the root prefix and the virtual path, would not fit PATH_MAX
+    is refused with ENAMETOOLONG and never cut to a shorter name, which once answered ENOENT for the cut; its parent, which
+    fits, is fine. And a relative path from a working directory so deep that the two together pass PATH_MAX is
+    ENAMETOOLONG too, where the kernel, walking relatively, succeeds: the stated limitation. On a private copy of the can,
+    since the chain is made in the tree."""
+    copy = os.path.join(ctx.work, "lengthcan")
+    shutil.rmtree(copy, ignore_errors=True)
+    copy_can(ctx.can, copy)
+    rootlen = len(os.path.join(copy, "root"))
+    if rootlen > 200:
+        return "the work directory's path is too long for the window: skipped"
+    base = "/usr/share/cont-deep"
+    fd = os.open(os.path.join(copy, "root", base.lstrip("/")[:9]), os.O_RDONLY | os.O_DIRECTORY)   # /usr/share
+    os.mkdir("cont-deep", dir_fd=fd)
+    nfd = os.open("cont-deep", os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd); os.close(fd); fd = nfd
+    v = base
+    for i in range(19):                                                # 19 components of 200: 3839 characters
+        os.mkdir("a" * 200, dir_fd=fd)
+        nfd = os.open("a" * 200, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd); os.close(fd); fd = nfd
+        v += "/" + "a" * 200
+    parent = v
+    last = "b" * (PATH_MAX - rootlen - len(v) - 1)                      # a directory whose real spelling is exactly PATH_MAX long
+    os.mkdir(last, dir_fd=fd)
+    nfd = os.open(last, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd); os.close(fd); fd = nfd
+    with os.fdopen(os.open("f", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fd), "w") as f:
+        f.write("deep\n")
+    os.close(fd)
+    deep, dfile = v + "/" + last, v + "/" + last + "/f"
+    expect(len(dfile) < PATH_MAX and rootlen + len(deep) == PATH_MAX, "the window: root %d, dir %d, file %d" % (rootlen, len(deep), len(dfile)))
+    # the deep working directory on the host: 14 components of 200 below the work directory, then 7 more reached relatively
+    d = "d" * 200
+    hostdeep = os.path.join(ctx.work, "deepcwd")
+    os.makedirs(hostdeep)
+    fd = os.open(hostdeep, os.O_RDONLY | os.O_DIRECTORY)
+    for i in range(14):
+        os.mkdir(d, dir_fd=fd)
+        nfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd); os.close(fd); fd = nfd
+        hostdeep = os.path.join(hostdeep, d)
+    with os.fdopen(os.open("f", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fd), "w") as f:
+        f.write("here\n")
+    rel = ""
+    for i in range(7):
+        os.mkdir(d, dir_fd=fd)
+        nfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd); os.close(fd); fd = nfd
+        rel += d + "/"
+    with os.fdopen(os.open("f", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fd), "w") as f:
+        f.write("below\n")
+    os.close(fd)
+    rel += "f"
+    expect(len(hostdeep) < PATH_MAX and len(hostdeep) + 1 + len(rel) > PATH_MAX, "the deep working directory: %d + %d" % (len(hostdeep), len(rel)))
+    rc, out, err = run([os.path.join(copy, ".can", "opener"), os.path.join(ctx.progs, "path_length"), parent, deep, dfile, "cd:" + hostdeep, rel, "f"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "path_length: rc=%d %r %r" % (rc, out, err))
+    want = ["1: stat=ok open=ok", "2: stat=ENAMETOOLONG open=ENAMETOOLONG", "3: stat=ENAMETOOLONG open=ENAMETOOLONG", "4: stat=ENAMETOOLONG open=ENAMETOOLONG", "5: stat=ok open=ok"]
+    expect(out.splitlines() == want, "the parent fits, the directory at the limit and its file are ENAMETOOLONG, a relative path past PATH_MAX from a deep working directory is ENAMETOOLONG (13), a short one is fine: %r" % out)
+    shutil.rmtree(copy, ignore_errors=True)
 
 
 @test

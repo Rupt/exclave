@@ -54,14 +54,14 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
     if (path[0] == '/') {
         if (rf & RESOLVE_BENEATH) return -EXDEV;               /* nd_jump_root: an absolute path leaves the scope */
         S->touched_can = 1;                                 /* the root is the tree's */
-        scpy(rest, path, PATH_MAX); scpy(cur, base, PATH_MAX);
+        scpy(rest, path, sizeof S->rest); scpy(cur, base, PATH_MAX);
         if (base[0]) dom = is_can_owned(base);
     } else {
         int r = (dfd == AT_FDCWD) ? cwd_virtual(rest) : fd_virtual(dfd, rest);
         if (r < 0) return r;
         if (rf & RESOLVE_NO_XDEV) dom = rest[1] ? is_can_owned(rest) : 1;
         if (!rest[1] || is_can_owned(rest)) S->touched_can = 1;   /* the directory the walk starts from */
-        scat(rest, "/", PATH_MAX); scat(rest, path, PATH_MAX);
+        scat(rest, "/", sizeof S->rest); scat(rest, path, sizeof S->rest);   /* a directory and a path, each under PATH_MAX, fit rest together */
         cur[0] = 0;
     }
     char *rp = rest;
@@ -78,7 +78,14 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
                 if (rf & RESOLVE_BENEATH) return -EXDEV;
                 if (rf & RESOLVE_IN_ROOT) continue;
             }
-            char *s = xstrrchr(cur, '/'); if (s) *s = 0; else cur[0] = 0; continue;
+            char *s = xstrrchr(cur, '/'); if (s) *s = 0; else cur[0] = 0;
+            if (!cur[0]) S->touched_can = 1;                   /* the tree's root, reached from below: the walk is the handler's, not the kernel's own */
+            if (rf & RESOLVE_NO_XDEV) {                        /* follow_dotdot: leaving a mount upward is a crossing */
+                int d = cur[0] ? is_can_owned(cur) : 1;
+                if (d != dom) return -EXDEV;
+                dom = d;
+            }
+            continue;
         }
         size_t curl = xstrlen(cur); if (curl + 1 + cl + 1 >= PATH_MAX) return -ENAMETOOLONG;
         cur[curl] = '/'; xmemcpy(cur + curl + 1, comp, cl + 1);
@@ -87,6 +94,9 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         if (C.rootlen && xstrcmp(cur, C.root) == 0) { cur[0] = 0; S->touched_can = 1; while (*rp == '/') rp++; continue; }
         while (*rp == '/') rp++;
         int last = (*rp == 0);
+        /* a can-owned path is re-issued under the tree's root prefix: one that would not fit PATH_MAX there is refused here,
+         * ENAMETOOLONG, and never cut to a shorter name (13) */
+        if (C.rootlen + (long)(curl + 1 + cl) + (last ? trailing : 0) >= PATH_MAX && is_can_owned(cur)) return -ENAMETOOLONG;
         if (rf & RESOLVE_NO_XDEV) {                            /* the mount changes where the domain does; an identity symlink that is
                                                                 * not followed is the tree's own entry, and its host target is not reached */
             int d = is_can_owned(cur);
@@ -99,8 +109,9 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
             if (nomagic) return -ELOOP;                        /* a magic link, refused by the resolve flags */
             if (++hops > 40) return -ELOOP;
             S->touched_can = 1;
-            scpy(tmp, C.exe, PATH_MAX); scat(tmp, "/", PATH_MAX); scat(tmp, rp, PATH_MAX);
-            scpy(rest, tmp, PATH_MAX); rp = rest; cur[0] = 0; continue;
+            size_t el = xstrlen(C.exe), rl = xstrlen(rp);
+            if (el + 1 + rl + 1 >= sizeof S->rest) return -ENAMETOOLONG;
+            memmove(rest + el + 1, rp, rl + 1); xmemcpy(rest, C.exe, el); rest[el] = '/'; rp = rest; cur[0] = 0; continue;
         }
         /* classify the component: a directory, a symlink (text in tmp), absent, or something else */
         int kind, err = -ENOENT;
@@ -149,7 +160,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         if (rf & RESOLVE_NO_SYMLINKS) return -ELOOP;
         if (++hops > 40) return -ELOOP;
         size_t tl = xstrlen(tmp), rl = xstrlen(rp);
-        if (tl + 1 + rl + 1 >= PATH_MAX) return -ENAMETOOLONG;
+        if (tl + 1 + rl + 1 >= sizeof S->rest) return -ENAMETOOLONG;
         memmove(rest + tl + 1, rp, rl + 1); xmemcpy(rest, tmp, tl); rest[tl] = '/'; rp = rest;
         if (tmp[0] == '/') {
             if (rf & RESOLVE_BENEATH) return -EXDEV;           /* an absolute link target leaves the scope */

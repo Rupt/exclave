@@ -150,7 +150,8 @@ class Forms:
                  ("host_dangling", h + "/hdang"), ("host_loop", h + "/hloop"), ("host_rel_link", h + "/hrel"), ("host_missing", h + "/missing"),
                  ("host_dotdot", h + "/hdir/../hfile"), ("host_file_slash", h + "/hfile/"), ("host_tmp_new", "/tmp/cont-probe-%d/new" % os.getpid()),
                  ("host_dot_last", h + "/hdir/."), ("host_dotdot_last", h + "/hdir/.."),
-                 ("rel_file", "hfile"), ("rel_dot", "."), ("rel_dotdot", ".."), ("rel_dot_dir", "./hdir"), ("rel_up", "../" + os.path.basename(h) + "/hfile"), ("rel_via_link", "hdir/../hlink")]
+                 ("rel_file", "hfile"), ("rel_dot", "."), ("rel_dotdot", ".."), ("rel_dot_dir", "./hdir"), ("rel_up", "../" + os.path.basename(h) + "/hfile"), ("rel_via_link", "hdir/../hlink"),
+                 ("rel_root_by_dotdot", "../" * h.count("/") + "."), ("rel_etc_by_dotdot", "../" * h.count("/") + "etc/passwd")]   # up to the root from the host area, and into the tree
         self.paths = [(n, S(p)) for n, p in can + hostf]
         self.paths += [("fault_end", "e:" + hx(self.file)), ("fault_null", "n:"), ("fault_unmapped", "u:")]
         self.few = [(n, S(p)) for n, p in [("can_file", self.file), ("can_dir", self.dir), ("missing", "/maze/missing"), ("dir_slash", self.dir + "/"),
@@ -456,7 +457,7 @@ def errnos(b, o):
 
 # differences with a reason: (syscall name or None, predicate on (label, bwrap answer, opener answer), reason).
 # The list is part of the design (17): each entry names the rule that makes the difference right.
-BOUND = {"passwd", "resolv", "tmp", "home", "opt", "dev_null"}          # bound from the host into the read-only root under bwrap
+BOUND = {"passwd", "resolv", "tmp", "home", "opt", "dev_null", "rel_etc_by_dotdot"}   # bound from the host into the read-only root under bwrap
 EXPECTED = [
     # the kernel matrix (12): what this kernel lacks or decided differently, each entry naming the kernel change
     (None, lambda l, b, o: errnos(b, o)[0] == 38,
@@ -481,7 +482,7 @@ EXPECTED = [
      "a host entry bound into bwrap's read-only root: its parent directory, or the identity symlink itself, is read-only there (EROFS); the opener answers with the host's permissions (8.1, 8.4)"),
     (None, lambda l, b, o: "to_root" in forms_in(l) and errnos(b, o) == (22, 1),
      "uid 0 is not mapped in bwrap's user namespace (EINVAL); the opener runs in none (EPERM)"),
-    ("bind", lambda l, b, o: l.startswith(("root/", "root_dotdot/")) and "after_chdir_rel" in l and errnos(b, o) == (30, 13),
+    ("bind", lambda l, b, o: l.startswith(("root/", "root_dotdot/", "rel_root_by_dotdot/")) and "after_chdir_rel" in l and errnos(b, o) == (30, 13),
      "a new top-level name is the host's (8.1 rule 2): the host's / answers EACCES for a create there, where the read-only root under bwrap says EROFS"),
     ("fanotify_mark", lambda l, b, o: errnos(b, o)[0] == 22,
      "fanotify_mark checks its flags and descriptor before its path; the opener resolves the path first, and fanotify needs CAP_SYS_ADMIN, which no can process has (13)"),
