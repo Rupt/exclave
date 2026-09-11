@@ -117,6 +117,16 @@ static void show(struct arg *a, long ret)
     }
 }
 
+#define RESOLVE_BENEATH 0x08
+#define RESOLVE_IN_ROOT 0x10
+#define RESOLVE_CACHED 0x20
+static int scoped_uncached(const struct arg *a)                       /* an open_how whose walk is scoped and not RESOLVE_CACHED */
+{
+    if (a->kind != 'h' || !a->buf) return 0;
+    unsigned long long rs = ((const unsigned long long *)a->buf)[2];
+    return (rs & (RESOLVE_BENEATH | RESOLVE_IN_ROOT)) && !(rs & RESOLVE_CACHED);
+}
+
 int main(void)
 {
     page = sysconf(_SC_PAGESIZE);
@@ -144,6 +154,13 @@ int main(void)
         } else {
             errno = 0;
             ret = syscall(nr, args[0].v, args[1].v, args[2].v, args[3].v, args[4].v, args[5].v);
+            /* openat2(2): a scoped walk (RESOLVE_BENEATH, RESOLVE_IN_ROOT) answers EAGAIN when a rename or a mount anywhere on
+             * the system raced it, and tells the caller to retry; this caller does, so the kernel's answer is the retry's.
+             * RESOLVE_CACHED's EAGAIN is not a race and is not retried. */
+            for (int tries = 0; nr == SYS_openat2 && ret < 0 && errno == EAGAIN && tries < 1000 && scoped_uncached(&args[2]); tries++) {
+                errno = 0;
+                ret = syscall(nr, args[0].v, args[1].v, args[2].v, args[3].v, args[4].v, args[5].v);
+            }
             err = ret < 0 ? errno : 0;
             if (ret >= 0 && (nr == SYS_open || nr == SYS_openat || nr == SYS_creat || nr == SYS_openat2)) { close((int)ret); ret = 0; }
         }
