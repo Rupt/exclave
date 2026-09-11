@@ -79,7 +79,7 @@ enum {
     NR_execveat = 322, NR_statx = 332, NR_openat2 = 437, NR_faccessat2 = 439, NR_fchmodat2 = 452,
     NR_close_range = 436, NR_dup2 = 33, NR_fanotify_mark = 301, NR_writev = 20, NR_process_vm_writev = 311,
     NR_setxattrat = 463, NR_getxattrat = 464, NR_listxattrat = 465, NR_removexattrat = 466, NR_open_tree_attr = 467,
-    NR_file_getattr = 468, NR_file_setattr = 469,
+    NR_file_getattr = 468, NR_file_setattr = 469, NR_bind = 49, NR_connect = 42,
     /* the hot path of the filter (7.4.2) */
     NR_brk = 12, NR_futex = 202, NR_madvise = 28, NR_clock_gettime = 228, NR_pipe2 = 293, NR_vfork = 58, NR_readv = 19,
     NR_set_tid_address = 218, NR_set_robust_list = 273, NR_prlimit64 = 302, NR_getrandom = 318, NR_rseq = 334,
@@ -155,7 +155,7 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
     NR_execveat = 281, NR_statx = 291, NR_openat2 = 437, NR_faccessat2 = 439, NR_fchmodat2 = 452,
     NR_close_range = 436, NR_dup2 = ABSENT(24), NR_fanotify_mark = 263, NR_writev = 66, NR_process_vm_writev = 271,
     NR_setxattrat = 463, NR_getxattrat = 464, NR_listxattrat = 465, NR_removexattrat = 466, NR_open_tree_attr = 467,
-    NR_file_getattr = 468, NR_file_setattr = 469,
+    NR_file_getattr = 468, NR_file_setattr = 469, NR_bind = 200, NR_connect = 203,
     NR_brk = 214, NR_futex = 98, NR_madvise = 233, NR_clock_gettime = 113, NR_pipe2 = 59, NR_vfork = ABSENT(25), NR_readv = 65,
     NR_set_tid_address = 96, NR_set_robust_list = 99, NR_prlimit64 = 261, NR_getrandom = 278, NR_rseq = 293,
     NR_arch_prctl = ABSENT(26), NR_sched_getaffinity = 123,
@@ -202,6 +202,8 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
 #define EINTR   4
 #define EACCES  13
 #define EEXIST  17
+#define EADDRINUSE 98
+#define ECONNREFUSED 111
 #define ENOTDIR 20
 #define EINVAL  22
 #define ETXTBSY 26

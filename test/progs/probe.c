@@ -19,6 +19,8 @@
  *   v:<hex>,<hex>,...    a NULL-terminated vector of strings (execve's argv and envp); v: is the empty vector
  *   x:<hex>:<flags>      a struct xattr_args whose value is the bytes (setxattrat, getxattrat)
  *   I:                   a descriptor from inotify_init1(0), closed after the call
+ *   k:<type>            a unix socket of that type, opened before the call (open=<errno> when it fails)
+ *   A:<hex>             a struct sockaddr_un, AF_UNIX, whose sun_path holds those bytes (at most 108, unterminated at 108)
  *   h:<flags>:<mode>:<resolve>[:<size>[:<tail>]]   a struct open_how (openat2), in a buffer of <size> bytes (24 by
  *                        default) whose byte 24 is <tail> when given: the extensible-struct rules
  *
@@ -32,8 +34,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/un.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -73,6 +77,9 @@ static void decode(struct arg *a, char *tok)
                 mprotect((char *)a->map + page, (size_t)page, PROT_NONE); char *at = (char *)a->map + page - n; unhex(p, at); a->v = (long)at; break; }
     case 'n': a->v = 0; break;
     case 'I': a->fd = (int)syscall(SYS_inotify_init1, 0); a->open_errno = a->fd < 0 ? errno : 0; a->v = a->fd; break;
+    case 'k': a->fd = socket(AF_UNIX, (int)strtol(p, 0, 10), 0); a->open_errno = a->fd < 0 ? errno : 0; a->v = a->fd; break;
+    case 'A': { a->buf = calloc(1, 4096); struct sockaddr_un *u = (struct sockaddr_un *)a->buf; u->sun_family = AF_UNIX;   /* the driver keeps the path to 108 bytes */
+                a->size = (size_t)unhex(p, u->sun_path); a->v = (long)a->buf; break; }
     case 'h': { unsigned long long f = 0, m = 0, rs = 0; long size = 24, tail = -1; sscanf(p, "%llu:%llu:%llu:%ld:%ld", &f, &m, &rs, &size, &tail);
                 if (size < 24) size = 24;
                 a->buf = calloc(1, (size_t)size + 8); unsigned long long *h = (unsigned long long *)a->buf; h[0] = f; h[1] = m; h[2] = rs;

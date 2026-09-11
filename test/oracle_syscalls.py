@@ -16,6 +16,7 @@ import platform
 import random
 import re
 import shutil
+import socket
 import subprocess
 import sys
 
@@ -48,6 +49,20 @@ def hx(s):
     return s.encode("utf-8", "surrogateescape").hex() if isinstance(s, str) else s.hex()
 
 
+SOCK_STREAM, SOCK_DGRAM = 1, 2
+
+def K(type_):                     # a unix socket descriptor of this type
+    return "k:%d" % type_
+def A(path):                      # a sockaddr_un holding this path, 108 bytes of it at most (unterminated at 108, as the kernel allows)
+    return "A:" + path.encode("utf-8", "surrogateescape")[:108].hex()
+def alen(path):                   # its length argument: the family, the bytes, and a NUL when there is room
+    n = min(len(path.encode("utf-8", "surrogateescape")), 108)
+    return 2 + n + (1 if n < 108 else 0)
+REL_SOCK = "probe-sock-%d" % os.getpid()     # the relative socket name: one per driver, since a chdir into /tmp binds it in the host's /tmp
+
+
+def raw_of(tok):                  # the path behind an s: token; None for the fault forms, which a sockaddr cannot carry
+    return bytes.fromhex(tok[2:]).decode("utf-8", "surrogateescape") if tok.startswith("s:") else None
 def S(path):                      # a string argument
     return "s:" + hx(path)
 
@@ -221,14 +236,30 @@ def generate(forms, nr, uid, gid):
         add("inotify_add_watch", n, "I:", p, I(IN_MODIFY))
         add("fanotify_mark", n, I(-1), I(0), I(0), I(AT_FDCWD), p)
         add("execve", n, p, V("x"), V())
+        if raw_of(p) is not None:                                          # a sockaddr_un path is a path (13 item 31)
+            add("bind", n, K(SOCK_STREAM), A(raw_of(p)), I(alen(raw_of(p))))
+            add("connect", n, K(SOCK_STREAM), A(raw_of(p)), I(alen(raw_of(p))))
         group[0] = "chdir"
         add("chdir", n, p)
         add("getcwd", n + "/after_chdir", B("cwd", 4096), I(4096))
         add("stat", n + "/after_chdir_dot", S("."), B("stat", 256))
         add("stat", n + "/after_chdir_dotdot", S(".."), B("stat", 256))
+        add("bind", n + "/after_chdir_rel", K(SOCK_STREAM), A(REL_SOCK), I(alen(REL_SOCK)))   # a relative bind from that directory
+        add("connect", n + "/after_chdir_rel", K(SOCK_STREAM), A(REL_SOCK), I(alen(REL_SOCK)))
         add("chdir", n + "/back", S(forms.host))
         group[0] = None
     add("getcwd", "short", B("cwd", 4), I(4))
+    for name in ("bind", "connect"):                                      # the structure's own rules, and a socket file in the tree
+        add(name, "can_sock", K(SOCK_STREAM), A("/maze/sock"), I(alen("/maze/sock")))
+        add(name, "can_sock_dgram", K(SOCK_DGRAM), A("/maze/sock"), I(alen("/maze/sock")))
+        add(name, "abstract", K(SOCK_STREAM), A("\0probe-abstract-%d" % os.getpid()), I(alen("\0probe-abstract-%d" % os.getpid())))   # one name per process
+        add(name, "unnamed", K(SOCK_STREAM), A(""), I(2))
+        add(name, "len_too_long", K(SOCK_STREAM), A(forms.file), I(200))
+        add(name, "len_too_short", K(SOCK_STREAM), A(forms.file), I(1))
+        add(name, "null_addr", K(SOCK_STREAM), "n:", I(20))
+        add(name, "fault_addr", K(SOCK_STREAM), "u:", I(20))
+        add(name, "not_a_socket", F(O_RDONLY, forms.file), A(forms.host + "/hfile"), I(alen(forms.host + "/hfile")))
+    add("stat", "can_sock", S("/maze/sock"), B("stat", 256))
     add("execve", "true", S(forms.true), V("true"), V())
     add("execve", "sh_exit3", S(forms.sh), V("sh", "-c", "exit 3"), V("PATH=/usr/bin:/bin"))
     add("execve", "argv_null", S(forms.true), "n:", V())
@@ -368,6 +399,8 @@ def host_reset(host, root_can, probe):
             os.removexattr(probe, x)
     rmtree(os.path.dirname(host))
     rmtree("/tmp/cont-probe-%d" % os.getpid())
+    if os.path.lexists("/tmp/" + REL_SOCK):                              # a relative bind after a chdir into /tmp
+        os.remove("/tmp/" + REL_SOCK)
     os.makedirs(host + "/hdir")
     with open(host + "/hfile", "w") as f:
         f.write("hello\n")
@@ -448,6 +481,8 @@ EXPECTED = [
      "a host entry bound into bwrap's read-only root: its parent directory, or the identity symlink itself, is read-only there (EROFS); the opener answers with the host's permissions (8.1, 8.4)"),
     (None, lambda l, b, o: "to_root" in forms_in(l) and errnos(b, o) == (22, 1),
      "uid 0 is not mapped in bwrap's user namespace (EINVAL); the opener runs in none (EPERM)"),
+    ("bind", lambda l, b, o: l.startswith(("root/", "root_dotdot/")) and "after_chdir_rel" in l and errnos(b, o) == (30, 13),
+     "a new top-level name is the host's (8.1 rule 2): the host's / answers EACCES for a create there, where the read-only root under bwrap says EROFS"),
     ("fanotify_mark", lambda l, b, o: errnos(b, o)[0] == 22,
      "fanotify_mark checks its flags and descriptor before its path; the opener resolves the path first, and fanotify needs CAP_SYS_ADMIN, which no can process has (13)"),
     (None, lambda l, b, o: errnos(b, o) == (26, 30),
@@ -504,6 +539,10 @@ def main():
     os.symlink(host + "/hfile", os.path.join(root, "maze", "lH"))          # a can link to a host file, and to a host directory
     os.symlink(host + "/hdir", os.path.join(root, "maze", "lHD"))
     shutil.copytree(os.path.join(root, "maze"), os.path.join(can, "root", "maze"), symlinks=True)
+    for r in (root, os.path.join(can, "root")):                            # a socket file in the tree, for bind and connect (copytree cannot carry one)
+        sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sk.bind(os.path.join(r, "maze", "sock"))
+        sk.close()
     for f in IDENTITY:                                                      # as oracle_ns: the host's link text in the copy, its target bound
         p_ = os.path.join(root, f.lstrip("/"))
         if os.path.islink(f) and os.path.lexists(p_):

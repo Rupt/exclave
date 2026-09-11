@@ -17,6 +17,7 @@ import argparse
 import os
 import re
 import shutil
+import socket
 import signal
 import stat
 import subprocess
@@ -176,6 +177,11 @@ def make_can(ctx):
     # test additions to the tree
     with open(os.path.join(root, "usr", "share", "cont-test-marker"), "w") as f:
         f.write("marker\n")
+    sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)                    # a socket file in the tree (13 item 31)
+    if os.path.lexists(os.path.join(root, "usr", "share", "cont-test.sock")):   # a fixture made by an earlier run carries it already
+        os.remove(os.path.join(root, "usr", "share", "cont-test.sock"))
+    sk.bind(os.path.join(root, "usr", "share", "cont-test.sock"))
+    sk.close()
     for name, body in (("cont-test-script", "#!/bin/sh\necho script ok $1 $#\n"),
                        ("cont-test-noshebang", "echo noshebang ok\n"),
                        ("cont-test-script2", "#!/usr/bin/cont-test-script\n"),
@@ -244,7 +250,7 @@ def compile_progs(ctx):
     shutil.copytree(os.path.join(HERE, "progs"), src)
     os.makedirs(ctx.progs, exist_ok=True)
     gcc = wrapper(ctx, GCC)
-    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2"):
+    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2", "unix_socket"):
         rc, out, err = run([gcc, "-O1", "-g", "-pthread", "-o", os.path.join(ctx.progs, name), os.path.join(src, name + ".c"), "-lm", "-ldl"], cwd=ctx.work, env=ctx.env)
         if rc and name == "execstack" and "not allowed here" in err:      # nested functions are gcc's; clang has none
             continue
@@ -656,23 +662,21 @@ def cross_can_distinct_openers(ctx):
 def nested_older_opener(ctx):
     """7.4.2: an older opener nested inside a newer one reuses the newer filter and answers ENOSYS for a trap
     it does not know, never re-issuing it to the host. build/opener-old is the current opener built with the
-    previous filter version and without openat2 in its filter or handler (make builds it beside build/opener)."""
+    previous filter version and without bind and connect in its filter or handler (make builds it beside build/opener)."""
     old = os.path.join(os.path.dirname(ctx.opener_src), "opener-old")
     if not os.path.exists(old):
         return "no build/opener-old"
-    src = os.path.join(ctx.work, "o2.c")
-    with open(src, "w") as f:
-        f.write('#include <stdio.h>\n#include <errno.h>\n#include <string.h>\n#include <unistd.h>\n#include <fcntl.h>\n#include <sys/syscall.h>\n'
-                'int main(void) { unsigned long long h[3] = { 0, 0, 0 }; long r = syscall(437, AT_FDCWD, "/etc/passwd", h, 24);\n'
-                ' printf("%d %d\\n", r < 0 ? -1 : 0, r < 0 ? errno : 0); return 0; }\n')
-    prog = os.path.join(ctx.work, "o2")
+    src = os.path.join(ctx.work, "nb.c")
+    sock = os.path.join(ctx.work, "nest-sock")
+    with open(src, "w") as f:                                                 # a bind at a fresh host path: 0 from the kernel
+        f.write('#include <stdio.h>\n#include <errno.h>\n#include <string.h>\n#include <unistd.h>\n#include <sys/socket.h>\n#include <sys/un.h>\n'
+                'int main(void) { struct sockaddr_un a; memset(&a, 0, sizeof a); a.sun_family = AF_UNIX; strncpy(a.sun_path, "@PATH@", sizeof a.sun_path - 1);\n'
+                ' int s = socket(AF_UNIX, SOCK_STREAM, 0); unlink("@PATH@"); long r = bind(s, (struct sockaddr *)&a, sizeof a);\n'
+                ' printf("%d %d\\n", r < 0 ? -1 : 0, r < 0 ? errno : 0); unlink("@PATH@"); return 0; }\n'.replace("@PATH@", sock))
+    prog = os.path.join(ctx.work, "nb")
     rc, out, err = run([wrapper(ctx, GCC), "-O0", "-o", prog, src], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "compile: " + err)
-    import ctypes                                                          # the kernel's own answer, asked from here
-    libc = ctypes.CDLL(None, use_errno=True)
-    buf = ctypes.create_string_buffer(24)
-    r = libc.syscall(437, -100, b"/etc/passwd", buf, 24)
-    kernel = "%d %d\n" % (-1 if r < 0 else 0, ctypes.get_errno() if r < 0 else 0)
+    kernel = "0 0\n"
     rc, outer, err = run([wrapper(ctx, "sh"), "-c", prog], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and outer == kernel, "inside the current opener the kernel's answer comes back: kernel %r can %r %r" % (kernel, outer, err))
     can2 = os.path.join(ctx.work, "old-can")
@@ -1658,6 +1662,33 @@ def openat2_resolve(ctx):
     if rc == 3:
         return "no openat2 on this kernel (5.6 and later)"
     expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
+def unix_socket(ctx):
+    """7.4.3, 13 item 31: a sockaddr_un's path is a path. bind and connect at a path of every class answer what the
+    kernel answers on a read-only bind mount (the namespace oracle measured these): a can-owned bind is EADDRINUSE
+    for an existing name and EROFS otherwise, from a working directory inside the tree too; a can-owned connect is
+    ENOENT, ENOTDIR or ECONNREFUSED; host paths and abstract names work; the structure's own limits are EINVAL. A
+    datagram destination in sendto stays as written (13), so only its host case is asserted."""
+    d = os.path.join(ctx.work, "sockhost")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "unix_socket"), [d, "/usr/share", ctx.vbin("true"), "/usr/share/cont-test.sock"])
+    expect(rc == 0, "unix_socket: %r %r" % (out, err))
+    got = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
+    want = {"bind host dir": "ret=0 errno=0", "bind /tmp": "ret=0 errno=0", "bind can dir": "ret=-1 errno=30",
+            "bind existing can file": "ret=-1 errno=98", "bind existing can socket": "ret=-1 errno=98", "bind missing can parent": "ret=-1 errno=2",
+            "bind under a can file": "ret=-1 errno=20", "bind can dir itself": "ret=-1 errno=98", "bind can dir trailing slash name": "ret=-1 errno=2",
+            "bind abstract": "ret=0 errno=0", "bind relative in host cwd": "ret=0 errno=0", "bind relative in can cwd": "ret=-1 errno=30",
+            "connect host listener": "ret=0 errno=0", "connect host socket no listener": "ret=-1 errno=111", "connect can file": "ret=-1 errno=111",
+            "connect can socket": "ret=-1 errno=111", "connect missing can path": "ret=-1 errno=2", "connect can dir": "ret=-1 errno=111",
+            "connect under a can file": "ret=-1 errno=20", "connect missing host path": "ret=-1 errno=2", "sendto host dgram": "ret=1 errno=0",
+            "bind addrlen too long": "ret=-1 errno=22", "bind addrlen too short": "ret=-1 errno=22", "bind wrong family": "ret=-1 errno=22",
+            "bind can path of 107 bytes": "ret=-1 errno=30", "connect can path of 107 bytes": "ret=-1 errno=2"}
+    bad = ["%s: got %s, the kernel says %s" % (k, got.get(k), v) for k, v in want.items() if got.get(k) != v]
+    expect(not bad, "; ".join(bad))
+    expect(not os.path.exists(os.path.join(ctx.root, "usr", "share", "sock-rel")), "a relative bind from a working directory inside the tree wrote into the tree")
 
 
 @test

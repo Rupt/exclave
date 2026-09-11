@@ -50,7 +50,7 @@ $(OUT): $(SRC) $(HDR) Makefile
 # that must answer ENOSYS rather than re-issue it
 $(OLD): $(SRC) $(HDR) Makefile
 	@mkdir -p build
-	$(CC) $(filter-out -fstack-usage,$(CFLAGS)) -DFILTER_VERSION=2 -DCONT_TEST_OLD $(LDFLAGS) -o $@.debug $(SRC)
+	$(CC) $(filter-out -fstack-usage,$(CFLAGS)) -DFILTER_VERSION=3 -DCONT_TEST_OLD $(LDFLAGS) -o $@.debug $(SRC)
 	$(call linkcheck,)
 	objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
 
@@ -65,7 +65,7 @@ build/opener-aarch64: $(SRC) $(HDR) Makefile
 
 build/opener-old-aarch64: $(SRC) $(HDR) Makefile
 	@mkdir -p build
-	$(AARCH64_CC) $(filter-out -fstack-usage,$(CFLAGS_AARCH64)) -DFILTER_VERSION=2 -DCONT_TEST_OLD $(LDFLAGS) -o $@.debug $(SRC)
+	$(AARCH64_CC) $(filter-out -fstack-usage,$(CFLAGS_AARCH64)) -DFILTER_VERSION=3 -DCONT_TEST_OLD $(LDFLAGS) -o $@.debug $(SRC)
 	$(call linkcheck,aarch64-linux-gnu-)
 	aarch64-linux-gnu-objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
 

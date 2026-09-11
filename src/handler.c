@@ -503,14 +503,53 @@ static void real_nofollow(struct scratch *S, int nofollow)
     to_real(S->v, S->real, S->tmp);
 }
 
+/* ---------- bind and connect (7.4.3, 13 item 31) ---------- */
+/* a sockaddr_un's path is a path like any other, under the visibility rule. The kernel reads the family and the
+ * path out of the structure, so the handler does the same and answers for a can-owned path what the kernel answers
+ * on a read-only bind mount (oracle 17.3): bind is a create (unix_bind_bsd), the name looked up first, EEXIST read
+ * as EADDRINUSE, then EROFS; connect looks the name up (unix_find_bsd), needs write permission on what it finds,
+ * and finds no listener behind a file in the tree, ECONNREFUSED, since nothing can bind there. A host path, an
+ * abstract name, an unnamed address or another family is re-issued as given; a bad length is the kernel's EINVAL. */
+#define AF_UNIX 1
+#ifndef W_OK
+#define W_OK 2
+#endif
+static long do_sockaddr(struct scratch *S, long *a, int nr)
+{
+    long len = a[2];
+    scpy(S->v, "-", PATH_MAX);
+    if (len < 2 || len > 110 || !a[1]) return RE5(nr, a[0], a[1], a[2], 0, 0);
+    long r = copy_exact(S->extra, (const void *)a[1], (size_t)len); if (r) return r;
+    unsigned short fam; xmemcpy(&fam, S->extra, 2);
+    if (fam != AF_UNIX || len == 2 || S->extra[2] == 0) return RE5(nr, a[0], a[1], a[2], 0, 0);
+    size_t n = (size_t)len - 2; if (n > 108) n = 108;         /* unix_mkname_bsd: the path ends at the length or at a NUL */
+    xmemcpy(S->b1, S->extra + 2, n); S->b1[n] = 0;
+    if (S->b1[0] != '/') { r = sys_faccessat(AT_FDCWD, ".", X_OK); if (r < 0) return r; }
+    if ((r = canon(S, S->b1, AT_FDCWD, nr == NR_connect, S->v)) < 0) { scpy(S->v, S->b1, PATH_MAX); return r; }
+    if (!is_can_owned(S->v)) {                                /* a host path: the kernel gets the resolved real path, as for every
+                                                              * other syscall, since a can symlink may have led here (oracle 17.3) */
+        to_real(S->v, S->real, S->tmp);
+        size_t rl = xstrlen(S->real), gl = xstrlen(S->b1);
+        size_t slash = gl > 1 && S->b1[gl - 1] == '/' && S->real[rl - 1] != '/';   /* a trailing slash is the kernel's to judge (filename_create) */
+        if (rl + slash > 107) return -ENAMETOOLONG;              /* sun_path is 108 bytes: a real path past it cannot be named (13) */
+        xmemcpy(S->extra + 2, S->real, rl); if (slash) S->extra[2 + rl] = '/'; S->extra[2 + rl + slash] = 0;
+        return RE5(nr, a[0], S->extra, 2 + rl + slash + 1, 0, 0);
+    }
+    if (nr == NR_bind) { r = ro_create(S, S->v, 0); return r == -EEXIST ? -EADDRINUSE : r; }
+    if (!exists_can(S, S->v, (struct kstat *)S->b2)) return absent_errno(S);
+    r = sys_faccessat(AT_FDCWD, S->real, W_OK); if (r < 0) return r;
+    return -ECONNREFUSED;
+}
+
 static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratch **Sp)
 {
     long r;
     switch (nr) {
     case NR_open:   return do_open(S, a, 0, -1, a[1], a[2], NR_openat);
     case NR_openat: return do_open(S, a, 1, 0, a[2], a[3], NR_openat);
-#ifndef CONT_TEST_OLD                                        /* build/opener-old: the previous version, which does not know it (17.4) */
     case NR_openat2: return do_openat2(S, a);
+#ifndef CONT_TEST_OLD                                        /* build/opener-old: the previous version, which does not know them (17.4) */
+    case NR_bind: case NR_connect: return do_sockaddr(S, a, nr);
 #endif
     case NR_creat:  return do_open(S, a, 0, -1, O_CREAT | O_WRONLY | O_TRUNC, a[1], NR_openat);
     case NR_stat: case NR_lstat:
@@ -726,9 +765,10 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
 static const char *sysname(int nr)
 {
     switch (nr) {
-    case NR_open: case NR_openat: case NR_creat: return "open";
+    case NR_open: case NR_openat: case NR_creat: case NR_openat2: return "open";
 #ifndef CONT_TEST_OLD
-    case NR_openat2: return "open";
+    case NR_bind: return "bind";
+    case NR_connect: return "connect";
 #endif
     case NR_stat: case NR_lstat: case NR_newfstatat: case NR_statx: return "stat";
     case NR_access: case NR_faccessat: case NR_faccessat2: return "access";

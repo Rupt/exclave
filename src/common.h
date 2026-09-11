@@ -9,7 +9,7 @@
 
 #define OPENER_VERSION "0.1"
 #ifndef FILTER_VERSION
-#define FILTER_VERSION 3                 /* 7.4.2: versioned reuse; bumped whenever the trap set grows (2: the *xattrat and file_*attr syscalls; 3: openat2) */
+#define FILTER_VERSION 4                 /* 7.4.2: versioned reuse; bumped whenever the trap set grows (2: the *xattrat and file_*attr syscalls; 3: openat2; 4: bind and connect) */
 #endif
 #define PATH_MAX 4096
 #define NAME_MAX 255
