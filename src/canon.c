@@ -58,6 +58,16 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         if (base[0]) dom = is_can_owned(base);
     } else {
         int r = (dfd == AT_FDCWD) ? cwd_virtual(rest) : fd_virtual(dfd, rest);
+        if (r == -ENOENT) {                                    /* a directory deleted under the program, which the kernel still walks from and
+                                                                * the handler cannot name: the path is spelt through the magic link, a host
+                                                                * path the kernel resolves itself; a walk from there into the can stays
+                                                                * the host's (13) */
+            char *n = S->b2; if (dfd != AT_FDCWD) ltoa_(dfd, n);
+            scpy(out, dfd == AT_FDCWD ? "/proc/self/cwd" : "/proc/self/fd/", PATH_MAX); if (dfd != AT_FDCWD) scat(out, n, PATH_MAX);
+            if (xstrlen(out) + 1 + pl >= PATH_MAX) return -ENAMETOOLONG;
+            scat(out, "/", PATH_MAX); scat(out, path, PATH_MAX);
+            return 0;
+        }
         if (r < 0) return r;
         if (rf & RESOLVE_NO_XDEV) dom = rest[1] ? is_can_owned(rest) : 1;
         if (!rest[1] || is_can_owned(rest)) S->touched_can = 1;   /* the directory the walk starts from */
@@ -133,7 +143,8 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
             else if ((st.st_mode & S_IFMT) != S_IFLNK) kind = CK_FILE;
             else {
                 long n = sys_readlink(real, tmp, PATH_MAX - 1);
-                if (n < 0) kind = CK_FILE;
+                if (n < 0) return (int)n;                      /* a link the walk must follow and cannot read: its own error, EACCES for another
+                                                                * process's magic link (get_link); the last component is followed here too */
                 else {
                     tmp[n] = 0; kind = CK_LINK;
                     if (xstrncmp(cur, "/proc/", 6) == 0) {

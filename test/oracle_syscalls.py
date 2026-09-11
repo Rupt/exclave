@@ -212,6 +212,8 @@ def generate(forms, nr, uid, gid):
         add("readlink", n, p, B("link", 4096), I(4096))
         add("readlink", n + "/short", p, B("link", 4), I(4))
         add("readlink", n + "/zero", p, B("link", 4), I(0))
+        add("readlink", n + "/hi_zero", p, B("link", 4), I(1 << 32))                # an int argument with bits above the word: the kernel sees 0
+        add("readlink", n + "/hi_minus", p, B("link", 4), I((1 << 32) | 0xffffffff))   # and -1
         if n != "proc_exe":
             add("truncate", n, p, I(0))
         add("mkdir", n, p, I(0o755))
@@ -253,6 +255,7 @@ def generate(forms, nr, uid, gid):
         add("chdir", n + "/back", S(forms.host))
         group[0] = None
     add("getcwd", "short", B("cwd", 4), I(4))
+    add("getcwd", "all_ones", B("cwd", 4096), I(-1))
     for name in ("bind", "connect"):                                      # the structure's own rules, and a socket file in the tree
         add(name, "can_sock", K(SOCK_STREAM), A("/maze/sock"), I(alen("/maze/sock")))
         add(name, "can_sock_dgram", K(SOCK_DGRAM), A("/maze/sock"), I(alen("/maze/sock")))
@@ -260,6 +263,7 @@ def generate(forms, nr, uid, gid):
         add(name, "unnamed", K(SOCK_STREAM), A(""), I(2))
         add(name, "len_too_long", K(SOCK_STREAM), A(forms.file), I(200))
         add(name, "len_too_short", K(SOCK_STREAM), A(forms.file), I(1))
+        add(name, "len_hi", K(SOCK_STREAM), A("/maze/sock"), I((1 << 32) | alen("/maze/sock")))
         add(name, "null_addr", K(SOCK_STREAM), "n:", I(20))
         add(name, "fault_addr", K(SOCK_STREAM), "u:", I(20))
         add(name, "not_a_socket", F(O_RDONLY, forms.file), A(forms.host + "/hfile"), I(alen(forms.host + "/hfile")))
@@ -284,6 +288,7 @@ def generate(forms, nr, uid, gid):
         add("symlinkat", n, S("/maze/f0"), d, p)
         add("readlinkat", n, d, p, B("link", 4096), I(4096))
         add("readlinkat", n + "/zero", d, p, B("link", 4), I(0))
+        add("readlinkat", n + "/hi_two", d, p, B("link", 4), I((1 << 32) | 2))
         add("fchmodat", n, d, p, I(0o644))
         add("faccessat", n, d, p, I(4))
         add("faccessat", n + "/W", d, p, I(2))
@@ -298,6 +303,7 @@ def generate(forms, nr, uid, gid):
         add("utimensat", n + "/null_times", d, p, "n:", I(0))
         add("utimensat", n + "/bad_nsec", d, p, "t:0,1000000000,0,0", I(0))
         add("utimensat", n + "/bad_flags", d, p, "t:1000,0,2000,0", I(0x8000))
+        add("utimensat", n + "/hi_flags", d, p, "t:1000,0,2000,0", I(1 << 32))
         add("utimensat", n + "/empty", d, p, "t:1000,0,2000,0", I(AT_EMPTY_PATH))
         add("futimesat", n + "/bad_usec", d, p, "T:1000,0,2000,-1")
         add("execveat", n, d, p, V("x"), V(), I(0))

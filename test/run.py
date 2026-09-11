@@ -239,7 +239,7 @@ def compile_progs(ctx):
     shutil.copytree(os.path.join(HERE, "progs"), src)
     os.makedirs(ctx.progs, exist_ok=True)
     gcc = wrapper(ctx, GCC)
-    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2", "unix_socket", "openat2_xdev", "fexec", "exec_identity", "path_length", "spawn_threads"):
+    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2", "unix_socket", "openat2_xdev", "fexec", "exec_identity", "path_length", "spawn_threads", "adversarial"):
         rc, out, err = run([gcc, "-O1", "-g", "-pthread", "-o", os.path.join(ctx.progs, name), os.path.join(src, name + ".c"), "-lm", "-ldl"], cwd=ctx.work, env=ctx.env)
         if rc and name == "execstack" and "not allowed here" in err:      # nested functions are gcc's; clang has none
             continue
@@ -1802,6 +1802,56 @@ def spawn_threads(ctx):
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "spawn_threads"), [d, ctx.vbin("true")], timeout=120)
     expect(rc == 0 and "0 failures" in out and "hung" not in out, "spawn_threads: rc=%d %r %r" % (rc, out, err))
     return out.strip().splitlines()[-1]
+
+
+@test
+def adversarial(ctx):
+    """17.4: what a hostile program or a fuzzer would try, each case answered in microseconds. Arguments with bits above
+    the word where the kernel takes an int (the probe passes longs and cannot try them): a readlink size of zero or minus
+    one as an int once had the handler write past the program's buffer; the opener's own variables set before an exec,
+    dropped; a working directory deleted under the program, its . and .. kept; an exec with no descriptor to spare, which
+    the handler borrows against a soft limit and which a hard limit refuses (13); mounts and roots from inside, refused by
+    the filter (7.4.2); SIGSYS ignored, handled or on a signalfd; magic links under /proc/1; interpreter loops and chains;
+    an empty executable and a loader that is a directory. The kernel under bwrap measured the answers, but for the
+    variables, the mounts and the hard limit, which are the opener's own (revision 16)."""
+    d = os.path.join(ctx.work, "advhost")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "adversarial"), [d], env=dict(ctx.env, SH=ctx.vbin("sh")))
+    expect(rc == 0, "adversarial: rc=%d %r %r" % (rc, out, err))
+    lines = set(out.splitlines())
+    want = ["readlink size 1 with upper bits: 1 byte, buffer intact", "readlink size -1 as int: EINVAL, buffer intact", "readlink size 0 as int: EINVAL, buffer intact",
+            "readlinkat AT_FDCWD with upper bits: ok", "openat dfd with upper bits: ok", "utimensat host, flags upper bits only: ok", "utimensat can, flags upper bits only: EROFS",
+            "faccessat2 can, flags upper bits only: ok", "newfstatat can, flags upper bits only: ok", "getcwd size all ones: ok", "getcwd size 4 with upper bits: ok",
+            "renameat2 flags upper bits only: ok", "unlinkat flags upper bits only: ok", "bind can path, addrlen upper bits: EROFS", "connect can socket, addrlen upper bits: ECONNREFUSED",
+            "openat2 size with upper bits: errno=7",
+            "exec of a host ELF with CAN_* set: ran, exit 0", "child sees CAN_EXEC=unset CAN_EXECFN=unset CAN_COMM=unset",
+            "wrapper with CAN_* set: comm=sh CAN_EXEC=unset CAN_EXECFN=unset CAN_COMM=unset",
+            "deleted cwd: getcwd: ENOENT", "deleted cwd: stat .: ok", "deleted cwd: open .: ok", "deleted cwd: stat ../f: ok", "deleted cwd: mkdir x: ENOENT", "deleted cwd: open x O_CREAT: ENOENT",
+            "no fd left: exec can true: ran", "no fd left: exec host ELF: ran", "no fd left: exec host script: ran", "no fd left, hard limit too: exec can true: EMFILE",
+            "unshare user+mount: ok", "mount tmpfs inside: EPERM", "chroot inside: EPERM", "open_tree: ENOSYS", "mount_setattr: ENOSYS",
+            "stat with SIGSYS ignored: ok", "stat with a SIGSYS handler installed: ok", "program's SIGSYS handler ran: no", "stat with SIGSYS blocked and on a signalfd: ok", "signalfd delivered a SIGSYS: no",
+            "stat /proc/1/root/etc: EACCES", "stat /proc/1/root: EACCES", "lstat /proc/1/root: ok", "open /proc/1/cwd: EACCES", "readlink /proc/1/exe: EACCES",
+            "exec of a script that is its own interpreter: ELOOP", "exec of a chain of 3 scripts: ran, exit 0", "exec of a chain of 4 scripts: ran, exit 0", "exec of a chain of 5 scripts: ran, exit 0", "exec of a chain of 6 scripts: ELOOP",
+            "exec of a script with an empty #! line: ENOEXEC", "exec of an empty executable: ENOEXEC", "exec of an ELF whose loader is a directory: EACCES"]
+    if os.getuid() == 0:
+        want = [w for w in want if "/proc/1" not in w]        # root may follow init's links
+    lacks = {"faccessat2 can, flags upper bits only: ok": "faccessat2 can, flags upper bits only: ENOSYS",   # 5.8 and later
+             "unshare user+mount: ok": None}                    # a kernel or host without user namespaces: any refusal is its own
+    bad = []
+    for w in want:
+        if w in lines:
+            continue
+        if w in lacks and (lacks[w] in lines if lacks[w] else any(l.startswith(w.split(": ")[0] + ": ") for l in lines)):
+            continue
+        bad.append(w)
+    expect(not bad, "missing or different: " + "; ".join(bad) + "\n     got: " + out.strip().replace("\n", "\n          "))
+    # the descriptor room the opener borrows at startup (7.4.5) is the program's again by the time it runs, through the
+    # positional entry's re-exec and its exec of a wrapper alike
+    import resource
+    hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+    rc, out, err = run([ctx.opener, ctx.vbin("sh"), "-c", "ulimit -n"], cwd=ctx.work, env=ctx.env, preexec=lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (8, hard)))
+    expect(out.strip() == "8", "a wrapper run through the entry under a soft limit of 8 sees %r (rc=%d %r): the borrowed room was not given back" % (out.strip(), rc, err))
 
 
 @test

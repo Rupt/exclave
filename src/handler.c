@@ -277,6 +277,22 @@ static long do_openat2(struct scratch *S, long *a)
 /* ---------- exec (7.6): scripts and host programs run inside the can's world ---------- */
 static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, int cloexec, struct scratch **Sp);
 
+/* the first bytes of a file the exec must look at: the kernel needs no descriptor for its own exec, so a program at its
+ * descriptor limit may still exec; the handler needs one and borrows it, the soft limit raised by one for the open when
+ * the hard limit allows, then put back (7.4.5) */
+static long open_header(const char *real)
+{
+    long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
+    if (fd != -EMFILE) return fd;
+    unsigned long lim[2], one[2];
+    if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, lim) < 0 || lim[0] >= lim[1]) return fd;
+    one[0] = lim[0] + 1; one[1] = lim[1];
+    if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, one, 0) < 0) return fd;
+    fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
+    SC4(NR_prlimit64, 0, RLIMIT_NOFILE, lim, 0);
+    return fd;
+}
+
 /* A pointer vector of n entries: a scratch region when it fits, an anonymous mapping otherwise (F3-2:
  * vectors are sized from their counts). A mapping made by a vfork child stays in the parent, unused. */
 static char **vector(void *region, size_t region_size, long n, void **big)
@@ -347,7 +363,7 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
     if (argc < 0) { scratch_put(S2); return argc; }
     nargv = vector(S2->rest, 6 * PATH_MAX, argc + 4, &big2);   /* rest, cur, real, tmp and v of S2, contiguous, hold six PATH_MAXes */
     if (!nargv) { vector_free(big1, argc + 1); scratch_put(S2); return -ENOMEM; }
-    long fd = sys_open(S->real, O_RDONLY | O_CLOEXEC, 0);
+    long fd = open_header(S->real);
     long n = fd < 0 ? fd : sys_read((int)fd, line, 255); if (fd >= 0) sys_close((int)fd);
     long r = -ENOEXEC;
     if (n < 0) r = n;
@@ -367,7 +383,7 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
  * such an exec with ENOENT before it runs anything (fs/exec.c, BINPRM_FLAGS_PATH_INACCESSIBLE) */
 static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, int cloexec, struct scratch **Sp)
 {
-    if (depth > 4) return -ELOOP;
+    if (depth > 5) return -ELOOP;                            /* binfmt_script: five interpreters may nest, the sixth is ELOOP (measured) */
     if (vis_in_data(v)) return -EACCES;                          /* 6.2: a data prefix is never executed (review O4-3) */
     to_real_exec(v, S->real);
     struct kstat st; long e;
@@ -376,7 +392,7 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     long ok = sys_faccessat(AT_FDCWD, S->real, X_OK);           /* the kernel's answer for this process, triads and search included (O3-4) */
     if (ok < 0) return ok;
     int wrapper = is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp);
-    long fd = sys_open(wrapper ? S->tmp : S->real, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) return fd;
+    long fd = open_header(wrapper ? S->tmp : S->real); if (fd < 0) return fd;
     unsigned char h[4]; long n = sys_read((int)fd, h, 4); sys_close((int)fd);
     int script = n >= 2 && h[0] == '#' && h[1] == '!', elf = n == 4 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F';
     if (script && cloexec) return -ENOENT;
@@ -396,7 +412,10 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
                                                               * file, a host path or a data prefix, is left to the child opener, which refuses it by name */
         scpy(S->b1, S->tmp, PATH_MAX);
         if ((e = canon(S, S->b1, AT_FDCWD, 1, S->tmp)) < 0) return e;
-        if (is_can_owned(S->tmp) && !vis_in_data(S->tmp) && (sys_stat(to_real(S->tmp, S->real, S->b2), &st) < 0 || (st.st_mode & S_IFMT) != S_IFREG)) return -ENOENT;
+        if (is_can_owned(S->tmp) && !vis_in_data(S->tmp)) {
+            if ((e = sys_stat(to_real(S->tmp, S->real, S->b2), &st)) < 0) return e;
+            if ((st.st_mode & S_IFMT) != S_IFREG) return -EACCES;   /* do_open_execat: a loader that is not a regular file */
+        }
     }
     return exec_env(S, C.opener, argv, envp, v, 1);
 }
@@ -422,7 +441,7 @@ static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp,
     long l = sys_readlink(S->real, S->tmp, PATH_MAX - 1); if (l < 0) return l;   /* comm is the file's own name (7.6), which the link spells with " (deleted)" */
     S->tmp[l] = 0; if (l > 10 && xstrcmp(S->tmp + l - 10, " (deleted)") == 0) S->tmp[l - 10] = 0;
     scpy(S->comm, base_name(S->tmp), sizeof S->comm);
-    long h = sys_open(S->real, O_RDONLY | O_CLOEXEC, 0); if (h < 0) return h;
+    long h = open_header(S->real); if (h < 0) return h;
     unsigned char *head = (unsigned char *)S->tmp; long k = sys_read((int)h, head, 4); sys_close((int)h);
     if (k >= 2 && head[0] == '#' && head[1] == '!') {
         long fl = sys_fcntl(fd, F_GETFD, 0); if (fl < 0) return fl;
@@ -619,7 +638,8 @@ static void real_nofollow(struct scratch *S, int nofollow)
 #endif
 static long do_sockaddr(struct scratch *S, long *a, int nr)
 {
-    long len = a[2];
+    long len = (int)a[2];                                    /* addrlen is an int: the kernel truncates, and a length past the word must not
+                                                              * turn a can path into one re-issued as written */
     scpy(S->v, "-", PATH_MAX);
     if (len < 2 || len > 110 || !a[1]) return RE5(nr, a[0], a[1], a[2], 0, 0);
     long r = copy_exact(S->pid, S->extra, (const void *)a[1], (size_t)len); if (r) return r;
@@ -681,14 +701,14 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         int m = st.st_mode & S_IFMT;
         return m == S_IFREG || m == S_IFDIR || m == S_IFLNK ? -EROFS : r;
     }
-    case NR_readlink:   return do_readlink(S, a, 0, -1, (char *)a[1], a[2]);
-    case NR_readlinkat: return do_readlink(S, a, 1, 0, (char *)a[2], a[3]);
+    case NR_readlink:   return do_readlink(S, a, 0, -1, (char *)a[1], (int)a[2]);   /* bufsiz is an int: the kernel truncates, so must the copy's bound */
+    case NR_readlinkat: return do_readlink(S, a, 1, 0, (char *)a[2], (int)a[3]);
     case NR_getcwd:
         r = RE5(NR_getcwd, S->tmp, PATH_MAX, 0, 0, 0);
         if (r <= 0) return r;
         if (starts_dir(S->tmp, C.root)) from_real(S->tmp);
         r = (long)xstrlen(S->tmp) + 1;
-        if (r > a[1]) return -ERANGE;
+        if ((unsigned long)r > (unsigned long)a[1]) return -ERANGE;   /* size is unsigned: all ones is a large buffer, not a negative one */
         { long e = copy_out(S->pid, (void *)a[0], S->tmp, (size_t)r); if (e) return e; }
         return r;
     case NR_chdir:
@@ -794,7 +814,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     }
     case NR_utime: case NR_utimes: case NR_futimesat: case NR_utimensat: {
         int pi = nr == NR_utime || nr == NR_utimes ? 0 : 1, di = nr == NR_utime || nr == NR_utimes ? -1 : 0;
-        long fl = nr == NR_utimensat ? a[3] : 0;
+        long fl = nr == NR_utimensat ? (int)a[3] : 0;        /* an int: bits above the word are not flags */
         long ts[4] = { 0, 0, 0, 0 }; int badns = 0;
         if (nr == NR_utimensat) {                            /* the kernel's order (fs/utimes.c): the times read, two UTIME_OMITs a no-op, the flags,
                                                               * then the lookup or the descriptor, then vfs_utimes, where a nanosecond out of range is

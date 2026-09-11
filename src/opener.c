@@ -97,6 +97,9 @@ static char **env_prepare(char **envp, int boundary)
     return out;
 }
 
+/* the descriptor room borrowed at startup (7.4.5), given back before the opener execs another opener, which borrows for itself */
+static void unborrow(void) { if (C.borrowed) { SC4(NR_prlimit64, 0, RLIMIT_NOFILE, C.rlim, 0); C.borrowed = 0; } }
+
 static void find_can(const char *exe)
 {
     char d[PATH_MAX]; scpy(d, exe, PATH_MAX);
@@ -158,6 +161,7 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
     env[k++] = var; env[k++] = fn;
     for (long i = 0; i < n; i++) if (!internal_var(envp[i])) env[k++] = envp[i];
     env[k] = 0;
+    unborrow();
     long r = sys_execve(C.opener, argv + 1, env);
     die("cannot re-exec the opener", C.opener, r);
 }
@@ -184,6 +188,7 @@ static void loader_mode_check(char **argv, char **env2)
                                                                               * kernel's answer for that name; the kernel follows the last link */
         if (canon(S, S->b1, AT_FDCWD, 0, S->v2) < 0) scpy(S->v2, C.program, PATH_MAX);
         to_real_exec(S->v2, S->b2);
+        unborrow();
         long e = sys_execve(S->b2, argv, env2);
         die("cannot exec the wrapper", C.program, e);
     }
@@ -194,7 +199,7 @@ static void loader_mode_check(char **argv, char **env2)
 static __attribute__((noreturn)) void run(const char *v, const char *given, long argc, char **argv, char **envp, unsigned long *auxv, int depth)
 {
     static char real[PATH_MAX], payload[PATH_MAX];
-    if (depth > 4) die_status(126, "interpreter chain too deep", v, ELOOP);
+    if (depth > 5) die_status(126, "interpreter chain too deep", v, ELOOP);   /* as binfmt_script: five may nest (7.4.5) */
     to_real_exec(v, real);
     if (is_wrapper_real(real, payload) && payload_of(real, payload)) scpy(real, payload, PATH_MAX);
     long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) die("cannot open program", v, fd);
@@ -228,6 +233,13 @@ void start_c(unsigned long *sp)
 
     unsigned long m = 1UL << (SIGSYS - 1);                    /* 7.5.2: SIGSYS must never be blocked */
     sys_rt_sigprocmask(SIG_UNBLOCK, &m, 0, 8);
+    /* a program at its descriptor limit may still exec, since the kernel's exec needs no descriptor (7.4.5): the opener's
+     * own opens, the manifest, the tree's top level, the program and its loader, borrow two under the hard limit, given
+     * back in loader_run before the program runs */
+    if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, C.rlim) == 0 && C.rlim[0] < 16 && C.rlim[0] < C.rlim[1]) {
+        unsigned long more[2] = { C.rlim[0] + 2 < C.rlim[1] ? C.rlim[0] + 2 : C.rlim[1], C.rlim[1] };
+        C.borrowed = SC4(NR_prlimit64, 0, RLIMIT_NOFILE, more, 0) == 0;
+    }
     log_open(envp);
 
     static char exe[PATH_MAX];

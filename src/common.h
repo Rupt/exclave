@@ -80,6 +80,7 @@
 
 /* ---------- seccomp ---------- */
 #define PR_SET_SECCOMP 22
+#define RLIMIT_NOFILE 7
 #define PR_SET_NAME 15
 #define SECCOMP_MODE_FILTER 2
 #define SECCOMP_SET_MODE_FILTER 1
@@ -183,6 +184,7 @@ struct can {
     const char *data[32]; int ndata;  /* data prefixes: never executed, never a loader (6.2) */
     /* cwd rule (8.1.4) */
     char cwdclaim[PATH_MAX]; long cwdclaim_len;   /* subtree claimed for the host; empty if none */
+    unsigned long rlim[2]; int borrowed;   /* RLIMIT_NOFILE as the program had it, raised for the opener's own opens (7.4.5) */
     /* diagnostics */
     int logfd;
     unsigned long text_lo, text_hi;   /* the opener's own text range, for the nesting rule (7.5.3) */

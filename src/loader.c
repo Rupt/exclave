@@ -99,7 +99,12 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
 int elf_probe(const char *real, char *interp, int *is_opener, void *buf)
 {
     *is_opener = 0; interp[0] = 0;
-    long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) return (int)fd;
+    long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
+    if (fd == -EMFILE) {                                     /* a program at its descriptor limit: borrow one for the read (7.4.5) */
+        unsigned long lim[2], one[2];
+        if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, lim) == 0 && lim[0] < lim[1]) { one[0] = lim[0] + 1; one[1] = lim[1]; SC4(NR_prlimit64, 0, RLIMIT_NOFILE, one, 0); fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0); SC4(NR_prlimit64, 0, RLIMIT_NOFILE, lim, 0); }
+    }
+    if (fd < 0) return (int)fd;
     Ehdr eh; Phdr *ph = (Phdr *)buf; unsigned char *nb = (unsigned char *)buf + 128 * sizeof(Phdr); int ret = -ENOEXEC;   /* 7168 + 512 bytes: the loader's own limit of headers */
     if (sys_pread((int)fd, &eh, sizeof eh, 0) == sizeof eh && eh.e_ident[0] == 0x7f && eh.e_ident[1] == 'E'
         && eh.e_ident[4] == ELFCLASS64 && eh.e_machine == EM_NATIVE && eh.e_phnum <= 128 && eh.e_phentsize == sizeof(Phdr)
@@ -175,6 +180,7 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
         jump = ientry; interp_base = base; scpy(interp_path, ireal, PATH_MAX);
     }
     if (wants_exec_stack(ph_main, eh.e_phnum)) stack_make_exec();
+    if (C.borrowed) SC4(NR_prlimit64, 0, RLIMIT_NOFILE, C.rlim, 0);   /* the program's own descriptor limit, as it had it (7.4.5) */
     long auxc = 0; while (auxv[auxc * 2] != AT_NULL) auxc++;
     long envc = 0; while (envp[envc]) envc++;
     unsigned long words = 1 + argc + 1 + envc + 1 + (auxc + 1) * 2 + 2;
