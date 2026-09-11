@@ -139,6 +139,7 @@ class Forms:
                ("above_root", "/.." + self.file), ("missing", "/maze/missing"), ("missing_slash", "/maze/missing/"), ("missing_mid", "/maze/missing/x"),
                ("dot_last", self.dir + "/."), ("dotdot_last", self.dir + "/.."), ("root_dotdot", "/.."),
                ("notdir_mid", self.file + "/x"), ("empty", ""), ("wrapper", self.true), ("sh_link", self.sh),
+               ("ro_file", "/maze/ro444"), ("sock", "/maze/sock"),                   # a file its owner cannot write, and a special file: access(W_OK) has its own order
                ("passwd", "/etc/passwd"), ("resolv", "/etc/resolv.conf"), ("tmp", "/tmp"), ("dev_null", "/dev/null"),
                ("proc_exe", "/proc/self/exe"), ("proc_cwd", "/proc/self/cwd"), ("home", "/home"), ("opt", "/opt"),
                ("can_to_host", "/maze/lH"), ("can_to_host_dir", "/maze/lHD"),
@@ -154,7 +155,7 @@ class Forms:
                  ("rel_root_by_dotdot", "../" * h.count("/") + "."), ("rel_etc_by_dotdot", "../" * h.count("/") + "etc/passwd")]   # up to the root from the host area, and into the tree
         self.paths = [(n, S(p)) for n, p in can + hostf]
         self.paths += [("fault_end", "e:" + hx(self.file)), ("fault_null", "n:"), ("fault_unmapped", "u:")]
-        self.few = [(n, S(p)) for n, p in [("can_file", self.file), ("can_dir", self.dir), ("missing", "/maze/missing"), ("dir_slash", self.dir + "/"),
+        self.few = [(n, S(p)) for n, p in [("can_file", self.file), ("can_dir", self.dir), ("missing", "/maze/missing"), ("dir_slash", self.dir + "/"), ("file_slash", self.file + "/"),
                                           ("above_root", "/.." + self.file), ("empty", ""), ("wrapper", self.true), ("host_file", h + "/hfile"),
                                           ("host_dir", h + "/hdir"), ("host_missing", h + "/missing"), ("host_to_can", h + "/hlink"),
                                           ("rel_file", "hfile")]] + [("fault_null", "n:")]   # no /tmp here: bwrap's bind makes it another mount, so a link or rename into it is EXDEV there and not natively
@@ -210,6 +211,7 @@ def generate(forms, nr, uid, gid):
             add("access", "%s/%s" % (n, mn), p, I(m))
         add("readlink", n, p, B("link", 4096), I(4096))
         add("readlink", n + "/short", p, B("link", 4), I(4))
+        add("readlink", n + "/zero", p, B("link", 4), I(0))
         if n != "proc_exe":
             add("truncate", n, p, I(0))
         add("mkdir", n, p, I(0o755))
@@ -223,6 +225,7 @@ def generate(forms, nr, uid, gid):
         add("utime", n, p, "U:1000,2000")
         add("utime", n + "/null", p, "n:")
         add("utimes", n, p, "T:1000,0,2000,0")
+        add("utimes", n + "/bad_usec", p, "T:1000,1000000,2000,0")
         add("mknod", n + "/fifo", p, I(0o10644), I(0))
         add("mknod", n + "/reg", p, I(0o100644), I(0))
         add("statfs", n, p, B("raw", 256))
@@ -280,6 +283,7 @@ def generate(forms, nr, uid, gid):
         add("unlinkat", n + "/rmdir", d, p, I(AT_REMOVEDIR))
         add("symlinkat", n, S("/maze/f0"), d, p)
         add("readlinkat", n, d, p, B("link", 4096), I(4096))
+        add("readlinkat", n + "/zero", d, p, B("link", 4), I(0))
         add("fchmodat", n, d, p, I(0o644))
         add("faccessat", n, d, p, I(4))
         add("faccessat", n + "/W", d, p, I(2))
@@ -292,6 +296,10 @@ def generate(forms, nr, uid, gid):
         add("utimensat", n + "/now", d, p, "t:0,%d,0,%d" % (UTIME_NOW, UTIME_NOW), I(0))
         add("utimensat", n + "/omit", d, p, "t:0,%d,0,%d" % (UTIME_OMIT, UTIME_OMIT), I(0))
         add("utimensat", n + "/null_times", d, p, "n:", I(0))
+        add("utimensat", n + "/bad_nsec", d, p, "t:0,1000000000,0,0", I(0))
+        add("utimensat", n + "/bad_flags", d, p, "t:1000,0,2000,0", I(0x8000))
+        add("utimensat", n + "/empty", d, p, "t:1000,0,2000,0", I(AT_EMPTY_PATH))
+        add("futimesat", n + "/bad_usec", d, p, "T:1000,0,2000,-1")
         add("execveat", n, d, p, V("x"), V(), I(0))
         add("execveat", n + "/empty", d, p, V("x"), V(), I(AT_EMPTY_PATH))
         add("setxattrat", n, d, p, I(0), S("user.probe"), X("v"), I(16))
@@ -325,6 +333,9 @@ def generate(forms, nr, uid, gid):
         add("openat2", n + "/null_how", d, p, "n:", I(24))
         add("openat2", n + "/huge_struct", d, p, H(O_RDONLY, size=24), I(8192))
     add("utimensat", "fd_null_path", F(O_RDONLY, forms.file), "n:", "t:1000,0,2000,0", I(0))
+    add("utimensat", "fd_null_path_nofollow", F(O_RDONLY, forms.file), "n:", "t:1000,0,2000,0", I(AT_SYMLINK_NOFOLLOW))
+    add("utimensat", "fd_null_path_bad_nsec", F(O_RDONLY, forms.file), "n:", "t:0,-5,0,0", I(0))
+    add("utimensat", "cwd_null_path", I(AT_FDCWD), "n:", "t:1000,0,2000,0", I(0))
     add("utimensat", "hostfd_null_path", F(O_WRONLY, forms.host + "/hfile"), "n:", "t:1000,0,2000,0", I(0))
     add("newfstatat", "fd_null_empty", F(O_RDONLY, forms.file), "n:", B("stat", 256), I(AT_EMPTY_PATH))
     add("newfstatat", "fd_null", F(O_RDONLY, forms.file), "n:", B("stat", 256), I(0))
@@ -370,6 +381,7 @@ def generate(forms, nr, uid, gid):
         add("readlink", "in_can/" + r, S(r), B("link", 4096), I(4096))
         add("mkdir", "in_can/" + r, S(r), I(0o755))
         add("access", "in_can/" + r, S(r), I(2))
+    add("utimensat", "in_can/null_path", I(AT_FDCWD), "n:", "t:1000,0,2000,0", I(0))
     add("chdir", "up_from_can", S(".."))
     add("getcwd", "up_from_can", B("cwd", 4096), I(4096))
     add("chdir", "above_root_from_can", S("../../../.."))
@@ -486,6 +498,8 @@ EXPECTED = [
      "a new top-level name is the host's (8.1 rule 2): the host's / answers EACCES for a create there, where the read-only root under bwrap says EROFS"),
     ("fanotify_mark", lambda l, b, o: errnos(b, o)[0] == 22,
      "fanotify_mark checks its flags and descriptor before its path; the opener resolves the path first, and fanotify needs CAP_SYS_ADMIN, which no can process has (13)"),
+    (None, lambda l, b, o: KERNEL < (6, 14) and "ro_file" in forms_in(l) and errnos(b, o) == (30, 13),
+     "a write-open without O_TRUNC, or a truncate, of a file its owner cannot write on a read-only mount: this kernel wants the mount before the permission (EROFS); vfs_truncate and do_open check the permission first since 6.14, and the handler answers as they do"),
     (None, lambda l, b, o: errnos(b, o) == (26, 30),
      "a write-open of an executable another process is running: the kernel says ETXTBSY before EROFS, the opener EROFS (13); seen when the gate runs the same can copy's shell beside the probe"),
 ]
@@ -544,6 +558,9 @@ def main():
         sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sk.bind(os.path.join(r, "maze", "sock"))
         sk.close()
+        with open(os.path.join(r, "maze", "ro444"), "w") as f:              # a file its owner cannot write: access(W_OK) is EACCES before EROFS
+            f.write("ro\n")
+        os.chmod(os.path.join(r, "maze", "ro444"), 0o444)
     for f in IDENTITY:                                                      # as oracle_ns: the host's link text in the copy, its target bound
         p_ = os.path.join(root, f.lstrip("/"))
         if os.path.islink(f) and os.path.lexists(p_):

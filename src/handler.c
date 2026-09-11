@@ -19,6 +19,8 @@
 #define RENAME_NOREPLACE 1
 #define F_GETFL 3
 #define UTIME_OMIT ((1L << 30) - 2)
+#define UTIME_NOW ((1L << 30) - 1)
+static int nsec_valid(long ns) { return ns == UTIME_OMIT || ns == UTIME_NOW || (ns >= 0 && ns <= 999999999); }   /* fs/utimes.c */
 
 static inline long *gregs(void *uc) { return (long *)((char *)uc + UC_GREGS_OFF); }
 static inline unsigned long *frame_mask(void *uc) { return (unsigned long *)((char *)uc + UC_SIGMASK_OFF); }
@@ -202,14 +204,27 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
         if ((flags & O_TMPFILE) == O_TMPFILE) return !ex ? ae : dir ? -EROFS : -ENOTDIR;
         if (creat && (flags & O_EXCL)) return ex ? -EEXIST : ae != -ENOENT ? ae : -EROFS;
         if (creat && dir) return -EISDIR;
-        if (wr) { if (!ex) return ae != -ENOENT ? ae : creat ? -EROFS : -ENOENT; if (dir) return -EISDIR; return -EROFS; }
+        if (wr) {
+            if (!ex) return ae != -ENOENT ? ae : creat ? -EROFS : -ENOENT;
+            if (dir) return -EISDIR;
+            /* do_open, may_open, do_dentry_open: a special file is opened as the kernel opens it, since the read-only mount does not
+             * protect it (ENXIO for a socket, a FIFO's own rules); on a regular file O_TRUNC wants the mount writable before anything,
+             * EROFS, and otherwise the permission comes first, EACCES, and the mount after it */
+            struct kstat rs; to_real(S->v, S->real, S->tmp);
+            if (sys_lstat(S->real, &rs) < 0 || (rs.st_mode & S_IFMT) == S_IFREG) {
+                if (flags & O_TRUNC) return -EROFS;
+                long pe = sys_faccessat(AT_FDCWD, S->real, acc == O_RDWR ? R_OK | W_OK : W_OK);
+                return pe < 0 ? pe : -EROFS;
+            }
+        }
         if (creat && !ex) return ae != -ENOENT ? ae : -EROFS;
         flags &= ~O_CREAT;                                   /* O_CREAT on an existing file, read-only: succeeds */
     }
     real_nofollow(S, !follow);                               /* O_PATH|O_NOFOLLOW on an identity symlink opens the host's link itself */
     if (!follow) flags |= O_NOFOLLOW;
     if (nr == NR_openat2) {                                  /* re-issued as itself, so a kernel without it answers ENOSYS as it would natively */
-        unsigned long *how = (unsigned long *)S->b2; how[0] = (unsigned long)flags; how[1] = (unsigned long)mode; how[2] = 0;
+        unsigned long *how = (unsigned long *)S->b2; how[0] = (unsigned long)flags; how[2] = 0;
+        how[1] = (flags & O_CREAT) || (flags & O_TMPFILE) == O_TMPFILE ? (unsigned long)mode : 0;   /* build_open_flags: a mode only with a create */
         return RE5(NR_openat2, AT_FDCWD, S->real, how, 24, 0);
     }
     return RE5(NR_openat, AT_FDCWD, S->real, flags, mode, 0);
@@ -459,8 +474,8 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
 /* ---------- readlink: /proc links and identity files answer in virtual terms (8.4) ---------- */
 static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, long bufsiz)
 {
+    if (bufsiz <= 0) return -EINVAL;                          /* do_readlinkat: before the path is read at all */
     long r = resolve(S, a, pi, di, 0, di >= 0); if (r < 0) return r;
-    if (bufsiz <= 0) return -EINVAL;
     char *ans = 0;
     if (r == 1) {                                             /* readlinkat(fd, ""): the kernel reads the descriptor's own link (F3-8) */
         r = RE5(NR_readlinkat, a[di], "", S->tmp, PATH_MAX - 1, 0);
@@ -649,10 +664,14 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_access: case NR_faccessat: case NR_faccessat2: {
         int pi = nr == NR_access ? 0 : 1, di = nr == NR_access ? -1 : 0; long mode = a[pi + 1], fl = nr == NR_faccessat2 ? a[3] : 0;
         if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), 0)) < 0) return r;
-        if ((mode & W_OK) && is_can_owned(S->v)) return ro_attr(S, S->v);
         to_real(S->v, S->real, S->tmp);
-        if (nr == NR_faccessat2) return RE5(nr, AT_FDCWD, S->real, mode, fl | AT_SYMLINK_NOFOLLOW, 0);
-        return RE5(NR_faccessat, AT_FDCWD, S->real, mode, 0, 0);
+        r = nr == NR_faccessat2 ? RE5(nr, AT_FDCWD, S->real, mode, fl | AT_SYMLINK_NOFOLLOW, 0) : RE5(NR_faccessat, AT_FDCWD, S->real, mode, 0, 0);
+        /* do_faccessat: the lookup's and the permission's own answers come first; then a write the permission allows on a
+         * regular file, a directory or a symlink under a read-only mount is EROFS, and a special file never is */
+        if (r < 0 || !(mode & W_OK) || !is_can_owned(S->v)) return r;
+        struct kstat st; if (sys_lstat(S->real, &st) < 0) return r;
+        int m = st.st_mode & S_IFMT;
+        return m == S_IFREG || m == S_IFDIR || m == S_IFLNK ? -EROFS : r;
     }
     case NR_readlink:   return do_readlink(S, a, 0, -1, (char *)a[1], a[2]);
     case NR_readlinkat: return do_readlink(S, a, 1, 0, (char *)a[2], a[3]);
@@ -678,6 +697,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
             if (!ex) return absent_errno(S);
             if ((st->st_mode & S_IFMT) == S_IFDIR) return -EISDIR;
             if (sys_lstat(S->real, st) == 0 && (st->st_mode & S_IFMT) != S_IFREG) return -EINVAL;
+            to_real(S->v, S->real, S->tmp);                  /* vfs_truncate: the permission, EACCES, before the mount, EROFS */
+            r = sys_faccessat(AT_FDCWD, S->real, W_OK); if (r < 0) return r;
             return -EROFS;
         }
         to_real_exec(S->v, S->real);
@@ -735,7 +756,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if ((r = resolve(S, a, opi, odi, (fl & AT_SYMLINK_FOLLOW) != 0, (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
         if (r == 1) { if ((r = dfd_virtual((int)a[odi], S->v)) < 0) return r; }
         scpy(S->v2, S->v, PATH_MAX);                         /* old */
-        if (!exists_can(S, S->v2, &st)) return -ENOENT;     /* do_linkat: the old name is looked up before the new one is read at all */
+        if (!exists_can(S, S->v2, &st)) return absent_errno(S);   /* do_linkat: the old name is looked up before the new one is read at all: its own error, ENOTDIR for a slash on a file */
         if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
         /* then the new name, in either domain (EEXIST, the name's own error), then the read-only rule for a
          * can-owned new name, then EXDEV for a can-owned old one */
@@ -766,13 +787,35 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_utime: case NR_utimes: case NR_futimesat: case NR_utimensat: {
         int pi = nr == NR_utime || nr == NR_utimes ? 0 : 1, di = nr == NR_utime || nr == NR_utimes ? -1 : 0;
         long fl = nr == NR_utimensat ? a[3] : 0;
-        if (nr == NR_utimensat && a[2]) {                    /* do_utimes: two UTIME_OMITs are a no-op before any lookup; a bad pointer is EFAULT */
-            long ts[4]; if ((r = copy_exact(S->pid, ts, (const void *)a[2], sizeof ts))) return r;
-            if (ts[1] == UTIME_OMIT && ts[3] == UTIME_OMIT) return 0;
+        long ts[4] = { 0, 0, 0, 0 }; int badns = 0;
+        if (nr == NR_utimensat) {                            /* the kernel's order (fs/utimes.c): the times read, two UTIME_OMITs a no-op, the flags,
+                                                              * then the lookup or the descriptor, then vfs_utimes, where a nanosecond out of range is
+                                                              * EINVAL before the mount's EROFS */
+            if (a[2]) {
+                if ((r = copy_exact(S->pid, ts, (const void *)a[2], sizeof ts))) return r;
+                if (ts[1] == UTIME_OMIT && ts[3] == UTIME_OMIT) return 0;
+                badns = !nsec_valid(ts[1]) || !nsec_valid(ts[3]);
+            }
+            if (fl & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) return -EINVAL;
+            if (a[1] == 0) {                                 /* a NULL path names the descriptor, with no flag allowed; with AT_FDCWD it is getname's EFAULT */
+                if ((int)a[0] == AT_FDCWD) return -EFAULT;   /* the descriptor is an int in the register: glibc's syscall() zero-extends it */
+                if (fl) return -EINVAL;
+                if (!fd_can(S, (int)a[0])) return RE5(nr, a[0], 0, a[2], a[3], 0);
+                return badns ? -EINVAL : -EROFS;
+            }
+        } else if ((nr == NR_utimes || nr == NR_futimesat) && a[pi + 1]) {   /* do_futimesat: a microsecond out of range is EINVAL before the lookup */
+            long tv[4]; if ((r = copy_exact(S->pid, tv, (const void *)a[pi + 1], sizeof tv))) return r;
+            if (tv[1] < 0 || tv[1] >= 1000000 || tv[3] < 0 || tv[3] >= 1000000) return -EINVAL;
         }
-        if (nr == NR_utimensat && a[1] == 0) return fd_can(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], 0, a[2], a[3], 0);
-        if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), 0)) < 0) return r;
-        if ((r = ro_attr(S, S->v))) return r;
+        if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
+        if (r == 1) {                                        /* AT_EMPTY_PATH: the descriptor itself (6.12+) */
+            if (!fd_can(S, (int)a[0])) return RE5(nr, a[0], a[1], a[2], a[3], 0);
+            return badns ? -EINVAL : -EROFS;
+        }
+        if (is_can_owned(S->v)) {                            /* the name's own error, then the times, then the write */
+            struct kstat st; if (!exists_can(S, S->v, &st)) return absent_errno(S);
+            return badns ? -EINVAL : -EROFS;
+        }
         to_real(S->v, S->real, S->tmp);
         if (nr == NR_utime) return RE5(NR_utime, S->real, a[1], 0, 0, 0);
         if (nr == NR_utimes) return RE5(NR_utimes, S->real, a[1], 0, 0, 0);
