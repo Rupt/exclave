@@ -149,7 +149,7 @@ def extract(root, debs, log=print):
         _inside(root_real, dst)
         if os.path.lexists(dst):
             os.remove(dst)
-        os.link(src, dst)
+        os.link(src, dst, follow_symlinks=False)                # the member the archive names, never what a shipped symlink there points at
     return owner
 
 

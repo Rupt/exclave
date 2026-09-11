@@ -24,13 +24,15 @@ DEFAULT_DIRS = ["/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu", "/lib64", 
 MUSL_DIRS = ["/lib", "/usr/local/lib", "/usr/lib"]
 HWCAPS = ["glibc-hwcaps/x86-64-v4", "glibc-hwcaps/x86-64-v3", "glibc-hwcaps/x86-64-v2"]
 LIBC_SONAME = {"glibc": "libc.so.6", "musl": "libc.musl-x86_64.so.1"}
+LIB_DIR, PLATFORM = "lib/x86_64-linux-gnu", "x86_64"          # what the loader substitutes for $LIB and $PLATFORM; set by set_machine
 
 
 def set_machine(machine):
     """The can's machine decides the multiarch directory, the hwcaps subdirectories and musl's soname."""
-    global MACHINE, DEFAULT_DIRS, HWCAPS, LIBC_SONAME
+    global MACHINE, DEFAULT_DIRS, HWCAPS, LIBC_SONAME, LIB_DIR, PLATFORM
     MACHINE = machine
     uname, triplet = MACHINES.get(machine, ("unknown", "unknown"))
+    LIB_DIR, PLATFORM = "lib/" + triplet, uname
     DEFAULT_DIRS = ["/lib/" + triplet, "/usr/lib/" + triplet, "/lib64", "/usr/lib64", "/lib", "/usr/lib"]
     HWCAPS = ["glibc-hwcaps/x86-64-v4", "glibc-hwcaps/x86-64-v3", "glibc-hwcaps/x86-64-v2"] if machine == 62 else []
     LIBC_SONAME = {"glibc": "libc.so.6", "musl": "libc.musl-%s.so.1" % uname}
@@ -193,7 +195,8 @@ class Report:
 
 
 def _expand(s, origin):
-    return s.replace("$ORIGIN", origin).replace("${ORIGIN}", origin).replace("$LIB", "lib/x86_64-linux-gnu").replace("${LIB}", "lib/x86_64-linux-gnu").replace("$PLATFORM", "x86_64").replace("${PLATFORM}", "x86_64")
+    """The loader's substitutions in an RPATH or RUNPATH, for the can's machine (glibc's dl-load.c)."""
+    return s.replace("$ORIGIN", origin).replace("${ORIGIN}", origin).replace("$LIB", LIB_DIR).replace("${LIB}", LIB_DIR).replace("$PLATFORM", PLATFORM).replace("${PLATFORM}", PLATFORM)
 
 
 def read_cache(tree):
