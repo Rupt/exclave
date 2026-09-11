@@ -426,8 +426,6 @@ def cmd_unpack(out, debs, log=print):
         pkgs.append((name, path, fields, ver, arch))
     if len(arches) > 1:
         raise build.BuildError("the packages mix architectures %s" % sorted(arches))
-    for line in build.dependency_report([(n, f) for n, _, f, _, _ in pkgs]):
-        log("depends: " + line)
     os.makedirs(os.path.join(out, ".can"))
     root = os.path.join(out, "root")
     triples = [(n, p, f) for n, p, f, _, _ in pkgs]
@@ -438,6 +436,8 @@ def cmd_unpack(out, debs, log=print):
     except build.BuildError:
         shutil.rmtree(out)
         raise
+    for line in build.dependency_report([(n, f) for n, _, f, _, _ in pkgs], root):   # after synthesis: a file dependency asks the tree
+        log("depends: " + line)
     install_opener(out, arch=next(iter(arches), None))
     build.write_lock(out, [(n, v, a, b2_file(p)) for n, p, _, v, a in pkgs])
     log("unpacked %d packages into %s" % (len(pkgs), out))

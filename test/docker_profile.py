@@ -3,8 +3,10 @@
 
 Docker's default profile (a JSON allow-list with a default errno) is assembled here into a classic BPF
 program and installed by bwrap around a can workload, with the host's tree visible read-only, the way a
-CI container would run it. The opener then stacks its own filter on top. Needs bwrap and user
-namespaces; says so and exits 0 when it cannot run.
+CI container would run it. The opener then stacks its own filter on top. The profile runs twice: as
+assembled for this kernel, and as Docker installs it before kernel 4.8, where process_vm_readv is refused
+and the opener copies program memory through a pipe (13); the workload includes a bad pointer that must be
+EFAULT either way. Needs bwrap and user namespaces; says so and exits 0 when it cannot run.
 
     test/docker_profile.py --can CAN --profile docker-seccomp.json [--work DIR]
 """
@@ -64,7 +66,8 @@ class BPF:
         return b"".join(struct.pack("<HBBI", c, jt, jf, k) for c, jt, jf, k in self.insns)
 
 
-def build(profile, table):
+def build(profile, table, kernel=None):
+    """kernel: a (major, minor) to apply the profile's minKernel conditions against; None takes every such entry."""
     default = profile.get("defaultAction", "SCMP_ACT_ERRNO")
     default_errno = int(profile.get("defaultErrnoRet", 1))
     b = BPF()
@@ -83,6 +86,8 @@ def build(profile, table):
             continue
         if exc.get("arches") and set(exc["arches"]) & set(ARCH_NAMES):
             continue
+        if kernel and inc.get("minKernel") and tuple(int(x) for x in inc["minKernel"].split(".")) > kernel:
+            continue                                                 # as Docker installs the profile on an older kernel
         action = entry.get("action", "SCMP_ACT_ALLOW")
         ret = {"SCMP_ACT_ALLOW": RET_ALLOW, "SCMP_ACT_LOG": RET_ALLOW, "SCMP_ACT_TRACE": RET_ALLOW,
                "SCMP_ACT_ERRNO": RET_ERRNO | int(entry.get("errnoRet", 1)), "SCMP_ACT_KILL": RET_KILL,
@@ -142,7 +147,7 @@ def build(profile, table):
     return b
 
 
-def assemble(profile_path, can=None):
+def assemble(profile_path, can=None, kernel=None):
     profile = json.load(open(profile_path))
     table = kernel_table(can)
     b = BPF()
@@ -151,7 +156,7 @@ def assemble(profile_path, can=None):
         for cond in entry.get("args") or []:
             if cond["op"] == "SCMP_CMP_NE":
                 raise SystemExit("profile uses SCMP_CMP_NE, which this assembler does not implement")
-    return build(profile, table).pack()
+    return build(profile, table, kernel).pack()
 
 
 def main():
@@ -163,34 +168,39 @@ def main():
     if not shutil.which("bwrap") or subprocess.run(["bwrap", "--ro-bind", "/", "/", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
         print("bwrap or user namespaces unavailable; the Docker-profile run cannot happen here")
         return 0
-    prog = assemble(a.profile, os.path.abspath(a.can))
     import tree                                                  # the can's compiler and shell as the tree spells them
-    root = os.path.join(os.path.abspath(a.can), "root")
+    can = os.path.abspath(a.can)
+    root = os.path.join(can, "root")
     cc = tree.compiler(root, MACHINE) or "cc"
     work = os.path.abspath(a.work)
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
     with open(os.path.join(work, "hello.c"), "w") as f:
-        f.write('#include <stdio.h>\n#include <pthread.h>\n#include <spawn.h>\n#include <sys/wait.h>\nextern char **environ;\n'
+        f.write('#include <errno.h>\n#include <stdio.h>\n#include <pthread.h>\n#include <spawn.h>\n#include <sys/wait.h>\n#include <unistd.h>\nextern char **environ;\n'
                 'static void *t(void *a) { return a; }\n'
                 'int main(void) { pthread_t th; pthread_create(&th, 0, t, 0); pthread_join(th, 0); pid_t p; char *av[] = {"true", 0};\n'
+                ' if (access((const char *)16, F_OK) != -1 || errno != EFAULT) return 3;   /* a bad pointer is EFAULT however the handler reads memory (13) */\n'
                 ' if (posix_spawn(&p, "TRUEPATH", 0, 0, av, environ)) return 2; int st; waitpid(p, &st, 0); printf("hello under docker profile %d\\n", st); return st; }\n'.replace("TRUEPATH", tree.vbin(root, "true")))
-    can = os.path.abspath(a.can)
-    r, w = os.pipe()
-    os.write(w, prog)
-    os.close(w)
-    cmd = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--bind", work, work, "--chdir", work, "--seccomp", str(r),
-           "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "TMPDIR", work, os.path.join(root, tree.vbin(root, "sh").lstrip("/")), "-c",
-           "%s -O1 -pthread hello.c -o hello && ./hello && ls /usr/lib >/dev/null && cat /etc/passwd | head -1 && touch /usr/x 2>&1; readlink /proc/self/exe" % cc]
-    p = subprocess.run(cmd, pass_fds=[r], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    out, err = p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
     exe = tree.resolve(root, tree.vbin(root, "readlink"))            # what /proc/self/exe reads for the wrapper, or the applet's busybox
-    ok = p.returncode == 0 and "hello under docker profile 0" in out and "Read-only" in out and out.strip().endswith(exe)
-    print(("PASS" if ok else "FAIL") + " can under Docker's default profile (%d BPF instructions): rc=%d\n%s%s" % (len(prog) // 8, p.returncode, out, err))
-    if ok:
+    fails = 0
+    for label, kernel in (("Docker's default profile", None), ("the profile as Docker installs it before kernel 4.8, process_vm_readv refused", (3, 10))):
+        prog = assemble(a.profile, can, kernel)
+        r, w = os.pipe()
+        os.write(w, prog)
+        os.close(w)
+        cmd = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--bind", work, work, "--chdir", work, "--seccomp", str(r),
+               "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "TMPDIR", work, os.path.join(root, tree.vbin(root, "sh").lstrip("/")), "-c",
+               "%s -O1 -pthread hello.c -o hello && ./hello && ls /usr/lib >/dev/null && cat /etc/passwd | head -1 && touch /usr/x 2>&1; readlink /proc/self/exe" % cc]
+        p = subprocess.run(cmd, pass_fds=[r], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        os.close(r)
+        out, err = p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
+        ok = p.returncode == 0 and "hello under docker profile 0" in out and "Read-only" in out and out.strip().endswith(exe)
+        print(("PASS" if ok else "FAIL") + " can under %s (%d BPF instructions): rc=%d\n%s%s" % (label, len(prog) // 8, p.returncode, out, err))
+        fails += not ok
+    if not fails:
         shutil.rmtree(work, ignore_errors=True)
-    return 0 if ok else 1
+    return 1 if fails else 0
 
 
 if __name__ == "__main__":

@@ -301,6 +301,7 @@ struct linux_dirent64 {
 static inline long sys_read(int fd, void *b, size_t n)          { return SC3(NR_read, fd, b, n); }
 static inline long sys_write(int fd, const void *b, size_t n)   { return SC3(NR_write, fd, b, n); }
 static inline long sys_close(int fd)                             { return SC1(NR_close, fd); }
+static inline long sys_pipe2(int *fds, int flags)                { return SC2(NR_pipe2, fds, flags); }
 static inline long sys_openat(int dfd, const char *p, int fl, int mode) { return SC4(NR_openat, dfd, p, fl, mode); }
 static inline long sys_open(const char *p, int fl, int mode)     { return sys_openat(AT_FDCWD, p, fl, mode); }
 static inline long sys_fstatat(int dfd, const char *p, struct kstat *st, int fl) { return SC4(NR_newfstatat, dfd, p, st, fl); }

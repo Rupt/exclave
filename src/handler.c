@@ -26,25 +26,42 @@ static inline unsigned long *frame_mask(void *uc) { return (unsigned long *)((ch
 #define RE6(nr, a, b, c, d, e, f) __sc6((nr), (long)(a), (long)(b), (long)(c), (long)(d), (long)(e), (long)(f))
 
 /* ---------- copying from the program's memory with EFAULT fidelity (7.5.4) ---------- */
-static int no_readv;                                         /* process_vm_readv refused: direct reads, a bad pointer faults (13) */
+static int no_readv;                                         /* process_vm_readv refused: copies go through a pipe (13) */
 static pid_t cur_pid;                                        /* set per trap; one pid per process, so a plain static; no TLS in the opener */
+/* where process_vm_readv is refused, EPERM under a seccomp profile that gates it on a capability, as Docker's does before
+ * kernel 4.8, the copy goes through a pipe: write() from program memory and read() into it fault exactly as the syscall's
+ * own copy would, EFAULT or short at the boundary; the pipe lives for the copy alone, a page a step (13) */
+static long pipe_copy(void *dst, const void *src, size_t n)
+{
+    int fds[2]; long done = 0;
+    if (sys_pipe2(fds, O_CLOEXEC | O_NONBLOCK) < 0) { xmemcpy(dst, src, n); return (long)n; }   /* no descriptor left: a direct copy */
+    while (done < (long)n) {
+        size_t chunk = n - (size_t)done; if (chunk > 4096) chunk = 4096;   /* a page always fits an empty pipe */
+        long w = sys_write(fds[1], (const char *)src + done, chunk);
+        long r = w > 0 ? sys_read(fds[0], (char *)dst + done, (size_t)w) : w;
+        if (r <= 0) break;
+        done += r;
+        if (r < (long)chunk) break;
+    }
+    sys_close(fds[0]); sys_close(fds[1]);
+    return done;
+}
 static long copy_in(void *dst, const void *src, size_t n)
 {
     unsigned long p = (unsigned long)src;
     if (!p) return -EFAULT;
-    if (no_readv) { xmemcpy(dst, src, n); return (long)n; }
+    if (no_readv) { long g = pipe_copy(dst, src, n); return g > 0 || n == 0 ? g : -EFAULT; }
     struct iovec l = { dst, n }, r[2]; unsigned long rn = 1;
     unsigned long first = 4096 - (p & 4095); if (first > n) first = n;
     r[0].iov_base = (void *)p; r[0].iov_len = first;
     if (first < n) { r[1].iov_base = (void *)(p + first); r[1].iov_len = n - first; rn = 2; }
     long got = sys_process_vm_readv(cur_pid, &l, 1, r, rn, 0);
-    if (got == -ENOSYS || got == -EPERM) { no_readv = 1; log_msg("process_vm_readv refused; direct reads", 0); return copy_in(dst, src, n); }
+    if (got == -ENOSYS || got == -EPERM) { no_readv = 1; log_msg("process_vm_readv refused; copies through a pipe", 0); return copy_in(dst, src, n); }
     return got < 0 ? -EFAULT : got;
 }
 /* NUL-terminated string into dst[PATH_MAX]; returns its length or -EFAULT/-ENAMETOOLONG */
 static long copy_str_in(char *dst, const char *src)
 {
-    if (no_readv) { long i = 0; for (; i < PATH_MAX; i++) { dst[i] = src[i]; if (!dst[i]) return i; } return -ENAMETOOLONG; }
     long got = copy_in(dst, src, 256); if (got < 0) return got;
     for (long i = 0; i < got; i++) if (!dst[i]) return i;
     if (got < 256) return -EFAULT;
@@ -58,7 +75,7 @@ static long copy_out(void *dst, const void *src, size_t n)
 {
     unsigned long p = (unsigned long)dst;
     if (!p) return -EFAULT;
-    if (no_readv) { xmemcpy(dst, src, n); return 0; }
+    if (no_readv) return pipe_copy(dst, src, n) == (long)n ? 0 : -EFAULT;
     struct iovec l = { (void *)src, n }, r[2]; unsigned long rn = 1;
     unsigned long first = 4096 - (p & 4095); if (first > n) first = n;
     r[0].iov_base = (void *)p; r[0].iov_len = first;
@@ -136,6 +153,24 @@ static long ro_create(struct scratch *S, const char *v, int is_dir)
 }
 static long ro_attr(struct scratch *S, const char *v)
 { struct kstat st; int ex = exists_can(S, v, &st); if (!is_can_owned(v)) return 0; return ex ? -EROFS : absent_errno(S); }
+/* an overlong last component of a delete: do_unlinkat and do_rmdir take the write lock on the parent before they look the
+ * name up, so a can-owned parent answers EROFS first, where an overlong earlier component fails in the walk (oracle 17.3) */
+static long delete_overlong(struct scratch *S, int dfd)
+{
+    char *p = S->b1; size_t n = 0;                              /* the path as given, from resolve */
+    while (n < PATH_MAX && p[n]) n++;
+    if (n >= PATH_MAX) return -ENAMETOOLONG;                  /* getname's own answer: no NUL within PATH_MAX */
+    while (n > 1 && p[n - 1] == '/') n--;                     /* a trailing slash names the same component */
+    size_t s = n; while (s > 0 && p[s - 1] != '/') s--;      /* p[s..n) is the last component */
+    if (n - s <= NAME_MAX) return -ENAMETOOLONG;              /* an earlier component was the overlong one */
+    for (size_t i = 0, cl = 0; i < s; i++) { if (p[i] == '/') cl = 0; else if (++cl > NAME_MAX) return -ENAMETOOLONG; }
+    char c = p[s]; p[s] = 0;                                  /* the parent: what precedes the component, or the directory itself */
+    long r = canon(S, s ? p : ".", dfd, 1, S->v);
+    p[s] = c;
+    r = r < 0 ? -ENAMETOOLONG : is_can_owned(S->v) ? -EROFS : -ENAMETOOLONG;
+    scpy(S->v, S->b1, PATH_MAX);                              /* the log names what was asked for */
+    return r;
+}
 static long ro_delete(struct scratch *S, const char *v) { to_real_exec(v, S->real); return is_can_owned(v) ? -EROFS : 0; }
 static void real_nofollow(struct scratch *S, int nofollow);
 static int dfd_virtual(int fd, char *out);
@@ -543,7 +578,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_rmdir: case NR_unlink: case NR_unlinkat: {
         int pi = nr == NR_unlinkat ? 1 : 0, di = nr == NR_unlinkat ? 0 : -1;
         long fl = nr == NR_rmdir ? AT_REMOVEDIR : nr == NR_unlinkat ? a[2] : 0;
-        if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
+        if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r == -ENAMETOOLONG ? delete_overlong(S, di < 0 ? AT_FDCWD : (int)a[di]) : r;
         int sp = last_special(S->b1);                        /* do_rmdir, do_unlinkat: answered before any lookup */
         if (sp) return (fl & AT_REMOVEDIR) ? (sp == 1 ? -EINVAL : sp == 2 ? -ENOTEMPTY : -EBUSY) : -EISDIR;
         if ((r = ro_delete(S, S->v))) return r;

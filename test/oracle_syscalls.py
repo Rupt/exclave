@@ -452,8 +452,6 @@ EXPECTED = [
      "fanotify_mark checks its flags and descriptor before its path; the opener resolves the path first, and fanotify needs CAP_SYS_ADMIN, which no can process has (13)"),
     (None, lambda l, b, o: errnos(b, o) == (26, 30),
      "a write-open of an executable another process is running: the kernel says ETXTBSY before EROFS, the opener EROFS (13); seen when the gate runs the same can copy's shell beside the probe"),
-    (None, lambda l, b, o: "long_component" in forms_in(l) and errnos(b, o) == (30, 36),
-     "the opener refuses an overlong name before the read-only rule; for a delete the kernel checks EROFS first (do_unlinkat)"),
 ]
 
 

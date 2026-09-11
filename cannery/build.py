@@ -426,9 +426,13 @@ def write_lock(can, pkgs, manifest_hash=None, tree=False, keep_hashes=False):
 
 
 # ---------------------------------------------------------------- the dependency report (10.1)
-def dependency_report(pkgs):
+def dependency_report(pkgs, root=None):
     """pkgs: [(name, control fields)]. Lines naming every Depends or Pre-Depends the set does not satisfy,
-    with Provides and version constraints honoured. A report, not a refusal: the set is the user's."""
+    with Provides and version constraints honoured; a dependency spelt as a path (rpm's and apk's `/bin/sh`) is
+    satisfied when the tree under root, extracted and synthesised, resolves it. A report, not a refusal: the set
+    is the user's."""
+    import elfcheck
+    tree = elfcheck.Tree(root) if root else None
     rd = {"apk": apk, "rpm": rpm}.get(pkgs[0][1].get("_format") if pkgs else None, deb)
     have = {n: f.get("Version", "") for n, f in pkgs}
     provides = {}
@@ -440,7 +444,7 @@ def dependency_report(pkgs):
     for n, f in sorted(pkgs):
         for field in ("Pre-Depends", "Depends"):
             for alts in rd.parse_deps(f.get(field, "")):
-                ok = any(name.startswith("/") for name, _, _ in alts)   # apk's file dependencies are not checked
+                ok = any(name.startswith("/") and (tree is None or tree.resolve(name) is not None) for name, _, _ in alts)
                 for name, op, ver in alts:
                     if name in have and rd.satisfies(have[name], op, ver):
                         ok = True

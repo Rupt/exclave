@@ -17,8 +17,8 @@ PATH = [
     (["on_sigsys"], 1), (["dispatch"], 1),
     (["do_open", "do_execve", "do_readlink", "do_sigprocmask", "do_pselect6", "exec_loader_mode"], 1),
     (["exec_target"], 5), (["exec_script"], 5),
-    (["resolve", "canon", "fd_virtual", "cwd_virtual", "ro_create", "ro_attr", "exists_can", "to_real", "to_real_exec", "vis_is_host", "elf_probe", "vec_read"], 1),
-    (["copy_str_in", "copy_in", "copy_out", "scratch_get", "nest_enter", "is_wrapper_real", "payload_of", "from_real", "cache_classify", "cache_get", "cache_put", "log_line", "log_msg"], 1),
+    (["resolve", "canon", "delete_overlong", "fd_virtual", "cwd_virtual", "ro_create", "ro_attr", "exists_can", "to_real", "to_real_exec", "vis_is_host", "elf_probe", "vec_read"], 1),
+    (["copy_str_in", "copy_in", "copy_out", "pipe_copy", "scratch_get", "nest_enter", "is_wrapper_real", "payload_of", "from_real", "cache_classify", "cache_get", "cache_put", "log_line", "log_msg"], 1),
 ]
 frames, seen_dynamic = {}, {}
 for f in sys.argv[1:]:

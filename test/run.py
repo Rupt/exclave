@@ -936,7 +936,7 @@ def make_rpm(path, name, members, requires=(), provides=(), postin=""):
 @test
 def rpm_unpack(ctx):
     """10.1: unpack reads .rpm files by the file: lead, headers, cpio payload; Requires and Provides with rpm's
-    flags, so-called provides and file dependencies, rpmlib features and rich dependencies skipped; hard links;
+    flags, so-called provides, file dependencies asked of the tree, rpmlib features and rich dependencies skipped; hard links;
     the merged-usr links; alternatives --install lines in %post synthesised; one format per can."""
     d = os.path.join(ctx.work, "rpms")
     os.makedirs(d, exist_ok=True)
@@ -944,17 +944,19 @@ def rpm_unpack(ctx):
     make_rpm(os.path.join(d, "tool-1.0-1.x86_64.rpm"), "tool",
              [("usr", "dir", None, 0o755), ("usr/bin", "dir", None, 0o755), ("usr/bin/tool-2", "file", b"#!/bin/sh\necho tool ok\n", 0o755),
               ("usr/bin/tool", "file", b"#!/bin/sh\necho the shipped file, which %post removes\n", 0o755)],
-             requires=[("libfoo.so.1()(64bit)", 0, ""), ("absent-pkg", GE, "2"), ("/bin/sh", 0, ""), ("rpmlib(CompressedFileNames)", (1 << 24) | 10, "3.0.4-1"), ("(a or b)", 0, "")],
+             requires=[("libfoo.so.1()(64bit)", 0, ""), ("absent-pkg", GE, "2"), ("/bin/sh", 0, ""), ("/usr/bin/absent-file", 0, ""), ("rpmlib(CompressedFileNames)", (1 << 24) | 10, "3.0.4-1"), ("(a or b)", 0, "")],
              postin="/usr/bin/rm -f /usr/bin/tool\n/usr/sbin/alternatives --install /usr/bin/tool tool /usr/bin/tool-2 20\n")
     make_rpm(os.path.join(d, "libfoo-1.0-1.x86_64.rpm"), "libfoo",
              [("usr", "dir", None, 0o755), ("usr/lib64", "dir", None, 0o755), ("usr/lib64/libfoo.so.1", "file", b"data\n", 0o644),
+              ("usr/bin", "dir", None, 0o755), ("usr/bin/sh", "file", b"#!/bin/true\n", 0o755),                     # /bin/sh through the merged-usr link
               ("usr/share", "dir", None, 0o755), ("usr/share/doc", "file", b"doc\n", 0o644)],
              provides=[("libfoo.so.1()(64bit)", 0, ""), ("libfoo", EQ, "1.0-1")])
     out = os.path.join(ctx.work, "rpm.can")
     rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "unpack", out, os.path.join(d, "tool-1.0-1.x86_64.rpm"), os.path.join(d, "libfoo-1.0-1.x86_64.rpm")])
     expect(rc == 0, "unpack: " + o + e)
     expect("depends: tool needs absent-pkg (>= 2), not in the set" in o, "the versioned dependency was not reported: " + o)
-    expect("libfoo" not in o.replace("libfoo-1.0", "") and "/bin/sh" not in o and "rpmlib" not in o and "(a or b)" not in o, "a provide in the set, a file dependency, an rpmlib feature or a rich dependency was reported: " + o)
+    expect("libfoo" not in o.replace("libfoo-1.0", "") and "/bin/sh" not in o and "rpmlib" not in o and "(a or b)" not in o, "a provide in the set, a file dependency the tree has, an rpmlib feature or a rich dependency was reported: " + o)
+    expect("depends: tool needs /usr/bin/absent-file, not in the set" in o, "a file dependency the tree lacks was not reported: " + o)
     root = os.path.join(out, "root")
     expect(os.readlink(os.path.join(root, "bin")) == "usr/bin" and os.readlink(os.path.join(root, "lib64")) == "usr/lib64", "the merged-usr links")
     expect(os.path.exists(os.path.join(root, "usr", "lib64", "libfoo.so.1")) and os.path.exists(os.path.join(root, "usr", "bin", "tool-2")), "payload extracted")
@@ -974,13 +976,13 @@ def rpm_unpack(ctx):
 @test
 def apk_unpack(ctx):
     """10.1: unpack reads .apk files by the file, with .PKGINFO's depend and provides, so: names and file
-    dependencies; Alpine's directories are its own, not merged /usr; busybox's applet links are synthesised
+    dependencies asked of the tree; Alpine's directories are its own, not merged /usr; busybox's applet links are synthesised
     from /etc/busybox-paths.d as relative links; one format per can."""
     d = os.path.join(ctx.work, "apks")
     os.makedirs(d, exist_ok=True)
     make_apk(os.path.join(d, "tool-1.0-r0.apk"), "tool", [("usr", "dir", None, 0o755), ("usr/bin", "dir", None, 0o755),
                                                           ("usr/bin/tool", "file", b"#!/bin/sh\necho tool ok\n", 0o755)],
-             "depend = so:libfoo.so.1\ndepend = absent-pkg>=2\ndepend = /bin/sh\n")
+             "depend = so:libfoo.so.1\ndepend = absent-pkg>=2\ndepend = /bin/sh\ndepend = /usr/bin/absent-file\n")
     make_apk(os.path.join(d, "libfoo-1.0-r0.apk"), "libfoo", [("bin", "dir", None, 0o755), ("bin/busybox", "file", b"#!/bin/true\n", 0o755),
                                                             ("etc", "dir", None, 0o755), ("etc/busybox-paths.d", "dir", None, 0o755),
                                                             ("etc/busybox-paths.d/busybox", "file", b"bin/sh\nusr/bin/tool2\n", 0o644),
@@ -990,7 +992,8 @@ def apk_unpack(ctx):
     rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "unpack", out, os.path.join(d, "tool-1.0-r0.apk"), os.path.join(d, "libfoo-1.0-r0.apk")])
     expect(rc == 0, "unpack: " + o + e)
     expect("depends: tool needs absent-pkg (>= 2), not in the set" in o, "the versioned dependency was not reported: " + o)
-    expect("libfoo" not in o.replace("libfoo-1.0", "") and "/bin/sh" not in o, "a so: provides in the set or a file dependency was reported: " + o)
+    expect("libfoo" not in o.replace("libfoo-1.0", "") and "/bin/sh" not in o, "a so: provides in the set or a file dependency the tree has (the applet link) was reported: " + o)
+    expect("depends: tool needs /usr/bin/absent-file, not in the set" in o, "a file dependency the tree lacks was not reported: " + o)
     root = os.path.join(out, "root")
     expect(os.path.isdir(os.path.join(root, "bin")) and not os.path.islink(os.path.join(root, "bin")), "Alpine's /bin is a directory of its own")
     expect(os.readlink(os.path.join(root, "bin", "sh")) == "busybox" and os.readlink(os.path.join(root, "usr", "bin", "tool2")) == "../../bin/busybox",
