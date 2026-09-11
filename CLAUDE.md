@@ -107,7 +107,10 @@ The loop that has served well, in the order it pays:
   can in two orders and, for the first can, under the plain terminal's
   AppArmor label, the oracles, the syscall probe and the Docker
   profile, every step in parallel on copies, in about a minute with a
-  30 s budget per test. The suite runs on the can pruned to what it
+  30 s budget per test. The oracles and the probe run the opener a
+  can carries, so a can made before a rebuild measures the old one:
+  give them a copy reopened with `build/opener`, as the gate does.
+  The suite runs on the can pruned to what it
   touches, made by the first run on a can and kept under
   `build/fixtures/` by the can's lock and the test sources; a new test
   that touches a file the fixture lacks fails once, and the next run

@@ -30,8 +30,8 @@ matrix checks natively on each VM; the opener builds for aarch64 from
 the same sources and the matrix has an emulated arm64 row. gdb debugs
 a canned program with no manual command: the opener carries the script
 gdb needs. The
-regression suite (61 named tests), the kernel oracles, a differential
-syscall probe that agrees with the kernel on 16 916 cases per can, and
+regression suite (64 named tests), the kernel oracles, a differential
+syscall probe that agrees with the kernel on 18 586 cases per can, and
 Docker's default seccomp profile pass on the gcc, Alpine, Fedora and
 clang cans, each pruned to what the suite touches, in one gate of
 about a minute on the reference machine, where the plain-terminal
@@ -368,7 +368,7 @@ test/dogfood.py      the cannery can building a can that must reproduce the host
 test/gate.sh         the commit gate, every step in parallel on copies of the cans given; test/examples.sh the example runs
 test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/stackcheck.py the stack budget
-docs/            proposal (revision 15), review response, prior art, review reports
+docs/            proposal (revision 16), review response, prior art, review reports
 spike/           frozen prototypes and their tests
 ```
 
