@@ -250,7 +250,7 @@ def compile_progs(ctx):
     shutil.copytree(os.path.join(HERE, "progs"), src)
     os.makedirs(ctx.progs, exist_ok=True)
     gcc = wrapper(ctx, GCC)
-    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2", "unix_socket", "openat2_xdev"):
+    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2", "unix_socket", "openat2_xdev", "fexec"):
         rc, out, err = run([gcc, "-O1", "-g", "-pthread", "-o", os.path.join(ctx.progs, name), os.path.join(src, name + ".c"), "-lm", "-ldl"], cwd=ctx.work, env=ctx.env)
         if rc and name == "execstack" and "not allowed here" in err:      # nested functions are gcc's; clang has none
             continue
@@ -1713,6 +1713,29 @@ def openat2_xdev(ctx):
                 "no_xdev cwd to /usr/share (can)": "ret=0 errno=0", "no_xdev host fd to /dev/null (absolute)": "ret=-1 errno=18"}
     bad = ["%s: %s, wanted %s" % (k, got.get(k), v) for k, v in crossing.items() if got.get(k) != v]
     expect(not bad, "the can-to-host crossing under RESOLVE_NO_XDEV: " + "; ".join(bad))
+
+
+@test
+def fexec(ctx):
+    """13 item 25, 7.4.5: exec of a descriptor that has no path. A memfd holding an ELF and an unlinked file run on the
+    loader path through the child opener, which names the program by its descriptor and answers the link's text for
+    /proc/self/exe as the kernel does; a script in a memfd or an unlinked file reaches its interpreter as /dev/fd/N,
+    and a close-on-exec script is ENOENT, as natively. The kernel under bwrap measured these answers."""
+    d = os.path.join(ctx.work, "fexechost")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "fexec"), [d])
+    expect(rc == 0, "fexec: %r %r" % (out, err))
+    got = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
+    want = {"memfd elf": "ret=0 errno=0 status=7 out=child ran, exe memfd:prog (deleted), argv0 fexec",
+            "memfd elf cloexec": "ret=0 errno=0 status=7 out=child ran, exe memfd:prog (deleted), argv0 memfd-program",
+            "unlinked elf": "ret=0 errno=0 status=7 out=child ran, exe unlinked-prog (deleted), argv0 fexec",
+            "memfd script": "ret=0 errno=0 status=0 out=script ran, argv0 /dev/fd/3",
+            "memfd script cloexec": "ret=-1 errno=2",
+            "unlinked script": "ret=0 errno=0 status=0 out=script ran, argv0 /dev/fd/3",
+            "fd with a path (control)": "ret=0 errno=0 status=7 out=child ran, exe linked-prog, argv0 fexec"}
+    bad = ["%s: got %s, the kernel says %s" % (k, got.get(k), v) for k, v in want.items() if got.get(k) != v]
+    expect(not bad, "; ".join(bad))
 
 
 @test

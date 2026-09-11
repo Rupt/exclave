@@ -313,7 +313,7 @@ static long exec_loader_mode(struct scratch *S, const char *v, char **argv, char
 
 /* a script that is not a wrapper (a host script, 7.6): the interpreter is resolved in the can's world,
  * the script is passed by its virtual path. Kernel convention: argv = interp [arg] script args... */
-static long exec_script(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, struct scratch **Sp)
+static inline __attribute__((always_inline)) long exec_script(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, struct scratch **Sp)   /* inlined into both callers: one frame per script level (7.5.4) */
 {
     struct scratch *S2 = scratch_get(S->pid, S->tid, (unsigned long)__builtin_frame_address(0)); if (!S2) return -ENOMEM;
     char *line = S2->b1, *vcopy = S2->b2;
@@ -367,6 +367,40 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     return -ENOEXEC;
 }
 
+/* a descriptor with no path (13 item 25): a memfd, or a file unlinked since it was opened. The kernel runs the file
+ * behind the descriptor; the opener runs it on the loader path named through /proc/self/fd, by a dup without
+ * close-on-exec that the child opener closes once the segments are mapped, and the child answers the link's text for
+ * /proc/self/exe as the kernel does. A script goes to its interpreter as /dev/fd/N, the kernel's spelling, and a
+ * close-on-exec script is ENOENT, since the interpreter could not open it (execveat(2)) */
+#ifndef F_DUPFD
+#define F_DUPFD 0
+#define F_GETFD 1
+#define FD_CLOEXEC 1
+#endif
+static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp, struct scratch **Sp)
+{
+    char *n = S->cur; ltoa_(fd, n);                          /* buffers from the scratch (7.5.4): the number, the stat, the header */
+    scpy(S->real, "/proc/self/fd/", PATH_MAX); scat(S->real, n, PATH_MAX);
+    struct kstat *st = (struct kstat *)S->b2; long e;
+    if ((e = sys_stat(S->real, st)) < 0) return e;
+    if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
+    long ok = sys_faccessat(AT_FDCWD, S->real, X_OK); if (ok < 0) return ok;
+    long h = sys_open(S->real, O_RDONLY | O_CLOEXEC, 0); if (h < 0) return h;
+    unsigned char *head = (unsigned char *)S->tmp; long k = sys_read((int)h, head, 4); sys_close((int)h);
+    if (k >= 2 && head[0] == '#' && head[1] == '!') {
+        long fl = sys_fcntl(fd, F_GETFD, 0); if (fl < 0) return fl;
+        if (fl & FD_CLOEXEC) return -ENOENT;
+        scpy(S->v, "/dev/fd/", PATH_MAX); scat(S->v, n, PATH_MAX);
+        return exec_script(S, S->v, S->v, argv, envp, 0, Sp);   /* S->real is read; /dev/fd/N is what the interpreter gets */
+    }
+    if (!(k == 4 && head[0] == 0x7f && head[1] == 'E' && head[2] == 'L' && head[3] == 'F')) return -ENOEXEC;
+    long m = sys_fcntl(fd, F_DUPFD, 3); if (m < 0) return m;   /* inherited by the child opener, which closes it after the mapping */
+    ltoa_(m, n); scpy(S->v, "/proc/self/fd/", PATH_MAX); scat(S->v, n, PATH_MAX);
+    long r = exec_loader_mode(S, S->v, argv, envp, Sp);
+    sys_close((int)m);                                       /* only reached when the exec failed */
+    return r;
+}
+
 static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, char **argv, char **envp, struct scratch **Sp)
 {
     long r = resolve(S, a, pi, di, !(flags & AT_SYMLINK_NOFOLLOW), (flags & AT_EMPTY_PATH) != 0);
@@ -374,7 +408,9 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
     if (r == 1) {
         struct kstat st;                                     /* a descriptor on a symlink itself (O_PATH|O_NOFOLLOW) cannot be run (fs/exec.c) */
         if (SC2(NR_fstat, a[di], &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK) return -ELOOP;
-        r = dfd_virtual((int)a[di], S->v); if (r < 0) return r;
+        r = dfd_virtual((int)a[di], S->v);
+        if (r == -ENOENT) return exec_descriptor(S, (int)a[di], argv, envp, Sp);   /* fd_virtual: the link ends " (deleted)": no path */
+        if (r < 0) return r;
     }
     else if (flags & AT_SYMLINK_NOFOLLOW) {                    /* the kernel refuses to run a symlink itself (F3-20) */
         struct kstat st; to_real_exec(S->v, S->real);

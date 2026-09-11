@@ -154,6 +154,7 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
     Ehdr eh; unsigned long entry, phdr_va, base = 0, jump; int has_interp; char interp_v[PATH_MAX];
     int fd = open_elf(real, &eh, ph_main, 128);
     payload_base = map_elf(fd, &eh, ph_main, &entry, &phdr_va, &has_interp, interp_v, real);
+    if (C.descfd > 2) { sys_close(C.descfd); C.descfd = -1; }   /* a program run from a descriptor with no path (13 item 25): mapped, the dup goes */
     sys_close(fd);
     jump = entry; payload_entry = entry; scpy(payload_path, real, PATH_MAX);
     if (has_interp) {

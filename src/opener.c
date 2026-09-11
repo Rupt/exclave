@@ -194,7 +194,7 @@ static __attribute__((noreturn)) void run(const char *v, const char *given, long
     if (is_wrapper_real(real, payload) && payload_of(real, payload)) scpy(real, payload, PATH_MAX);
     long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) die("cannot open program", v, fd);
     char *line = arena_alloc(256); long n = sys_read((int)fd, line, 255); sys_close((int)fd);
-    if (n >= 4 && line[0] == 0x7f && line[1] == 'E' && line[2] == 'L' && line[3] == 'F') { scpy(C.exe, v, PATH_MAX); loader_run(v, real, argc, argv, envp, auxv); }
+    if (n >= 4 && line[0] == 0x7f && line[1] == 'E' && line[2] == 'L' && line[3] == 'F') { if (!C.exe_fixed) scpy(C.exe, v, PATH_MAX); loader_run(v, real, argc, argv, envp, auxv); }
     if (n < 0) n = 0;
     line[n] = 0;
     /* a script: the kernel's argv convention, with buffers that outlive this level of the interpreter chain */
@@ -241,6 +241,13 @@ void start_c(unsigned long *sp)
     } else if ((target = find_env(envp, "CAN_EXEC"))) {       /* the internal protocol of 7.4.5: re-exec'd by a handler, or by entry_exec below */
         if (target[0] != '/') die("CAN_EXEC must be an absolute path", target, 0);
         C.loader_mode = 1; scpy(C.program, target, PATH_MAX); scpy(C.execfn, argv[0] ? argv[0] : target, PATH_MAX);
+        C.descfd = -1;
+        if (xstarts(target, "/proc/self/fd/")) {               /* a descriptor with no path (13 item 25): the kernel's identity for the
+                                                              * program is the link's text; the dup is closed once the segments are mapped */
+            long n = sys_readlink(target, C.exe, PATH_MAX - 1); if (n > 0) { C.exe[n] = 0; C.exe_fixed = 1; }
+            long m = 0; for (const char *q = target + 14; *q >= '0' && *q <= '9'; q++) m = m * 10 + (*q - '0');
+            C.descfd = (int)m;
+        }
     } else {
         entry_exec(argc, argv, envp);                          /* the opener run by hand: .can/opener PROGRAM ARGS... */
     }
