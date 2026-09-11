@@ -42,10 +42,13 @@ The loop that has served well, in the order it pays:
 
 ## Preferences
 
-- **Commits**: one concise line, imperative, no body, no
-  `Co-Authored-By`. Pushing is the user's to do. Committing when asked,
-  or when the instruction clearly implies it, keeps the history the
-  user's.
+- **Commits**: one short status line, imperative, the length of a
+  subject line and not a paragraph folded onto one line, no body, no
+  `Co-Authored-By`. Name what changed and let the diff, the proposal
+  and the tests carry the detail; much of the history here is
+  overlong, so match the intent rather than that habit. Pushing is the
+  user's to do. Committing when asked, or when the instruction clearly
+  implies it, keeps the history the user's.
 - **Documents stay self-contained and canonical.** `docs/PROPOSAL.md`
   should read without the conversation that produced it, so a design
   change goes into the proposal rather than a side note, and earlier
