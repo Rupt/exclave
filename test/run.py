@@ -1812,8 +1812,14 @@ def adversarial(ctx):
     dropped; a working directory deleted under the program, its . and .. kept; an exec with no descriptor to spare, which
     the handler borrows against a soft limit and which a hard limit refuses (13); mounts and roots from inside, refused by
     the filter (7.4.2); SIGSYS ignored, handled or on a signalfd; magic links under /proc/1; interpreter loops and chains;
-    an empty executable and a loader that is a directory. The kernel under bwrap measured the answers, but for the
-    variables, the mounts and the hard limit, which are the opener's own (revision 16)."""
+    an empty executable and a loader that is a directory. A second batch: a descriptor with no path handed to exec (a
+    pipe or a socket is EACCES, only a regular file is run), a hard link across the boundary (EXDEV), a symlink chain
+    at the kernel's limit of forty and one past it, the read-only rule from other angles (mknod, ftruncate and a
+    shared writable mapping of a read-only descriptor, a device node), odd process shapes (CLONE_FS, CLONE_FILES, not
+    dumpable, PER_LINUX32, a vfork child, a handler on an alternate stack), the cache saturated and a huge environment,
+    io_uring and clone3 refused by the filter, and an execute-only file the loader cannot read (EACCES, a limitation).
+    The kernel under bwrap measured the answers, but for the variables, the mounts, the hard limit, the filter's
+    refusals and the execute-only files, which are the opener's own (revision 16, extended)."""
     d = os.path.join(ctx.work, "advhost")
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
@@ -1833,9 +1839,30 @@ def adversarial(ctx):
             "stat with SIGSYS ignored: ok", "stat with a SIGSYS handler installed: ok", "program's SIGSYS handler ran: no", "stat with SIGSYS blocked and on a signalfd: ok", "signalfd delivered a SIGSYS: no",
             "stat /proc/1/root/etc: EACCES", "stat /proc/1/root: EACCES", "lstat /proc/1/root: ok", "open /proc/1/cwd: EACCES", "readlink /proc/1/exe: EACCES",
             "exec of a script that is its own interpreter: ELOOP", "exec of a chain of 3 scripts: ran, exit 0", "exec of a chain of 4 scripts: ran, exit 0", "exec of a chain of 5 scripts: ran, exit 0", "exec of a chain of 6 scripts: ELOOP",
-            "exec of a script with an empty #! line: ENOEXEC", "exec of an empty executable: ENOEXEC", "exec of an ELF whose loader is a directory: EACCES"]
+            "exec of a script with an empty #! line: ENOEXEC", "exec of an empty executable: ENOEXEC", "exec of an ELF whose loader is a directory: EACCES",
+            # the second batch: descriptors with no path given to exec, the read-only rule from other angles, odd process shapes, saturation
+            "exec with 0, 1 and 2 closed: ran, exit 0", "traps with 0, 1 and 2 closed: stat ok, open ok, readlink ok",
+            "fexecve of a pipe: EACCES", "fexecve of a socket: EACCES", "fexecve of /dev/null: EACCES",   # only a regular file is exec'd (do_open_execat)
+            "linkat a can file by /proc/self/fd to a host name: errno=18", "linkat a can file by empty path to a host name: errno=18",   # a link across the boundary is EXDEV
+            "a chain of 40 symlinks: ok", "a chain of 41 symlinks: ELOOP", "readlink /proc/self/task/tid/exe: the program",
+            "stat /proc/self/root/usr/share/cont-test-marker: ok", "a path of 4000 slashes then a can file: ok",
+            "mknod a char device in the can: EROFS", "ftruncate a read-only can descriptor: EINVAL",
+            "mmap PROT_WRITE MAP_SHARED of a read-only can descriptor: EACCES", "utimensat can descriptor NULL path, NOW and OMIT: EROFS",
+            "open a can file O_PATH with O_WRONLY: ok", "truncate /dev/null: EINVAL",
+            "unshare CLONE_FS then chdir into the can: ok, ok, getcwd /usr/share", "unshare CLONE_FILES then trap: ok, stat ok, open ok",
+            "not dumpable: stat ok, readlink exe ok", "PER_LINUX32 then exec of a wrapper: ran, exit 0",
+            "a vfork child that traps and exits: child ok, parent after ok", "a trap from a handler on a 16 KB alternate stack: ok",
+            "io_uring_setup: ENOSYS", "clone3: ENOSYS",           # the filter refuses them (7.4.2); the kernel would answer EINVAL
+            "openat on a descriptor of a directory renamed meanwhile: ok",
+            "20000 absent can paths then a present and an absent one: 0 wrong, present ok, absent ENOENT",
+            "exec of a wrapper with 50000 environment entries: ran, exit 0", "exec with a bad pointer among argv: EFAULT",
+            "readlink whose write crosses into an unmapped page: EFAULT",
+            "exec of an ELF with mode 0111: EACCES", "exec of a script with mode 0111: EACCES",   # the loader reads what it runs; execute-only is a limitation (13)
+            "exec of a script whose interpreter is relative: ran, exit 0",
+            "exec of a script whose #! has two options: one argument, the shell rejected it",   # the #! remainder is one argument, not two
+            "exec of a wrapper with an empty environment: ran, exit 0"]
     if os.getuid() == 0:
-        want = [w for w in want if "/proc/1" not in w]        # root may follow init's links
+        want = [w for w in want if "/proc/1" not in w and "mode 0111" not in w]   # root follows init's links and reads an execute-only file
     lacks = {"faccessat2 can, flags upper bits only: ok": "faccessat2 can, flags upper bits only: ENOSYS",   # 5.8 and later
              "unshare user+mount: ok": None}                    # a kernel or host without user namespaces: any refusal is its own
     bad = []

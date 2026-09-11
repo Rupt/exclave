@@ -472,7 +472,11 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
     if (byfd) {
         struct kstat st;                                     /* a descriptor on a symlink itself (O_PATH|O_NOFOLLOW) cannot be run (fs/exec.c) */
         if (dfd != AT_FDCWD) {                               /* AT_FDCWD with an empty path is the working directory, no descriptor */
-            if (SC2(NR_fstat, dfd, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK) return -ELOOP;
+            if (SC2(NR_fstat, dfd, &st) == 0) {
+                int m = st.st_mode & S_IFMT;
+                if (m == S_IFLNK) return -ELOOP;             /* a symlink descriptor (O_PATH|O_NOFOLLOW) cannot be run (F3-20) */
+                if (m != S_IFREG) return -EACCES;            /* do_open_execat: only a regular file is exec'd; a pipe or socket has no path to spell */
+            }
             r = sys_fcntl(dfd, F_GETFD, 0); if (r < 0) return r;
             cloexec = (r & FD_CLOEXEC) != 0;
         }
