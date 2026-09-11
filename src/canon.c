@@ -50,14 +50,17 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
     if (base[0] == '/' && base[1] == 0) base = "";
     int nomagic = rf & (RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH | RESOLVE_IN_ROOT);
     int dom = 1;
+    S->touched_can = 0;                                     /* a walk that stays in the host's domain is the kernel's own to make (7.4.3) */
     if (path[0] == '/') {
         if (rf & RESOLVE_BENEATH) return -EXDEV;               /* nd_jump_root: an absolute path leaves the scope */
+        S->touched_can = 1;                                 /* the root is the tree's */
         scpy(rest, path, PATH_MAX); scpy(cur, base, PATH_MAX);
         if (base[0]) dom = is_can_owned(base);
     } else {
         int r = (dfd == AT_FDCWD) ? cwd_virtual(rest) : fd_virtual(dfd, rest);
         if (r < 0) return r;
         if (rf & RESOLVE_NO_XDEV) dom = rest[1] ? is_can_owned(rest) : 1;
+        if (!rest[1] || is_can_owned(rest)) S->touched_can = 1;   /* the directory the walk starts from */
         scat(rest, "/", PATH_MAX); scat(rest, path, PATH_MAX);
         cur[0] = 0;
     }
@@ -81,7 +84,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         cur[curl] = '/'; xmemcpy(cur + curl + 1, comp, cl + 1);
         /* the tree's real root directory is an alias of /: a path spelt through <can>/root/ is the same path in
          * virtual space, with the same ownership and the same read-only rule (review F3-1) */
-        if (C.rootlen && xstrcmp(cur, C.root) == 0) { cur[0] = 0; while (*rp == '/') rp++; continue; }
+        if (C.rootlen && xstrcmp(cur, C.root) == 0) { cur[0] = 0; S->touched_can = 1; while (*rp == '/') rp++; continue; }
         while (*rp == '/') rp++;
         int last = (*rp == 0);
         if (rf & RESOLVE_NO_XDEV) {                            /* the mount changes where the domain does; an identity symlink that is
@@ -95,11 +98,13 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         if ((C.loader_mode || xstrcmp(C.exe, C.program) != 0) && is_self_exe(cur, S->pid)) {   /* loader path, or a script whose exe is its interpreter */
             if (nomagic) return -ELOOP;                        /* a magic link, refused by the resolve flags */
             if (++hops > 40) return -ELOOP;
+            S->touched_can = 1;
             scpy(tmp, C.exe, PATH_MAX); scat(tmp, "/", PATH_MAX); scat(tmp, rp, PATH_MAX);
             scpy(rest, tmp, PATH_MAX); rp = rest; cur[0] = 0; continue;
         }
         /* classify the component: a directory, a symlink (text in tmp), absent, or something else */
         int kind, err = -ENOENT;
+        if (!(!vis_is_identity_file(cur) && (last || !vis_leads_to_host_file(cur)) && !is_can_owned(cur))) S->touched_can = 1;   /* anything but a plain host component */
         if (vis_is_identity_file(cur)) {                       /* 8.4: resolved on the host at startup; its host symlinks are not ours to follow */
             if ((rf & RESOLVE_NO_SYMLINKS) && vis_readlink_identity(cur, tmp) == 1) return -ELOOP;   /* it is a symlink where the walk sees it */
             kind = CK_FILE;
@@ -132,7 +137,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
                 }
             }
             /* any spelling of the tree's root directory, through a bind mount or another link, is / (F3-13) */
-            if (kind == CK_DIR && C.root_ino && st.st_dev == C.root_dev && st.st_ino == C.root_ino) { cur[0] = 0; continue; }
+            if (kind == CK_DIR && C.root_ino && st.st_dev == C.root_dev && st.st_ino == C.root_ino) { cur[0] = 0; S->touched_can = 1; continue; }
         }
         if (kind != CK_LINK) {
             /* an intermediate component must be a directory: the kernel says so before it looks further, and
@@ -149,6 +154,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         if (tmp[0] == '/') {
             if (rf & RESOLVE_BENEATH) return -EXDEV;           /* an absolute link target leaves the scope */
             scpy(cur, base, PATH_MAX);                         /* the scope's root is / for a scoped walk in root */
+            S->touched_can = 1;                                /* the walk restarts at the tree's root */
         } else { char *s = xstrrchr(cur, '/'); if (s) *s = 0; else cur[0] = 0; }
     }
     if (!cur[0]) { cur[0] = '/'; cur[1] = 0; }

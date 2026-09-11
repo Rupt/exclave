@@ -250,7 +250,7 @@ def compile_progs(ctx):
     shutil.copytree(os.path.join(HERE, "progs"), src)
     os.makedirs(ctx.progs, exist_ok=True)
     gcc = wrapper(ctx, GCC)
-    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2", "unix_socket"):
+    for name in ("ro_matrix", "signals", "threads", "spawn", "exec", "fifo", "execstack", "ljmp", "fdpress", "openat2", "unix_socket", "openat2_xdev"):
         rc, out, err = run([gcc, "-O1", "-g", "-pthread", "-o", os.path.join(ctx.progs, name), os.path.join(src, name + ".c"), "-lm", "-ldl"], cwd=ctx.work, env=ctx.env)
         if rc and name == "execstack" and "not allowed here" in err:      # nested functions are gcc's; clang has none
             continue
@@ -1662,6 +1662,57 @@ def openat2_resolve(ctx):
     if rc == 3:
         return "no openat2 on this kernel (5.6 and later)"
     expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
+def openat2_xdev(ctx):
+    """13 item 22, 7.4.3: an openat2 whose walk never touches the can is re-issued as given with its resolve flags, so
+    the kernel enforces RESOLVE_NO_XDEV across the host's own mounts, and the other flags, on host-only walks. The
+    kernel's answers come from this harness itself, natively, for the same cases with the same descriptors (bwrap
+    rebuilds /dev and cannot be the oracle for the host's mounts); the walks that touch the can assert the crossing
+    rule. Skips on a kernel without openat2."""
+    d = os.path.join(ctx.work, "xdevhost")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "openat2_xdev"), [d])
+    if rc == 3:
+        return "no openat2 on this kernel (5.6 and later)"
+    expect(rc == 0, out + err)
+    got = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    NO_XDEV, NO_MAGIC, NO_SYMLINKS, BENEATH, IN_ROOT = 1, 2, 4, 8, 16
+    RD, DIR = os.O_RDONLY, os.O_RDONLY | os.O_DIRECTORY
+    dev, proc, hd = (os.open(x, os.O_PATH | os.O_DIRECTORY) for x in ("/dev", "/proc", d))
+    cases = [("no_xdev cwd to .", -100, ".", DIR, NO_XDEV), ("no_xdev cwd to sub", -100, "sub", DIR, NO_XDEV), ("no_xdev cwd to ..", -100, "..", DIR, NO_XDEV),
+             ("no_xdev /dev fd to null", dev, "null", RD, NO_XDEV), ("no_xdev /dev fd to shm", dev, "shm", DIR, NO_XDEV), ("no_xdev /dev fd to ..", dev, "..", DIR, NO_XDEV),
+             ("no_xdev /proc fd to self/status", proc, "self/status", RD, NO_XDEV), ("no_xdev host fd to file", hd, "file", RD, NO_XDEV),
+             ("no_symlinks host fd to lnk", hd, "lnk", RD, NO_SYMLINKS), ("no_symlinks host fd to file", hd, "file", RD, NO_SYMLINKS),
+             ("no_magiclinks /proc fd to self/status", proc, "self/status", RD, NO_MAGIC), ("no_magiclinks /proc fd to version", proc, "version", RD, NO_MAGIC),
+             ("beneath host fd to sub", hd, "sub", DIR, BENEATH), ("beneath host fd to ..", hd, "..", DIR, BENEATH), ("beneath host fd to sub/..", hd, "sub/..", DIR, BENEATH),
+             ("in_root host fd to /etc/passwd", hd, "/etc/passwd", RD, IN_ROOT), ("in_root host fd to ../../../file", hd, "../../../file", RD, IN_ROOT),
+             ("in_root /dev fd to /null", dev, "/null", RD, IN_ROOT), ("beneath|no_xdev /dev fd to shm", dev, "shm", DIR, BENEATH | NO_XDEV)]
+    here = os.getcwd()
+    os.chdir(d)                                                            # the AT_FDCWD cases start where the program started them
+    try:
+        bad = []
+        for label, dfd, path, flags, resolve in cases:
+            how = (ctypes.c_ulonglong * 3)(flags, 0, resolve)
+            r = libc.syscall(437, dfd, path.encode(), how, 24)
+            native = "ret=0 errno=0" if r >= 0 else "ret=-1 errno=%d" % ctypes.get_errno()
+            if r >= 0:
+                os.close(r)
+            if got.get(label) != native:
+                bad.append("%s: the can says %s, the kernel says %s" % (label, got.get(label), native))
+    finally:
+        os.chdir(here)
+        for fd in (dev, proc, hd):
+            os.close(fd)
+    expect(not bad, "; ".join(bad))
+    crossing = {"no_xdev cwd to /dev/null": "ret=-1 errno=18", "no_xdev cwd to /dev/shm": "ret=-1 errno=18", "no_xdev cwd to /proc/self/status": "ret=-1 errno=18",
+                "no_xdev cwd to /usr/share (can)": "ret=0 errno=0", "no_xdev host fd to /dev/null (absolute)": "ret=-1 errno=18"}
+    bad = ["%s: %s, wanted %s" % (k, got.get(k), v) for k, v in crossing.items() if got.get(k) != v]
+    expect(not bad, "the can-to-host crossing under RESOLVE_NO_XDEV: " + "; ".join(bad))
 
 
 @test

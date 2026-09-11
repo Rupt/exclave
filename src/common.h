@@ -215,6 +215,8 @@ struct scratch {
     char extra[8192];              /* argv vectors, masks, headers */
     pid_t pid, tid;                /* the owner, looked up once per trap */
     unsigned resolve;              /* openat2's resolve flags for the walk (7.4.3); 0 for every other syscall */
+    int touched_can;               /* set by canon: the walk started at, passed through or ended in the can's domain, or rewrote a magic link */
+    unsigned long how0[3];         /* openat2's struct open_how as given, for a walk that never touched the can (7.4.3) */
 };
 struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame);
 void scratch_put(struct scratch *s);

@@ -179,7 +179,13 @@ static int dfd_virtual(int fd, char *out);
 static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long mode, int nr)
 {
     int follow = !(flags & O_NOFOLLOW) && !((flags & O_CREAT) && (flags & O_EXCL));
-    long r = resolve(S, a, pi, di, follow, 0); if (r < 0) return r;
+    long r = resolve(S, a, pi, di, follow, 0);
+    if (nr == NR_openat2 && r <= 0 && !S->touched_can) {     /* a walk that never touched the can is the kernel's own to make, with every
+                                                              * resolve flag, on the host's own mounts (13 item 22); RESOLVE_CACHED dropped */
+        S->how0[2] &= ~(unsigned long)RESOLVE_CACHED;
+        return RE5(NR_openat2, a[0], a[1], S->how0, 24, 0);
+    }
+    if (r < 0) return r;
     int acc = (int)(flags & O_ACCMODE);
     int wr = acc == O_WRONLY || acc == O_RDWR || (flags & O_TRUNC) || (flags & O_TMPFILE) == O_TMPFILE;
     int creat = (flags & O_CREAT) != 0;
@@ -246,6 +252,7 @@ static long do_openat2(struct scratch *S, long *a)
         if ((r = dfd_virtual(dfd, S->v2)) < 0) return r;
     }
     S->resolve = (unsigned)rf;
+    S->how0[0] = flags; S->how0[1] = mode; S->how0[2] = rf; S->touched_can = 1;   /* as given, for a host-only walk; canon decides */
     r = do_open(S, a, 1, 0, (long)flags, (long)mode, NR_openat2);
     S->resolve = 0;
     return r;
