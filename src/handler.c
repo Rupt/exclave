@@ -816,7 +816,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
             if (tv[1] < 0 || tv[1] >= 1000000 || tv[3] < 0 || tv[3] >= 1000000) return -EINVAL;
         }
         if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
-        if (r == 1) {                                        /* AT_EMPTY_PATH: the descriptor itself (6.12+) */
+        if (r == 1) {                                        /* AT_EMPTY_PATH: the descriptor itself (5.9+) */
             if (!fd_can(S, (int)a[0])) return RE5(nr, a[0], a[1], a[2], a[3], 0);
             return badns ? -EINVAL : -EROFS;
         }
