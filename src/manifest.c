@@ -58,7 +58,7 @@ enum { F_STR = 1, F_TOK = 2 };
 #define MANIFEST_MAX_HOST 32
 struct field { int kind; const char *s; size_t n; };
 
-/* parse one string literal starting at the opening quote; decodes into out (arena) */
+/* parse one string literal starting at the opening quote; the decoded string goes to f, in the arena */
 static int parse_string(struct cur *c, char *err, size_t errn, struct field *f)
 {
     static char dec[PATH_MAX * 2];

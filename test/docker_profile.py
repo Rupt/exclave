@@ -119,8 +119,7 @@ def build(profile, table, kernel=None):
                     skip += [(j1, 2), (j2, 2)]
                 else:                                              # NE: equal means the rule does not apply
                     b.jump_to(j1, 2, lambda: b.label())            # hi differs: applies
-                    b.jump_to(j2, 1, lambda b=b, j2=j2: j2 + 1)     # placeholder, replaced below
-                    # simpler: treat NE as "hi differs or lo differs"; jump past the ret when both equal
+                    b.jump_to(j2, 1, lambda b=b, j2=j2: j2 + 1)     # unreachable: assemble() refuses SCMP_CMP_NE before building
                     skip_eq = b.emit(BPF.JA, 0, 0, 0)
                     b.jump_to(skip_eq, 3, None)
             elif op in ("SCMP_CMP_LT", "SCMP_CMP_LE", "SCMP_CMP_GT", "SCMP_CMP_GE"):

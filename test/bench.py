@@ -3,7 +3,7 @@
 
     test/bench.py --can CAN [--sqlite PATH] [--work DIR]
 
-The can must contain gcc-13; the host's /usr/bin/gcc-13 gives the native column where present.
+The can must contain gcc-13; the host's /usr/bin/gcc-13, else its gcc, gives the native column.
 """
 import argparse
 import os
@@ -115,7 +115,7 @@ def main():
             if p.returncode:
                 raise SystemExit(p.stderr.decode())
     rows.append(("thirty gcc -O0 hello.c, s", best(lambda: (lambda t: time.time() - t)(time.time()) if False else _time(lambda: thirty(hgcc))) if hgcc else None, best(lambda: _time(lambda: thirty(cgcc)))))
-    # a small project: 60 files, compile each, link
+    # a small project: 61 files, compile each, link
     proj = os.path.join(work, "proj")
     os.makedirs(proj)
     for i in range(60):

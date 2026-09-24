@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """grammar_test.py — the property tests of PROPOSAL.md 6.2 and 17 item 3 (review O4-14).
 
-    test/grammar_test.py [--cases N] [--seed S] [--c-parser build/manifest_test]
+    test/grammar_test.py [--cases N] [--seed S] [--c-parser PATH]
 
 Three statements hold for every byte sequence b: encode is injective, decode(encode(b)) == b, and fmt is
-idempotent. Every malformed variant of a manifest is rejected. And the two implementations of the grammar,
-the cannery's Python parser and the opener's C parser (built by make unit with a file argument), accept and
-reject the same inputs.
+idempotent. And the two implementations of the grammar, the cannery's Python parser and the opener's C parser
+(built by test/gate.sh's unit step, run with a file argument), accept and reject the same inputs: manifests
+and their malformed variants (MUTATIONS).
 """
 import argparse
 import os
@@ -105,7 +105,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cases", type=int, default=3000)
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--c-parser", default=os.path.join(os.path.dirname(HERE), "build", "manifest_test"))
+    ap.add_argument("--c-parser", default=os.path.join(os.path.dirname(HERE), "build", "gate", "manifest_test"))
     a = ap.parse_args()
     rng = random.Random(a.seed)
     bad = properties(rng, a.cases)

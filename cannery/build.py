@@ -25,7 +25,7 @@ class BuildError(Exception):
     pass
 
 
-# ---------------------------------------------------------------- extraction (step 3)
+# ---------------------------------------------------------------- extraction (step 2)
 def _safe_rel(name):
     parts = [p for p in name.split("/") if p not in ("", ".")]
     if any(p == ".." for p in parts):
@@ -46,7 +46,7 @@ def _inside(root_real, dst):
 
 
 def reader(path):
-    """The reader for a package file, chosen by the file (10.1): deb.py or apk.py, one interface."""
+    """The reader for a package file, chosen by the file (10.1): deb.py, apk.py or rpm.py, one interface."""
     return apk if path.endswith(".apk") else rpm if path.endswith(".rpm") else deb
 
 
@@ -90,7 +90,7 @@ def extract(root, debs, log=print):
     for name, path, st in debs:
         rd = reader(path)
         fields, scripts = rd.control(path)
-        # 10.1 step 3: a diversion that renames a file changes where the tree must hold it, and dpkg's
+        # 10.1 step 2: a diversion that renames a file changes where the tree must hold it, and dpkg's
         # database is not reproduced here; those are refused. Diversions with --no-rename, and the
         # merged-usr and zutils transitions every noble closure carries, leave a fresh tree unchanged.
         for sname in ("preinst", "postinst"):
@@ -153,7 +153,7 @@ def extract(root, debs, log=print):
     return owner
 
 
-# ---------------------------------------------------------------- synthesis (step 4)
+# ---------------------------------------------------------------- synthesis (step 3)
 _UA = re.compile(r"(?:update-)?alternatives\s+(?:--(?:quiet|verbose|force)\s+)*--install\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)((?:\s+--slave\s+\S+\s+\S+\s+\S+)*)")   # Debian's and rpm's spellings
 _SLAVE = re.compile(r"--slave\s+(\S+)\s+(\S+)\s+(\S+)")
 
@@ -179,7 +179,7 @@ def _link(root, link, target, log, replace=False):
 
 
 def synthesise(root, debs, log=print):
-    """The effects of maintainer scripts, never the scripts (10.1 step 4). Runs before wrapping."""
+    """The effects of maintainer scripts, never the scripts (10.1 step 3). Runs before wrapping."""
     names = set(n for n, _, _ in debs)
     # update-alternatives: every --install line in a postinst, highest priority wins, slaves follow
     groups = {}
@@ -327,7 +327,7 @@ def synthesise(root, debs, log=print):
         log("libc-bin present but no static ldconfig found; no ld.so.cache")
 
 
-# ---------------------------------------------------------------- placeholders (step 5)
+# ---------------------------------------------------------------- placeholders (step 4)
 IDENTITY_FILES = ["/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf", "/etc/resolv.conf", "/etc/hosts",
                   "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]
 
@@ -399,7 +399,7 @@ def tree_hash(root):
 def write_lock(can, pkgs, manifest_hash=None, tree=False, keep_hashes=False):
     """6.4: the lock is a record of inputs and output. pkgs: [(name, version, arch, b2)], or None to keep the
     pkg records of the lock already there. The closing step writes the opener, manifest and tree hashes;
-    keep_hashes rewrites them from the can as it stands (after prune or reopen); otherwise they are dropped
+    keep_hashes keeps the lock's manifest hash and recomputes the opener and tree hashes (after prune or reopen); otherwise they are dropped
     (after unwrap: an open can has no output yet)."""
     import cannery
     R = cannery.Record

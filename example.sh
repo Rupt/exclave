@@ -19,7 +19,7 @@ dir=$(pwd)
 rm -rf gcc.can sysroot.can hello.can hello.c hello hello-plain hello-pruned log && mkdir log   # a rerun keeps only the fetched files
 cannery() { python3 "$here/cannery/cannery.py" "$@"; }
 run() { echo "+ $*" >&2; "$@"; }                                          # every command shown as it runs
-logged() {                                                                # logged NAME CMD...: the long outputs go to log/NAME.log
+logged() {                                                                # logged NAME CMD...: the command and its long output go to log/NAME.log
     name=$1; shift
     run "$@" > "log/$name.log" 2>&1 || { echo "$name failed: see $dir/log/$name.log" >&2; exit 1; }
     echo "  $(tail -1 "log/$name.log") ($(grep -c '^warning' "log/$name.log") warnings; log/$name.log)"
@@ -37,6 +37,7 @@ echo "== 3. CentOS 7's glibc as a sysroot inside it"
 [ -n "$(ls el7 2>/dev/null)" ] || logged fetch-rpms python3 "$here/tools/fetch-rpms.py" --repo https://vault.centos.org/7.9.2009/os/x86_64 --no-base --out el7 glibc glibc-devel glibc-headers kernel-headers libgcc
 logged unpack-el7 cannery unpack sysroot.can el7/*.rpm
 run cp -a sysroot.can/root gcc.can/root/opt/sysroot-el7
+printf '%s\n' "+ printf 'can 1\\n\\ndata \"/opt/sysroot-el7\"\\n' > gcc.can/.can/manifest" >&2
 printf 'can 1\n\ndata "/opt/sysroot-el7"\n' > gcc.can/.can/manifest
 logged wrap cannery wrap gcc.can
 run ln -s root/usr/bin/gcc-13 gcc.can/gcc

@@ -176,7 +176,7 @@ struct can {
     int loader_mode;               /* 1: re-exec'd with CAN_EXEC; program is not a wrapper */
     int descfd;                    /* loader mode for a descriptor with no path (13 item 25): the dup to close once the segments are mapped, else -1 */
     int exe_fixed;                 /* exe holds the descriptor's link text, the kernel's identity for such a program; run() leaves it */
-    int boundary;                  /* 1: this process installed the filter (can boundary) */
+    int boundary;                  /* 1: no filter of ours inherited: this process is the can boundary (7.2) */
     /* the manifest (6.2) and what the tree says (8.1); the limits are stated in 8.1 and enforced by cannery wrap */
     char isa[32];
     const char *own[512]; int nown;   /* the manifest's claims (at most 256), then every non-empty top-level entry of the tree (at most 256) */
@@ -199,7 +199,7 @@ const char *base_name(const char *p);
 void ltoa_(long v, char *b);            /* decimal, buffer >= 24 */
 void xtoa_(unsigned long v, char *b);   /* lowercase hex, buffer >= 20 */
 int starts_dir(const char *s, const char *pfx);  /* s == pfx or s starts with pfx + "/" ; "/" matches all */
-void *arena_alloc(size_t n);            /* bump allocator for index strings; never freed */
+void *arena_alloc(size_t n);            /* bump allocator for the manifest's strings, the tables, the environment; never freed */
 const char *arena_str(const char *s, size_t n);
 long shebang_argv(char *line, const char *script, char **argv, long argc, char **nargv, long cap);
 
@@ -221,7 +221,7 @@ struct scratch {
     char v2[PATH_MAX];             /* the first path of a two-path syscall, the directory a scoped openat2 walk may not leave, or the
                                     * name an exec'd program is exec'd by as the kernel spells it (7.4.5); canon never writes it */
     char comm[NAME_MAX + 1];       /* the comm the kernel would set for an exec'd program (7.6) */
-    char extra[8192];              /* argv vectors, masks, headers */
+    char extra[8192];              /* argv and envp vectors, ELF headers, an extended open_how, a sockaddr */
     pid_t pid, tid;                /* the owner, looked up once per trap */
     unsigned resolve;              /* openat2's resolve flags for the walk (7.4.3); 0 for every other syscall */
     int touched_can;               /* set by canon: the walk started at, passed through or ended in the can's domain, or rewrote a magic link */
@@ -240,8 +240,8 @@ void from_real(char *r);                              /* in place, no buffer */
 int  is_can_owned(const char *v);
 int  vis_leads_to_host_file(const char *v);   /* v is a proper ancestor of a host-resolved file */
 int  is_wrapper_real(const char *real, char *tmp);   /* tmp PATH_MAX */
-int  payload_of(const char *real, char *out);         /* 1 if real is a wrapper; out = payload */
-int  vis_readlink_identity(const char *v, char *out); /* 1 if v is an identity file; out = host link text */
+int  payload_of(const char *real, char *out);         /* out = real's payload path, dir/.real/base; 1 if it fits; no wrapper check */
+int  vis_readlink_identity(const char *v, char *out); /* 1 if v is an identity file that is a host symlink, out = its text; -EINVAL if not a symlink; 0 otherwise */
 int  vis_is_identity_file(const char *v);              /* 1 if v is exactly a host identity file */
 int  vis_in_data(const char *v);                       /* 1 if v lies under a data prefix (6.2) */
 
@@ -249,7 +249,7 @@ int  vis_in_data(const char *v);                       /* 1 if v lies under a da
 enum { CK_NONE = 1, CK_DIR, CK_LINK, CK_FILE, CK_WRAPPER };
 int  cache_get(const char *v, char *link_out);        /* 0 on a miss; link_out PATH_MAX gets a symlink's text */
 void cache_put(const char *v, int kind, const char *link);
-int  cache_classify(const char *v, const char *real, char *tmp);   /* one lstat on a miss; 0 only if the lstat raced */
+int  cache_classify(const char *v, const char *real, char *tmp);   /* one lstat on a miss, two more for a regular file's wrapper check; 0 only if a readlink raced */
 
 /* ---------- canonicalisation (canon.c) ---------- */
 int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *out);  /* 0 or -errno */
@@ -262,7 +262,7 @@ __attribute__((noreturn)) void loader_run(const char *vpath, const char *real, l
 int elf_probe(const char *real, char *interp, int *is_opener, void *buf);   /* 1 has interp, 0 none, <0 error; buf >= 7680 bytes */
 
 /* ---------- filter (filter.c) ---------- */
-int  filter_probe(void);      /* 1 if an equal-or-newer filter is inherited */
+int  filter_probe(void);      /* 0: no filter of ours inherited; otherwise the newest inherited filter's version (7.4.2) */
 void filter_install(void);
 extern const int path_syscalls[]; extern const int n_path_syscalls;
 

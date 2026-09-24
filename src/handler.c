@@ -3,7 +3,7 @@
  * Runs in the program's thread on every trapped syscall. It canonicalises
  * the path in virtual space, decides host or can, applies the read-only rule
  * for the can, re-issues the syscall through the syscall page, and writes the result into
- * the frame. It owns about 2 KB of the program's stack; everything larger
+ * the frame. It uses at most 3 KB of the program's stack (7.5.4); everything larger
  * lives in scratch memory. It never blocks a signal, and it edits the
  * program's signal mask only through the frame the kernel restores. Its
  * own syscalls go through the syscall page (sys.h), so a signal handler
@@ -27,7 +27,7 @@ static inline unsigned long *frame_mask(void *uc) { return (unsigned long *)((ch
 #define RE5(nr, a, b, c, d, e) __sc6((nr), (long)(a), (long)(b), (long)(c), (long)(d), (long)(e), 0)
 #define RE6(nr, a, b, c, d, e, f) __sc6((nr), (long)(a), (long)(b), (long)(c), (long)(d), (long)(e), (long)(f))
 
-/* ---------- copying from the program's memory with EFAULT fidelity (7.5.4) ---------- */
+/* ---------- copying from the program's memory with EFAULT fidelity (7.5.6) ---------- */
 static int no_readv;                                         /* process_vm_readv refused: copies go through a pipe (13) */
 /* every copy names the pid of the trap it serves, recorded in the trap's own chunk: a process-wide value would be a vfork child's
  * while a thread of the parent is in its handler, and name the child's new image once it has exec'd (7.5.4) */
@@ -90,8 +90,9 @@ static long copy_out(pid_t pid, void *dst, const void *src, size_t n)
 
 /* ---------- path resolution ---------- */
 /* args[pi] relative to args[di] (or the cwd when di < 0) into S->v; 1 means "empty path with AT_EMPTY_PATH: fd-based".
- * allow_empty: 1 accepts the empty string, 2 also a NULL path, which only newfstatat and statx accept (6.11+);
- * every other syscall answers EFAULT for NULL, AT_EMPTY_PATH or not (oracle 17.7) */
+ * allow_empty: 1 accepts the empty string, 2 also a NULL path, as getname_maybe_null does under AT_EMPTY_PATH for
+ * newfstatat and statx (6.11+), the *xattrat calls and file_getattr and file_setattr; every other syscall answers
+ * EFAULT for NULL, AT_EMPTY_PATH or not (oracle 17.7) */
 static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int allow_empty)
 {
     if (!a[pi] && allow_empty == 2) return 1;
@@ -274,7 +275,7 @@ static long do_openat2(struct scratch *S, long *a)
     return r;
 }
 
-/* ---------- exec (7.6): scripts and host programs run inside the can's world ---------- */
+/* ---------- exec (7.4.5): scripts and host programs run inside the can's world ---------- */
 static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, int cloexec, struct scratch **Sp);
 
 /* the first bytes of a file the exec must look at: the kernel needs no descriptor for its own exec, so a program at its
@@ -352,7 +353,7 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
     return r;
 }
 
-/* a script that is not a wrapper (a host script, 7.6): the interpreter is resolved in the can's world,
+/* a script that is not a wrapper (a host script, 7.4.5): the interpreter is resolved in the can's world,
  * the script is passed by its virtual path. Kernel convention: argv = interp [arg] script args... */
 static inline __attribute__((always_inline)) long exec_script(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, struct scratch **Sp)   /* inlined into both callers: one frame per script level (7.5.4) */
 {
@@ -386,9 +387,9 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     if (depth > 5) return -ELOOP;                            /* binfmt_script: five interpreters may nest, the sixth is ELOOP (measured) */
     if (vis_in_data(v)) return -EACCES;                          /* 6.2: a data prefix is never executed (review O4-3) */
     to_real_exec(v, S->real);
-    struct kstat st; long e;
-    if ((e = sys_stat(S->real, &st)) < 0) return e;          /* ENOENT, ENOTDIR for a trailing slash, the name's own error */
-    if ((st.st_mode & S_IFMT) != S_IFREG) return -EACCES;
+    struct kstat *st = (struct kstat *)S->b2; long e;           /* in the scratch, not the frame: six of these frames may nest (7.5.4) */
+    if ((e = sys_stat(S->real, st)) < 0) return e;           /* ENOENT, ENOTDIR for a trailing slash, the name's own error */
+    if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
     long ok = sys_faccessat(AT_FDCWD, S->real, X_OK);           /* the kernel's answer for this process, triads and search included (O3-4) */
     if (ok < 0) return ok;
     int wrapper = is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp);
@@ -413,8 +414,8 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
         scpy(S->b1, S->tmp, PATH_MAX);
         if ((e = canon(S, S->b1, AT_FDCWD, 1, S->tmp)) < 0) return e;
         if (is_can_owned(S->tmp) && !vis_in_data(S->tmp)) {
-            if ((e = sys_stat(to_real(S->tmp, S->real, S->b2), &st)) < 0) return e;
-            if ((st.st_mode & S_IFMT) != S_IFREG) return -EACCES;   /* do_open_execat: a loader that is not a regular file */
+            if ((e = sys_stat(to_real(S->tmp, S->real, S->b2), st)) < 0) return e;   /* to_real is done with b2 before the stat fills it */
+            if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;  /* do_open_execat: a loader that is not a regular file */
         }
     }
     return exec_env(S, C.opener, argv, envp, v, 1);
@@ -474,7 +475,7 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
         if (dfd != AT_FDCWD) {                               /* AT_FDCWD with an empty path is the working directory, no descriptor */
             if (SC2(NR_fstat, dfd, &st) == 0) {
                 int m = st.st_mode & S_IFMT;
-                if (m == S_IFLNK) return -ELOOP;             /* a symlink descriptor (O_PATH|O_NOFOLLOW) cannot be run (F3-20) */
+                if (m == S_IFLNK) return -ELOOP;             /* a symlink descriptor (O_PATH|O_NOFOLLOW) cannot be run */
                 if (m != S_IFREG) return -EACCES;            /* do_open_execat: only a regular file is exec'd; a pipe or socket has no path to spell */
             }
             r = sys_fcntl(dfd, F_GETFD, 0); if (r < 0) return r;
@@ -605,7 +606,7 @@ static long do_io_pgetevents(struct scratch *S, long *a)
 }
 
 /* ---------- descriptors that name can files ---------- */
-/* ST_RDONLY into the flag word of a statfs the kernel just filled (8.2), through the copies of 7.5.4 like every other write
+/* ST_RDONLY into the flag word of a statfs the kernel just filled (8.2), through the copies of 7.5.6 like every other write
  * into program memory: the kernel validated the buffer a moment ago, but another thread may have unmapped it since */
 static long ro_flag(struct scratch *S, void *flags)
 {
@@ -774,8 +775,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
          * that is "." or "..", then the write check, then the lookups */
         int oc = is_can_owned(S->v2), nc = is_can_owned(S->v);
         if (oc != nc) return -EXDEV;
-        if (osp) return -EINVAL;
-        if (nsp) return (fl & RENAME_NOREPLACE) ? -EEXIST : -EINVAL;
+        if (osp) return -EBUSY;
+        if (nsp) return (fl & RENAME_NOREPLACE) ? -EEXIST : -EBUSY;
         if (oc && nc) return -EROFS;
         (void)st;
         to_real_exec(S->v2, S->b1); to_real_exec(S->v, S->real);
@@ -854,19 +855,19 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if (nr == NR_futimesat) return RE5(NR_futimesat, AT_FDCWD, S->real, a[2], 0, 0);
         return RE5(NR_utimensat, AT_FDCWD, S->real, a[2], fl | AT_SYMLINK_NOFOLLOW, 0);
     }
-    case NR_setxattrat: case NR_removexattrat:               /* (dfd, path, at_flags, name, [value, size]) */
-        if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) != 0)) < 0) return r;
+    case NR_setxattrat: case NR_removexattrat:               /* (dfd, path, at_flags, name, [xattr_args, its size]) */
+        if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1) return fd_can(S, (int)a[0]) ? -EROFS : RE6(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
         if ((r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);
         return RE6(nr, AT_FDCWD, S->real, a[2] | AT_SYMLINK_NOFOLLOW, a[3], a[4], a[5]);
     case NR_getxattrat: case NR_listxattrat:
-        if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) != 0)) < 0) return r;
+        if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1) return RE6(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
         to_real(S->v, S->real, S->tmp);
         return RE6(nr, AT_FDCWD, S->real, a[2] | AT_SYMLINK_NOFOLLOW, a[3], a[4], a[5]);
     case NR_file_getattr: case NR_file_setattr:              /* (dfd, path, attr, size, at_flags): the chattr ioctls as syscalls */
-        if ((r = resolve(S, a, 1, 0, !(a[4] & AT_SYMLINK_NOFOLLOW), (a[4] & AT_EMPTY_PATH) != 0)) < 0) return r;
+        if ((r = resolve(S, a, 1, 0, !(a[4] & AT_SYMLINK_NOFOLLOW), (a[4] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1) return (nr == NR_file_setattr && fd_can(S, (int)a[0])) ? -EROFS : RE5(nr, a[0], a[1], a[2], a[3], a[4]);
         if (nr == NR_file_setattr && (r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);

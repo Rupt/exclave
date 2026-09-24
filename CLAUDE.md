@@ -54,7 +54,7 @@ The loop that has served well, in the order it pays:
   change goes into the proposal rather than a side note, and earlier
   revisions live in git history rather than archive files.
 - **No options.** The opener has one environment knob, `CAN_LOG`, and
-  the cannery's commands take paths and nothing else. A flag, a mode or
+  the cannery's commands take paths, `fmt --check` the one flag. A flag, a mode or
   a manifest key is rarely the answer; the rule that makes the option
   unnecessary, or a stated limitation, usually is. A can is a directory
   at every stage, so what a user can do to it with `cp`, `ln` and an
@@ -62,8 +62,9 @@ The loop that has served well, in the order it pays:
   Test scripts may take arguments.
 - **The opener is freestanding C**: no libc, raw syscalls from
   `src/sys.h`, every syscall issued through the syscall page (a bare
-  `syscall` or `svc` instruction belongs only in the bootstrap and the
-  restorer, since the filter recognises the page). One source builds
+  `syscall` or `svc` instruction belongs only in the bootstrap, the
+  filter-version probe and the restorer, since the filter recognises
+  the page and the probe must not be allowed by it). One source builds
   both openers, and what differs by architecture sits best in
   `src/sys.h`, `src/common.h` and `#if` blocks named for it. `make`
   builds `build/opener-aarch64` when `aarch64-linux-gnu-gcc` is
@@ -117,9 +118,11 @@ The loop that has served well, in the order it pays:
   the build has changed. A hand-made copy has neither: reopen it.
   The suite runs on the can pruned to what it
   touches, made by the first run on a can and kept under
-  `build/fixtures/` by the can's lock and the test sources; a new test
-  that touches a file the fixture lacks fails once, and the next run
-  remakes the fixture. After rebuilding the opener, `cannery.py reopen
+  `build/fixtures/`, keyed by the can's lock and the sources of the
+  suite, its programs and the cannery; a change to those makes the next
+  run use the whole can and remake it. An opener or `test/tree.py`
+  change that makes a test touch a file the fixture lacks fails that
+  test until the fixture is removed. After rebuilding the opener, `cannery.py reopen
   CAN` refreshes a can; replacing `.can/opener` alone leaves the
   wrappers linked to the old file.
 - **Tests are independent.** A test in `test/run.py` makes what it

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""run.py — the regression suite for milestone 1a (PROPOSAL.md 17.4, the subset a single machine can run).
+"""run.py — the regression suite (PROPOSAL.md 17.4, the part a single machine can run).
 
-    test/run.py [--tree DIR | --can CAN] [--work DIR] [--keep] [-k SUBSTRING] [--order given|reverse|random]
+    test/run.py [--tree DIR | --can CAN] [--work DIR] [--keep] [-k SUBSTRING] [--order given|reverse|random] [--seed N] [--budget SECONDS]
 
 Makes a can from TREE (default $CONT_TREE), or from the unwrapped root of an existing CAN, under WORK
-(default build/test-work) with a few test files added to the tree, compiles test/progs/*.c with the can's
-own gcc, and runs every named test. Needs python3 and a Debian/Ubuntu gcc tree (see README.md). Optional:
+(default build/test-work) with a few test files added to the tree, compiles test/progs/*.c with the tree's
+own C compiler (test/tree.py), and runs every named test; with --can, on the fixture kept under build/fixtures/
+when there is one (17). Needs python3 and a tree with a C compiler (see README.md). Optional:
 strace for the isolation test, /usr/bin/gcc-13 for the identical-object test. Exit status is the number of
 failures.
 
@@ -117,7 +118,7 @@ def fixture_key(can):
 
 def make_fixture(ctx, dst):
     """The shared can pruned to what this run touched, from every CAN_LOG file the run wrote, kept for the next
-    run (17): the same tree the tests just passed on, a few hundred files instead of thousands, the cannery's
+    run (17): the same tree the tests just passed on, about a fifth of its files, the cannery's
     own prune. Made only from a run with no failure, so that a partial log never fixes a partial fixture."""
     logs = sorted(os.path.join(dp, f) for dp, dn, fn in os.walk(ctx.work) for f in fn if f.endswith(".log"))
     tmp = "%s.tmp%d" % (dst, os.getpid())                        # two runs may make the same fixture at once (test/gate.sh)
@@ -759,7 +760,7 @@ def exec_vectors(ctx):
 
 @test
 def proc_magic_links(ctx):
-    """/dev/stdin on a pipe, process substitution and /proc/self/fd of a pipe are reachable (F3-11)."""
+    """/dev/stdin on a pipe, process substitution and /proc/self/fd of a file are reachable (F3-11)."""
     rc, out, err = run([wrapper(ctx, "sh"), "-c", "cat /dev/stdin"], cwd=ctx.work, env=ctx.env, inp=b"hi\n")
     expect(out == "hi\n", "/dev/stdin on a pipe: %r %r" % (out, err))
     if os.path.exists(wrapper(ctx, "bash")):
@@ -932,7 +933,7 @@ def make_rpm(path, name, members, requires=(), provides=(), postin=""):
 @test
 def rpm_unpack(ctx):
     """10.1: unpack reads .rpm files by the file: lead, headers, cpio payload; Requires and Provides with rpm's
-    flags, so-called provides, file dependencies asked of the tree, rpmlib features and rich dependencies skipped; hard links;
+    flags, so-called provides, file dependencies asked of the tree, rpmlib features and rich dependencies skipped;
     the merged-usr links; alternatives --install lines in %post synthesised; one format per can."""
     d = os.path.join(ctx.work, "rpms")
     os.makedirs(d, exist_ok=True)
@@ -1039,7 +1040,7 @@ def cannery_extraction_rules(ctx):
 def unpack_and_wrap(ctx):
     """10.1 as files: unpack takes package files and nothing else, records every input by hash, reports what the
     set's own control files say it lacks, refuses two versions of one package; wrap closes the can and records
-    the manifest and tree hashes; the closed can runs; a tree assembled by hand becomes a can by wrap alone."""
+    the manifest and tree hashes; unwrap, check and a second wrap keep the lock (F4-6, O4-18); a tree assembled by hand becomes a can by wrap alone."""
     import elfcheck
     d = os.path.join(ctx.work, "updebs")
     os.makedirs(d, exist_ok=True)
@@ -1117,7 +1118,8 @@ def unpack_and_wrap(ctx):
 def wrap_refusals(ctx):
     """wrap refuses, and wraps nothing when it refuses: a stale wrapper of another opener (F4-2), a file its user
     cannot execute (F4-7), a payload without a wrapper (F4-5, O4-11), an ELF whose loader the tree lacks (F4-8,
-    O4-7), a manifest beyond the opener's tables (O4-9, O4-10); executables in a data prefix are left alone (O4-1)."""
+    O4-7), a manifest or a tree beyond the opener's tables, which the opener refuses too (O4-9, O4-10); executables in a
+    data prefix are left alone (O4-1)."""
     cannery_py = os.path.join(REPO, "cannery", "cannery.py")
 
     def hand(name, files, manifest=None):
@@ -1181,12 +1183,24 @@ def wrap_refusals(ctx):
     g = hand("lim2.can", [("/usr/bin/hi", script, 0o755)], b"can 1\n\n" + b"".join(b'host "/hostpath%03d"\n' % i for i in range(40)))
     rc, o, e = run([sys.executable, cannery_py, "wrap", g])
     expect(rc != 0 and "40 host records" in o + e, "40 host records must be refused: " + (o + e)[-300:])
+    t_ = hand("lim3.can", [("/usr/bin/hi", script, 0o755)] + [("/top%03d" % i, b"", 0o644) for i in range(300)])
+    for i in range(20):
+        os.makedirs(os.path.join(t_, "root", "empty%02d" % i))           # placeholders take no slot, as the opener counts
+    rc, o, e = run([sys.executable, cannery_py, "wrap", t_])
+    m = re.search(r"root/ has (\d+) top-level entries; the opener holds 256", o + e)   # /usr, /etc with its identity placeholders, the 300
+    expect(rc != 0 and m and 301 < int(m.group(1)) < 320, "300 top-level files must be refused, the placeholders not counted: " + (o + e)[-300:])
     can2 = os.path.join(ctx.work, "hosts30.can")
     copy_can(ctx.can, can2)
     with open(os.path.join(can2, ".can", "manifest"), "wb") as f:
         f.write(b"can 1\n\n" + b"".join(b'host "/hostpath%03d"\n' % i for i in range(30)))
     rc, out, err = run([os.path.join(can2, "root", ctx.vbin("cat").lstrip("/")), "/etc/hosts"], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and out == open("/etc/hosts").read(), "30 host records leave the identity files the host's: %r %r" % (out[:80], err))
+    can3 = os.path.join(ctx.work, "top300.can")               # the tree's 256 slots are its own, whatever the manifest claims
+    copy_can(ctx.can, can3)
+    for i in range(300):
+        open(os.path.join(can3, "root", "top%03d" % i), "w").close()
+    rc, out, err = run([os.path.join(can3, "root", ctx.vbin("cat").lstrip("/")), "/etc/hosts"], cwd=ctx.work, env=ctx.env)
+    expect(rc != 0 and "more than 256 top-level entries" in err, "300 top-level entries must be refused by the opener: %r" % err[-300:])
     # O4-1, O4-3: a data prefix is neither wrapped nor executed
     dp = os.path.join(ctx.work, "data.can")
     copy_can(ctx.can, dp)
@@ -1394,7 +1408,8 @@ def prune_and_check_with_logs(ctx):
 @test
 def static_check_loader_model(ctx):
     """10.3 after the review (O3-10, F3-17): DT_RPATH is inherited down the chain, ld.so.cache is read, a search
-    directory the can does not own is refused, an opener in the cache is refused."""
+    directory the can does not own is refused; a hand-made glibc layout closes (F4-13, F4-9), a truncated ELF is an error
+    by name (F4-11), a library a workload built in its own directory is a note (F4-10, O5-4)."""
     import elfcheck
     x = os.path.join(ctx.root, "usr", "local", "x")
     base = os.path.join(x, "lib")
@@ -1715,7 +1730,7 @@ def exec_identity(ctx):
     descriptor and /dev/fd/N through one, comm then the file's own name; a close-on-exec script descriptor refused with
     ENOENT before anything runs; a header the loader cannot load ENOEXEC and a loader the can lacks ENOENT from execve
     itself, where the child used to die after a successful exec. The kernel under bwrap measured these answers
-    (build/review, revision 16)."""
+    (test/exercise.py, revision 16)."""
     d = os.path.join(ctx.work, "identhost")
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
@@ -1807,7 +1822,7 @@ def spawn_threads(ctx):
 @test
 def adversarial(ctx):
     """17.4: what a hostile program or a fuzzer would try, each case answered in microseconds. Arguments with bits above
-    the word where the kernel takes an int (the probe passes longs and cannot try them): a readlink size of zero or minus
+    the word where the kernel takes an int (the probe compares the answers; this checks the buffer past the count): a readlink size of zero or minus
     one as an int once had the handler write past the program's buffer; the opener's own variables set before an exec,
     dropped; a working directory deleted under the program, its . and .. kept; an exec with no descriptor to spare, which
     the handler borrows against a soft limit and which a hard limit refuses (13); mounts and roots from inside, refused by
@@ -1965,7 +1980,7 @@ def gdb_hooks(ctx):
     expect(rc == 0, "compile -g: " + err)
     base = [gdb, "-batch", "-nx", "-iex", "set auto-load safe-path /", "-iex", "set debuginfod enabled off", "-ex", "set breakpoint pending on"]
     if ctx.musl:
-        return "gdb's breakpoints in a musl libc: the script does not walk musl's link map (13.1)"
+        return "gdb's breakpoints in a musl libc do not hit, the program's own do (13 item 1)"
     wr = "write"
     rc, out, err = run(base + ["-ex", "break main", "-ex", "break " + wr, "-ex", "run", "-ex", "bt", "-ex", "continue", "-ex", "bt", "-ex", "info auto-load python-scripts", "--args", ctx.opener, exe], cwd=ctx.work, env=ctx.env, timeout=300)
     expect(re.search(r"^Breakpoint 1, main \(.*\) at \S*hello\.c:\d+", out, re.M), "the program's own breakpoint hits with its source line: %r %r" % (out[-800:], err[-400:]))

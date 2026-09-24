@@ -3,7 +3,7 @@
  * The opener is an ET_DYN object with no interpreter: it relocates itself,
  * finds its can from its own path, reads the manifest, decides whether it is the
  * can boundary (no filter inherited) and prepares the environment
- * accordingly, installs the handler and, at the boundary, the filter, then
+ * accordingly, installs the handler and, unless one of this version or newer is inherited, the filter, then
  * loads the program it stands for: the payload of the wrapper it was run as,
  * or the CAN_EXEC target when re-exec'd in loader mode, by a handler or by its own positional entry.
  */
@@ -18,7 +18,7 @@ __asm__(".text\n.globl _start\n.type _start,@function\n_start:\n"
 __asm__(".text\n.globl _start\n.type _start,%function\n_start:\n"
         " mov x0, sp\n bl start_c\n brk #0\n");
 #endif
-/* 6.1: the note by which the opener recognises itself in a file */
+/* 7, 7.4.5: the note by which the opener recognises itself in a file */
 __asm__(".section .note.cont,\"a\"\n .balign 4\n .long 5\n .long 4\n .long 1\n .asciz \"cont\"\n .balign 4\n .long 1\n .text\n");
 
 /* 7.4.2: map the syscall page. Raw syscalls only: nothing else may run before this. */
@@ -195,7 +195,7 @@ static void loader_mode_check(char **argv, char **env2)
     scratch_put(S);
 }
 
-/* 7.6: load the program at virtual path v; scripts go through their interpreter (kernel convention) */
+/* 7.3, 7.4.5: load the program at virtual path v; scripts go through their interpreter (kernel convention) */
 static __attribute__((noreturn)) void run(const char *v, const char *given, long argc, char **argv, char **envp, unsigned long *auxv, int depth)
 {
     static char real[PATH_MAX], payload[PATH_MAX];

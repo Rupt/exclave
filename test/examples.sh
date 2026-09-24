@@ -5,7 +5,7 @@
 #   CONT_SQLITE=FILE     test/bench.py: the performance table (16), best of three
 #   CONT_RPMS=DIR        test/sysroot.py: a CentOS 7 glibc as a data prefix, its output run inside and out
 #   CONT_DEBS_ARM64=DIR  test/matrix.py --only noble-arm64: the emulated aarch64 row (12), about an hour
-# The x86-64 kernel matrix is test/matrix.py --can CAN on its own, eight minutes.
+# The x86-64 kernel matrix is test/matrix.py --can CAN on its own, about ten minutes.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(dirname "$here")

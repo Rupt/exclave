@@ -27,9 +27,9 @@ LEAD = 96
 HEADER_MAGIC = b"\x8e\xad\xe8\x01"
 # the tags the reader uses (rpm's rpmtag.h)
 T = {"NAME": 1000, "VERSION": 1001, "RELEASE": 1002, "EPOCH": 1003, "ARCH": 1022, "POSTIN": 1024, "PREIN": 1023, "POSTTRANS": 1152,
-     "POSTUN": 1026, "TRIGGERSCRIPTS": 1065, "REQUIREFLAGS": 1048, "REQUIRENAME": 1049, "REQUIREVERSION": 1050,
+     "REQUIREFLAGS": 1048, "REQUIRENAME": 1049, "REQUIREVERSION": 1050,
      "PROVIDEFLAGS": 1112, "PROVIDENAME": 1047, "PROVIDEVERSION": 1113, "OBSOLETENAME": 1090, "OBSOLETEVERSION": 1115, "OBSOLETEFLAGS": 1114,
-     "PAYLOADCOMPRESSOR": 1125, "PAYLOADFORMAT": 1124, "SOURCERPM": 1044}
+     "PAYLOADCOMPRESSOR": 1125}
 SENSE = {2: "<", 4: ">", 8: "="}     # RPMSENSE_LESS, GREATER, EQUAL bits
 SENSE_RPMLIB = 1 << 24
 
@@ -100,7 +100,7 @@ def _decompress(comp, data):
 
 
 def _cpio_members(data):
-    """The entries of a newc or crc cpio archive as (name, mode, size, offset of the content, linkname, nlink, ino, dev)."""
+    """The entries of a newc or crc cpio archive as (name, mode, mtime, content, nlink, (devmaj, devmin, ino))."""
     out, p = [], 0
     while p + 110 <= len(data):
         magic = data[p:p + 6]
@@ -237,10 +237,6 @@ def parse_deps(field):
 
 
 # ---------------------------------------------------------------- versions, as rpmvercmp orders them
-def _segments(v):
-    return [(0, int(s)) if s.isdigit() else (1, s) if s.isalpha() else (2, "") for s in re.findall(r"[0-9]+|[a-zA-Z]+|~|\^", v)]
-
-
 def _rpmvercmp(a, b):
     """rpmvercmp: alternating alpha and numeric segments, numeric beats alpha, '~' sorts before anything."""
     if a == b:

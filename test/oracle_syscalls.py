@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""oracle_syscalls.py — the differential syscall probe (PROPOSAL.md 17, item 3).
+"""oracle_syscalls.py — the differential syscall probe (PROPOSAL.md 17, item 7).
 
 Every trapped syscall of src/filter.c is issued with every path form of 7.4.4, and every flag that changes
 resolution, over a random maze, by one program (test/progs/probe.c) under two projections of the same tree:
@@ -8,7 +8,7 @@ what a buffer holds afterwards must agree case by case; a difference fails unles
 The expectations therefore come from the kernel, not from a test's author. Needs user namespaces and bwrap,
 like oracle_ns; says so and exits 0 when it cannot run.
 
-    test/oracle_syscalls.py --can CAN [--work DIR] [--seed S] [--only NAME] [--keep] [--show N]
+    test/oracle_syscalls.py --can CAN [--work DIR] [--seed S] [--only NAME] [--keep] [--show N] [--expected]
 """
 import argparse
 import os
@@ -345,6 +345,16 @@ def generate(forms, nr, uid, gid):
     add("utimensat", "hostfd_null_path", F(O_WRONLY, forms.host + "/hfile"), "n:", "t:1000,0,2000,0", I(0))
     add("newfstatat", "fd_null_empty", F(O_RDONLY, forms.file), "n:", B("stat", 256), I(AT_EMPTY_PATH))
     add("newfstatat", "fd_null", F(O_RDONLY, forms.file), "n:", B("stat", 256), I(0))
+    # AT_EMPTY_PATH with an empty or a NULL path: the *xattrat and file_*attr calls name the descriptor either way (getname_maybe_null)
+    for fn, d in (("fd", F(O_RDONLY, forms.file)), ("hostfd", F(O_RDONLY, forms.host + "/hfile")), ("cwd", I(AT_FDCWD))):
+        for pn, p in (("empty", S("")), ("null", "n:")):
+            lab = "%s_%s/empty" % (fn, pn)
+            add("setxattrat", lab, d, p, I(AT_EMPTY_PATH), S("user.probe"), X("v"), I(16))
+            add("getxattrat", lab, d, p, I(AT_EMPTY_PATH), S("user.probe"), X("\0" * 64), I(16))
+            add("listxattrat", lab, d, p, I(AT_EMPTY_PATH), B("xattr", 512), I(512))
+            add("removexattrat", lab, d, p, I(AT_EMPTY_PATH), S("user.probe"))
+            add("file_getattr", lab, d, p, B("raw", 32), I(32), I(AT_EMPTY_PATH))
+            add("file_setattr", lab, d, p, B("raw", 32), I(32), I(AT_EMPTY_PATH))
     add("readlinkat", "proc_fd", I(AT_FDCWD), S("/proc/self/fd/0"), B("link", 4096), I(4096))
     add("execveat", "true_fd", F(O_RDONLY, forms.true), S(""), V("true"), V(), I(AT_EMPTY_PATH))
     add("execveat", "true_pathfd", F(O_PATH, forms.true), S(""), V("true"), V(), I(AT_EMPTY_PATH))
@@ -360,6 +370,15 @@ def generate(forms, nr, uid, gid):
                 add("renameat2", "%s/%s" % (lab, fn), I(AT_FDCWD), p1, I(AT_FDCWD), p2, I(fl))
             for fn, fl in (("plain", 0), ("follow", AT_SYMLINK_FOLLOW), ("empty", AT_EMPTY_PATH)):
                 add("linkat", "%s/%s" % (lab, fn), I(AT_FDCWD), p1, I(AT_FDCWD), p2, I(fl))
+    # a last component that is ".", ".." or the root, either side: do_renameat2 answers EBUSY before the write check
+    dots = [("dot_last", S(forms.dir + "/.")), ("dotdot_last", S(forms.dir + "/..")), ("root", S("/")),
+            ("host_dot_last", S(forms.host + "/hdir/.")), ("host_dotdot_last", S(forms.host + "/hdir/.."))]
+    for n1, p1 in dots:
+        for n2, p2 in [(n, p) for n, p in two if n in ("can_file", "host_file", "host_missing")]:
+            for lab, x, y in (("%s->%s" % (n1, n2), p1, p2), ("%s->%s" % (n2, n1), p2, p1)):
+                add("rename", lab, x, y)
+                for fn, fl in (("plain", 0), ("noreplace", RENAME_NOREPLACE), ("exchange", RENAME_EXCHANGE)):
+                    add("renameat2", "%s/%s" % (lab, fn), I(AT_FDCWD), x, I(AT_FDCWD), y, I(fl))
     for n1, d1, p1 in forms.at_few:
         for n2, d2, p2 in forms.at_few:
             lab = "%s->%s" % (n1, n2)

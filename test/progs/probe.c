@@ -1,4 +1,4 @@
-/* probe.c — the interpreter of the differential syscall probe (PROPOSAL.md 17, item 3).
+/* probe.c — the interpreter of the differential syscall probe (PROPOSAL.md 17, item 7).
  *
  * Reads cases from stdin, one per line: an id, a syscall number, then up to six encoded arguments. Each case
  * is issued through syscall(2), so that no libc wrapper stands between the case and the kernel (or the
@@ -19,7 +19,7 @@
  *   v:<hex>,<hex>,...    a NULL-terminated vector of strings (execve's argv and envp); v: is the empty vector
  *   x:<hex>:<flags>      a struct xattr_args whose value is the bytes (setxattrat, getxattrat)
  *   I:                   a descriptor from inotify_init1(0), closed after the call
- *   k:<type>            a unix socket of that type, opened before the call (open=<errno> when it fails)
+ *   k:<type>            a unix socket of that type, opened before the call (-1 when it fails)
  *   A:<hex>             a struct sockaddr_un, AF_UNIX, whose sun_path holds those bytes (at most 108, unterminated at 108)
  *   h:<flags>:<mode>:<resolve>[:<size>[:<tail>]]   a struct open_how (openat2), in a buffer of <size> bytes (24 by
  *                        default) whose byte 24 is <tail> when given: the extensible-struct rules

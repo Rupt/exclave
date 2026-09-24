@@ -1,8 +1,13 @@
 /* adversarial.c — what a hostile program or a fuzzer would try (PROPOSAL.md 17.4): arguments with their upper 32 bits
- * set where the kernel takes an int, which the probe cannot try since it passes longs; the opener's own variables set
+ * set where the kernel takes an int, with the program's buffer checked past the count; the opener's own variables set
  * before an exec; a working directory deleted under the program; an exec with no descriptor left; mounts and roots
  * from inside; SIGSYS ignored, handled or fed to a signalfd; magic links under /proc/1; interpreter loops and chains;
- * an empty executable, a loader that is a directory. usage: adversarial HOSTDIR, or "adversarial HOSTDIR --child".
+ * an empty executable, a loader that is a directory. A second batch (sections 9 to 15): an exec with 0, 1 and 2 closed;
+ * a pipe, a socket or /dev/null handed to fexecve; a hard link across the boundary, symlink chains at the kernel's
+ * limit and one past it, odd spellings of the self magic links; the read-only rule from mknod, ftruncate and a shared
+ * writable mapping; CLONE_FS, CLONE_FILES, not dumpable, PER_LINUX32, a vfork child and a handler on an alternate
+ * stack; io_uring and clone3 refused; a saturated cache, a huge environment, bad pointers; execute-only files and
+ * interpreters spelt oddly. usage: adversarial HOSTDIR, or "adversarial HOSTDIR --child".
  * Prints one line per case, "<case>: <answer>", the same in every world where the kernel is the oracle, so the
  * exerciser shows what differs; the named regression asserts the kernel's answers, and for the cases the opener
  * decides for itself (its variables stripped, mounts refused) the opener's. Exit 0 always. */

@@ -8,7 +8,7 @@ Each --repo is a repository root holding repodata/repomd.xml (Fedora's Everythin
 BaseOS and AppStream, CentOS 7's os on vault.centos.org). The closure of Requires is resolved against
 primary.xml: names, versioned constraints, the so-called provides (`libc.so.6(GLIBC_2.2.5)(64bit)`),
 file dependencies through the files the index lists, rich dependencies and rpmlib() features skipped; a
-virtual name is satisfied by an already selected provider, a --choose, a provider named like the
+virtual name is satisfied by a --choose, an already selected provider, a provider named like the
 dependency, else the first provider by name. The base set (setup, filesystem, basesystem, bash) is added
 unless --no-base. Every download is verified against the index's SHA-256; the metadata signature is not
 verified, so the mirror is trusted. The cannery itself never fetches: `cannery unpack OUT DIR/*.rpm`

@@ -44,13 +44,13 @@ int starts_dir(const char *s, const char *pfx)
     return xstrncmp(s, pfx, l) == 0 && (s[l] == '/' || s[l] == 0);
 }
 
-/* arena: index strings and the environment live here for the process's life */
+/* arena: the manifest's strings, the ownership and host tables, the environment and the entry's buffers, for the process's life */
 static char arena[512 * 1024];
 static size_t arena_used;
 void *arena_alloc(size_t n)
 {
     n = (n + 15) & ~(size_t)15;
-    if (arena_used + n > sizeof arena) die("index too large", 0, ENOMEM);
+    if (arena_used + n > sizeof arena) die("arena full", 0, ENOMEM);
     void *p = arena + arena_used; arena_used += n; return p;
 }
 const char *arena_str(const char *s, size_t n)

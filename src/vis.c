@@ -45,6 +45,7 @@ static void own_from_tree(void)
 {
     static char buf[16384]; static char real[PATH_MAX];
     long fd = sys_open(C.root, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0); if (fd < 0) die("cannot read root/", C.root, fd);
+    int first = C.nown;                                        /* the manifest's claims come first; the tree has 256 slots of its own */
     for (;;) {
         long n = sys_getdents64((int)fd, buf, sizeof buf);
         if (n < 0) die("cannot read root/", C.root, n);
@@ -56,7 +57,7 @@ static void own_from_tree(void)
             int type = d->d_type;
             if (type == DT_UNKNOWN) { struct kstat st; if (sys_lstat(real, &st) < 0) continue; type = (st.st_mode & S_IFMT) == S_IFDIR ? DT_DIR : (st.st_mode & S_IFMT) == S_IFLNK ? DT_LNK : 8; }
             if (type == DT_DIR && !dir_nonempty(real)) continue;      /* a placeholder: ls / shows it, the host owns it */
-            if (C.nown >= (int)(sizeof C.own / sizeof C.own[0])) die("more than 256 top-level entries in root/", C.root, 0);
+            if (C.nown - first >= 256) die("more than 256 top-level entries in root/", C.root, 0);
             size_t l = xstrlen(d->d_name);
             char *v = arena_alloc(l + 2); v[0] = '/'; xmemcpy(v + 1, d->d_name, l + 1);
             C.own[C.nown++] = v;
@@ -158,7 +159,7 @@ static int base_is_host(const char *v, const char **real)
     return 0;
 }
 
-/* the full rule: the two claims first (8.1.4 and the can's own directory), then the base rule */
+/* the full rule: the root, the identity files, then the two claims (8.1 rules 4 and 6), then the base rule */
 int vis_is_host(const char *v, const char **real)
 {
     if (v[0] == '/' && v[1] == 0) return 0;                    /* the root itself is the tree's (8.3), before the claims that pass through it */

@@ -1,4 +1,4 @@
-/* manifest_test.c — host-side tests for the strict manifest grammar (PROPOSAL.md 6.2). Built by `make unit`. */
+/* manifest_test.c — host-side tests for the strict manifest grammar (PROPOSAL.md 6.2). Built by test/gate.sh's unit step. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

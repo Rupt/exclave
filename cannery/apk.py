@@ -3,7 +3,7 @@
 An .apk is three gzip members back to back, each a tar stream: the signature, the control files
 (.PKGINFO and the install scripts, dot-files at the top), and the data. Python's gzip reads the members
 as one stream and tarfile reads the headers as one archive, since the first two streams carry no end-of-
-archive blocks. The interface is deb.py's, so build.py serves both: control(path) -> (fields, scripts)
+archive blocks. The interface is deb.py's, so build.py serves every reader: control(path) -> (fields, scripts)
 with Debian's field names, open_tar(path, "data.tar") -> the data members, parse_deps, satisfies.
 """
 import io
@@ -94,7 +94,7 @@ _TOKEN = re.compile(r"^(!?)([^\s<>=~!][^\s<>=~]*?)(?:(<=|>=|><|<|>|=|~)(.+))?$")
 def parse_deps(field):
     """'so:libc.musl-x86_64.so.1 zlib>=1.2 !conflict /bin/sh' -> [[(name, op, version)]]: one alternative each,
     since apk has none; a '!' item is a conflict and is not a dependency; a path item, /bin/sh, names a file
-    some package must ship, which the fetcher cannot see and the report does not check."""
+    some package must ship, which the fetcher skips and the report asks of the extracted tree."""
     out = []
     for tok in (field or "").split():
         m = _TOKEN.match(tok)
@@ -114,7 +114,7 @@ _VER = re.compile(r"^(\d+(?:\.\d+)*)([a-z])?((?:_(?:alpha|beta|pre|rc|cvs|svn|gi
 def _key(v):
     m = _VER.match(v)
     if not m:
-        return ([0], "", [], 0, v)                                 # a version apk would not accept: ordered last among equals
+        return ([0], "", [], 0, v)                                 # a version apk would not accept: compared as 0
     nums = [int(x) for x in m.group(1).split(".")]
     sufs = [(_SUFFIX[s.rstrip("0123456789")], int(s[len(s.rstrip("0123456789")):] or 0)) for s in m.group(3).split("_") if s]
     return (nums, m.group(2) or "", sufs, int(m.group(4) or 0), "")

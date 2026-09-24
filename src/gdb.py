@@ -42,7 +42,7 @@ def _can_root():
 
 
 def _in_tree(root, v):
-    """A virtual path resolved inside root as a chroot would resolve it (7.4.4); None when it leaves or is missing."""
+    """A virtual path resolved inside root as a chroot would resolve it (7.4.4); None when a component is missing or the links loop."""
     cur, parts, hops = "", [p for p in v.split("/") if p and p != "."], 0
     while parts:
         p = parts.pop(0)

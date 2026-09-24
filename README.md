@@ -28,10 +28,10 @@ compiles C and C++; a CentOS 7 glibc as a data prefix in the gcc can
 gives outputs that run on every glibc since 2.17, which the kernel
 matrix checks natively on each VM; the opener builds for aarch64 from
 the same sources and the matrix has an emulated arm64 row. gdb debugs
-a canned program with no manual command: the opener carries the script
-gdb needs. The
+a canned program once the can is in its auto-load safe-path: the opener
+carries the script gdb needs. The
 regression suite (65 named tests), the kernel oracles, a differential
-syscall probe that agrees with the kernel on 18 931 cases per can, and
+syscall probe that agrees with the kernel on 19 087 cases per can, and
 Docker's default seccomp profile pass on the gcc, Alpine, Fedora and
 clang cans, each pruned to what the suite touches, in one gate of
 about a minute on the reference machine, where the plain-terminal
@@ -40,7 +40,7 @@ virtual machines passes on nine distributions from CentOS 7 at kernel
 3.10 to Fedora 42, Alpine's musl userland and SELinux included. The
 cannery ships as a can and the gcc can it builds from inside its can
 reproduces the host-built lockfile byte for byte. Trace pruning keeps
-120 of a gcc can's 4 851 files for a hello-world compile. `example.sh`
+122 of a gcc can's 4 851 files for a hello-world compile. `example.sh`
 walks the path from a clean checkout to a program built inside a can
 that runs on any glibc since 2.17, in nine seconds once the packages
 are cached. Section 18
@@ -60,8 +60,9 @@ make
 ```
 
 `example.sh` runs the whole path under the directory you name and
-prints every command as it runs, so its output is the tutorial and
-each line is one you can run by hand:
+prints each command as it runs, or for the long ones a line of summary
+with the command and its output in a log under `log/`, so its output
+and logs are the tutorial and each command is one you can run by hand:
 
 1. `make` builds `build/opener`, the freestanding binary every
    executable in a can is a hard link to.
@@ -147,14 +148,14 @@ it again; a bare directory holding a `root/` becomes a can by `wrap`
 alone.
 
 ```
-tools/fetch-debs.py --out debs gcc-13 libc6-dev            # Ubuntu or Debian: the closure of the packages named, verified against the index
+tools/fetch-debs.py --out debs gcc-13 libc6-dev make       # Ubuntu or Debian: the closure of the packages named, verified against the index
 tools/fetch-apks.py --out apks gcc musl-dev binutils        # the same for Alpine
 tools/fetch-rpms.py --repo URL --out rpms gcc glibc-devel   # and for Fedora, Rocky, CentOS: any repository with repodata/
 cannery/cannery.py unpack gcc.can debs/*.deb               # package files -> an open can, a directory you may edit; .apk and .rpm files likewise
 cannery/cannery.py wrap gcc.can                            # close it: wrap every executable, static check, hashes into the lock
 ln -s root/usr/bin/gcc-13 gcc.can/gcc                      # an entry, if you want one
 gcc.can/gcc -O2 hello.c -o hello                           # any executable in root/ runs by path
-gcc.can/root/usr/bin/sh -c 'cc1 --version'                 # the can's own shell, with the can's PATH
+gcc.can/root/usr/bin/sh -c 'as --version'                  # the can's own shell, with the can's PATH
 gcc.can/.can/opener /path/to/host/program args...           # a program without a wrapper, a host tool or a built output, inside the can
 gdb -iex 'set auto-load safe-path /' --args gcc.can/gcc -c x.c   # gdb: the opener carries the script; break, bt, source lines
 CAN_LOG=/tmp/can.log gcc.can/gcc -c x.c                    # the one knob: one line per trapped syscall
@@ -263,7 +264,8 @@ first user meets, with the rule behind each and what to do:
   one back. Everything else under `/etc` is the can's.
 - **The locale, the time zone and the shell are the can's.** At the
   boundary `LANG=C.UTF-8`, `TZ=UTC0` and `SHELL=/bin/sh` replace the
-  user's, and the variables that steer a loader or libc to host files
+  user's, `LANGUAGE` and every `LC_*` are dropped with them, and the
+  variables that steer a loader or libc to host files
   (`LD_*`, `GCONV_PATH`, `LOCPATH` and the like) are dropped; every
   other variable passes through, and inside the can nothing is
   touched. `date` prints UTC, messages are English. A can that wants
@@ -274,8 +276,9 @@ first user meets, with the rule behind each and what to do:
   byte upstream's. `du` and `tar` differ by the opener's size times
   the wrappers, and a copy that breaks hard links (`cp -r`, `git`,
   `zip`) still works, each wrapper then being a copy of the opener.
-  `/proc/<pid>/exe` of a canned program seen from outside names the
-  opener; from inside it is right.
+  `/proc/<pid>/exe` of a built output or a host program run inside
+  names `.can/opener` from outside, and a wrapped program's names its
+  own path; from inside both are right.
 - **Nothing elevates.** seccomp needs `no_new_privs`, which also
   disables setuid, file capabilities and AppArmor transitions on exec:
   `sudo`, `su`, `ping` and setcap binaries fail inside a can, from
@@ -321,7 +324,7 @@ test/dogfood.py --cache DIR               # the cannery as a can, and a cross-ca
    19 the decisions.
 2. `src/`: the opener, one module per section of the proposal (below).
 3. `docs/REVIEW-RESPONSE.md`: every review finding and where it landed.
-4. `docs/PRIOR-ART.md`: twenty related systems and the primary sources
+4. `docs/PRIOR-ART.md`: the related systems and the primary sources
    for the kernel and loader facts relied on. `docs/reviews/`: the
    review reports; round 3 reviewed the code and is the best reading on
    where the implementation is subtle.
@@ -383,6 +386,7 @@ the target and the identity the kernel would give it, removed before
 any program runs, never an interface; `.can/opener PROGRAM ARGS...` is
 how a program without a wrapper is run from outside. At the can boundary four variables are the can's, always the
 same: `PATH=/usr/local/bin:/usr/bin:/bin`, `LANG=C.UTF-8`, `TZ=UTC0`
-and `SHELL=/bin/sh`; the loader and libc variables are dropped;
+and `SHELL=/bin/sh`; `LANGUAGE`, every `LC_*` and the loader and libc
+variables are dropped;
 everything else passes through, and inside the boundary nothing is
 touched.

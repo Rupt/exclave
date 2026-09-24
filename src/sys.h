@@ -1,7 +1,7 @@
 /* sys.h — freestanding Linux syscall layer for the opener.
  *
- * The launcher is built with -nostdlib -ffreestanding: it links against
- * nothing at all, so it can be dropped into any bundle and run on any
+ * The opener is built with -nostdlib -ffreestanding: it links against
+ * nothing at all, so it can be dropped into any can and run on any
  * Linux of the same architecture regardless of what libc the host has.
  * Everything it needs from the OS is a raw syscall defined here.
  */
@@ -19,7 +19,7 @@ typedef unsigned int mode_t;
 /* The syscall page (PROPOSAL.md 7.4.2): one page at a fixed address holding the syscall instruction and a return.
  * Every syscall the opener makes goes through it, and the filter allows a syscall by that instruction address
  * alone. The address is the same in every process, so one filter serves the whole tree. The page is mapped by
- * page_init() before anything else runs; only the bootstrap and the signal restorer use a raw instruction. It
+ * page_init() before anything else runs; only the bootstrap, the filter probe (7.4.2) and the signal restorer use a raw instruction. It
  * lies below the classic ET_EXEC base of both architectures and is 64K-aligned for kernels with 64K pages. */
 #define SC_PAGE 0x3f0000UL
 /* A syscall the architecture lacks gets a sentinel below zero, unique so that the handler's switch compiles, and
@@ -234,7 +234,7 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
 #define MS_RELATIME    (1<<21)
 #define MNT_DETACH     2
 
-/* statfs f_flags bits (ST_*) share values with MS_* for the ones we care about */
+/* statfs f_flags bits (ST_*); only ST_RDONLY is used, which equals MS_RDONLY */
 #define ST_RDONLY  1
 #define ST_NOSUID  2
 #define ST_NODEV   4

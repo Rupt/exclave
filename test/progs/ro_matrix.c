@@ -1,5 +1,5 @@
 /* ro_matrix.c — the read-only matrix of PROPOSAL.md 8.2 plus path-argument fidelity.
- * usage: ro_matrix HOSTDIR   (HOSTDIR: a writable host directory). Prints FAIL lines; exit 1 on any. */
+ * usage: ro_matrix HOSTDIR [WRAPPER]   (HOSTDIR: a writable host directory; WRAPPER: a wrapper whose redirect is checked). Prints FAIL lines; exit 1 on any. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -23,7 +23,7 @@ static int fails;
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) { fprintf(stderr, "usage: ro_matrix HOSTDIR\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: ro_matrix HOSTDIR [WRAPPER]\n"); return 2; }
     const char *host = argv[1];
     const char *marker = "/usr/share/cont-test-marker", *missing = "/usr/share/cont-missing", *dir = "/usr/share";
     char hfile[4096], hnew[4096], hdir[4096];

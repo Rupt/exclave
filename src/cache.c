@@ -67,7 +67,7 @@ void cache_put(const char *v, int kind, const char *link)
     __sync_lock_release(&lock);
 }
 
-/* classify a can-owned virtual path by one lstat and remember it; real is its real path, tmp is PATH_MAX.
+/* classify a can-owned virtual path by one lstat, two more for a regular file's wrapper check, and remember it; real is its real path, tmp is PATH_MAX.
  * No path buffer lives on the stack here: the handler runs on whatever alternate stack the program set up. */
 int cache_classify(const char *v, const char *real, char *tmp)
 {

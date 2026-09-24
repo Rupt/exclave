@@ -1,6 +1,6 @@
 /* scratch.c — handler scratch memory (PROPOSAL.md 7.5.4).
  *
- * The handler may use only about 2 KB of the program's stack, so its path
+ * The handler may use only 3 KB of the program's stack (7.5.4), so its path
  * buffers live in chunks obtained with mmap on demand. A chunk records its
  * owner (pid, tid); it is released explicitly when the handler returns.
  * When nothing is free, chunks whose owner no longer exists are reclaimed

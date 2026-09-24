@@ -1,6 +1,6 @@
 /* filter.c — the seccomp filter (PROPOSAL.md 7.4.2).
  *
- * One classic-BPF program, installed once at the can boundary and inherited
+ * One classic-BPF program, installed at the can boundary, or over an older version's, and inherited
  * by every descendant. The opener's own syscalls are recognised by their
  * instruction address: all of them are issued from the syscall page, which
  * every opener maps at the same fixed address, so the filter stays valid
@@ -71,12 +71,12 @@ const int n_path_syscalls = sizeof path_syscalls / sizeof path_syscalls[0];
 static const int fd_syscalls[] = { NR_fchmod, NR_fchown, NR_fsetxattr, NR_fremovexattr, NR_fstatfs };
 /* signal-mask syscalls the handler scrubs (7.5.2) */
 static const int mask_syscalls[] = { NR_rt_sigprocmask, NR_rt_sigsuspend };
-/* closed rather than emulated in milestone 1a: each would bypass or confuse translation */
+/* refused with ENOSYS rather than emulated (7.4.3): each would bypass or confuse translation */
 static const int enosys_syscalls[] = { NR_clone3, NR_io_uring_setup, NR_name_to_handle_at, NR_uselib,
     428 /* open_tree */, 429 /* move_mount */, 430 /* fsopen */, 431 /* fsconfig */, 432 /* fsmount */, 433 /* fspick */, NR_mount_setattr,
     NR_open_tree_attr };
 static const int eperm_syscalls[] = { NR_chroot, NR_acct, NR_pivot_root, NR_mount, NR_umount2 };
-/* the hot path: answered before anything else is examined */
+/* the hot path: allowed after the architecture, probe and page checks, before any trapped syscall is examined */
 static const int fast_allow[] = { NR_read, NR_write, NR_close, NR_fstat, NR_lseek, NR_mmap, NR_mprotect, NR_munmap,
     NR_brk, NR_rt_sigreturn, NR_pread64, NR_futex, NR_madvise, NR_getpid, NR_clock_gettime,
     NR_exit_group, NR_exit, NR_wait4, NR_getdents64, NR_fcntl, NR_dup, NR_dup2, NR_dup3, NR_pipe2,

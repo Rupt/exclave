@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """cannery — builds cans from files (PROPOSAL.md sections 6 and 10).
 
-A can is a directory at every stage, and every command takes paths and nothing else:
+A can is a directory at every stage, and every command takes paths; `fmt --check` is the one flag:
 
     cannery.py unpack OUT DEB...   Make the open can OUT from package files: extract, synthesise what
                                    maintainer scripts would have done, add the placeholders, record every
                                    input in OUT/.can/lock, report dependencies the set does not satisfy.
-    cannery.py wrap CAN            Close a can: wrap every executable, check the manifest (written as
-                                   `can 1` if absent) and every ELF, write the tree hash to the lock.
+    cannery.py wrap CAN            Close a can: check the manifest (written as `can 1` if absent), the
+                                   wrappers and every ELF, then wrap every executable and write the
+                                   opener, manifest and tree hashes to the lock.
                                    Idempotent; a bare directory holding root/ becomes a can.
     cannery.py unwrap CAN          Open a can: move every payload back over its wrapper.
     cannery.py check CAN [LOG...]  Wrappers, payloads and the static check; with CAN_LOG files, the
@@ -302,12 +303,11 @@ def manifest(can):
     return load(p, "can") if os.path.exists(p) else [Record("can", [("t", b"1")])]
 
 
-def owned(can):
-    """8.1: the can's ownership set as the opener computes it at startup: the manifest's own records plus
-    every top-level entry of root/ that is not an empty directory; a directory that cannot be listed is not
-    a placeholder (review O4-8)."""
+def owned_top(can):
+    """8.1 rule 1: every top-level entry of root/ that is not an empty directory; a directory that cannot be
+    listed is not a placeholder (review O4-8)."""
     root = os.path.join(can, "root")
-    own = set(o[0].decode("utf-8", "surrogateescape") for o in values(manifest(can), "own"))
+    top = []
     for name in sorted(os.listdir(root)):
         p = os.path.join(root, name)
         try:
@@ -315,8 +315,15 @@ def owned(can):
         except PermissionError:
             empty = False
         if not empty:
-            own.add("/" + name)
-    return sorted(own)
+            top.append("/" + name)
+    return top
+
+
+def owned(can):
+    """8.1: the can's ownership set as the opener computes it at startup: the manifest's own records plus
+    the tree's top-level entries of rule 1."""
+    own = set(o[0].decode("utf-8", "surrogateescape") for o in values(manifest(can), "own"))
+    return sorted(own | set(owned_top(can)))
 
 
 def check_limits(can):
@@ -326,7 +333,7 @@ def check_limits(can):
         n = len(values(m, key))
         if n > LIMITS[key]:
             raise build.BuildError("the manifest has %d %s records; the opener holds %d" % (n, key, LIMITS[key]))
-    top = len(os.listdir(os.path.join(can, "root")))
+    top = len(owned_top(can))                                 # as the opener counts them: a placeholder takes no slot
     if top > LIMITS["top"]:
         raise build.BuildError("root/ has %d top-level entries; the opener holds %d" % (top, LIMITS["top"]))
 
@@ -454,8 +461,8 @@ def cmd_unpack(out, debs, log=print):
 
 def wrapper_problems(can, data=()):
     """6.1 as the tree stands: a wrapper of another opener (stale), a wrapper without a payload, a payload
-    without a wrapper (a stray under the reserved name), an executable not wrapped outside data prefixes,
-    an executable its user cannot run. Returns the list of problems."""
+    without a wrapper (a stray under the reserved name), an executable its user cannot run. Returns the list
+    of problems; cmd_check adds the executables not wrapped, which wrap is about to wrap."""
     root = os.path.join(can, "root")
     oi = opener_ino(can)
     problems = []
@@ -511,7 +518,7 @@ def wrap_files(can, data=(), quiet=False):
 def cmd_wrap(can, quiet=False):
     """Close a can: opener, placeholders, manifest, the wrapper and static checks on the tree as it stands,
     then the wrappers, then the lock's opener, manifest and tree hashes. A refusal happens before anything
-    is wrapped, so a refused can is still the directory it was (review F4-8, O4-7)."""
+    is wrapped, so a refused can is left unwrapped (review F4-8, O4-7)."""
     root = os.path.join(can, "root")
     if not os.path.isdir(root):
         sys.exit("refusing: %s has no root/ directory" % can)

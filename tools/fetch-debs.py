@@ -119,8 +119,9 @@ class Repo:
         return sorted(n for n, sts in self.index.items() if sts[0].get("Essential") == "yes")
 
     def resolve(self, wanted, essential=True, choose=None):
-        """Closure of Depends and Pre-Depends: {name: stanza}. Virtual packages and alternatives by the
-        first choice unless `choose` maps a virtual or alternative name to a package."""
+        """Closure of Depends and Pre-Depends: {name: stanza}. Alternatives by one already selected, else the first
+        satisfiable; virtual packages by a selected provider, else the highest Priority; unless `choose` maps a
+        virtual or alternative name to a package."""
         choose = choose or {}
         selected, notes = {}, []
         queue = [(n, "requested") for n in wanted]

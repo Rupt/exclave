@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """matrix.py — the kernel matrix (PROPOSAL.md 12, 17 item 5): a can built here, run in virtual machines.
 
-    test/matrix.py --can CAN [--only NAME,...] [--work DIR] [--keep] [--memory MB]
+    test/matrix.py --can CAN [--only NAME,...] [--work DIR] [--images DIR] [--memory MB] [--arm64 --debs-arm64 DIR]
 
 Each row of VMS names a distribution cloud image. The image is downloaded once, booted under QEMU with
 KVM behind a copy-on-write overlay and a cloud-init seed that installs python3 and strace (and bubblewrap
 where it exists), the can and this repository's test tree and opener are copied in over SSH, and the
 regression suite runs there; the oracles, the syscall probe and the Docker-profile run follow where bubblewrap works.
-One VM at a time, 1 GB each. Results go to build/matrix-results.md.
+One VM at a time, 1 GB each, 2 GB for the emulated row. Results go to build/matrix-results.md.
 """
 import argparse
 import os
@@ -22,7 +22,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
-# name, expected kernel, ssh user, image URL candidates (first that downloads wins), package family, notes
+# name, expected kernel, ssh user, image URL candidates (first that downloads wins), package family, notes, arch
 VMS = [
     ("centos-7", "3.10", "centos", ["https://cloud.centos.org/centos/7/images/CentOS-7-x86_64-GenericCloud-2211.qcow2"], "centos7", "EOL; yum repos moved to vault", "x86_64"),
     ("ubuntu-18.04", "4.15", "ubuntu", ["https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg-amd64.img"], "apt", "", "x86_64"),
@@ -96,8 +96,13 @@ def user_data(family, pubkey):
         return "\n".join(["#cloud-config", "ssh_authorized_keys:", "  - " + pubkey, "runcmd:",
                           "  - sed -i 's/^mirrorlist=/#mirrorlist=/; s|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|' /etc/yum.repos.d/CentOS-*.repo",
                           "  - yum install -y " + " ".join(pk), "  - touch /var/tmp/cont-ready", ""])
+    # apt installs the list in one transaction, so one package the mirror has dropped fails them all: Debian 11's security
+    # suite, winding down after its LTS, still lists a bubblewrap whose file is gone. Each package again on its own, then
+    # from the release's main suite
+    retry = ["  - for p in %s; do dpkg -s $p >/dev/null 2>&1 || apt-get install -y $p || apt-get install -y $p=$(apt-cache madison $p | "
+             "awk '!/security/ {print $3; exit}'); done" % " ".join(pk)] if family == "apt" else []
     return "\n".join(["#cloud-config", "ssh_authorized_keys:", "  - " + pubkey, "package_update: true", "packages:"] + ["  - " + p for p in pk]
-                     + ["runcmd:", "  - touch /var/tmp/cont-ready", ""])
+                     + ["runcmd:"] + retry + ["  - touch /var/tmp/cont-ready", ""])
 
 
 AAVMF = "/usr/share/AAVMF"
@@ -167,7 +172,6 @@ def main():
     ap.add_argument("--work", default=os.path.join(REPO, "build", "matrix-work"))
     ap.add_argument("--images", default=os.path.join(os.path.expanduser("~"), ".cache", "cont-images"))
     ap.add_argument("--memory", type=int, default=1024)
-    ap.add_argument("--keep", action="store_true")
     ap.add_argument("--arm64", action="store_true", help="include the emulated aarch64 VM (slow); --only names it too")
     ap.add_argument("--debs-arm64", help="directory of arm64 .deb files the aarch64 VM makes its gcc can from")
     a = ap.parse_args()

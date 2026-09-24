@@ -61,7 +61,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         if (r == -ENOENT) {                                    /* a directory deleted under the program, which the kernel still walks from and
                                                                 * the handler cannot name: the path is spelt through the magic link, a host
                                                                 * path the kernel resolves itself; a walk from there into the can stays
-                                                                * the host's (13) */
+                                                                * the host's (7.4.3) */
             char *n = S->b2; if (dfd != AT_FDCWD) ltoa_(dfd, n);
             scpy(out, dfd == AT_FDCWD ? "/proc/self/cwd" : "/proc/self/fd/", PATH_MAX); if (dfd != AT_FDCWD) scat(out, n, PATH_MAX);
             if (xstrlen(out) + 1 + pl >= PATH_MAX) return -ENAMETOOLONG;

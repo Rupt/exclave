@@ -2,8 +2,7 @@
 
 Static: every ELF under root/ outside data prefixes, payloads in place of wrappers, must name one
 interpreter between them (through the tree's symlinks), every DT_NEEDED must resolve under root/ by the
-loader's own algorithm, every library reached must depend on that loader's libc and nothing else, no
-path component may be `.real`. Anything that would resolve on the host, and anything that would mix
+loader's own algorithm, every library reached must depend on that loader's libc and nothing else. Anything that would resolve on the host, and anything that would mix
 libcs, is reported and the can is refused. Static executables are reported.
 
 Dynamic: given CAN_LOG files a workload wrote, every library opened must be can-owned, and NSS modules

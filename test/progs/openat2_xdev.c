@@ -1,6 +1,7 @@
 /* openat2_xdev.c — openat2's resolve flags on walks that never touch the can (PROPOSAL.md 13 item 22, 17.4): RESOLVE_NO_XDEV
  * across the host's own mount boundaries, and the other flags on host-only walks. usage: openat2_xdev HOSTDIR. Prints one
- * line per case, "<case>: ret=<r> errno=<e>", the same in every world, so the kernel under bwrap is the oracle. Exit 0
+ * line per case, "<case>: ret=<r> errno=<e>", the same in every world, so the kernel is the oracle: the regression replays these cases natively,
+ * since bwrap rebuilds /dev and cannot answer for the host's mounts. Exit 0
  * always, 3 when the kernel has no openat2. */
 #define _GNU_SOURCE
 #include <errno.h>
