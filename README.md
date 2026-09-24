@@ -31,7 +31,7 @@ the same sources and the matrix has an emulated arm64 row. gdb debugs
 a canned program once the can is in its auto-load safe-path: the opener
 carries the script gdb needs. The
 regression suite (65 named tests), the kernel oracles, a differential
-syscall probe that agrees with the kernel on 19 087 cases per can, and
+syscall probe that agrees with the kernel on 19 093 cases per can, and
 Docker's default seccomp profile pass on the gcc, Alpine, Fedora and
 clang cans, each pruned to what the suite touches, in one gate of
 about a minute on the reference machine, where the plain-terminal
@@ -211,7 +211,8 @@ same file, so a `make` writes one log. A newline in a path is written
 `\n` and a backslash `\\`; nothing else is escaped.
 
 `cannery check CAN [LOG...]` first verifies the wrappers and their
-payloads, then runs the static check on every ELF file outside data
+payloads and compares the tree with the lock's hash, then runs the
+static check on every ELF file outside data
 prefixes: every loader and every `DT_NEEDED` resolves inside the tree
 by the loader's own search, to one libc, and nothing would resolve on
 the host. Errors name the file and stop `wrap`; warnings are things
@@ -268,7 +269,7 @@ first user meets, with the rule behind each and what to do:
   variables that steer a loader or libc to host files
   (`LD_*`, `GCONV_PATH`, `LOCPATH` and the like) are dropped; every
   other variable passes through, and inside the can nothing is
-  touched. `date` prints UTC, messages are English. A can that wants
+  touched but the opener's own variables (below). `date` prints UTC, messages are English. A can that wants
   otherwise ships the data and a wrapper script that sets the variable.
 - **From the host, every executable in a can is the opener.** `ldd`,
   `file` and `debsums` see the same small static binary at every
@@ -310,7 +311,7 @@ first user meets, with the rule behind each and what to do:
 test/inputs.sh ~/.cache/cont-inputs   # the development inputs from the network: the four cans of the gate, the examples' inputs; skips what is present
 CONT_CACHE=~/.cache/cont-debs test/gate.sh ~/.cache/cont-inputs/*.can   # the commit gate, about a minute: unit tests, stack budget, the suite on every can in two orders and once under the plain terminal's label, the oracles, the syscall probe, the Docker profile; CONT_CACHE adds dogfood
 test/run.py --can gcc.can                 # the suite alone; --tree DIR for a plain tree (spike/make-tree.sh makes one); -k NAME, --order random
-test/matrix.py --can gcc.can              # the kernel matrix: cloud images under QEMU/KVM, one VM at a time, nine minutes
+test/matrix.py --can gcc.can              # the kernel matrix: cloud images under QEMU/KVM, one VM at a time, about ten minutes
 test/exercise.py --can gcc.can test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the opener, side by side
 test/examples.sh gcc.can                  # the example runs, each when its input is set: CONT_SRC (realsoft), CONT_SQLITE (bench), CONT_RPMS (sysroot), CONT_DEBS_ARM64 (the emulated aarch64 row)
 test/sysroot.py --can gcc.can --rpms el7/ --out hello     # the sysroot recipe as a test: symbol versions checked, the output run inside and out, then natively by the matrix
@@ -361,7 +362,7 @@ tools/fetch-rpms.py  the same for a yum or dnf repository, verified by the index
 test/sysroot.py      a glibc sysroot as a data prefix and an output built against it, for the matrix to run natively
 test/run.py          the regression suite; test/progs/ its C, Rust and Go programs
 test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the openat2 oracle
-test/oracle_syscalls.py  the differential syscall probe: every trapped syscall with every path form under bwrap and under the opener; test/progs/probe.c its interpreter
+test/oracle_syscalls.py  the differential syscall probe: every trapped path and descriptor syscall with every path form under bwrap and under the opener; test/progs/probe.c its interpreter
 test/inputs.sh       the development inputs, remade from the network through ~/.cache
 test/exercise.py     one program run under bwrap and under the opener, the answers side by side: how a limitation is measured before it is fixed
 test/docker_profile.py   a can under Docker's default seccomp profile; test/docker-seccomp.json the profile
@@ -388,5 +389,5 @@ how a program without a wrapper is run from outside. At the can boundary four va
 same: `PATH=/usr/local/bin:/usr/bin:/bin`, `LANG=C.UTF-8`, `TZ=UTC0`
 and `SHELL=/bin/sh`; `LANGUAGE`, every `LC_*` and the loader and libc
 variables are dropped;
-everything else passes through, and inside the boundary nothing is
+everything else passes through, and inside the boundary nothing else is
 touched.

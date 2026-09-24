@@ -4,10 +4,11 @@
 # ~/.cache, and both may be empty at any time: whatever is missing is fetched again, and an item DIR already
 # has is skipped, so a rerun costs nothing. Afterwards:
 #   CONT_CACHE=$HOME/.cache/cont-debs test/gate.sh DIR/gcc13.can DIR/alpine.can DIR/f42.can DIR/clang.can
-#   CONT_SRC=DIR/src CONT_SQLITE=DIR/src/sqlite3.c CONT_RPMS=DIR/el7 CONT_DEBS_ARM64=DIR/debs-arm64 test/examples.sh DIR/gcc13.can
-# The package sets are the ones the proposal measures (10.1, 12): the noble gcc-13 and clang-18 closures, Alpine
-# 3.21's gcc, Fedora 42's gcc, CentOS 7's glibc for the sysroot of 9, the noble arm64 gcc-13 closure for the
-# emulated row, and the four projects of test/realsoft.py with the SQLite amalgamation of test/bench.py.
+#   CONT_SRC=DIR/src CONT_SQLITE=DIR/src/sqlite3.c CONT_RPMS=DIR/el7 CONT_DEBS_ARM64=DIR/debs-arm64 test/examples.sh DIR/realsoft.can
+# The package sets are the ones the proposal measures (10.1, 12, 16.3): the noble gcc-13 and clang-18 closures,
+# Alpine 3.21's gcc, Fedora 42's gcc, the noble gcc, g++, make and python3 that test/realsoft.py builds with,
+# CentOS 7's glibc for the sysroot of 9, the noble arm64 gcc-13 closure for the emulated row, and the four
+# projects of test/realsoft.py with the SQLite amalgamation of test/bench.py.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(dirname "$here")
@@ -57,6 +58,7 @@ fetch debs-gcc13 fetch-debs.py gcc-13 libc6-dev && can gcc13 debs-gcc13
 fetch apks fetch-apks.py gcc musl-dev binutils make linux-headers && can alpine apks
 fetch rpms-f42 fetch-rpms.py --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make && can f42 rpms-f42
 fetch debs-clang fetch-debs.py clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils && can clang debs-clang
+fetch debs-realsoft fetch-debs.py gcc g++ make libc6-dev python3 && can realsoft debs-realsoft
 fetch el7 fetch-rpms.py --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
 fetch debs-arm64 fetch-debs.py --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev
 file https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz ac034b9c7bbd9f8cc38953efaac07145ce0c8993107a1594d5cedd08fdf2a2bc

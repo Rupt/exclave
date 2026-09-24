@@ -1,58 +1,82 @@
 #!/usr/bin/env python3
-"""Stack budget check (PROPOSAL.md 7.5.4): reads gcc -fstack-usage output of the current build.
+"""Stack budget check (PROPOSAL.md 7.5.4): reads the gcc -fcallgraph-info=su output of the current build.
 
-Fails if any function on the handler path has a frame above 512 bytes or an unbounded dynamic frame, if a
-name listed here appears in no .su file and nowhere in src/*.c (a rename or a deletion must be loud, review
-O3-12; an inlined name counts in its caller), or if the handler path's worst case exceeds 3072 bytes. The path
-is the deepest chain: on_sigsys -> dispatch -> do_execve -> exec_target x6 (a #! chain of host scripts nests
-exec_target and exec_script, five interpreters deep as binfmt_script allows) -> the resolution and probing
-helpers. gcc's .isra/.constprop/.part clones count under their base names.
+    test/stackcheck.py build/opener.debug-*.ci
+
+The handler path is every function the call graph reaches from on_sigsys, each with the frame gcc wrote beside
+it, so a function is on the path because it is called there, not because a list names it. Fails if one of them
+has a frame above 512 bytes or an unbounded dynamic frame, if the graph has a cycle other than exec_target's
+own (a #! chain of host scripts, exec_script inlined into it, six frames as binfmt_script allows five
+interpreters), if on_sigsys or exec_target is not in the graph (a rename must be loud, review O3-12), or if the
+deepest chain exceeds 3072 bytes. gcc writes no edge for a call through a pointer, and the opener makes none.
 """
 import re
 import sys
 
 LIMIT_FRAME = 512
-LIMIT_PATH = 3072                # 7.5.4: under 3 KB with a five-deep chain of host scripts, about 1.3 KB otherwise
-# (names, multiplier): the largest frame among the names, times the multiplier
-PATH = [
-    (["on_sigsys"], 1), (["dispatch"], 1),
-    (["do_open", "do_execve", "do_readlink", "do_sigprocmask", "do_pselect6", "do_sockaddr", "exec_env"], 1),
-    (["exec_descriptor"], 1),
-    (["exec_target"], 6), (["exec_script"], 6),
-    (["resolve", "canon", "delete_overlong", "fd_virtual", "cwd_virtual", "ro_create", "ro_attr", "exists_can", "to_real", "to_real_exec", "vis_is_host", "elf_probe", "vec_read"], 1),
-    (["copy_str_in", "copy_in", "copy_out", "pipe_copy", "scratch_get", "nest_enter", "is_wrapper_real", "payload_of", "from_real", "cache_classify", "cache_get", "cache_put", "log_line", "log_msg"], 1),
-]
-frames, seen_dynamic = {}, {}
+LIMIT_PATH = 3072                # 7.5.4: under 3 KB with a five-deep chain of host scripts
+ROOT, NESTED, NEST_MAX = "on_sigsys", "exec_target", 6
+
+
+def base(title):
+    """A node's function name: the file prefix of a static function and gcc's clone suffixes dropped."""
+    return re.sub(r"(\.(isra|constprop|part|cold)(\.\d+)?)+$", "", title.rsplit(":", 1)[-1])
+
+
+frames, kinds, calls = {}, {}, {}
 for f in sys.argv[1:]:
     for line in open(f):
-        m = re.match(r"^(\S+?):\d+:\d+:(\S+)\s+(\d+)\s+(\w+(?:,\w+)?)", line)
-        if not m:
+        m = re.match(r'node: \{ title: "([^"]*)" label: "[^"]*?(\d+) bytes \(([^)]*)\)"', line)
+        if m:
+            frames[m.group(1)], kinds[m.group(1)] = int(m.group(2)), m.group(3)
             continue
-        name = re.sub(r"\.(isra|constprop|part|cold)\.?\d*$", "", m.group(2))
-        size, kind = int(m.group(3)), m.group(4)
-        frames[name] = max(frames.get(name, 0), size)
-        if kind not in ("static", "dynamic,bounded"):
-            seen_dynamic[name] = kind
-import glob
-import os
-listed = {n for names, _ in PATH for n in names}
-sources = "".join(open(f).read() for f in glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "*.c")))
+        m = re.match(r'edge: \{ sourcename: "([^"]*)" targetname: "([^"]*)"', line)
+        if m:
+            calls.setdefault(m.group(1), set()).add(m.group(2))
+roots = [t for t in frames if base(t) == ROOT]
 fails = []
-for n in sorted(listed - set(frames)):
-    if re.search(r"\b%s\s*\(" % re.escape(n), sources):
-        continue                              # inlined into its caller: its frame is counted there
-    fails.append("%s is on the handler path but neither in a .su file nor in the sources (renamed or deleted)" % n)
-for n in sorted(listed & set(seen_dynamic)):
-    fails.append("%s: unbounded dynamic frame (%s)" % (n, seen_dynamic[n]))
-for n in sorted(listed):
-    if frames.get(n, 0) > LIMIT_FRAME:
-        fails.append("%s: frame %d over %d" % (n, frames[n], LIMIT_FRAME))
-worst = sum(max(frames.get(n, 0) for n in names) * mult for names, mult in PATH)
-print("handler path worst case: %d bytes; largest handler-path frames: %s" % (
-    worst, ", ".join("%s=%d" % (n, frames[n]) for n in sorted(listed & set(frames), key=lambda x: -frames[x])[:8])))
+if len(roots) != 1 or not any(base(t) == NESTED for t in frames):
+    sys.exit("FAIL %s or %s is not in the call graph of %s (renamed, or no .ci files)" % (ROOT, NESTED, " ".join(sys.argv[1:]) or "nothing"))
+
+memo, stack, reached = {}, [], set()
+
+
+def deepest(t, nested):
+    """(bytes, chain) of the deepest chain from t, with nested frames of exec_target already on the stack."""
+    key = (t, nested)
+    if key in memo:
+        return memo[key]
+    reached.add(t)
+    here = frames.get(t, 0)
+    if base(t) == NESTED:
+        nested += 1
+    best = (0, [])
+    stack.append(t)
+    for c in sorted(calls.get(t, ())):
+        if c in stack and not (base(c) == NESTED and nested < NEST_MAX):
+            if base(c) != NESTED:
+                fails.append("recursion through %s: the stack it takes is unbounded" % " -> ".join(base(s) for s in stack[stack.index(c):] + [c]))
+            continue
+        if c not in frames:
+            continue                          # a name no .ci file defines: an assembly routine, which takes no frame
+        d = deepest(c, nested)
+        if d[0] > best[0]:
+            best = d
+    stack.pop()
+    memo[key] = (here + best[0], ["%s=%d" % (base(t), here)] + best[1])
+    return memo[key]
+
+
+worst, chain = deepest(roots[0], 0)
+for t in sorted(reached):
+    if frames[t] > LIMIT_FRAME:
+        fails.append("%s: frame %d over %d" % (base(t), frames[t], LIMIT_FRAME))
+    if kinds[t] not in ("static", "dynamic,bounded"):
+        fails.append("%s: unbounded dynamic frame (%s)" % (base(t), kinds[t]))
+print("handler path worst case: %d bytes over %d functions reached from %s: %s" % (worst, len({base(t) for t in reached}), ROOT, " > ".join(chain)))
 if worst > LIMIT_PATH:
     fails.append("handler path %d > %d" % (worst, LIMIT_PATH))
-for f in fails:
+for f in sorted(set(fails)):
     print("FAIL " + f)
 print("stack budget OK" if not fails else "stack budget FAILED")
 sys.exit(1 if fails else 0)

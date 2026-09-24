@@ -235,11 +235,26 @@ def read_cache(tree):
 VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
 
 
+class Owned(list):
+    """8.1's ownership as the opener computes it: the own prefixes, the list itself, and the manifest's host
+    records, .host, which take a path back from an own prefix no longer than theirs."""
+    def __init__(self, own=(), host=()):
+        list.__init__(self, own)
+        self.host = list(host)
+
+
+def _under(v, p):
+    return v == p or v.startswith(p.rstrip("/") + "/")
+
+
 def host_owned(vdir, own):
-    """The opener's ownership rule for a directory: volatile, or under no own prefix (8.1)."""
-    if any(vdir == v or vdir.startswith(v + "/") for v in VOLATILE):
+    """The opener's base rule for a path (8.1, vis.c base_is_host): volatile, or its longest host record at least
+    as long as its longest own prefix, which a path under neither is."""
+    if any(_under(vdir, v) for v in VOLATILE):
         return True
-    return not any(vdir == o or vdir.startswith(o.rstrip("/") + "/") for o in own)
+    def longest(prefixes):
+        return max((len(p) for p in prefixes if _under(vdir, p)), default=-1)
+    return longest(getattr(own, "host", ())) >= longest(own)
 
 
 def find_library(tree, name, elf, vpath, rpaths, cache, own=(), host_hits=None, default_dirs=None, interp=None):
@@ -280,14 +295,10 @@ def find_library(tree, name, elf, vpath, rpaths, cache, own=(), host_hits=None, 
     return None
 
 
-def _interps(tree):
-    """The PT_INTERP strings of the tree's dynamic executables, from a bounded look at the conventional loaders."""
-    out = []
-    for cand in ("/lib/ld-musl-x86_64.so.1", "/lib64/ld-linux-x86-64.so.2", "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"):
-        r = tree.resolve(cand)
-        if r and os.path.isfile(tree.payload(r)):
-            out.append(cand)
-    return out
+def _has_musl_loader(tree):
+    """Whether the tree has musl's loader for the can's machine (set_machine), which reads no ld.so.cache."""
+    r = tree.resolve("/lib/ld-musl-%s.so.1" % PLATFORM)
+    return bool(r and os.path.isfile(tree.payload(r)))
 
 
 def static_check(can, own, data_prefixes=(), log=print):
@@ -307,7 +318,7 @@ def static_check(can, own, data_prefixes=(), log=print):
     if host_owned("/etc", own):                                # the loader would read the host's cache and preload list (review F4-9)
         rep.errors.append("/etc is the host's: the loader would read the host's /etc/ld.so.cache and /etc/ld.so.preload; the tree must own /etc")
     elif cache is None:
-        if not any("musl" in os.path.basename(i) for i in _interps(tree)):   # musl has no cache; glibc without one searches its defaults only
+        if not _has_musl_loader(tree):                           # musl has no cache; glibc without one searches its defaults only
             rep.warnings.append("no /etc/ld.so.cache: only the loader's default directories are searched at run time")
     else:
         for soname, paths in cache.items():                       # no cache entry may name the opener (10.3)
@@ -367,6 +378,8 @@ def static_check(can, own, data_prefixes=(), log=print):
                     rep.errors.append("%s wants interpreter %s, which does not resolve in the tree" % (vpath, e.interp))
                 elif any(r == p or r.startswith(p.rstrip("/") + "/") for p in data_prefixes):
                     rep.errors.append("%s wants interpreter %s, which resolves into the data prefix %s: never executed or loaded (6.2)" % (vpath, e.interp, r))
+                elif own and host_owned(r, own):
+                    rep.errors.append("%s wants interpreter %s, which resolves to %s, a path the can does not own: the opener refuses a host loader (7.4.5)" % (vpath, e.interp, r))
                 else:
                     interps.setdefault(r, (e.interp, vpath))
             (executables if e.interp is not None or e.type != ET_DYN else libraries).append((vpath, e))
@@ -479,7 +492,7 @@ def dynamic_check(can, logs, own, log=print):
     for lib in sorted(libs):
         if any(lib.startswith(c.rstrip("/") + "/") for c in cwds):   # the workload's own build directory (review F4-10): the
             rep.warnings.append("library opened under the workload's working directory, its own output presumably: " + lib)   # host's by 8.1 rule 4, whatever prefix it lies under
-        elif any(lib == o or lib.startswith(o.rstrip("/") + "/") for o in own):
+        elif not host_owned(lib, own):
             continue
         else:
             rep.errors.append("library opened on the host: " + lib)
@@ -489,10 +502,8 @@ def dynamic_check(can, logs, own, log=print):
         for line in open("/etc/nsswitch.conf", encoding="utf-8", errors="replace"):
             line = line.split("#", 1)[0]
             if ":" in line:
-                for w in line.split(":", 1)[1].split():
-                    if w.isalpha() and w not in ("files", "dns", "db", "compat"):
-                        mods.add(w)
-                    elif w in ("db", "compat"):
+                for w in line.split(":", 1)[1].split():               # a module name, mdns4_minimal included; not [NOTFOUND=return]
+                    if re.fullmatch(r"[A-Za-z0-9_]+", w) and w not in ("files", "dns"):
                         mods.add(w)
         for m in sorted(mods):
             if not any(tree.resolve(os.path.join(d, "libnss_%s.so.2" % m)) for d in DEFAULT_DIRS):

@@ -6,7 +6,7 @@ fixed: the program prints one line per case, "<case>: <answer>", and the kernel'
 
     test/exercise.py --can CAN PROG.c [ARGS...]     HOSTDIR in ARGS is replaced by a fresh writable host directory
 
-The work lives under build/exercise/<can>: a copy of the can reopened with build/opener, and reopened again whenever the
+The work lives under build/exercise/<can>-<lock hash>: a copy of the can reopened with build/opener, and reopened again whenever the
 build has changed since, the unwrapped tree for bwrap, both with a socket file at /usr/share/cont-test.sock and the
 suite's marker. Needs bwrap and user namespaces; says so and exits 1 when it cannot run. Exit status: the number of
 lines that differ."""

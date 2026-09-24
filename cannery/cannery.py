@@ -11,8 +11,8 @@ A can is a directory at every stage, and every command takes paths; `fmt --check
                                    opener, manifest and tree hashes to the lock.
                                    Idempotent; a bare directory holding root/ becomes a can.
     cannery.py unwrap CAN          Open a can: move every payload back over its wrapper.
-    cannery.py check CAN [LOG...]  Wrappers, payloads and the static check; with CAN_LOG files, the
-                                   dynamic check of what a workload actually opened.
+    cannery.py check CAN [LOG...]  Wrappers, payloads, the tree against the lock's hash and the static
+                                   check; with CAN_LOG files, the dynamic check of what a workload opened.
     cannery.py prune CAN LOG...    Drop every file no logged workload touched (10.4).
     cannery.py fmt FILE...         Parse with the strict grammar and rewrite in canonical form
                                    (--check: only report).
@@ -110,7 +110,7 @@ def parse(data, kind="can"):
         if data[i] == 0x0A:
             line += 1
         i += n
-    records, comments = [], []
+    records, comments, counts = [], [], {}
     pos, line = 0, 1
     while pos < len(data):
         end = data.index(b"\n", pos)
@@ -148,6 +148,10 @@ def parse(data, kind="can"):
         rec = Record(key, fields, comments, line)
         comments = []
         _check_record(rec, kind)
+        if kind == "can" and key in LIMITS:                           # the opener's tables (8.1), refused where the opener refuses
+            counts[key] = counts.get(key, 0) + 1
+            if counts[key] > LIMITS[key]:
+                _fail(line, 1, "more than %d %s records" % (LIMITS[key], key))
         records.append(rec)
         pos, line = end + 1, line + 1
     if comments:
@@ -320,19 +324,18 @@ def owned_top(can):
 
 
 def owned(can):
-    """8.1: the can's ownership set as the opener computes it at startup: the manifest's own records plus
-    the tree's top-level entries of rule 1."""
-    own = set(o[0].decode("utf-8", "surrogateescape") for o in values(manifest(can), "own"))
-    return sorted(own | set(owned_top(can)))
+    """8.1: the can's ownership as the opener computes it at startup: the manifest's own records plus the
+    tree's top-level entries of rule 1, with the host records that take paths back from them."""
+    m = manifest(can)
+    own = set(o[0].decode("utf-8", "surrogateescape") for o in values(m, "own"))
+    host = [h[0].decode("utf-8", "surrogateescape") for h in values(m, "host")]
+    return elfcheck.Owned(sorted(own | set(owned_top(can))), host)
 
 
 def check_limits(can):
-    """The opener's fixed tables (8.1): refuse what it would refuse, before closing (review O4-9, O4-10)."""
-    m = manifest(can)
-    for key in ("own", "host", "data"):
-        n = len(values(m, key))
-        if n > LIMITS[key]:
-            raise build.BuildError("the manifest has %d %s records; the opener holds %d" % (n, key, LIMITS[key]))
+    """The opener's fixed tables (8.1): refuse what it would refuse, before closing (review O4-9, O4-10); the
+    manifest's records are counted by parse, the tree's top-level entries here."""
+    manifest(can)
     top = len(owned_top(can))                                 # as the opener counts them: a placeholder takes no slot
     if top > LIMITS["top"]:
         raise build.BuildError("root/ has %d top-level entries; the opener holds %d" % (top, LIMITS["top"]))

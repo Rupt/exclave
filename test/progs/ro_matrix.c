@@ -84,6 +84,7 @@ int main(int argc, char **argv)
     CHECK(futimens(fd, 0), EROFS);
     CHECK(fsetxattr(fd, "user.x", "y", 1, 0), EROFS);
     { int fl = 0; CHECK(ioctl(fd, FS_IOC_SETFLAGS, &fl), EROFS); }
+    { struct fsxattr x; memset(&x, 0, sizeof x); CHECK(ioctl(fd, FS_IOC_FSSETXATTR, &x), EROFS); }   /* the filter had the wrong number until version 5 */
     { struct stat a, b; CHECK(fstatat(fd, "", &a, AT_EMPTY_PATH), 0); stat(marker, &b); if (a.st_ino != b.st_ino) { fails++; printf("FAIL fstatat AT_EMPTY_PATH inode\n"); }
       /* F3-5: NULL with AT_EMPTY_PATH is the kernel's own fast form since 6.11 */
       struct utsname u; uname(&u); int maj = 0, min = 0; sscanf(u.release, "%d.%d", &maj, &min); int newform = maj > 6 || (maj == 6 && min >= 11);

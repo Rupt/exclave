@@ -53,14 +53,16 @@ static long copy_in(pid_t pid, void *dst, const void *src, size_t n)
 {
     unsigned long p = (unsigned long)src;
     if (!p) return -EFAULT;
-    if (no_readv) { long g = pipe_copy(dst, src, n); return g < 0 ? g : g > 0 || n == 0 ? g : -EFAULT; }
-    struct iovec l = { dst, n }, r[2]; unsigned long rn = 1;
-    unsigned long first = 4096 - (p & 4095); if (first > n) first = n;
-    r[0].iov_base = (void *)p; r[0].iov_len = first;
-    if (first < n) { r[1].iov_base = (void *)(p + first); r[1].iov_len = n - first; rn = 2; }
-    long got = sys_process_vm_readv(pid, &l, 1, r, rn, 0);
-    if (got == -ENOSYS || got == -EPERM) { no_readv = 1; log_msg("process_vm_readv refused; copies through a pipe", 0); return copy_in(pid, dst, src, n); }
-    return got < 0 ? -EFAULT : got;
+    if (!no_readv) {
+        struct iovec l = { dst, n }, r[2]; unsigned long rn = 1;
+        unsigned long first = 4096 - (p & 4095); if (first > n) first = n;
+        r[0].iov_base = (void *)p; r[0].iov_len = first;
+        if (first < n) { r[1].iov_base = (void *)(p + first); r[1].iov_len = n - first; rn = 2; }
+        long got = sys_process_vm_readv(pid, &l, 1, r, rn, 0);
+        if (got != -ENOSYS && got != -EPERM) return got < 0 ? -EFAULT : got;
+        no_readv = 1; log_msg("process_vm_readv refused; copies through a pipe", 0);
+    }
+    long g = pipe_copy(dst, src, n); return g < 0 ? g : g > 0 || n == 0 ? g : -EFAULT;
 }
 /* NUL-terminated string into dst[PATH_MAX]; returns its length or -EFAULT/-ENAMETOOLONG */
 static long copy_str_in(pid_t pid, char *dst, const char *src)
@@ -78,14 +80,16 @@ static long copy_out(pid_t pid, void *dst, const void *src, size_t n)
 {
     unsigned long p = (unsigned long)dst;
     if (!p) return -EFAULT;
-    if (no_readv) { long g = pipe_copy(dst, src, n); return g == (long)n ? 0 : g < 0 ? g : -EFAULT; }
-    struct iovec l = { (void *)src, n }, r[2]; unsigned long rn = 1;
-    unsigned long first = 4096 - (p & 4095); if (first > n) first = n;
-    r[0].iov_base = (void *)p; r[0].iov_len = first;
-    if (first < n) { r[1].iov_base = (void *)(p + first); r[1].iov_len = n - first; rn = 2; }
-    long got = sys_process_vm_writev(pid, &l, 1, r, rn, 0);
-    if (got == -ENOSYS || got == -EPERM) { no_readv = 1; return copy_out(pid, dst, src, n); }
-    return got == (long)n ? 0 : -EFAULT;
+    if (!no_readv) {
+        struct iovec l = { (void *)src, n }, r[2]; unsigned long rn = 1;
+        unsigned long first = 4096 - (p & 4095); if (first > n) first = n;
+        r[0].iov_base = (void *)p; r[0].iov_len = first;
+        if (first < n) { r[1].iov_base = (void *)(p + first); r[1].iov_len = n - first; rn = 2; }
+        long got = sys_process_vm_writev(pid, &l, 1, r, rn, 0);
+        if (got != -ENOSYS && got != -EPERM) return got == (long)n ? 0 : -EFAULT;
+        no_readv = 1;
+    }
+    long g = pipe_copy(dst, src, n); return g == (long)n ? 0 : g < 0 ? g : -EFAULT;
 }
 
 /* ---------- path resolution ---------- */

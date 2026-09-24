@@ -4,7 +4,8 @@
  * buffers live in chunks obtained with mmap on demand. A chunk records its
  * owner (pid, tid); it is released explicitly when the handler returns.
  * When nothing is free, chunks whose owner no longer exists are reclaimed
- * by liveness, never by stack position. Nothing here takes a lock: a
+ * by liveness, never by another thread's stack position; a thread's own
+ * chunks left by a longjmp are released by frame (nest_enter). Nothing here takes a lock: a
  * handler that interrupts a handler, or a fork while another thread is in
  * one, must never find a lock held by a frame that cannot release it.
  */

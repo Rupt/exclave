@@ -68,24 +68,26 @@ The loop that has served well, in the order it pays:
   both openers, and what differs by architecture sits best in
   `src/sys.h`, `src/common.h` and `#if` blocks named for it. `make`
   builds `build/opener-aarch64` when `aarch64-linux-gnu-gcc` is
-  installed; it is tested in the arm64 VM (`test/matrix.py --arm64
-  --debs-arm64 DIR`), since user-mode emulation has no seccomp. A
+  installed; it is tested in the arm64 VM (`test/matrix.py --can CAN
+  --only noble-arm64 --debs-arm64 DIR`), since user-mode emulation has no seccomp. A
   syscall the handler re-issues is best one the oldest kernel of the
   matrix has (`renameat`, not `renameat2`, for a plain rename).
 - **Handler buffers come from `struct scratch`** rather than the stack,
   because the handler runs on whatever alternate stack a program set
   up, and Rust's is 8 KB including the kernel's frame.
-  `test/stackcheck.py`, the gate's stack step, lists every function on
-  the handler path; a new one belongs on the list, and a function that
-  gains a second caller may stop being inlined and be counted twice.
+  `test/stackcheck.py`, the gate's stack step, walks gcc's call graph
+  from `on_sigsys` and fails over 3 KB or on a recursion other than
+  `exec_target`'s, so a new function is counted without a list; a call
+  through a pointer would have no edge, and the opener makes none.
   Program memory is read through `copy_in` and written through
   `copy_out`, paths and vectors alike. Environment strings the opener
   hands a program should be writable.
 - **The filter's trap set is versioned.** `make` also builds
-  `build/opener-old`, the previous filter version without the syscalls
-  the current one added (version 4's `bind` and `connect`), for the
-  nesting regression; a change to `FILTER_VERSION` or to the trap set
-  moves that build and the regression's trap with it. A new syscall the
+  `build/opener-old`, an older filter version without syscalls a later
+  one added (version 3, without version 4's `bind` and `connect`), for
+  the nesting regression; the version moves whenever the trap set
+  grows, and a version that adds syscalls moves that build and the
+  regression's trap with it. A new syscall the
   kernel adds is trapped by the filter's ceiling and answered `ENOSYS`
   until it is classified in `test/syscalls.py` and, if it takes a path,
   handled in `src/handler.c` and listed in `src/filter.c`.
@@ -111,9 +113,10 @@ The loop that has served well, in the order it pays:
   can in two orders and, for the first can, under the plain terminal's
   AppArmor label, the oracles, the syscall probe and the Docker
   profile, every step in parallel on copies, in about a minute with a
-  30 s budget per test. Every driver takes a can through
-  `tree.fresh_can`, a copy of its own reopened with `build/opener`,
-  since the opener a can carries is the one it was closed with; a
+  30 s budget per test. Every driver runs `build/opener` on a copy of
+  its own, the suite a can it wraps from the given can's tree and the
+  others `tree.fresh_can`, a copy reopened with `build/opener`, since
+  the opener a can carries is the one it was closed with; a
   copy kept between runs (`test/exercise.py`) is reopened again when
   the build has changed. A hand-made copy has neither: reopen it.
   The suite runs on the can pruned to what it

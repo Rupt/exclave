@@ -23,7 +23,7 @@ import cannery  # noqa: E402
 
 import platform  # noqa: E402
 TRIPLET = "%s-linux-gnu" % platform.machine()                     # the can's multiarch directory: the suite runs on the can's own machine
-GCC = TRIPLET + "-gcc-13"                                         # both replaced by what the tree says once the can is known (test/tree.py)
+GCC = TRIPLET + "-gcc-13"                                         # replaced by what the tree says once the can is known (test/tree.py)
 SH, SHX, LIBC, SH_LINK = "/usr/bin/sh", "/usr/bin/dash", "/lib/x86_64-linux-gnu/libc.so.6", "dash"   # likewise: the shell, the file behind it, libc, the link's text
 IDENTITY = ["/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf", "/etc/resolv.conf", "/etc/hosts",
             "/etc/ssl/certs/ca-certificates.crt"]
@@ -38,12 +38,12 @@ WORKLOADS = [
     "mv $SH $W/moved; echo $?; ln $SHX $W/linked; echo $?; ln -s $SHX $W/symlinked; echo $?; ln $W/hello.c /usr/newlink; echo $?",
     "cp $SHX $W/dashcopy; echo $?; cmp $SHX $W/dashcopy; echo $?",
     "stat -c '%s %F %a' $SHX $SH $LIBC; stat -c '%F %a' /usr/lib",
-    "ls /usr/lib/gcc/" + TRIPLET + "/13 | grep -v '^\\.real$' | head -20",
+    "ls /usr/lib/gcc/*/* | grep -v '^\\.real$' | head -20",                  # the tree's own triplet and version
     "find /usr/lib/gcc -name '*.o' | sort | head -30",
     "cd $W && $CC -O1 hello.c -o hello && ./hello a b; echo $?",
     "cd $W && $CC -O0 -c hello.c -o hello.o && ls -l hello.o | cut -d' ' -f5",
     "cat /nonexistent; echo $?; cat /usr/lib; echo $?; cd $SHX; echo $?",
-    "echo x > /dev/null; echo $?; : > /tmp/oracle-file; echo $?; ls /tmp/oracle-file",
+    "echo x > /dev/null; echo $?; : > /tmp/oracle-file-%d; echo $?; ls /tmp/oracle-file-%d; rm /tmp/oracle-file-%d" % ((os.getpid(),) * 3),
     "stat -f -c '%T' /usr; touch /usr/bin/true 2>&1; chmod 600 /usr/bin/true 2>&1; echo $?",
     "date +%Z; TZ=Asia/Tokyo date +%Z; ls /etc/localtime 2>&1 | wc -l",
     "test -w $SHX; echo $?; test -x $SHX; echo $?; test -w $W; echo $?",
@@ -134,10 +134,9 @@ def main():
         f.write('#include <stdio.h>\nint main(int c, char **v) { printf("hello %d\\n", c); return 0; }\n')
     fails = 0
     # 1. the read-only matrix against the kernel: the same program, the same expectations, a real read-only bind
-    global GCC, TRIPLET, SH, SHX, LIBC, SH_LINK
+    global GCC, SH, SHX, LIBC, SH_LINK
     r = os.path.join(can, "root")
     GCC = tree.compiler(r, platform.machine()) or GCC
-    TRIPLET = tree.triplet(r, platform.machine())
     SH, SHX, LIBC = tree.vbin(r, "sh"), tree.resolve(r, tree.vbin(r, "sh")), tree.libc(r, platform.machine())
     SH_LINK = os.readlink(os.path.join(r, SH.lstrip("/"))) if os.path.islink(os.path.join(r, SH.lstrip("/"))) else ""
     gcc = os.path.join(can, "root", tree.vbin(os.path.join(can, "root"), GCC).lstrip("/"))

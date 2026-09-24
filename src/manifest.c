@@ -130,13 +130,15 @@ int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t
     if (len == 0 || buf[len - 1] != '\n') return fail(err, errn, K, "file must end with LF");
     if (len >= 3 && (unsigned char)buf[0] == 0xEF && (unsigned char)buf[1] == 0xBB && (unsigned char)buf[2] == 0xBF)
         return fail(err, errn, K, "byte order mark");
-    /* whole-file UTF-8 and CR check */
+    /* whole-file UTF-8 and CR check, naming the line as the record pass would */
     for (const unsigned char *p = K->p; p < K->end;) {
-        if (*p == '\r') { K->line = 1; return fail(err, errn, K, "CR not allowed"); }
+        if (*p == '\r') return fail(err, errn, K, "CR not allowed");
         int l = utf8_len(p, (size_t)(K->end - p));
         if (!l) return fail(err, errn, K, "malformed UTF-8");
+        if (*p == '\n') K->line++;
         p += l;
     }
+    K->line = 1;
 
     while (K->p < K->end) {
         K->col = 1;
@@ -164,6 +166,7 @@ int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t
             if (r) return r;
             nf++;
         }
+        K->col = 1;                                                      /* the record's own errors name its line, column 1 */
         pending_comment = 0;
         nrec++;
         /* typing */
@@ -195,6 +198,7 @@ int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t
             return fail(err, errn, K, "unknown key");
         }
 #undef WANT
+        K->line++;                                                       /* the record's LF */
     }
     if (pending_comment) return fail(err, errn, K, "comment after the last record");
     if (!seen_can) return fail(err, errn, K, "empty manifest");

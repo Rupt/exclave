@@ -458,7 +458,8 @@ def dependency_report(pkgs, root=None):
 
 # ---------------------------------------------------------------- CAN_LOG as an input (10.3, 10.4)
 def log_lines(logs):
-    """Yield (what, result, path) from CAN_LOG files; the path's \\n and \\\\ escapes undone (6.2)."""
+    """Yield (what, result, path) from CAN_LOG files; the path's \\n and \\\\ escapes undone left to right (6.2),
+    so that a backslash before an n stays a backslash."""
     for lp in logs:
         for line in open(lp, encoding="utf-8", errors="surrogateescape"):
             parts = line.rstrip("\n").split(" ", 2)
@@ -468,7 +469,7 @@ def log_lines(logs):
                 r = int(parts[1])
             except ValueError:
                 continue
-            yield parts[0], r, parts[2].replace("\\n", "\n").replace("\\\\", "\\")
+            yield parts[0], r, re.sub(r"\\([n\\])", lambda m: "\n" if m.group(1) == "n" else "\\", parts[2])
 
 
 # ---------------------------------------------------------------- pruning (10.4)

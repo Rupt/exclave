@@ -19,7 +19,7 @@ struct sock_fprog { unsigned short len; struct sock_filter *filter; };
 #define RET_K   0x06
 #define AND_K   0x54      /* BPF_ALU | BPF_AND | BPF_K */
 #define JGT_K   0x25      /* BPF_JMP | BPF_JGT | BPF_K */
-#define HIGHEST_KNOWN_SYSCALL 469      /* file_setattr, 6.17; test/syscalls.py probes the running kernel above it */
+#define HIGHEST_KNOWN_SYSCALL 470      /* listns, in 7.0's table; test/syscalls.py probes the running kernel above it */
 #define OFF_NR   0
 #define OFF_ARCH 4
 #define OFF_IP   8

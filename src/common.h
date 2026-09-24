@@ -9,7 +9,7 @@
 
 #define OPENER_VERSION "0.1"
 #ifndef FILTER_VERSION
-#define FILTER_VERSION 4                 /* 7.4.2: versioned reuse; bumped whenever the trap set grows (2: the *xattrat and file_*attr syscalls; 3: openat2; 4: bind and connect) */
+#define FILTER_VERSION 5                 /* 7.4.2: versioned reuse; bumped whenever the trap set grows (2: the *xattrat and file_*attr syscalls; 3: openat2; 4: bind and connect; 5: FS_IOC_FSSETXATTR's right number) */
 #endif
 #define PATH_MAX 4096
 #define NAME_MAX 255
@@ -106,7 +106,7 @@
 
 /* ---------- ioctl requests the filter traps (chattr) ---------- */
 #define FS_IOC_SETFLAGS   0x40086602UL
-#define FS_IOC_FSSETXATTR 0x401c581cUL
+#define FS_IOC_FSSETXATTR 0x401c5820UL                  /* _IOW('X', 32, struct fsxattr); versions 1 to 4 had 'X' 28 */
 
 /* ---------- statfs flag ---------- */
 #define ST_RDONLY_BIT 1

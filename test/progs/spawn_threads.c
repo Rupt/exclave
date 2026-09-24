@@ -3,7 +3,7 @@
  * thread's own; and a forked child whose traps nest, a timer's handler trapping inside a trapped stat, while every
  * chunk the pool had is held by threads blocked in the parent, so that the child's pool must grow under nesting.
  * usage: spawn_threads HOSTDIR PROGRAM (a program to spawn, the can's true). Prints one line per part; exit 0 when
- * both pass. */
+ * both pass, which the second does only when a timer's trap landed and every stat, nested or not, succeeded. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -33,8 +33,8 @@ static void *trapper(void *arg)
     return arg;
 }
 
-static volatile long ticks;
-static void on_alarm(int sig) { struct stat st; (void)sig; if (stat("/usr/share", &st) == 0) ticks++; }   /* a trap inside whatever trap the timer interrupted */
+static volatile long ticks, tick_fails;
+static void on_alarm(int sig) { struct stat st; (void)sig; if (stat("/usr/share", &st) == 0) ticks++; else tick_fails++; }   /* a trap inside whatever trap the timer interrupted */
 
 static void *blocker(void *arg)                                /* holds a chunk: blocked inside the handler's re-issued open of a FIFO */
 {
@@ -72,7 +72,7 @@ int main(int argc, char **argv)
         struct stat st; int bad = 0;
         for (int i = 0; i < 200000; i++) if (stat("/usr/share/cont-test-marker", &st)) bad++;
         it.it_value.tv_sec = it.it_value.tv_usec = 0; setitimer(ITIMER_REAL, &it, 0);
-        _exit(bad ? 1 : ticks ? 0 : 3);
+        _exit(bad || tick_fails ? 1 : ticks ? 0 : 3);
     }
     int st = -1;
     for (int i = 0; i < 300; i++) { if (waitpid(c, &st, WNOHANG) == c) break; usleep(100000); }   /* 30 s: a hang is a failure, not a stall */
@@ -81,5 +81,5 @@ int main(int argc, char **argv)
     for (int i = 0; i < 8; i++) pthread_join(b[i], 0);
     unlink(fifo);
     printf("nested traps in a forked child while the pool is held: %s\n", WIFEXITED(st) && WEXITSTATUS(st) == 0 ? "ok" : WIFEXITED(st) && WEXITSTATUS(st) == 3 ? "no timer trap landed" : WIFEXITED(st) ? "a stat failed" : "hung");
-    return fails == 0 && WIFEXITED(st) && WEXITSTATUS(st) != 1 && WEXITSTATUS(st) != 2 && (WEXITSTATUS(st) == 0 || WEXITSTATUS(st) == 3) ? 0 : 1;
+    return fails == 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0 ? 0 : 1;
 }

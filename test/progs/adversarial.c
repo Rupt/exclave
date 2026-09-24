@@ -139,7 +139,7 @@ int main(int argc, char **argv)
     const char *hd = argv[1], *sh = getenv("SH") ? getenv("SH") : "/usr/bin/sh";
     char p[4096], q[4096], buf[64];
     snprintf(p, sizeof p, "%s/f", hd); { int c = open(p, O_WRONLY | O_CREAT, 0644); write(c, "f\n", 2); close(c); }
-    snprintf(q, sizeof q, "%s/hl", hd); symlink("f", q);      /* a host symlink of four bytes of text */
+    snprintf(q, sizeof q, "%s/hl", hd); symlink("f", q);      /* a host symlink of one byte of text */
     int hfd = open(hd, O_RDONLY | O_DIRECTORY);
     struct stat st;
     struct timespec ts[2] = { { 1000, 0 }, { 2000, 0 } };

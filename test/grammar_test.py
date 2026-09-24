@@ -6,7 +6,7 @@
 Three statements hold for every byte sequence b: encode is injective, decode(encode(b)) == b, and fmt is
 idempotent. And the two implementations of the grammar, the cannery's Python parser and the opener's C parser
 (built by test/gate.sh's unit step, run with a file argument), accept and reject the same inputs: manifests
-and their malformed variants (MUTATIONS).
+and their malformed variants (MUTATIONS); and both name the line of an error on a known line (POSITIONS).
 """
 import argparse
 import os
@@ -101,6 +101,33 @@ def compare(rng, cases, c_parser):
     return diverge
 
 
+POSITIONS = [                                     # an error on a known line, which both parsers must name (6.2)
+    (b'can 1\n\nisa "x86-64"\n\nown "/x"\nbogus 1\n', 6), (b'can 1\n\nown "/x"\nown "x"\n', 4),
+    (b'can 1\n\nown "/x"\r\n', 3), (b'can 1\n\nown "/\xff"\n', 3), (b'can 1\n\nown "/x" \n', 3),
+    (b'can 1\n\nown "/x"\n# after\n', 5), (b"can 1\n\n" + b"".join(b'own "/c%03d"\n' % i for i in range(257)), 259),
+]
+
+
+def positions(c_parser):
+    bad = 0
+    with tempfile.TemporaryDirectory(prefix="grammar-") as d:
+        path = os.path.join(d, "manifest")
+        for text, want in POSITIONS:
+            with open(path, "wb") as f:
+                f.write(text)
+            try:
+                cannery.parse(text, "can")
+                py = "accepted"
+            except cannery.GrammarError as e:
+                py = str(e)
+            c = subprocess.run([c_parser, path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stderr.strip()
+            for who, msg in (("python", py), ("c", c)):
+                if not msg.startswith("line %d col " % want):
+                    bad += 1
+                    print("FAIL the %s parser says %r of an error on line %d of %r" % (who, msg, want, text[:50]))
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cases", type=int, default=3000)
@@ -115,6 +142,8 @@ def main():
         print("no C parser at %s: the two-parser comparison did not run" % a.c_parser)
     else:
         print("%d near-manifests through both parsers: %d divergences" % (a.cases // 3, div))
+        bad += positions(a.c_parser)
+        print("%d errors on known lines: both parsers name the line" % len(POSITIONS))
     return 1 if bad or div > 0 else 0
 
 

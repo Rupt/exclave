@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """oracle_syscalls.py — the differential syscall probe (PROPOSAL.md 17, item 7).
 
-Every trapped syscall of src/filter.c is issued with every path form of 7.4.4, and every flag that changes
+Every trapped path and descriptor syscall of src/filter.c, and the two chattr ioctls, is issued with every path
+form of 7.4.4, and every flag that changes
 resolution, over a random maze, by one program (test/progs/probe.c) under two projections of the same tree:
 the kernel's, a bwrap read-only bind of the unwrapped tree at /, and the opener's. Return value, errno and
 what a buffer holds afterwards must agree case by case; a difference fails unless EXPECTED names its reason.
@@ -39,6 +40,7 @@ RENAME_NOREPLACE, RENAME_EXCHANGE, RENAME_WHITEOUT = 1, 2, 4
 RESOLVE_NO_XDEV, RESOLVE_NO_MAGICLINKS, RESOLVE_NO_SYMLINKS, RESOLVE_BENEATH, RESOLVE_IN_ROOT, RESOLVE_CACHED = 1, 2, 4, 8, 0x10, 0x20
 UTIME_NOW, UTIME_OMIT = (1 << 30) - 1, (1 << 30) - 2
 FS_IOC_SETFLAGS = 0x40086602 if MACHINE == "x86_64" else 0x40086602
+FS_IOC_FSSETXATTR = 0x401c5820                                    # _IOW('X', 32, struct fsxattr), the same on both machines
 IN_MODIFY = 2
 STATX_BASIC_STATS = 0x7ff
 IDENTITY = ["/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf", "/etc/resolv.conf", "/etc/hosts",
@@ -395,6 +397,7 @@ def generate(forms, nr, uid, gid):
         add("fstatfs", n, f, B("raw", 256))
         if not n.startswith("host"):                                   # not on a host file: ext4 on 5.10 to 6.1 refuses to clear the extent flag of
             add("ioctl", n + "/setflags", f, I(FS_IOC_SETFLAGS), B("raw", 8))   # a file recreated moments after its predecessor was deleted (13), which the reset does
+            add("ioctl", n + "/fssetxattr", f, I(FS_IOC_FSSETXATTR), B("raw", 28))
     # relative paths from a can-owned working directory
     rel = ["", ".", "..", os.path.basename(forms.file), "../" + os.path.basename(forms.file), "nonexistent", "../../..", "../../../../etc/passwd", "../../home", "./"]
     group[0] = "cwd_in_can"

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """run.py — the regression suite (PROPOSAL.md 17.4, the part a single machine can run).
 
-    test/run.py [--tree DIR | --can CAN] [--work DIR] [--keep] [-k SUBSTRING] [--order given|reverse|random] [--seed N] [--budget SECONDS]
+    test/run.py [--tree DIR | --can CAN] [--work DIR] [--keep] [-k NAME|SUBSTRING] [--order given|reverse|random] [--seed N] [--budget SECONDS]
 
 Makes a can from TREE (default $CONT_TREE), or from the unwrapped root of an existing CAN, under WORK
 (default build/test-work) with a few test files added to the tree, compiles test/progs/*.c with the tree's
@@ -654,8 +654,8 @@ def cross_can_distinct_openers(ctx):
 @test
 def nested_older_opener(ctx):
     """7.4.2: an older opener nested inside a newer one reuses the newer filter and answers ENOSYS for a trap
-    it does not know, never re-issuing it to the host. build/opener-old is the current opener built with the
-    previous filter version and without bind and connect in its filter or handler (make builds it beside build/opener)."""
+    it does not know, never re-issuing it to the host. build/opener-old is the current opener built at filter version 3,
+    without version 4's bind and connect in its filter or handler (make builds it beside build/opener)."""
     old = os.path.join(os.path.dirname(ctx.opener_src), "opener-old")
     if not os.path.exists(old):
         return "no build/opener-old"
@@ -1179,10 +1179,10 @@ def wrap_refusals(ctx):
     # O4-9, O4-10: the opener's tables
     f_ = hand("lim.can", [("/usr/bin/hi", script, 0o755)], b"can 1\n\n" + b"".join(b'own "/claim%03d"\n' % i for i in range(300)))
     rc, o, e = run([sys.executable, cannery_py, "wrap", f_])
-    expect(rc != 0 and "300 own records" in o + e, "300 own records must be refused: " + (o + e)[-300:])
+    expect(rc != 0 and "line 259 col 1: more than 256 own records" in o + e, "300 own records must be refused at the 257th: " + (o + e)[-300:])
     g = hand("lim2.can", [("/usr/bin/hi", script, 0o755)], b"can 1\n\n" + b"".join(b'host "/hostpath%03d"\n' % i for i in range(40)))
     rc, o, e = run([sys.executable, cannery_py, "wrap", g])
-    expect(rc != 0 and "40 host records" in o + e, "40 host records must be refused: " + (o + e)[-300:])
+    expect(rc != 0 and "line 35 col 1: more than 32 host records" in o + e, "40 host records must be refused at the 33rd: " + (o + e)[-300:])
     t_ = hand("lim3.can", [("/usr/bin/hi", script, 0o755)] + [("/top%03d" % i, b"", 0o644) for i in range(300)])
     for i in range(20):
         os.makedirs(os.path.join(t_, "root", "empty%02d" % i))           # placeholders take no slot, as the opener counts
@@ -1299,11 +1299,12 @@ def log_names_and_escapes(ctx):
     copy_can(ctx.can, can2)
     odd = os.path.join(can2, "root", "usr", "share", "odd")
     os.makedirs(odd)
-    for name in ("with\nnewline", "back\\slash"):
+    names = ("with\nnewline", "back\\slash", "back\\nslash")         # the last a backslash before an n, not a newline
+    for name in names:
         with open(os.path.join(odd, name), "w") as f:
             f.write(name)
     log2 = os.path.join(ctx.work, "odd.log")
-    for name in ("with\nnewline", "back\\slash"):
+    for name in names:
         rc, out, err = run([os.path.join(can2, "root", ctx.vbin("cat").lstrip("/")), "/usr/share/odd/" + name], cwd=ctx.work, env=dict(ctx.env, CAN_LOG=log2))
         expect(out == name, "cat of the odd name: %r %r" % (out, err))
     lines = open(log2).read().split("\n")
@@ -1313,7 +1314,7 @@ def log_names_and_escapes(ctx):
     expect(rc == 0, err)
     rc, o, e = run([sys.executable, os.path.join(REPO, "cannery", "cannery.py"), "prune", can2, log2])
     expect(rc == 0, "prune: " + o + e)
-    expect(sorted(os.listdir(odd)) == sorted(["with\nnewline", "back\\slash"]), "the odd names must survive pruning: %r" % os.listdir(odd))
+    expect(sorted(os.listdir(odd)) == sorted(names), "the odd names must survive pruning: %r" % os.listdir(odd))
     empty = os.path.join(ctx.work, "empty.log")
     open(empty, "w").close()
     before = sum(1 for _ in cannery.walk_files(os.path.join(can2, "root")))
@@ -1409,7 +1410,8 @@ def prune_and_check_with_logs(ctx):
 def static_check_loader_model(ctx):
     """10.3 after the review (O3-10, F3-17): DT_RPATH is inherited down the chain, ld.so.cache is read, a search
     directory the can does not own is refused; a hand-made glibc layout closes (F4-13, F4-9), a truncated ELF is an error
-    by name (F4-11), a library a workload built in its own directory is a note (F4-10, O5-4)."""
+    by name (F4-11), a host record is applied as the opener applies it, a library a workload built in its own directory
+    is a note (F4-10, O5-4)."""
     import elfcheck
     x = os.path.join(ctx.root, "usr", "local", "x")
     base = os.path.join(x, "lib")
@@ -1484,6 +1486,12 @@ def static_check_loader_model(ctx):
     os.chmod(bad, 0o755)
     rep = elfcheck.static_check(hand2, cannery.owned(hand2), [])
     expect(any("broken" in e_ and ("malformed" in e_ or "not ELF64" in e_) for e_ in rep.errors), "a truncated ELF must be reported by name: %r" % rep.errors[:3])
+    # a host record takes a path back from the tree by the opener's longest prefix (8.1): over the loader's directory
+    # it leaves the can no loader the opener will take, and the check must say so rather than read the tree alone
+    with open(os.path.join(hand2, ".can", "manifest"), "w") as f:
+        f.write('can 1\n\nhost "/usr/%s"\n' % ctx.ldso_dir)
+    rep = elfcheck.static_check(hand2, cannery.owned(hand2), [])
+    expect(any("/usr/bin/true wants interpreter" in e_ and "does not own" in e_ for e_ in rep.errors), "a host record over the loader: %r" % rep.errors[:3])
     # F4-10: a library the workload built in its own directory is a note, not an error
     bld = os.path.join(ctx.work, "bld")
     os.makedirs(bld, exist_ok=True)
@@ -2060,7 +2068,8 @@ def main():
     ctx.shared = shared_state(ctx)
     print("can made and programs compiled in %.1fs" % (time.time() - t0))
     fails = 0
-    order = [t for t in TESTS if not a.k or a.k in t.__name__]
+    exact = [t for t in TESTS if t.__name__ == a.k]                      # a test's own name runs it alone, spawn beside spawn_threads
+    order = exact or [t for t in TESTS if not a.k or a.k in t.__name__]
     if a.order == "reverse":
         order.reverse()
     elif a.order == "random":
