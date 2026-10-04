@@ -17,7 +17,9 @@ CFLAGS_COMMON := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unus
 CFLAGS  := $(CFLAGS_COMMON) -fcf-protection=none -mno-red-zone -fcallgraph-info=su   # the call graph and frames test/stackcheck.py reads
 # the aarch64 opener (7.1, 12): the same sources, the cross compiler when the machine has one
 AARCH64_CC := $(shell command -v aarch64-linux-gnu-gcc 2>/dev/null)
-CFLAGS_AARCH64 := $(CFLAGS_COMMON) -mgeneral-regs-only -mno-outline-atomics -fcallgraph-info=su   # atomics inline: no libgcc to call
+# atomics inline, no libgcc to call; x28 never touched, since a Go program without cgo keeps its g there and its
+# signal handler reads it as it finds it, in the middle of the opener's handler too (7.5.3)
+CFLAGS_AARCH64 := $(CFLAGS_COMMON) -mgeneral-regs-only -mno-outline-atomics -ffixed-x28 -fcallgraph-info=su
 LDFLAGS := -shared -nostdlib -Wl,-e,_start -Wl,--no-relax -Wl,-z,noexecstack -Wl,-z,norelro \
            -Wl,-z,nopack-relative-relocs -Wl,-Bsymbolic -Wl,--build-id=none
 

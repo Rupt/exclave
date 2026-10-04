@@ -66,7 +66,9 @@ The loop that has served well, in the order it pays:
   filter-version probe and the restorer, since the filter recognises
   the page and the probe must not be allowed by it). One source builds
   both openers, and what differs by architecture sits best in
-  `src/sys.h`, `src/common.h` and `#if` blocks named for it. `make`
+  `src/sys.h`, `src/common.h` and `#if` blocks named for it; the
+  aarch64 build leaves `x28` alone (`-ffixed-x28`), where a Go program
+  keeps its goroutine while the handler runs (7.5.3). `make`
   builds `build/opener-aarch64` when `aarch64-linux-gnu-gcc` is
   installed; it is tested in the arm64 VM (`test/matrix.py --can CAN
   --only noble-arm64 --debs-arm64 DIR`), since user-mode emulation has no seccomp. A

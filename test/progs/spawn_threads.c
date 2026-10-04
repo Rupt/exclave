@@ -70,7 +70,8 @@ int main(int argc, char **argv)
         signal(SIGALRM, on_alarm);
         struct itimerval it = { { 0, 1000 }, { 0, 1000 } }; setitimer(ITIMER_REAL, &it, 0);
         struct stat st; int bad = 0;
-        for (int i = 0; i < 200000; i++) if (stat("/usr/share/cont-test-marker", &st)) bad++;
+        for (long i = 0; ticks + tick_fails < 200 && i < 20000000; i++)   /* 200 timer traps, about 0.2 s, however slow a trap is */
+            if (stat("/usr/share/cont-test-marker", &st)) bad++;
         it.it_value.tv_sec = it.it_value.tv_usec = 0; setitimer(ITIMER_REAL, &it, 0);
         _exit(bad || tick_fails ? 1 : ticks ? 0 : 3);
     }

@@ -145,14 +145,19 @@ int main(int argc, char **argv)
     struct timespec ts[2] = { { 1000, 0 }, { 2000, 0 } };
 
     /* 1. an int argument with its upper 32 bits set: the kernel truncates, so must the handler */
+#ifdef SYS_readlink
+#define READLINK(p_, b_, n_) syscall(SYS_readlink, p_, b_, n_)
+#else                                                        /* aarch64 has readlinkat alone, whose size is the same int */
+#define READLINK(p_, b_, n_) syscall(SYS_readlinkat, (long)AT_FDCWD, p_, b_, n_)
+#endif
     memset(buf, 'X', sizeof buf);
-    long r = syscall(SYS_readlink, q, buf, HI | 1);           /* a one-byte link text, a one-byte buffer with bits above the word */
+    long r = READLINK(q, buf, HI | 1);           /* a one-byte link text, a one-byte buffer with bits above the word */
     printf("readlink size 1 with upper bits: %s%s\n", r < 0 ? en(r) : r == 1 ? "1 byte" : "other count", buf[1] == 'X' ? ", buffer intact" : ", BUFFER OVERRUN");
     memset(buf, 'X', sizeof buf);
-    r = syscall(SYS_readlink, q, buf, 0xffffffffUL);          /* -1 as an int */
+    r = READLINK(q, buf, 0xffffffffUL);          /* -1 as an int */
     printf("readlink size -1 as int: %s%s\n", en(r), buf[0] == 'X' ? ", buffer intact" : ", BUFFER OVERRUN");
     memset(buf, 'X', sizeof buf);
-    r = syscall(SYS_readlink, q, buf, HI);                     /* 0 as an int */
+    r = READLINK(q, buf, HI);                     /* 0 as an int */
     printf("readlink size 0 as int: %s%s\n", en(r), buf[0] == 'X' ? ", buffer intact" : ", BUFFER OVERRUN");
     r = syscall(SYS_readlinkat, HI | (unsigned)AT_FDCWD, q, buf, 8);
     printf("readlinkat AT_FDCWD with upper bits: %s\n", r < 0 ? en(r) : "ok");
