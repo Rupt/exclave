@@ -20,9 +20,10 @@ typedef unsigned int mode_t;
  * Every syscall the opener makes goes through it, and the filter allows a syscall by that instruction address
  * alone. The address is the same in every process, so one filter serves the whole tree. The page is mapped by
  * page_init() before anything else runs; only the bootstrap, the filter probe (7.4.2) and the signal restorer use a raw instruction. It
- * lies below GNU ld's ET_EXEC base of both architectures (not Go's on aarch64, 13 item 24) and is 64K-aligned for kernels
- * with 64K pages. */
-#define SC_PAGE 0x3f0000UL
+ * lies high in the low 2 GB, above program images, which every linker starts low and grows upward (Go's on aarch64 from
+ * 0x10000, 13 item 24), and below 0x7fff8000, where ASan's shadow begins on x86-64; 64K-aligned for kernels with 64K
+ * pages. Until filter version 6 it was 0x3f0000. */
+#define SC_PAGE 0x7fe00000UL
 /* A syscall the architecture lacks gets a sentinel below zero, unique so that the handler's switch compiles, and
  * the filter skips it (a legacy form the kernel of the other architecture has: open, stat, fork, ...). */
 #define ABSENT(k) (-1000 - (k))

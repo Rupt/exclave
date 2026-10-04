@@ -411,7 +411,8 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     int another;                                             /* 7.4.5: a file carrying .note.cont is another opener: exec it as it is */
     int pr = elf_probe(S->real, S->tmp, &another, S->extra);
     if (pr < 0) return -ENOEXEC;                             /* a class, machine or header the loader (7.3) cannot load: the kernel's answer for a foreign file */
-    if (another) { log_line("exec", 0, v); return RE5(NR_execve, S->real, argv, envp, 0, 0); }
+    if (another >= PAGE_GENERATION) { log_line("exec", 0, v); return RE5(NR_execve, S->real, argv, envp, 0, 0); }
+    if (another) return exec_env(S, C.opener, argv, envp, v, 1);   /* an opener whose page this filter traps: the child refuses it by name */
     if (pr == 1) {                                           /* the loader the header names, resolved as loader_run resolves it (7.3): one that is not there
                                                               * is ENOENT here, as the kernel's open_exec answers; one that exists but is not the can's own
                                                               * file, a host path or a data prefix, is left to the child opener, which refuses it by name */

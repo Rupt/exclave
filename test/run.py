@@ -21,6 +21,7 @@ import shutil
 import socket
 import signal
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -655,7 +656,9 @@ def cross_can_distinct_openers(ctx):
 def nested_older_opener(ctx):
     """7.4.2: an older opener nested inside a newer one reuses the newer filter and answers ENOSYS for a trap
     it does not know, never re-issuing it to the host. build/opener-old is the current opener built at filter version 3,
-    without version 4's bind and connect in its filter or handler (make builds it beside build/opener)."""
+    without version 4's bind and connect in its filter or handler (make builds it beside build/opener). Across the
+    syscall page's move (filter version 6, revision 16) neither direction can run, and each is refused by name: this
+    opener under a filter older than 6, and an opener whose note has the old page generation exec'd from inside."""
     old = os.path.join(os.path.dirname(ctx.opener_src), "opener-old")
     if not os.path.exists(old):
         return "no build/opener-old"
@@ -681,6 +684,22 @@ def nested_older_opener(ctx):
     text = open(log).read()
     expect("opener 0 inside %s" % prog in text and "trap -38 -" in text and "boundary" not in text.split("opener 0 inside", 1)[1],
            "the inner opener reused the newer filter and answered the trap itself: %r" % text[-400:])
+    # the page's move: this opener under opener-old's version-3 filter refuses before its first trapped syscall
+    rc, out, err = run([os.path.join(can2, "root", ctx.vbin("sh").lstrip("/")), "-c", "%s; echo rc=$?" % wrapper(ctx, "true")], cwd=ctx.work, env=ctx.env)
+    expect(out == "rc=127\n" and "from before the syscall page moved runs this process" in err, "under a filter older than 6: %r %r" % (out, err))
+    # and an opener whose note says page generation 1, exec'd from inside, is refused by this opener's child
+    gen1 = os.path.join(ctx.work, "opener-gen1")
+    blob = open(ctx.opener_src, "rb").read()
+    note = b"cont\0\0\0\0" + struct.pack("<I", 2)
+    expect(blob.count(note) == 1, "the note's page generation is found once in the opener")
+    with open(gen1, "wb") as f:
+        f.write(blob.replace(note, b"cont\0\0\0\0" + struct.pack("<I", 1)) + b"\0")   # a byte more: an opener of its own size, not a copy of this one
+    os.chmod(gen1, 0o755)
+    can3 = os.path.join(ctx.work, "gen1-can")
+    copy_can(ctx.can, can3)
+    cannery.cmd_reopen(can3, gen1)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s/root%s; echo rc=$?" % (can3, ctx.vbin("true"))], cwd=ctx.work, env=ctx.env)
+    expect(out == "rc=127\n" and "from before the syscall page moved cannot run here" in err, "an opener of page generation 1 from inside: %r %r" % (out, err))
 
 
 @test
@@ -1958,17 +1977,38 @@ def unix_socket(ctx):
 def go_paths(ctx):
     """17.4: a Go program doing path syscalls from goroutines. Go issues syscalls raw, makes threads with clone,
     installs its own handler for every signal, SIGSYS included (7.5.2), and runs on small stacks; built static by
-    the host's go with cgo off and run inside as a host program. Skips with the reason when there is no go."""
-    go = shutil.which("go") or next((g for g in ("/usr/lib/go/bin/go", "/usr/local/go/bin/go") if os.path.exists(g)), None)
-    if not go:
-        return "no go toolchain (golang-go)"
-    exe = os.path.join(ctx.progs, "go_paths")
-    env = dict(ctx.env, GOCACHE=os.path.join(REPO, "build", "gocache"), GOPATH=os.path.join(ctx.work, "gopath"), HOME=ctx.work,
-               GO111MODULE="off", CGO_ENABLED="0", GOFLAGS="", GOTOOLCHAIN="local")
-    rc, out, err = run([go, "build", "-o", exe, os.path.join(ctx.work, "src", "go_paths.go")], cwd=ctx.work, env=env, timeout=600)
-    expect(rc == 0, "go build: " + err[-600:])
+    go with cgo off and run inside as a host program, twice: as go links it for the machine, and from 0x10000 as its
+    aarch64 linker does, an image past where the syscall page lay until revision 16 (13 item 24). Built here by the
+    host's go, or taken from build/go/<machine>, where the matrix puts the ones it built for a VM without go; skips
+    with the reason when there is neither."""
+    go, prebuilt = tree.go_toolchain(), os.path.join(REPO, "build", "go", platform.machine())
+    if go:
+        try:
+            exes = tree.go_build(go, ctx.progs, platform.machine(), ctx.work)
+        except RuntimeError as e:
+            expect(False, str(e))
+    elif all(os.path.exists(os.path.join(prebuilt, n)) for n, f in tree.GO_BUILDS):   # copied under the work directory, which the
+        exes = [(n, shutil.copy2(os.path.join(prebuilt, n), os.path.join(ctx.progs, n))) for n, f in tree.GO_BUILDS]   # can lets through
+    else:
+        return "no go toolchain (golang-go) and nothing in build/go/" + platform.machine()
+    for name, exe in exes:
+        if name == "go_paths_low":
+            lo, hi = tree.load_span(exe)
+            expect(lo < 0x3f0000 and hi > 0x3f1000, "%s spans %#x-%#x, not across 0x3f0000" % (name, lo, hi))
+        rc, out, err = inside(ctx, exe)
+        expect(rc == 0 and "FAIL" not in out, "%s: %s%s" % (name, out, err))
+
+
+@test
+def low_image(ctx):
+    """13 item 24: a program whose image starts at 0x10000 and reaches past 0x3f0000, as Go's aarch64 linker lays one
+    out, runs in a can; the syscall page lay at 0x3f0000 until revision 16 and such a program died unmapped. Built
+    here by the can's compiler -no-pie from that address, so every can kind and both architectures run it."""
+    exe = os.path.join(ctx.work, "low_image")
+    rc, out, err = run([wrapper(ctx, GCC), "-O1", "-no-pie", "-Wl,-Ttext-segment=0x10000", "-o", exe, os.path.join(ctx.work, "src", "low_image.c")], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "compile from 0x10000: " + err)
     rc, out, err = inside(ctx, exe)
-    expect(rc == 0 and "FAIL" not in out, out + err)
+    expect(rc == 0 and out.startswith("text 0x") and out.rstrip().endswith("marker 0"), "a program from 0x10000 past 0x3f0000: rc=%d %r %r" % (rc, out, err))
 
 
 @test

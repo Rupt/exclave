@@ -18,8 +18,17 @@ __asm__(".text\n.globl _start\n.type _start,@function\n_start:\n"
 __asm__(".text\n.globl _start\n.type _start,%function\n_start:\n"
         " mov x0, sp\n bl start_c\n brk #0\n");
 #endif
-/* 7, 7.4.5: the note by which the opener recognises itself in a file */
-__asm__(".section .note.cont,\"a\"\n .balign 4\n .long 5\n .long 4\n .long 1\n .asciz \"cont\"\n .balign 4\n .long 1\n .text\n");
+/* 7, 7.4.5: the note by which the opener recognises itself in a file; its word is PAGE_GENERATION (7.4.2) */
+#define NOTE_WORD_(g) #g
+#define NOTE_WORD(g) NOTE_WORD_(g)
+__asm__(".section .note.cont,\"a\"\n .balign 4\n .long 5\n .long 4\n .long 1\n .asciz \"cont\"\n .balign 4\n .long " NOTE_WORD(PAGE_GENERATION) "\n .text\n");
+
+/* before the page and the version check: a message and an exit, raw, as nothing else is allowed yet */
+static void raw_fatal(const char *msg, long len)
+{
+    __sc6_raw(NR_write, 2, (long)msg, len, 0, 0, 0);
+    for (;;) __sc6_raw(NR_exit_group, 127, 0, 0, 0, 0, 0);
+}
 
 /* 7.4.2: map the syscall page. Raw syscalls only: nothing else may run before this. */
 static void page_init(void)
@@ -29,9 +38,8 @@ static void page_init(void)
         if (m >= 0) __sc6_raw(NR_munmap, m, 4096, 0, 0, 0, 0);
         static const char msg[] = "opener: cannot map the syscall page\n";
         static const char busy[] = "opener: another opener is already resident in this process\n";
-        if (m == -EEXIST) __sc6_raw(NR_write, 2, (long)busy, sizeof busy - 1, 0, 0, 0);
-        else __sc6_raw(NR_write, 2, (long)msg, sizeof msg - 1, 0, 0, 0);
-        for (;;) __sc6_raw(NR_exit_group, 127, 0, 0, 0, 0, 0);
+        if (m == -EEXIST) raw_fatal(busy, sizeof busy - 1);
+        raw_fatal(msg, sizeof msg - 1);
     }
 #if defined(__x86_64__)
     unsigned char *p = (unsigned char *)SC_PAGE; p[0] = 0x0f; p[1] = 0x05; p[2] = 0xc3;   /* syscall; ret */
@@ -227,6 +235,13 @@ void start_c(unsigned long *sp)
 {
     page_init();
     reloc_self();
+    /* 7.4.2: the probe comes before any syscall an inherited filter could trap. A filter from before the page moved allows
+     * an opener's syscalls from the old page only and would trap every one of this opener's, so it is refused by name */
+    int have = filter_probe();                                /* a filter inherited: exec'd from inside a can, by a handler or a program */
+    if (have && have < FILTER_PAGE_SINCE) {
+        static const char old[] = "opener: an opener from before the syscall page moved runs this process; reopen its can (cannery reopen)\n";
+        raw_fatal(old, sizeof old - 1);
+    }
     long argc = (long)sp[0]; char **argv = (char **)(sp + 1); char **envp = argv + argc + 1;
     char **e = envp; while (*e) e++;
     unsigned long *auxv = (unsigned long *)(e + 1);
@@ -247,7 +262,6 @@ void start_c(unsigned long *sp)
     exe[n] = 0;
     find_can(exe);
     read_manifest(auxv);
-    int have = filter_probe();                                /* a filter inherited: exec'd from inside a can, by a handler or a program */
 
     const char *target, *fn, *cm;
     if (starts_dir(exe, C.root)) {                            /* a wrapper: the kernel ran the opener under the program's name. Decided first,

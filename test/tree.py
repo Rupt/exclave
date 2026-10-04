@@ -1,11 +1,13 @@
 """tree.py — what a tree says about itself, for the suite and the oracles (PROPOSAL.md 17): a test asserts what the
-tree says, never what one distribution spells. Every function takes the tree's root directory; and, at the end, the one
-way a driver takes a can: a copy of its own, reopened with the build, so that the opener under test is always
-build/opener and never the one a can was closed with."""
+tree says, never what one distribution spells. Every function takes the tree's root directory; then the one way a
+driver takes a can: a copy of its own, reopened with the build, so that the opener under test is always build/opener
+and never the one a can was closed with; and the Go regression's builds, which the matrix makes on the host for VMs
+that have no go."""
 import filecmp
 import os
 import re
 import shutil
+import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -113,3 +115,43 @@ def reopen_if_stale(can, opener=BUILD_OPENER):
         cannery.cmd_reopen(can, opener)
         return True
     return False
+
+
+# the Go regression's programs (17.4): as go links for the machine, and from 0x10000 as its aarch64 linker does, an image
+# past where the syscall page lay until revision 16 (13 item 24)
+GO_BUILDS = (("go_paths", []), ("go_paths_low", ["-ldflags=-T 0x11000"]))
+GOARCH = {"x86_64": "amd64", "aarch64": "arm64"}
+
+
+def go_toolchain():
+    return shutil.which("go") or next((g for g in ("/usr/lib/go/bin/go", "/usr/local/go/bin/go") if os.path.exists(g)), None)
+
+
+def go_build(go, out_dir, machine, work):
+    """GO_BUILDS of test/progs/go_paths.go into out_dir, static with cgo off, for machine; [(name, path)], or a
+    RuntimeError with go's message. work holds GOPATH; the build cache is build/gocache."""
+    env = dict(os.environ, GOCACHE=os.path.join(REPO, "build", "gocache"), GOPATH=os.path.join(work, "gopath"), HOME=work,
+               GO111MODULE="off", CGO_ENABLED="0", GOFLAGS="", GOTOOLCHAIN="local", GOOS="linux", GOARCH=GOARCH[machine])
+    os.makedirs(out_dir, exist_ok=True)
+    out = []
+    for name, flags in GO_BUILDS:
+        path = os.path.join(out_dir, name)
+        p = subprocess.run([go, "build"] + flags + ["-o", path, os.path.join(REPO, "test", "progs", "go_paths.go")], cwd=work, env=env,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
+        if p.returncode:
+            raise RuntimeError("go build %s for %s: %s" % (name, machine, p.stderr.decode(errors="replace")[-600:]))
+        out.append((name, path))
+    return out
+
+
+def load_span(path):
+    """The lowest and highest addresses an ELF64 file's PT_LOAD segments cover, bss included."""
+    import struct
+    with open(path, "rb") as f:
+        h = f.read(64)
+        phoff, phentsize, phnum = struct.unpack_from("<Q", h, 32)[0], struct.unpack_from("<H", h, 54)[0], struct.unpack_from("<H", h, 56)[0]
+        f.seek(phoff)
+        ph = f.read(phentsize * phnum)
+    loads = [struct.unpack_from("<IIQQQQQQ", ph, i * phentsize) for i in range(phnum)]
+    loads = [(l[3], l[3] + l[6]) for l in loads if l[0] == 1]
+    return min(a for a, b in loads), max(b for a, b in loads)

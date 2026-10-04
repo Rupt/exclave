@@ -88,7 +88,8 @@ The loop that has served well, in the order it pays:
   `build/opener-old`, an older filter version without syscalls a later
   one added (version 3, without version 4's `bind` and `connect`), for
   the nesting regression; the version moves whenever the trap set
-  grows, and a version that adds syscalls moves that build and the
+  grows or the syscall page moves (6: to `0x7fe00000`, above program
+  images), and a version that adds syscalls moves that build and the
   regression's trap with it. A new syscall the
   kernel adds is trapped by the filter's ceiling and answered `ENOSYS`
   until it is classified in `test/syscalls.py` and, if it takes a path,

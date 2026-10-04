@@ -14,6 +14,9 @@ import (
 	"syscall"
 )
 
+// big reaches past 0x3f0000 when the test links the program from 0x10000, as Go's aarch64 linker does (13 item 24)
+var big [8 << 20]byte
+
 func env(name, dflt string) string {
 	if v := os.Getenv(name); v != "" {
 		return v
@@ -24,6 +27,7 @@ func env(name, dflt string) string {
 func main() {
 	fails := 0
 	fail := func(f string, a ...interface{}) { fails++; fmt.Printf("FAIL "+f+"\n", a...) }
+	big[len(big)-1] = 1
 	marker := "/usr/share/cont-test-marker"
 	sh, shExe, truep := env("CONT_SH", "/usr/bin/sh"), env("CONT_SH_EXE", "/usr/bin/dash"), env("CONT_TRUE", "/usr/bin/true")
 
@@ -96,7 +100,7 @@ func main() {
 	os.Remove(host)
 
 	// identity: the program's own path, links, the working directory inside the can
-	if exe, err := os.Executable(); err != nil || filepath.Base(exe) != "go_paths" {
+	if exe, err := os.Executable(); err != nil || filepath.Base(exe) != filepath.Base(os.Args[0]) {
 		fail("os.Executable: %q %v", exe, err)
 	}
 	if real, err := filepath.EvalSymlinks(sh); err != nil || real != shExe {

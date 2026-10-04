@@ -95,7 +95,7 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
     return bias;
 }
 
-/* 1: dynamic (interp filled), 0: static, <0: error. is_opener set from .note.cont. */
+/* 1: dynamic (interp filled), 0: static, <0: error. is_opener: the page generation .note.cont carries, 0 without one. */
 int elf_probe(const char *real, char *interp, int *is_opener, void *buf)
 {
     *is_opener = 0; interp[0] = 0;
@@ -117,7 +117,8 @@ int elf_probe(const char *real, char *interp, int *is_opener, void *buf)
                 long n = sys_pread((int)fd, nb, ph[i].p_filesz, (long)ph[i].p_offset); long o = 0;
                 while (n >= 12 && o + 12 <= n) {
                     uint32_t nsz = *(uint32_t *)(nb + o), dsz = *(uint32_t *)(nb + o + 4);
-                    if (nsz == 5 && o + 17 <= n && xmemcmp(nb + o + 12, "cont", 5) == 0) *is_opener = 1;
+                    if (nsz == 5 && o + 17 <= n && xmemcmp(nb + o + 12, "cont", 5) == 0)
+                        *is_opener = dsz >= 4 && o + 24 <= n && *(uint32_t *)(nb + o + 20) ? (int)*(uint32_t *)(nb + o + 20) : 1;
                     o += 12 + ((nsz + 3) & ~3u) + ((dsz + 3) & ~3u);
                 }
             }
@@ -157,6 +158,9 @@ static void stack_make_exec(void)
 void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp, unsigned long *auxv)
 {
     Ehdr eh; unsigned long entry, phdr_va, base = 0, jump; int has_interp; char interp_v[PATH_MAX];
+    static char pbuf[7680]; int gen;                         /* another can's opener from before the page moved, which a handler sends here (7.4.2) */
+    if (elf_probe(real, interp_v, &gen, pbuf) >= 0 && gen && gen < PAGE_GENERATION)
+        die("a can's opener from before the syscall page moved cannot run here; reopen that can (cannery reopen)", vpath, 0);
     int fd = open_elf(real, &eh, ph_main, 128);
     payload_base = map_elf(fd, &eh, ph_main, &entry, &phdr_va, &has_interp, interp_v, real);
     if (C.descfd > 2) { sys_close(C.descfd); C.descfd = -1; }   /* a program run from a descriptor with no path (13 item 25): mapped, the dup goes */

@@ -9,8 +9,10 @@
 
 #define OPENER_VERSION "0.1"
 #ifndef FILTER_VERSION
-#define FILTER_VERSION 5                 /* 7.4.2: versioned reuse; bumped whenever the trap set grows (2: the *xattrat and file_*attr syscalls; 3: openat2; 4: bind and connect; 5: FS_IOC_FSSETXATTR's right number) */
+#define FILTER_VERSION 6                 /* 7.4.2: versioned reuse; bumped whenever the trap set grows or the page moves (2: the *xattrat and file_*attr syscalls; 3: openat2; 4: bind and connect; 5: FS_IOC_FSSETXATTR's right number; 6: the syscall page moved) */
 #endif
+#define FILTER_PAGE_SINCE 6              /* an inherited filter older than this allows another page's syscalls and traps this opener's */
+#define PAGE_GENERATION 2                /* the word of .note.cont (opener.c): 1 in openers whose page was at 0x3f0000 */
 #define PATH_MAX 4096
 #define NAME_MAX 255
 
@@ -259,7 +261,7 @@ int is_self_exe(const char *p, pid_t pid);   /* /proc/self/exe in any spelling, 
 
 /* ---------- loader (loader.c) ---------- */
 __attribute__((noreturn)) void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp, unsigned long *auxv);
-int elf_probe(const char *real, char *interp, int *is_opener, void *buf);   /* 1 has interp, 0 none, <0 error; buf >= 7680 bytes */
+int elf_probe(const char *real, char *interp, int *is_opener, void *buf);   /* 1 has interp, 0 none, <0 error; buf >= 7680 bytes; is_opener: the note's page generation, 0 for no opener */
 
 /* ---------- filter (filter.c) ---------- */
 int  filter_probe(void);      /* 0: no filter of ours inherited; otherwise the newest inherited filter's version (7.4.2) */

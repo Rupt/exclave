@@ -21,6 +21,8 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+import tree  # noqa: E402
 
 # name, expected kernel, ssh user, image URL candidates (first that downloads wins), package family, notes, arch
 VMS = [
@@ -184,7 +186,8 @@ def main():
     if not os.path.exists(key):
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
     pubkey = open(key + ".pub").read().strip()
-    # the payload: the can (hard links preserved by tar) and the repository's test tree, cannery and opener. For the
+    # the payload: the can (hard links preserved by tar) and the repository's test tree, cannery, opener and, where the
+    # host has go, the Go regression's programs built for the VM's machine. For the
     # aarch64 VM the payload carries the arm64 package files and the cross-built openers under the suite's names:
     # the can is unpacked and closed in the VM, on its own architecture (10.1).
     payloads = {}
@@ -198,6 +201,10 @@ def main():
             with tarfile.open(payload, "w:gz", compresslevel=1) as t:
                 for d in ("test", "cannery"):
                     t.add(os.path.join(REPO, d), arcname="cont/" + d)
+                go = tree.go_toolchain()                          # the Go regression's programs, built here for the VM's machine: the VMs have no go
+                if go:
+                    for n, p in tree.go_build(go, os.path.join(work, "go-" + arch), arch, work):
+                        t.add(p, arcname="cont/build/go/%s/%s" % (arch, n))
                 if arch == "x86_64":
                     t.add(can, arcname="can")
                     t.add(os.path.join(REPO, "build", "opener"), arcname="cont/build/opener")
