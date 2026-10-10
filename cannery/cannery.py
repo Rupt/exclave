@@ -19,6 +19,9 @@ A can is a directory at every stage, and every command takes paths; `fmt --check
     cannery.py hash CAN            The tree hash of 6.4.
     cannery.py reopen CAN [OPENER] Replace the opener and relink every wrapper.
 
+Unpack, wrap and reopen also write CAN/README, which tells whoever finds the can what it is and how to
+run it, where the can has none.
+
 The cannery never opens a network connection: the files it is given are its inputs, whoever fetched
 them. Standard library only. Python 3.6 or later.
 """
@@ -51,6 +54,85 @@ SCHEMA = {
 ONCE = {"can", "isa", "lock", "cannery", "opener", "manifest", "tree"}
 # the opener's tables (8.1): the manifest may carry this many records, the tree this many top-level entries
 LIMITS = {"own": 256, "host": 32, "data": 32, "top": 256}
+# 6.1: the can's README, for whoever finds the directory without knowing cont; written where the can has none
+CAN_README = b"""\
+This directory is a can: Linux software packed with the libraries and
+files it needs, so that its programs run from here, by path, with
+nothing installed. It was made by the cannery, the build tool of a
+project called cont. It runs on Linux 3.10 or later, on the machine
+type it was built for ("file .can/opener" names it), with no root,
+setup step, daemon or container, and running it changes nothing in
+root/ or .can/ and leaves nothing behind. It is not a sandbox: its
+programs run as you, with your files and your network.
+
+What is here
+
+  root/          the software's own /: usually the packages listed
+                 in .can/lock, unpacked as if installed.
+  .can/opener    a small program that starts the others. Every
+                 program in root/ is a hard link to it, a "wrapper";
+                 the real one sits in a hidden .real/ directory
+                 beside it, and running root/usr/bin/NAME runs
+                 root/usr/bin/.real/NAME inside the can.
+  .can/manifest  the maker's settings; "can 1" alone means none.
+  .can/lock      one "pkg" line per package that went in: name,
+                 version, architecture and hash of the package file;
+                 then hashes of the opener, the manifest and, on the
+                 "tree" line, all of root/. Not where they came from.
+  other names    shortcuts into root/ that the maker added.
+
+A lock with no "tree" line marks an open, unfinished can: its
+programs are unwrapped and would use this system's libraries.
+
+Running it
+
+With CAN the path of this directory, run from your own directory:
+
+  CAN/NAME ARGS...               a shortcut, if the maker made one
+  CAN/root/usr/bin/NAME ARGS...  any program in the can
+  CAN/root/bin/sh                a shell inside the can, if it has one
+  CAN/.can/opener PROG ARGS...   PROG run inside the can: one of your
+                                 own, such as one the can's compiler
+                                 built, or a can path, /usr/bin/NAME
+
+A symlink to a program in root/ works too; a copy does not, and a
+program run straight from .real/ is likely to fail.
+
+Inside, a program sees the top-level directories that root/ fills,
+/usr, /etc, /lib and the rest, as its own, read-only: writing there
+fails as on a read-only disk. Everything else is this system's: /home,
+/tmp, /proc, /dev, the working directory, and eight files such as
+/etc/passwd and /etc/resolv.conf that say who you are and how network
+names are looked up. PATH is the can's, so this system's commands are
+not found by name. The locale is C.UTF-8 and the time zone UTC by
+default, and sudo, su and other setuid programs do not work inside.
+
+CAN_LOG=/some/file makes every process append one line per call that
+names a file: the call, its result and the path. Messages that begin
+"opener:" come from the can, not from the program.
+
+Moving, copying, removing
+
+Nothing outside this directory refers to it: move it, copy it with
+cp -a, pack it with tar, or remove it with rm -r. A copy that splits
+the hard links (cp -r) still runs, larger by the opener's size per
+program. Do not edit a program in root/ in place: they are all one
+file. A can does not run from a filesystem mounted noexec.
+
+Checking it
+
+The hashes are BLAKE2b-256, so "b2sum -l 256 .can/opener" prints the
+lock's opener hash, and a package file fetched again its pkg hash.
+The cannery, cont's build tool, is not part of this can:
+
+  cannery check DIR   every program wrapped, the libraries each needs
+                      found inside, root/ against the lock's tree line
+  cannery unwrap DIR  open the can for editing; cannery wrap DIR
+                      closes it again
+  cannery reopen DIR  put in another opener, relinking every program
+
+This file is the same in every can; a maker may replace it.
+"""
 
 
 class GrammarError(Exception):
@@ -408,6 +490,14 @@ def default_opener(arch=None):
     return os.path.join(HERE, "..", "build", "opener")
 
 
+def write_readme(can):
+    """CAN/README for whoever finds the can (6.1), unless the can has one: the maker's own, or an entry by that name."""
+    p = os.path.join(can, "README")
+    if not os.path.lexists(p):
+        with open(p, "wb") as f:
+            f.write(CAN_README)
+
+
 def install_opener(can, opener=None, arch=None):
     """Put an opener at CAN/.can/opener unless one is there already: the one for the packages' architecture."""
     dst = os.path.join(can, ".can", "opener")
@@ -459,6 +549,7 @@ def cmd_unpack(out, debs, log=print):
         log("depends: " + line)
     install_opener(out, arch=next(iter(arches), None))
     build.write_lock(out, [(n, v, a, b2_file(p)) for n, p, _, v, a in pkgs])
+    write_readme(out)
     log("unpacked %d packages into %s" % (len(pkgs), out))
 
 
@@ -546,6 +637,7 @@ def cmd_wrap(can, quiet=False):
         print("refused; %s is not closed and nothing was wrapped" % can)
         return 1
     wrap_files(can, data, quiet)
+    write_readme(can)
     build.write_lock(can, None, "b2:" + hashlib.blake2b(mdata, digest_size=32).hexdigest(), tree=True)
     if not quiet:
         print("closed %s" % can)
@@ -589,6 +681,7 @@ def cmd_reopen(can, opener=None):
                 shutil.copy2(new, w)
             n += 1
     os.replace(new, os.path.join(can, ".can", "opener"))
+    write_readme(can)
     for s in strays:
         print("payload without wrapper, left alone: " + s)
     if os.path.exists(os.path.join(can, ".can", "lock")):

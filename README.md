@@ -30,7 +30,7 @@ matrix checks natively on each VM; the opener builds for aarch64 from
 the same sources and the matrix has an emulated arm64 row. gdb debugs
 a canned program once the can is in its auto-load safe-path: the opener
 carries the script gdb needs. The
-regression suite (66 named tests), the kernel oracles, a differential
+regression suite (67 named tests), the kernel oracles, a differential
 syscall probe that agrees with the kernel on 19 093 cases per can, and
 Docker's default seccomp profile pass on the gcc, Alpine, Fedora and
 clang cans, each pruned to what the suite touches, in one gate of
@@ -145,7 +145,10 @@ placeholders and records every input by hash in the lockfile. The
 result is a directory. `wrap` closes it: wraps every executable, runs
 the static check, records the manifest and tree hashes; `unwrap` opens
 it again; a bare directory holding a `root/` becomes a can by `wrap`
-alone.
+alone. Every can has a `README` at its top for whoever finds it
+without this repository: what it is, how to run its programs, what
+it touches and how to check it. The cannery writes it where the can
+has none, so a maker's own stays.
 
 ```
 tools/fetch-debs.py --out debs gcc-13 libc6-dev make       # Ubuntu or Debian: the closure of the packages named, verified against the index

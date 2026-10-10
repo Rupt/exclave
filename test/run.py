@@ -1025,6 +1025,57 @@ def apk_unpack(ctx):
 
 
 @test
+def can_readme(ctx):
+    """6.1: every can explains itself to whoever finds it. Unpack, wrap and reopen write README at the top
+    where the can has none and leave the maker's own, or an entry by that name, alone; the files it names are
+    there; the opener run bare names it, and an opener outside any can says so."""
+    cannery_py = os.path.join(REPO, "cannery", "cannery.py")
+    d = os.path.join(ctx.work, "readme-apks")
+    os.makedirs(d, exist_ok=True)
+    make_apk(os.path.join(d, "x-1.0-r0.apk"), "x", [("usr", "dir", None, 0o755), ("usr/share", "dir", None, 0o755),
+                                                    ("usr/share/x", "file", b"x\n", 0o644)])
+    out = os.path.join(ctx.work, "readme-unpacked.can")
+    rc, o, e = run([sys.executable, cannery_py, "unpack", out, os.path.join(d, "x-1.0-r0.apk")])
+    expect(rc == 0, "unpack: " + o + e)
+    with open(os.path.join(out, "README"), "rb") as f:
+        expect(f.read() == cannery.CAN_README, "unpack wrote no README")
+    bare = os.path.join(ctx.work, "readme-bare")                  # a bare directory holding root/, closed by wrap alone
+    os.makedirs(os.path.join(bare, "root", "usr", "share"))
+    os.makedirs(os.path.join(bare, ".can"))
+    shutil.copy2(ctx.opener, os.path.join(bare, ".can", "opener"))
+    with open(os.path.join(bare, "root", "usr", "share", "x"), "w") as f:
+        f.write("x\n")
+    rc, o, e = run([sys.executable, cannery_py, "wrap", bare])
+    expect(rc == 0, "wrap: " + o + e)
+    with open(os.path.join(bare, "README"), "rb") as f:
+        expect(f.read() == cannery.CAN_README, "wrap wrote no README")
+    here = cannery.CAN_README.split(b"\nWhat is here\n")[1].split(b"\nRunning it\n")[0].decode()
+    for name in re.findall(r"^  (\S+/\S*)", here, re.M):
+        expect(os.path.lexists(os.path.join(bare, name)), "the README names %s, which a closed can lacks" % name)
+    rc, out_, err = run([os.path.join(bare, ".can", "opener")], cwd=ctx.work)
+    expect(rc == 127 and "can's opener" in err and "README" in err, "the opener run bare: rc=%d %r" % (rc, err))
+    lone = os.path.join(ctx.work, "readme-lone-%d" % os.getpid())
+    os.makedirs(lone, exist_ok=True)
+    shutil.copy2(ctx.opener, os.path.join(lone, "opener"))
+    rc, out_, err = run([os.path.join(lone, "opener"), "true"], cwd=ctx.work)
+    expect(rc == 127 and "not inside a can" in err and ".can/manifest" in err, "an opener outside a can: rc=%d %r" % (rc, err))
+    with open(os.path.join(bare, "README"), "w") as f:            # the maker's own notes stay
+        f.write("notes\n")
+    rc, o, e = run([sys.executable, cannery_py, "wrap", bare])
+    expect(rc == 0 and open(os.path.join(bare, "README")).read() == "notes\n", "wrap replaced the maker's README: " + o + e)
+    cannery.cmd_reopen(bare, ctx.opener)
+    expect(open(os.path.join(bare, "README")).read() == "notes\n", "reopen replaced the maker's README")
+    os.remove(os.path.join(bare, "README"))
+    os.symlink("root/usr/share/x", os.path.join(bare, "README"))   # an entry by that name stays an entry
+    cannery.cmd_reopen(bare, ctx.opener)
+    expect(os.readlink(os.path.join(bare, "README")) == "root/usr/share/x", "reopen replaced an entry named README")
+    os.remove(os.path.join(bare, "README"))
+    cannery.cmd_reopen(bare, ctx.opener)                          # a can closed before there was a README gets one
+    with open(os.path.join(bare, "README"), "rb") as f:
+        expect(f.read() == cannery.CAN_README, "reopen wrote no README")
+
+
+@test
 def cannery_extraction_rules(ctx):
     """10.1 after the review: a member reached through a package's own symlink is refused (O3-8); two spellings
     of one path under merged usr conflict (O3-9)."""

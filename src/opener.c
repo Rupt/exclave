@@ -112,7 +112,7 @@ static void find_can(const char *exe)
 {
     char d[PATH_MAX]; scpy(d, exe, PATH_MAX);
     for (;;) {
-        char *s = xstrrchr(d, '/'); if (!s || s == d) die("not inside a can", exe, 0);
+        char *s = xstrrchr(d, '/'); if (!s || s == d) die("not inside a can: a can's opener runs from the can's .can/ or as a program in its root/, and no directory above this one has .can/manifest", exe, 0);
         *s = 0;
         char p[PATH_MAX]; scpy(p, d, PATH_MAX); scat(p, "/.can/manifest", PATH_MAX);
         struct kstat st;
@@ -152,7 +152,7 @@ static void read_manifest(unsigned long *auxv)
  * from the working directory as execve would take it. */
 static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **envp)
 {
-    if (argc < 2) die("usage: .can/opener PROGRAM [ARGS...]; or run a wrapper inside root/", 0, 0);
+    if (argc < 2) die("this is a can's opener, behind every program in root/: run one of those by path, or .can/opener PROGRAM [ARGS...] to run another inside the can; the can's README says more", 0, 0);
     if (xstrlen(argv[1]) >= PATH_MAX) die("program path too long", 0, ENAMETOOLONG);
     char *t = arena_alloc(PATH_MAX);
     if (argv[1][0] == '/') scpy(t, argv[1], PATH_MAX);
