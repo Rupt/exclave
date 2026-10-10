@@ -96,10 +96,15 @@ class Elf:
         f.seek(phoff)
         ph = f.read(phentsize * phnum)
         self.loads, self.interp, dyn = [], None, None
+        self.debug_only = False
         for i in range(phnum):
             p_type, _, p_offset, p_vaddr, _, p_filesz, p_memsz, _ = struct.unpack_from("<IIQQQQQQ", ph, i * phentsize)
             if p_type == PT_LOAD:
                 self.loads.append((p_vaddr, p_offset, p_filesz))
+            elif p_type == PT_INTERP and p_filesz < 2:
+                # a separate debug file (objcopy --only-keep-debug, /usr/lib/debug) keeps a program's headers but not the
+                # bytes they map; its PT_INTERP is empty in the file, which the kernel refuses (ENOEXEC), so it is no program
+                self.debug_only = True
             elif p_type == PT_INTERP:
                 f.seek(p_offset)
                 self.interp = f.read(p_filesz).rstrip(b"\0").decode("utf-8", "surrogateescape")
@@ -369,6 +374,8 @@ def static_check(can, own, data_prefixes=(), log=print):
                 continue
             if e.machine != MACHINE:
                 rep.warnings.append("%s: not %s: a foreign object, not checked (13)" % (vpath, MACHINES.get(MACHINE, ("?",))[0]))
+                continue
+            if e.debug_only:                                  # debug information, which nothing loads or runs
                 continue
             if e.interp is None and e.type != ET_DYN:
                 rep.static.append(vpath)

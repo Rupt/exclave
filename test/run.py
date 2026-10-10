@@ -1481,7 +1481,7 @@ def static_check_loader_model(ctx):
     """10.3 after the review (O3-10, F3-17): DT_RPATH is inherited down the chain, ld.so.cache is read, a search
     directory the can does not own is refused; a hand-made glibc layout closes (F4-13, F4-9), a truncated ELF is an error
     by name (F4-11), a host record is applied as the opener applies it, a library a workload built in its own directory
-    is a note (F4-10, O5-4)."""
+    is a note (F4-10, O5-4); a separate debug file, whose segments carry no bytes, is not a program."""
     import elfcheck
     x = os.path.join(ctx.root, "usr", "local", "x")
     base = os.path.join(x, "lib")
@@ -1505,6 +1505,9 @@ def static_check_loader_model(ctx):
                     ["-o", os.path.join(built, "hostprog"), "prog.c", "-L" + built, "-l:libfoo.so.1", "-Wl,-rpath-link," + built, "-Wl,-rpath,/tmp/cont-hostlib"]):
             rc, out, err = run([gcc] + cmd, cwd=src, env=ctx.env)
             expect(rc == 0, err)
+        rc, out, err = run([wrapper(ctx, "objcopy"), "--only-keep-debug", os.path.join(built, "prog"), os.path.join(built, "prog.debug")], cwd=src, env=ctx.env)
+        expect(rc == 0, "objcopy: " + err)
+        shutil.copy2(os.path.join(built, "prog.debug"), os.path.join(x, "prog.debug"))   # as /usr/lib/debug holds them: an empty PT_INTERP
         for f in ("libbar.so.1", "libfoo.so.1"):
             shutil.copy2(os.path.join(built, f), os.path.join(base, f))
         for f in ("prog", "hostprog"):
@@ -1512,6 +1515,8 @@ def static_check_loader_model(ctx):
         rep = elfcheck.static_check(ctx.can, cannery.owned(ctx.can), cannery.data_prefixes(ctx.can))
         bad = [e for e in rep.errors if "/usr/local/x/prog" in e or ("libfoo" in e and "hostprog" not in e)]
         expect(not bad, "RPATH inheritance: " + "; ".join(bad))
+        debug = [e for e in rep.errors if "prog.debug" in e]
+        expect(not debug, "a separate debug file is not a program: %r" % debug)
         expect(any("hostprog" in e and "does not own" in e for e in rep.errors), "a host RPATH must be refused (F3-17): %r" % rep.errors[:3])
         cache = elfcheck.read_cache(elfcheck.Tree(ctx.root))
         if ctx.ldso_cache:
