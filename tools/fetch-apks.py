@@ -54,9 +54,9 @@ class Repo:
         req = urllib.request.Request(url, headers={"User-Agent": "cont-cannery/0.1"})
         with urllib.request.urlopen(req, timeout=120) as r:
             data = r.read()
-        with open(path + ".tmp", "wb") as f:
+        with open(path + ".tmp%d" % os.getpid(), "wb") as f:
             f.write(data)
-        os.replace(path + ".tmp", path)
+        os.replace(path + ".tmp%d" % os.getpid(), path)   # two fetches may share the cache
         return data
 
     def load_index(self):
