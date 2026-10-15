@@ -199,7 +199,7 @@ def main():
         if True:                                                  # packed afresh every run: a kept payload once carried a stale test tree
             log("packing the test tree for", arch)
             with tarfile.open(payload, "w:gz", compresslevel=1) as t:
-                for d in ("test", "cannery"):
+                for d in ("test", "cannery", "src"):                  # src: the filter model the suite builds in the VM (filter_model)
                     t.add(os.path.join(REPO, d), arcname="cont/" + d)
                 go = tree.go_toolchain()                          # the Go regression's programs, built here for the VM's machine: the VMs have no go
                 if go:
