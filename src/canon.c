@@ -7,19 +7,26 @@
  */
 #include "common.h"
 
-int fd_virtual(int fd, char *out)
+static int in_tree(const char *r) { return C.rootlen && xstrncmp(r, C.root, (size_t)C.rootlen) == 0 && (r[C.rootlen] == '/' || r[C.rootlen] == 0); }
+/* the virtual path of a descriptor or of the working directory; *tree, when asked, says whether the kernel's real path
+ * lay in the tree */
+static int fd_virtual_in(int fd, char *out, int *tree)
 {
     char l[64] = "/proc/self/fd/"; char n[24]; ltoa_(fd, n); scat(l, n, sizeof l);
     long r = sys_readlink(l, out, PATH_MAX - 1); if (r < 0) return r == -ENOENT ? -EBADF : (int)r;   /* no such link: no such descriptor */
     out[r] = 0;
     if (r > 10 && xstrcmp(out + r - 10, " (deleted)") == 0) return -ENOENT;   /* let the caller pass it through */
+    if (tree) *tree = in_tree(out);
     from_real(out); return 0;
 }
-int cwd_virtual(char *out)
+static int cwd_virtual_in(char *out, int *tree)
 {
     long r = sys_getcwd(out, PATH_MAX); if (r < 0) return (int)r;
+    if (tree) *tree = in_tree(out);
     from_real(out); return 0;
 }
+int fd_virtual(int fd, char *out) { return fd_virtual_in(fd, out, 0); }
+int cwd_virtual(char *out) { return cwd_virtual_in(out, 0); }
 
 /* /proc/self/exe in any spelling: self, thread-self, <pid>, <pid>/task/<tid>; the walk has already resolved
  * the self link into a pid, so the numeric forms are the ones that occur */
@@ -44,7 +51,8 @@ int is_self_exe(const char *p, pid_t mypid)
  * device is the tree's own: within one mount a directory has one path, and the rule has already refused the tree's own
  * name. Anything else, a link, a missing directory, a refusal, a second mount, a kernel without openat2, is the walk's.
  * The last component is always the walk's, so that its kind, its link and its error are found as before. */
-static int host_fast;                                        /* 0 not yet known, 1 the check stands in, -1 it does not, for this process */
+static int tree_once;                                        /* the tree's filesystem mounted once with its device: 0 not yet known, 1, -1 */
+static int no_openat2;                                       /* the kernel predates openat2 (5.6) */
 
 /* the decoded mount point at f (mountinfo escapes a space, a tab, a newline and a backslash as \ooo) as a '/'-boundary
  * prefix of the tree's real path: its length, or -1 */
@@ -107,7 +115,7 @@ static int tree_mounted_once(char *buf)
  * walk through every directory before the final component. 1 if it did, cur then the last of them and *rpp the final */
 static int host_chain(struct scratch *S, char *cur, char **rpp)
 {
-    if (host_fast < 0) return 0;
+    if (no_openat2 || tree_once < 0) return 0;
     if (xstrncmp(cur, "/proc", 5) == 0 && (cur[5] == '/' || !cur[5])) return 0;   /* magic links, the process's own exe: the walk's */
     char *p = S->real, *q = *rpp; size_t n = xstrlen(cur);
     int dirs = 1;
@@ -126,15 +134,29 @@ static int host_chain(struct scratch *S, char *cur, char **rpp)
     p[n] = 0;
     if (dirs < 3) return 0;                                   /* an openat2 and a close for fewer lstats than that */
     if (!vis_plain_host_chain(p, (unsigned)xstrlen(cur))) return 0;
-    if (!host_fast) host_fast = tree_mounted_once(S->tmp);
-    if (host_fast <= 0) return 0;
+    if (!tree_once) tree_once = tree_mounted_once(S->tmp);
+    if (tree_once <= 0) return 0;
     unsigned long how[3] = { O_PATH | O_DIRECTORY | O_CLOEXEC, 0, RESOLVE_NO_SYMLINKS };
     long fd = SC4(NR_openat2, AT_FDCWD, p, how, sizeof how);
-    if (fd == -ENOSYS || fd == -E2BIG || fd == -EINVAL) { host_fast = -1; return 0; }   /* before 5.6 */
+    if (fd == -ENOSYS || fd == -E2BIG || fd == -EINVAL) { no_openat2 = 1; return 0; }   /* before 5.6 */
     if (fd < 0) return 0;
     sys_close((int)fd);
     scpy(cur, p, PATH_MAX); *rpp = q;
     return 1;
+}
+
+/* a relative walk's starting directory, as the kernel names it (PERFORMANCE.md 4 item 5): the kernel starts a relative
+ * lookup at the directory itself and never walks its ancestors again, and getcwd and /proc/self/fd/N name it without a
+ * link, so the walk may start there resolved. Not where the name could mislead: a tree directory known by a host name,
+ * a host name the rule does not plainly give the host, procfs, or a host directory on a filesystem that could hold the
+ * tree's root under another name (the one-step check's condition) */
+static int start_resolved(struct scratch *S, const char *v, int owned, int tree)
+{
+    if (xstrncmp(v, "/proc", 5) == 0 && (v[5] == '/' || !v[5])) return 0;
+    if (owned || tree) return owned && tree;
+    if (!vis_plain_host_chain(v, 2)) return 0;
+    if (!tree_once) tree_once = tree_mounted_once(S->tmp);
+    return tree_once > 0;
 }
 
 int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *out)
@@ -158,7 +180,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         scpy(rest, path, sizeof S->rest); scpy(cur, base, PATH_MAX);
         if (base[0]) dom = is_can_owned(base);
     } else {
-        int r = (dfd == AT_FDCWD) ? cwd_virtual(rest) : fd_virtual(dfd, rest);
+        int tree = 0, r = (dfd == AT_FDCWD) ? cwd_virtual_in(rest, &tree) : fd_virtual_in(dfd, rest, &tree);
         if (r == -ENOENT) {                                    /* a directory deleted under the program, which the kernel still walks from and
                                                                 * the handler cannot name: the path is spelt through the magic link, a host
                                                                 * path the kernel resolves itself; a walk from there into the can stays
@@ -171,9 +193,14 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         }
         if (r < 0) return r;
         if (rf & RESOLVE_NO_XDEV) dom = rest[1] ? is_can_owned(rest) : 1;
-        if (!rest[1] || is_can_owned(rest)) S->touched_can = 1;   /* the directory the walk starts from */
-        scat(rest, "/", sizeof S->rest); scat(rest, path, sizeof S->rest);   /* a directory and a path, each under PATH_MAX, fit rest together */
-        cur[0] = 0;
+        int owned = !rest[1] || is_can_owned(rest);
+        if (owned) S->touched_can = 1;                         /* the directory the walk starts from */
+        if (!rf && rest[1] && start_resolved(S, rest, owned, tree)) {
+            scpy(cur, rest, PATH_MAX); scpy(rest, path, sizeof S->rest);   /* the walk starts in the directory, resolved */
+        } else {
+            scat(rest, "/", sizeof S->rest); scat(rest, path, sizeof S->rest);   /* a directory and a path, each under PATH_MAX, fit rest together */
+            cur[0] = 0;
+        }
     }
     char *rp = rest;
     for (;;) {

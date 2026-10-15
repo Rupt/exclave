@@ -862,6 +862,12 @@ def bind_mount_alias(ctx):
     rc, out, err = run(["unshare", "-Urm", "sh", "-c", cmd], cwd=ctx.work, env=dict(ctx.env, PATH="/usr/bin:/bin"))
     expect(out == "rc=1\nmarker\n" and "Read-only" in err, "bind alias: rc=%d %r %r" % (rc, out, err))
     expect(not os.path.exists(os.path.join(ctx.root, "usr", "zz-alias")), "the tree was written through a bind mount")
+    # relative names from a working directory inside the alias: the walk that starts from the kernel's name of the
+    # directory (PERFORMANCE.md 4 item 5) must still see the tree there
+    cmd = "mount --bind %s %s && cd %s/root/usr && %s -c 'touch zz-alias; echo rc=$?; cat share/cont-test-marker'" % (ctx.can, alias, alias, wrapper(ctx, "sh"))
+    rc, out, err = run(["unshare", "-Urm", "sh", "-c", cmd], cwd=ctx.work, env=dict(ctx.env, PATH="/usr/bin:/bin"))
+    expect(out == "rc=1\nmarker\n" and "Read-only" in err, "bind alias, relative: rc=%d %r %r" % (rc, out, err))
+    expect(not os.path.exists(os.path.join(ctx.root, "usr", "zz-alias")), "the tree was written through a bind mount, relative")
 
 
 def make_deb(path, name, members, control_extra=""):
