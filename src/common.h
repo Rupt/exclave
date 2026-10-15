@@ -192,6 +192,7 @@ struct can {
     int logfd;
     unsigned long text_lo, text_hi;   /* the opener's own text range, for the nesting rule (7.5.3) */
     unsigned long root_dev, root_ino; /* the tree's root directory, so that any spelling of it is recognised (F3-13) */
+    unsigned long pagesz;              /* the kernel's page size, AT_PAGESZ: 4 KB, or 16 KB or 64 KB on some aarch64 kernels (7.3) */
 };
 extern struct can C;
 

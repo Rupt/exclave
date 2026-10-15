@@ -45,7 +45,7 @@ static int open_elf(const char *real, Ehdr *eh, Phdr *ph, int maxph)
 /* map every PT_LOAD; returns the load bias; fills entry, phdr address, interp string */
 static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned long *entry, unsigned long *phdr_va, int *has_interp, char *interp, const char *name)
 {
-    unsigned long lo = ~0UL, hi = 0;
+    unsigned long lo = ~0UL, hi = 0, mask = C.pagesz - 1;   /* the kernel's page, as load_elf_binary rounds (7.3) */
     *has_interp = 0;
     for (int i = 0; i < eh->e_phnum; i++) {
         if (ph[i].p_type == PT_INTERP) {
@@ -54,7 +54,10 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
             interp[ph[i].p_filesz] = 0; *has_interp = 1;
         }
         if (ph[i].p_type != PT_LOAD) continue;
-        unsigned long s = ph[i].p_vaddr & ~0xfffUL, e = (ph[i].p_vaddr + ph[i].p_memsz + 0xfff) & ~0xfffUL;
+        /* an address and an offset that differ within a page cannot be mapped at this page size, and the kernel refuses
+         * such a program too (EINVAL from its mmap): a binary linked for 4 KB pages on a 16 KB or 64 KB kernel */
+        if ((ph[i].p_vaddr - ph[i].p_offset) & mask) die("a segment is not aligned to this kernel's page size", name, EINVAL);
+        unsigned long s = ph[i].p_vaddr & ~mask, e = (ph[i].p_vaddr + ph[i].p_memsz + mask) & ~mask;
         if (s < lo) lo = s;
         if (e > hi) hi = e;
     }
@@ -68,7 +71,7 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
     for (int i = 0; i < eh->e_phnum; i++) {
         if (ph[i].p_type != PT_LOAD) continue;
         int prot = (ph[i].p_flags & PF_R ? PROT_READ : 0) | (ph[i].p_flags & PF_W ? PROT_WRITE : 0) | (ph[i].p_flags & PF_X ? PROT_EXEC : 0);
-        unsigned long va = bias + ph[i].p_vaddr, off = ph[i].p_vaddr & 0xfff;
+        unsigned long va = bias + ph[i].p_vaddr, off = ph[i].p_vaddr & mask;
         unsigned long mstart = va - off, flen = ph[i].p_filesz + off, mlen = ph[i].p_memsz + off;
         int fixed = (eh->e_type == ET_DYN) ? MAP_FIXED : MAP_FIXED_NOREPLACE;
         if (flen) {
@@ -78,7 +81,7 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
             if ((unsigned long)m != mstart) die("segment address already in use", name, EEXIST);
         }
         if (mlen > flen) {
-            unsigned long fend = mstart + flen, zend = (fend + 0xfff) & ~0xfffUL;
+            unsigned long fend = mstart + flen, zend = (fend + mask) & ~mask;
             if ((ph[i].p_flags & PF_W) && flen) xmemset((void *)fend, 0, zend - fend);
             if (mstart + mlen > zend) {
                 long m = sys_mmap((void *)zend, mstart + mlen - zend, prot, MAP_PRIVATE | MAP_ANONYMOUS | fixed, -1, 0);

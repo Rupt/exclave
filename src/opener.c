@@ -245,6 +245,9 @@ void start_c(unsigned long *sp)
     long argc = (long)sp[0]; char **argv = (char **)(sp + 1); char **envp = argv + argc + 1;
     char **e = envp; while (*e) e++;
     unsigned long *auxv = (unsigned long *)(e + 1);
+    C.pagesz = 4096;                                          /* the loader maps at the kernel's page size (7.3); a power of two, or 4 KB */
+    for (long i = 0; auxv[i * 2] != AT_NULL; i++)
+        if (auxv[i * 2] == AT_PAGESZ && auxv[i * 2 + 1] >= 4096 && !(auxv[i * 2 + 1] & (auxv[i * 2 + 1] - 1))) C.pagesz = auxv[i * 2 + 1];
 
     unsigned long m = 1UL << (SIGSYS - 1);                    /* 7.5.2: SIGSYS must never be blocked */
     sys_rt_sigprocmask(SIG_UNBLOCK, &m, 0, 8);
