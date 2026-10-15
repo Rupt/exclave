@@ -516,6 +516,32 @@ def identity(ctx):
 
 
 @test
+def host_walk_one_step(ctx):
+    """PERFORMANCE.md 4 item 4: where the directories ahead of a walk are all the host's, one openat2 with
+    RESOLVE_NO_SYMLINKS stands in for their lstats, and anything it cannot vouch for is the walk's. A host symlink
+    into /usr deep in the chain still reaches the can's /usr; a file where a directory should be is ENOTDIR and a
+    missing directory ENOENT, as the walk answers; a plain deep path reads as it does natively."""
+    base = os.path.join(ctx.work, "deephost-%d" % os.getpid())
+    deep = os.path.join(base, "h1", "h2", "h3", "h4")
+    os.makedirs(deep, exist_ok=True)
+    with open(os.path.join(deep, "f"), "w") as f:
+        f.write("deep\n")
+    if not os.path.lexists(os.path.join(deep, "lnk")):
+        os.symlink("/usr", os.path.join(deep, "lnk"))
+    cat = wrapper(ctx, "cat")
+    rc, out, err = run([cat, os.path.join(deep, "f")], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "deep\n", "a deep host file: rc=%d %r %r" % (rc, out, err))
+    rc, out, err = run([cat, os.path.join(deep, "lnk", "share", "cont-test-marker")], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "marker\n", "a host link into /usr deep in a host chain reaches the can's: rc=%d %r %r" % (rc, out, err))
+    rc, out, err = run([cat, os.path.join("deephost-%d" % os.getpid(), "h1", "h2", "h3", "h4", "lnk", "share", "cont-test-marker")], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "marker\n", "the same, relative: rc=%d %r %r" % (rc, out, err))
+    rc, out, err = run([cat, os.path.join(deep, "f", "x", "y")], cwd=ctx.work, env=ctx.env)
+    expect(rc != 0 and "Not a directory" in err, "a file in the middle: %r" % err)
+    rc, out, err = run([cat, os.path.join(base, "h1", "missing", "h3", "f")], cwd=ctx.work, env=ctx.env)
+    expect(rc != 0 and "No such file" in err, "a missing directory in the middle: %r" % err)
+
+
+@test
 def speculation_unchanged(ctx):
     """The filter is installed with SECCOMP_FILTER_FLAG_SPEC_ALLOW: where the kernel's default is
     spec_store_bypass_disable=seccomp (4.17 to 5.15), a filter without it forces Speculative Store Bypass Disable on

@@ -12,8 +12,9 @@ extern char **environ;
 static int fails;
 static long rss(void) { FILE *f = fopen("/proc/self/status", "r"); char l[256]; long v = -1; while (f && fgets(l, 256, f)) if (!strncmp(l, "VmRSS:", 6)) v = atol(l + 6); if (f) fclose(f); return v; }
 static const char *TRUE = "/usr/bin/true";                 /* the tree's, by the test */
-static int spawn_true(void) { pid_t p; char *av[] = { "true", 0 }; if (posix_spawn(&p, TRUE, 0, 0, av, environ)) return -1; int st; waitpid(p, &st, 0); return st; }
-static void *w(void *a) { for (int i = 0; i < 25; i++) if (spawn_true()) return (void *)1; return 0; }
+/* 0, a wait status, or 0x10000 plus posix_spawn's error, so that a failure says which */
+static int spawn_true(void) { pid_t p; char *av[] = { "true", 0 }; int e = posix_spawn(&p, TRUE, 0, 0, av, environ); if (e) return 0x10000 | e; int st; waitpid(p, &st, 0); return st; }
+static void *w(void *a) { for (int i = 0; i < 25; i++) { int r = spawn_true(); if (r) return (void *)(long)r; } return 0; }
 
 int main(int argc, char **argv)
 {
@@ -25,7 +26,7 @@ int main(int argc, char **argv)
     if (system(cmd) != 0) { fails++; printf("FAIL system(gcc --version)\n"); }
     pthread_t t[8]; void *r;
     for (int i = 0; i < 8; i++) pthread_create(&t[i], 0, w, 0);
-    for (int i = 0; i < 8; i++) { pthread_join(t[i], &r); if (r) { fails++; printf("FAIL spawning thread %d\n", i); } }
+    for (int i = 0; i < 8; i++) { pthread_join(t[i], &r); if (r) { long v = (long)r; fails++; printf("FAIL spawning thread %d: %s %ld\n", i, v & 0x10000 ? "posix_spawn error" : "wait status", v & 0xffff); } }
     for (int i = 0; i < 50; i++) spawn_true();
     long before = rss();
     for (int i = 0; i < 1000; i++) if (spawn_true()) { fails++; printf("FAIL spawn %d\n", i); break; }

@@ -36,6 +36,107 @@ int is_self_exe(const char *p, pid_t mypid)
     return xstrcmp(p, "/exe") == 0;
 }
 
+/* ---------- the one-step host check (PERFORMANCE.md 4 item 4) ----------
+ * A walk through host directories lstats each, to follow a host symlink in virtual space (a link into /usr reaches the
+ * can's) and to see the tree's root by another name (F3-13). Where the remaining directories are all plain host by the
+ * rule, one openat2 with RESOLVE_NO_SYMLINKS answers the first question for all of them: it succeeds only if each is a
+ * directory reached without a link. The second needs no question where the tree's filesystem is mounted once and its
+ * device is the tree's own: within one mount a directory has one path, and the rule has already refused the tree's own
+ * name. Anything else, a link, a missing directory, a refusal, a second mount, a kernel without openat2, is the walk's.
+ * The last component is always the walk's, so that its kind, its link and its error are found as before. */
+static int host_fast;                                        /* 0 not yet known, 1 the check stands in, -1 it does not, for this process */
+
+/* the decoded mount point at f (mountinfo escapes a space, a tab, a newline and a backslash as \ooo) as a '/'-boundary
+ * prefix of the tree's real path: its length, or -1 */
+static long mount_prefix(const char *f, const char *fe)
+{
+    long k = 0;
+    while (f < fe) {
+        char c = *f++;
+        if (c == '\\' && fe - f >= 3) { c = (char)(((f[0] - '0') << 6) | ((f[1] - '0') << 3) | (f[2] - '0')); f += 3; }
+        if (C.root[k] != c) return -1;
+        k++;
+    }
+    if (k == 1 && C.root[0] == '/') return 1;                 /* the root mount */
+    return C.root[k] == '/' || C.root[k] == 0 ? k : -1;
+}
+/* one pass over /proc/self/mountinfo in buf (PATH_MAX): pass 0 finds the mount holding the tree, the longest mount point
+ * that is a prefix of its path, the last of equals since a later mount covers an earlier; pass 1 counts the mounts of
+ * that device. 0 when the file cannot be read or a line does not fit */
+static long mounts(char *buf, int pass, unsigned long *dev, long *count)
+{
+    long fd = sys_open("/proc/self/mountinfo", O_RDONLY | O_CLOEXEC, 0); if (fd < 0) return 0;
+    long have = 0, best = -1, ok = 1;
+    for (;;) {
+        long n = sys_read((int)fd, buf + have, PATH_MAX - 1 - (size_t)have);
+        if (n < 0) { ok = 0; break; }
+        have += n; buf[have] = 0;
+        char *l = buf, *nl;
+        while ((nl = xstrchr(l, '\n'))) {
+            /* id parent major:minor root mountpoint ... */
+            char *f[5]; int nf = 0; char *q = l;
+            while (nf < 5 && q < nl) { while (q < nl && *q == ' ') q++; f[nf++] = q; while (q < nl && *q != ' ') q++; }
+            if (nf == 5) {
+                unsigned long ma = 0, mi = 0; char *d = f[2];
+                while (*d >= '0' && *d <= '9') ma = ma * 10 + (unsigned long)(*d++ - '0');
+                if (*d == ':') d++;
+                while (*d >= '0' && *d <= '9') mi = mi * 10 + (unsigned long)(*d++ - '0');
+                unsigned long md = ma << 32 | mi;
+                if (pass == 0) { char *e = f[4]; while (e < nl && *e != ' ') e++; long k = mount_prefix(f[4], e); if (k >= best && k > 0) { best = k; *dev = md; } }
+                else if (md == *dev) (*count)++;
+            }
+            l = nl + 1;
+        }
+        have -= l - buf; memmove(buf, l, (size_t)have + 1);
+        if (n == 0) break;
+        if (have >= PATH_MAX - 1) { ok = 0; break; }          /* a line longer than the buffer */
+    }
+    sys_close((int)fd);
+    return ok && (pass == 1 || best > 0);
+}
+static int tree_mounted_once(char *buf)
+{
+    unsigned long dev = 0; long count = 0;
+    if (!mounts(buf, 0, &dev, &count)) return 0;              /* unread: asked again at the next walk */
+    if (!mounts(buf, 1, &dev, &count)) return 0;
+    unsigned long sd = C.root_dev;                            /* the stat encoding: glibc's major and minor */
+    unsigned long ma = ((sd >> 8) & 0xfff) | ((sd >> 32) & ~0xfffUL), mi = (sd & 0xff) | ((sd >> 12) & ~0xffUL);
+    return count == 1 && dev == (ma << 32 | mi) ? 1 : -1;     /* a btrfs subvolume's device is not its mount's: the walk's */
+}
+/* at the plain host directory cur, not the last component, with the rest of the path at *rpp: try to stand in for the
+ * walk through every directory before the final component. 1 if it did, cur then the last of them and *rpp the final */
+static int host_chain(struct scratch *S, char *cur, char **rpp)
+{
+    if (host_fast < 0) return 0;
+    if (xstrncmp(cur, "/proc", 5) == 0 && (cur[5] == '/' || !cur[5])) return 0;   /* magic links, the process's own exe: the walk's */
+    char *p = S->real, *q = *rpp; size_t n = xstrlen(cur);
+    int dirs = 1;
+    xmemcpy(p, cur, n);
+    for (;;) {
+        while (*q == '/') q++;
+        char *e = q; while (*e && *e != '/') e++;
+        char *after = e; while (*after == '/') after++;
+        if (!*after) break;                                    /* q is the final component */
+        size_t cl = (size_t)(e - q);
+        if (cl > NAME_MAX || n + 1 + cl + 1 >= PATH_MAX) return 0;   /* the walk's ENAMETOOLONG */
+        if (q[0] == '.' && (cl == 1 || (cl == 2 && q[1] == '.'))) return 0;   /* "." and "..": the walk's, by the rule */
+        p[n++] = '/'; xmemcpy(p + n, q, cl); n += cl; dirs++;
+        q = after;
+    }
+    p[n] = 0;
+    if (dirs < 3) return 0;                                   /* an openat2 and a close for fewer lstats than that */
+    if (!vis_plain_host_chain(p, (unsigned)xstrlen(cur))) return 0;
+    if (!host_fast) host_fast = tree_mounted_once(S->tmp);
+    if (host_fast <= 0) return 0;
+    unsigned long how[3] = { O_PATH | O_DIRECTORY | O_CLOEXEC, 0, RESOLVE_NO_SYMLINKS };
+    long fd = SC4(NR_openat2, AT_FDCWD, p, how, sizeof how);
+    if (fd == -ENOSYS || fd == -E2BIG || fd == -EINVAL) { host_fast = -1; return 0; }   /* before 5.6 */
+    if (fd < 0) return 0;
+    sys_close((int)fd);
+    scpy(cur, p, PATH_MAX); *rpp = q;
+    return 1;
+}
+
 int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *out)
 {
     char *rest = S->rest, *cur = S->cur, *real = S->real, *tmp = S->tmp;
@@ -140,6 +241,8 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
                 kind = cache_classify(cur, real, tmp);
                 if (!kind) kind = CK_NONE;
             }
+        } else if (!last && !rf && host_chain(S, cur, &rp)) {
+            continue;                                          /* cur is the last directory before the final component */
         } else {
             scpy(real, hreal, PATH_MAX);                       /* to_real_exec's answer for a host path */
             struct kstat st; long r = sys_lstat(real, &st);

@@ -267,6 +267,37 @@ static int leads_facts(const char *v, const struct facts *f)
     if (!v[0] || (v[0] == '/' && !v[1])) return (root_flags & R_LEADS) != 0;   /* starts_dir(file, "") and (file, "/") */
     return f->exact && (f->exact->flags & R_LEADS);
 }
+/* the one-step host check's question (PERFORMANCE.md 4 item 4): is every '/'-boundary prefix of p at least from long
+ * plain host, the host's by the full rule, not an identity file, not on the way to one and not the tree's root by its
+ * name, so that a walk through them would do nothing but lstat each and find a directory? One pass, as rule_facts. */
+int vis_plain_host_chain(const char *p, unsigned from)
+{
+    struct facts f; f.exact = 0; f.best_host = f.best_own = -1; f.vol = 0; f.len = 0;
+    if (p[0] != '/' || from < 2) return 0;
+    if (root_flags & R_OWN) f.best_own = 1;
+    if (root_flags & R_HOSTDIR) f.best_host = 1;
+    if (root_flags & R_VOLATILE) f.vol = 1;
+    unsigned long h = RULE_BASIS;
+    for (unsigned i = 0;; i++) {
+        char c = p[i];
+        if (i > 0 && (c == '/' || c == 0)) {
+            struct rule *r = rule_find(p, i, h);
+            if (r) {
+                if (r->flags & R_OWN) f.best_own = i;
+                if (r->flags & R_HOSTDIR) f.best_host = i;
+                if (r->flags & R_VOLATILE) f.vol = 1;
+            }
+            if (i >= from) {                                   /* the candidate p[0..i), i >= 2: never the root */
+                if (r && (r->flags & (R_HOSTFILE | R_LEADS))) return 0;
+                if (C.rootlen == (long)i && xmemcmp(p, C.root, i) == 0) return 0;
+                struct facts g = f; g.exact = r; g.len = i; const char *real;
+                if (!is_host_facts(p, &g, &real)) return 0;
+            }
+        }
+        if (c == 0) return 1;
+        h = rule_hash(h, c);
+    }
+}
 /* the walk's three questions of a candidate in one pass (7.4.4): whether it is an identity file, whether it is a
  * directory on the way to one, and whose it is; 1 if the host's, *real its real path */
 int vis_walk_facts(const char *v, int *identity, int *leads, const char **real)
