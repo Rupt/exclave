@@ -149,7 +149,12 @@ void filter_install(void)
     build();
     struct sock_fprog fp = { (unsigned short)np, prog };
     if (sys_prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) die("PR_SET_NO_NEW_PRIVS failed", 0, 0);
-    long r = SC3(NR_seccomp, SECCOMP_SET_MODE_FILTER, 0, &fp);
+    /* SPEC_ALLOW: a filter installed without it switches the process and its descendants to Speculative Store Bypass
+     * Disable, forced, wherever the kernel's default is spec_store_bypass_disable=seccomp (4.17 to 5.15 and the
+     * backports before), which slows compute-bound code by up to several times; a can is not a security boundary and
+     * its programs did not ask for it (PERFORMANCE.md 3). A kernel without the flag answers EINVAL. */
+    long r = SC3(NR_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_SPEC_ALLOW, &fp);
+    if (r == -EINVAL) r = SC3(NR_seccomp, SECCOMP_SET_MODE_FILTER, 0, &fp);
     if (r == -ENOSYS) r = sys_prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, (unsigned long)&fp, 0, 0);   /* kernels before 3.17 */
     if (r < 0) die("cannot install the seccomp filter", 0, r);
 }

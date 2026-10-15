@@ -516,6 +516,22 @@ def identity(ctx):
 
 
 @test
+def speculation_unchanged(ctx):
+    """The filter is installed with SECCOMP_FILTER_FLAG_SPEC_ALLOW: where the kernel's default is
+    spec_store_bypass_disable=seccomp (4.17 to 5.15), a filter without it forces Speculative Store Bypass Disable on
+    every canned process (PERFORMANCE.md 3). A program at the boundary and one it spawns report what a native one
+    does; on a kernel that never forces it the lines agree either way, so the matrix's older rows are the test."""
+    def lines(text):
+        return [l for l in text.splitlines() if l.startswith("Speculation")]
+    rc, native, err = run(["cat", "/proc/self/status"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "native cat: %r" % err)
+    rc, boundary, err = run([wrapper(ctx, "cat"), "/proc/self/status"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and lines(boundary) == lines(native), "at the boundary: %r, natively %r %r" % (lines(boundary), lines(native), err))
+    rc, child, err = run([wrapper(ctx, "sh"), "-c", "cat /proc/self/status"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and lines(child) == lines(native), "in a spawned child: %r, natively %r %r" % (lines(child), lines(native), err))
+
+
+@test
 def environment(ctx):
     env = dict(ctx.env, LD_PRELOAD="/nonexistent", LD_LIBRARY_PATH="/x", GCONV_PATH="/x", LOCPATH="/x", CAN_TESTVAR="1")
     rc, out, err = run([wrapper(ctx, "env")], cwd=ctx.work, env=env)
