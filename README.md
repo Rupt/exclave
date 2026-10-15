@@ -332,7 +332,9 @@ test/dogfood.py --cache DIR               # the cannery as a can, and a cross-ca
    for the kernel and loader facts relied on. `docs/reviews/`: the
    review reports; round 3 reviewed the code and is the best reading on
    where the implementation is subtle.
-5. `spike/README.md`: the prototypes that preceded the opener, frozen.
+5. `docs/PERFORMANCE.md`: where a can's overhead goes, measured, what
+   was done about it and what was deliberately left alone.
+6. `spike/README.md`: the prototypes that preceded the opener, frozen.
 
 ## Layout
 
@@ -375,7 +377,7 @@ test/dogfood.py      the cannery can building a can that must reproduce the host
 test/gate.sh         the commit gate, every step in parallel on copies of the cans given; test/examples.sh the example runs
 test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/stackcheck.py the stack budget
-docs/            proposal (revision 16), review response, prior art, review reports
+docs/            proposal (revision 16), review response, prior art, performance, review reports
 spike/           frozen prototypes and their tests
 ```
 
