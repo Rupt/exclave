@@ -30,7 +30,7 @@ matrix checks natively on each VM; the opener builds for aarch64 from
 the same sources and the matrix has an emulated arm64 row. gdb debugs
 a canned program once the can is in its auto-load safe-path: the opener
 carries the script gdb needs. The
-regression suite (69 named tests), the kernel oracles, a differential
+regression suite (71 named tests), the kernel oracles, a differential
 syscall probe that agrees with the kernel on 19 093 cases per can, and
 Docker's default seccomp profile pass on the gcc, Alpine, Fedora and
 clang cans, each pruned to what the suite touches, in one gate of

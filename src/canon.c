@@ -70,10 +70,13 @@ static long mount_prefix(const char *f, const char *fe)
 }
 /* one pass over /proc/self/mountinfo in buf (PATH_MAX): pass 0 finds the mount holding the tree, the longest mount point
  * that is a prefix of its path, the last of equals since a later mount covers an earlier; pass 1 counts the mounts of
- * that device. 0 when the file cannot be read or a line does not fit */
+ * that device. 1 when answered; 0 when no descriptor was free, to be asked again; -1 when it cannot be answered here: no
+ * /proc, an unreadable file, a line longer than the buffer, no mount holding the tree, as in a chroot (review O7-3) */
 static long mounts(char *buf, int pass, unsigned long *dev, long *count)
 {
-    long fd = sys_open("/proc/self/mountinfo", O_RDONLY | O_CLOEXEC, 0); if (fd < 0) return 0;
+    long fd = sys_open("/proc/self/mountinfo", O_RDONLY | O_CLOEXEC, 0);
+    if (fd == -EMFILE || fd == -ENFILE) return 0;
+    if (fd < 0) return -1;
     long have = 0, best = -1, ok = 1;
     for (;;) {
         long n = sys_read((int)fd, buf + have, PATH_MAX - 1 - (size_t)have);
@@ -100,19 +103,21 @@ static long mounts(char *buf, int pass, unsigned long *dev, long *count)
         if (have >= PATH_MAX - 1) { ok = 0; break; }          /* a line longer than the buffer */
     }
     sys_close((int)fd);
-    return ok && (pass == 1 || best > 0);
+    return ok && (pass == 1 || best > 0) ? 1 : -1;
 }
 static int tree_mounted_once(char *buf)
 {
     unsigned long dev = 0; long count = 0;
-    if (!mounts(buf, 0, &dev, &count)) return 0;              /* unread: asked again at the next walk */
-    if (!mounts(buf, 1, &dev, &count)) return 0;
+    long r = mounts(buf, 0, &dev, &count); if (r <= 0) return (int)r;   /* no descriptor: asked again at the next walk; else decided */
+    r = mounts(buf, 1, &dev, &count); if (r <= 0) return (int)r;
     unsigned long sd = C.root_dev;                            /* the stat encoding: glibc's major and minor */
     unsigned long ma = ((sd >> 8) & 0xfff) | ((sd >> 32) & ~0xfffUL), mi = (sd & 0xff) | ((sd >> 12) & ~0xffUL);
     return count == 1 && dev == (ma << 32 | mi) ? 1 : -1;     /* a btrfs subvolume's device is not its mount's: the walk's */
 }
 /* at the plain host directory cur, not the last component, with the rest of the path at *rpp: try to stand in for the
- * walk through every directory before the final component. 1 if it did, cur then the last of them and *rpp the final */
+ * walk through every directory before the final component. 1 if it did, cur then the last of them and *rpp the final;
+ * 0 if the chain does not qualify; -1 if the openat2 was made and could not vouch for it, which the walk remembers
+ * until it restarts at a link, so that a failing chain is not tried again at every component (review O7-2) */
 static int host_chain(struct scratch *S, char *cur, char **rpp)
 {
     if (no_openat2 || tree_once < 0) return 0;
@@ -139,8 +144,14 @@ static int host_chain(struct scratch *S, char *cur, char **rpp)
     unsigned long how[3] = { O_PATH | O_DIRECTORY | O_CLOEXEC, 0, RESOLVE_NO_SYMLINKS };
     long fd = SC4(NR_openat2, AT_FDCWD, p, how, sizeof how);
     if (fd == -ENOSYS || fd == -E2BIG || fd == -EINVAL) { no_openat2 = 1; return 0; }   /* before 5.6 */
-    if (fd < 0) return 0;
+    if (fd < 0) return -1;
+    /* the kernel's name for what it reached must be the path itself: on a case-insensitive filesystem x.can/ROOT is the
+     * tree's root under another spelling on the same mount, and the tree's root, pinned by the program's own mappings,
+     * keeps its own name (review O7-1); any other difference, an alias nobody foresaw, is the walk's too */
+    char l[32] = "/proc/self/fd/", nb[24]; ltoa_(fd, nb); scat(l, nb, sizeof l);
+    long k = sys_readlink(l, S->tmp, PATH_MAX - 1);
     sys_close((int)fd);
+    if (k != (long)n || xmemcmp(S->tmp, p, n) != 0) return -1;
     scpy(cur, p, PATH_MAX); *rpp = q;
     return 1;
 }
@@ -162,7 +173,7 @@ static int start_resolved(struct scratch *S, const char *v, int owned, int tree)
 int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *out)
 {
     char *rest = S->rest, *cur = S->cur, *real = S->real, *tmp = S->tmp;
-    int hops = 0;
+    int hops = 0, chain_failed = 0;                          /* a one-step host check that could not vouch: not tried again until a link */
     size_t pl = xstrlen(path);
     int trailing = pl > 1 && path[pl - 1] == '/';
     /* openat2's resolve flags (7.4.3): a scoped walk (RESOLVE_IN_ROOT, RESOLVE_BENEATH) cannot leave S->v2, the
@@ -182,8 +193,12 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         /* a path spelt through the tree's real root, as a program that finds its files from its argv[0] spells them:
          * the walk would lstat every directory above the tree and then see the tree's root by name (F3-1), and the
          * opener resolved that name from /proc/self/exe, so the path starts at the root (PERFORMANCE.md 6) */
-        if (!rf && C.rootlen && xstrncmp(path, C.root, (size_t)C.rootlen) == 0 && (path[C.rootlen] == '/' || !path[C.rootlen]))
+        if (!rf && C.rootlen && xstrncmp(path, C.root, (size_t)C.rootlen) == 0 && (path[C.rootlen] == '/' || !path[C.rootlen])) {
+            /* the walk's own answer for the directories above the tree, which the kernel searches: EACCES where one is
+             * not searchable, ENOENT where the can was moved while it runs (review O7-5); one question for six lstats */
+            long e = sys_faccessat(AT_FDCWD, C.dir, X_OK); if (e < 0) return (int)e;
             scpy(rest, path + C.rootlen, sizeof S->rest);
+        }
     } else {
         int tree = 0, r = (dfd == AT_FDCWD) ? cwd_virtual_in(rest, &tree) : fd_virtual_in(dfd, rest, &tree);
         if (r == -ENOENT) {                                    /* a directory deleted under the program, which the kernel still walks from and
@@ -257,7 +272,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
             memmove(rest + el + 1, rp, rl + 1); xmemcpy(rest, C.exe, el); rest[el] = '/'; rp = rest; cur[0] = 0; continue;
         }
         /* classify the component: a directory, a symlink (text in tmp), absent, or something else */
-        int kind, err = -ENOENT, idf, leads; const char *hreal;
+        int kind, err = -ENOENT, idf, leads, chain = 0; const char *hreal;
         int host = vis_walk_facts(cur, &idf, &leads, &hreal); /* the rule asked once for the candidate (PERFORMANCE.md 4 item 3) */
         leads = leads && !last;
         if (idf || leads || !host) S->touched_can = 1;         /* anything but a plain host component */
@@ -273,9 +288,10 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
                 kind = cache_classify(cur, real, tmp);
                 if (!kind) kind = CK_NONE;
             }
-        } else if (!last && !rf && host_chain(S, cur, &rp)) {
+        } else if (!last && !rf && !chain_failed && (chain = host_chain(S, cur, &rp)) > 0) {
             continue;                                          /* cur is the last directory before the final component */
         } else {
+            if (chain < 0) chain_failed = 1;                   /* the walk's, from here to the next link (review O7-2) */
             scpy(real, hreal, PATH_MAX);                       /* to_real_exec's answer for a host path */
             struct kstat st; long r = sys_lstat(real, &st);
             if (r < 0) { kind = CK_NONE; err = (int)r; }
@@ -310,6 +326,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         }
         if (rf & RESOLVE_NO_SYMLINKS) return -ELOOP;
         if (++hops > 40) return -ELOOP;
+        chain_failed = 0;                                      /* the walk restarts at the link's text */
         size_t tl = xstrlen(tmp), rl = xstrlen(rp);
         if (tl + 1 + rl + 1 >= sizeof S->rest) return -ENAMETOOLONG;
         memmove(rest + tl + 1, rp, rl + 1); xmemcpy(rest, tmp, tl); rest[tl] = '/'; rp = rest;

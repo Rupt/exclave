@@ -153,6 +153,7 @@ void vis_init(void)
 enum { R_OWN = 1, R_HOSTDIR = 2, R_HOSTFILE = 4, R_VOLATILE = 8, R_LEADS = 16 };
 #define RULE_SLOTS 2048
 static struct rule { const char *s; unsigned len, flags; int host; } rules[RULE_SLOTS];   /* host: the index of a file's record */
+static int nrules;                                             /* entries placed, at most half the slots */
 static int root_flags;                                         /* a rule string "/", which starts_dir lets match every absolute path */
 static unsigned dir_len;                                       /* the can's directory's length, for vis_is_host's claim on it */
 
@@ -173,6 +174,7 @@ static void rule_add(const char *v, unsigned len, unsigned flags, int host)
     struct rule *r = rule_find(v, len, h);
     if (!r) {
         unsigned i = (unsigned)h & (RULE_SLOTS - 1); while (rules[i].s) i = (i + 1) & (RULE_SLOTS - 1);
+        if (++nrules > RULE_SLOTS / 2) die("visibility table full", v, 0);   /* slack left, so that a probe always meets an empty slot (review O7-6) */
         r = &rules[i]; r->s = v; r->len = len; r->host = -1;
     }
     if ((flags & R_HOSTFILE) && !(r->flags & R_HOSTFILE)) r->host = host;   /* a file named twice: the first record, as the scans found it */
@@ -181,7 +183,6 @@ static void rule_add(const char *v, unsigned len, unsigned flags, int host)
 static void rule_build(void)
 {
     dir_len = (unsigned)xstrlen(C.dir);
-    if (C.nown + C.nhost * 8 + 8 > RULE_SLOTS / 2) die("visibility table full", 0, 0);   /* 512 claims and 128 host records fit with slack */
     for (int i = 0; i < C.nown; i++) rule_add(C.own[i], (unsigned)xstrlen(C.own[i]), R_OWN, -1);
     for (int i = 0; volatile_dirs[i]; i++) rule_add(volatile_dirs[i], (unsigned)xstrlen(volatile_dirs[i]), R_VOLATILE, -1);
     for (int i = 0; i < C.nhost; i++) {

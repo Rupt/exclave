@@ -539,6 +539,67 @@ def host_walk_one_step(ctx):
     expect(rc != 0 and "Not a directory" in err, "a file in the middle: %r" % err)
     rc, out, err = run([cat, os.path.join(base, "h1", "missing", "h3", "f")], cwd=ctx.work, env=ctx.env)
     expect(rc != 0 and "No such file" in err, "a missing directory in the middle: %r" % err)
+    # the answers above hold with or without the one-step check; where the opener would use it, it must have run
+    if shutil.which("strace") and mounted_once(ctx.root):
+        trace = os.path.join(ctx.work, "deephost-%d.trace" % os.getpid())
+        run(["strace", "-f", "-e", "trace=openat2", "-o", trace, cat, os.path.join(deep, "f")], cwd=ctx.work, env=ctx.env)
+        expect("RESOLVE_NO_SYMLINKS" in open(trace).read(), "the one-step check did not run where the tree's filesystem is mounted once")
+
+
+def mounted_once(path):
+    """The one-step check's condition (canon.c tree_mounted_once): the mount holding path is its filesystem's only one
+    in /proc/self/mountinfo, with path's own device number."""
+    real = os.path.realpath(path)
+    dev = os.stat(real).st_dev
+    best, mm, lines = -1, None, []
+    for l in open("/proc/self/mountinfo"):
+        f = l.split()
+        mp = f[4].encode().decode("unicode_escape")
+        lines.append(f[2])
+        if (real == mp or real.startswith(mp.rstrip("/") + "/")) and len(mp) >= best:
+            best, mm = len(mp), f[2]
+    return mm is not None and lines.count(mm) == 1 and mm == "%d:%d" % (os.major(dev), os.minor(dev))
+
+
+@test
+def casefold_alias(ctx):
+    """O7-1: on a case-insensitive filesystem the tree's root has other spellings, x.can/ROOT for X.can/root, on the
+    same mount; a host walk that stood in for its lstats with one openat2 must still see the tree there, read-only.
+    Made on a casefold tmpfs (6.13) in a user namespace; skipped where either is missing."""
+    if subprocess.run(["unshare", "-Urm", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
+        return "no user namespaces"
+    mnt = os.path.join(ctx.work, "casefold-%d" % os.getpid())
+    os.makedirs(mnt, exist_ok=True)
+    sh = wrapper(ctx, "sh")
+    rel = os.path.relpath(sh, ctx.can)
+    setup = ("mount -t tmpfs -o casefold tmpfs %s && mkdir %s/cf && chattr +F %s/cf || exit 99; "   # names that differ only in case (the
+             "cp -a %s %s/cf/X.can 2>/dev/null; test -x %s/cf/X.can/%s || exit 98") % (mnt, mnt, mnt, ctx.can, mnt, mnt, rel)   # kernel's headers) are skipped
+    inner = ("touch %s/cf/x.can/ROOT/usr/zz-cf; echo rc=$?; cat %s/cf/x.can/ROOT/usr/share/cont-test-marker; "
+             "cd %s/cf/x.can/ROOT/usr && touch zz-cf2; echo rc=$?") % (mnt, mnt, mnt)
+    cmd = "%s && %s/cf/X.can/%s -c '%s'; ls %s/cf/X.can/root/usr | grep zz-cf" % (setup, mnt, rel, inner, mnt)   # what reached the tree
+    rc, out, err = run(["unshare", "-Urm", "sh", "-c", cmd], cwd=ctx.work, env=dict(ctx.env, PATH="/usr/bin:/bin"))
+    if rc == 99:
+        return "no casefold tmpfs here: %s" % err.strip()[-120:]
+    expect(rc != 98, "the can's shell did not copy onto the casefold tmpfs: %r" % err[-300:])
+    expect(out == "rc=1\nmarker\nrc=1\n" and err.count("Read-only") >= 2, "a case-folded spelling of the tree's root: rc=%d %r %r" % (rc, out, err))
+
+
+@test
+def filter_model(ctx):
+    """test/filter_test.c, built by the can's compiler for this machine and run inside the can: the filter against the
+    rule of 7.4.2 with this machine's syscall numbers, so that the arm64 row checks the aarch64 filter, which the gate's
+    unit step, built for the reference machine, cannot (review O7)."""
+    d = os.path.join(ctx.work, "filter-model")
+    for sub, names in (("src", ("filter.c", "str.c", "common.h", "sys.h", "elf.h")), ("test", ("filter_test.c",))):
+        os.makedirs(os.path.join(d, sub), exist_ok=True)
+        for n in names:
+            shutil.copy(os.path.join(REPO, sub, n), os.path.join(d, sub, n))
+    exe = os.path.join(d, "filter_test")
+    rc, out, err = run([wrapper(ctx, GCC), "-std=gnu11", "-O1", "-fno-builtin", "-DHOST_TEST", "-o", exe,
+                        os.path.join(d, "test", "filter_test.c"), os.path.join(d, "src", "filter.c"), os.path.join(d, "src", "str.c")], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "cannot build the filter model: %s" % err[-600:])
+    rc, out, err = inside(ctx, exe, timeout=300)
+    expect(rc == 0 and " 0 failures" in out, "the filter against its rule: %s %s" % (out[-600:], err[-300:]))
 
 
 @test
@@ -751,6 +812,13 @@ def real_root_is_the_tree(ctx):
     rc, out, err = run([wrapper(ctx, "sh"), "-c", "touch %s/usr/zz; echo rc=$?; rm %s%s; echo rc=$?; cat %s/usr/share/cont-test-marker; ls -l %s%s | cut -c1 " % (root, root, ctx.vbin("true"), root, root, ctx.vbin("sh"))], cwd="/", env=ctx.env)
     expect(out == "rc=1\nrc=1\nmarker\nl\n" and "Read-only" in err, "real-root spelling: %r %r" % (out, err))
     expect(not os.path.exists(os.path.join(root, "usr", "zz")) and os.path.exists(os.path.join(root, ctx.vbin("true").lstrip("/"))), "the tree was written through its real path")
+    # other spellings of the same path, which the walk resolves rather than the shortcut for the exact one: relative from a
+    # host working directory, and with a doubled slash (review O7: a mutant without the walk's refusal of the root's name wrote)
+    relp = os.path.relpath(os.path.join(root, "usr", "zz2"), ctx.work)
+    slashed = root.replace("/", "//", 1) + "/usr/zz3"
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "touch %s; echo rc=$?; touch %s; echo rc=$?" % (relp, slashed)], cwd=ctx.work, env=ctx.env)
+    expect(out == "rc=1\nrc=1\n" and err.count("Read-only") == 2, "relative and doubled-slash spellings: %r %r" % (out, err))
+    expect(not os.path.exists(os.path.join(root, "usr", "zz2")) and not os.path.exists(os.path.join(root, "usr", "zz3")), "the tree was written through another spelling of its real path")
 
 
 @test

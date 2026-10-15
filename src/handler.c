@@ -340,8 +340,8 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
     void *big; char **env; long envc = vec_read(S, S->extra, sizeof S->extra, envp, 3, &env, &big);
     if (envc < 0) return envc;
     /* the head of every variable, 12 bytes, read in one process_vm_readv for up to 256 at a time rather than one call
-     * each (PERFORMANCE.md 2.5); a variable the batch could not read whole, near the end of a mapping, and the rest of
-     * its batch are read one at a time as before. tmp holds the heads, rest the iovecs: both free until the end */
+     * each (PERFORMANCE.md 2.5); a variable the batch could not read whole, near the end of a mapping, is read on its own
+     * as before, and the batch resumes after it (review O7). tmp holds the heads, rest the iovecs: both free until the end */
     long n = 0; char head[12], *heads = S->tmp; struct iovec *riov = (struct iovec *)S->rest;
     for (long i = 0; i < envc;) {
         long k = envc - i, done = 0; if (k > 256) k = 256;
