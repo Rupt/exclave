@@ -242,6 +242,7 @@ char *to_real_exec(const char *v, char *out);         /* v -> real, no wrapper r
 void from_real(char *r);                              /* in place, no buffer */
 int  is_can_owned(const char *v);
 int  vis_leads_to_host_file(const char *v);   /* v is a proper ancestor of a host-resolved file */
+int  vis_walk_facts(const char *v, int *identity, int *leads, const char **real);   /* the three in one pass: 1 if the host's */
 int  is_wrapper_real(const char *real, char *tmp);   /* tmp PATH_MAX */
 int  payload_of(const char *real, char *out);         /* out = real's payload path, dir/.real/base; 1 if it fits; no wrapper check */
 int  vis_readlink_identity(const char *v, char *out); /* 1 if v is an identity file that is a host symlink, out = its text; -EINVAL if not a symlink; 0 otherwise */

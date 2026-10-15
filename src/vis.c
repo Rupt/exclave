@@ -106,6 +106,7 @@ static int host_resolve(const char *p, char *out, char *link)
 }
 
 static int base_is_host(const char *v, const char **real);
+static void rule_build(void);
 
 static void claim_cwd(void)
 {
@@ -138,51 +139,150 @@ void vis_init(void)
         id_link[n] = link[0] ? arena_str(link, xstrlen(link)) : 0; n++;
     }
     C.nhost = n;
+    rule_build();
     claim_cwd();
+}
+
+/* The rule compiled (PERFORMANCE.md 2.2, 4 item 3). Every string the rule matches a path against, a claim, a host
+ * record, an identity file, a volatile directory, and every proper ancestor of an identity file, is an entry of one
+ * table built at startup, with what it is. starts_dir(v, p) holds exactly when p is v cut at a '/' or at its end, so
+ * the prefixes of v the rule can match are found by one pass over v, hashing as it goes and looking each cut up: a
+ * path's answer costs its length rather than the forty comparisons per question the scans cost, which the walk asked
+ * five to eight times per component. The table is written once before anything traps and only read afterwards. */
+enum { R_OWN = 1, R_HOSTDIR = 2, R_HOSTFILE = 4, R_VOLATILE = 8, R_LEADS = 16 };
+#define RULE_SLOTS 2048
+static struct rule { const char *s; unsigned len, flags; int host; } rules[RULE_SLOTS];   /* host: the index of a file's record */
+static int root_flags;                                         /* a rule string "/", which starts_dir lets match every absolute path */
+static unsigned dir_len;                                       /* the can's directory's length, for vis_is_host's claim on it */
+
+static unsigned long rule_hash(unsigned long h, char c) { return (h ^ (unsigned char)c) * 1099511628211UL; }
+#define RULE_BASIS 1469598103934665603UL
+static struct rule *rule_find(const char *v, unsigned len, unsigned long h)
+{
+    for (unsigned i = (unsigned)h & (RULE_SLOTS - 1), n = 0; n < RULE_SLOTS; i = (i + 1) & (RULE_SLOTS - 1), n++) {
+        if (!rules[i].s) return 0;
+        if (rules[i].len == len && xmemcmp(rules[i].s, v, len) == 0) return &rules[i];
+    }
+    return 0;
+}
+static void rule_add(const char *v, unsigned len, unsigned flags, int host)
+{
+    if (len == 1 && v[0] == '/') { root_flags |= (int)flags; return; }
+    unsigned long h = RULE_BASIS; for (unsigned i = 0; i < len; i++) h = rule_hash(h, v[i]);
+    struct rule *r = rule_find(v, len, h);
+    if (!r) {
+        unsigned i = (unsigned)h & (RULE_SLOTS - 1); while (rules[i].s) i = (i + 1) & (RULE_SLOTS - 1);
+        r = &rules[i]; r->s = v; r->len = len; r->host = -1;
+    }
+    if ((flags & R_HOSTFILE) && !(r->flags & R_HOSTFILE)) r->host = host;   /* a file named twice: the first record, as the scans found it */
+    r->flags |= flags;
+}
+static void rule_build(void)
+{
+    dir_len = (unsigned)xstrlen(C.dir);
+    if (C.nown + C.nhost * 8 + 8 > RULE_SLOTS / 2) die("visibility table full", 0, 0);   /* 512 claims and 128 host records fit with slack */
+    for (int i = 0; i < C.nown; i++) rule_add(C.own[i], (unsigned)xstrlen(C.own[i]), R_OWN, -1);
+    for (int i = 0; volatile_dirs[i]; i++) rule_add(volatile_dirs[i], (unsigned)xstrlen(volatile_dirs[i]), R_VOLATILE, -1);
+    for (int i = 0; i < C.nhost; i++) {
+        const char *v = C.host[i].v; unsigned len = (unsigned)xstrlen(v);
+        if (!C.host[i].is_file) { rule_add(v, len, R_HOSTDIR, -1); continue; }
+        rule_add(v, len, R_HOSTFILE, i);
+        for (unsigned k = 1; k < len; k++) if (v[k] == '/') rule_add(v, k, R_LEADS, -1);   /* the directories on the way to it */
+        if (v[0] == '/') root_flags |= R_LEADS;               /* and the root, which starts_dir lets lead to every absolute path */
+    }
+}
+
+/* what the rule's strings say of v: the identity file it is, the longest host record and claim that are prefixes of it,
+ * whether a volatile directory is */
+struct facts { struct rule *exact; long best_host, best_own; int vol; unsigned len; };
+static void rule_facts(const char *v, struct facts *f)
+{
+    f->exact = 0; f->best_host = f->best_own = -1; f->vol = 0;
+    if (v[0] == '/') {                                         /* starts_dir(v, "/") */
+        if (root_flags & R_OWN) f->best_own = 1;
+        if (root_flags & R_HOSTDIR) f->best_host = 1;
+        if (root_flags & R_VOLATILE) f->vol = 1;
+    }
+    unsigned long h = RULE_BASIS;
+    for (unsigned i = 0;; i++) {
+        char c = v[i];
+        if (i > 0 && (c == '/' || c == 0)) {
+            struct rule *r = rule_find(v, i, h);
+            if (r) {
+                if (r->flags & R_OWN) f->best_own = i;
+                if (r->flags & R_HOSTDIR) f->best_host = i;
+                if (r->flags & R_VOLATILE) f->vol = 1;
+                if (c == 0) f->exact = r;
+            }
+        }
+        if (c == 0) { f->len = i; break; }
+        h = rule_hash(h, c);
+    }
+}
+/* starts_dir(v, p) || starts_dir(p, v), v of length vl and p of length pl, neither "/" (vis_is_host answers the root first) */
+static int on_the_way(const char *v, unsigned vl, const char *p, unsigned pl)
+{
+    if (pl == 1 && p[0] == '/') return starts_dir(v, p) || starts_dir(p, v);
+    if (vl >= pl) return xmemcmp(v, p, pl) == 0 && (v[pl] == '/' || v[pl] == 0);
+    return xmemcmp(p, v, vl) == 0 && p[vl] == '/';
+}
+static struct rule *rule_exact(const char *v)
+{
+    unsigned long h = RULE_BASIS; unsigned len = 0;
+    for (; v[len]; len++) h = rule_hash(h, v[len]);
+    return len ? rule_find(v, len, h) : 0;
 }
 
 /* 8.1 without the two claims: identity file > volatile > host records > own > default host; longest prefix wins.
  * The root directory itself is the tree's, so ls / lists the tree and its placeholders (8.3, review O4-17). */
-static int base_is_host(const char *v, const char **real)
+static int base_is_host_facts(const char *v, const struct facts *f, const char **real)
 {
     if (v[0] == '/' && v[1] == 0) return 0;
-    for (int i = 0; i < C.nhost; i++)
-        if (C.host[i].is_file && xstrcmp(v, C.host[i].v) == 0) { *real = C.host[i].r; return 1; }
-    for (int i = 0; volatile_dirs[i]; i++)
-        if (starts_dir(v, volatile_dirs[i])) { *real = v; return 1; }
-    long best_host = -1, best_own = -1;
-    for (int i = 0; i < C.nhost; i++)
-        if (!C.host[i].is_file && starts_dir(v, C.host[i].v)) { long l = (long)xstrlen(C.host[i].v); if (l > best_host) best_host = l; }
-    for (int i = 0; i < C.nown; i++)
-        if (starts_dir(v, C.own[i])) { long l = (long)xstrlen(C.own[i]); if (l > best_own) best_own = l; }
-    if (best_host >= best_own) { *real = v; return 1; }      /* includes the default: nothing owns it */
+    if (f->exact && (f->exact->flags & R_HOSTFILE)) { *real = C.host[f->exact->host].r; return 1; }
+    if (f->vol) { *real = v; return 1; }
+    if (f->best_host >= f->best_own) { *real = v; return 1; }  /* includes the default: nothing owns it */
     return 0;
 }
+static int base_is_host(const char *v, const char **real) { struct facts f; rule_facts(v, &f); return base_is_host_facts(v, &f, real); }
 
 /* the full rule: the root, the identity files, then the two claims (8.1 rules 4 and 6), then the base rule */
-int vis_is_host(const char *v, const char **real)
+static int is_host_facts(const char *v, const struct facts *fp, const char **real)
 {
+    struct facts f = *fp;
     if (v[0] == '/' && v[1] == 0) return 0;                    /* the root itself is the tree's (8.3), before the claims that pass through it */
-    for (int i = 0; i < C.nhost; i++)
-        if (C.host[i].is_file && xstrcmp(v, C.host[i].v) == 0) { *real = C.host[i].r; return 1; }
+    if (f.exact && (f.exact->flags & R_HOSTFILE)) { *real = C.host[f.exact->host].r; return 1; }
     /* 8.1.4: a claimed working directory is the host's as a subtree, and so is every directory on the way to
      * it, or realpath and pwd -P could not walk the path the process was started in */
-    if (C.cwdclaim_len && (starts_dir(v, C.cwdclaim) || starts_dir(C.cwdclaim, v))) { *real = v; return 1; }
+    if (C.cwdclaim_len && on_the_way(v, f.len, C.cwdclaim, (unsigned)C.cwdclaim_len)) { *real = v; return 1; }
     /* 8.1: the can's own directory is the host's as a subtree, and so are the directories on the way to it: a
      * program that locates its files relative to its real executable path, as gcc does, must reach them
      * wherever the can lives, including under a prefix its own tree owns */
-    if (starts_dir(v, C.dir) || starts_dir(C.dir, v)) { *real = v; return 1; }
-    return base_is_host(v, real);
+    if (on_the_way(v, f.len, C.dir, dir_len)) { *real = v; return 1; }
+    return base_is_host_facts(v, &f, real);
 }
+int vis_is_host(const char *v, const char **real) { struct facts f; rule_facts(v, &f); return is_host_facts(v, &f, real); }
 int is_can_owned(const char *v) { const char *r; return !vis_is_host(v, &r); }
+static int leads_facts(const char *v, const struct facts *f)
+{
+    if (!v[0] || (v[0] == '/' && !v[1])) return (root_flags & R_LEADS) != 0;   /* starts_dir(file, "") and (file, "/") */
+    return f->exact && (f->exact->flags & R_LEADS);
+}
+/* the walk's three questions of a candidate in one pass (7.4.4): whether it is an identity file, whether it is a
+ * directory on the way to one, and whose it is; 1 if the host's, *real its real path */
+int vis_walk_facts(const char *v, int *identity, int *leads, const char **real)
+{
+    struct facts f; rule_facts(v, &f);
+    *identity = f.exact && (f.exact->flags & R_HOSTFILE);
+    *leads = leads_facts(v, &f);
+    return is_host_facts(v, &f, real);
+}
 
 /* 8.4: the directories on the way to a host identity file exist on the host whether or not the can ships
  * them; a path walk treats them as directories so that the file itself can be reached */
 int vis_leads_to_host_file(const char *v)
 {
-    for (int i = 0; i < C.nhost; i++)
-        if (C.host[i].is_file && starts_dir(C.host[i].v, v) && xstrcmp(C.host[i].v, v) != 0) return 1;
-    return 0;
+    struct facts f; f.exact = rule_exact(v);
+    return leads_facts(v, &f);
 }
 
 int is_wrapper_real(const char *real, char *tmp)
@@ -231,13 +331,13 @@ void from_real(char *r)
 }
 int vis_is_identity_file(const char *v)
 {
-    for (int i = 0; i < C.nhost; i++)
-        if (C.host[i].is_file && xstrcmp(v, C.host[i].v) == 0) return 1;
-    return 0;
+    struct rule *r = rule_exact(v);
+    return r && (r->flags & R_HOSTFILE);
 }
 int vis_readlink_identity(const char *v, char *out)
 {
-    for (int i = 0; i < C.nhost; i++)
-        if (C.host[i].is_file && xstrcmp(v, C.host[i].v) == 0) { if (!id_link[i]) return -EINVAL; scpy(out, id_link[i], PATH_MAX); return 1; }
-    return 0;
+    struct rule *r = rule_exact(v);
+    if (!r || !(r->flags & R_HOSTFILE)) return 0;
+    if (!id_link[r->host]) return -EINVAL;
+    scpy(out, id_link[r->host], PATH_MAX); return 1;
 }

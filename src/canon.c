@@ -124,19 +124,24 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
             memmove(rest + el + 1, rp, rl + 1); xmemcpy(rest, C.exe, el); rest[el] = '/'; rp = rest; cur[0] = 0; continue;
         }
         /* classify the component: a directory, a symlink (text in tmp), absent, or something else */
-        int kind, err = -ENOENT;
-        if (!(!vis_is_identity_file(cur) && (last || !vis_leads_to_host_file(cur)) && !is_can_owned(cur))) S->touched_can = 1;   /* anything but a plain host component */
-        if (vis_is_identity_file(cur)) {                       /* 8.4: resolved on the host at startup; its host symlinks are not ours to follow */
+        int kind, err = -ENOENT, idf, leads; const char *hreal;
+        int host = vis_walk_facts(cur, &idf, &leads, &hreal); /* the rule asked once for the candidate (PERFORMANCE.md 4 item 3) */
+        leads = leads && !last;
+        if (idf || leads || !host) S->touched_can = 1;         /* anything but a plain host component */
+        if (idf) {                                             /* 8.4: resolved on the host at startup; its host symlinks are not ours to follow */
             if ((rf & RESOLVE_NO_SYMLINKS) && vis_readlink_identity(cur, tmp) == 1) return -ELOOP;   /* it is a symlink where the walk sees it */
             kind = CK_FILE;
         }
-        else if (!last && vis_leads_to_host_file(cur)) kind = CK_DIR;   /* on the way to an identity file: a directory (8.4) */
-        else if (is_can_owned(cur)) {                          /* 7.4.4: can-owned components are remembered for the process's life */
-            to_real_exec(cur, real);
-            kind = cache_classify(cur, real, tmp);
-            if (!kind) kind = CK_NONE;
+        else if (leads) kind = CK_DIR;                         /* on the way to an identity file: a directory (8.4) */
+        else if (!host) {                                      /* 7.4.4: can-owned components are remembered for the process's life */
+            kind = cache_get(cur, tmp);                        /* the real path only for a component not yet remembered */
+            if (!kind) {
+                scpy(real, C.root, PATH_MAX); scat(real, cur, PATH_MAX);   /* to_real_exec's answer for a can path; cur is never "/" here */
+                kind = cache_classify(cur, real, tmp);
+                if (!kind) kind = CK_NONE;
+            }
         } else {
-            to_real_exec(cur, real);
+            scpy(real, hreal, PATH_MAX);                       /* to_real_exec's answer for a host path */
             struct kstat st; long r = sys_lstat(real, &st);
             if (r < 0) { kind = CK_NONE; err = (int)r; }
             else if ((st.st_mode & S_IFMT) == S_IFDIR) kind = CK_DIR;
