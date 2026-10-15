@@ -179,6 +179,11 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         S->touched_can = 1;                                 /* the root is the tree's */
         scpy(rest, path, sizeof S->rest); scpy(cur, base, PATH_MAX);
         if (base[0]) dom = is_can_owned(base);
+        /* a path spelt through the tree's real root, as a program that finds its files from its argv[0] spells them:
+         * the walk would lstat every directory above the tree and then see the tree's root by name (F3-1), and the
+         * opener resolved that name from /proc/self/exe, so the path starts at the root (PERFORMANCE.md 6) */
+        if (!rf && C.rootlen && xstrncmp(path, C.root, (size_t)C.rootlen) == 0 && (path[C.rootlen] == '/' || !path[C.rootlen]))
+            scpy(rest, path + C.rootlen, sizeof S->rest);
     } else {
         int tree = 0, r = (dfd == AT_FDCWD) ? cwd_virtual_in(rest, &tree) : fd_virtual_in(dfd, rest, &tree);
         if (r == -ENOENT) {                                    /* a directory deleted under the program, which the kernel still walks from and

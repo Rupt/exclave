@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """bench.py — the performance table (PROPOSAL.md 13 item 2, 16). Best of three, native against the can.
 
-    test/bench.py --can CAN [--sqlite PATH] [--work DIR]
+    test/bench.py --can CAN [--sqlite PATH] [--work DIR] [--opener OPENER]
 
 The can must contain gcc-13; the host's /usr/bin/gcc-13, else its gcc, gives the native column.
 """
@@ -23,6 +23,20 @@ STAT_C = r'''
 int main(int c, char **v) { struct stat st; struct timespec a, b; const char *p = v[1]; int n = 200000;
   clock_gettime(CLOCK_MONOTONIC, &a); for (int i = 0; i < n; i++) stat(p, &st); clock_gettime(CLOCK_MONOTONIC, &b);
   printf("%.0f\n", ((b.tv_sec - a.tv_sec) * 1e9 + (b.tv_nsec - a.tv_nsec)) / n); return 0; }
+'''
+CALLS_C = r'''
+#define _GNU_SOURCE
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/syscall.h>
+#include <time.h>
+#include <unistd.h>
+static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e9 + t.tv_nsec; }
+int main(int c, char **v) { int n = 200000; char buf[PATH_MAX]; double a = now();
+  if (v[1][0] == 'g') for (int i = 0; i < 20 * n; i++) syscall(SYS_getppid);
+  else for (int i = 0; i < n; i++) if (!realpath(v[2], buf)) return 1;
+  printf("%.0f\n", (now() - a) / (v[1][0] == 'g' ? 20 * n : n)); return 0; }
 '''
 SPAWN_C = r'''
 #include <spawn.h>
@@ -74,13 +88,14 @@ def main():
     ap.add_argument("--can", required=True)
     ap.add_argument("--sqlite", help="sqlite3.c amalgamation for the compute-bound compile")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "bench-work"))
+    ap.add_argument("--opener", default=os.path.join(REPO, "build", "opener"), help="the opener to measure (default: the build)")
     a = ap.parse_args()
     work = os.path.abspath(a.work)
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
     import tree
-    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy reopened with the build (17)
+    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"), opener=os.path.abspath(a.opener))   # a copy reopened with the build (17)
     cgcc, hgcc = os.path.join(can, "root", "usr", "bin", GCC), shutil.which("gcc-13") or shutil.which("gcc")
     opener = os.path.join(can, ".can", "opener")
     env = {"PATH": "/usr/bin:/bin"}
@@ -92,7 +107,7 @@ def main():
     def inside(prog, *args):
         return run([opener, prog] + list(args), work, env).stdout.decode().strip()
 
-    for name, src in (("statb", STAT_C), ("spawnb", SPAWN_C), ("spawn100k", SPAWN100K_C)):
+    for name, src in (("statb", STAT_C), ("callsb", CALLS_C), ("spawnb", SPAWN_C), ("spawn100k", SPAWN100K_C)):
         with open(os.path.join(work, name + ".c"), "w") as f:
             f.write(src)
         p = run([cgcc, "-O2", "-o", os.path.join(work, name), os.path.join(work, name + ".c")], work, env)
@@ -103,6 +118,10 @@ def main():
     rows.append(("stat(), seven-component can path, ns per call", best(lambda: int(native(statb, "/usr/lib/gcc/x86_64-linux-gnu/13/include/stddef.h"))), best(lambda: int(inside(statb, "/usr/lib/gcc/x86_64-linux-gnu/13/include/stddef.h")))))
     hostfile = os.path.join(work, "statb.c")
     rows.append(("stat(), %d-component host path, ns per call" % hostfile.count("/"), best(lambda: int(native(statb, hostfile))), best(lambda: int(inside(statb, hostfile)))))
+    rows.append(("stat(), relative name in the working directory, %d components deep on the host, ns per call" % work.count("/"), best(lambda: int(native(statb, "statb.c"))), best(lambda: int(inside(statb, "statb.c")))))
+    callsb = os.path.join(work, "callsb")
+    rows.append(("realpath() of the working directory, ns per call", best(lambda: int(native(callsb, "r", work))), best(lambda: int(inside(callsb, "r", work)))))
+    rows.append(("getppid(), untrapped, ns per call", best(lambda: int(native(callsb, "g"))), best(lambda: int(inside(callsb, "g")))))
     rows.append(("posix_spawn of /usr/bin/true, us per spawn", best(lambda: int(native(spawnb))), best(lambda: int(inside(spawnb)))))
     spawn100k = os.path.join(work, "spawn100k")                          # 17.4: 100 000 spawns from one process, RSS before and after, one run
     rows.append(("100 000 posix_spawns of /usr/bin/true from one process", native(spawn100k), inside(spawn100k)))
