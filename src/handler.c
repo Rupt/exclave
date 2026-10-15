@@ -339,11 +339,25 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
 {
     void *big; char **env; long envc = vec_read(S, S->extra, sizeof S->extra, envp, 3, &env, &big);
     if (envc < 0) return envc;
-    long n = 0; char head[12];
-    for (long i = 0; i < envc; i++) {
-        long got = copy_in(S->pid, head, env[i], sizeof head);
-        if (got >= 9 && (xmemcmp(head, "CAN_EXEC=", 9) == 0 || xmemcmp(head, "CAN_COMM=", 9) == 0 || (got >= 11 && xmemcmp(head, "CAN_EXECFN=", 11) == 0))) continue;
-        env[n++] = env[i];
+    /* the head of every variable, 12 bytes, read in one process_vm_readv for up to 256 at a time rather than one call
+     * each (PERFORMANCE.md 2.5); a variable the batch could not read whole, near the end of a mapping, and the rest of
+     * its batch are read one at a time as before. tmp holds the heads, rest the iovecs: both free until the end */
+    long n = 0; char head[12], *heads = S->tmp; struct iovec *riov = (struct iovec *)S->rest;
+    for (long i = 0; i < envc;) {
+        long k = envc - i, done = 0; if (k > 256) k = 256;
+        if (!no_readv) {
+            for (long j = 0; j < k; j++) { riov[j].iov_base = env[i + j]; riov[j].iov_len = sizeof head; }
+            struct iovec l = { heads, (size_t)k * sizeof head };
+            long got = sys_process_vm_readv(S->pid, &l, 1, riov, (unsigned long)k, 0);
+            if (got > 0) done = got / (long)sizeof head;
+        }
+        if (!done) done = -1;                                /* one variable the slow way */
+        for (long j = 0; j < (done < 0 ? 1 : done); j++, i++) {
+            const char *h = heads + j * (long)sizeof head; long got = sizeof head;
+            if (done < 0) { got = copy_in(S->pid, head, env[i], sizeof head); h = head; }
+            if (got >= 9 && (xmemcmp(h, "CAN_EXEC=", 9) == 0 || xmemcmp(h, "CAN_COMM=", 9) == 0 || (got >= 11 && xmemcmp(h, "CAN_EXECFN=", 11) == 0))) continue;
+            env[n++] = env[i];
+        }
     }
     int k = loader ? 3 : 2;
     for (long i = n; i > 0; i--) env[i + k - 1] = env[i - 1];
@@ -396,7 +410,8 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
     long ok = sys_faccessat(AT_FDCWD, S->real, X_OK);           /* the kernel's answer for this process, triads and search included (O3-4) */
     if (ok < 0) return ok;
-    int wrapper = is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp);
+    int wrapper = (is_can_owned(v) ? cache_classify(v, S->real, S->tmp) == CK_WRAPPER : is_wrapper_real(S->real, S->tmp))   /* remembered by the walk (7.4.4) */
+                  && payload_of(S->real, S->tmp);
     long fd = open_header(wrapper ? S->tmp : S->real); if (fd < 0) return fd;
     unsigned char h[4]; long n = sys_read((int)fd, h, 4); sys_close((int)fd);
     int script = n >= 2 && h[0] == '#' && h[1] == '!', elf = n == 4 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F';

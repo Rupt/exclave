@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/personality.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
@@ -46,6 +47,16 @@ int main(int argc, char **argv)
     }
     if (!strcmp(mode, "personality")) { personality(ADDR_NO_RANDOMIZE); execl("/proc/self/exe", argv[0], "child", (char *)0); perror("execl"); return 1; }
     if (!strcmp(mode, "script")) { execl(argv[2], argv[2], "arg1", (char *)0); perror("execl script"); return 1; }
+    if (!strcmp(mode, "showenv")) { printf("A=%s B=%s CAN_COMMX=%s\n", getenv("A") ? getenv("A") : "-", getenv("B") ? getenv("B") : "-", getenv("CAN_COMMX") ? getenv("CAN_COMMX") : "-"); return 0; }
+    if (!strcmp(mode, "envedge")) {                          /* a variable in the last bytes before an unmapped page, between others: the handler
+                                                              * reads every variable's head in one batch, and one it cannot read whole falls back
+                                                              * to its own read without losing the rest (PERFORMANCE.md 4 item 6) */
+        char *pg = mmap(0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0); if (pg == MAP_FAILED) { perror("mmap"); return 1; }
+        munmap(pg + 4096, 4096);
+        char *edge = pg + 4096 - 4; memcpy(edge, "A=1", 4);
+        char *ev[] = { "B=2", edge, "CAN_COMMX=keep", "CAN_EXEC=/bogus", 0 }, *av[] = { argv[2], "showenv", 0 };
+        execve(argv[2], av, ev); perror("execve"); return 1;
+    }
     if (!strcmp(mode, "vectors")) {                          /* O3-11, F3-14: NULL and bad vectors behave as the kernel makes them */
         int fails = 0; extern char **environ;
         for (int t = 2; t < argc; t++) {

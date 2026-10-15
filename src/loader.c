@@ -96,6 +96,20 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
 }
 
 /* 1: dynamic (interp filled), 0: static, <0: error. is_opener: the page generation .note.cont carries, 0 without one. */
+/* a PT_NOTE segment's .note.cont, read from fd into nb (512 bytes): its page generation, 1 for a note without one
+ * (an opener from before the word was added), 0 for no note of ours; the last such note counts */
+static int note_gen(int fd, const Phdr *p, unsigned char *nb)
+{
+    long n = sys_pread(fd, nb, p->p_filesz, (long)p->p_offset), o = 0; int g = 0;
+    while (n >= 12 && o + 12 <= n) {
+        uint32_t nsz = *(uint32_t *)(nb + o), dsz = *(uint32_t *)(nb + o + 4);
+        if (nsz == 5 && o + 17 <= n && xmemcmp(nb + o + 12, "cont", 5) == 0)
+            g = dsz >= 4 && o + 24 <= n && *(uint32_t *)(nb + o + 20) ? (int)*(uint32_t *)(nb + o + 20) : 1;
+        o += 12 + ((nsz + 3) & ~3u) + ((dsz + 3) & ~3u);
+    }
+    return g;
+}
+
 int elf_probe(const char *real, char *interp, int *is_opener, void *buf)
 {
     *is_opener = 0; interp[0] = 0;
@@ -114,13 +128,7 @@ int elf_probe(const char *real, char *interp, int *is_opener, void *buf)
             if (ph[i].p_type == PT_INTERP && ph[i].p_filesz < PATH_MAX) {
                 if (sys_pread((int)fd, interp, ph[i].p_filesz, (long)ph[i].p_offset) == (long)ph[i].p_filesz) { interp[ph[i].p_filesz] = 0; ret = 1; }
             } else if (ph[i].p_type == PT_NOTE && ph[i].p_filesz <= 512) {
-                long n = sys_pread((int)fd, nb, ph[i].p_filesz, (long)ph[i].p_offset); long o = 0;
-                while (n >= 12 && o + 12 <= n) {
-                    uint32_t nsz = *(uint32_t *)(nb + o), dsz = *(uint32_t *)(nb + o + 4);
-                    if (nsz == 5 && o + 17 <= n && xmemcmp(nb + o + 12, "cont", 5) == 0)
-                        *is_opener = dsz >= 4 && o + 24 <= n && *(uint32_t *)(nb + o + 20) ? (int)*(uint32_t *)(nb + o + 20) : 1;
-                    o += 12 + ((nsz + 3) & ~3u) + ((dsz + 3) & ~3u);
-                }
+                int g = note_gen((int)fd, &ph[i], nb); if (g) *is_opener = g;
             }
         }
     }
@@ -158,10 +166,11 @@ static void stack_make_exec(void)
 void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp, unsigned long *auxv)
 {
     Ehdr eh; unsigned long entry, phdr_va, base = 0, jump; int has_interp; char interp_v[PATH_MAX];
-    static char pbuf[7680]; int gen;                         /* another can's opener from before the page moved, which a handler sends here (7.4.2) */
-    if (elf_probe(real, interp_v, &gen, pbuf) >= 0 && gen && gen < PAGE_GENERATION)
-        die("a can's opener from before the syscall page moved cannot run here; reopen that can (cannery reopen)", vpath, 0);
     int fd = open_elf(real, &eh, ph_main, 128);
+    static unsigned char nb[512]; int gen = 0;               /* another can's opener from before the page moved, which a handler sends here (7.4.2) */
+    for (int i = 0; i < eh.e_phnum; i++) if (ph_main[i].p_type == PT_NOTE && ph_main[i].p_filesz <= 512) { int g = note_gen(fd, &ph_main[i], nb); if (g) gen = g; }
+    if (gen && gen < PAGE_GENERATION)
+        die("a can's opener from before the syscall page moved cannot run here; reopen that can (cannery reopen)", vpath, 0);
     payload_base = map_elf(fd, &eh, ph_main, &entry, &phdr_va, &has_interp, interp_v, real);
     if (C.descfd > 2) { sys_close(C.descfd); C.descfd = -1; }   /* a program run from a descriptor with no path (13 item 25): mapped, the dup goes */
     sys_close(fd);

@@ -817,6 +817,8 @@ def exec_vectors(ctx):
     os.chmod(hs, 0o755)
     rc, out, err = inside(ctx, p, ["vectors", ctx.vbin("true"), p, hs], timeout=60)
     expect(rc == 0 and "FAIL" not in out, out + err)
+    rc, out, err = inside(ctx, p, ["envedge", p], timeout=60)
+    expect(rc == 0 and out == "A=1 B=2 CAN_COMMX=keep\n", "a variable at the end of a mapping, among others: rc=%d %r %r" % (rc, out, err))
 
 
 @test

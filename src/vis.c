@@ -90,12 +90,13 @@ int vis_in_data(const char *v)
 static const char *id_link[64];
 
 /* resolve a host path's symlink chain on the host; returns the final path in out, first link text in link */
-static int host_resolve(const char *p, char *out, char *link)
+static int host_resolve(const char *p, const struct kstat *first, char *out, char *link)   /* first: p's lstat, already made */
 {
     char cur[PATH_MAX], t[PATH_MAX]; scpy(cur, p, PATH_MAX); link[0] = 0;
     for (int hops = 0; hops < 40; hops++) {
         struct kstat st;
-        if (sys_lstat(cur, &st) < 0) return 0;
+        if (hops == 0) st = *first;
+        else if (sys_lstat(cur, &st) < 0) return 0;
         if ((st.st_mode & S_IFMT) != S_IFLNK) { scpy(out, cur, PATH_MAX); return 1; }
         long n = sys_readlink(cur, t, PATH_MAX - 1); if (n < 0) return 0; t[n] = 0;
         if (!link[0]) scpy(link, t, PATH_MAX);
@@ -134,7 +135,7 @@ void vis_init(void)
         if (sys_lstat(C.host[i].v, &st) < 0) { log_msg("host path absent, using the can's", C.host[i].v); continue; }
         if ((st.st_mode & S_IFMT) == S_IFDIR) { C.host[n] = C.host[i]; C.host[n].is_file = 0; id_link[n] = 0; n++; continue; }
         static char out[PATH_MAX], link[PATH_MAX];
-        if (!host_resolve(C.host[i].v, out, link)) { log_msg("host path unresolvable, using the can's", C.host[i].v); continue; }
+        if (!host_resolve(C.host[i].v, &st, out, link)) { log_msg("host path unresolvable, using the can's", C.host[i].v); continue; }
         C.host[n].v = C.host[i].v; C.host[n].r = arena_str(out, xstrlen(out)); C.host[n].is_file = 1;
         id_link[n] = link[0] ? arena_str(link, xstrlen(link)) : 0; n++;
     }
