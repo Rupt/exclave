@@ -19,7 +19,9 @@ step() {                                                    # step NAME CMD...: 
 }
 unit() {
     cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/manifest_test" "$here/manifest_test.c" "$repo/src/manifest.c" "$repo/src/str.c" \
-        && "$out/manifest_test" && python3 "$here/grammar_test.py" --c-parser "$out/manifest_test" && python3 "$here/syscalls.py"   # the parser just built, not a stale build/manifest_test
+        && "$out/manifest_test" && python3 "$here/grammar_test.py" --c-parser "$out/manifest_test" \
+        && cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/filter_test" "$here/filter_test.c" "$repo/src/filter.c" "$repo/src/str.c" \
+        && "$out/filter_test" && python3 "$here/syscalls.py"   # the parser and the filter just built, not stale builds
 }
 stack() {
     python3 "$here/stackcheck.py" "$repo"/build/opener.debug-*.ci || return 1

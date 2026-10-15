@@ -376,7 +376,7 @@ test/realsoft.py     real projects built inside and outside a can; test/matrix.p
 test/dogfood.py      the cannery can building a can that must reproduce the host-built lockfile
 test/gate.sh         the commit gate, every step in parallel on copies of the cans given; test/examples.sh the example runs
 test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
-test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/stackcheck.py the stack budget
+test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule; test/stackcheck.py the stack budget
 docs/            proposal (revision 16), review response, prior art, performance, review reports
 spike/           frozen prototypes and their tests
 ```
