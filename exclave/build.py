@@ -13,10 +13,8 @@ import subprocess
 from collections.abc import Callable, Iterable, Iterator
 lazy from types import ModuleType
 
-import apk
-import deb
-import elfcheck
-import rpm
+from exclave import apk, deb, elfcheck, rpm
+lazy from exclave import cli  # cli imports this module: lazily, so neither waits on the other
 
 TOOL_VERSION = "0.1.0"
 MERGED_USR = ["bin", "sbin", "lib", "lib32", "lib64", "libx32"]
@@ -541,25 +539,22 @@ def write_lock(
     recomputes the launcher and tree hashes (after prune or relink); otherwise they are dropped
     (after unwrap: an unwrapped exclave has no output yet).
     """
-    import exclave  # noqa: PLC0415 -- exclave imports build: at the top this would be a cycle
-
-    record = exclave.Record
+    record = cli.Record
     lock = os.path.join(ex, ".exclave", "hashes")
-    old = exclave.load(lock, "hashes") if os.path.exists(lock) else []
+    old = cli.load(lock, "hashes") if os.path.exists(lock) else []
     if pkgs is None:
         pkgs = []
-        for v in exclave.values(old, "pkg"):
+        for v in cli.values(old, "pkg"):
             name, ver, arch, h = (f.decode("utf-8", "surrogateescape") for f in v)
             pkgs.append((name, ver, arch, h))
     if keep_hashes:
-        m = exclave.values(old, "manifest")
-        manifest_hash, tree = (m[0][0].decode() if m else None), bool(exclave.values(old, "tree"))
+        m = cli.values(old, "manifest")
+        manifest_hash, tree = (m[0][0].decode() if m else None), bool(cli.values(old, "tree"))
     recs = [record("hashes", [("t", b"1")]), record("tool", [("s", TOOL_VERSION.encode())])]
     if manifest_hash or tree:
         recs.append(
             record(
-                "launcher",
-                [("s", exclave.b2_file(os.path.join(ex, ".exclave", "launcher")).encode())],
+                "launcher", [("s", cli.b2_file(os.path.join(ex, ".exclave", "launcher")).encode())]
             )
         )
     for name, ver, arch, h in sorted(pkgs):
@@ -578,8 +573,8 @@ def write_lock(
         recs.append(record("manifest", [("s", manifest_hash.encode())]))
     if tree:
         recs.append(record("tree", [("s", tree_hash(os.path.join(ex, "tree")).encode())]))
-    data = exclave.dump(recs, "hashes")
-    exclave.parse(data, "hashes")
+    data = cli.dump(recs, "hashes")
+    cli.parse(data, "hashes")
     with open(lock, "wb") as f:
         f.write(data)
 
@@ -711,8 +706,6 @@ def prune(
     licence texts; drop every other file and symlink. Directories are never removed, so ownership
     and `ls` do not change. Returns (kept, removed, bytes).
     """
-    import exclave  # noqa: PLC0415 -- exclave imports build: at the top this would be a cycle
-
     root = os.path.join(ex, "tree")
     keep: set[str] = set()
     whole: set[str] = set()
@@ -765,7 +758,7 @@ def prune(
     # the log names canonical paths, so every alias a program used is a symlink to keep:
     # every symlink in the tree that reaches a kept file, or a directory, stays with its chain;
     # the rest go
-    for _real, v, st in exclave.walk_files(root):
+    for _real, v, st in cli.walk_files(root):
         if not stat.S_ISLNK(st.st_mode) or v in keep:
             continue
         chain: set[str] = set()

@@ -24,15 +24,13 @@ import shutil
 import subprocess
 import sys
 
+import oracle_ns
+import tree
+
+from exclave import build, cli
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, HERE)
-sys.path.insert(0, os.path.join(REPO, "exclave"))
-import oracle_ns  # noqa: E402
-import tree  # noqa: E402
-
-import build  # noqa: E402
-import exclave  # noqa: E402
 
 
 def setup(ex0: str, work: str) -> None:
@@ -42,9 +40,7 @@ def setup(ex0: str, work: str) -> None:
     # a copy relinked with the build (17)
     ex = tree.fresh_exclave(ex0, os.path.join(work, "exclave"))
     root = os.path.join(work, "bare", "tree")
-    shutil.copytree(
-        os.path.join(ex, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy
-    )
+    shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=cli.link_or_copy)
     build.unwrap(os.path.join(work, "bare"), log=lambda *_: None)
     for r in (root, os.path.join(ex, "tree")):
         tree.socket_file(os.path.join(r, "usr", "share", "exclave-test.sock"))

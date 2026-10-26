@@ -25,8 +25,7 @@ import sys
 import urllib.request
 lazy from collections.abc import Callable
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "exclave"))
-import deb
+from exclave import deb
 
 
 class RepoError(Exception):

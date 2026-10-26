@@ -36,17 +36,10 @@ import re
 import shutil
 import stat
 import sys
+from typing import Never
 lazy from collections.abc import Iterable, Iterator, Sequence
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from typing import Never
-
-import apk
-import deb
-import elfcheck
-import rpm
-
-import build
+from exclave import apk, build, deb, elfcheck, rpm
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # canonical key order per file kind (6.2, 6.4)
@@ -949,7 +942,7 @@ def require_exclave(ex: str, cmd: str) -> None:
         sys.exit(f"refusing: {ex} has no .exclave/ directory; wrap makes one")
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -1000,7 +993,3 @@ def main(argv: list[str]) -> int:
     except (build.BuildError, deb.DebError, apk.ApkError, rpm.RpmError) as e:
         sys.exit(f"exclave: {e}")
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))

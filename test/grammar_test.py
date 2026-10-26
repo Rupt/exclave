@@ -17,9 +17,9 @@ import sys
 import tempfile
 lazy from collections.abc import Callable
 
+from exclave import cli
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(HERE), "exclave"))
-import exclave  # noqa: E402
 
 
 def rand_bytes(rng: random.Random, *, path: bool = False) -> bytes:
@@ -45,22 +45,22 @@ def properties(rng: random.Random, cases: int) -> int:
         b = rand_bytes(rng, path=True).replace(b"/", b"_")
         if b in (b".", b".."):
             b = b"_" + b
-        q = exclave.quote(b)
+        q = cli.quote(b)
         if seen.setdefault(q, b) != b:
             bad += 1  # encode is injective
-        text = ("exclave 1\n\nown {}\n".format(exclave.quote(b"/" + b))).encode()
+        text = ("exclave 1\n\nown {}\n".format(cli.quote(b"/" + b))).encode()
         try:
-            recs = exclave.parse(text, "exclave")
-        except exclave.GrammarError as e:
+            recs = cli.parse(text, "exclave")
+        except cli.GrammarError as e:
             bad += 1
             print(f"FAIL parse of encoded {b!r}: {e}")
             continue
         if recs[1].fields[0][1] != b"/" + b:  # decode(encode(b)) == b
             bad += 1
             print(f"FAIL round trip {b!r}")
-        canon = exclave.dump(recs, "exclave")
+        canon = cli.dump(recs, "exclave")
         # format is idempotent
-        if canon != text or exclave.dump(exclave.parse(canon, "exclave"), "exclave") != canon:
+        if canon != text or cli.dump(cli.parse(canon, "exclave"), "exclave") != canon:
             bad += 1
             print(f"FAIL canonical form {b!r}")
     return bad
@@ -96,9 +96,7 @@ def near_manifest(rng: random.Random) -> bytes:
         key = rng.choice(["own", "host", "data", "cpu", "cpu", "bogus"])
         val = rand_bytes(rng)
         recs.append(
-            "{} {}".format(
-                key, exclave.quote((b"/" if key in ("own", "host", "data") else b"") + val)
-            )
+            "{} {}".format(key, cli.quote((b"/" if key in ("own", "host", "data") else b"") + val))
         )
     if rng.random() < 0.3:
         recs.insert(rng.randint(0, len(recs)), "# " + rand_bytes(rng).decode("utf-8", "replace"))
@@ -117,9 +115,9 @@ def compare(rng: random.Random, cases: int, c_parser: str) -> int:
             with open(path, "wb") as f:
                 f.write(text)
             try:
-                exclave.parse(text, "exclave")
+                cli.parse(text, "exclave")
                 py = True
-            except exclave.GrammarError:
+            except cli.GrammarError:
                 py = False
             c = subprocess.run([c_parser, path], capture_output=True, check=False).returncode == 0
             if py != c:
@@ -147,9 +145,9 @@ def positions(c_parser: str) -> int:
             with open(path, "wb") as f:
                 f.write(text)
             try:
-                exclave.parse(text, "exclave")
+                cli.parse(text, "exclave")
                 py = "accepted"
-            except exclave.GrammarError as e:
+            except cli.GrammarError as e:
                 py = str(e)
             c = subprocess.run(
                 [c_parser, path], capture_output=True, text=True, check=False

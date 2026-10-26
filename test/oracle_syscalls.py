@@ -91,16 +91,15 @@ import subprocess
 import sys
 lazy from collections.abc import Callable
 
+import tree
+from oracle_resolve import make_maze
+from syscalls import kernel_table
+
+from exclave import build, cli
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(REPO, "exclave"))
-sys.path.insert(0, HERE)
-import tree  # noqa: E402
-from oracle_resolve import make_maze  # noqa: E402
-from syscalls import kernel_table  # noqa: E402
 
-import build  # noqa: E402
-import exclave  # noqa: E402
 
 MACHINE = platform.machine()
 # orderings have moved between kernels (8.2)
@@ -1194,7 +1193,7 @@ def main() -> int:
     # same maze in both
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(
-        os.path.join(given, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy
+        os.path.join(given, "tree"), root, symlinks=True, copy_function=cli.link_or_copy
     )
     build.unwrap(os.path.join(work, "bare"), log=lambda *_: None)
     # the launcher's world: a copy relinked with the build (17)

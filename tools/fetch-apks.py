@@ -25,8 +25,7 @@ import tarfile
 import urllib.request
 import zlib
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "exclave"))
-import apk
+from exclave import apk
 
 DEFAULT_MIRROR = "https://dl-cdn.alpinelinux.org/alpine"
 BASE = ["alpine-baselayout", "busybox"]

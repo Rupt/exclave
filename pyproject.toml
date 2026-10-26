@@ -11,9 +11,21 @@ license-files = ["LICENSE"]
 requires-python = ">=3.15"
 dependencies = []
 
+[project.scripts]
+exclave = "exclave.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# The package is exclave/ at the top of the checkout, beside src/, the
+# launcher's C. uv sync installs it into .venv in editable mode; the matrix's
+# VMs and the tool's own exclave get it with `uv pip install --target`.
+module-name = "exclave"
+module-root = ""
+
 [tool.uv]
-# Scripts, not a package: nothing is built or installed from this tree.
-package = false
 # Never borrow a Python from the machine, as the uv in .uv/ is never borrowed
 # from PATH: what runs here should not depend on what is installed.
 python-preference = "only-managed"
@@ -116,9 +128,10 @@ convention = "google"
 
 [tool.ty.environment]
 python-version = "3.15"
-# The import roots: the tool's modules, the tests' helpers and the fetchers,
-# each imported by bare name from its own directory.
-root = ["exclave", "test", "tools"]
+# The import roots: the checkout, for the exclave package, and test/, whose
+# drivers import their helpers (tree, syscalls, oracle_ns, ...) as a script's
+# siblings, from the directory Python puts first on a script's path.
+root = [".", "test"]
 
 [tool.ty.src]
 include = ["exclave", "test", "tools"]

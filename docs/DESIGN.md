@@ -1752,8 +1752,12 @@ library only, run as `scripts/exclave` by the pinned Python: the uv that
 `scripts/install-uv` puts in `.uv/` installs the version `.python-version`
 names (3.15) into the checkout, and every script runs through it
 (`scripts/lib.sh`), so nothing the machine has installed decides which
-Python runs. The tool is also shipped as an exclave of itself, with that
-Python inside (10.5).
+Python runs. The tool is the `exclave` package (`exclave/`, its command line
+`exclave.cli`), which `uv sync` installs into the checkout's `.venv` in
+editable form and which runs as `python -m exclave` or the `exclave`
+console script; the tests and the fetchers import it as a package. It
+is also shipped as an exclave of itself, with that Python inside
+(10.5).
 
 The tool takes files and writes directories. It never opens a network
 connection. The package files it is given are its inputs, whoever
@@ -2095,11 +2099,14 @@ The tool's own exclave is built by `exclave unpack` from Ubuntu's base
 system, the closure of `libc6` and `libgcc-s1`. The pinned Python's own
 tree, the one running the build, is copied in at `/opt/python`, without
 Tcl/Tk, whose libraries search a directory of the machine they were
-built on, which the static check rightly refuses; the tool's source and
-the launcher are copied in by hand, and `exclave wrap` wraps it, its
-static check verifying that the Python's libraries resolve inside. Its
-shortcut is a shell script that runs `/opt/python/bin/python3` on the
-tool, which is one reason scripts are wrapped (6.1).
+built on, which the static check rightly refuses. The tool and the
+launcher go in next: `uv pip install --target` installs the package into
+that Python's site-packages, and the launcher goes beside its modules,
+where the tool looks for one outside a checkout. `exclave wrap` then
+wraps it, its static check verifying that the Python's libraries resolve
+inside. Its shortcut is a shell script that runs
+`/opt/python/bin/python3 -m exclave`, which is one reason scripts are
+wrapped (6.1).
 
 A tool's exclave can build the next one. That is a cross-exclave
 invocation, with each exclave holding a launcher of its own, and
@@ -2503,8 +2510,7 @@ and stay fixed.
     (item 24) and the current launcher cannot run under each other: the
     current one refuses either nesting and points here (7.4.2); the
     conversion, which relinks, fixes it. Converting a can is renames,
-    two edits and three commands, `exclave/exclave.py` standing for the
-    command:
+    two edits and three commands:
 
     ```
     cd OLD.can && mv .can .exclave && mv root tree && mv .exclave/opener .exclave/launcher && mv .exclave/lock .exclave/hashes
@@ -3619,8 +3625,9 @@ machine, in virtual machines, one at a time with 1 GB each. Each VM
 boots its distribution's cloud image under QEMU with KVM behind a
 copy-on-write overlay; cloud-init installs strace and, where the
 distribution has it, bubblewrap. The exclave, the test tree, the
-checkout's launcher and the pinned Python are copied in, and the exclave
-is relinked there. The Python is built for the VM's machine and libc and
+checkout's launcher and the pinned Python are copied in, the checkout
+installed into that Python in editable form as `uv sync` installs it
+here (a `.pth` naming it), and the exclave is relinked there. The Python is built for the VM's machine and libc and
 installed by the repository's uv: the glibc builds need only glibc 2.17,
 so CentOS 7 runs the same Python as Fedora 42, and Alpine takes the musl
 build. A VM's own `python3`, if it has one, is never used.

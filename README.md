@@ -384,7 +384,7 @@ src/scratch.c        handler memory: mmap'd chunks with liveness reclamation (7.
 src/isa.c            the CPU check (7.7): x86-64 psABI levels by cpuid and XCR0, aarch64 levels by AT_HWCAP
 src/str.c            string helpers, arena, the shebang parser
 src/log.c            EXCLAVE_LOG and fatal messages
-exclave/exclave.py   the command line: grammar, unpack, wrap, unwrap, check, prune, format, hash, relink
+exclave/cli.py       the command line: grammar, unpack, wrap, unwrap, check, prune, format, hash, relink; the package's entry point
 exclave/deb.py       ar, tar, compression, control stanzas, dependency fields, Debian version order
 exclave/apk.py       the Alpine reader with deb.py's interface: gzip streams, .PKGINFO, apk's dependency and version syntax
 exclave/rpm.py       the rpm reader with the same interface: lead and headers, the cpio payload, rpm's flags and version order

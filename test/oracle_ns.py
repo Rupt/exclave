@@ -10,19 +10,18 @@ than against the launcher. Needs user namespaces and bwrap; says so and exits 0 
 
 import argparse
 import os
+import platform
 import re
 import shutil
 import subprocess
 import sys
 lazy from collections.abc import Iterable
 
+from exclave import build, cli
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(REPO, "exclave"))
-import platform  # noqa: E402
 
-import build  # noqa: E402
-import exclave  # noqa: E402
 
 # the exclave's multiarch directory: the suite runs on the exclave's own machine
 TRIPLET = f"{platform.machine()}-linux-gnu"
@@ -243,9 +242,7 @@ def main() -> int:
     # an unwrapped copy of the tree for bwrap: hard links, then the originals moved back over the
     # wrappers
     root = os.path.join(work, "bare", "tree")
-    shutil.copytree(
-        os.path.join(ex, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy
-    )
+    shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=cli.link_or_copy)
     build.unwrap(os.path.join(work, "bare"), log=lambda *_: None)
     with open(os.path.join(root, "usr", "share", "exclave-test-marker"), "w") as f:
         f.write("marker\n")

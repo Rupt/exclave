@@ -16,6 +16,7 @@ build/matrix-results.md.
 
 import argparse
 import contextlib
+import io
 import os
 import shutil
 import socket
@@ -25,11 +26,12 @@ import tarfile
 import time
 import urllib.request
 
+import tree
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 UV = os.path.join(REPO, ".uv", "bin", "uv")
-sys.path.insert(0, HERE)
-import tree  # noqa: E402
+PYDIR = f"python{sys.version_info[0]}.{sys.version_info[1]}"
 
 # name, expected kernel, ssh user, image URL candidates (first that downloads wins), package family,
 # notes, arch
@@ -467,6 +469,12 @@ def main() -> int:
                 # the text the launcher carries, which exclave_readme compares
                 t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")
                 t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
+                # the exclave package installed into that Python as uv sync installs it here, in
+                # editable form: a .pth naming the checkout, relative to site-packages
+                pth = b"../../../../repo\n"
+                info = tarfile.TarInfo(f"python/lib/{PYDIR}/site-packages/_exclave.pth")
+                info.size = len(pth)
+                t.addfile(info, io.BytesIO(pth))
                 if a.docker_profile:
                     t.add(a.docker_profile, arcname="docker-seccomp.json")
                 # the Go regression's programs, built here for the VM's machine: the VMs have no go
@@ -556,9 +564,9 @@ def main() -> int:
                 continue
             if arch != "x86_64":  # the exclave is made here, on its own architecture (10.1)
                 _rc, out = vm.ssh(
-                    "cd m && $PWD/python/bin/python3 repo/exclave/exclave.py unpack ex debs/*.deb "
+                    "cd m && $PWD/python/bin/python3 -m exclave unpack ex debs/*.deb "
                     "2>&1 | tail -3 && "
-                    "$PWD/python/bin/python3 repo/exclave/exclave.py wrap ex 2>&1 | tail -3",
+                    "$PWD/python/bin/python3 -m exclave wrap ex 2>&1 | tail -3",
                     timeout=3600 * slow,
                 )
                 log(name, "exclave:", " | ".join(x.strip() for x in out.splitlines()[-3:]))
@@ -576,7 +584,7 @@ def main() -> int:
             else:
                 # the exclave given carries the launcher that made it: the row tests the checkout's
                 _rc, out = vm.ssh(
-                    "cd m && $PWD/python/bin/python3 repo/exclave/exclave.py "
+                    "cd m && $PWD/python/bin/python3 -m exclave "
                     "relink ex repo/build/launcher 2>&1 | tail -1",
                     timeout=600 * slow,
                 )

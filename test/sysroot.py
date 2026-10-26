@@ -23,13 +23,15 @@ import shutil
 import subprocess
 import sys
 
+import tree
+
+from exclave import cli
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(REPO, "exclave"))
-sys.path.insert(0, HERE)
-import tree  # noqa: E402
+# the tool, as the pinned Python runs it: the exclave package's entry point
+TOOL = (sys.executable, "-m", "exclave")
 
-import exclave  # noqa: E402
 
 HELLO = (
     "#include <stdio.h>\n#include <stdlib.h>\n"
@@ -63,30 +65,29 @@ def main() -> int:
         shutil.rmtree(work)
     os.makedirs(work)
     ex, sysroot_ex = os.path.join(work, "gcc.exclave"), os.path.join(work, "sysroot.exclave")
-    exclave_py = os.path.join(REPO, "exclave", "exclave.py")
     tree.fresh_exclave(a.exclave, ex)  # a copy of its own, relinked with the build (17)
-    rc, out, err = run([sys.executable, exclave_py, "unwrap", ex])
+    rc, out, err = run([*TOOL, "unwrap", ex])
     if rc:
         sys.exit("unwrap: " + out + err)
     rpms = sorted(glob.glob(os.path.join(a.rpms, "*.rpm")))
-    rc, out, err = run([sys.executable, exclave_py, "unpack", sysroot_ex, *rpms])
+    rc, out, err = run([*TOOL, "unpack", sysroot_ex, *rpms])
     if rc:
         sys.exit("unpack: " + out + err)
     dst = os.path.join(ex, "tree", a.prefix.lstrip("/"))
     shutil.copytree(
-        os.path.join(sysroot_ex, "tree"), dst, symlinks=True, copy_function=exclave.link_or_copy
+        os.path.join(sysroot_ex, "tree"), dst, symlinks=True, copy_function=cli.link_or_copy
     )
     with open(os.path.join(ex, ".exclave", "manifest"), "wb") as f:
         f.write(
-            exclave.dump(
+            cli.dump(
                 [
-                    exclave.Record("exclave", [("t", b"1")]),
-                    exclave.Record("data", [("s", a.prefix.encode())]),
+                    cli.Record("exclave", [("t", b"1")]),
+                    cli.Record("data", [("s", a.prefix.encode())]),
                 ],
                 "exclave",
             )
         )
-    rc, out, err = run([sys.executable, exclave_py, "wrap", ex])
+    rc, out, err = run([*TOOL, "wrap", ex])
     if rc:
         sys.exit("wrap: " + out + err)
     print([line for line in out.splitlines() if line.startswith("static check")][-1])
@@ -120,7 +121,7 @@ def main() -> int:
     versions = sorted(
         set(re.findall(r"GLIBC_([0-9.]+)", out)), key=lambda v: [int(x) for x in v.split(".")]
     )
-    import elfcheck
+    from exclave import elfcheck
 
     # the banner in libc.so.6, any glibc
     gv = elfcheck.glibc_version(elfcheck.Tree(os.path.join(sysroot_ex, "tree")))

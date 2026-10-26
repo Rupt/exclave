@@ -14,6 +14,9 @@ exits 0 when it cannot run.
 import argparse
 import json
 import os
+
+# seccomp's architecture word and Docker's names for this machine, whose profile entries name arches
+import platform
 import shutil
 import struct
 import subprocess
@@ -24,8 +27,6 @@ lazy from collections.abc import Callable
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
-# seccomp's architecture word and Docker's names for this machine, whose profile entries name arches
-import platform  # noqa: E402
 
 MACHINE = platform.machine()
 AUDIT_ARCH = {"x86_64": 0xC000003E, "aarch64": 0xC00000B7}[MACHINE]

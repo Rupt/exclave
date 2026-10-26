@@ -20,7 +20,7 @@ import subprocess
 from typing import BinaryIO
 lazy from collections.abc import Callable, Iterable, Sequence
 
-lazy import build
+lazy from exclave import build
 
 PT_LOAD, PT_DYNAMIC, PT_INTERP = 1, 2, 3
 DT_NULL, DT_NEEDED, DT_STRTAB, DT_STRSZ, DT_SONAME, DT_RPATH, DT_RUNPATH = 0, 1, 5, 10, 14, 15, 29

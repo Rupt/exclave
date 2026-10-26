@@ -30,8 +30,7 @@ import xml.etree.ElementTree as ET
 from compression import zstd
 from typing import TypedDict
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "exclave"))
-import rpm
+from exclave import rpm
 
 BASE = ["setup", "filesystem", "basesystem", "bash"]
 NS = {

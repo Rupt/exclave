@@ -17,7 +17,6 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_LAUNCHER = os.path.join(REPO, "build", "launcher")
-sys.path.insert(0, os.path.join(REPO, "exclave"))
 
 
 def vbin(root: str, name: str) -> str:
@@ -138,9 +137,9 @@ def copy_exclave(src: str, dst: str) -> str:
     The tree's files hard-linked, the files under .exclave/ copied, since a manifest or hashes file
     written through a hard link would change the given exclave's.
     """
-    import exclave
+    from exclave import cli
 
-    shutil.copytree(src, dst, symlinks=True, copy_function=exclave.link_or_copy)
+    shutil.copytree(src, dst, symlinks=True, copy_function=cli.link_or_copy)
     for name in os.listdir(os.path.join(dst, ".exclave")):
         p = os.path.join(dst, ".exclave", name)
         if os.path.isfile(p) and not os.path.islink(p):
@@ -162,12 +161,12 @@ def fresh_exclave(src: str, dst: str, launcher: str = BUILD_LAUNCHER) -> str:
     which a rebuild leaves behind. The copy is made anew on every run, so nothing has to be
     remembered.
     """
-    import exclave
+    from exclave import cli
 
     if not os.path.isfile(launcher):
         sys.exit(f"no launcher at {launcher}: run make")
     copy_exclave(src, dst)
-    exclave.cmd_relink(dst, launcher)
+    cli.cmd_relink(dst, launcher)
     return dst
 
 
@@ -177,10 +176,10 @@ def relink_if_stale(ex: str, launcher: str = BUILD_LAUNCHER) -> bool:
     The check is a byte comparison of two small files, the relink a second, so a rebuild never has
     to be remembered by hand.
     """
-    import exclave
+    from exclave import cli
 
     if not filecmp.cmp(launcher, os.path.join(ex, ".exclave", "launcher"), shallow=False):
-        exclave.cmd_relink(ex, launcher)
+        cli.cmd_relink(ex, launcher)
         return True
     return False
 

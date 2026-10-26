@@ -114,8 +114,12 @@ The loop that has served well, in the order it pays:
   per architecture, checked against a committed checksum), uv installs
   the Python `.python-version` names (3.15) and the dev tools `uv.lock`
   pins, and every command is a POSIX `sh` wrapper in `scripts/` that
-  sources `scripts/lib.sh`. Python files are programs the wrappers run,
-  without shebangs or executable bits. The matrix carries the same
+  sources `scripts/lib.sh`. The tool is the `exclave` package, which
+  `uv sync` installs into `.venv` in editable form; everything imports
+  it as a package (`from exclave import build, cli`), never by editing
+  `sys.path`, and a test driver imports its helpers as a script's
+  siblings. Python files are programs the wrappers run, without
+  shebangs or executable bits. The matrix carries the same
   Python into its VMs, and the tool's own exclave is built on it.
   Running Python by hand: `.uv/bin/uv run python FILE` with the
   environment `scripts/lib.sh` sets.

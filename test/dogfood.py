@@ -18,6 +18,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
+# the tool, as the pinned Python runs it: the exclave package's entry point
+TOOL = (sys.executable, "-m", "exclave")
 
 
 def run(cmd: list[str], cwd: str, *, check: bool = True) -> str:
@@ -48,10 +50,9 @@ def main() -> int:
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
-    exclave = os.path.join(REPO, "exclave", "exclave.py")
     print("building the tool's own exclave")
     tool_ex = os.path.join(work, "tool.exclave")
-    run([sys.executable, exclave, "unpack", tool_ex, *debs(tool_debs)], work)
+    run([*TOOL, "unpack", tool_ex, *debs(tool_debs)], work)
     # the pinned Python, the one running this, as a tree of its own: the base system's packages
     # give it a libc. Without Tcl/Tk, which the tool never imports and whose libraries search a
     # build directory the exclave does not own (/tools/deps/lib), so the static check would
@@ -69,17 +70,25 @@ def main() -> int:
     shutil.copytree(
         sys.base_prefix, os.path.join(tool_ex, "tree", "opt", "python"), symlinks=True, ignore=tk
     )
-    # the tool's own source and the launcher, by hand: the exclave is a directory
-    lib = os.path.join(tool_ex, "tree", "usr", "lib", "exclave")
-    shutil.copytree(
-        os.path.join(REPO, "exclave"), lib, ignore=shutil.ignore_patterns("__pycache__")
+    # the exclave package installed into that Python, as uv installs it anywhere, and the launcher
+    # beside its modules, where the tool looks for one outside a checkout
+    site = os.path.join(
+        tool_ex,
+        "tree",
+        "opt",
+        "python",
+        "lib",
+        f"python{sys.version_info[0]}.{sys.version_info[1]}",
+        "site-packages",
     )
-    shutil.copy2(os.path.join(REPO, "build", "launcher"), os.path.join(lib, "launcher"))
+    uv = os.path.join(REPO, ".uv", "bin", "uv")
+    run([uv, "pip", "install", "--quiet", "--no-deps", "--target", site, REPO], work)
+    shutil.copy2(os.path.join(REPO, "build", "launcher"), os.path.join(site, "exclave", "launcher"))
     entry = os.path.join(tool_ex, "tree", "usr", "bin", "exclave")
     with open(entry, "w") as f:
-        f.write('#!/bin/sh\nexec /opt/python/bin/python3 /usr/lib/exclave/exclave.py "$@"\n')
+        f.write('#!/bin/sh\nexec /opt/python/bin/python3 -m exclave "$@"\n')
     os.chmod(entry, 0o755)
-    run([sys.executable, exclave, "wrap", tool_ex], work)
+    run([*TOOL, "wrap", tool_ex], work)
     os.symlink("tree/usr/bin/exclave", os.path.join(tool_ex, "exclave"))
     run(
         [
@@ -92,11 +101,8 @@ def main() -> int:
     )
     gcc_files = debs(gcc_debs)
     print("building the gcc exclave on the host")
-    run(
-        [sys.executable, exclave, "unpack", os.path.join(work, "gcc-host.exclave"), *gcc_files],
-        work,
-    )
-    run([sys.executable, exclave, "wrap", os.path.join(work, "gcc-host.exclave")], work)
+    run([*TOOL, "unpack", os.path.join(work, "gcc-host.exclave"), *gcc_files], work)
+    run([*TOOL, "wrap", os.path.join(work, "gcc-host.exclave")], work)
     print("building the gcc exclave inside the tool's own exclave")
     run(
         [
