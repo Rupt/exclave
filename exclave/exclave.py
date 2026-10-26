@@ -25,7 +25,7 @@ Unpack, wrap and relink also write EXCLAVE/README, which tells whoever finds the
 is and how to run it, where the exclave has none.
 
 The tool never opens a network connection: the files it is given are its inputs, whoever fetched
-them. Standard library only. Python 3.6 or later.
+them. Standard library only, run by the pinned Python (scripts/exclave).
 """
 
 import argparse
@@ -953,8 +953,7 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    sub = ap.add_subparsers(dest="cmd")
-    sub.required = True  # required= is Python 3.7; the matrix runs 3.6
+    sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("unpack")
     p.add_argument("out")
     p.add_argument("debs", nargs="+")
