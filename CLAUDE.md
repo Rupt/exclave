@@ -19,7 +19,7 @@ The loop that has served well, in the order it pays:
 
 1. **Measure first.** A limitation or a suspected wrong answer gets an
    exerciser: a small C program in `test/progs/` that prints one line
-   per case. `test/exercise.py --exclave EXCLAVE PROG.c ARGS` runs it
+   per case. `scripts/exercise --exclave EXCLAVE PROG.c ARGS` runs it
    under `bwrap` with the unwrapped tree read-only at `/`, where the
    kernel answers, and under the launcher, and marks the lines that
    differ. The kernel's column is the expectation. For a trapped
@@ -40,7 +40,7 @@ The loop that has served well, in the order it pays:
    the regression list (17 item 4), performance (16) and section 19 are
    where a change is recorded; figures there are measured rather than
    guessed, because the documents are what a reader trusts.
-5. **Gate, matrix, commit.** `test/gate.sh EXCLAVE...` on the gcc,
+5. **Gate, matrix, commit.** `scripts/gate EXCLAVE...` on the gcc,
    Alpine, Fedora and clang exclaves at zero failures, `test/matrix.py
    --exclave EXCLAVE` before a launcher change is committed, one commit
    per item.
@@ -77,7 +77,7 @@ The loop that has served well, in the order it pays:
   `x28` alone (`-ffixed-x28`), where a Go program keeps its goroutine
   while the handler runs (7.5.3). `make` builds `build/launcher-aarch64`
   when `aarch64-linux-gnu-gcc` is installed; it is tested in the arm64
-  VM (`test/matrix.py --exclave EXCLAVE --only noble-arm64 --debs-arm64
+  VM (`scripts/matrix --exclave EXCLAVE --only noble-arm64 --debs-arm64
   DIR --docker-profile FILE`), since user-mode emulation has no seccomp. A syscall the handler
   re-issues is best one the oldest kernel of the matrix has (`renameat`,
   not `renameat2`, for a plain rename).
@@ -116,8 +116,8 @@ The loop that has served well, in the order it pays:
   and measured on the reference machine; a change that moves one
   measures it again, and a number the current code has not produced is
   better left out than quoted.
-- **The gate.** `test/gate.sh EXCLAVE...` (`EXCLAVE_TEST_INPUTS=DIR`,
-  the directory `test/inputs.sh` filled, adds the Docker profile and
+- **The gate.** `scripts/gate EXCLAVE...` (`EXCLAVE_TEST_INPUTS=DIR`,
+  the directory `scripts/inputs` filled, adds the Docker profile and
   dogfood) runs the unit tests, the stack budget, the suite on every
   exclave in two orders and, for the first exclave, under the plain
   terminal's AppArmor label, the oracles and the syscall probe, every step in parallel on copies, in about a
@@ -134,7 +134,7 @@ The loop that has served well, in the order it pays:
   run use the whole exclave and remake it. A launcher or `test/tree.py`
   change that makes a test touch a file the fixture lacks fails that
   test until the fixture is removed. After rebuilding the launcher,
-  `exclave/exclave.py relink EXCLAVE` refreshes an exclave; replacing
+  `scripts/exclave relink EXCLAVE` refreshes an exclave; replacing
   `.exclave/launcher` alone leaves the wrappers linked to the old file.
 - **Tests are independent.** A test in `test/run.py` makes what it
   needs and leaves the shared context alone; the fixtures are the exclave,
@@ -165,7 +165,7 @@ mirror configured on this machine is `http://gb.archive.ubuntu.com/ubuntu`;
 
 ## Scratch space
 
-Every development input is made by `test/inputs.sh DIR`, which holds the
+Every development input is made by `scripts/inputs DIR`, which holds the
 exact fetch commands: the gcc, Alpine, Fedora and clang exclaves of the
 gate, Docker's seccomp profile and dogfood's packages, the CentOS 7 rpms
 for `test/sysroot.py`, the arm64 debs for the emulated row, and the

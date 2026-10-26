@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """exclave — builds exclaves from files (DESIGN.md sections 6 and 10).
 
 An exclave is a directory at every stage, and every command takes paths; `format --check` is the one flag:

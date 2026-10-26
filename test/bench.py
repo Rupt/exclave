@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """bench.py — the performance table (DESIGN.md 13 item 2, 16). Best of three, native against the exclave.
 
     test/bench.py --exclave EXCLAVE [--sqlite PATH] [--work DIR] [--launcher LAUNCHER]

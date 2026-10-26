@@ -1,10 +1,9 @@
-#!/usr/bin/env python3
 """exercise.py — one program, two worlds (DESIGN.md 17): compile PROG.c with the exclave's compiler, run it under bwrap with
 the unwrapped tree read-only at / (the namespace oracle's world, where the kernel answers) and under the launcher, and
 print the two outputs side by side, marking the lines that differ. This is how a limitation is measured before it is
 fixed: the program prints one line per case, "<case>: <answer>", and the kernel's column is the expectation.
 
-    test/exercise.py --exclave EXCLAVE PROG.c [ARGS...]     HOSTDIR in ARGS is replaced by a fresh writable host directory
+    scripts/exercise --exclave EXCLAVE PROG.c [ARGS...]     HOSTDIR in ARGS is replaced by a fresh writable host directory
 
 The work lives under build/exercise/<exclave>-<hashes file's hash>: a copy of the exclave relinked with build/launcher, and relinked again whenever the
 build has changed since, the unwrapped tree for bwrap, both with a socket file at /usr/share/exclave-test.sock and the

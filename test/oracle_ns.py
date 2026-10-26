@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """oracle_ns.py — the namespace oracle (DESIGN.md 17, item 1).
 
 The same tree runs twice: under `bwrap` with the unwrapped tree bound read-only at `/`, and under the

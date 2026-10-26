@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
 """sysroot.py — a sysroot as a data directory (DESIGN.md 9, 6.2): a glibc from one distribution inside a gcc exclave
 from another, and an output of that gcc that runs wherever that glibc's version is old enough.
 
-    test/sysroot.py --exclave GCC_EXCLAVE --rpms DIR --out FILE [--work DIR] [--prefix /opt/sysroot-el7]
+    scripts/sysroot --exclave GCC_EXCLAVE --rpms DIR --out FILE [--work DIR] [--prefix /opt/sysroot-el7]
 
 Makes a copy of the gcc exclave, unwraps it, unpacks the rpm files (a glibc, its headers, kernel headers, libgcc)
 into an exclave of their own with the tool, copies that tree into the copy at the prefix, records the prefix

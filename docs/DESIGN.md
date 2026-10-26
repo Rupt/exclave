@@ -129,13 +129,13 @@ What is built and tested:
   --keep` leaves the tool's own exclave in `build/dogfood-work/`, and a
   gcc exclave built from inside it reproduces the host-built hashes
   file byte for byte (10.5).
-- **Trace pruning**: in `example.sh`, a hello-world compile against the
+- **Trace pruning**: in `scripts/example`, a hello-world compile against the
   CentOS 7 sysroot keeps 227 of the gcc exclave's 9 567 files and
   symlinks, counted as `exclave prune` reports them, the
   originals in `.real/` included; the pruned copy compiles the program
   again. 10.4 gives the figure for the test suite's gcc exclave.
 
-`example.sh` walks from a clean checkout to a program built inside an
+`scripts/example` walks from a clean checkout to a program built inside an
 exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
@@ -154,7 +154,7 @@ How it is tested (17):
 - **Docker's default seccomp profile**: a workload in each exclave runs
   under it, standing for a CI container where user namespaces are
   blocked (17 item 5).
-- **The commit gate**, `test/gate.sh`, which runs the unit tests, the
+- **The commit gate**, `scripts/gate`, which runs the unit tests, the
   suite, the oracles and the probe on the four exclaves in under a
   minute; an oracle that cannot run on the machine, for want of `bwrap`
   or user namespaces, is reported as SKIP, not as passing (17).
@@ -1778,7 +1778,7 @@ every command except `wrap` refuses one without `.exclave/`.
 ### 10.1 From packages
 
 ```
-tools/fetch-debs.py --out debs gcc-13 libc6-dev       # or apt, a mirror, a hand-made directory
+scripts/fetch-debs --out debs gcc-13 libc6-dev       # or apt, a mirror, a hand-made directory
 exclave unpack gcc-13.exclave debs/*.deb
 exclave wrap gcc-13.exclave
 ln -s tree/usr/bin/gcc-13 gcc-13.exclave/gcc
@@ -2076,7 +2076,7 @@ they reach rather than by what the log says: the `cc` that a program
 ran appears in the log as the gcc it resolved to.
 
 Afterwards the hashes file's tree hash is rewritten and the static
-check runs. On the gcc 13 exclave that `test/inputs.sh` makes, a
+check runs. On the gcc 13 exclave that `scripts/inputs` makes, a
 hello-world compile keeps 220 of 5 204 files and symlinks, counted as
 `prune` prints them, originals included; 87 of them are licence texts.
 The count moves by a file or two with where the work directory lies.
@@ -2098,8 +2098,8 @@ one reason scripts are wrapped (6.1).
 
 A tool's exclave can build the next one. That is a cross-exclave
 invocation, with each exclave holding a launcher of its own, and
-`test/dogfood.py` tests it as one. `test/dogfood.py --inputs DIR` takes
-two package sets that `test/inputs.sh DIR` fetched with
+`test/dogfood.py` tests it as one. `scripts/dogfood --inputs DIR` takes
+two package sets that `scripts/inputs DIR` fetched with
 `tools/fetch-debs.py`, the tool's (`debs-tool`) and the gcc 13 closure
 (`debs-gcc13`), and touches no network. It builds the tool's exclave,
 then builds the same gcc exclave twice from the same files: once with
@@ -2506,8 +2506,8 @@ and stay fixed.
     sed -i -e 's/^can 1$/exclave 1/' -e 's/^isa /cpu /' .exclave/manifest
     sed -i -e 's/^lock 1$/hashes 1/' -e 's/^cannery /tool /' -e 's/^opener /launcher /' .exclave/hashes
     cd .. && mv OLD.can OLD.exclave                               # the suffix is a convention; any name works
-    exclave/exclave.py relink OLD.exclave build/launcher          # the current launcher behind every wrapper
-    exclave/exclave.py unwrap OLD.exclave && exclave/exclave.py wrap OLD.exclave   # the manifest's hash, recorded again
+    scripts/exclave relink OLD.exclave build/launcher          # the current launcher behind every wrapper
+    scripts/exclave unwrap OLD.exclave && scripts/exclave wrap OLD.exclave   # the manifest's hash, recorded again
     ```
 
     The converted exclave's hashes file equals the one a fresh `unpack`
@@ -2969,7 +2969,7 @@ helper. None covers the host that denies user namespaces.
 
 **Docker's default seccomp profile**, `seccomp/default.json` in
 `moby/profiles` at commit `3c28324` (Apache-2.0), which
-`test/inputs.sh` fetches pinned by hash and `test/docker_profile.py`
+`scripts/inputs` fetches pinned by hash and `test/docker_profile.py`
 runs an exclave under (17 item 5). For the syscalls the launcher needs:
 
 | Syscall | Verdict |
@@ -3021,7 +3021,7 @@ item 9).
 
 What an exclave costs a program, where the cost goes, and what the
 launcher does about it. The figures come from the reference machine
-(2), with the tree on ZFS, and the gcc exclave of `test/inputs.sh`,
+(2), with the tree on ZFS, and the gcc exclave of `scripts/inputs`,
 measured October 2026 unless stated; the older kernels are the x86-64
 rows of the matrix (12.1), run under KVM on the same machine. 13 item 2
 states the limitation; 16.9 says how to reproduce the figures.
@@ -3325,10 +3325,10 @@ resolved without a manifest record being added.
   three, native against a copy of the exclave relinked with the given
   launcher (by default `build/launcher`). The exclave must contain
   gcc-13; the host's `gcc-13`, else its `gcc`, gives the native column.
-  `--sqlite` names the `sqlite3.c` amalgamation `test/inputs.sh`
+  `--sqlite` names the `sqlite3.c` amalgamation `scripts/inputs`
   extracts. To compare two launchers, run it once with each.
 - `test/realsoft.py --exclave EXCLAVE --src INPUTS/src`, where `INPUTS`
-  is the directory `test/inputs.sh` filled, builds the projects of
+  is the directory `scripts/inputs` filled, builds the projects of
   16.8.
 - `test/vm_run.py --script SH FILE...` runs a script beside the given
   files on every x86-64 kernel of the matrix; a static program that
@@ -3486,12 +3486,12 @@ gate:
 
 ```sh
 make
-test/inputs.sh ~/.cache/exclave-inputs
+scripts/inputs ~/.cache/exclave-inputs
 D=~/.cache/exclave-inputs
-EXCLAVE_TEST_INPUTS=$D test/gate.sh $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave
+EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave
 ```
 
-`test/inputs.sh DIR` makes the gate's four exclaves: Ubuntu 24.04's
+`scripts/inputs DIR` makes the gate's four exclaves: Ubuntu 24.04's
 gcc-13 closure, Alpine 3.21's gcc, Fedora 42's gcc, and Ubuntu 24.04's
 clang-18 closure. It also makes what dogfood and the example runs take:
 the tool's own package closure, the packages `test/realsoft.py` builds
@@ -3504,7 +3504,7 @@ file is pinned by its BLAKE2b-256 in the script. An item `DIR` already
 has is skipped, and whatever is missing is fetched again. The
 repository holds no third-party input.
 
-**The gate** (`test/gate.sh EXCLAVE...`) is the check run before a
+**The gate** (`scripts/gate EXCLAVE...`) is the check run before a
 commit. It runs these steps in parallel, each with its own log under
 `build/gate/`, and prints one line per step, ok, SKIP or FAIL:
 
@@ -3519,7 +3519,7 @@ commit. It runs these steps in parallel, each with its own log under
 - for the first exclave, the suite once more under the plain
   terminal's AppArmor label (`aa-exec -p unconfined`), where user
   namespaces are denied (12);
-- when `EXCLAVE_TEST_INPUTS` names the directory `test/inputs.sh`
+- when `EXCLAVE_TEST_INPUTS` names the directory `scripts/inputs`
   filled, the Docker profile run on every exclave, and dogfood:
   `test/dogfood.py` makes the tool's own exclave, then makes the same
   gcc exclave twice from the same packages, once with the tool on the
@@ -3537,7 +3537,7 @@ number of failed steps. On the reference machine the whole gate, on the
 four exclaves with their fixtures and with the Docker profile and
 dogfood, takes 41 s (measured October 2026).
 
-**The suite** (`test/run.py --exclave EXCLAVE`, or `--tree DIR` for an
+**The suite** (`scripts/test --exclave EXCLAVE`, or `--tree DIR` for an
 unwrapped tree) makes an exclave under its work directory, compiles
 `test/progs/` with the tree's own C compiler, and runs the named tests.
 `-k NAME` runs one test, or every test whose name contains a substring.
@@ -3588,7 +3588,7 @@ border, `getdents` (which is not trapped), or the host's own mount
 boundaries, which `bwrap` rebuilds. Those stay with the named
 regressions.
 
-**The exerciser** (`test/exercise.py --exclave EXCLAVE PROG.c ARGS`)
+**The exerciser** (`scripts/exercise --exclave EXCLAVE PROG.c ARGS`)
 measures a limitation before it is fixed. A small C program prints one
 line per case as `<case>: <answer>`. The driver compiles it with the
 exclave's compiler and runs it under `bwrap` with the unwrapped tree
@@ -3602,7 +3602,7 @@ answers, and a trapped syscall's cases join the probe. For the host's
 own mounts, which `bwrap` rebuilds, a test replays its host-only cases
 natively from the harness, as `openat2_xdev` does.
 
-**The kernel matrix** (`test/matrix.py --exclave EXCLAVE
+**The kernel matrix** (`scripts/matrix --exclave EXCLAVE
 [--docker-profile FILE]`) runs one gcc exclave, built on the reference
 machine, in virtual machines, one at a time with 1 GB each. Each VM
 boots its distribution's cloud image under QEMU with KVM behind a
@@ -3621,7 +3621,7 @@ output of `test/sysroot.py` run natively. The results go to
 take about ten minutes and are run before a launcher change is
 committed.
 
-**The emulated arm64 row** (`test/matrix.py --exclave EXCLAVE --only
+**The emulated arm64 row** (`scripts/matrix --exclave EXCLAVE --only
 noble-arm64 --debs-arm64 DIR [--docker-profile FILE]`) boots Ubuntu
 24.04's arm64 cloud image under `qemu-system-aarch64 -M virt -cpu max`
 with TCG and the AAVMF firmware, since user-mode emulation has no
@@ -3636,11 +3636,11 @@ asked, not in the gate, and making it shorter is in 18.
 `test/vm_run.py --script SH FILE...` boots the same x86-64 rows and
 runs a script beside the files it is given, for exclaves made to ship,
 where the suite does not apply. The two VM drivers are the one
-exception to the rule that only `test/inputs.sh` downloads: they fetch
+exception to the rule that only `scripts/inputs` downloads: they fetch
 each cloud image once into `~/.cache/exclave-images`, and the VMs
 install their packages through cloud-init.
 
-**The example runs** (`test/examples.sh EXCLAVE`) need inputs and time
+**The example runs** (`scripts/examples EXCLAVE`) need inputs and time
 the gate cannot afford. Each runs when its input variable is set:
 
 - `EXCLAVE_TEST_SRC`: `test/realsoft.py` builds zlib, Lua, SQLite and
@@ -3654,7 +3654,7 @@ the gate cannot afford. Each runs when its input variable is set:
   `EXCLAVE_TEST_DOCKER` adding the Docker profile run.
 
 They exist because real builds and other hosts expose behaviour no
-synthetic test anticipates (12.1). `example.sh DIR` at the repository's
+synthetic test anticipates (12.1). `scripts/example DIR` at the repository's
 root is the README's first run as a script, from a clean checkout to a
 program that runs on any glibc since 2.17.
 
@@ -3862,7 +3862,7 @@ specified.
   that could not run is reported as SKIP (17).
 - **Every driver runs the build's launcher on a relinked copy of its
   own**: an exclave carries the launcher it was wrapped with (17).
-- **Tests take their inputs as paths**: only `test/inputs.sh` fetches,
+- **Tests take their inputs as paths**: only `scripts/inputs` fetches,
   each third-party input pinned by its hash, and the VM drivers, which
   download cloud images; the repository holds no third-party file (17).
 - **Tests are independent**: any order, any single test, several suites

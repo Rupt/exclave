@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Stack budget check (DESIGN.md 7.5.4): reads the gcc -fcallgraph-info=su output of the current build.
 
     test/stackcheck.py build/launcher.debug-*.ci

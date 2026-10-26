@@ -1,0 +1,5 @@
+#!/bin/sh
+# scripts/dogfood: the tool as an exclave, building an exclave that must reproduce (docs/DESIGN.md 10.5), run by the pinned Python (scripts/lib.sh).
+set -eu
+. "$(dirname -- "$0")/lib.sh"
+exec "$UV" run --quiet --project "$ROOT" python "$ROOT/test/dogfood.py" "$@"

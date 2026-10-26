@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
 """matrix.py — the kernel matrix (DESIGN.md 12, 17 item 5): an exclave built here, run in virtual machines.
 
-    test/matrix.py --exclave EXCLAVE [--only NAME,...] [--work DIR] [--images DIR] [--memory MB] [--arm64 --debs-arm64 DIR]
+    scripts/matrix --exclave EXCLAVE [--only NAME,...] [--work DIR] [--images DIR] [--memory MB] [--arm64 --debs-arm64 DIR]
                    [--docker-profile FILE]
 
 Each row of VMS names a distribution cloud image. The image is downloaded once, booted under QEMU with
@@ -177,7 +176,7 @@ def main():
     ap.add_argument("--memory", type=int, default=1024)
     ap.add_argument("--arm64", action="store_true", help="include the emulated aarch64 VM (slow); --only names it too")
     ap.add_argument("--debs-arm64", help="directory of arm64 .deb files the aarch64 VM makes its gcc exclave from")
-    ap.add_argument("--docker-profile", help="Docker's default seccomp profile (test/inputs.sh fetches it); without it the Docker-profile run is left out")
+    ap.add_argument("--docker-profile", help="Docker's default seccomp profile (scripts/inputs fetches it); without it the Docker-profile run is left out")
     a = ap.parse_args()
     if not shutil.which("qemu-system-x86_64") or not shutil.which("cloud-localds"):
         sys.exit("need qemu-system-x86_64 and cloud-localds")

@@ -1,4 +1,4 @@
-/* filter_test.c — the seccomp filter against the rule of DESIGN.md 7.4.2. Built by test/gate.sh's unit step.
+/* filter_test.c — the seccomp filter against the rule of DESIGN.md 7.4.2. Built by scripts/gate's unit step.
  *
  * A classic-BPF interpreter runs the program src/filter.c builds for every syscall number up to past the ceiling,
  * from the syscall page and from elsewhere, with the arguments each conditional rule reads set and clear, and the

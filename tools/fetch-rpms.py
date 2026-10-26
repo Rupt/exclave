@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
 """fetch-rpms.py — an example of the step before the tool for rpm distributions: resolve a package closure
 from a yum/dnf repository's metadata and download it into a directory of .rpm files (DESIGN.md 10.1).
 
-    tools/fetch-rpms.py --repo URL [--repo URL]... [--cache DIR] [--choose VIRTUAL=PKG]... [--no-base] --out DIR PACKAGE...
+    scripts/fetch-rpms --repo URL [--repo URL]... [--cache DIR] [--choose VIRTUAL=PKG]... [--no-base] --out DIR PACKAGE...
 
 Each --repo is a repository root holding repodata/repomd.xml (Fedora's Everything/x86_64/os, Rocky's
 BaseOS and AppStream, CentOS 7's os on vault.centos.org). The closure of Requires is resolved against

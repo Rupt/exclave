@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """syscalls.py — the path-syscall table test (DESIGN.md 17, item 5).
 
 Every syscall in the kernel's table for this machine is classified here: x86-64's unistd_64.h, or the

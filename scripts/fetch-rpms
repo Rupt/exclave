@@ -1,0 +1,5 @@
+#!/bin/sh
+# scripts/fetch-rpms: an rpm package closure, downloaded (docs/DESIGN.md 10.1), run by the pinned Python (scripts/lib.sh).
+set -eu
+. "$(dirname -- "$0")/lib.sh"
+exec "$UV" run --quiet --project "$ROOT" python "$ROOT/tools/fetch-rpms.py" "$@"

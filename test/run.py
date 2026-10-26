@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """run.py — the regression suite (DESIGN.md 17.4, the part a single machine can run).
 
     test/run.py [--tree DIR | --exclave EXCLAVE] [--work DIR] [--keep] [-k NAME|SUBSTRING] [--order given|reverse|random] [--seed N] [--budget SECONDS]
@@ -121,7 +120,7 @@ def make_fixture(ctx, dst):
     run (17): the same tree the tests just passed on, about a fifth of its files, the tool's
     own prune. Made only from a run with no failure, so that a partial log never fixes a partial fixture."""
     logs = sorted(os.path.join(dp, f) for dp, dn, fn in os.walk(ctx.work) for f in fn if f.endswith(".log"))
-    tmp = "%s.tmp%d" % (dst, os.getpid())                        # two runs may make the same fixture at once (test/gate.sh)
+    tmp = "%s.tmp%d" % (dst, os.getpid())                        # two runs may make the same fixture at once (scripts/gate)
     shutil.rmtree(tmp, ignore_errors=True)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     copy_exclave(ctx.exclave, tmp)

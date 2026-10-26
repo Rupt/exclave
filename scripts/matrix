@@ -1,0 +1,5 @@
+#!/bin/sh
+# scripts/matrix: the kernel matrix in virtual machines (docs/DESIGN.md 12.1, 17), run by the pinned Python (scripts/lib.sh).
+set -eu
+. "$(dirname -- "$0")/lib.sh"
+exec "$UV" run --quiet --project "$ROOT" python "$ROOT/test/matrix.py" "$@"

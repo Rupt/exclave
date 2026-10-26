@@ -1,11 +1,10 @@
-#!/usr/bin/env python3
 """grammar_test.py — the property tests of DESIGN.md 6.2 and 17 item 3.
 
     test/grammar_test.py [--cases N] [--seed S] [--c-parser PATH]
 
 Three statements hold for every byte sequence b: encode is injective, decode(encode(b)) == b, and format is
 idempotent. And the two implementations of the grammar, the tool's Python parser and the launcher's C parser
-(built by test/gate.sh's unit step, run with a file argument), accept and reject the same inputs: manifests
+(built by scripts/gate's unit step, run with a file argument), accept and reject the same inputs: manifests
 and their malformed variants (MUTATIONS); and both name the line of an error on a known line (POSITIONS).
 """
 import argparse

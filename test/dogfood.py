@@ -1,10 +1,10 @@
-#!/usr/bin/env python3
 """dogfood.py — the tool as an exclave, and an exclave built from inside it (DESIGN.md 10.5).
 
-    test/dogfood.py --inputs DIR [--work DIR] [--keep]
+    scripts/dogfood --inputs DIR [--work DIR] [--keep]
 
-Takes two package sets test/inputs.sh fetched into DIR, debs-tool and debs-gcc13, and touches no network.
-It makes the tool's own exclave from python3, zstd and xz-utils plus this checkout's exclave and launcher,
+Takes two package sets scripts/inputs fetched into DIR, debs-base and debs-gcc13, and touches no network.
+It makes the tool's own exclave from Ubuntu's base system, the pinned Python running this script (copied in as
+/opt/python) and this checkout's exclave and launcher,
 then makes the same gcc exclave twice from the same files: once with the checkout's exclave on the host, once
 with the tool's own exclave's shortcut from inside it. The two hashes files must be identical, tree hash
 included. Exit status 0 on success.
@@ -37,10 +37,10 @@ def main():
     ap.add_argument("--work", default=os.path.join(REPO, "build", "dogfood-work"))
     ap.add_argument("--keep", action="store_true")
     a = ap.parse_args()
-    tool_debs, gcc_debs = (os.path.join(a.inputs, d) for d in ("debs-tool", "debs-gcc13"))
+    tool_debs, gcc_debs = (os.path.join(a.inputs, d) for d in ("debs-base", "debs-gcc13"))
     for d in (tool_debs, gcc_debs):
         if not os.path.isdir(d) or not debs(d):
-            sys.exit("FAIL %s has no .deb files: run test/inputs.sh %s" % (d, a.inputs))
+            sys.exit("FAIL %s has no .deb files: run scripts/inputs %s" % (d, a.inputs))
     work = os.path.abspath(a.work)
     if os.path.exists(work):
         shutil.rmtree(work)
@@ -49,12 +49,17 @@ def main():
     print("building the tool's own exclave")
     tool_ex = os.path.join(work, "tool.exclave")
     run([sys.executable, exclave, "unpack", tool_ex] + debs(tool_debs), work)
+    # the pinned Python, the one running this, as a tree of its own: the base system's packages give it a libc.
+    # Without Tcl/Tk, which the tool never imports and whose libraries search a build directory the exclave does
+    # not own (/tools/deps/lib), so the static check would rightly refuse them
+    tk = shutil.ignore_patterns("libtcl*", "libtk*", "tcl[0-9]*", "tk[0-9]*", "_tkinter*", "tkinter", "idlelib", "turtledemo")
+    shutil.copytree(sys.base_prefix, os.path.join(tool_ex, "tree", "opt", "python"), symlinks=True, ignore=tk)
     lib = os.path.join(tool_ex, "tree", "usr", "lib", "exclave")                # the tool's own source and the launcher, by hand: the exclave is a directory
     shutil.copytree(os.path.join(REPO, "exclave"), lib, ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy2(os.path.join(REPO, "build", "launcher"), os.path.join(lib, "launcher"))
     entry = os.path.join(tool_ex, "tree", "usr", "bin", "exclave")
     with open(entry, "w") as f:
-        f.write('#!/bin/sh\nexec python3 /usr/lib/exclave/exclave.py "$@"\n')
+        f.write('#!/bin/sh\nexec /opt/python/bin/python3 /usr/lib/exclave/exclave.py "$@"\n')
     os.chmod(entry, 0o755)
     run([sys.executable, exclave, "wrap", tool_ex], work)
     os.symlink("tree/usr/bin/exclave", os.path.join(tool_ex, "exclave"))

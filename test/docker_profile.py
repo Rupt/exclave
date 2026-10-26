@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """docker_profile.py — an exclave under Docker's default seccomp profile (DESIGN.md 12, 17 item 5).
 
 Docker's default profile (a JSON allow-list with a default errno) is assembled here into a classic BPF

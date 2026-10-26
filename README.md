@@ -54,18 +54,21 @@ kernel 7.0, glibc 2.39.
 
 ## First run
 
-You need an x86-64 Linux host with `gcc`, `make`, `python3` (3.6 or
-later) and `zstd`, which unpacks Ubuntu's packages, and the network for
-two downloads: Ubuntu's gcc packages and CentOS 7's glibc, 121 MB in
-all. No root, no container runtime, no user namespaces: nothing here
-needs a privilege.
+You need an x86-64 or aarch64 Linux host with `gcc`, `make`, and `curl`
+or `wget`, and the network: `scripts/install-uv` fetches a pinned,
+checksummed [uv](https://docs.astral.sh/uv/) into `.uv/`, which provides
+the pinned Python and everything else Python the project uses; the
+example then downloads Ubuntu's gcc packages and CentOS 7's glibc, 121
+MB in all. No root, no container runtime, no user namespaces: nothing
+here needs a privilege, and nothing is installed outside the checkout.
 
 ```bash
+scripts/install-uv
 make
-./example.sh ~/exclave-example
+scripts/example ~/exclave-example
 ```
 
-`example.sh` runs the whole path under the directory you name and
+`scripts/example` runs the whole path under the directory you name and
 prints each command as it runs, or for the long ones a line of summary
 with the command and its output in a log under `log/`, so its output
 and logs are the tutorial and each command is one you can run by hand:
@@ -99,7 +102,7 @@ and logs are the tutorial and each command is one you can run by hand:
    it.
 
 What it prints on the reference machine, abridged; `exclave` in it is
-`example.sh`'s shorthand for `python3 exclave/exclave.py`:
+`scripts/example`'s shorthand for `scripts/exclave`:
 
 ```
 == 3. CentOS 7's glibc as a sysroot inside it
@@ -232,23 +235,23 @@ to run its programs, what it touches and how to check it. The tool
 writes it where the exclave has none, so a maker's own stays.
 
 ```
-tools/fetch-debs.py --out debs gcc-13 libc6-dev make         # Ubuntu or Debian: the closure of the packages named, verified against the index
-tools/fetch-apks.py --out apks gcc musl-dev binutils         # the same for Alpine
-tools/fetch-rpms.py --repo URL --out rpms gcc glibc-devel    # and for Fedora, Rocky, CentOS: any repository with repodata/
-exclave/exclave.py unpack gcc.exclave debs/*.deb             # package files -> an unwrapped exclave, a directory you may edit; .apk and .rpm files likewise
-exclave/exclave.py wrap gcc.exclave                          # wrap every executable, static check, hashes into .exclave/hashes
+scripts/fetch-debs --out debs gcc-13 libc6-dev make         # Ubuntu or Debian: the closure of the packages named, verified against the index
+scripts/fetch-apks --out apks gcc musl-dev binutils         # the same for Alpine
+scripts/fetch-rpms --repo URL --out rpms gcc glibc-devel    # and for Fedora, Rocky, CentOS: any repository with repodata/
+scripts/exclave unpack gcc.exclave debs/*.deb             # package files -> an unwrapped exclave, a directory you may edit; .apk and .rpm files likewise
+scripts/exclave wrap gcc.exclave                          # wrap every executable, static check, hashes into .exclave/hashes
 ln -s tree/usr/bin/gcc-13 gcc.exclave/gcc                    # a shortcut, if you want one
 gcc.exclave/gcc -O2 hello.c -o hello                         # any executable in tree/ runs by path
 gcc.exclave/tree/usr/bin/sh -c 'as --version'                # the exclave's own shell, with the exclave's PATH
 gcc.exclave/.exclave/launcher /path/to/host/program args...  # a program without a wrapper, a host tool or a built output, inside the exclave
 gdb -iex 'set auto-load safe-path /' --args gcc.exclave/gcc -c x.c   # gdb: the launcher carries the script; break, bt, source lines
 EXCLAVE_LOG=/tmp/exclave.log gcc.exclave/gcc -c x.c          # the one knob: one line per trapped syscall
-exclave/exclave.py check gcc.exclave /tmp/exclave.log        # static check of every ELF, dynamic check of the logged run
-exclave/exclave.py prune gcc.exclave /tmp/exclave.log        # keep what the logged runs touched
-exclave/exclave.py unwrap gcc.exclave                        # the originals back over their wrappers, to edit; wrap again after
-exclave/exclave.py relink gcc.exclave build/launcher         # swap the launcher after rebuilding it; the wrappers are relinked
-exclave/exclave.py hash gcc.exclave                          # the tree hash the hashes file records
-exclave/exclave.py format gcc.exclave/.exclave/manifest      # the canonical spelling of a manifest or hashes file; --check only reports
+scripts/exclave check gcc.exclave /tmp/exclave.log        # static check of every ELF, dynamic check of the logged run
+scripts/exclave prune gcc.exclave /tmp/exclave.log        # keep what the logged runs touched
+scripts/exclave unwrap gcc.exclave                        # the originals back over their wrappers, to edit; wrap again after
+scripts/exclave relink gcc.exclave build/launcher         # swap the launcher after rebuilding it; the wrappers are relinked
+scripts/exclave hash gcc.exclave                          # the tree hash the hashes file records
+scripts/exclave format gcc.exclave/.exclave/manifest      # the canonical spelling of a manifest or hashes file; --check only reports
 ```
 
 Between `unpack` and `wrap` the unwrapped exclave is yours: copy a
@@ -272,9 +275,9 @@ build system's own installer doing the building:
 
 ```
 gcc.exclave/tree/usr/bin/sh -c './configure --prefix=/usr/local && make && make install DESTDIR=$PWD/stage'
-exclave/exclave.py unpack tool.exclave runtime/*.deb         # libc6 and whatever else the result links against
+scripts/exclave unpack tool.exclave runtime/*.deb         # libc6 and whatever else the result links against
 cp -a stage/usr/local tool.exclave/tree/usr/
-exclave/exclave.py wrap tool.exclave                         # the static check says whether it all links inside
+scripts/exclave wrap tool.exclave                         # the static check says whether it all links inside
 ```
 
 No recipe format and no closure copying: the runtime the result needs
@@ -332,7 +335,7 @@ namespaces for the kernel oracles and the syscall probe; `strace`,
 user namespace, as from a plain terminal on Ubuntu 23.10 and later, the
 gate marks the oracle and probe steps SKIP rather than ok.
 
-`test/inputs.sh` downloads every development input, pinned or verified,
+`scripts/inputs` downloads every development input, pinned or verified,
 through caches under `~/.cache`; the tests take their inputs as paths,
 and nothing else touches the network except the kernel matrix, which
 downloads cloud images and whose VMs install packages. Section 17 of
@@ -340,18 +343,18 @@ downloads cloud images and whose VMs install packages. Section 17 of
 the design decisions a change is expected to respect.
 
 ```
-test/inputs.sh ~/.cache/exclave-inputs   # the development inputs: the gate's four exclaves, Docker's seccomp profile, the examples' inputs; skips what is present
-D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D test/gate.sh $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # the commit gate, about a minute: unit tests, stack budget, the suite on every exclave in two orders and the first once under the plain terminal's label, the oracles, the syscall probe, the Docker profile, dogfood
-test/run.py --exclave gcc.exclave     # the suite alone; -k NAME, --order random
-test/matrix.py --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix: cloud images under QEMU/KVM, one VM at a time, about ten minutes
-test/exercise.py --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the launcher, side by side
-test/examples.sh ~/.cache/exclave-inputs/realsoft.exclave   # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_DEBS_ARM64 (the emulated aarch64 row), EXCLAVE_TEST_DOCKER (its Docker profile run)
+scripts/inputs ~/.cache/exclave-inputs   # the development inputs: the gate's four exclaves, Docker's seccomp profile, the examples' inputs; skips what is present
+D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # the commit gate, about a minute: unit tests, stack budget, the suite on every exclave in two orders and the first once under the plain terminal's label, the oracles, the syscall probe, the Docker profile, dogfood
+scripts/test --exclave gcc.exclave     # the suite alone; -k NAME, --order random
+scripts/matrix --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix: cloud images under QEMU/KVM, one VM at a time, about ten minutes
+scripts/exercise --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the launcher, side by side
+scripts/examples ~/.cache/exclave-inputs/realsoft.exclave   # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_DEBS_ARM64 (the emulated aarch64 row), EXCLAVE_TEST_DOCKER (its Docker profile run)
 ```
 
 The repository's layout:
 
 ```
-example.sh       the first run: from make to a program built inside an exclave that runs on any glibc since 2.17, every command shown
+scripts/example       the first run: from make to a program built inside an exclave that runs on any glibc since 2.17, every command shown
 Makefile         builds the launchers: build/launcher, and build/launcher-aarch64 with a cross compiler
 src/sys.h        syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
 src/elf.h        the ELF structures the loader needs
@@ -382,15 +385,15 @@ test/sysroot.py      a glibc sysroot as a data directory and an output built aga
 test/run.py          the regression suite; test/progs/ its C, Rust and Go programs
 test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the openat2 oracle
 test/oracle_syscalls.py  the differential syscall probe: every trapped path and descriptor syscall with every path form under bwrap and under the launcher; test/progs/probe.c its interpreter
-test/inputs.sh       the development inputs, remade from the network through ~/.cache
+scripts/inputs       the development inputs, remade from the network through ~/.cache
 test/exercise.py     one program run under bwrap and under the launcher, the answers side by side: how a limitation is measured before it is fixed
-test/docker_profile.py   an exclave under Docker's default seccomp profile, which test/inputs.sh fetches
+test/docker_profile.py   an exclave under Docker's default seccomp profile, which scripts/inputs fetches
 test/scratch_test.c  the scratch pool's sweep under the interleaving that once shared a chunk
 test/isa_test.c      the CPU level check against made-up cpuid and XCR0 values and against gcc's own answer
 test/syscalls.py     every kernel syscall classified; test/bench.py the performance table
 test/realsoft.py     real projects built inside and outside an exclave; test/matrix.py the kernel matrix in VMs, test/vm_run.py one VM
 test/dogfood.py      the tool's exclave building an exclave that must reproduce the host-built hashes file
-test/gate.sh         the commit gate, every step in parallel on copies of the exclaves given; test/examples.sh the example runs
+scripts/gate         the commit gate, every step in parallel on copies of the exclaves given; scripts/examples the example runs
 test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule; test/stackcheck.py the stack budget
 LICENSE          the MIT licence; the launcher carries its text

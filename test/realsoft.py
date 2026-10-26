@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """realsoft.py — build real projects inside an exclave and on the host, compare results and time.
 
     test/realsoft.py --exclave EXCLAVE --src DIR [--work DIR] [--jobs N] [--only NAME,...]

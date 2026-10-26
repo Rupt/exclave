@@ -1,4 +1,4 @@
-/* isa_test.c — the x86-64 CPU level check of DESIGN.md 7.7. Built by test/gate.sh's unit step with src/isa.c.
+/* isa_test.c — the x86-64 CPU level check of DESIGN.md 7.7. Built by scripts/gate's unit step with src/isa.c.
  *
  * The decision is fed cpuid words and XCR0 values made up here, so that a kernel which has disabled AVX or AVX-512
  * state is covered on any machine: the CPU's features are not enough when the state is off. Then the launcher's own

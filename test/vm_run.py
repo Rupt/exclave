@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """vm_run.py — run a script beside some files in each virtual machine of the kernel matrix (DESIGN.md 12).
 
     test/vm_run.py --script SH [--only NAME,...] [--work DIR] [--images DIR] [--memory MB] FILE...

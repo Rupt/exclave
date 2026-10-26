@@ -1,0 +1,5 @@
+#!/bin/sh
+# scripts/test: the regression suite (docs/DESIGN.md 17), run by the pinned Python (scripts/lib.sh).
+set -eu
+. "$(dirname -- "$0")/lib.sh"
+exec "$UV" run --quiet --project "$ROOT" python "$ROOT/test/run.py" "$@"

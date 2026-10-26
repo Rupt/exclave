@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """oracle_resolve.py — the kernel as the oracle for canonicalisation (DESIGN.md 17, item 2).
 
 A random maze of directories, files and symlinks (relative, absolute, dangling, looping, with `..` and

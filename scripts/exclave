@@ -1,0 +1,5 @@
+#!/bin/sh
+# scripts/exclave: the exclave command (docs/DESIGN.md 10), run by the pinned Python (scripts/lib.sh).
+set -eu
+. "$(dirname -- "$0")/lib.sh"
+exec "$UV" run --quiet --project "$ROOT" python "$ROOT/exclave/exclave.py" "$@"

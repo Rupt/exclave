@@ -77,7 +77,7 @@ build/launcher-old-aarch64: $(SRC) $(HDR) Makefile
 	$(call linkcheck,aarch64-linux-gnu-)
 	aarch64-linux-gnu-objcopy --strip-all --keep-section=.debug_gdb_scripts --keep-section=.exclave.license $@.debug $@
 
-# the tests are test/gate.sh EXCLAVE... (the commit gate) and test/examples.sh EXCLAVE (the example runs); see README.md
+# the tests are scripts/gate EXCLAVE... (the commit gate) and scripts/examples EXCLAVE (the example runs); see README.md
 
 clean:
 	rm -rf build
