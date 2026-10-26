@@ -33,30 +33,32 @@ static int log_ok(void)
 /* one line, one write: "<what> <result> <path>\n"; atomic under O_APPEND. A path may hold any byte: a newline is
  * written as \n and a backslash as \\, the two escapes the tool undoes when it reads a log; the
  * escaped pieces go out as iovecs, no buffer, since this runs on the handler's stack */
+static struct iovec iov(const void *p, size_t n) { return (struct iovec){ unconst(p), n }; }
+
 void log_line(const char *what, long result, const char *path)
 {
     if (!log_ok()) return;
     char n[24]; ltoa_(result, n);
     if (!path) path = "-";
     struct iovec io[12]; int k = 0;
-    io[k++] = (struct iovec){ (void *)what, xstrlen(what) }; io[k++] = (struct iovec){ " ", 1 };
-    io[k++] = (struct iovec){ n, xstrlen(n) }; io[k++] = (struct iovec){ " ", 1 };
+    io[k++] = iov(what, xstrlen(what)); io[k++] = iov(" ", 1);
+    io[k++] = iov(n, xstrlen(n)); io[k++] = iov(" ", 1);
     const char *seg = path;
     for (const char *p = path;; p++) {
         if (*p && *p != '\n' && *p != '\\') continue;
-        if (p > seg) io[k++] = (struct iovec){ (void *)seg, (size_t)(p - seg) };
+        if (p > seg) io[k++] = iov(seg, (size_t)(p - seg));
         if (!*p) break;
-        io[k++] = (struct iovec){ (void *)(*p == '\n' ? "\\n" : "\\\\"), 2 };
+        io[k++] = iov(*p == '\n' ? "\\n" : "\\\\", 2);
         seg = p + 1;
         if (k >= 10) { SC3(NR_writev, C.logfd, io, k); k = 0; }   /* a pathological path costs a second write */
     }
-    io[k++] = (struct iovec){ "\n", 1 };
+    io[k++] = iov("\n", 1);
     SC3(NR_writev, C.logfd, io, k);
 }
 void log_msg(const char *a, const char *b)
 {
     if (!log_ok()) return;
-    struct iovec io[5] = { { "launcher 0 ", 11 }, { (void *)a, xstrlen(a) }, { " ", b ? 1 : 0 }, { (void *)(b ? b : ""), b ? xstrlen(b) : 0 }, { "\n", 1 } };
+    struct iovec io[5] = { iov("launcher 0 ", 11), iov(a, xstrlen(a)), iov(" ", b ? 1 : 0), iov(b ? b : "", b ? xstrlen(b) : 0), iov("\n", 1) };
     SC3(NR_writev, C.logfd, io, 5);                          /* one write, no buffer: this runs on the handler's stack too */
 }
 

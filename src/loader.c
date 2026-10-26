@@ -106,10 +106,10 @@ static int note_gen(int fd, const Phdr *p, unsigned char *nb)
     long n = sys_pread(fd, nb, p->p_filesz, (long)p->p_offset), o = 0; int g = 0;
     while (n >= 12 && o + 12 <= n) {
         uint32_t nsz = *(uint32_t *)(nb + o), dsz = *(uint32_t *)(nb + o + 4);
-        long w = o + 12 + (long)((nsz + 3) & ~3u);            /* the word after the name, padded to 4 */
+        long w = o + 12 + (long)((nsz + 3) & ~3U);            /* the word after the name, padded to 4 */
         if ((nsz == 8 && o + 20 <= n && xmemcmp(nb + o + 12, "exclave", 8) == 0) || (nsz == 5 && o + 17 <= n && xmemcmp(nb + o + 12, "cont", 5) == 0))
             g = dsz >= 4 && w + 4 <= n && *(uint32_t *)(nb + w) ? (int)*(uint32_t *)(nb + w) : 1;
-        o += 12 + ((nsz + 3) & ~3u) + ((dsz + 3) & ~3u);
+        o += 12 + ((nsz + 3) & ~3U) + ((dsz + 3) & ~3U);
     }
     return g;
 }
@@ -143,23 +143,24 @@ int elf_probe(const char *real, char *interp, int *is_launcher, void *buf)
 /* The kernel makes the initial stack executable when the program's PT_GNU_STACK asks for it (nested
  * functions, old assembly); the loader must do the same or the program dies on its first trampoline
  *. The stack is found in /proc/self/maps. */
-#define PT_GNU_STACK 0x6474e551u
+#define PT_GNU_STACK 0x6474e551U
 static int wants_exec_stack(const Phdr *ph, int n)
 {
     for (int i = 0; i < n; i++) if (ph[i].p_type == PT_GNU_STACK) return (ph[i].p_flags & PF_X) != 0;
     return 0;
 }
+static unsigned long hex_digit(char c) { return (unsigned long)(c <= '9' ? c - '0' : c - 'a' + 10); }   /* /proc's lowercase hex */
 static void stack_make_exec(void)
 {
     static char maps[65536]; long fd = sys_open("/proc/self/maps", O_RDONLY | O_CLOEXEC, 0); if (fd < 0) return;
-    long n = 0, r; while (n < (long)sizeof maps - 1 && (r = sys_read((int)fd, maps + n, sizeof maps - 1 - n)) > 0) n += r;
+    long n = 0, r; while (n < (long)sizeof maps - 1 && (r = sys_read((int)fd, maps + n, sizeof maps - 1 - (size_t)n)) > 0) n += r;
     sys_close((int)fd); maps[n] = 0;
     for (char *l = maps; l && *l; ) {
         char *e = xstrchr(l, '\n'); if (e) *e = 0;
         if (xstrstr(l, "[stack]")) {
             unsigned long lo = 0, hi = 0; char *p = l;
-            for (; *p != '-'; p++) lo = lo * 16 + (*p <= '9' ? *p - '0' : *p - 'a' + 10);
-            for (p++; *p != ' '; p++) hi = hi * 16 + (*p <= '9' ? *p - '0' : *p - 'a' + 10);
+            for (; *p != '-'; p++) lo = lo * 16 + hex_digit(*p);
+            for (p++; *p != ' '; p++) hi = hi * 16 + hex_digit(*p);
             sys_mprotect((void *)lo, hi - lo, PROT_READ | PROT_WRITE | PROT_EXEC);
             return;
         }
@@ -167,7 +168,7 @@ static void stack_make_exec(void)
     }
 }
 
-void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp, unsigned long *auxv)
+void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp, const unsigned long *auxv)
 {
     Ehdr eh; unsigned long entry, phdr_va, base = 0, jump; int has_interp; char interp_v[PATH_MAX];
     int fd = open_elf(real, &eh, ph_main, 128);
@@ -200,7 +201,7 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
     if (C.borrowed) SC4(NR_prlimit64, 0, RLIMIT_NOFILE, C.rlim, 0);   /* the program's own descriptor limit, as it had it (7.4.5) */
     long auxc = 0; while (auxv[auxc * 2] != AT_NULL) auxc++;
     long envc = 0; while (envp[envc]) envc++;
-    unsigned long words = 1 + argc + 1 + envc + 1 + (auxc + 1) * 2 + 2;
+    unsigned long words = (unsigned long)(1 + argc + 1 + envc + 1 + (auxc + 1) * 2 + 2);
     unsigned long *sp = (unsigned long *)(((unsigned long)__builtin_alloca(words * 8 + 1024) + 15) & ~15UL), *w = sp;
     *w++ = (unsigned long)argc;
     for (long i = 0; i < argc; i++) *w++ = (unsigned long)argv[i];
@@ -217,6 +218,7 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
         case AT_BASE: v = base; break;
         case AT_ENTRY: v = entry; break;
         case AT_EXECFN: v = (unsigned long)C.execfn; seen = 1; break;   /* the path the program was exec'd by, the script's for a script, as the kernel gives it */
+        default: break;                                      /* every other entry as the kernel gave it */
         }
         *w++ = k; *w++ = v;
     }

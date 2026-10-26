@@ -2,7 +2,7 @@
 #include "common.h"
 
 #if defined(__aarch64__)
-int isa_supported(const char *isa, unsigned long *auxv)
+int isa_supported(const char *isa, const unsigned long *auxv)
 {
     if (xstrcmp(isa, "aarch64") == 0 || xstrcmp(isa, "armv8-a") == 0) return 1;
     unsigned long hwcap = 0;
@@ -12,9 +12,12 @@ int isa_supported(const char *isa, unsigned long *auxv)
     return -1;
 }
 #else
-static void cpuid(unsigned leaf, unsigned sub, unsigned *a, unsigned *b, unsigned *c, unsigned *d)
+struct cpuid { unsigned a, b, c, d; };
+static struct cpuid cpuid(unsigned leaf, unsigned sub)
 {
-    __asm__ volatile ("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(leaf), "c"(sub));
+    struct cpuid r;
+    __asm__ volatile ("cpuid" : "=a"(r.a), "=b"(r.b), "=c"(r.c), "=d"(r.d) : "a"(leaf), "c"(sub));
+    return r;
 }
 
 /* XCR0, the state components the kernel has enabled; xgetbv faults unless cpuid says OSXSAVE */
@@ -41,7 +44,7 @@ int isa_x86_level_ok(int level, unsigned c1, unsigned b7, unsigned cx, unsigned 
     return v3 && (b7 >> 16 & 1) && (b7 >> 30 & 1) && (b7 >> 28 & 1) && (b7 >> 17 & 1) && (b7 >> 31 & 1) && (xcr0 & 0xe6) == 0xe6;
 }
 
-int isa_supported(const char *isa, unsigned long *auxv)
+int isa_supported(const char *isa, const unsigned long *auxv)
 {
     (void)auxv;
     if (xstrcmp(isa, "x86-64") == 0) return 1;
@@ -50,15 +53,8 @@ int isa_supported(const char *isa, unsigned long *auxv)
     else if (xstrcmp(isa, "x86-64-v3") == 0) level = 3;
     else if (xstrcmp(isa, "x86-64-v4") == 0) level = 4;
     else return -1;
-    unsigned a, b, c, d, max;
-    cpuid(0, 0, &max, &b, &c, &d);
-    if (max < 7) return 0;
-    cpuid(1, 0, &a, &b, &c, &d);
-    unsigned c1 = c;
-    cpuid(7, 0, &a, &b, &c, &d);
-    unsigned b7 = b;
-    cpuid(0x80000001u, 0, &a, &b, &c, &d);
-    unsigned cx = c;
+    if (cpuid(0, 0).a < 7) return 0;                         /* the highest leaf */
+    unsigned c1 = cpuid(1, 0).c, b7 = cpuid(7, 0).b, cx = cpuid(0x80000001U, 0).c;
     return isa_x86_level_ok(level, c1, b7, cx, (c1 >> 27 & 1) ? xgetbv0() : 0);
 }
 #endif

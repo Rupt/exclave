@@ -22,7 +22,8 @@ void scratch_put(struct scratch *s);
 static int inside_hook;
 static struct scratch *c_chunk;
 
-void scratch_test_between(void *chunk)
+void scratch_test_between(void *chunk);
+void scratch_test_between(void *chunk)                    /* src/scratch.c calls it */
 {
     (void)chunk;
     if (inside_hook++) return;                                /* B's own sweep, nested here, runs straight through */
@@ -36,7 +37,7 @@ int main(void)
 #if defined(__x86_64__)
     unsigned char *p = m; p[0] = 0x0f; p[1] = 0x05; p[2] = 0xc3;   /* syscall; ret */
 #elif defined(__aarch64__)
-    uint32_t *w = m; w[0] = 0xd4000001u; w[1] = 0xd65f03c0u;       /* svc #0; ret */
+    uint32_t *w = m; w[0] = 0xd4000001U; w[1] = 0xd65f03c0U;       /* svc #0; ret */
     __builtin___clear_cache((char *)m, (char *)m + 8);
 #endif
     mprotect(m, 4096, PROT_READ | PROT_EXEC);

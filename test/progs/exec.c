@@ -48,9 +48,10 @@ int main(int argc, char **argv)
     if (!strcmp(mode, "personality")) { personality(ADDR_NO_RANDOMIZE); execl("/proc/self/exe", argv[0], "child", (char *)0); perror("execl"); return 1; }
     if (!strcmp(mode, "script")) { execl(argv[2], argv[2], "arg1", (char *)0); perror("execl script"); return 1; }
     if (!strcmp(mode, "showenv")) { printf("A=%s B=%s EXCLAVE_COMMX=%s\n", getenv("A") ? getenv("A") : "-", getenv("B") ? getenv("B") : "-", getenv("EXCLAVE_COMMX") ? getenv("EXCLAVE_COMMX") : "-"); return 0; }
-    if (!strcmp(mode, "envedge")) {                          /* a variable in the last bytes before an unmapped page, between others: the handler
-                                                              * reads every variable's head in one batch, and one it cannot read whole falls back
-                                                              * to its own read without losing the rest (DESIGN.md 16.6 item 6) */
+    /* a variable in the last bytes before an unmapped page, between others: the handler
+     * reads every variable's head in one batch, and one it cannot read whole falls back
+     * to its own read without losing the rest (DESIGN.md 16.6 item 6) */
+    if (!strcmp(mode, "envedge")) {
         char *pg = mmap(0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0); if (pg == MAP_FAILED) { perror("mmap"); return 1; }
         munmap(pg + 4096, 4096);
         char *edge = pg + 4096 - 4; memcpy(edge, "A=1", 4);

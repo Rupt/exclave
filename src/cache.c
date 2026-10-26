@@ -11,7 +11,7 @@
 #include "common.h"
 
 #define SLOTS 16384
-#define STRINGS (1024 * 1024)
+#define STRINGS (1024UL * 1024)
 
 struct slot { volatile unsigned long hash; unsigned int off; unsigned char kind; };
 static struct slot table[SLOTS];

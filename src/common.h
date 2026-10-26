@@ -88,14 +88,14 @@
 #define SECCOMP_SET_MODE_FILTER 1
 #define SECCOMP_GET_ACTION_AVAIL 2
 #define SECCOMP_FILTER_FLAG_SPEC_ALLOW 4    /* 4.17 */
-#define SECCOMP_RET_KILL_PROCESS 0x80000000u
-#define SECCOMP_RET_KILL_THREAD  0x00000000u
-#define SECCOMP_RET_TRAP  0x00030000u
-#define SECCOMP_RET_ERRNO 0x00050000u
-#define SECCOMP_RET_ALLOW 0x7fff0000u
-#define AUDIT_ARCH_X86_64 0xC000003Eu
-#define AUDIT_ARCH_AARCH64 0xC00000B7u
-#define X32_SYSCALL_BIT 0x40000000u
+#define SECCOMP_RET_KILL_PROCESS 0x80000000U
+#define SECCOMP_RET_KILL_THREAD  0x00000000U
+#define SECCOMP_RET_TRAP  0x00030000U
+#define SECCOMP_RET_ERRNO 0x00050000U
+#define SECCOMP_RET_ALLOW 0x7fff0000U
+#define AUDIT_ARCH_X86_64 0xC000003EU
+#define AUDIT_ARCH_AARCH64 0xC00000B7U
+#define X32_SYSCALL_BIT 0x40000000U
 
 /* ---------- mmap ---------- */
 #define PROT_READ 1
@@ -203,8 +203,8 @@ void ltoa_(long v, char *b);            /* decimal, buffer >= 24 */
 void xtoa_(unsigned long v, char *b);   /* lowercase hex, buffer >= 20 */
 int starts_dir(const char *s, const char *pfx);  /* s == pfx or s starts with pfx + "/" ; "/" matches all */
 void *arena_alloc(size_t n);            /* bump allocator for the manifest's strings, the tables, the environment; never freed */
-const char *arena_str(const char *s, size_t n);
-long shebang_argv(char *line, const char *script, char **argv, long argc, char **nargv, long cap);
+char *arena_str(const char *s, size_t n);
+long shebang_argv(char *line, char *script, char **argv, long argc, char **nargv, long cap);
 
 /* ---------- logging (log.c) ---------- */
 void log_open(char **envp);
@@ -221,8 +221,9 @@ struct scratch {
     char b1[PATH_MAX], b2[PATH_MAX];
     char rest[2 * PATH_MAX];       /* the walk's remaining path: a directory and a relative path, or a link's text and the rest, each under PATH_MAX */
     char cur[PATH_MAX], real[PATH_MAX], tmp[PATH_MAX], v[PATH_MAX];
-    char v2[PATH_MAX];             /* the first path of a two-path syscall, the directory a scoped openat2 walk may not leave, or the
-                                    * name an exec'd program is exec'd by as the kernel spells it (7.4.5); canon never writes it */
+    /* the first path of a two-path syscall, the directory a scoped openat2 walk may not leave, or the
+     * name an exec'd program is exec'd by as the kernel spells it (7.4.5); canon never writes it */
+    char v2[PATH_MAX];
     char comm[NAME_MAX + 1];       /* the comm the kernel would set for an exec'd program (7.6) */
     char extra[8192];              /* argv and envp vectors, ELF headers, an extended open_how, a sockaddr */
     pid_t pid, tid;                /* the owner, looked up once per trap */
@@ -245,7 +246,7 @@ int  vis_leads_to_host_file(const char *v);   /* v is a proper ancestor of a hos
 int  vis_walk_facts(const char *v, int *identity, int *leads, const char **real);   /* the three in one pass: 1 if the host's */
 int  vis_plain_host_chain(const char *p, unsigned from);   /* every prefix from that long the host's plainly: the one-step check may stand in */
 int  is_wrapper_real(const char *real, char *tmp);   /* tmp PATH_MAX */
-int  payload_of(const char *real, char *out);         /* out = real's original's path, dir/.real/base; 1 if it fits; no wrapper check */
+int  payload_of(const char *wrapper, char *payload);  /* payload = the wrapper's original's path, dir/.real/base; 1 if it fits; no wrapper check */
 int  vis_readlink_identity(const char *v, char *out); /* 1 if v is an identity file that is a host symlink, out = its text; -EINVAL if not a symlink; 0 otherwise */
 int  vis_is_identity_file(const char *v);              /* 1 if v is exactly a host identity file */
 int  vis_in_data(const char *v);                       /* 1 if v lies under a data directory (6.2) */
@@ -263,7 +264,7 @@ int cwd_virtual(char *out);
 int is_self_exe(const char *p, pid_t pid);   /* /proc/self/exe in any spelling, for this process */
 
 /* ---------- loader (loader.c) ---------- */
-__attribute__((noreturn)) void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp, unsigned long *auxv);
+__attribute__((noreturn)) void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp, const unsigned long *auxv);
 int elf_probe(const char *real, char *interp, int *is_launcher, void *buf);   /* 1 has interp, 0 none, <0 error; buf >= 7680 bytes; is_launcher: the note's page generation, 0 for no launcher */
 
 /* ---------- filter (filter.c) ---------- */
@@ -276,7 +277,7 @@ void handler_install(void);
 void sig_restorer(void);
 
 /* ---------- CPU level (isa.c) ---------- */
-int isa_supported(const char *isa, unsigned long *auxv);   /* 1 yes, 0 no, -1 unknown string; auxv for AT_HWCAP on aarch64 */
+int isa_supported(const char *isa, const unsigned long *auxv);   /* 1 yes, 0 no, -1 unknown string; auxv for AT_HWCAP on aarch64 */
 #if !defined(__aarch64__)
 int isa_x86_level_ok(int level, unsigned c1, unsigned b7, unsigned cx, unsigned long xcr0);   /* the x86-64 decision, testable on the host */
 #endif

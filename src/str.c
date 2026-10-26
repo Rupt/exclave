@@ -53,7 +53,7 @@ void *arena_alloc(size_t n)
     if (arena_used + n > sizeof arena) die("arena full", 0, ENOMEM);
     void *p = arena + arena_used; arena_used += n; return p;
 }
-const char *arena_str(const char *s, size_t n)
+char *arena_str(const char *s, size_t n)
 {
     char *p = arena_alloc(n + 1); xmemcpy(p, s, n); p[n] = 0; return p;
 }
@@ -62,7 +62,7 @@ const char *arena_str(const char *s, size_t n)
  * kernel's argv for it: interp [arg] script args... Returns the new argc, -1 if
  * the line is not a shebang, -2 if nargv (cap entries) is too small. The line
  * buffer is modified in place and must outlive nargv. */
-long shebang_argv(char *line, const char *script, char **argv, long argc, char **nargv, long cap)
+long shebang_argv(char *line, char *script, char **argv, long argc, char **nargv, long cap)
 {
     if (line[0] != '#' || line[1] != '!') return -1;
     char *e = xstrchr(line, '\n'); if (e) *e = 0;      /* no newline within the buffer: the kernel uses what it has (5.1+) */
@@ -76,7 +76,7 @@ long shebang_argv(char *line, const char *script, char **argv, long argc, char *
     }
     if (argc + 3 > cap) return -2;
     long k = 0; nargv[k++] = interp; if (arg) nargv[k++] = arg;
-    nargv[k++] = (char *)script;
+    nargv[k++] = script;
     for (long i = 1; i < argc; i++) nargv[k++] = argv[i];
     nargv[k] = 0;
     return k;

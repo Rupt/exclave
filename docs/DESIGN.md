@@ -3537,7 +3537,11 @@ about a minute. The steps run in parallel, each with its own log under
 `build/gate/`, one line each with its time, ok, SKIP or FAIL:
 
 - the code checks, `scripts/check`: ruff, ty, shellcheck, shfmt and
-  taplo over the Python, the shell scripts and the TOML;
+  taplo over the Python, the shell scripts and the TOML; over the C,
+  gcc's strict warnings as errors (`make warnings`: both launchers,
+  `build/launcher-old` and the unit tests) and clang-tidy with its
+  static analyser on the launcher for each architecture and on the
+  unit tests (`.clang-tidy`);
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py`, the scratch-pool test and the CPU
   level test, each built from the current sources;
@@ -3883,6 +3887,11 @@ specified.
 - **The Python is ruff- and ty-clean**: `scripts/check` runs ruff, ty,
   shellcheck, shfmt and taplo from `uv.lock`, and an ignored rule or a
   suppression carries its reason (17).
+- **The C is clean under gcc's strict warnings and clang-tidy**, the
+  launcher for both architectures; clang-tidy comes from `uv.lock`, gcc
+  is the one that builds the launcher, and the build itself does not
+  stop on a warning, since a newer gcc may find something new. A check
+  `.clang-tidy` turns off carries its reason (17).
 - **`wrap` checks before it touches the tree**: a refused exclave is
   left unwrapped (10.1, 10.3).
 - **An exclave is wrapped on a machine of its architecture**: the static

@@ -10,7 +10,13 @@ HDR     := src/sys.h src/common.h src/elf.h src/gdb.py LICENSE
 OUT     := build/launcher
 OLD     := build/launcher-old
 
-CFLAGS_COMMON := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
+# Every warning here is clean, and scripts/check holds it so (make warnings); the build itself does not stop on
+# one, since a newer gcc than the one the code was checked with may warn of something new.
+WARNINGS := -Wall -Wextra -Wshadow -Wconversion -Wcast-qual -Wwrite-strings -Wstrict-prototypes \
+           -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls -Wnested-externs -Wold-style-definition \
+           -Wundef -Wformat=2 -Wnull-dereference -Wduplicated-cond -Wduplicated-branches -Wlogical-op \
+           -Wjump-misses-init -Wvla -Wimplicit-fallthrough -Wunused-macros
+CFLAGS_COMMON := -std=gnu11 -O2 -g $(WARNINGS) \
            -nostdlib -nostartfiles -ffreestanding -fno-stack-protector -fno-builtin \
            -fPIC -fvisibility=hidden -fno-plt \
            -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns
@@ -29,7 +35,7 @@ define linkcheck
 	@$(1)nm -u $@.debug | grep . && (echo "$@ has undefined symbols" && false) || true
 endef
 
-.PHONY: all clean
+.PHONY: all clean warnings
 
 all: $(OUT) $(OLD) $(if $(AARCH64_CC),build/launcher-aarch64 build/launcher-old-aarch64)
 
@@ -76,6 +82,19 @@ build/launcher-old-aarch64: $(SRC) $(HDR) Makefile
 	$(AARCH64_CC) $(filter-out -fcallgraph-info=su,$(CFLAGS_AARCH64)) -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD $(LDFLAGS) -o $@.debug $(SRC)
 	$(call linkcheck,aarch64-linux-gnu-)
 	aarch64-linux-gnu-objcopy --strip-all --keep-section=.debug_gdb_scripts --keep-section=.exclave.license $@.debug $@
+
+# every source compiled with the warnings as errors: the launcher's for each architecture there is a compiler for, and
+# as build/launcher-old; the unit tests' for the host, on its libc, whose string.h declares again what sys.h declares.
+# Nothing is kept.
+UNIT_FLAGS := -std=gnu11 -O1 -g $(WARNINGS) -Wno-redundant-decls -fno-builtin -fno-tree-loop-distribute-patterns
+warnings:
+	@s=0; for f in $(SRC); do $(CC) $(filter-out -fcallgraph-info=su,$(CFLAGS)) -Werror -c -o /dev/null $$f || s=1; \
+	    $(CC) $(filter-out -fcallgraph-info=su,$(CFLAGS)) -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD -Werror -c -o /dev/null $$f || s=1; done; \
+	$(if $(AARCH64_CC),for f in $(SRC); do $(AARCH64_CC) $(filter-out -fcallgraph-info=su,$(CFLAGS_AARCH64)) -Werror -c -o /dev/null $$f || s=1; done;) \
+	for f in test/*_test.c src/manifest.c src/filter.c src/isa.c src/str.c; do \
+	    $(CC) $(UNIT_FLAGS) -Werror -DHOST_TEST -c -o /dev/null $$f || s=1; done; \
+	$(CC) $(UNIT_FLAGS) -Werror -DSCRATCH_TEST -c -o /dev/null src/scratch.c || s=1; \
+	exit $$s
 
 # the tests are scripts/gate EXCLAVE... (the commit gate) and scripts/examples EXCLAVE (the example runs); see README.md
 

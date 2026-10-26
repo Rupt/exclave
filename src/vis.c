@@ -322,17 +322,16 @@ int is_wrapper_real(const char *real, char *tmp)
 {
     struct kstat st;
     if (sys_lstat(real, &st) < 0 || (st.st_mode & S_IFMT) != S_IFREG) return 0;
-    if (st.st_dev != C.launcher_dev || st.st_ino != C.launcher_ino) {
-        if (st.st_size != C.launcher_size) return 0;
-    }
-    return payload_of(real, tmp) && sys_lstat(tmp, &st) == 0;   /* the launcher's inode or a copy: a wrapper only where its original exists;
-                                                                    .exclave/launcher itself is not one */
+    if ((st.st_dev != C.launcher_dev || st.st_ino != C.launcher_ino) && st.st_size != C.launcher_size) return 0;
+    /* the launcher's inode or a copy: a wrapper only where its original exists;
+     * .exclave/launcher itself is not one */
+    return payload_of(real, tmp) && sys_lstat(tmp, &st) == 0;
 }
-int payload_of(const char *real, char *out)
+int payload_of(const char *wrapper, char *payload)
 {
-    const char *b = xstrrchr(real, '/'); if (!b) return 0;
-    size_t dl = (size_t)(b - real); if (dl + 7 + xstrlen(b) >= PATH_MAX) return 0;
-    xmemcpy(out, real, dl); out[dl] = 0; scat(out, "/.real", PATH_MAX); scat(out, b, PATH_MAX);
+    const char *b = xstrrchr(wrapper, '/'); if (!b) return 0;
+    size_t dl = (size_t)(b - wrapper); if (dl + 7 + xstrlen(b) >= PATH_MAX) return 0;
+    xmemcpy(payload, wrapper, dl); payload[dl] = 0; scat(payload, "/.real", PATH_MAX); scat(payload, b, PATH_MAX);
     return 1;
 }
 
@@ -349,7 +348,7 @@ char *to_real(const char *v, char *out, char *tmp)
     to_real_exec(v, out);
     if (!C.rootlen || !starts_dir(out, C.root)) return out;
     int k = cache_classify(v, out, tmp);                       /* the wrapper check, remembered (7.4.4) */
-    if (k == CK_WRAPPER || (!k && is_wrapper_real(out, tmp))) { if (payload_of(out, tmp)) scpy(out, tmp, PATH_MAX); }
+    if ((k == CK_WRAPPER || (!k && is_wrapper_real(out, tmp))) && payload_of(out, tmp)) scpy(out, tmp, PATH_MAX);
     return out;
 }
 void from_real(char *r)

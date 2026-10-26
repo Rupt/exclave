@@ -182,7 +182,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
     unsigned rf = S->resolve;
     const char *base = (rf & (RESOLVE_IN_ROOT | RESOLVE_BENEATH)) ? S->v2 : "";
     if (base[0] == '/' && base[1] == 0) base = "";
-    int nomagic = rf & (RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH | RESOLVE_IN_ROOT);
+    unsigned nomagic = rf & (RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH | RESOLVE_IN_ROOT);
     int dom = 1;
     S->touched_exclave = 0;                                     /* a walk that stays in the host's domain is the kernel's own to make (7.4.3) */
     if (path[0] == '/') {
@@ -201,10 +201,11 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         }
     } else {
         int tree = 0, r = (dfd == AT_FDCWD) ? cwd_virtual_in(rest, &tree) : fd_virtual_in(dfd, rest, &tree);
-        if (r == -ENOENT) {                                    /* a directory deleted under the program, which the kernel still walks from and
-                                                                * the handler cannot name: the path is spelt through the magic link, a host
-                                                                * path the kernel resolves itself; a walk from there into the exclave stays
-                                                                * the host's (7.4.3) */
+        /* a directory deleted under the program, which the kernel still walks from and
+         * the handler cannot name: the path is spelt through the magic link, a host
+         * path the kernel resolves itself; a walk from there into the exclave stays
+         * the host's (7.4.3) */
+        if (r == -ENOENT) {
             char *n = S->b2; if (dfd != AT_FDCWD) ltoa_(dfd, n);
             scpy(out, dfd == AT_FDCWD ? "/proc/self/cwd" : "/proc/self/fd/", PATH_MAX); if (dfd != AT_FDCWD) scat(out, n, PATH_MAX);
             if (xstrlen(out) + 1 + pl >= PATH_MAX) return -ENAMETOOLONG;
@@ -255,8 +256,9 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         /* an exclave path is re-issued under the tree's root prefix: one that would not fit PATH_MAX there is refused here,
          * ENAMETOOLONG, and never cut to a shorter name (13) */
         if (C.rootlen + (long)(curl + 1 + cl) + (last ? trailing : 0) >= PATH_MAX && is_exclave_path(cur)) return -ENAMETOOLONG;
-        if (rf & RESOLVE_NO_XDEV) {                            /* the mount changes where the domain does; an identity symlink that is
-                                                                * not followed is the tree's own entry, and its host target is not reached */
+        /* the mount changes where the domain does; an identity symlink that is
+         * not followed is the tree's own entry, and its host target is not reached */
+        if (rf & RESOLVE_NO_XDEV) {
             int d = is_exclave_path(cur);
             if (d != dom && !(last && !follow_last && !trailing && vis_is_identity_file(cur) && vis_readlink_identity(cur, tmp) == 1)) return -EXDEV;
             dom = d;
@@ -298,20 +300,19 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
             else if ((st.st_mode & S_IFMT) == S_IFDIR) kind = CK_DIR;
             else if ((st.st_mode & S_IFMT) != S_IFLNK) kind = CK_FILE;
             else {
+                /* a link the walk must follow and cannot read: its own error, EACCES for another process's magic link
+                 * (get_link); the last component is followed here too */
                 long n = sys_readlink(real, tmp, PATH_MAX - 1);
-                if (n < 0) return (int)n;                      /* a link the walk must follow and cannot read: its own error, EACCES for another
-                                                                * process's magic link (get_link); the last component is followed here too */
-                else {
-                    tmp[n] = 0; kind = CK_LINK;
-                    if (xstrncmp(cur, "/proc/", 6) == 0) {
-                        if (nomagic && xstrchr(cur + 6, '/')) return -ELOOP;   /* a link below /proc/<pid>/ is a magic link; one at /proc/ is not */
-                        /* a procfs magic link to something that has no path (a pipe, a socket, an unlinked
-                         * file) is reachable only through the link itself: the walk ends here */
-                        if ((tmp[0] != '/' && xstrchr(tmp, ':') && xstrchr(tmp, '[')) || (n > 10 && xstrcmp(tmp + n - 10, " (deleted)") == 0)) {   /* pipe:[n], socket:[n], anon_inode:[x], a deleted file */
-                            if (!last) return -ENOTDIR;
-                            kind = CK_FILE;
-                        } else from_real(tmp);                 /* procfs links report real paths */
-                    }
+                if (n < 0) return (int)n;
+                tmp[n] = 0; kind = CK_LINK;
+                if (xstrncmp(cur, "/proc/", 6) == 0) {
+                    if (nomagic && xstrchr(cur + 6, '/')) return -ELOOP;   /* a link below /proc/<pid>/ is a magic link; one at /proc/ is not */
+                    /* a procfs magic link to something that has no path (a pipe, a socket, an unlinked
+                     * file) is reachable only through the link itself: the walk ends here */
+                    if ((tmp[0] != '/' && xstrchr(tmp, ':') && xstrchr(tmp, '[')) || (n > 10 && xstrcmp(tmp + n - 10, " (deleted)") == 0)) {   /* pipe:[n], socket:[n], anon_inode:[x], a deleted file */
+                        if (!last) return -ENOTDIR;
+                        kind = CK_FILE;
+                    } else from_real(tmp);                     /* procfs links report real paths */
                 }
             }
             /* any spelling of the tree's root directory, through a bind mount or another link, is / */

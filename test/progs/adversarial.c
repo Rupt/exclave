@@ -66,8 +66,9 @@ static const char *en(long r)
 /* the child's exec answer: the errno through a close-on-exec pipe when the exec returned, else "ran" with the program's
  * exit status and the first line it wrote to stderr; with nofds the child first closes everything above the pipe and
  * lowers RLIMIT_NOFILE to what is open, so that no descriptor can be opened */
-struct ex { const char *path; char *const *argv; int nofds; void (*prep)(void); char *const *envp; };   /* nofds 1: the soft limit lowered to what
-                                                                 * is open; 2: the hard one too; 3: 0, 1 and 2 closed; prep: run in the child first */
+/* nofds 1: the soft limit lowered to what
+ * is open; 2: the hard one too; 3: 0, 1 and 2 closed; prep: run in the child first */
+struct ex { const char *path; char *const *argv; int nofds; void (*prep)(void); char *const *envp; };
 static const char *exec_answer(struct ex *x)
 {
     static char b[200];

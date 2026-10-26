@@ -54,7 +54,7 @@ static void page_init(void)
 #if defined(__x86_64__)
     unsigned char *p = (unsigned char *)SC_PAGE; p[0] = 0x0f; p[1] = 0x05; p[2] = 0xc3;   /* syscall; ret */
 #elif defined(__aarch64__)
-    uint32_t *w = (uint32_t *)SC_PAGE; w[0] = 0xd4000001u; w[1] = 0xd65f03c0u;              /* svc #0; ret */
+    uint32_t *w = (uint32_t *)SC_PAGE; w[0] = 0xd4000001U; w[1] = 0xd65f03c0U;              /* svc #0; ret */
     __asm__ volatile ("dc cvau, %0\n dsb ish\n ic ivau, %0\n dsb ish\n isb\n" : : "r"(SC_PAGE) : "memory");   /* the written words reach the instruction fetch */
 #endif
     __sc6_raw(NR_mprotect, (long)SC_PAGE, 4096, PROT_READ | PROT_EXEC, 0, 0, 0);
@@ -106,12 +106,12 @@ static int env_denied(const char *e)
 static char **env_prepare(char **envp, int boundary)
 {
     long n = 0; while (envp[n]) n++;
-    char **out = arena_alloc((size_t)(n + 6) * sizeof(char *)); long k = 0;
+    char **out = (char **)arena_alloc((size_t)(n + 6) * sizeof(char *)); long k = 0;
     for (long i = 0; i < n; i++) {
         if (boundary ? env_denied(envp[i]) : internal_var(envp[i])) continue;
         out[k++] = envp[i];
     }
-    if (boundary) for (int i = 0; fixed[i]; i++) out[k++] = (char *)arena_str(fixed[i], xstrlen(fixed[i]));   /* writable: bash writes into its environment strings */
+    if (boundary) for (int i = 0; fixed[i]; i++) out[k++] = arena_str(fixed[i], xstrlen(fixed[i]));   /* writable: bash writes into its environment strings */
     out[k] = 0;
     return out;
 }
@@ -176,7 +176,7 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
     char *var = arena_alloc(PATH_MAX + 13); scpy(var, "EXCLAVE_EXEC=", PATH_MAX + 13); scat(var, t, PATH_MAX + 13);
     char *fn = arena_alloc(PATH_MAX + 15); scpy(fn, "EXCLAVE_EXECFN=", PATH_MAX + 15); scat(fn, argv[1], PATH_MAX + 15);   /* the name as given: AT_EXECFN, comm, a script's $0 (7.6) */
     long n = 0; while (envp[n]) n++;
-    char **env = arena_alloc((size_t)(n + 3) * sizeof(char *)); long k = 0;
+    char **env = (char **)arena_alloc((size_t)(n + 3) * sizeof(char *)); long k = 0;
     env[k++] = var; env[k++] = fn;
     for (long i = 0; i < n; i++) if (!internal_var(envp[i])) env[k++] = envp[i];
     env[k] = 0;
@@ -202,9 +202,10 @@ static void loader_mode_check(char **argv, char **env2)
     if (sys_stat(S->real, &st) < 0) die_status(127, "cannot execute", C.program, ENOENT);
     if ((st.st_mode & S_IFMT) != S_IFREG) die_status(126, "cannot execute", C.program, EACCES);
     long ok = sys_faccessat(AT_FDCWD, S->real, X_OK); if (ok < 0) die_status(126, "cannot execute", C.program, ok);
-    if (is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp)) {   /* a wrapper: the kernel runs the launcher under the program's name,
-                                                                              * exec'd by the name the caller spelt, /bin/sh, so that comm is the
-                                                                              * kernel's answer for that name; the kernel follows the last link */
+    /* a wrapper: the kernel runs the launcher under the program's name,
+     * exec'd by the name the caller spelt, /bin/sh, so that comm is the
+     * kernel's answer for that name; the kernel follows the last link */
+    if (is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp)) {
         if (canon(S, S->b1, AT_FDCWD, 0, S->v2) < 0) scpy(S->v2, C.program, PATH_MAX);
         to_real_exec(S->v2, S->b2);
         unborrow();
@@ -242,7 +243,7 @@ static __attribute__((noreturn)) void run(const char *v, const char *given, long
     run(iv, nargv[0], k, nargv, envp, auxv, depth + 1);
 }
 
-void start_c(unsigned long *sp)
+__attribute__((used)) static void start_c(unsigned long *sp)   /* called by _start, above */
 {
     page_init();
     reloc_self();
@@ -278,8 +279,9 @@ void start_c(unsigned long *sp)
     read_manifest(auxv);
 
     const char *target, *fn, *cm;
-    if (starts_dir(exe, C.root)) {                            /* a wrapper: the kernel ran the launcher under the program's name. Decided first,
-                                                              * so that EXCLAVE_EXEC in anyone's environment is inert for the whole tree */
+    /* a wrapper: the kernel ran the launcher under the program's name. Decided first,
+     * so that EXCLAVE_EXEC in anyone's environment is inert for the whole tree */
+    if (starts_dir(exe, C.root)) {
         scpy(C.program, exe, PATH_MAX); from_real(C.program);
         /* the identity the kernel would have given the program (7.6): the name a handler exec'd this wrapper by, as the kernel spells it,
          * carried in EXCLAVE_EXECFN and EXCLAVE_COMM by that handler, which only a launcher sets; from the host, the kernel's own AT_EXECFN, a
@@ -298,11 +300,12 @@ void start_c(unsigned long *sp)
         scpy(C.execfn, fn ? fn : target, PATH_MAX);
         scpy(C.comm, cm ? cm : base_name(C.execfn), sizeof C.comm);
         C.descfd = -1;
-        if (xstarts(target, "/proc/self/fd/")) {               /* a descriptor with no path (13 item 25): the kernel's identity for the
-                                                              * program is the link's text; the dup is closed once the segments are mapped */
-            long n = sys_readlink(target, C.exe, PATH_MAX - 1); if (n > 0) { C.exe[n] = 0; C.exe_fixed = 1; }
-            long m = 0; for (const char *q = target + 14; *q >= '0' && *q <= '9'; q++) m = m * 10 + (*q - '0');
-            C.descfd = (int)m;
+        /* a descriptor with no path (13 item 25): the kernel's identity for the
+         * program is the link's text; the dup is closed once the segments are mapped */
+        if (xstarts(target, "/proc/self/fd/")) {
+            long len = sys_readlink(target, C.exe, PATH_MAX - 1); if (len > 0) { C.exe[len] = 0; C.exe_fixed = 1; }
+            long fd = 0; for (const char *q = target + 14; *q >= '0' && *q <= '9'; q++) fd = fd * 10 + (*q - '0');
+            C.descfd = (int)fd;
         }
     } else {
         entry_exec(argc, argv, envp);                          /* the launcher run by hand: .exclave/launcher PROGRAM ARGS... */

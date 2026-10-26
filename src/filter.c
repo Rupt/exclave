@@ -15,17 +15,18 @@ struct sock_fprog { unsigned short len; struct sock_filter *filter; };
 
 #define LD_ABS  0x20      /* BPF_LD | BPF_W | BPF_ABS */
 #define JEQ_K   0x15      /* BPF_JMP | BPF_JEQ | BPF_K */
-#define JSET_K  0x45
+#if defined(__x86_64__)
+#define JSET_K  0x45      /* BPF_JMP | BPF_JSET | BPF_K: the x32 bit's test */
+#endif
 #define RET_K   0x06
 #define AND_K   0x54      /* BPF_ALU | BPF_AND | BPF_K */
-#define JGT_K   0x25      /* BPF_JMP | BPF_JGT | BPF_K */
 #define HIGHEST_KNOWN_SYSCALL 470      /* listns, in 7.0's table; test/syscalls.py probes the running kernel above it */
 #define OFF_NR   0
 #define OFF_ARCH 4
 #define OFF_IP   8
-#define OFF_ARG(i) (16 + 8 * (i))          /* low word; high word at +4 */
+#define OFF_ARG(i) (16U + 8U * (unsigned)(i))          /* low word; high word at +4 */
 
-#define PROBE_ERRNO(v) (0x800u | (unsigned)(v))   /* 7.4.2: the probe answer, an errno the kernel can carry */
+#define PROBE_ERRNO(v) (0x800U | (unsigned)(v))   /* 7.4.2: the probe answer, an errno the kernel can carry */
 
 static struct sock_filter prog[1024];
 static int np;
@@ -168,7 +169,7 @@ static void build(void)
     /* the launcher's own syscalls: issued from the syscall page */
     for (int i = 0; i < npage; i++) prog[page[i]].k = (uint32_t)(np - page[i] - 1);
     emit(LD_ABS, 0, 0, OFF_IP + 4); emit(JEQ_K, 0, 4, (uint32_t)(SC_PAGE >> 32));
-    emit(LD_ABS, 0, 0, OFF_IP); emit(AND_K, 0, 0, ~0xfffu); emit(JEQ_K, 0, 1, (uint32_t)SC_PAGE);
+    emit(LD_ABS, 0, 0, OFF_IP); emit(AND_K, 0, 0, ~0xfffU); emit(JEQ_K, 0, 1, (uint32_t)SC_PAGE);
     ret(SECCOMP_RET_ALLOW);
     /* the refusals; everything else that reaches here traps, and a syscall newer than this filter knows is answered
      * ENOSYS by the handler (7.4.2): a future path-taking syscall must not reach the host untranslated */
@@ -205,6 +206,8 @@ void filter_install(void)
 
 #ifdef HOST_TEST
 /* test/filter_test.c: the built program and the lists it was built from, for the model of 7.4.2 */
+const void *filter_for_test(int *n);
+const int *filter_list_for_test(int which, int *n);
 const void *filter_for_test(int *n) { build(); *n = np; return prog; }
 const int *filter_list_for_test(int which, int *n)
 {

@@ -90,7 +90,7 @@ enum {
 #define ARCH_NAME "x86_64"
 #define ARCH_ISA_DEFAULT "x86-64"
 #define EM_NATIVE 62
-#define AUDIT_ARCH_NATIVE 0xC000003Eu
+#define AUDIT_ARCH_NATIVE 0xC000003EU
 #define R_NATIVE_RELATIVE 8                 /* R_X86_64_RELATIVE */
 #define O_DIRECTORY 0200000
 #define O_NOFOLLOW  0400000
@@ -165,7 +165,7 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
 #define ARCH_NAME "aarch64"
 #define ARCH_ISA_DEFAULT "aarch64"
 #define EM_NATIVE 183
-#define AUDIT_ARCH_NATIVE 0xC00000B7u
+#define AUDIT_ARCH_NATIVE 0xC00000B7U
 #define R_NATIVE_RELATIVE 1027              /* R_AARCH64_RELATIVE */
 #define O_DIRECTORY 040000
 #define O_NOFOLLOW  0100000
@@ -175,6 +175,12 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
 
 /* MAGIC marks the filter probe (uname with MAGIC as its argument, 7.4.2); nothing else. */
 #define MAGIC 0xC0DEC0DE5CA1AB1EUL
+/* The static analyser cannot see what a syscall's assembly writes through its arguments, and would report every
+ * buffer a syscall fills as uninitialised: to it, a syscall is a call to a function it cannot see. */
+#ifdef __clang_analyzer__
+long __sc6_opaque(long n, long a, long b, long c, long d, long e, long f);
+#define __sc6 __sc6_opaque
+#endif
 #define SC0(n)                 __sc6(n, 0, 0, 0, 0, 0, 0)
 #define SC1(n, a)              __sc6(n, (long)(a), 0, 0, 0, 0, 0)
 #define SC2(n, a, b)           __sc6(n, (long)(a), (long)(b), 0, 0, 0, 0)
@@ -366,13 +372,15 @@ static inline long sys_fork(void)
 }
 
 /* ---------- tiny libc subset ---------- */
+/* a pointer into a const argument handed back writable, as strchr does, or into a struct iovec for writing out */
+static inline void *unconst(const void *p) { return (void *)(uintptr_t)p; }
 static inline size_t xstrlen(const char *s) { size_t n = 0; while (s[n]) n++; return n; }
 static inline int xstrcmp(const char *a, const char *b) { while (*a && *a == *b) a++, b++; return (unsigned char)*a - (unsigned char)*b; }
 static inline int xstrncmp(const char *a, const char *b, size_t n) { while (n && *a && *a == *b) a++, b++, n--; return n ? (unsigned char)*a - (unsigned char)*b : 0; }
 static inline int xstarts(const char *s, const char *pfx) { return xstrncmp(s, pfx, xstrlen(pfx)) == 0; }
-static inline char *xstrchr(const char *s, int c) { for (; *s; s++) if (*s == c) return (char *)s; return c == 0 ? (char *)s : 0; }
-static inline char *xstrrchr(const char *s, int c) { const char *r = 0; for (; *s; s++) if (*s == c) r = s; return (char *)r; }
-static inline char *xstrstr(const char *h, const char *n) { size_t l = xstrlen(n); for (; *h; h++) if (xstrncmp(h, n, l) == 0) return (char *)h; return 0; }
+static inline char *xstrchr(const char *s, int c) { for (; *s; s++) if (*s == c) return unconst(s); return c == 0 ? unconst(s) : 0; }
+static inline char *xstrrchr(const char *s, int c) { const char *r = 0; for (; *s; s++) if (*s == c) r = s; return unconst(r); }
+static inline char *xstrstr(const char *h, const char *n) { size_t l = xstrlen(n); for (; *h; h++) if (xstrncmp(h, n, l) == 0) return unconst(h); return 0; }
 static inline void *xmemcpy(void *d, const void *s, size_t n) { char *dd = d; const char *ss = s; while (n--) *dd++ = *ss++; return d; }
 static inline void *xmemset(void *d, int c, size_t n) { char *dd = d; while (n--) *dd++ = (char)c; return d; }
 static inline int xmemcmp(const void *a, const void *b, size_t n) { const unsigned char *x = a, *y = b; for (; n; n--, x++, y++) if (*x != *y) return *x - *y; return 0; }

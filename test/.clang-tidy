@@ -1,0 +1,10 @@
+# The unit tests are single-threaded host programs on libc: its exit and printf are theirs to use
+# unchecked, and its string.h declares again the functions sys.h declares for the launcher. Their
+# hooks are called from outside the file, by the source under test or by a sanitiser's runtime.
+InheritParentConfig: true
+Checks:
+  - -concurrency-mt-unsafe
+  - -cert-err33-c
+  - -readability-redundant-declaration
+  - -readability-inconsistent-declaration-parameter-name
+  - -misc-use-internal-linkage

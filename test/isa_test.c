@@ -12,7 +12,7 @@ struct exclave C;
 void die(const char *what, const char *detail, long err) { fprintf(stderr, "die: %s %s %ld\n", what, detail ? detail : "", err); exit(99); }
 
 #if defined(__x86_64__)
-#define BIT(n) (1u << (n))
+#define BIT(n) (1U << (n))
 /* every feature bit of v2, v3 and v4, in the words isa.c reads */
 static const unsigned C1 = BIT(13) | BIT(23) | BIT(0) | BIT(19) | BIT(20) | BIT(9) | BIT(28) | BIT(29) | BIT(12) | BIT(22) | BIT(27);
 static const unsigned B7 = BIT(5) | BIT(3) | BIT(8) | BIT(16) | BIT(30) | BIT(28) | BIT(17) | BIT(31);
@@ -39,7 +39,7 @@ int main(void)
     expect(4, C1, B7, CX, 0x67, 0, "Hi16_ZMM state disabled");
     expect(4, C1, B7 & ~BIT(16), CX, 0xe7, 0, "no AVX512F");
     __builtin_cpu_init();
-    int real[3] = {__builtin_cpu_supports("x86-64-v2"), __builtin_cpu_supports("x86-64-v3"), __builtin_cpu_supports("x86-64-v4")};
+    int real[3] = {__builtin_cpu_supports("x86-64-v2") ? 1 : 0, __builtin_cpu_supports("x86-64-v3") ? 1 : 0, __builtin_cpu_supports("x86-64-v4") ? 1 : 0};
     static const char *const name[3] = {"x86-64-v2", "x86-64-v3", "x86-64-v4"};
     for (int i = 0; i < 3; i++) {
         cases++;

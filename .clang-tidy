@@ -1,0 +1,55 @@
+# clang-tidy for the launcher and the unit tests, run by scripts/check on both architectures.
+#
+# The families are on whole; a check is off below only where the launcher's design is what it
+# flags, each with the reason. A finding that is right in principle but wrong at one site takes
+# NOLINT(check) there, with its reason on the line.
+Checks:
+  - bugprone-*
+  - cert-*
+  - clang-analyzer-*
+  - concurrency-*
+  - misc-*
+  - performance-*
+  - portability-*
+  - readability-*
+  # The launcher's own syscalls are inline assembly (sys.h), its addresses integers (a program's
+  # memory, the syscall page), and every module includes common.h, which includes the rest.
+  - -portability-no-assembler
+  - -performance-no-int-to-ptr
+  - -clang-analyzer-optin.core.FixedAddressDereference
+  - -misc-include-cleaner
+  # #pragma once is what every header uses; #if defined(...) pairs with #elif defined(...).
+  - -portability-avoid-pragma-once
+  - -readability-use-concise-preprocessor-directives
+  # memmove and friends are the launcher's own (str.c); C11's _s functions do not exist here.
+  - -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+  # Names: __sc6 and the kernel's own spellings are reserved identifiers by design; the kernel's
+  # register and syscall names are short.
+  - -bugprone-reserved-identifier
+  - -cert-dcl37-c
+  - -cert-dcl51-cpp
+  - -readability-identifier-length
+  # Flags are ints or'd together, as the kernel's headers define them.
+  - -bugprone-signed-bitwise
+  - -hicpp-signed-bitwise
+  # Numbers in the launcher are the kernel's (offsets, limits, page sizes), cited where they are used.
+  - -readability-magic-numbers
+  # Style the code holds to on purpose: `if ((r = f()) < 0) return r;`, braces where they help,
+  # several declarations on a line, parameters in the kernel's order.
+  - -bugprone-assignment-in-if-condition
+  - -readability-braces-around-statements
+  - -readability-isolate-declaration
+  - -bugprone-easily-swappable-parameters
+  - -readability-math-missing-parentheses
+  # Conditions chained in the order the kernel checks them read as a table; a short body stays on its
+  # line beside a braced one; and clang-format lays a list out by whether it ends in a comma.
+  - -readability-avoid-nested-conditional-operator
+  - -readability-inconsistent-ifelse-braces
+  - -readability-trailing-comma
+  # The handler is one dispatch over the syscalls it traps; its size is the syscall table's.
+  - -readability-function-cognitive-complexity
+  - -readability-function-size
+  # Recursion is test/stackcheck.py's to judge: it allows exec_target's alone, bounded, and counts its frames.
+  - -misc-no-recursion
+WarningsAsErrors: "*"
+HeaderFilterRegex: "src/.*"

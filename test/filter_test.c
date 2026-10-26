@@ -19,7 +19,7 @@ const int *filter_list_for_test(int which, int *n);
 struct sock_filter { uint16_t code; uint8_t jt, jf; uint32_t k; };
 struct data { uint32_t nr, arch; uint64_t ip, args[6]; };
 #define HIGHEST 470                                           /* src/filter.c's HIGHEST_KNOWN_SYSCALL */
-#define NOT_CONST 0xffffffffu
+#define NOT_CONST 0xffffffffU
 
 /* the interpreter: the instructions src/filter.c emits, and nothing else. known: 0 runs on full data; 1 runs as the
  * action cache does, answering NOT_CONST at the first load of anything but the number and the architecture */
@@ -93,7 +93,7 @@ int main(void)
 {
     int n; const struct sock_filter *p = filter_for_test(&n);
     int fails = 0, cases = 0, consts = 0, steps, worst_allow = 0; long allow_steps = 0, allows = 0;
-    static const uint64_t values[] = { 0, 1, 2, MAGIC, MAGIC & 0xffffffffu, MAGIC >> 32 << 32, SECCOMP_GET_ACTION_AVAIL, PR_SET_SECCOMP,
+    static const uint64_t values[] = { 0, 1, 2, MAGIC, MAGIC & 0xffffffffU, MAGIC >> 32 << 32, SECCOMP_GET_ACTION_AVAIL, PR_SET_SECCOMP,
         FS_IOC_SETFLAGS, FS_IOC_FSSETXATTR, FS_IOC_SETFLAGS | 1UL << 32, 1UL << 32, ~0UL };
     static const uint64_t ips[] = { 0x401000, SC_PAGE, SC_PAGE + 0xffe, SC_PAGE + 0x1000, SC_PAGE - 1, SC_PAGE | 1UL << 32, 0x7f0000001000 };
     uint32_t nrs[HIGHEST + 64]; int nn = 0;
@@ -106,7 +106,7 @@ int main(void)
                 for (unsigned v = 0; v < (a < 0 ? 1 : sizeof values / sizeof values[0]); v++)
                     for (int arch = 0; arch < 2; arch++) {
                         struct data d; memset(&d, 0, sizeof d);
-                        d.nr = nr; d.arch = arch ? AUDIT_ARCH_NATIVE : 0x40000028u; d.ip = ips[j];
+                        d.nr = nr; d.arch = arch ? AUDIT_ARCH_NATIVE : 0x40000028U; d.ip = ips[j];
                         if (a >= 0) d.args[a] = values[v];
                         uint32_t got = run(p, n, &d, 0, &steps), want = rule(&d);
                         cases++;
@@ -122,6 +122,6 @@ int main(void)
         }
     }
     printf("%d instructions; %d cases, %d failures; %d of %d numbers allowed by number alone (the action cache); an allowed syscall from a program runs %.1f instructions on average, %d at most\n",
-           n, cases, fails, consts, HIGHEST + 1, (double)allow_steps / allows, worst_allow);
+           n, cases, fails, consts, HIGHEST + 1, (double)allow_steps / (double)allows, worst_allow);
     return fails != 0;
 }
