@@ -21,14 +21,22 @@
 extern char **environ;
 static volatile int stop, fails;
 static char exe[4096];
+static char seen[8][160];                                    /* the first wrong answers, named: the call, its result and errno or text */
+
+static void wrong(const char *what, long r, int e, const char *text, long n)
+{
+    int i = __sync_fetch_and_add(&fails, 1);
+    if (i < 8) snprintf(seen[i], sizeof seen[i], "%s: ret=%ld errno=%d%s%.*s", what, r, r < 0 ? e : 0, text ? " text=" : "", text ? (int)(n > 100 ? 100 : n) : 0, text ? text : "");
+}
 
 static void *trapper(void *arg)
 {
     struct stat st; char b[4096];
     while (!stop) {
-        if (stat("/usr/share/exclave-test-marker", &st)) { __sync_fetch_and_add(&fails, 1); continue; }
+        long r = stat("/usr/share/exclave-test-marker", &st);
+        if (r) { wrong("stat", r, errno, 0, 0); continue; }
         long n = readlink("/proc/self/exe", b, sizeof b - 1);
-        if (n < 0 || (size_t)n != strlen(exe) || memcmp(b, exe, (size_t)n)) __sync_fetch_and_add(&fails, 1);
+        if (n < 0 || (size_t)n != strlen(exe) || memcmp(b, exe, (size_t)n)) wrong("readlink /proc/self/exe", n, errno, n > 0 ? b : 0, n);
     }
     return arg;
 }
@@ -59,6 +67,7 @@ int main(int argc, char **argv)
     stop = 1;
     for (int i = 0; i < 4; i++) pthread_join(t[i], 0);
     printf("spawns beside trapping threads: %d spawned, %d failures\n", spawned, fails);
+    for (int i = 0; i < fails && i < 8; i++) printf("  wrong answer: %s\n", seen[i]);
     /* part 2: eight threads hold chunks in a FIFO open; a forked child traps with a 1 ms timer whose handler traps too */
     char fifo[4096]; snprintf(fifo, sizeof fifo, "%s/fifo", host); unlink(fifo);
     if (mkfifo(fifo, 0600)) { perror("mkfifo"); return 1; }
