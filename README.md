@@ -3,8 +3,10 @@
 `exclave` turns environment-dependent Linux software, compilers first, into
 a directory that behaves like a single static executable: copy it
 anywhere, run any program inside it by path, and it never touches a host
-library, header, loader or configuration file. No daemon, no image store,
-no privileges, no host binaries, no run-time options.
+library, header or loader, and reads no host configuration but eight
+identity files: who the users are, how names resolve, which certificate
+authorities are trusted. No daemon, no image store, no privileges, no
+host binaries, and one run-time knob, `EXCLAVE_LOG`, which only logs.
 
 An **exclave** is that directory: an unmodified filesystem tree plus
 one static, freestanding binary, the **launcher**, which every
@@ -13,12 +15,14 @@ onto `/` with a seccomp filter and a resident `SIGSYS` handler that
 rewrites every path-taking syscall inside the process, and loads the
 original program and the exclave's own `ld.so` itself. The **`exclave`
 command** builds exclaves from files: package files it is handed, or
-any filesystem tree, and is itself an exclave.
+any filesystem tree.
 
 > **Experimental.** exclave works and is tested widely (below), but it
-> has no release or version number yet, and its format may still change.
+> has no release or version number yet. The format is versioned
+> (`exclave 1`, `hashes 1`), and nothing else promises compatibility
+> between commits.
 
-## Status
+## What works
 
 - **Packages in, a directory out.** The `exclave` command builds
   exclaves from Debian and Ubuntu `.deb`, Alpine `.apk` and Fedora,
@@ -26,29 +30,35 @@ any filesystem tree, and is itself an exclave.
   files and never fetches; three small fetchers in `tools/` are the
   step before it.
 - **Compilers first.** A gcc exclave builds zlib, Lua, SQLite and re2c
-  from source with their configure scripts, at native speed for the
-  compiles and about a third slower for the configure scripts. A clang
+  from source with their configure scripts: the builds within a fifth
+  of native time, the configure scripts about a third slower. A clang
   exclave compiles C and C++; Alpine and Fedora exclaves compile and run
   C. A CentOS 7 glibc as a data directory gives outputs that run on
   every glibc since 2.17.
-- **x86-64 and aarch64.** One source builds both launchers.
+- **Where it runs.** x86-64 and aarch64 Linux, kernel 3.10 or later as
+  tested, glibc or musl software inside, 4 KB pages (larger pages are
+  untested). One source builds both launchers.
 - **gdb** debugs a program in an exclave: the launcher carries the
   script gdb needs.
 - **Tested against the kernel.** A suite of 74 named tests, oracles that
   compare the launcher's answers with the kernel's under a read-only
   bind mount, and a differential probe of 19 093 syscall cases pass on
-  gcc, clang, Alpine and Fedora exclaves, under Docker's default seccomp
-  profile, and in virtual machines from CentOS 7 at kernel 3.10 to
-  Fedora 42 and an emulated arm64 Ubuntu.
+  gcc, clang, Alpine and Fedora exclaves. An exclave also runs under
+  Docker's default seccomp profile, and the gcc exclave passes the suite
+  in virtual machines from CentOS 7 at kernel 3.10 to Fedora 42 and an
+  emulated arm64 Ubuntu.
 
 Figures here and in `docs/DESIGN.md` are measured on the reference
-machine: Ubuntu 24.04, kernel 7.0, x86-64, glibc 2.39.
+machine: an AMD Ryzen AI 7 350 (8 cores, 16 threads), Ubuntu 24.04,
+kernel 7.0, glibc 2.39.
 
 ## First run
 
-You need an x86-64 Linux host with `gcc`, `make` and `python3` (3.6 or
-later), and the network for one package fetch. No root, no container
-runtime, no user namespaces: nothing here needs a privilege.
+You need an x86-64 Linux host with `gcc`, `make`, `python3` (3.6 or
+later) and `zstd`, which unpacks Ubuntu's packages, and the network for
+two downloads: Ubuntu's gcc packages and CentOS 7's glibc, 121 MB in
+all. No root, no container runtime, no user namespaces: nothing here
+needs a privilege.
 
 ```bash
 make
@@ -82,12 +92,14 @@ and logs are the tutorial and each command is one you can run by hand:
    build natively on CentOS 7. It runs on this host and, through
    `.exclave/launcher`, inside the exclave on the exclave's loader.
 5. `exclave prune` keeps, in a copy, the files that compile touched
-   and the packages' licence texts, 227 of 9 567; the copy compiles the program again, and
+   and the packages' licence texts: 227 of the 9 567 files and links
+   under `tree/`; the copy compiles the program again, and
    `exclave check` reads the new log: that copy is the exclave you would
    ship for that workload, and the check is the one you would run on
    it.
 
-What it prints on the reference machine, abridged:
+What it prints on the reference machine, abridged; `exclave` in it is
+`example.sh`'s shorthand for `python3 exclave/exclave.py`:
 
 ```
 == 3. CentOS 7's glibc as a sysroot inside it
@@ -129,136 +141,6 @@ that touches nothing on the host, 264 MB with the sysroot; `hello`;
 second run reuses; and `log/`, one file per step. A second run takes
 nine seconds on the reference machine; the first also fetches 121 MB:
 the 94 packages and 23 rpms, and the indexes that resolve them.
-
-## Making your own exclave
-
-The `exclave` command takes files and never fetches. Whatever puts
-package files in a directory is the step before it: apt, a mirror, the
-three fetchers here. `unpack` reads each package's own control archive,
-reports dependencies the set does not satisfy, extracts in Python,
-synthesises what maintainer scripts would have done (alternatives,
-`ld.so.cache` with the exclave's own `ldconfig`, the CA bundle,
-`/etc/passwd`), adds the placeholders and records every input by hash in
-the hashes file. The result is a directory. `wrap` wraps every
-executable, runs the static check and records the manifest and tree
-hashes; `unwrap` moves the originals back; a bare directory holding a
-`tree/` becomes an exclave by `wrap` alone. Every exclave has a `README`
-at its top for whoever finds it without this repository: what it is, how
-to run its programs, what it touches and how to check it. The tool
-writes it where the exclave has none, so a maker's own stays.
-
-```
-tools/fetch-debs.py --out debs gcc-13 libc6-dev make         # Ubuntu or Debian: the closure of the packages named, verified against the index
-tools/fetch-apks.py --out apks gcc musl-dev binutils         # the same for Alpine
-tools/fetch-rpms.py --repo URL --out rpms gcc glibc-devel    # and for Fedora, Rocky, CentOS: any repository with repodata/
-exclave/exclave.py unpack gcc.exclave debs/*.deb             # package files -> an unwrapped exclave, a directory you may edit; .apk and .rpm files likewise
-exclave/exclave.py wrap gcc.exclave                          # wrap every executable, static check, hashes into .exclave/hashes
-ln -s tree/usr/bin/gcc-13 gcc.exclave/gcc                    # a shortcut, if you want one
-gcc.exclave/gcc -O2 hello.c -o hello                         # any executable in tree/ runs by path
-gcc.exclave/tree/usr/bin/sh -c 'as --version'                # the exclave's own shell, with the exclave's PATH
-gcc.exclave/.exclave/launcher /path/to/host/program args...  # a program without a wrapper, a host tool or a built output, inside the exclave
-gdb -iex 'set auto-load safe-path /' --args gcc.exclave/gcc -c x.c   # gdb: the launcher carries the script; break, bt, source lines
-EXCLAVE_LOG=/tmp/exclave.log gcc.exclave/gcc -c x.c          # the one knob: one line per trapped syscall
-exclave/exclave.py check gcc.exclave /tmp/exclave.log        # static check of every ELF, dynamic check of the logged run
-exclave/exclave.py prune gcc.exclave /tmp/exclave.log        # keep what the logged runs touched
-exclave/exclave.py unwrap gcc.exclave                        # the originals back over their wrappers, to edit; wrap again after
-exclave/exclave.py relink gcc.exclave build/launcher         # swap the launcher after rebuilding it; the wrappers are relinked
-exclave/exclave.py hash gcc.exclave                          # the tree hash the hashes file records
-exclave/exclave.py format gcc.exclave/.exclave/manifest      # the canonical spelling of a manifest or hashes file; --check only reports
-```
-
-Between `unpack` and `wrap` the unwrapped exclave is yours: copy a
-built prefix in, delete what you do not want, add a data directory,
-write the manifest. The manifest is `gcc.exclave/.exclave/manifest`,
-`exclave 1` when nothing is overridden, and has four other keys, each
-a string: `cpu` names the level the binaries need (`"x86-64-v3"`;
-x86-64 when absent); `data` names a directory that is never executed
-or loaded, not wrapped, not checked, a sysroot or a second libc's
-world; `host` puts a host path
-at its own name inside the exclave, `host "/usr/local/share/fonts"`;
-`own` makes a path the exclave's, which removes one of the eight host
-identity files below. That is the whole manifest. There is no way to
-make the tree writable, remap a path, set a variable or put a directory
-on `PATH`: a wrapper script inside the exclave sets variables, a
-symlink in the tree does remapping, and a symlink in the exclave's own
-`/usr/local/bin` puts a program on `PATH`.
-
-An exclave of something you built is the same four lines, with the
-build system's own installer doing the building:
-
-```
-gcc.exclave/tree/usr/bin/sh -c './configure --prefix=/usr/local && make && make install DESTDIR=$PWD/stage'
-exclave/exclave.py unpack tool.exclave runtime/*.deb         # libc6 and whatever else the result links against
-cp -a stage/usr/local tool.exclave/tree/usr/
-exclave/exclave.py wrap tool.exclave                         # the static check says whether it all links inside
-```
-
-No recipe format and no closure copying: the runtime the result needs
-is packages you already have, and the static check verifies that every
-library resolves inside the exclave.
-
-## Bundles made before the rename
-
-exclave was once called `cont`, and an exclave a can: `.can/` for
-`.exclave/`, `root/` for `tree/`, `opener` and `lock` for `launcher` and
-`hashes`. A can still runs as it is, from anywhere, and runs an
-exclave's programs as an exclave runs its own. The `exclave` command
-refuses one by name; converting it is renames, two edits and three
-commands, `exclave/exclave.py` standing for the command:
-
-```
-cd OLD.can && mv .can .exclave && mv root tree && mv .exclave/opener .exclave/launcher && mv .exclave/lock .exclave/hashes
-sed -i -e 's/^can 1$/exclave 1/' -e 's/^isa /cpu /' .exclave/manifest
-sed -i -e 's/^lock 1$/hashes 1/' -e 's/^cannery /tool /' -e 's/^opener /launcher /' .exclave/hashes
-cd .. && mv OLD.can OLD.exclave                               # the suffix is a convention; any name works
-exclave/exclave.py relink OLD.exclave build/launcher          # the current launcher behind every wrapper
-exclave/exclave.py unwrap OLD.exclave && exclave/exclave.py wrap OLD.exclave   # the manifest's hash, recorded again
-```
-
-The converted exclave's hashes file equals the one a fresh `unpack` and
-`wrap` of the same packages writes, apart from the launcher's hash. A
-launcher old enough to put its syscall page at another address refuses
-to run under the current one and points here; relinking fixes it.
-
-## The log and the checks
-
-`EXCLAVE_LOG=<file>` is the launcher's one knob. It appends one line per
-trapped syscall, `<syscall> <result> <virtual path>`, the result being
-the return value or the negative errno: `open 3 /etc/ld.so.cache` is
-descriptor 3, `access -2 /etc/ld.so.preload` is `ENOENT`, which is what
-a search looks like and is not a fault. Lines that begin `launcher`
-are the launcher's own decisions: the working directory it started in
-and, when that lies under an exclave path, the subtree it gave the
-host; the border program; an identity file the host lacks, answered
-from the exclave's copy. Every process a workload spawns appends to the
-same file, so a `make` writes one log. A newline in a path is written
-`\n` and a backslash `\\`; nothing else is escaped.
-
-`exclave check EXCLAVE [LOG...]` first verifies the wrappers and their
-originals and compares the tree with the hash the hashes file records,
-then runs the static check on every ELF file outside data
-directories: every loader and every `DT_NEEDED` resolves inside the tree
-by the loader's own search, to one libc, and nothing would resolve on
-the host. Errors name the file and stop `wrap`; warnings are things
-worth knowing that do not: a dangling symlink, a 32-bit or
-foreign-machine object a package ships beside the real ones; static
-executables are counted, having no loader to verify.
-With logs it adds the dynamic check: every library the workload opened
-resolved inside the exclave, and every NSS module this host's
-`nsswitch.conf` names that the exclave lacks is a warning. glibc skips a
-missing module, which is right for `hosts` and wrong for `passwd` on a
-host whose users come from LDAP or `systemd-homed`, so the warning is
-the one to read before shipping an exclave to such a host.
-
-`exclave prune EXCLAVE LOG...` keeps every path a logged syscall touched,
-the entries of any directory a program listed, the symlink chains that
-reach kept files, the libraries kept programs need, the placeholders
-and the identity files, and removes every other file and symlink;
-directories stay, so `ls` and ownership do not change. It refuses a
-log that names no program in the exclave. Afterwards a failed open in a
-new log names what pruning removed, so the cycle is prune, run the
-whole workload, add back from an unpruned copy. The suite runs on
-exclaves pruned this way.
 
 ## What bites first
 
@@ -318,49 +200,161 @@ first user meets, with the rule behind each and what to do:
   common case.
 - **Compiler-identity caches** see every compiler in an exclave as the same
   binary at the same mtime; ccache needs `compiler_check = %compiler% -v`.
-- **Overhead** is per trapped syscall: about 9x on a tight `stat`
-  loop, within noise on a compute-bound compile, about half again on
-  thirty small compiles, where process start dominates. Section 16 of
-  `docs/DESIGN.md` has the measurements.
+- **Overhead** is per trapped syscall: 6 to 10 times native on a tight
+  `stat` loop, about a third more on thirty small compiles, where
+  process start dominates, and within noise on a compute-bound compile.
+  Section 16 of `docs/DESIGN.md` has the measurements.
 - **A running program on a host path is not protected from another
   process's writes**, since the kernel executes the launcher, not the
-  file: natively `gcc -o prog` over a running `prog` fails, in an
-  exclave it does not.
+  file: natively `cp new prog` over a running `prog` fails with "Text
+  file busy"; in an exclave it succeeds, and the running program may
+  take `SIGBUS`. (Linkers unlink their output first, so relinking is
+  safe either way.)
 - **Not a sandbox.** The translation is bypassable by a program that
   wants to; it isolates software from the host's files, not the host
   from the software.
 
+## Making your own exclave
+
+The `exclave` command takes files and never fetches. Whatever puts
+package files in a directory is the step before it: apt, a mirror, the
+three fetchers here. `unpack` reads each package's own control archive,
+reports dependencies the set does not satisfy, extracts in Python,
+synthesises what maintainer scripts would have done (alternatives,
+`ld.so.cache` with the exclave's own `ldconfig`, the CA bundle,
+`/etc/passwd`), adds the placeholders and records every input by hash in
+the hashes file. The result is a directory. `wrap` wraps every
+executable, runs the static check and records the manifest and tree
+hashes; `unwrap` moves the originals back; a bare directory holding a
+`tree/` becomes an exclave by `wrap` alone. Every exclave has a `README`
+at its top for whoever finds it without this repository: what it is, how
+to run its programs, what it touches and how to check it. The tool
+writes it where the exclave has none, so a maker's own stays.
+
+```
+tools/fetch-debs.py --out debs gcc-13 libc6-dev make         # Ubuntu or Debian: the closure of the packages named, verified against the index
+tools/fetch-apks.py --out apks gcc musl-dev binutils         # the same for Alpine
+tools/fetch-rpms.py --repo URL --out rpms gcc glibc-devel    # and for Fedora, Rocky, CentOS: any repository with repodata/
+exclave/exclave.py unpack gcc.exclave debs/*.deb             # package files -> an unwrapped exclave, a directory you may edit; .apk and .rpm files likewise
+exclave/exclave.py wrap gcc.exclave                          # wrap every executable, static check, hashes into .exclave/hashes
+ln -s tree/usr/bin/gcc-13 gcc.exclave/gcc                    # a shortcut, if you want one
+gcc.exclave/gcc -O2 hello.c -o hello                         # any executable in tree/ runs by path
+gcc.exclave/tree/usr/bin/sh -c 'as --version'                # the exclave's own shell, with the exclave's PATH
+gcc.exclave/.exclave/launcher /path/to/host/program args...  # a program without a wrapper, a host tool or a built output, inside the exclave
+gdb -iex 'set auto-load safe-path /' --args gcc.exclave/gcc -c x.c   # gdb: the launcher carries the script; break, bt, source lines
+EXCLAVE_LOG=/tmp/exclave.log gcc.exclave/gcc -c x.c          # the one knob: one line per trapped syscall
+exclave/exclave.py check gcc.exclave /tmp/exclave.log        # static check of every ELF, dynamic check of the logged run
+exclave/exclave.py prune gcc.exclave /tmp/exclave.log        # keep what the logged runs touched
+exclave/exclave.py unwrap gcc.exclave                        # the originals back over their wrappers, to edit; wrap again after
+exclave/exclave.py relink gcc.exclave build/launcher         # swap the launcher after rebuilding it; the wrappers are relinked
+exclave/exclave.py hash gcc.exclave                          # the tree hash the hashes file records
+exclave/exclave.py format gcc.exclave/.exclave/manifest      # the canonical spelling of a manifest or hashes file; --check only reports
+```
+
+Between `unpack` and `wrap` the unwrapped exclave is yours: copy a
+built prefix in, delete what you do not want, add a data directory,
+write the manifest. The manifest is `gcc.exclave/.exclave/manifest`,
+`exclave 1` when nothing is overridden, and has four other keys, each
+a string: `cpu` names the level the binaries need (`"x86-64-v3"`;
+x86-64 when absent); `data` names a directory that is never executed
+or loaded, not wrapped, not checked, a sysroot or a second libc's
+world; `host` puts a host path
+at its own name inside the exclave, `host "/usr/local/share/fonts"`;
+`own` makes a path the exclave's: one of the eight host identity files
+below, or any other path the rule would give the host. That is the whole manifest. There is no way to
+make the tree writable, remap a path, set a variable or put a directory
+on `PATH`: a wrapper script inside the exclave sets variables, a
+symlink in the tree does remapping, and a symlink in the exclave's own
+`/usr/local/bin` puts a program on `PATH`.
+
+An exclave of something you built is the same four lines, with the
+build system's own installer doing the building:
+
+```
+gcc.exclave/tree/usr/bin/sh -c './configure --prefix=/usr/local && make && make install DESTDIR=$PWD/stage'
+exclave/exclave.py unpack tool.exclave runtime/*.deb         # libc6 and whatever else the result links against
+cp -a stage/usr/local tool.exclave/tree/usr/
+exclave/exclave.py wrap tool.exclave                         # the static check says whether it all links inside
+```
+
+No recipe format and no closure copying: the runtime the result needs
+is packages you already have, and the static check verifies that every
+library resolves inside the exclave.
+
+## The log and the checks
+
+`EXCLAVE_LOG=<file>` is the launcher's one knob. It appends one line per
+trapped syscall, `<syscall> <result> <virtual path>`, the result being
+the return value or the negative errno: `open 3 /etc/ld.so.cache` is
+descriptor 3, `access -2 /etc/ld.so.preload` is `ENOENT`, which is what
+a search looks like and is not a fault. Lines that begin `launcher`
+are the launcher's own decisions: the working directory it started in
+and, when that lies under an exclave path, the subtree it gave the
+host; the border program; an identity file the host lacks, answered
+from the exclave's copy. Every process a workload spawns appends to the
+same file, so a `make` writes one log. A newline in a path is written
+`\n` and a backslash `\\`; nothing else is escaped.
+
+`exclave check EXCLAVE [LOG...]` first verifies the wrappers and their
+originals and compares the tree with the hash the hashes file records,
+then runs the static check on every ELF file outside data
+directories: every loader and every `DT_NEEDED` resolves inside the tree
+by the loader's own search, to one libc, and nothing would resolve on
+the host. Errors name the file and stop `wrap`; warnings are things
+worth knowing that do not: a dangling symlink, a 32-bit or
+foreign-machine object a package ships beside the real ones; static
+executables are counted, having no loader to verify.
+With logs it adds the dynamic check: every library the workload opened
+resolved inside the exclave, and every NSS module this host's
+`nsswitch.conf` names that the exclave lacks is a warning. glibc skips a
+missing module, which is right for `hosts` and wrong for `passwd` on a
+host whose users come from LDAP or `systemd-homed`, so the warning is
+the one to read before shipping an exclave to such a host.
+
+`exclave prune EXCLAVE LOG...` keeps every path a logged syscall touched,
+the entries of any directory a program listed, the symlink chains that
+reach kept files, the libraries kept programs need, the placeholders
+and the identity files, and removes every other file and symlink;
+directories stay, so `ls` and ownership do not change. It refuses a
+log that names no program in the exclave. Afterwards a failed open in a
+new log names what pruning removed, so the cycle is prune, run the
+whole workload, add back from an unpruned copy. The suite runs on
+exclaves pruned this way.
+
 ## Development
 
-The tests need the development inputs, which one script downloads
-through caches under `~/.cache`; nothing else touches the network.
-Section 17 of `docs/DESIGN.md` describes what each test establishes,
-and section 19 the design decisions a change is expected to respect.
+Requirements beyond the first run's: `bubblewrap` and unprivileged user
+namespaces for the kernel oracles and the syscall probe; `strace`,
+`gdb`, Go and `rustc` for the suite's regressions; optionally
+`aarch64-linux-gnu-gcc` for the aarch64 launcher, and QEMU with KVM and
+`cloud-image-utils` for the kernel matrix (`qemu-system-arm` and
+`qemu-efi-aarch64` for its arm64 row). Where `bwrap` cannot create a
+user namespace, as from a plain terminal on Ubuntu 23.10 and later, the
+gate marks the oracle and probe steps SKIP rather than ok.
+
+`test/inputs.sh` downloads every development input, pinned or verified,
+through caches under `~/.cache`; the tests take their inputs as paths,
+and nothing else touches the network except the kernel matrix, which
+downloads cloud images and whose VMs install packages. Section 17 of
+`docs/DESIGN.md` describes what each test establishes, and section 19
+the design decisions a change is expected to respect.
 
 ```
-test/inputs.sh ~/.cache/exclave-inputs   # the development inputs from the network: the four exclaves of the gate, Docker's seccomp profile, the examples' inputs; skips what is present. Nothing else fetches
-EXCLAVE_TEST_INPUTS=~/.cache/exclave-inputs test/gate.sh ~/.cache/exclave-inputs/*.exclave   # the commit gate, about a minute: unit tests, stack budget, the suite on every exclave in two orders and once under the plain terminal's label, the oracles, the syscall probe; EXCLAVE_TEST_INPUTS adds the Docker profile and dogfood
-test/run.py --exclave gcc.exclave     # the suite alone; --tree DIR for a plain tree (spike/make-tree.sh makes one); -k NAME, --order random
+test/inputs.sh ~/.cache/exclave-inputs   # the development inputs: the gate's four exclaves, Docker's seccomp profile, the examples' inputs; skips what is present
+D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D test/gate.sh $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # the commit gate, about a minute: unit tests, stack budget, the suite on every exclave in two orders and the first once under the plain terminal's label, the oracles, the syscall probe, the Docker profile, dogfood
+test/run.py --exclave gcc.exclave     # the suite alone; -k NAME, --order random
 test/matrix.py --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix: cloud images under QEMU/KVM, one VM at a time, about ten minutes
 test/exercise.py --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the launcher, side by side
-test/examples.sh gcc.exclave          # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_DEBS_ARM64 (the emulated aarch64 row), EXCLAVE_TEST_DOCKER (its Docker profile run)
-test/sysroot.py --exclave gcc.exclave --rpms el7/ --out hello   # the sysroot recipe as a test: symbol versions checked, the output run inside and out, then natively by the matrix
-test/dogfood.py --inputs DIR          # the tool as an exclave, and a cross-exclave build that must reproduce
+test/examples.sh ~/.cache/exclave-inputs/realsoft.exclave   # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_DEBS_ARM64 (the emulated aarch64 row), EXCLAVE_TEST_DOCKER (its Docker profile run)
 ```
 
-## Documentation
-
-- `docs/DESIGN.md`: the design and specification, self-contained. 6 is
-  the format, 7 the launcher, 8 the visibility rule, 10 the `exclave`
-  command, 12 where it runs, 13 the limitations, 16 performance, 17
-  the tests, 19 the decisions.
-- `src/`: the launcher, one module per part of the design (below).
-
-## Layout
+The repository's layout:
 
 ```
 example.sh       the first run: from make to a program built inside an exclave that runs on any glibc since 2.17, every command shown
+Makefile         builds the launchers: build/launcher, and build/launcher-aarch64 with a cross compiler
 src/sys.h        syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
+src/elf.h        the ELF structures the loader needs
 src/common.h     constants, the run-time state (struct exclave), every module's interface
 src/launcher.c   entry: syscall page, self-relocation, find the exclave, manifest, border, env, load
 src/manifest.c   the strict grammar parser (6.2); also built for the host by the gate's unit step
@@ -381,8 +375,8 @@ exclave/apk.py       the Alpine reader with deb.py's interface: gzip streams, .P
 exclave/rpm.py       the rpm reader with the same interface: lead and headers, the cpio payload, rpm's flags and version order
 exclave/build.py     extraction rules, synthesis, placeholders, dependency report, pruning, tree hash, hashes file, unwrap
 exclave/elfcheck.py  the static and dynamic checks of 10.3
-tools/fetch-debs.py  an example of the step before the tool: resolve a closure from an archive and download it
-tools/fetch-apks.py  the same for an Alpine repository, verified as apk verifies
+tools/fetch-debs.py  an example of the step before the tool: resolve a closure from an archive and download it, checked against the index; the Release signature is not verified, so prefer an https mirror
+tools/fetch-apks.py  the same for an Alpine repository: each package's checksums as apk checks them; the index's signature is not verified
 tools/fetch-rpms.py  the same for a yum or dnf repository, verified by the index's SHA-256
 test/sysroot.py      a glibc sysroot as a data directory and an output built against it, for the matrix to run natively
 test/run.py          the regression suite; test/progs/ its C, Rust and Go programs
@@ -391,39 +385,36 @@ test/oracle_syscalls.py  the differential syscall probe: every trapped path and 
 test/inputs.sh       the development inputs, remade from the network through ~/.cache
 test/exercise.py     one program run under bwrap and under the launcher, the answers side by side: how a limitation is measured before it is fixed
 test/docker_profile.py   an exclave under Docker's default seccomp profile, which test/inputs.sh fetches
+test/scratch_test.c  the scratch pool's sweep under the interleaving that once shared a chunk
 test/syscalls.py     every kernel syscall classified; test/bench.py the performance table
-test/realsoft.py     real projects built inside and outside an exclave; test/matrix.py the kernel matrix in VMs
+test/realsoft.py     real projects built inside and outside an exclave; test/matrix.py the kernel matrix in VMs, test/vm_run.py one VM
 test/dogfood.py      the tool's exclave building an exclave that must reproduce the host-built hashes file
 test/gate.sh         the commit gate, every step in parallel on copies of the exclaves given; test/examples.sh the example runs
 test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule; test/stackcheck.py the stack budget
 LICENSE          the MIT licence; the launcher carries its text
 docs/DESIGN.md   the design and specification
-spike/           frozen prototypes and their tests
+spike/           the prototypes that preceded the launcher, kept as they were; they cite the design by its earlier name, docs/PROPOSAL.md, in git history
+CLAUDE.md        working notes for contributors and coding agents
 ```
 
-## Names
+## Reporting problems and contributing
 
-`exclave` is the project, its repository, the build command and the
-format: a directory `name.exclave/`, whose own files are in
-`name.exclave/.exclave/`. The **launcher** is `.exclave/launcher`, the
-binary every wrapper is a hard link to; the **tree** is
-`name.exclave/tree/`, what the software sees as `/`; **hashes** is
-`.exclave/hashes`, every input, the launcher, the manifest and the tree
-by hash; a **shortcut** is a symlink a maker puts at the top of an
-exclave, pointing at a wrapper. The environment knob is `EXCLAVE_LOG`,
-the only one. `EXCLAVE_EXEC`, `EXCLAVE_EXECFN` and `EXCLAVE_COMM` are
-the launcher's own protocol: set by a launcher when it execs a wrapper
-or re-execs itself for a program on the loader path, the target and the
-identity the kernel would give it, removed from the environment a
-program is given (the kernel's copy in `/proc/<pid>/environ` keeps
-them), never an interface; `.exclave/launcher PROGRAM ARGS...` is how a
-program without a wrapper is run from outside. At the border four
-variables are the exclave's, always the same:
-`PATH=/usr/local/bin:/usr/bin:/bin`, `LANG=C.UTF-8`, `TZ=UTC0` and
-`SHELL=/bin/sh`; `LANGUAGE`, every `LC_*` and the loader and libc
-variables are dropped; everything else passes through, and inside the
-border nothing else is touched.
+A problem report is most useful with the failing lines of an
+`EXCLAVE_LOG=/tmp/x.log` run, `uname -r` and the distribution, the
+exclave's `.exclave/hashes` file and the output of `exclave check` on
+it. Contributions are welcome: a change passes the gate on the four
+exclaves above, a launcher change the kernel matrix too, and the
+design decisions in section 19 of `docs/DESIGN.md` stand unless the
+change argues otherwise.
+
+## Documentation
+
+- `docs/DESIGN.md`: the design and specification, self-contained. 6 is
+  the format, 7 the launcher, 8 the visibility rule, 10 the `exclave`
+  command, 12 where it runs, 13 the limitations, 16 performance, 17
+  the tests, 19 the decisions.
+- `src/`: the launcher, one module per part of the design (below).
 
 ## Licence
 
