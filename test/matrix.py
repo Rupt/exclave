@@ -203,6 +203,7 @@ def main():
             with tarfile.open(payload, "w:gz", compresslevel=1) as t:
                 for d in ("test", "exclave", "src"):                  # src: the filter model the suite builds in the VM (filter_model)
                     t.add(os.path.join(REPO, d), arcname="repo/" + d)
+                t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")   # the text the launcher carries, which exclave_readme compares
                 if a.docker_profile:
                     t.add(a.docker_profile, arcname="docker-seccomp.json")
                 go = tree.go_toolchain()                          # the Go regression's programs, built here for the VM's machine: the VMs have no go
