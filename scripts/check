@@ -4,19 +4,20 @@
 # none from the machine. scripts/gate runs this as a step.
 #
 #   scripts/check          report; exit non-zero on any finding
-#   scripts/check --fix    let the formatters and ruff write their corrections
+#   scripts/check --fix    let ruff and the formatters write their corrections
 #
-# A pass says nothing: each tool is asked for its quietest form.
-set -eu
+# Every check runs, whatever an earlier one found. A pass says nothing: each
+# tool is asked for its quietest form.
+set -u
 
 . "$(dirname -- "$0")/lib.sh"
-cd "$ROOT"
+cd "$ROOT" || exit 2
 
 fix=false
 [ "${1-}" = --fix ] && fix=true
 
 # Bring .venv up to date once; every run below then uses it as it is.
-"$UV" sync --quiet
+"$UV" sync --quiet || exit 2
 export UV_NO_SYNC=1
 
 # The shell scripts, in the positional parameters: every file under scripts/
@@ -28,17 +29,37 @@ for path in scripts/*; do
     esac
 done
 
+status=0
+run() { "$@" || status=1; }
+
 if $fix; then
-    "$UV" run --quiet ruff format .
-    "$UV" run --quiet ruff check --fix .
-    "$UV" run --quiet shfmt --indent 4 --posix --simplify --write "$@"
-    RUST_LOG=warn "$UV" run --quiet taplo fmt pyproject.toml
+    # ruff's fixes first, so that the formatter has the last word on layout
+    run "$UV" run --quiet ruff check --fix .
+    run "$UV" run --quiet ruff format .
+    run "$UV" run --quiet shfmt --indent 4 --posix --simplify --write "$@"
+    run env RUST_LOG=warn "$UV" run --quiet taplo fmt pyproject.toml
 else
-    "$UV" run --quiet ruff format --check --quiet .
-    "$UV" run --quiet ruff check --quiet .
-    "$UV" run --quiet shfmt --indent 4 --posix --simplify --diff "$@"
-    RUST_LOG=warn "$UV" run --quiet taplo fmt --check --diff pyproject.toml
+    run "$UV" run --quiet ruff format --check --quiet .
+    run "$UV" run --quiet ruff check --quiet .
+    run "$UV" run --quiet shfmt --indent 4 --posix --simplify --diff "$@"
+    run env RUST_LOG=warn "$UV" run --quiet taplo fmt --check --diff pyproject.toml
 fi
-"$UV" run --quiet shellcheck --severity=style --shell=sh \
+run "$UV" run --quiet shellcheck --severity=style --shell=sh \
     --external-sources --source-path=SCRIPTDIR "$@"
-"$UV" run --quiet ty check --quiet
+run "$UV" run --quiet ty check --quiet
+
+# A suppression says why on its line: `# noqa: RULE -- reason`.
+if grep -rnE '# (noqa: [A-Z0-9, ]+|ty: ignore\[[a-z0-9, -]+\])$' --include='*.py' exclave fetch test src; then
+    echo "check: a suppression above gives no reason" >&2
+    status=1
+fi
+
+# Every hashes file records the tool's version, which is the package's.
+if ! "$UV" run --quiet python -c '
+import sys, tomllib, exclave
+want = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+sys.exit(exclave.__version__ != want)'; then
+    echo "check: exclave.__version__ differs from pyproject.toml's version" >&2
+    status=1
+fi
+exit $status
