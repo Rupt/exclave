@@ -1,2 +1,8 @@
 /build/
 __pycache__/
+
+# The pinned uv, its cache and its Pythons (scripts/install-uv), and the
+# environment uv keeps from uv.lock.
+.uv
+.venv/
+.ruff_cache/

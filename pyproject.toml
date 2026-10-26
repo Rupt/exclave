@@ -1,0 +1,111 @@
+[project]
+name = "exclave"
+version = "0.1.0"
+description = "Relocatable, privilege-free Linux software: a directory that runs by path."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+# The pinned Python is .python-version; uv installs it, and every script runs
+# through it (scripts/lib.sh). The tool and the tests use the standard library
+# only, so there is nothing to depend on.
+requires-python = ">=3.15"
+dependencies = []
+
+[tool.uv]
+# Scripts, not a package: nothing is built or installed from this tree.
+package = false
+# Never borrow a Python from the machine, as the uv in .uv/ is never borrowed
+# from PATH: what runs here should not depend on what is installed.
+python-preference = "only-managed"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.2",
+    "ty>=0.0.92",
+    # The shell scripts and this file are code too. Each of these ships its
+    # binary in a wheel, so uv installs it like any other dependency rather
+    # than the machine having to provide it.
+    "shellcheck-py>=0.11.0",
+    "shfmt-py>=3.12.0",
+    "taplo>=0.9.3",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py315"
+# One line per finding: the full form repeats the source, which is already on
+# screen in an editor and in the diff.
+output-format = "concise"
+# src/gdb.py runs inside gdb's own embedded Python, whatever version the
+# machine's gdb was built with, not the pinned one.
+per-file-target-version = { "src/gdb.py" = "py37" }
+
+[tool.ruff.format]
+# One layout per expression, whether or not somebody left a trailing comma.
+skip-magic-trailing-comma = true
+docstring-code-format = true
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    # Docstrings are checked when present, not required: a short function whose
+    # name says what it does is worse for a sentence repeating it.
+    "D1",
+    # Conflicts with the formatter, which owns string layout.
+    "COM812",
+    "ISC001",
+    # The licence is in LICENSE and in the launcher; a notice per file adds nothing.
+    "CPY001",
+    # Many keyword-only arguments are allowed, and preferred to a flag object.
+    "PLR0913",
+    # Kernel numbers, offsets and errnos are the subject here; a name for each
+    # would hide the number a reader checks against the kernel's headers.
+    "PLR2004",
+    # `assert` is for sanity checks, which is what it is for.
+    "S101",
+    # Command-line tools and test drivers: print is their output.
+    "T20",
+    # The tool and the tests run programs by design: the launcher, compilers,
+    # bwrap, QEMU. Every argument vector is built from paths, never a shell string.
+    "S603",
+    "S607",
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ty.environment]
+python-version = "3.15"
+# The import roots: the tool's modules, the tests' helpers and the fetchers,
+# each imported by bare name from its own directory.
+root = ["exclave", "test", "tools"]
+
+[tool.ty.src]
+include = ["exclave", "test", "tools"]
+
+[tool.ty.analysis]
+# A `type: ignore` suppresses nothing: only `ty: ignore[<rule>]` does, so every
+# suppression names what it hides.
+respect-type-ignore-comments = false
+
+[tool.ty.terminal]
+error-on-warning = true
+output-format = "concise"
+
+[tool.ty.rules]
+possibly-unresolved-reference = "error"
+unused-ignore-comment = "error"
+deprecated = "error"
+division-by-zero = "error"
+index-out-of-bounds = "error"
+invalid-ignore-comment = "error"
+possibly-missing-attribute = "error"
+possibly-missing-import = "error"
+redundant-cast = "error"

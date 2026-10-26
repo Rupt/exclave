@@ -1,0 +1,82 @@
+#!/bin/sh
+# Install the pinned uv into .uv/, verified against a checksum committed here.
+# uv then provides the pinned Python (.python-version) and the development
+# tools (pyproject.toml), all under .uv/ and .venv/, so nothing the machine
+# has installed decides how the project's Python runs.
+#
+# Portable across Linux: the uv builds pinned are astral's musl ones, which
+# are statically linked, so one build per architecture runs on every
+# distribution, glibc or musl. Needs only curl or wget, tar, and sha256sum
+# or shasum.
+#
+# Idempotent: does nothing when the pinned version is in place. --force
+# reinstalls.
+set -eu
+
+# The pinned release. To upgrade, change the version and both checksums, which
+# are the ones reviewed, not ones taken from the download.
+UV_VERSION=0.13.5
+UV_SHA256_X86_64=57ef9d9ccb01fb1bd998df995b0dd221b52f7d7841fbea93f2d4463bf61fb7a9
+UV_SHA256_AARCH64=7906c79adb21c81abd559841ba76bb1d9af9d791acac7a041b2972e03ae16538
+
+UV_BOOTSTRAP=1
+export UV_BOOTSTRAP
+. "$(dirname -- "$0")/lib.sh"
+
+[ "$(uname -s)" = Linux ] || {
+    echo "uv is pinned for Linux only; this is $(uname -s)" >&2
+    exit 1
+}
+case "$(uname -m)" in
+x86_64 | amd64) arch=x86_64 sum=$UV_SHA256_X86_64 ;;
+aarch64 | arm64) arch=aarch64 sum=$UV_SHA256_AARCH64 ;;
+*)
+    echo "no uv is pinned for $(uname -m); add its checksum to $0" >&2
+    exit 1
+    ;;
+esac
+
+if [ "${1-}" != --force ] && [ -x "$UV" ]; then
+    installed=$("$UV" --version 2>/dev/null | cut -d' ' -f2 || echo none)
+    if [ "$installed" = "$UV_VERSION" ]; then
+        echo "uv $UV_VERSION already installed at $UV"
+        exit 0
+    fi
+    echo "replacing uv $installed with $UV_VERSION"
+fi
+
+name=uv-$arch-unknown-linux-musl
+url=https://github.com/astral-sh/uv/releases/download/$UV_VERSION/$name.tar.gz
+work=$(mktemp -d)
+# shellcheck disable=SC2064  # expand $work now, not when the trap fires
+trap "rm -rf '$work'" EXIT INT TERM
+
+echo "fetching $url"
+if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "$work/uv.tar.gz" "$url"
+elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$work/uv.tar.gz" "$url"
+else
+    echo "neither curl nor wget is installed" >&2
+    exit 1
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+    got=$(sha256sum "$work/uv.tar.gz" | cut -d' ' -f1)
+else
+    got=$(shasum -a 256 "$work/uv.tar.gz" | cut -d' ' -f1)
+fi
+[ "$got" = "$sum" ] || {
+    echo "checksum mismatch for $name: $got; refusing to install" >&2
+    exit 1
+}
+
+tar -xzf "$work/uv.tar.gz" -C "$work"
+mkdir -p "$UV_HOME/bin"
+for tool in uv uvx; do
+    # Into place through a temporary name, so a running uv is never truncated.
+    mv "$work/$name/$tool" "$UV_HOME/bin/.$tool.new"
+    chmod +x "$UV_HOME/bin/.$tool.new"
+    mv "$UV_HOME/bin/.$tool.new" "$UV_HOME/bin/$tool"
+done
+echo "installed $("$UV" --version) at $UV"
