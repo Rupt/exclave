@@ -4,8 +4,9 @@
                    [--docker-profile FILE]
 
 Each row of VMS names a distribution cloud image. The image is downloaded once, booted under QEMU with
-KVM behind a copy-on-write overlay and a cloud-init seed that installs python3 and strace (and bubblewrap
-where it exists), the exclave and this repository's test tree and launcher are copied in over SSH, and the
+KVM behind a copy-on-write overlay and a cloud-init seed that installs strace (and bubblewrap
+where it exists), the exclave, the pinned Python built for the VM's machine and libc, and this repository's
+test tree and launcher are copied in over SSH, and the
 regression suite runs there; the oracles, the syscall probe and, given the profile, the Docker-profile run follow where bubblewrap works.
 One VM at a time, 1 GB each, 2 GB for the emulated row. Results go to build/matrix-results.md.
 """
@@ -21,6 +22,7 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
+UV = os.path.join(REPO, ".uv", "bin", "uv")
 sys.path.insert(0, HERE)
 import tree  # noqa: E402
 
@@ -41,8 +43,9 @@ VMS = [
     # aarch64 under TCG (12): the same suite and oracles, the arm64 launcher and exclave, ten to twenty times slower
     ("noble-arm64", "6.8", "ubuntu", ["https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img"], "apt", "aarch64, TCG emulation", "aarch64"),]
 
-PACKAGES = {"apt": ["python3", "strace", "bubblewrap"], "dnf": ["python3", "strace", "bubblewrap"], "apk": ["python3", "strace", "bubblewrap", "bash"],
-            "centos7": ["python3", "strace"]}
+# what a VM installs for the oracles; Python is not among them: the payload carries the pinned one (pinned_python)
+PACKAGES = {"apt": ["strace", "bubblewrap"], "dnf": ["strace", "bubblewrap"], "apk": ["strace", "bubblewrap", "bash"],
+            "centos7": ["strace"]}
 
 
 def log(*a):
@@ -90,6 +93,24 @@ def free_port():
     p = s.getsockname()[1]
     s.close()
     return p
+
+
+def pinned_python(arch, libc):
+    """The tree of the pinned Python, the version running this, built for a VM's machine and libc: installed by the
+    repository's uv into its own Python directory (scripts/lib.sh), so a VM runs the suite on the same Python as the
+    reference machine whatever python3 its distribution has, or none. glibc builds need only glibc 2.17."""
+    name = "cpython-%d.%d.%d-linux-%s-%s" % (sys.version_info[0], sys.version_info[1], sys.version_info[2], arch, libc)
+    subprocess.run([UV, "python", "install", "--no-bin", "--quiet", name], check=True)
+    tree_ = os.path.join(os.environ.get("UV_PYTHON_INSTALL_DIR", os.path.join(REPO, ".uv", "python")), name)
+    if not os.path.isdir(tree_):
+        sys.exit("uv installed %s but it is not at %s" % (name, tree_))
+    return tree_
+
+
+def without_tk(info):
+    """tarfile filter: Tcl/Tk, which nothing here imports, stays out of the payload."""
+    base = os.path.basename(info.name)
+    return None if base.startswith(("libtcl", "libtk", "_tkinter", "tcl9", "tk9")) or base in ("tkinter", "idlelib", "turtledemo") else info
 
 
 def user_data(family, pubkey):
@@ -193,16 +214,17 @@ def main():
     # the exclave is unpacked and wrapped in the VM, on its own architecture (10.1).
     payloads = {}
 
-    def payload_for(arch):
-        if arch in payloads:
-            return payloads[arch]
-        payload = os.path.join(work, "payload-%s.tar.gz" % arch)
+    def payload_for(arch, libc):
+        if (arch, libc) in payloads:
+            return payloads[arch, libc]
+        payload = os.path.join(work, "payload-%s-%s.tar.gz" % (arch, libc))
         if True:                                                  # packed afresh every run: a kept payload once carried a stale test tree
             log("packing the test tree for", arch)
             with tarfile.open(payload, "w:gz", compresslevel=1) as t:
                 for d in ("test", "exclave", "src"):                  # src: the filter model the suite builds in the VM (filter_model)
                     t.add(os.path.join(REPO, d), arcname="repo/" + d)
                 t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")   # the text the launcher carries, which exclave_readme compares
+                t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
                 if a.docker_profile:
                     t.add(a.docker_profile, arcname="docker-seccomp.json")
                 go = tree.go_toolchain()                          # the Go regression's programs, built here for the VM's machine: the VMs have no go
@@ -223,7 +245,7 @@ def main():
                     t.add(os.path.join(REPO, "build", "launcher-aarch64"), arcname="repo/build/launcher")
                     if os.path.exists(os.path.join(REPO, "build", "launcher-old-aarch64")):
                         t.add(os.path.join(REPO, "build", "launcher-old-aarch64"), arcname="repo/build/launcher-old")
-        payloads[arch] = payload
+        payloads[arch, libc] = payload
         return payload
     results = []
     for name, kernel, user, urls, family, notes, arch in VMS:
@@ -232,7 +254,7 @@ def main():
         if arch != "x86_64" and not a.arm64 and not (a.only and name in a.only.split(",")):
             continue                                              # the emulated rows run only when asked: ten to twenty times slower
         slow = 10 if arch != "x86_64" else 1
-        payload = payload_for(arch)
+        payload = payload_for(arch, "musl" if family == "apk" else "gnu")
         image = os.path.join(a.images, name + ".qcow2")
         if not any(fetch(u, image) for u in urls):
             results.append((name, kernel, "image not available", "", notes))
@@ -259,17 +281,17 @@ def main():
                 results.append((name, uname, "cannot unpack: " + out[-200:], "", notes))
                 continue
             if arch != "x86_64":                                  # the exclave is made here, on its own architecture (10.1)
-                rc, out = vm.ssh("cd m && python3 repo/exclave/exclave.py unpack ex debs/*.deb 2>&1 | tail -3 && python3 repo/exclave/exclave.py wrap ex 2>&1 | tail -3", timeout=3600 * slow)
+                rc, out = vm.ssh("cd m && $PWD/python/bin/python3 repo/exclave/exclave.py unpack ex debs/*.deb 2>&1 | tail -3 && $PWD/python/bin/python3 repo/exclave/exclave.py wrap ex 2>&1 | tail -3", timeout=3600 * slow)
                 log(name, "exclave:", " | ".join(l.strip() for l in out.splitlines()[-3:]))
                 if "ex is wrapped" not in out:
                     results.append((name, uname, "cannot make the exclave: " + out[-300:].replace("\n", " | "), "", notes))
                     continue
             else:                                                 # the exclave given carries the launcher that made it: the row tests the checkout's
-                rc, out = vm.ssh("cd m && python3 repo/exclave/exclave.py relink ex repo/build/launcher 2>&1 | tail -1", timeout=600 * slow)
+                rc, out = vm.ssh("cd m && $PWD/python/bin/python3 repo/exclave/exclave.py relink ex repo/build/launcher 2>&1 | tail -1", timeout=600 * slow)
                 if "relinked" not in out:
                     results.append((name, uname, "cannot relink the exclave: " + out[-200:].replace("\n", " | "), "", notes))
                     continue
-            rc, out = vm.ssh("cd m && python3 repo/test/run.py --exclave $PWD/ex --work $PWD/work --budget %d 2>&1" % (60 * slow), timeout=2400 * slow)
+            rc, out = vm.ssh("cd m && $PWD/python/bin/python3 repo/test/run.py --exclave $PWD/ex --work $PWD/work --budget %d 2>&1" % (60 * slow), timeout=2400 * slow)
             with open(os.path.join(work, name + "-suite.log"), "w") as f:
                 f.write(out)
             suite = [l for l in out.splitlines() if "tests," in l]
@@ -304,10 +326,10 @@ def main():
             rc, out = vm.ssh("S=sudo; command -v sudo >/dev/null 2>&1 || S=doas; $S sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null; "
                              "cd m && bwrap --ro-bind / / true 2>&1 && echo bwrap-ok")
             if "bwrap-ok" in out:
-                rc, out = vm.ssh("cd m && python3 repo/test/oracle_resolve.py --exclave $PWD/ex --work $PWD/rw 2>&1 | tail -30; echo ====; "
-                                 "python3 repo/test/oracle_ns.py --exclave $PWD/ex --work $PWD/nw 2>&1 | tail -40; echo ====; "
-                                 "python3 repo/test/oracle_syscalls.py --exclave $PWD/ex --work $PWD/sw --show 5000 2>&1 | tail -20000; echo ====; "
-                                 + ("python3 repo/test/docker_profile.py --exclave $PWD/ex --profile $PWD/docker-seccomp.json --work $PWD/dw 2>&1 | tail -20"
+                rc, out = vm.ssh("cd m && $PWD/python/bin/python3 repo/test/oracle_resolve.py --exclave $PWD/ex --work $PWD/rw 2>&1 | tail -30; echo ====; "
+                                 "$PWD/python/bin/python3 repo/test/oracle_ns.py --exclave $PWD/ex --work $PWD/nw 2>&1 | tail -40; echo ====; "
+                                 "$PWD/python/bin/python3 repo/test/oracle_syscalls.py --exclave $PWD/ex --work $PWD/sw --show 5000 2>&1 | tail -20000; echo ====; "
+                                 + ("$PWD/python/bin/python3 repo/test/docker_profile.py --exclave $PWD/ex --profile $PWD/docker-seccomp.json --work $PWD/dw 2>&1 | tail -20"
                                     if a.docker_profile else "echo 'docker profile: not given'"), timeout=2400 * slow)
                 with open(os.path.join(work, name + "-oracles.log"), "w") as f:
                     f.write(out)
