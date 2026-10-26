@@ -72,7 +72,7 @@ The loop that has served well, in the order it pays:
   while the handler runs (7.5.3). `make` builds `build/launcher-aarch64`
   when `aarch64-linux-gnu-gcc` is installed; it is tested in the arm64
   VM (`test/matrix.py --exclave EXCLAVE --only noble-arm64 --debs-arm64
-  DIR`), since user-mode emulation has no seccomp. A syscall the handler
+  DIR --docker-profile FILE`), since user-mode emulation has no seccomp. A syscall the handler
   re-issues is best one the oldest kernel of the matrix has (`renameat`,
   not `renameat2`, for a plain rename).
 - **Handler buffers come from `struct scratch`** rather than the stack,
@@ -112,11 +112,11 @@ The loop that has served well, in the order it pays:
 - **Claims and measurements.** Figures in the proposal are marked by
   the revision that measured them; a number the current filter has not
   produced is better left out than quoted.
-- **The gate.** `test/gate.sh EXCLAVE...` (`EXCLAVE_TEST_CACHE=<cache>`
-  adds dogfood) runs the unit tests, the stack budget, the suite on
-  every exclave in two orders and, for the first exclave, under the
-  plain terminal's AppArmor label, the oracles, the syscall probe and
-  the Docker profile, every step in parallel on copies, in about a
+- **The gate.** `test/gate.sh EXCLAVE...` (`EXCLAVE_TEST_INPUTS=DIR`,
+  the directory `test/inputs.sh` filled, adds the Docker profile and
+  dogfood) runs the unit tests, the stack budget, the suite on every
+  exclave in two orders and, for the first exclave, under the plain
+  terminal's AppArmor label, the oracles and the syscall probe, every step in parallel on copies, in about a
   minute with a 30 s budget per test. Every driver runs `build/launcher`
   on a copy of its own, the suite an exclave it wraps from the given
   exclave's tree and the others `tree.fresh_exclave`, a copy relinked
@@ -163,8 +163,12 @@ mirror configured on this machine is `http://gb.archive.ubuntu.com/ubuntu`;
 
 Every development input is made by `test/inputs.sh DIR`, which holds the
 exact fetch commands: the gcc, Alpine, Fedora and clang exclaves of the
-gate, the CentOS 7 rpms for `test/sysroot.py`, the arm64 debs for the
-emulated row, and the sources of `test/realsoft.py` and `test/bench.py`.
+gate, Docker's seccomp profile and dogfood's packages, the CentOS 7 rpms
+for `test/sysroot.py`, the arm64 debs for the emulated row, and the
+sources of `test/realsoft.py` and `test/bench.py`. It is the one script
+that downloads: a test takes its inputs as paths and touches no
+network, and the repository holds no file of someone else's, so a
+third-party input is fetched there, pinned by its hash.
 `~/.cache/exclave-inputs` is a good `DIR`; the fetchers cache under
 `~/.cache/exclave-debs`, `exclave-apks` and `exclave-rpms`. Nothing
 under `~/.cache` or the session scratchpad is assumed to persist: the

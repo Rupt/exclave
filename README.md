@@ -41,8 +41,8 @@ QEMU virtual machines passes on nine distributions from CentOS 7 at
 kernel 3.10 to Fedora 42, Alpine's musl userland and SELinux included.
 The tool ships as an exclave, and the gcc exclave it builds from inside
 its exclave reproduces the host-built hashes file byte for byte. Trace
-pruning keeps 122 of a gcc exclave's 4 851 files for a hello-world
-compile. `example.sh` walks the path from a clean checkout to a program
+pruning keeps 212 of a gcc exclave's 4 851 files for a hello-world
+compile, 87 of them the packages' licence texts. `example.sh` walks the path from a clean checkout to a program
 built inside an exclave that runs on any glibc since 2.17, in nine
 seconds once the packages are cached. Section 18 of the proposal has the
 milestone table; 16 the measurements; 12 the matrix and the Alpine
@@ -85,8 +85,8 @@ and logs are the tutorial and each command is one you can run by hand:
    from 2.17 on, the oldest the kernel matrix has, which runs this same
    build natively on CentOS 7. It runs on this host and, through
    `.exclave/launcher`, inside the exclave on the exclave's loader.
-5. `exclave prune` keeps, in a copy, the 136 files that compile touched
-   out of 9 567; the copy compiles the program again, and
+5. `exclave prune` keeps, in a copy, the files that compile touched
+   and the packages' licence texts, 227 of 9 567; the copy compiles the program again, and
    `exclave check` reads the new log: that copy is the exclave you would
    ship for that workload, and the check is the one you would run on
    it.
@@ -113,7 +113,7 @@ hello from an exclave
 hello from an exclave
 == 5. the exclave pruned to what the compile touched, and the checks on it
 + exclave prune hello.exclave log/hello.log
-pruned hello.exclave: kept 136 files, removed 9431, 360514915 bytes freed
+pruned hello.exclave: kept 227 files, removed 9340, 359383346 bytes freed
 static check: 24 ELF files, 2 static executables, 0 warnings, 0 errors
 + exclave check hello.exclave log/pruned.log
 0 wrapper problems
@@ -338,14 +338,14 @@ first user meets, with the rule behind each and what to do:
 ## The tests
 
 ```
-test/inputs.sh ~/.cache/exclave-inputs   # the development inputs from the network: the four exclaves of the gate, the examples' inputs; skips what is present
-EXCLAVE_TEST_CACHE=~/.cache/exclave-debs test/gate.sh ~/.cache/exclave-inputs/*.exclave   # the commit gate, about a minute: unit tests, stack budget, the suite on every exclave in two orders and once under the plain terminal's label, the oracles, the syscall probe, the Docker profile; EXCLAVE_TEST_CACHE adds dogfood
+test/inputs.sh ~/.cache/exclave-inputs   # the development inputs from the network: the four exclaves of the gate, Docker's seccomp profile, the examples' inputs; skips what is present. Nothing else fetches
+EXCLAVE_TEST_INPUTS=~/.cache/exclave-inputs test/gate.sh ~/.cache/exclave-inputs/*.exclave   # the commit gate, about a minute: unit tests, stack budget, the suite on every exclave in two orders and once under the plain terminal's label, the oracles, the syscall probe; EXCLAVE_TEST_INPUTS adds the Docker profile and dogfood
 test/run.py --exclave gcc.exclave     # the suite alone; --tree DIR for a plain tree (spike/make-tree.sh makes one); -k NAME, --order random
-test/matrix.py --exclave gcc.exclave  # the kernel matrix: cloud images under QEMU/KVM, one VM at a time, about ten minutes
+test/matrix.py --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix: cloud images under QEMU/KVM, one VM at a time, about ten minutes
 test/exercise.py --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the launcher, side by side
-test/examples.sh gcc.exclave          # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_DEBS_ARM64 (the emulated aarch64 row)
+test/examples.sh gcc.exclave          # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_DEBS_ARM64 (the emulated aarch64 row), EXCLAVE_TEST_DOCKER (its Docker profile run)
 test/sysroot.py --exclave gcc.exclave --rpms el7/ --out hello   # the sysroot recipe as a test: symbol versions checked, the output run inside and out, then natively by the matrix
-test/dogfood.py --cache DIR           # the tool as an exclave, and a cross-exclave build that must reproduce
+test/dogfood.py --inputs DIR          # the tool as an exclave, and a cross-exclave build that must reproduce
 ```
 
 ## Read in this order
@@ -397,14 +397,15 @@ test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the op
 test/oracle_syscalls.py  the differential syscall probe: every trapped path and descriptor syscall with every path form under bwrap and under the launcher; test/progs/probe.c its interpreter
 test/inputs.sh       the development inputs, remade from the network through ~/.cache
 test/exercise.py     one program run under bwrap and under the launcher, the answers side by side: how a limitation is measured before it is fixed
-test/docker_profile.py   an exclave under Docker's default seccomp profile; test/docker-seccomp.json the profile
+test/docker_profile.py   an exclave under Docker's default seccomp profile, which test/inputs.sh fetches
 test/syscalls.py     every kernel syscall classified; test/bench.py the performance table
 test/realsoft.py     real projects built inside and outside an exclave; test/matrix.py the kernel matrix in VMs
 test/dogfood.py      the tool's exclave building an exclave that must reproduce the host-built hashes file
 test/gate.sh         the commit gate, every step in parallel on copies of the exclaves given; test/examples.sh the example runs
 test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule; test/stackcheck.py the stack budget
-docs/            proposal (revision 18), review response, prior art, performance, review reports
+LICENSE          the MIT licence; the launcher carries its text
+docs/            proposal (revision 19), review response, prior art, performance, review reports
 spike/           frozen prototypes and their tests
 ```
 
@@ -433,3 +434,14 @@ border nothing else is touched. Until revision 18 the project was
 `cont`, the format a can, the launcher the opener and the tool the
 cannery; section 5 of `docs/PROPOSAL.md` lists every earlier name
 beside its new one.
+
+## Licence
+
+exclave is under the MIT licence: `LICENSE`. The launcher is the part
+of exclave that every exclave holds, so it carries the licence's text,
+which the MIT licence asks to go with every copy; `readelf -p
+.exclave.license .exclave/launcher` prints it, and the README the tool
+writes says so. The software in an exclave's tree keeps its packages'
+own licences, and an exclave passed on passes their terms on with it:
+`exclave prune` keeps their texts, and an Alpine exclave has them only
+if the packages' `-doc` packages went in.
