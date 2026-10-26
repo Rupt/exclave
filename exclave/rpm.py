@@ -41,6 +41,7 @@ What unpack does differently for an rpm set, here and in build.py; the synthesis
   marked trusted and not distrusted, so that the Red Hat identity file of DESIGN.md 8.4 has a copy to
   fall back to.
 """
+
 import bz2
 import gzip
 import io
@@ -57,15 +58,31 @@ class RpmError(Exception):
     pass
 
 
-MERGED_USR = True           # Fedora, RHEL 7 and later: the filesystem package ships /bin -> usr/bin and /lib64 -> usr/lib64 as links, which the merged-usr links match
+MERGED_USR = True  # Fedora, RHEL 7 and later: the filesystem package ships /bin -> usr/bin and /lib64 -> usr/lib64 as links, which the merged-usr links match
 LEAD = 96
 HEADER_MAGIC = b"\x8e\xad\xe8\x01"
 # the tags the reader uses (rpm's rpmtag.h)
-T = {"NAME": 1000, "VERSION": 1001, "RELEASE": 1002, "EPOCH": 1003, "ARCH": 1022, "POSTIN": 1024, "PREIN": 1023, "POSTTRANS": 1152,
-     "REQUIREFLAGS": 1048, "REQUIRENAME": 1049, "REQUIREVERSION": 1050,
-     "PROVIDEFLAGS": 1112, "PROVIDENAME": 1047, "PROVIDEVERSION": 1113, "OBSOLETENAME": 1090, "OBSOLETEVERSION": 1115, "OBSOLETEFLAGS": 1114,
-     "PAYLOADCOMPRESSOR": 1125}
-SENSE = {2: "<", 4: ">", 8: "="}     # RPMSENSE_LESS, GREATER, EQUAL bits
+T = {
+    "NAME": 1000,
+    "VERSION": 1001,
+    "RELEASE": 1002,
+    "EPOCH": 1003,
+    "ARCH": 1022,
+    "POSTIN": 1024,
+    "PREIN": 1023,
+    "POSTTRANS": 1152,
+    "REQUIREFLAGS": 1048,
+    "REQUIRENAME": 1049,
+    "REQUIREVERSION": 1050,
+    "PROVIDEFLAGS": 1112,
+    "PROVIDENAME": 1047,
+    "PROVIDEVERSION": 1113,
+    "OBSOLETENAME": 1090,
+    "OBSOLETEVERSION": 1115,
+    "OBSOLETEFLAGS": 1114,
+    "PAYLOADCOMPRESSOR": 1125,
+}
+SENSE = {2: "<", 4: ">", 8: "="}  # RPMSENSE_LESS, GREATER, EQUAL bits
 SENSE_RPMLIB = 1 << 24
 
 
@@ -79,25 +96,28 @@ def _header(f):
     data = f.read(hsize)
     out = {}
     for i in range(nindex):
-        tag, typ, off, count = struct.unpack(">IIII", index[16 * i:16 * i + 16])
-        if typ in (3, 4, 5):                                   # int16, int32, int64
+        tag, typ, off, count = struct.unpack(">IIII", index[16 * i : 16 * i + 16])
+        if typ in (3, 4, 5):  # int16, int32, int64
             size = {3: 2, 4: 4, 5: 8}[typ]
             fmt = {3: ">h", 4: ">i", 5: ">q"}[typ]
-            vals = [struct.unpack(fmt, data[off + k * size:off + (k + 1) * size])[0] for k in range(count)]
+            vals = [
+                struct.unpack(fmt, data[off + k * size : off + (k + 1) * size])[0]
+                for k in range(count)
+            ]
             out[tag] = vals if count > 1 else vals[0]
-        elif typ == 6:                                         # one string
-            out[tag] = data[off:data.index(b"\0", off)].decode("utf-8", "replace")
-        elif typ in (8, 9):                                    # string array, i18n string array
+        elif typ == 6:  # one string
+            out[tag] = data[off : data.index(b"\0", off)].decode("utf-8", "replace")
+        elif typ in (8, 9):  # string array, i18n string array
             vals, p = [], off
             for _ in range(count):
                 e = data.index(b"\0", p)
                 vals.append(data[p:e].decode("utf-8", "replace"))
                 p = e + 1
             out[tag] = vals
-        elif typ == 7:                                         # binary
-            out[tag] = data[off:off + count]
-        elif typ == 1:                                         # char
-            out[tag] = data[off:off + count]
+        elif typ == 7:  # binary
+            out[tag] = data[off : off + count]
+        elif typ == 1:  # char
+            out[tag] = data[off : off + count]
     return out
 
 
@@ -107,7 +127,7 @@ def _sections(path):
         lead = f.read(LEAD)
         if len(lead) < LEAD or lead[:4] != b"\xed\xab\xee\xdb":
             raise RpmError("%s: not an rpm" % path)
-        _header(f)                                             # the signature header, then padding to 8 bytes
+        _header(f)  # the signature header, then padding to 8 bytes
         pos = f.tell()
         f.seek((pos + 7) & ~7)
         h = _header(f)
@@ -135,16 +155,30 @@ def _cpio_members(data):
     """The entries of a newc or crc cpio archive as (name, mode, mtime, content, nlink, (devmaj, devmin, ino))."""
     out, p = [], 0
     while p + 110 <= len(data):
-        magic = data[p:p + 6]
+        magic = data[p : p + 6]
         if magic not in (b"070701", b"070702"):
             raise RpmError("bad cpio header at %d" % p)
-        fields = [int(data[p + 6 + 8 * k:p + 14 + 8 * k], 16) for k in range(13)]
-        ino, mode, uid, gid, nlink, mtime, size, devmaj, devmin, rdevmaj, rdevmin, namesize, _chk = fields
-        name = data[p + 110:p + 110 + namesize - 1].decode("utf-8", "surrogateescape")
+        fields = [int(data[p + 6 + 8 * k : p + 14 + 8 * k], 16) for k in range(13)]
+        (
+            ino,
+            mode,
+            uid,
+            gid,
+            nlink,
+            mtime,
+            size,
+            devmaj,
+            devmin,
+            rdevmaj,
+            rdevmin,
+            namesize,
+            _chk,
+        ) = fields
+        name = data[p + 110 : p + 110 + namesize - 1].decode("utf-8", "surrogateescape")
         start = (p + 110 + namesize + 3) & ~3
         if name == "TRAILER!!!":
             break
-        content = data[start:start + size]
+        content = data[start : start + size]
         out.append((name, mode, mtime, content, nlink, (devmaj, devmin, ino)))
         p = (start + size + 3) & ~3
     return out
@@ -154,7 +188,14 @@ class _Member:
     """The part of tarfile.TarInfo that build.extract reads."""
 
     def __init__(self, name, mode, mtime, kind, linkname, content):
-        self.name, self.mode, self.mtime, self.kind, self.linkname, self.content = name, mode & 0o7777, mtime, kind, linkname, content
+        self.name, self.mode, self.mtime, self.kind, self.linkname, self.content = (
+            name,
+            mode & 0o7777,
+            mtime,
+            kind,
+            linkname,
+            content,
+        )
 
     def isdir(self):
         return self.kind == "dir"
@@ -202,12 +243,14 @@ def open_tar(path, member):
         if fmt == 0o040000:
             members.append(_Member(name, mode, mtime, "dir", "", b""))
         elif fmt == 0o120000:
-            members.append(_Member(name, mode, mtime, "sym", content.decode("utf-8", "surrogateescape"), b""))
+            members.append(
+                _Member(name, mode, mtime, "sym", content.decode("utf-8", "surrogateescape"), b"")
+            )
         elif fmt == 0o100000:
             if nlink > 1 and ident in first:
                 members.append(_Member(name, mode, mtime, "lnk", first[ident].name, b""))
                 if content and not first[ident].content:
-                    first[ident].content = content             # the content travels with the last link
+                    first[ident].content = content  # the content travels with the last link
             else:
                 m = _Member(name, mode, mtime, "file", "", content)
                 if nlink > 1:
@@ -221,11 +264,17 @@ def open_tar(path, member):
 def _deps(h, names, versions, flags):
     out = []
     ns, vs, fs = h.get(names, []), h.get(versions, []), h.get(flags, [])
-    ns, vs, fs = ([ns] if isinstance(ns, str) else ns), ([vs] if isinstance(vs, str) else vs), ([fs] if isinstance(fs, int) else fs)   # a count of one is a scalar
+    ns, vs, fs = (
+        ([ns] if isinstance(ns, str) else ns),
+        ([vs] if isinstance(vs, str) else vs),
+        ([fs] if isinstance(fs, int) else fs),
+    )  # a count of one is a scalar
     for i, n in enumerate(ns):
         v = vs[i] if i < len(vs) else ""
         fl = fs[i] if i < len(fs) else 0
-        if fl & SENSE_RPMLIB or n.startswith("rpmlib(") or n.startswith("("):   # rpm's own features; rich dependencies
+        if (
+            fl & SENSE_RPMLIB or n.startswith("rpmlib(") or n.startswith("(")
+        ):  # rpm's own features; rich dependencies
             continue
         op = "".join(s for bit, s in sorted(SENSE.items()) if fl & bit) if v else ""
         out.append(n + op + v if v else n)
@@ -235,8 +284,12 @@ def _deps(h, names, versions, flags):
 def control(path):
     """(fields, scripts): the header as Debian-style fields; the install scripts by rpm's names."""
     h, _, _ = _sections(path)
-    fields = {"Package": h.get(T["NAME"], ""), "Version": "%s-%s" % (h.get(T["VERSION"], ""), h.get(T["RELEASE"], "")),
-              "Architecture": h.get(T["ARCH"], ""), "_format": "rpm"}
+    fields = {
+        "Package": h.get(T["NAME"], ""),
+        "Version": "%s-%s" % (h.get(T["VERSION"], ""), h.get(T["RELEASE"], "")),
+        "Architecture": h.get(T["ARCH"], ""),
+        "_format": "rpm",
+    }
     if fields["Architecture"] == "noarch":
         fields["Architecture"] = "all"
     if T["EPOCH"] in h:
@@ -244,10 +297,18 @@ def control(path):
     if not fields["Package"]:
         raise RpmError("%s: no NAME in its header" % path)
     fields["Depends"] = " ".join(_deps(h, T["REQUIRENAME"], T["REQUIREVERSION"], T["REQUIREFLAGS"]))
-    fields["Provides"] = " ".join(_deps(h, T["PROVIDENAME"], T["PROVIDEVERSION"], T["PROVIDEFLAGS"]))
-    fields["Replaces"] = " ".join(_deps(h, T["OBSOLETENAME"], T["OBSOLETEVERSION"], T["OBSOLETEFLAGS"]))
+    fields["Provides"] = " ".join(
+        _deps(h, T["PROVIDENAME"], T["PROVIDEVERSION"], T["PROVIDEFLAGS"])
+    )
+    fields["Replaces"] = " ".join(
+        _deps(h, T["OBSOLETENAME"], T["OBSOLETEVERSION"], T["OBSOLETEFLAGS"])
+    )
     scripts = {}
-    for key, tag in (("postinst", T["POSTIN"]), ("preinst", T["PREIN"]), ("posttrans", T["POSTTRANS"])):
+    for key, tag in (
+        ("postinst", T["POSTIN"]),
+        ("preinst", T["PREIN"]),
+        ("posttrans", T["POSTTRANS"]),
+    ):
         if tag in h and h[tag]:
             scripts[key] = h[tag] if isinstance(h[tag], str) else "\n".join(h[tag])
     return fields, scripts
@@ -292,7 +353,7 @@ def _rpmvercmp(a, b):
         if c:
             return c
     if len(ta) != len(tb):
-        rest = ta[len(tb):] if len(ta) > len(tb) else tb[len(ta):]
+        rest = ta[len(tb) :] if len(ta) > len(tb) else tb[len(ta) :]
         if rest[0] == "~":
             return -1 if len(ta) > len(tb) else 1
         return 1 if len(ta) > len(tb) else -1
@@ -311,7 +372,7 @@ def vercmp(a, b):
     if ea != eb:
         return -1 if ea < eb else 1
     c = _rpmvercmp(va, vb)
-    if c or not ra or not rb:                                  # a constraint without a release matches any release
+    if c or not ra or not rb:  # a constraint without a release matches any release
         return c
     return _rpmvercmp(ra, rb)
 

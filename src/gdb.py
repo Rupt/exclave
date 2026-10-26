@@ -82,11 +82,16 @@ def _add(state, path, bias):
     if bias in state["loaded"] or not path:
         return
     state["loaded"].add(bias)
-    _quiet('add-symbol-file "%s" -o %#x' % (path.replace("\\", "\\\\").replace('"', '\\"'), bias))   # an exclave may live under a path with a space
+    _quiet(
+        'add-symbol-file "%s" -o %#x' % (path.replace("\\", "\\\\").replace('"', '\\"'), bias)
+    )  # an exclave may live under a path with a space
 
 
 def _r_debug():
-    for sym, indirect in (("_r_debug", False), ("_dl_debug_addr", True)):   # glibc's struct; musl's pointer to it
+    for sym, indirect in (
+        ("_r_debug", False),
+        ("_dl_debug_addr", True),
+    ):  # glibc's struct; musl's pointer to it
         try:
             a = int(gdb.parse_and_eval("(unsigned long)&" + sym))
         except gdb.error:
@@ -104,7 +109,13 @@ def _libraries(state):
     while lm:
         l_addr, l_name, l_next = _u64(lm), _u64(lm + 8), _u64(lm + 24)
         if not first and l_name:
-            name = gdb.selected_inferior().read_memory(l_name, 4096).tobytes().split(b"\0", 1)[0].decode("utf-8", "replace")
+            name = (
+                gdb.selected_inferior()
+                .read_memory(l_name, 4096)
+                .tobytes()
+                .split(b"\0", 1)[0]
+                .decode("utf-8", "replace")
+            )
             if name:
                 _add(state, _file_for(state["root"], name), l_addr)
         first, lm = False, l_next
@@ -114,6 +125,7 @@ def _libraries(state):
 
 class _Reload(gdb.Breakpoint):
     """r_brk: the loader calls it after every dlopen and dlclose (RT_CONSISTENT); the map is read again."""
+
     def __init__(self, addr, state):
         super().__init__("*%#x" % addr, internal=True)
         self.state = state
@@ -125,6 +137,7 @@ class _Reload(gdb.Breakpoint):
 
 class _Entry(gdb.Breakpoint):
     """The program's entry point: by now the loader has mapped every library and filled its link map."""
+
     def __init__(self, addr, state):
         super().__init__("*%#x" % addr, internal=True, temporary=True)
         self.state = state
@@ -144,6 +157,7 @@ def _guarded(fn, *args):
 
 class _Hook(gdb.Breakpoint):
     """exclave_debug_hook: the launcher has mapped the program and its loader and is about to jump."""
+
     def __init__(self):
         super().__init__("exclave_debug_hook", internal=True)
 
@@ -173,5 +187,7 @@ def _arm():
         gdb.post_event(_arm)
 
 
-gdb.execute("handle SIGSYS nostop noprint pass", to_string=True)   # every translated syscall is a SIGSYS (7.4.1)
+gdb.execute(
+    "handle SIGSYS nostop noprint pass", to_string=True
+)  # every translated syscall is a SIGSYS (7.4.1)
 _arm()

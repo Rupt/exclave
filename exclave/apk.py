@@ -20,6 +20,7 @@ What unpack does differently for an Alpine set, here and in build.py:
 - musl has no ld.so.cache, and the static check asks for none.
 - Licence texts come only with a package's `-doc` package (DESIGN.md 10.4).
 """
+
 import io
 import re
 import tarfile
@@ -29,8 +30,16 @@ class ApkError(Exception):
     pass
 
 
-MERGED_USR = False          # Alpine's /bin, /sbin and /lib are directories of their own
-SCRIPTS = (".pre-install", ".post-install", ".pre-upgrade", ".post-upgrade", ".pre-deinstall", ".post-deinstall", ".trigger")
+MERGED_USR = False  # Alpine's /bin, /sbin and /lib are directories of their own
+SCRIPTS = (
+    ".pre-install",
+    ".post-install",
+    ".pre-upgrade",
+    ".post-upgrade",
+    ".pre-deinstall",
+    ".post-deinstall",
+    ".trigger",
+)
 
 
 def _norm(name):
@@ -95,14 +104,21 @@ def control(path):
     fields["Architecture"] = raw.get("arch", ["noarch"])[0]
     if fields["Architecture"] == "noarch":
         fields["Architecture"] = "all"
-    for src, dst in (("depend", "Depends"), ("provides", "Provides"), ("replaces", "Replaces"), ("install_if", "Install-If")):
+    for src, dst in (
+        ("depend", "Depends"),
+        ("provides", "Provides"),
+        ("replaces", "Replaces"),
+        ("install_if", "Install-If"),
+    ):
         if src in raw:
             fields[dst] = " ".join(raw[src])
     fields["_format"] = "apk"
     return fields, scripts
 
 
-_TOKEN = re.compile(r"^(!?)([^\s<>=~!][^\s<>=~]*?)(?:(<=|>=|><|<|>|=|~)(.+))?$")   # a name is anything up to an operator: cmd:[ and so:libstdc++.so.6 are names
+_TOKEN = re.compile(
+    r"^(!?)([^\s<>=~!][^\s<>=~]*?)(?:(<=|>=|><|<|>|=|~)(.+))?$"
+)  # a name is anything up to an operator: cmd:[ and so:libstdc++.so.6 are names
 
 
 def parse_deps(field):
@@ -121,16 +137,32 @@ def parse_deps(field):
 
 
 # ---------------------------------------------------------------- versions, as apk-tools orders them
-_SUFFIX = {"alpha": -4, "beta": -3, "pre": -2, "rc": -1, "cvs": 1, "svn": 2, "git": 3, "hg": 4, "p": 5}
-_VER = re.compile(r"^(\d+(?:\.\d+)*)([a-z])?((?:_(?:alpha|beta|pre|rc|cvs|svn|git|hg|p)\d*)*)(?:-r(\d+))?$")
+_SUFFIX = {
+    "alpha": -4,
+    "beta": -3,
+    "pre": -2,
+    "rc": -1,
+    "cvs": 1,
+    "svn": 2,
+    "git": 3,
+    "hg": 4,
+    "p": 5,
+}
+_VER = re.compile(
+    r"^(\d+(?:\.\d+)*)([a-z])?((?:_(?:alpha|beta|pre|rc|cvs|svn|git|hg|p)\d*)*)(?:-r(\d+))?$"
+)
 
 
 def _key(v):
     m = _VER.match(v)
     if not m:
-        return ([0], "", [], 0, v)                                 # a version apk would not accept: compared as 0
+        return ([0], "", [], 0, v)  # a version apk would not accept: compared as 0
     nums = [int(x) for x in m.group(1).split(".")]
-    sufs = [(_SUFFIX[s.rstrip("0123456789")], int(s[len(s.rstrip("0123456789")):] or 0)) for s in m.group(3).split("_") if s]
+    sufs = [
+        (_SUFFIX[s.rstrip("0123456789")], int(s[len(s.rstrip("0123456789")) :] or 0))
+        for s in m.group(3).split("_")
+        if s
+    ]
     return (nums, m.group(2) or "", sufs, int(m.group(4) or 0), "")
 
 
@@ -160,4 +192,6 @@ def satisfies(version, op, want):
     if op == "~":
         return version == want or version.startswith(want + ".") or version.startswith(want + "-")
     c = vercmp(version, want)
-    return {"=": c == 0, "<": c < 0, ">": c > 0, "<=": c <= 0, ">=": c >= 0, "><": True}.get(op, True)
+    return {"=": c == 0, "<": c < 0, ">": c > 0, "<=": c <= 0, ">=": c >= 0, "><": True}.get(
+        op, True
+    )

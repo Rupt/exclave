@@ -9,6 +9,7 @@ then makes the same gcc exclave twice from the same files: once with the checkou
 with the tool's own exclave's shortcut from inside it. The two hashes files must be identical, tree hash
 included. Exit status 0 on success.
 """
+
 import argparse
 import os
 import shutil
@@ -32,7 +33,9 @@ def debs(d):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--inputs", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "dogfood-work"))
     ap.add_argument("--keep", action="store_true")
@@ -52,10 +55,25 @@ def main():
     # the pinned Python, the one running this, as a tree of its own: the base system's packages give it a libc.
     # Without Tcl/Tk, which the tool never imports and whose libraries search a build directory the exclave does
     # not own (/tools/deps/lib), so the static check would rightly refuse them
-    tk = shutil.ignore_patterns("libtcl*", "libtk*", "tcl[0-9]*", "tk[0-9]*", "_tkinter*", "tkinter", "idlelib", "turtledemo")
-    shutil.copytree(sys.base_prefix, os.path.join(tool_ex, "tree", "opt", "python"), symlinks=True, ignore=tk)
-    lib = os.path.join(tool_ex, "tree", "usr", "lib", "exclave")                # the tool's own source and the launcher, by hand: the exclave is a directory
-    shutil.copytree(os.path.join(REPO, "exclave"), lib, ignore=shutil.ignore_patterns("__pycache__"))
+    tk = shutil.ignore_patterns(
+        "libtcl*",
+        "libtk*",
+        "tcl[0-9]*",
+        "tk[0-9]*",
+        "_tkinter*",
+        "tkinter",
+        "idlelib",
+        "turtledemo",
+    )
+    shutil.copytree(
+        sys.base_prefix, os.path.join(tool_ex, "tree", "opt", "python"), symlinks=True, ignore=tk
+    )
+    lib = os.path.join(
+        tool_ex, "tree", "usr", "lib", "exclave"
+    )  # the tool's own source and the launcher, by hand: the exclave is a directory
+    shutil.copytree(
+        os.path.join(REPO, "exclave"), lib, ignore=shutil.ignore_patterns("__pycache__")
+    )
     shutil.copy2(os.path.join(REPO, "build", "launcher"), os.path.join(lib, "launcher"))
     entry = os.path.join(tool_ex, "tree", "usr", "bin", "exclave")
     with open(entry, "w") as f:
@@ -63,20 +81,37 @@ def main():
     os.chmod(entry, 0o755)
     run([sys.executable, exclave, "wrap", tool_ex], work)
     os.symlink("tree/usr/bin/exclave", os.path.join(tool_ex, "exclave"))
-    run([os.path.join(tool_ex, "exclave"), "format", "--check", os.path.join(tool_ex, ".exclave", "manifest")], work)
+    run(
+        [
+            os.path.join(tool_ex, "exclave"),
+            "format",
+            "--check",
+            os.path.join(tool_ex, ".exclave", "manifest"),
+        ],
+        work,
+    )
     gcc_debs = debs(gcc_debs)
     print("building the gcc exclave on the host")
-    run([sys.executable, exclave, "unpack", os.path.join(work, "gcc-host.exclave")] + gcc_debs, work)
+    run(
+        [sys.executable, exclave, "unpack", os.path.join(work, "gcc-host.exclave")] + gcc_debs, work
+    )
     run([sys.executable, exclave, "wrap", os.path.join(work, "gcc-host.exclave")], work)
     print("building the gcc exclave inside the tool's own exclave")
-    run([os.path.join(tool_ex, "exclave"), "unpack", os.path.join(work, "gcc-inside.exclave")] + gcc_debs, work)
+    run(
+        [os.path.join(tool_ex, "exclave"), "unpack", os.path.join(work, "gcc-inside.exclave")]
+        + gcc_debs,
+        work,
+    )
     run([os.path.join(tool_ex, "exclave"), "wrap", os.path.join(work, "gcc-inside.exclave")], work)
     a_lock = open(os.path.join(work, "gcc-host.exclave", ".exclave", "hashes"), "rb").read()
     b_lock = open(os.path.join(work, "gcc-inside.exclave", ".exclave", "hashes"), "rb").read()
     tree = [l for l in a_lock.decode().splitlines() if l.startswith("tree")]
     if a_lock == b_lock:
         print("PASS hashes files identical; %s" % tree[0])
-        out = run([os.path.join(work, "gcc-inside.exclave", "tree", "usr", "bin", "gcc-13"), "--version"], work)
+        out = run(
+            [os.path.join(work, "gcc-inside.exclave", "tree", "usr", "bin", "gcc-13"), "--version"],
+            work,
+        )
         print("     " + out.splitlines()[0])
         if not a.keep:
             shutil.rmtree(work, ignore_errors=True)

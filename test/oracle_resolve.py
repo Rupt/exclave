@@ -7,6 +7,7 @@ from inside the exclave. The resulting paths and errnos must agree.
 
     test/oracle_resolve.py --exclave EXCLAVE [--work DIR] [--paths N] [--seed S] [--keep]
 """
+
 import argparse
 import ctypes
 import errno
@@ -22,7 +23,10 @@ sys.path.insert(0, os.path.join(REPO, "exclave"))
 import exclave  # noqa: E402
 
 SYS_openat2 = 437
-O_PATH, O_NOFOLLOW = os.O_PATH, os.O_NOFOLLOW                  # this machine's bits: aarch64's O_NOFOLLOW is not x86-64's
+O_PATH, O_NOFOLLOW = (
+    os.O_PATH,
+    os.O_NOFOLLOW,
+)  # this machine's bits: aarch64's O_NOFOLLOW is not x86-64's
 RESOLVE_IN_ROOT = 0x10
 libc = ctypes.CDLL(None, use_errno=True)
 
@@ -38,8 +42,10 @@ def kernel_resolve(rootfd, root, path, follow):
     if path.startswith("/") and rel == ".":
         rel = "."
     fd = libc.syscall(SYS_openat2, rootfd, rel.encode(), ctypes.byref(how), ctypes.sizeof(how))
-    for _ in range(20):                                       # EAGAIN under RESOLVE_IN_ROOT means "retry": the kernel saw what it
-        if fd >= 0 or ctypes.get_errno() != errno.EAGAIN:    # took for a concurrent rename or mount (openat2(2)); RHEL 8's 4.18 says so for ..
+    for _ in range(20):  # EAGAIN under RESOLVE_IN_ROOT means "retry": the kernel saw what it
+        if (
+            fd >= 0 or ctypes.get_errno() != errno.EAGAIN
+        ):  # took for a concurrent rename or mount (openat2(2)); RHEL 8's 4.18 says so for ..
             break
         fd = libc.syscall(SYS_openat2, rootfd, rel.encode(), ctypes.byref(how), ctypes.sizeof(how))
     if fd < 0:
@@ -49,8 +55,8 @@ def kernel_resolve(rootfd, root, path, follow):
     if real == root:
         return "/", None
     if real.startswith(root + "/"):
-        return real[len(root):], None
-    return real, None                                        # should not happen under RESOLVE_IN_ROOT
+        return real[len(root) :], None
+    return real, None  # should not happen under RESOLVE_IN_ROOT
 
 
 def make_maze(root, rng, ndirs=12, nfiles=15, nlinks=40):
@@ -74,18 +80,27 @@ def make_maze(root, rng, ndirs=12, nfiles=15, nlinks=40):
         where = "%s/l%d" % (rng.choice(dirs), i)
         kind = rng.random()
         if kind < 0.35:
-            target = rng.choice(names)                        # absolute, into the maze
+            target = rng.choice(names)  # absolute, into the maze
         elif kind < 0.6:
             t = rng.choice(names)
             depth = where.count("/") - 1
-            target = "/".join([".."] * rng.randint(0, depth)) + t   # relative with .. (may overshoot)
+            target = (
+                "/".join([".."] * rng.randint(0, depth)) + t
+            )  # relative with .. (may overshoot)
             target = target.lstrip("/") or "."
         elif kind < 0.75:
-            target = rng.choice(["../" * rng.randint(1, 8) + "usr/bin", "/usr/../maze", "./d0/../", "/etc/../maze/d1/"])
+            target = rng.choice(
+                [
+                    "../" * rng.randint(1, 8) + "usr/bin",
+                    "/usr/../maze",
+                    "./d0/../",
+                    "/etc/../maze/d1/",
+                ]
+            )
         elif kind < 0.85:
-            target = "%s/missing%d" % (rng.choice(dirs), i)   # dangling
+            target = "%s/missing%d" % (rng.choice(dirs), i)  # dangling
         elif kind < 0.93:
-            target = where                                    # loop to itself
+            target = where  # loop to itself
         else:
             target = "/maze/l%d" % rng.randint(0, nlinks - 1)  # possible longer loop
         os.symlink(target, os.path.join(root, where.lstrip("/")))
@@ -121,7 +136,9 @@ def gen_paths(rng, dirs, files, links, n):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--exclave", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "resolve-work"))
     ap.add_argument("--paths", type=int, default=3000)
@@ -130,34 +147,60 @@ def main():
     a = ap.parse_args()
     rng = random.Random(a.seed)
     probe = OpenHow(O_PATH, 0, RESOLVE_IN_ROOT)
-    if libc.syscall(SYS_openat2, -100, b".", ctypes.byref(probe), ctypes.sizeof(probe)) < 0 and ctypes.get_errno() == errno.ENOSYS:
-        print("openat2 is not available on this kernel (5.6 and later); the resolution oracle cannot run here")
+    if (
+        libc.syscall(SYS_openat2, -100, b".", ctypes.byref(probe), ctypes.sizeof(probe)) < 0
+        and ctypes.get_errno() == errno.ENOSYS
+    ):
+        print(
+            "openat2 is not available on this kernel (5.6 and later); the resolution oracle cannot run here"
+        )
         return 0
     work = os.path.abspath(a.work)
     if os.path.exists(work):
         shutil.rmtree(work)
     import tree
-    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "exclave"))   # a copy relinked with the build (17)
+
+    ex = tree.fresh_exclave(
+        os.path.abspath(a.exclave), os.path.join(work, "exclave")
+    )  # a copy relinked with the build (17)
     root = os.path.join(ex, "tree")
     dirs, files, links = make_maze(root, rng)
     with open(os.path.join(ex, ".exclave", "manifest"), "w") as f:
-        f.write("exclave 1\n")                                       # /maze is a non-empty top-level directory: the exclave's by the tree alone (8.1)
+        f.write(
+            "exclave 1\n"
+        )  # /maze is a non-empty top-level directory: the exclave's by the tree alone (8.1)
     import platform
     import tree
+
     cc = tree.compiler(root, platform.machine())
     if not cc:
         sys.exit("no C compiler in the exclave")
     gcc = os.path.join(root, tree.vbin(root, cc).lstrip("/"))
     prog = os.path.join(work, "resolve")
-    r = subprocess.run([gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "resolve.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    r = subprocess.run(
+        [gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "resolve.c")],
+        cwd=work,
+        env={"PATH": "/usr/bin:/bin"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     if r.returncode:
         sys.exit("cannot compile resolve.c: " + r.stderr.decode(errors="replace"))
     paths = gen_paths(rng, dirs, files, links, a.paths)
-    p = subprocess.run([os.path.join(ex, ".exclave", "launcher"), prog], input="\n".join(paths).encode() + b"\n", cwd=work, env={"PATH": "/usr/bin:/bin"},
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p = subprocess.run(
+        [os.path.join(ex, ".exclave", "launcher"), prog],
+        input="\n".join(paths).encode() + b"\n",
+        cwd=work,
+        env={"PATH": "/usr/bin:/bin"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     answers = p.stdout.decode(errors="replace").splitlines()
     if len(answers) != len(paths):
-        sys.exit("the launcher answered %d of %d paths: %s" % (len(answers), len(paths), p.stderr.decode(errors="replace")[-500:]))
+        sys.exit(
+            "the launcher answered %d of %d paths: %s"
+            % (len(answers), len(paths), p.stderr.decode(errors="replace")[-500:])
+        )
     rootfd = os.open(root, os.O_PATH)
     fails, agree = 0, 0
     for path, ans in zip(paths, answers):

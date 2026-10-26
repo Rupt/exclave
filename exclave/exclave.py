@@ -26,6 +26,7 @@ how to run it, where the exclave has none.
 The tool never opens a network connection: the files it is given are its inputs, whoever fetched
 them. Standard library only. Python 3.6 or later.
 """
+
 import argparse
 import hashlib
 import os
@@ -49,8 +50,17 @@ KEY_ORDER = {
 }
 # key -> (min fields, max fields, kinds) ; kinds: s string, t token
 SCHEMA = {
-    "exclave": (1, 1, "t"), "cpu": (1, 1, "s"), "data": (1, 1, "s"), "host": (1, 1, "s"), "own": (1, 1, "s"),
-    "hashes": (1, 1, "t"), "tool": (1, 1, "s"), "launcher": (1, 1, "s"), "pkg": (4, 4, "ssss"), "manifest": (1, 1, "s"), "tree": (1, 1, "s"),
+    "exclave": (1, 1, "t"),
+    "cpu": (1, 1, "s"),
+    "data": (1, 1, "s"),
+    "host": (1, 1, "s"),
+    "own": (1, 1, "s"),
+    "hashes": (1, 1, "t"),
+    "tool": (1, 1, "s"),
+    "launcher": (1, 1, "s"),
+    "pkg": (4, 4, "ssss"),
+    "manifest": (1, 1, "s"),
+    "tree": (1, 1, "s"),
 }
 ONCE = {"exclave", "cpu", "hashes", "tool", "launcher", "manifest", "tree"}
 # the launcher's tables (8.1): the manifest may carry this many records, the tree this many top-level entries
@@ -228,8 +238,14 @@ def parse(data, kind="exclave"):
         col = m.end()
         fields = []
         while col < len(raw):
-            if raw[col:col + 1] != b" ":
-                _fail(line, col + 1, "tab outside a string" if raw[col] == 9 else "expected a single space between fields")
+            if raw[col : col + 1] != b" ":
+                _fail(
+                    line,
+                    col + 1,
+                    "tab outside a string"
+                    if raw[col] == 9
+                    else "expected a single space between fields",
+                )
             col += 1
             if col >= len(raw):
                 _fail(line, col + 1, "trailing space")
@@ -247,7 +263,9 @@ def parse(data, kind="exclave"):
         rec = Record(key, fields, comments, line)
         comments = []
         _check_record(rec, kind)
-        if kind == "exclave" and key in LIMITS:                           # the launcher's tables (8.1), refused where the launcher refuses
+        if (
+            kind == "exclave" and key in LIMITS
+        ):  # the launcher's tables (8.1), refused where the launcher refuses
             counts[key] = counts.get(key, 0) + 1
             if counts[key] > LIMITS[key]:
                 _fail(line, 1, "more than %d %s records" % (LIMITS[key], key))
@@ -278,7 +296,7 @@ def _parse_string(raw, col, line):
         if c == 0x22:
             return bytes(out), col + 1
         if c == 0x5C:
-            e = raw[col + 1:col + 2]
+            e = raw[col + 1 : col + 2]
             if e in (b"\\", b'"'):
                 out += e
                 col += 2
@@ -289,7 +307,7 @@ def _parse_string(raw, col, line):
                 out += b"\t"
                 col += 2
             elif e == b"x":
-                h = raw[col + 2:col + 4]
+                h = raw[col + 2 : col + 4]
                 if not re.fullmatch(rb"[0-9a-f]{2}", h):
                     _fail(line, col + 1, "\\x needs two lowercase hex digits")
                 out.append(int(h, 16))
@@ -298,11 +316,11 @@ def _parse_string(raw, col, line):
                 _fail(line, col + 1, "unknown escape")
             continue
         n = _utf8_len(raw, col)
-        cp = raw[col:col + n].decode("utf-8")
+        cp = raw[col : col + n].decode("utf-8")
         o = ord(cp)
         if o < 0x20 or 0x7F <= o <= 0x9F:
             _fail(line, col + 1, "control character must be escaped")
-        out += raw[col:col + n]
+        out += raw[col : col + n]
         col += n
 
 
@@ -347,10 +365,12 @@ def quote(b):
         elif n == 0:
             out.append("\\x%02x" % c)
         else:
-            s = b[i:i + n].decode("utf-8")
+            s = b[i : i + n].decode("utf-8")
             o = ord(s)
             if o < 0x20 or 0x7F <= o <= 0x9F:
-                out.append("\\x%02x" % o) if o < 0x80 else out.extend("\\x%02x" % x for x in b[i:i + n])
+                out.append("\\x%02x" % o) if o < 0x80 else out.extend(
+                    "\\x%02x" % x for x in b[i : i + n]
+                )
             else:
                 out.append(s)
         i += max(n, 1)
@@ -374,7 +394,9 @@ def dump(records, kind="exclave"):
         for r in recs:
             for c in r.comments:
                 out.append("#" + c)
-            out.append(" ".join([key] + [v.decode() if k == "t" else quote(v) for k, v in r.fields]))
+            out.append(
+                " ".join([key] + [v.decode() if k == "t" else quote(v) for k, v in r.fields])
+            )
     return ("\n".join(out) + "\n").encode("utf-8")
 
 
@@ -435,9 +457,11 @@ def check_limits(ex):
     """The launcher's fixed tables (8.1): refuse what it would refuse, before wrapping; the
     manifest's records are counted by parse, the tree's top-level entries here."""
     manifest(ex)
-    top = len(owned_top(ex))                                 # as the launcher counts them: a placeholder takes no slot
+    top = len(owned_top(ex))  # as the launcher counts them: a placeholder takes no slot
     if top > LIMITS["top"]:
-        raise build.BuildError("tree/ has %d top-level entries; the launcher holds %d" % (top, LIMITS["top"]))
+        raise build.BuildError(
+            "tree/ has %d top-level entries; the launcher holds %d" % (top, LIMITS["top"])
+        )
 
 
 def in_data(vpath, data):
@@ -488,18 +512,29 @@ def payload_path(real):
     return p if os.path.exists(p) else real
 
 
-MACHINE = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64", "all": None, "noarch": None}   # package spellings -> uname -m
+MACHINE = {
+    "amd64": "x86_64",
+    "x86_64": "x86_64",
+    "arm64": "aarch64",
+    "aarch64": "aarch64",
+    "all": None,
+    "noarch": None,
+}  # package spellings -> uname -m
 
 
 def default_launcher(arch=None):
     """build/launcher beside a checkout, or the launcher shipped next to this file in the tool's own exclave (10.5); for packages
     of another architecture than this machine's, the cross-built build/launcher-<machine> (7.1)."""
     import platform
+
     machine = MACHINE.get(arch, arch)
     if machine and machine != platform.machine():
         p = os.path.join(HERE, "..", "build", "launcher-" + machine)
         if not os.path.isfile(p):
-            sys.exit("no launcher for %s here: %s is not built (make with the cross compiler), and this machine is %s" % (machine, p, platform.machine()))
+            sys.exit(
+                "no launcher for %s here: %s is not built (make with the cross compiler), and this machine is %s"
+                % (machine, p, platform.machine())
+            )
         return p
     for p in (os.path.join(HERE, "..", "build", "launcher"), os.path.join(HERE, "launcher")):
         if os.path.isfile(p):
@@ -538,14 +573,23 @@ def cmd_unpack(out, debs, log=print):
     pkgs, seen, arches = [], {}, set()
     kinds = set(build.reader(p).__name__ for p in debs)
     if len(kinds) > 1:
-        raise build.BuildError("the package files mix formats %s: one format per exclave" % sorted(kinds))
+        raise build.BuildError(
+            "the package files mix formats %s: one format per exclave" % sorted(kinds)
+        )
     for path in debs:
         fields, _ = build.reader(path).control(path)
-        name, ver, arch = fields.get("Package"), fields.get("Version"), fields.get("Architecture", "")
+        name, ver, arch = (
+            fields.get("Package"),
+            fields.get("Version"),
+            fields.get("Architecture", ""),
+        )
         if not name or not ver:
             raise build.BuildError("%s: no Package or Version in its control file" % path)
         if name in seen:
-            raise build.BuildError("%s and %s both carry package %s: one version of a package per exclave" % (seen[name], path, name))
+            raise build.BuildError(
+                "%s and %s both carry package %s: one version of a package per exclave"
+                % (seen[name], path, name)
+            )
         seen[name] = path
         if arch and arch != "all":
             arches.add(arch)
@@ -562,7 +606,9 @@ def cmd_unpack(out, debs, log=print):
     except build.BuildError:
         shutil.rmtree(out)
         raise
-    for line in build.dependency_report([(n, f) for n, _, f, _, _ in pkgs], root):   # after synthesis: a file dependency asks the tree
+    for line in build.dependency_report(
+        [(n, f) for n, _, f, _, _ in pkgs], root
+    ):  # after synthesis: a file dependency asks the tree
         log("depends: " + line)
     install_launcher(out, arch=next(iter(arches), None))
     build.write_lock(out, [(n, v, a, b2_file(p)) for n, p, _, v, a in pkgs])
@@ -585,16 +631,24 @@ def wrapper_problems(ex, data=()):
         w = is_wrapper(real, oi)
         d_, n_ = os.path.split(real)
         if not w and os.path.exists(os.path.join(d_, ".real", n_)):
-            problems.append("stale wrapper (not this exclave's launcher): %s; run exclave relink" % v)
+            problems.append(
+                "stale wrapper (not this exclave's launcher): %s; run exclave relink" % v
+            )
         elif st.st_mode & 0o111 and not w and not os.access(real, os.X_OK):
-            problems.append("executable file its user cannot execute: %s (mode %o); a wrapper would run as the launcher's mode" % (v, st.st_mode & 0o7777))
+            problems.append(
+                "executable file its user cannot execute: %s (mode %o); a wrapper would run as the launcher's mode"
+                % (v, st.st_mode & 0o7777)
+            )
         if w and (not os.path.exists(payload_path(real)) or payload_path(real) == real):
             problems.append("wrapper without original: " + v)
     for dirpath, dirnames, filenames in os.walk(root):
         if os.path.basename(dirpath) == ".real":
             for n in filenames:
                 if not os.path.lexists(os.path.join(os.path.dirname(dirpath), n)):
-                    problems.append("original without wrapper: /%s (.real is reserved for originals, 6.1)" % os.path.relpath(os.path.join(dirpath, n), root))
+                    problems.append(
+                        "original without wrapper: /%s (.real is reserved for originals, 6.1)"
+                        % os.path.relpath(os.path.join(dirpath, n), root)
+                    )
     return problems
 
 
@@ -613,7 +667,9 @@ def wrap_files(ex, data=(), quiet=False):
         d, name = os.path.split(real)
         rd = os.path.join(d, ".real")
         if os.path.lexists(os.path.join(rd, name)):
-            raise build.BuildError("%s has an original in .real/ already: a stale wrapper; run exclave relink" % v)
+            raise build.BuildError(
+                "%s has an original in .real/ already: a stale wrapper; run exclave relink" % v
+            )
         os.makedirs(rd, exist_ok=True)
         os.rename(real, os.path.join(rd, name))
         try:
@@ -634,7 +690,9 @@ def cmd_wrap(ex, quiet=False):
     if not os.path.isdir(root):
         sys.exit("refusing: %s has no tree/ directory" % ex)
     install_launcher(ex)
-    build.placeholders(root, strip=False, log=lambda *a: None)   # 8.1: the conventional names and the identity files, if the tree lacks them
+    build.placeholders(
+        root, strip=False, log=lambda *a: None
+    )  # 8.1: the conventional names and the identity files, if the tree lacks them
     mp = manifest_path(ex)
     if not os.path.exists(mp):
         with open(mp, "wb") as f:
@@ -655,7 +713,9 @@ def cmd_wrap(ex, quiet=False):
         return 1
     wrap_files(ex, data, quiet)
     write_readme(ex)
-    build.write_lock(ex, None, "b2:" + hashlib.blake2b(mdata, digest_size=32).hexdigest(), tree=True)
+    build.write_lock(
+        ex, None, "b2:" + hashlib.blake2b(mdata, digest_size=32).hexdigest(), tree=True
+    )
     if not quiet:
         print("%s is wrapped" % ex)
     return 0
@@ -717,7 +777,10 @@ def static_report(ex, quiet=False):
             print("warning: " + w)
         for e in rep.errors:
             print("error: " + e)
-        print("static check: %d ELF files, %d static executables, %d warnings, %d errors" % (len(rep.seen), len(rep.static), len(rep.warnings), len(rep.errors)))
+        print(
+            "static check: %d ELF files, %d static executables, %d warnings, %d errors"
+            % (len(rep.seen), len(rep.static), len(rep.warnings), len(rep.errors))
+        )
     return rep
 
 
@@ -729,8 +792,15 @@ def cmd_check(ex, logs=()):
     oi = launcher_ino(ex)
     problems = wrapper_problems(ex, data)
     for real, v, st in walk_files(root):
-        if stat.S_ISREG(st.st_mode) and st.st_mode & 0o111 and not in_data(v, data) and not is_wrapper(real, oi) \
-                and not os.path.exists(os.path.join(os.path.dirname(real), ".real", os.path.basename(real))):
+        if (
+            stat.S_ISREG(st.st_mode)
+            and st.st_mode & 0o111
+            and not in_data(v, data)
+            and not is_wrapper(real, oi)
+            and not os.path.exists(
+                os.path.join(os.path.dirname(real), ".real", os.path.basename(real))
+            )
+        ):
             problems.append("executable not wrapped: " + v)
     lock = os.path.join(ex, ".exclave", "hashes")
     if os.path.exists(lock):
@@ -738,11 +808,18 @@ def cmd_check(ex, logs=()):
         if recorded:
             actual = build.tree_hash(root)
             if recorded[0][0].decode() != actual:
-                problems.append("the tree differs from the hashes file: recorded %s, now %s" % (recorded[0][0].decode(), actual))
+                problems.append(
+                    "the tree differs from the hashes file: recorded %s, now %s"
+                    % (recorded[0][0].decode(), actual)
+                )
         else:
-            problems.append("an unwrapped exclave: the hashes file has no tree hash; run exclave wrap")
+            problems.append(
+                "an unwrapped exclave: the hashes file has no tree hash; run exclave wrap"
+            )
     elif any(is_wrapper(real, oi) for real, v, st in walk_files(root) if stat.S_ISREG(st.st_mode)):
-        problems.append("wrappers but no hashes file: wrap never finished; run exclave wrap")   # the third state: wrapped, never finished
+        problems.append(
+            "wrappers but no hashes file: wrap never finished; run exclave wrap"
+        )  # the third state: wrapped, never finished
     for p in problems:
         print(p)
     print("%d wrapper problems" % len(problems))
@@ -764,7 +841,9 @@ def cmd_prune(ex, logs):
     print("pruned %s: kept %d files, removed %d, %d bytes freed" % (ex, kept, removed, freed))
     lock = os.path.join(ex, ".exclave", "hashes")
     if os.path.exists(lock) and values(load(lock, "hashes"), "tree"):
-        build.write_lock(ex, None, keep_hashes=True)         # the hashes file records the output as it now is
+        build.write_lock(
+            ex, None, keep_hashes=True
+        )  # the hashes file records the output as it now is
     rep = static_report(ex)
     return 1 if rep.errors else 0
 
@@ -775,7 +854,9 @@ def cmd_format(paths, check):
         with open(p, "rb") as f:
             data = f.read()
         first = next((l for l in data.split(b"\n") if l and not l.startswith(b"#")), b"")
-        kind = "hashes" if first.startswith(b"hashes ") else "exclave"        # by the first record, not the file's name
+        kind = (
+            "hashes" if first.startswith(b"hashes ") else "exclave"
+        )  # by the first record, not the file's name
         try:
             recs = parse(data, kind)
         except GrammarError as e:
@@ -798,8 +879,10 @@ def require_exclave(ex, cmd):
     """Refuse, in one line and before reading or writing anything, a directory the command cannot act on:
     a can, an exclave from before the rename, is named as one, since its launcher's own refusal sends its user here."""
     if os.path.isdir(os.path.join(ex, ".can")) and not os.path.isdir(os.path.join(ex, ".exclave")):
-        sys.exit("refusing: %s is a can, an exclave from before the rename, with .can/ and root/; convert it first "
-                 "(docs/DESIGN.md 13 item 45)" % ex)
+        sys.exit(
+            "refusing: %s is a can, an exclave from before the rename, with .can/ and root/; convert it first "
+            "(docs/DESIGN.md 13 item 45)" % ex
+        )
     if not os.path.isdir(os.path.join(ex, "tree")):
         sys.exit("refusing: %s has no tree/ directory" % ex)
     if cmd != "wrap" and not os.path.isdir(os.path.join(ex, ".exclave")):
@@ -807,17 +890,32 @@ def require_exclave(ex, cmd):
 
 
 def main(argv):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = ap.add_subparsers(dest="cmd")
-    sub.required = True                                       # required= is Python 3.7; the matrix runs 3.6
-    p = sub.add_parser("unpack"); p.add_argument("out"); p.add_argument("debs", nargs="+")
-    p = sub.add_parser("wrap"); p.add_argument("exclave")
-    p = sub.add_parser("unwrap"); p.add_argument("exclave")
-    p = sub.add_parser("check"); p.add_argument("exclave"); p.add_argument("logs", nargs="*")
-    p = sub.add_parser("prune"); p.add_argument("exclave"); p.add_argument("logs", nargs="+")
-    p = sub.add_parser("format"); p.add_argument("files", nargs="+"); p.add_argument("--check", action="store_true")
-    p = sub.add_parser("hash"); p.add_argument("exclave")
-    p = sub.add_parser("relink"); p.add_argument("exclave"); p.add_argument("launcher", nargs="?")
+    sub.required = True  # required= is Python 3.7; the matrix runs 3.6
+    p = sub.add_parser("unpack")
+    p.add_argument("out")
+    p.add_argument("debs", nargs="+")
+    p = sub.add_parser("wrap")
+    p.add_argument("exclave")
+    p = sub.add_parser("unwrap")
+    p.add_argument("exclave")
+    p = sub.add_parser("check")
+    p.add_argument("exclave")
+    p.add_argument("logs", nargs="*")
+    p = sub.add_parser("prune")
+    p.add_argument("exclave")
+    p.add_argument("logs", nargs="+")
+    p = sub.add_parser("format")
+    p.add_argument("files", nargs="+")
+    p.add_argument("--check", action="store_true")
+    p = sub.add_parser("hash")
+    p.add_argument("exclave")
+    p = sub.add_parser("relink")
+    p.add_argument("exclave")
+    p.add_argument("launcher", nargs="?")
     a = ap.parse_args(argv)
     if a.cmd not in ("unpack", "format"):
         require_exclave(a.exclave, a.cmd)

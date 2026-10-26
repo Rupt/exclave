@@ -7,6 +7,7 @@ there, the files are copied into the home directory beside the script, `sh SCRIP
 its exit status and last lines are the row. The whole output of each row goes to WORK/NAME.log. Exit
 status 0 when every row booted and the script exited 0.
 """
+
 import argparse
 import os
 import subprocess
@@ -19,11 +20,15 @@ import matrix  # noqa: E402
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--script", required=True)
     ap.add_argument("--only")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "vm-run-work"))
-    ap.add_argument("--images", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-images"))
+    ap.add_argument(
+        "--images", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-images")
+    )
     ap.add_argument("--memory", type=int, default=2048)
     ap.add_argument("files", nargs="*")
     a = ap.parse_args()
@@ -46,8 +51,15 @@ def main():
             f.write(matrix.user_data(family, pubkey))
         with open(os.path.join(work, name + "-meta-data"), "w") as f:
             f.write("instance-id: exclave-%s\nlocal-hostname: %s\n" % (name, name))
-        subprocess.run(["cloud-localds", os.path.join(work, name + "-seed.iso"), os.path.join(work, name + "-user-data"),
-                        os.path.join(work, name + "-meta-data")], check=True)
+        subprocess.run(
+            [
+                "cloud-localds",
+                os.path.join(work, name + "-seed.iso"),
+                os.path.join(work, name + "-user-data"),
+                os.path.join(work, name + "-meta-data"),
+            ],
+            check=True,
+        )
         matrix.log("booting", name)
         vm = matrix.VM(name, image, work, user, matrix.free_port(), a.memory, arch)
         try:

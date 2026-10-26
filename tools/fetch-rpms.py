@@ -13,6 +13,7 @@ unless --no-base. Every download is verified against the index's SHA-256; the me
 verified, so the mirror is trusted. The tool itself never fetches: `exclave unpack OUT DIR/*.rpm`
 takes what this tool, dnf, a mirror or a hand-made directory has put on disk. Not part of the tool's own exclave.
 """
+
 import argparse
 import gzip
 import hashlib
@@ -30,7 +31,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import rpm  # noqa: E402
 
 BASE = ["setup", "filesystem", "basesystem", "bash"]
-NS = {"c": "http://linux.duke.edu/metadata/common", "r": "http://linux.duke.edu/metadata/rpm", "m": "http://linux.duke.edu/metadata/repo"}
+NS = {
+    "c": "http://linux.duke.edu/metadata/common",
+    "r": "http://linux.duke.edu/metadata/rpm",
+    "m": "http://linux.duke.edu/metadata/repo",
+}
 FLAGS = {"EQ": "=", "LT": "<", "GT": ">", "LE": "<=", "GE": ">="}
 
 
@@ -53,7 +58,9 @@ def _decompress(name, data):
 
 
 def _evr(e):
-    ver = (e.get("epoch") + ":" if e.get("epoch") and e.get("epoch") != "0" else "") + (e.get("ver") or "")
+    ver = (e.get("epoch") + ":" if e.get("epoch") and e.get("epoch") != "0" else "") + (
+        e.get("ver") or ""
+    )
     if e.get("rel"):
         ver += "-" + e.get("rel")
     return ver
@@ -77,7 +84,7 @@ class Repo:
             data = r.read()
         with open(path + ".tmp%d" % os.getpid(), "wb") as f:
             f.write(data)
-        os.replace(path + ".tmp%d" % os.getpid(), path)   # two fetches may share the cache
+        os.replace(path + ".tmp%d" % os.getpid(), path)  # two fetches may share the cache
         return data
 
     def load_index(self):
@@ -97,12 +104,28 @@ class Repo:
                     continue
                 ver = _evr(pkg.find("c:version", NS))
                 fmt = pkg.find("c:format", NS)
-                st = {"name": name, "version": ver, "arch": arch, "href": pkg.find("c:location", NS).get("href"),
-                      "sha256": pkg.find("c:checksum", NS).text if pkg.find("c:checksum", NS).get("type") == "sha256" else None,
-                      "size": int(pkg.find("c:size", NS).get("package")), "_repo": url, "requires": [], "provides": []}
+                st = {
+                    "name": name,
+                    "version": ver,
+                    "arch": arch,
+                    "href": pkg.find("c:location", NS).get("href"),
+                    "sha256": pkg.find("c:checksum", NS).text
+                    if pkg.find("c:checksum", NS).get("type") == "sha256"
+                    else None,
+                    "size": int(pkg.find("c:size", NS).get("package")),
+                    "_repo": url,
+                    "requires": [],
+                    "provides": [],
+                }
                 for e in fmt.findall("r:requires/r:entry", NS):
                     if e.get("pre") == "1" or True:
-                        st["requires"].append((e.get("name"), FLAGS.get(e.get("flags")), _evr(e) if e.get("flags") else None))
+                        st["requires"].append(
+                            (
+                                e.get("name"),
+                                FLAGS.get(e.get("flags")),
+                                _evr(e) if e.get("flags") else None,
+                            )
+                        )
                 for e in fmt.findall("r:provides/r:entry", NS):
                     st["provides"].append((e.get("name"), _evr(e) if e.get("ver") else None))
                 for fe in fmt.findall("c:file", NS):
@@ -122,7 +145,11 @@ class Repo:
         st = self.index.get(name)
         if st is not None and rpm.satisfies(st["version"], op, ver):
             return st
-        cands = [(s, pv) for s, pv in self.provides.get(name, []) if op is None or (pv and rpm.satisfies(pv, op, ver))]
+        cands = [
+            (s, pv)
+            for s, pv in self.provides.get(name, [])
+            if op is None or (pv and rpm.satisfies(pv, op, ver))
+        ]
         if not cands and name.startswith("/"):
             cands = [(s, None) for s in self.files.get(name, [])]
         for s, pv in cands:
@@ -151,12 +178,16 @@ class Repo:
             for dep, op, ver in st["requires"]:
                 if dep.startswith("rpmlib(") or dep.startswith("("):
                     continue
-                if dep in selected and (op is None or rpm.satisfies(selected[dep]["version"], op, ver)):
+                if dep in selected and (
+                    op is None or rpm.satisfies(selected[dep]["version"], op, ver)
+                ):
                     continue
                 chosen = self._pick(dep, op, ver, selected, choose)
                 if chosen is None:
                     if dep.startswith("/"):
-                        notes.append("%s needs %s, which no indexed package provides" % (st["name"], dep))
+                        notes.append(
+                            "%s needs %s, which no indexed package provides" % (st["name"], dep)
+                        )
                         continue
                     raise RepoError("cannot satisfy %s of %s" % (dep, st["name"]))
                 if chosen["name"] not in selected:
@@ -167,7 +198,9 @@ class Repo:
         name = os.path.basename(st["href"])
         data = self._get(st["_repo"] + "/" + st["href"])
         if not st["sha256"]:
-            raise RepoError("%s: the index carries no SHA-256 for it; refusing an unverifiable download" % name)
+            raise RepoError(
+                "%s: the index carries no SHA-256 for it; refusing an unverifiable download" % name
+            )
         if hashlib.sha256(data).hexdigest() != st["sha256"]:
             raise RepoError("%s: SHA-256 does not match the index" % name)
         if len(data) != st["size"]:
@@ -176,11 +209,17 @@ class Repo:
 
 
 def main(argv):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("packages", nargs="+")
     ap.add_argument("--out", required=True, help="directory to fill with .rpm files")
-    ap.add_argument("--repo", action="append", required=True, help="repository root holding repodata/")
-    ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-rpms"))
+    ap.add_argument(
+        "--repo", action="append", required=True, help="repository root holding repodata/"
+    )
+    ap.add_argument(
+        "--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-rpms")
+    )
     ap.add_argument("--choose", action="append", default=[], metavar="VIRTUAL=PKG")
     ap.add_argument("--no-base", action="store_true")
     a = ap.parse_args(argv)

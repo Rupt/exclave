@@ -9,6 +9,7 @@ The work lives under build/exercise/<exclave>-<hashes file's hash>: a copy of th
 build has changed since, the unwrapped tree for bwrap, both with a socket file at /usr/share/exclave-test.sock and the
 suite's marker. Needs bwrap and user namespaces; says so and exits 1 when it cannot run. Exit status: the number of
 lines that differ."""
+
 import argparse
 import hashlib
 import os
@@ -30,15 +31,19 @@ def setup(ex0, work):
     """A wrapped copy for the launcher and an unwrapped tree for bwrap, made once per exclave."""
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
-    ex = tree.fresh_exclave(ex0, os.path.join(work, "exclave"))              # a copy relinked with the build (17)
+    ex = tree.fresh_exclave(
+        ex0, os.path.join(work, "exclave")
+    )  # a copy relinked with the build (17)
     root = os.path.join(work, "bare", "tree")
-    shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy)
+    shutil.copytree(
+        os.path.join(ex, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy
+    )
     build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
     for r in (root, os.path.join(ex, "tree")):
         tree.socket_file(os.path.join(r, "usr", "share", "exclave-test.sock"))
         with open(os.path.join(r, "usr", "share", "exclave-test-marker"), "w") as f:
             f.write("marker\n")
-    for f in oracle_ns.IDENTITY:                                          # as the namespace oracle: the host's link text, its target bound
+    for f in oracle_ns.IDENTITY:  # as the namespace oracle: the host's link text, its target bound
         p_ = os.path.join(root, f.lstrip("/"))
         if os.path.islink(f) and os.path.lexists(p_):
             os.remove(p_)
@@ -51,16 +56,31 @@ def setup(ex0, work):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--exclave", required=True)
     ap.add_argument("prog", help="a C source, compiled with the exclave's compiler")
-    ap.add_argument("args", nargs="*", help="arguments; HOSTDIR is replaced by a fresh writable host directory")
+    ap.add_argument(
+        "args", nargs="*", help="arguments; HOSTDIR is replaced by a fresh writable host directory"
+    )
     a = ap.parse_args()
-    if not shutil.which("bwrap") or subprocess.run(["bwrap", "--ro-bind", "/", "/", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
+    if (
+        not shutil.which("bwrap")
+        or subprocess.run(
+            ["bwrap", "--ro-bind", "/", "/", "true"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+    ):
         sys.exit("bwrap or user namespaces unavailable; the kernel's world cannot be made here")
     ex0 = os.path.abspath(a.exclave)
-    key = hashlib.blake2b(open(os.path.join(ex0, ".exclave", "hashes"), "rb").read(), digest_size=6).hexdigest()
-    work = os.path.join(REPO, "build", "exercise", os.path.basename(ex0).replace(".exclave", "") + "-" + key)
+    key = hashlib.blake2b(
+        open(os.path.join(ex0, ".exclave", "hashes"), "rb").read(), digest_size=6
+    ).hexdigest()
+    work = os.path.join(
+        REPO, "build", "exercise", os.path.basename(ex0).replace(".exclave", "") + "-" + key
+    )
     if not os.path.exists(os.path.join(work, "exclave", ".exclave", "hashes")):
         setup(ex0, work)
     elif tree.relink_if_stale(os.path.join(work, "exclave")):
@@ -68,11 +88,23 @@ def main():
     ex, root = os.path.join(work, "exclave"), os.path.join(work, "bare", "tree")
     r = os.path.join(ex, "tree")
     machine = os.uname().machine
-    oracle_ns.GCC = tree.compiler(r, machine) or oracle_ns.GCC             # the tree's spellings for both worlds
-    oracle_ns.SH, oracle_ns.SHX, oracle_ns.LIBC = tree.vbin(r, "sh"), tree.resolve(r, tree.vbin(r, "sh")), tree.libc(r, machine)
+    oracle_ns.GCC = (
+        tree.compiler(r, machine) or oracle_ns.GCC
+    )  # the tree's spellings for both worlds
+    oracle_ns.SH, oracle_ns.SHX, oracle_ns.LIBC = (
+        tree.vbin(r, "sh"),
+        tree.resolve(r, tree.vbin(r, "sh")),
+        tree.libc(r, machine),
+    )
     gcc = os.path.join(r, tree.vbin(r, oracle_ns.GCC).lstrip("/"))
     prog = os.path.join(work, os.path.basename(a.prog).rsplit(".", 1)[0])
-    p = subprocess.run([gcc, "-O1", "-o", prog, os.path.abspath(a.prog)], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = subprocess.run(
+        [gcc, "-O1", "-o", prog, os.path.abspath(a.prog)],
+        cwd=work,
+        env={"PATH": "/usr/bin:/bin"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
     if p.returncode:
         sys.exit("compile: " + p.stdout.decode(errors="replace"))
     hostdir = os.path.join(work, "hostdir")
@@ -80,6 +112,7 @@ def main():
     def fresh():
         shutil.rmtree(hostdir, ignore_errors=True)
         os.makedirs(hostdir)
+
     argv = [x.replace("HOSTDIR", hostdir) for x in a.args]
     fresh()
     rc_b, out_b, err_b = oracle_ns.run_bwrap(root, work, " ".join([prog] + argv))
@@ -95,8 +128,20 @@ def main():
         co, _, ro = o.partition(": ")
         same = cb == co and rb == ro
         differ += not same
-        print("%-45s | %-30s | %-30s%s" % (cb[:45], rb, ro if co == cb else o, "" if same else "   <-- differs"))
-    print("rc: bwrap=%d launcher=%d; %d differ%s%s" % (rc_b, rc_o, differ, "; bwrap stderr: %r" % err_b[:200] if err_b else "", "; launcher stderr: %r" % err_o[:200] if err_o else ""))
+        print(
+            "%-45s | %-30s | %-30s%s"
+            % (cb[:45], rb, ro if co == cb else o, "" if same else "   <-- differs")
+        )
+    print(
+        "rc: bwrap=%d launcher=%d; %d differ%s%s"
+        % (
+            rc_b,
+            rc_o,
+            differ,
+            "; bwrap stderr: %r" % err_b[:200] if err_b else "",
+            "; launcher stderr: %r" % err_o[:200] if err_o else "",
+        )
+    )
     return differ
 
 

@@ -12,6 +12,7 @@ package against the index's SHA256; the Release signature is not verified, so th
 The tool itself never fetches: `exclave unpack OUT DIR/*.deb` takes what this tool, apt, a mirror or
 a hand-made directory has put on disk. Not part of the tool's own exclave.
 """
+
 import argparse
 import hashlib
 import os
@@ -28,13 +29,28 @@ class RepoError(Exception):
     pass
 
 
-DEFAULT_MIRROR = {"ubuntu": "http://archive.ubuntu.com/ubuntu", "debian": "http://deb.debian.org/debian"}
-SNAPSHOT_BASE = {"ubuntu": "https://snapshot.ubuntu.com/ubuntu", "debian": "https://snapshot.debian.org/archive/debian"}
+DEFAULT_MIRROR = {
+    "ubuntu": "http://archive.ubuntu.com/ubuntu",
+    "debian": "http://deb.debian.org/debian",
+}
+SNAPSHOT_BASE = {
+    "ubuntu": "https://snapshot.ubuntu.com/ubuntu",
+    "debian": "https://snapshot.debian.org/archive/debian",
+}
 
 
 class Repo:
-    def __init__(self, distro, suites, arch, components, cache, mirror=None, snapshot=None, log=print):
-        self.distro, self.suites, self.arch, self.components, self.cache, self.log = distro, suites, arch, components, cache, log
+    def __init__(
+        self, distro, suites, arch, components, cache, mirror=None, snapshot=None, log=print
+    ):
+        self.distro, self.suites, self.arch, self.components, self.cache, self.log = (
+            distro,
+            suites,
+            arch,
+            components,
+            cache,
+            log,
+        )
         if snapshot:
             ts = snapshot if "T" in snapshot else snapshot.replace("-", "") + "T000000Z"
             self.mirror = SNAPSHOT_BASE[distro] + "/" + ts
@@ -42,8 +58,8 @@ class Repo:
             self.mirror = mirror or DEFAULT_MIRROR[distro]
         self.mirror = self.mirror.rstrip("/")
         self.snapshot = snapshot
-        self.index = {}       # name -> [stanza] (all versions)
-        self.provides = {}    # virtual name -> [(stanza, version or None)]
+        self.index = {}  # name -> [stanza] (all versions)
+        self.provides = {}  # virtual name -> [(stanza, version or None)]
         os.makedirs(cache, exist_ok=True)
 
     # ------------------------------------------------------------ fetching
@@ -59,7 +75,7 @@ class Repo:
             data = r.read()
         with open(path + ".tmp%d" % os.getpid(), "wb") as f:
             f.write(data)
-        os.replace(path + ".tmp%d" % os.getpid(), path)   # two fetches may share the cache
+        os.replace(path + ".tmp%d" % os.getpid(), path)  # two fetches may share the cache
         return data
 
     def _release_digests(self, suite):
@@ -90,7 +106,9 @@ class Repo:
                 data = self._get("%s/dists/%s/%s" % (self.mirror, suite, rel))
                 want, size = digests[rel]
                 if len(data) != size or hashlib.sha256(data).hexdigest() != want:
-                    raise RepoError("%s/%s: Packages index does not match the Release digest" % (suite, rel))
+                    raise RepoError(
+                        "%s/%s: Packages index does not match the Release digest" % (suite, rel)
+                    )
                 text = deb.decompress(rel, data).decode("utf-8", "replace")
                 n = 0
                 for st in deb.parse_stanzas(text):
@@ -100,7 +118,9 @@ class Repo:
                     self.index.setdefault(st["Package"], []).append(st)
                     for alts in deb.parse_deps(st.get("Provides", "")):
                         for name, op, ver in alts:
-                            self.provides.setdefault(name, []).append((st, ver if op == "=" else None))
+                            self.provides.setdefault(name, []).append(
+                                (st, ver if op == "=" else None)
+                            )
                     n += 1
                 self.log("index %s/%s: %d packages" % (suite, comp, n))
         for name in self.index:
@@ -148,17 +168,26 @@ class Repo:
                             if cand in choose:
                                 pick = (choose[cand], None, None)
                                 break
-                            if self._pick(cand, op, ver, selected, choose, st["Package"]) is not None:
+                            if (
+                                self._pick(cand, op, ver, selected, choose, st["Package"])
+                                is not None
+                            ):
                                 pick = (cand, op, ver)
                                 break
                     if pick is None:
-                        raise RepoError("cannot satisfy %s of %s: %s" % (field, st["Package"], " | ".join(a[0] for a in alts)))
+                        raise RepoError(
+                            "cannot satisfy %s of %s: %s"
+                            % (field, st["Package"], " | ".join(a[0] for a in alts))
+                        )
                     cand, op, ver = pick
                     if cand not in selected:
                         chosen = self._pick(cand, op, ver, selected, choose, st["Package"])
                         queue.append((chosen["Package"], st["Package"]))
                     elif op and not deb.satisfies(selected[cand]["Version"], op, ver):
-                        raise RepoError("%s needs %s %s %s but %s is selected" % (st["Package"], cand, op, ver, selected[cand]["Version"]))
+                        raise RepoError(
+                            "%s needs %s %s %s but %s is selected"
+                            % (st["Package"], cand, op, ver, selected[cand]["Version"])
+                        )
         return selected, notes
 
     def _pick(self, name, op, ver, selected, choose, why):
@@ -169,12 +198,20 @@ class Repo:
             return st
         if name in self.index and op:
             avail = ", ".join(s["Version"] for s in self.index[name])
-            raise RepoError("%s needs %s %s %s; the index has %s (versions are pinned to the index)" % (why, name, op, ver, avail))
+            raise RepoError(
+                "%s needs %s %s %s; the index has %s (versions are pinned to the index)"
+                % (why, name, op, ver, avail)
+            )
         providers = self.provides.get(name, [])
-        for st, pver in providers:                     # a provider already selected wins
-            if st["Package"] in selected and (op is None or (pver and deb.satisfies(pver, op, ver))):
+        for st, pver in providers:  # a provider already selected wins
+            if st["Package"] in selected and (
+                op is None or (pver and deb.satisfies(pver, op, ver))
+            ):
                 return st
-        for st, pver in sorted(providers, key=lambda p: (_PRIORITY.get(p[0].get("Priority", "optional"), 9), p[0]["Package"])):
+        for st, pver in sorted(
+            providers,
+            key=lambda p: (_PRIORITY.get(p[0].get("Priority", "optional"), 9), p[0]["Package"]),
+        ):
             if op is None or (pver and deb.satisfies(pver, op, ver)):
                 return st
         return None
@@ -184,7 +221,10 @@ class Repo:
         """Fetch one package, verify it against the index, return its path in the cache."""
         url = "%s/%s" % (self.mirror, st["Filename"])
         if "SHA256" not in st:
-            raise RepoError("%s: the index carries no SHA256 for it; refusing an unverifiable download" % st["Filename"])
+            raise RepoError(
+                "%s: the index carries no SHA256 for it; refusing an unverifiable download"
+                % st["Filename"]
+            )
         data = self._get(url)
         if hashlib.sha256(data).hexdigest() != st["SHA256"]:
             raise RepoError("%s: SHA256 does not match the index" % st["Filename"])
@@ -211,7 +251,9 @@ class _VersionKey:
 
 
 def main(argv):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("packages", nargs="+")
     ap.add_argument("--out", required=True, help="directory to fill with .deb files")
     ap.add_argument("--distro", default="ubuntu", choices=["ubuntu", "debian"])
@@ -220,14 +262,21 @@ def main(argv):
     ap.add_argument("--components", default="main,universe")
     ap.add_argument("--mirror")
     ap.add_argument("--snapshot")
-    ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-debs"))
+    ap.add_argument(
+        "--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-debs")
+    )
     ap.add_argument("--no-essential", action="store_true")
     ap.add_argument("--choose", action="append", default=[], metavar="VIRTUAL=PKG")
     a = ap.parse_args(argv)
-    suites = [s for x in a.suite for s in x.split(",")] or {"ubuntu": ["noble", "noble-updates", "noble-security"], "debian": ["bookworm"]}[a.distro]
+    suites = [s for x in a.suite for s in x.split(",")] or {
+        "ubuntu": ["noble", "noble-updates", "noble-security"],
+        "debian": ["bookworm"],
+    }[a.distro]
     r = Repo(a.distro, suites, a.arch, a.components.split(","), a.cache, a.mirror, a.snapshot)
     r.load_index()
-    selected, notes = r.resolve(a.packages, essential=not a.no_essential, choose=dict(x.split("=", 1) for x in a.choose))
+    selected, notes = r.resolve(
+        a.packages, essential=not a.no_essential, choose=dict(x.split("=", 1) for x in a.choose)
+    )
     os.makedirs(a.out, exist_ok=True)
     for name in sorted(selected):
         src = r.download(selected[name])

@@ -11,6 +11,7 @@ records); the index signature is not verified, so the mirror is trusted. The too
 fetches: `exclave unpack OUT DIR/*.apk` takes what this tool, apk, a mirror or a hand-made directory has
 put on disk. Not part of the tool's own exclave.
 """
+
 import argparse
 import base64
 import hashlib
@@ -39,7 +40,13 @@ def log(*a):
 
 class Repo:
     def __init__(self, mirror, branch, repos, arch, cache):
-        self.mirror, self.branch, self.repos, self.arch, self.cache = mirror.rstrip("/"), branch, repos, arch, cache
+        self.mirror, self.branch, self.repos, self.arch, self.cache = (
+            mirror.rstrip("/"),
+            branch,
+            repos,
+            arch,
+            cache,
+        )
         self.index, self.provides = {}, {}
         os.makedirs(cache, exist_ok=True)
 
@@ -55,12 +62,14 @@ class Repo:
             data = r.read()
         with open(path + ".tmp%d" % os.getpid(), "wb") as f:
             f.write(data)
-        os.replace(path + ".tmp%d" % os.getpid(), path)   # two fetches may share the cache
+        os.replace(path + ".tmp%d" % os.getpid(), path)  # two fetches may share the cache
         return data
 
     def load_index(self):
         for repo in self.repos:
-            data = self._get("%s/%s/%s/%s/APKINDEX.tar.gz" % (self.mirror, self.branch, repo, self.arch))
+            data = self._get(
+                "%s/%s/%s/%s/APKINDEX.tar.gz" % (self.mirror, self.branch, repo, self.arch)
+            )
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as t:
                 text = t.extractfile("APKINDEX").read().decode("utf-8", "replace")
             n = 0
@@ -73,7 +82,7 @@ class Repo:
                     continue
                 st["_repo"] = repo
                 if st["P"] in self.index:
-                    continue                                   # the first repository listed wins
+                    continue  # the first repository listed wins
                 self.index[st["P"]] = st
                 for alts in apk.parse_deps(st.get("p", "")):
                     for name, op, ver in alts:
@@ -87,7 +96,11 @@ class Repo:
             return st
         if st is not None and op:
             raise RepoError("%s %s %s wanted; the index has %s" % (name, op, ver, st["V"]))
-        providers = [(s, pv) for s, pv in self.provides.get(name, []) if op is None or (pv and apk.satisfies(pv, op, ver))]
+        providers = [
+            (s, pv)
+            for s, pv in self.provides.get(name, [])
+            if op is None or (pv and apk.satisfies(pv, op, ver))
+        ]
         for s, pv in providers:
             if s["P"] in selected:
                 return s
@@ -109,7 +122,9 @@ class Repo:
             selected[st["P"]] = st
             for alts in apk.parse_deps(st.get("D", "")):
                 dep, op, ver = alts[0]
-                if dep in selected or dep.startswith("/"):        # a file dependency: satisfied by whatever ships it
+                if dep in selected or dep.startswith(
+                    "/"
+                ):  # a file dependency: satisfied by whatever ships it
                     continue
                 chosen = self._pick(dep, op, ver, selected)
                 if chosen is None:
@@ -122,10 +137,14 @@ class Repo:
         """Fetch one package and verify it the way apk does: the index's checksum is the SHA-1 of the control
         section, the gzip member holding .PKGINFO, and .PKGINFO's datahash is the SHA-256 of the compressed data member."""
         name = "%s-%s.apk" % (st["P"], st["V"])
-        data = self._get("%s/%s/%s/%s/%s" % (self.mirror, self.branch, st["_repo"], self.arch, name))
+        data = self._get(
+            "%s/%s/%s/%s/%s" % (self.mirror, self.branch, st["_repo"], self.arch, name)
+        )
         want = st.get("C", "")
         if not want.startswith("Q1"):
-            raise RepoError("%s: the index carries no checksum for it; refusing an unverifiable download" % name)
+            raise RepoError(
+                "%s: the index carries no checksum for it; refusing an unverifiable download" % name
+            )
         if "S" in st and len(data) != int(st["S"]):
             raise RepoError("%s: size does not match the index" % name)
         members = _gzip_members(data)
@@ -136,14 +155,19 @@ class Repo:
         if base64.b64encode(hashlib.sha1(raw).digest()).decode() != want[2:]:
             raise RepoError("%s: checksum does not match the index" % name)
         m = re.search(rb"^datahash = ([0-9a-f]{64})$", plain, re.M)
-        if not m or hashlib.sha256(members[-1][0]).hexdigest() != m.group(1).decode():   # over the compressed data member, as abuild computes it
-            raise RepoError("%s: the data section does not match the datahash of its .PKGINFO" % name)
+        if (
+            not m or hashlib.sha256(members[-1][0]).hexdigest() != m.group(1).decode()
+        ):  # over the compressed data member, as abuild computes it
+            raise RepoError(
+                "%s: the data section does not match the datahash of its .PKGINFO" % name
+            )
         return name, data
 
 
 def _gzip_members(data):
     """[(compressed bytes, decompressed bytes)] for each gzip member of a concatenated stream."""
     import zlib
+
     out, pos = [], 0
     while pos < len(data):
         d = zlib.decompressobj(31)
@@ -155,14 +179,18 @@ def _gzip_members(data):
 
 
 def main(argv):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("packages", nargs="+")
     ap.add_argument("--out", required=True, help="directory to fill with .apk files")
     ap.add_argument("--branch", default="v3.21")
     ap.add_argument("--repos", default="main,community")
     ap.add_argument("--arch", default="x86_64")
     ap.add_argument("--mirror", default=DEFAULT_MIRROR)
-    ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-apks"))
+    ap.add_argument(
+        "--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-apks")
+    )
     ap.add_argument("--no-base", action="store_true")
     a = ap.parse_args(argv)
     repo = Repo(a.mirror, a.branch, a.repos.split(","), a.arch, a.cache)

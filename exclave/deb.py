@@ -3,6 +3,7 @@
 `ar` and `tar` are read in Python; xz, gzip and bzip2 through the standard
 library; zstd through the `zstd` tool, which the tool's own exclave ships.
 """
+
 import bz2
 import gzip
 import io
@@ -109,7 +110,9 @@ def parse_stanzas(text):
     return out
 
 
-_DEP = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9+.\-]*)(?::([A-Za-z0-9\-]+))?\s*(?:\(\s*(<<|<=|=|>=|>>|<|>)\s*([^)]+?)\s*\))?\s*(?:\[[^\]]*\])?\s*(?:<[^>]*>\s*)*$")
+_DEP = re.compile(
+    r"^\s*([A-Za-z0-9][A-Za-z0-9+.\-]*)(?::([A-Za-z0-9\-]+))?\s*(?:\(\s*(<<|<=|=|>=|>>|<|>)\s*([^)]+?)\s*\))?\s*(?:\[[^\]]*\])?\s*(?:<[^>]*>\s*)*$"
+)
 
 
 def parse_deps(field):
@@ -172,7 +175,7 @@ def _verrevcmp(a, b):
 
 
 def _split(v):
-    epoch, rest = (v.split(":", 1) if ":" in v else ("0", v))
+    epoch, rest = v.split(":", 1) if ":" in v else ("0", v)
     up, _, rev = rest.rpartition("-") if "-" in rest else (rest, "", "")
     return int(epoch), up, rev
 

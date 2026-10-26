@@ -1,6 +1,7 @@
 """build.py — extraction, synthesis, placeholders, the dependency report, pruning and the hashes file
 (DESIGN.md 10.1, 10.4, 6.4).
 """
+
 import glob
 import hashlib
 import os
@@ -17,7 +18,21 @@ import rpm
 TOOL_VERSION = "0.1.0"
 MERGED_USR = ["bin", "sbin", "lib", "lib32", "lib64", "libx32"]
 # 8.1 / 6.1: volatile directories stripped, conventional host names shipped empty
-PLACEHOLDERS = ["proc", "dev", "sys", "tmp", "run", "var/tmp", "home", "root", "boot", "mnt", "media", "opt", "srv"]
+PLACEHOLDERS = [
+    "proc",
+    "dev",
+    "sys",
+    "tmp",
+    "run",
+    "var/tmp",
+    "home",
+    "root",
+    "boot",
+    "mnt",
+    "media",
+    "opt",
+    "srv",
+]
 VOLATILE = ["proc", "dev", "sys", "tmp", "run", "var/tmp"]
 
 
@@ -42,7 +57,9 @@ def _inside(root_real, dst):
     """The parent of dst, once the kernel has resolved every symlink, must be the tree."""
     parent = os.path.realpath(os.path.dirname(dst))
     if parent != root_real and not parent.startswith(root_real + os.sep):
-        raise BuildError("%s escapes the tree through a symlink (resolves under %s)" % (dst, parent))
+        raise BuildError(
+            "%s escapes the tree through a symlink (resolves under %s)" % (dst, parent)
+        )
 
 
 def reader(path):
@@ -73,15 +90,23 @@ def extract(root, debs, log=print):
                     parts = rel.split("/")
                     parents.update("/".join(parts[:i]) for i in range(1, len(parts)))
     merged = {"usr/" + d for d in MERGED_USR}
-    if all(getattr(reader(p), "MERGED_USR", True) for _, p, _ in debs):   # Debian's and Fedora's merged /usr; Alpine's directories are its own
+    if all(
+        getattr(reader(p), "MERGED_USR", True) for _, p, _ in debs
+    ):  # Debian's and Fedora's merged /usr; Alpine's directories are its own
         for d in MERGED_USR:
-            if "usr/" + d not in links:                       # unless a package ships usr/<d> itself as a link (Fedora 42's usr/sbin -> bin)
+            if (
+                "usr/" + d not in links
+            ):  # unless a package ships usr/<d> itself as a link (Fedora 42's usr/sbin -> bin)
                 os.makedirs(os.path.join(root, "usr", d), exist_ok=True)
             p = os.path.join(root, d)
             if not os.path.lexists(p):
                 os.symlink("usr/" + d, p)
     for rel in sorted(links):
-        if (rel in parents or rel in merged) and not links[rel].startswith("/") and ".." not in links[rel].split("/"):
+        if (
+            (rel in parents or rel in merged)
+            and not links[rel].startswith("/")
+            and ".." not in links[rel].split("/")
+        ):
             dst = os.path.join(root, rel)
             if not os.path.lexists(dst):
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -97,36 +122,50 @@ def extract(root, debs, log=print):
             for line in scripts.get(sname, "").replace("\\\n", " ").split("\n"):
                 if line.strip().startswith("#") or "dpkg-divert" not in line:
                     continue
-                if re.search(r"--(remove|list|listpackage|truename)\b", line) or "--no-rename" in line or ".usr-is-merged" in line:
+                if (
+                    re.search(r"--(remove|list|listpackage|truename)\b", line)
+                    or "--no-rename" in line
+                    or ".usr-is-merged" in line
+                ):
                     continue
-                raise BuildError("%s adds a renaming diversion in its %s (%s); diversions are refused (10.1)" % (name, sname, line.strip()[:100]))
-        replaces[name] = set(a[0] for alts in rd.parse_deps(fields.get("Replaces", "")) for a in alts)
+                raise BuildError(
+                    "%s adds a renaming diversion in its %s (%s); diversions are refused (10.1)"
+                    % (name, sname, line.strip()[:100])
+                )
+        replaces[name] = set(
+            a[0] for alts in rd.parse_deps(fields.get("Replaces", "")) for a in alts
+        )
         with rd.open_tar(path, "data.tar") as t:
             for m in t.getmembers():
                 rel = _safe_rel(m.name)
                 if not rel:
                     continue
                 dst = os.path.join(root, rel)
-                key = _ALIAS.sub(r"usr/\1\2", rel)                    # /lib/x and /usr/lib/x are one file
+                key = _ALIAS.sub(r"usr/\1\2", rel)  # /lib/x and /usr/lib/x are one file
                 _inside(root_real, dst)
                 if m.isdir():
                     if os.path.islink(dst) and os.path.isdir(dst):
                         continue
                     os.makedirs(dst, exist_ok=True)
-                    os.chmod(dst, (m.mode & 0o777) | 0o700)                # the tar's mode; a tree must stay traversable by its owner
+                    os.chmod(
+                        dst, (m.mode & 0o777) | 0o700
+                    )  # the tar's mode; a tree must stay traversable by its owner
                     continue
                 if os.path.lexists(dst) and (os.path.islink(dst) or not os.path.isdir(dst)):
                     prev = owner.get(key)
                     if m.issym() and os.path.islink(dst) and os.readlink(dst) == m.linkname:
-                        continue                                            # identical symlink from two packages, or a merged-usr link: normal
+                        continue  # identical symlink from two packages, or a merged-usr link: normal
                     if os.path.islink(dst) and os.path.isdir(dst) and not m.issym():
                         raise BuildError("%s ships /%s over a directory symlink" % (name, rel))
                     if prev and (prev in replaces[name]):
-                        os.remove(dst)                                      # this package replaces the previous owner's file
+                        os.remove(dst)  # this package replaces the previous owner's file
                     elif prev and (name in replaces.get(prev, ())):
-                        continue                                            # the previous owner replaces ours: keep theirs
+                        continue  # the previous owner replaces ours: keep theirs
                     elif prev:
-                        raise BuildError("%s and %s both ship /%s and neither declares Replaces" % (prev, name, rel))
+                        raise BuildError(
+                            "%s and %s both ship /%s and neither declares Replaces"
+                            % (prev, name, rel)
+                        )
                     else:
                         os.remove(dst)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -138,8 +177,10 @@ def extract(root, debs, log=print):
                     fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                     with os.fdopen(fd, "wb") as f:
                         shutil.copyfileobj(t.extractfile(m), f)
-                    os.chmod(dst, (m.mode & 0o777) | 0o400)                 # setuid and setgid are meaningless under no_new_privs; a tree stays
-                                                                            # readable by its owner (Fedora ships /etc/gshadow as 0000)
+                    os.chmod(
+                        dst, (m.mode & 0o777) | 0o400
+                    )  # setuid and setgid are meaningless under no_new_privs; a tree stays
+                    # readable by its owner (Fedora ships /etc/gshadow as 0000)
                     os.utime(dst, (m.mtime, m.mtime))
                 else:
                     log("skipping special file /%s from %s" % (rel, name))
@@ -149,12 +190,16 @@ def extract(root, debs, log=print):
         _inside(root_real, dst)
         if os.path.lexists(dst):
             os.remove(dst)
-        os.link(src, dst, follow_symlinks=False)                # the member the archive names, never what a shipped symlink there points at
+        os.link(
+            src, dst, follow_symlinks=False
+        )  # the member the archive names, never what a shipped symlink there points at
     return owner
 
 
 # ---------------------------------------------------------------- synthesis (step 3)
-_UA = re.compile(r"(?:update-)?alternatives\s+(?:--(?:quiet|verbose|force)\s+)*--install\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)((?:\s+--slave\s+\S+\s+\S+\s+\S+)*)")   # Debian's and rpm's spellings
+_UA = re.compile(
+    r"(?:update-)?alternatives\s+(?:--(?:quiet|verbose|force)\s+)*--install\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)((?:\s+--slave\s+\S+\s+\S+\s+\S+)*)"
+)  # Debian's and rpm's spellings
 _SLAVE = re.compile(r"--slave\s+(\S+)\s+(\S+)\s+(\S+)")
 
 
@@ -184,7 +229,9 @@ def synthesise(root, debs, log=print):
     groups = {}
     for name, path, st in debs:
         fields, scripts = reader(path).control(path)
-        for m in _UA.finditer(scripts.get("postinst", "").replace("\\\n", " ")):     # join continuation lines
+        for m in _UA.finditer(
+            scripts.get("postinst", "").replace("\\\n", " ")
+        ):  # join continuation lines
             link, gname, target, prio = m.group(1), m.group(2), m.group(3), int(m.group(4))
             if not os.path.lexists(_v(root, target)):
                 continue
@@ -210,7 +257,10 @@ def synthesise(root, debs, log=print):
                 rel = line.strip().lstrip("/")
                 if rel and not os.path.lexists(_v(root, "/" + rel)):
                     os.makedirs(os.path.dirname(_v(root, "/" + rel)), exist_ok=True)
-                    os.symlink(os.path.relpath("/bin/busybox", os.path.dirname("/" + rel)), _v(root, "/" + rel))
+                    os.symlink(
+                        os.path.relpath("/bin/busybox", os.path.dirname("/" + rel)),
+                        _v(root, "/" + rel),
+                    )
                     n += 1
         log("synthesised %d busybox applet links from /etc/busybox-paths.d" % n)
     # Fedora 42's filesystem: its %posttrans merges sbin into bin, replacing /usr/sbin and /usr/local/sbin by a link
@@ -226,7 +276,11 @@ def synthesise(root, debs, log=print):
             if not os.path.isdir(d) or os.path.islink(d):
                 continue
             entries = os.listdir(d)
-            if all(os.path.islink(os.path.join(d, e)) and os.readlink(os.path.join(d, e)) == "../bin/" + e for e in entries):
+            if all(
+                os.path.islink(os.path.join(d, e))
+                and os.readlink(os.path.join(d, e)) == "../bin/" + e
+                for e in entries
+            ):
                 for e in entries:
                     os.remove(os.path.join(d, e))
                 os.rmdir(d)
@@ -253,7 +307,10 @@ def synthesise(root, debs, log=print):
     # which update-ca-trust extracts in %post from the p11-kit trust source; the CA anchors trusted there are
     # concatenated the same way. The bundle is an identity file (8.4): the host's where it has one.
     extracted = _v(root, "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem")
-    sources = sorted(glob.glob(_v(root, "/usr/share/pki/ca-trust-source/*.p11-kit")) + glob.glob(_v(root, "/etc/pki/ca-trust/source/anchors/*")))
+    sources = sorted(
+        glob.glob(_v(root, "/usr/share/pki/ca-trust-source/*.p11-kit"))
+        + glob.glob(_v(root, "/etc/pki/ca-trust/source/anchors/*"))
+    )
     if sources and not os.path.lexists(extracted):
         certs = []
         for src in sources:
@@ -262,17 +319,24 @@ def synthesise(root, debs, log=print):
                 if "-----BEGIN CERTIFICATE-----" in text:
                     certs.append(text.strip() + "\n")
                 continue
-            for obj in text.split("[p11-kit-object-v1]")[1:]:          # a certificate object: trust attributes, then its PEM
+            for obj in text.split("[p11-kit-object-v1]")[
+                1:
+            ]:  # a certificate object: trust attributes, then its PEM
                 head = obj.split("-----BEGIN", 1)[0]
                 if "trusted: true" not in head or "x-distrusted: true" in head:
                     continue
                 m = re.search(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", obj, re.S)
-                if m and m.group(0) + "\n" not in certs:            # one object per purpose in the source: one PEM in the bundle
+                if (
+                    m and m.group(0) + "\n" not in certs
+                ):  # one object per purpose in the source: one PEM in the bundle
                     certs.append(m.group(0) + "\n")
         os.makedirs(os.path.dirname(extracted), exist_ok=True)
         with open(extracted, "w", encoding="utf-8") as f:
             f.writelines(certs)
-        log("synthesised /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem from %d trusted certificates" % len(certs))
+        log(
+            "synthesised /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem from %d trusted certificates"
+            % len(certs)
+        )
     # libssl: OpenSSL's compiled-in trust paths are /usr/lib/ssl/cert.pem and /usr/lib/ssl/certs, symlinks the
     # openssl and ca-certificates packages ship and a library's closure lacks; without them the host's bundle
     # at the identity path (8.4) is never consulted
@@ -288,15 +352,26 @@ def synthesise(root, debs, log=print):
             log("synthesised /etc/%s from base-passwd" % name_)
     # ldconfig: the exclave's own, static, before wrapping so the cache never indexes the launcher
     ld = None
-    for cand in ("/usr/sbin/ldconfig.real", "/sbin/ldconfig.real", "/usr/sbin/ldconfig", "/sbin/ldconfig", "/usr/bin/ldconfig"):   # Fedora 42 merged sbin into bin
+    for cand in (
+        "/usr/sbin/ldconfig.real",
+        "/sbin/ldconfig.real",
+        "/usr/sbin/ldconfig",
+        "/sbin/ldconfig",
+        "/usr/bin/ldconfig",
+    ):  # Fedora 42 merged sbin into bin
         p = _v(root, cand)
         if os.path.isfile(p) and open(p, "rb").read(4) == b"\x7fELF":
             ld = p
             break
     if ld:
         conf, tmp = _v(root, "/etc/ld.so.conf"), None
-        if os.path.isfile(conf):                              # ldconfig -r refuses a relative include, which Red Hat's ld.so.conf has:
-            lines, changed = [], False                        # a copy with the pattern spelt from /etc is written in the tree for the run
+        if os.path.isfile(
+            conf
+        ):  # ldconfig -r refuses a relative include, which Red Hat's ld.so.conf has:
+            lines, changed = (
+                [],
+                False,
+            )  # a copy with the pattern spelt from /etc is written in the tree for the run
             for line in open(conf, encoding="utf-8", errors="replace"):
                 m = re.match(r"^(\s*include\s+)([^/\s][^\s]*)(.*)$", line)
                 if m:
@@ -307,10 +382,17 @@ def synthesise(root, debs, log=print):
                 with open(tmp, "w", encoding="utf-8") as f:
                     f.writelines(lines)
         try:
-            r = subprocess.run([ld, "-r", root, "-f", "/etc/ld.so.conf.exclave" if tmp else "/etc/ld.so.conf"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except OSError as e:                                  # the tree's ldconfig is of another architecture: no cache here (10.1)
+            r = subprocess.run(
+                [ld, "-r", root, "-f", "/etc/ld.so.conf.exclave" if tmp else "/etc/ld.so.conf"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except OSError as e:  # the tree's ldconfig is of another architecture: no cache here (10.1)
             r = None
-            log("the tree's ldconfig cannot run on this machine (%s): no ld.so.cache; wrap the exclave on a machine of its architecture" % e.strerror)
+            log(
+                "the tree's ldconfig cannot run on this machine (%s): no ld.so.cache; wrap the exclave on a machine of its architecture"
+                % e.strerror
+            )
         if tmp:
             os.remove(tmp)
         if r is None:
@@ -319,7 +401,9 @@ def synthesise(root, debs, log=print):
             log("ldconfig failed: " + r.stderr.decode(errors="replace").strip())
         else:
             log("synthesised /etc/ld.so.cache with the exclave's ldconfig")
-        aux = _v(root, "/var/cache/ldconfig")                 # records inodes and mtimes: never reproducible, never needed
+        aux = _v(
+            root, "/var/cache/ldconfig"
+        )  # records inodes and mtimes: never reproducible, never needed
         if os.path.isdir(aux):
             shutil.rmtree(aux)
     elif "libc-bin" in names:
@@ -327,8 +411,16 @@ def synthesise(root, debs, log=print):
 
 
 # ---------------------------------------------------------------- placeholders (step 4)
-IDENTITY_FILES = ["/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf", "/etc/resolv.conf", "/etc/hosts",
-                  "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]
+IDENTITY_FILES = [
+    "/etc/passwd",
+    "/etc/group",
+    "/etc/nsswitch.conf",
+    "/etc/host.conf",
+    "/etc/resolv.conf",
+    "/etc/hosts",
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+]
 
 
 def placeholders(root, strip=True, log=print):
@@ -344,10 +436,13 @@ def placeholders(root, strip=True, log=print):
         if not os.path.lexists(p):
             os.makedirs(p)
     import elfcheck
+
     tree = elfcheck.Tree(root)
-    for f in IDENTITY_FILES:                                  # 8.4: shipped empty, the host's answer at run time
+    for f in IDENTITY_FILES:  # 8.4: shipped empty, the host's answer at run time
         d, b = os.path.split(f)
-        rd = tree.resolve(d)                                  # the directory as the tree resolves it: Fedora's /etc/ssl/certs is a link into /etc/pki
+        rd = tree.resolve(
+            d
+        )  # the directory as the tree resolves it: Fedora's /etc/ssl/certs is a link into /etc/pki
         if rd is None and os.path.islink(_v(root, d)):
             log("identity file %s not placed: its directory is a dangling link in the tree" % f)
             continue
@@ -372,20 +467,28 @@ def tree_hash(root):
         dirnames[:] = sorted(d for d in dirnames if d != ".real")
         strays = []
         if os.path.isdir(os.path.join(dirpath, ".real")):
-            strays = [os.path.join(".real", n) for n in sorted(os.listdir(os.path.join(dirpath, ".real"))) if not os.path.lexists(os.path.join(dirpath, n))]
+            strays = [
+                os.path.join(".real", n)
+                for n in sorted(os.listdir(os.path.join(dirpath, ".real")))
+                if not os.path.lexists(os.path.join(dirpath, n))
+            ]
         for name in dirnames + filenames + strays:
             real = os.path.join(dirpath, name)
             rel = os.path.relpath(real, root).encode("utf-8", "surrogateescape")
             st = os.lstat(real)
             if stat.S_ISLNK(st.st_mode):
-                entries.append(rel + b"\0l\0" + os.readlink(real).encode("utf-8", "surrogateescape") + b"\0")
+                entries.append(
+                    rel + b"\0l\0" + os.readlink(real).encode("utf-8", "surrogateescape") + b"\0"
+                )
             elif stat.S_ISDIR(st.st_mode):
                 entries.append(rel + b"\0d\0\0")
             elif stat.S_ISREG(st.st_mode):
                 kind = b"x" if st.st_mode & 0o111 else b"f"
                 h = hashlib.blake2b(digest_size=32)
                 if not os.access(_payload(real), os.R_OK):
-                    raise BuildError("cannot read %s: the tree hash needs every file readable" % _payload(real))
+                    raise BuildError(
+                        "cannot read %s: the tree hash needs every file readable" % _payload(real)
+                    )
                 with open(_payload(real), "rb") as f:
                     for chunk in iter(lambda: f.read(1 << 20), b""):
                         h.update(chunk)
@@ -400,19 +503,38 @@ def write_lock(ex, pkgs, manifest_hash=None, tree=False, keep_hashes=False):
     keep_hashes keeps the manifest hash and recomputes the launcher and tree hashes (after prune or relink); otherwise they are dropped
     (after unwrap: an unwrapped exclave has no output yet)."""
     import exclave
+
     R = exclave.Record
     lock = os.path.join(ex, ".exclave", "hashes")
     old = exclave.load(lock, "hashes") if os.path.exists(lock) else []
     if pkgs is None:
-        pkgs = [tuple(f.decode("utf-8", "surrogateescape") for f in v) for v in exclave.values(old, "pkg")]
+        pkgs = [
+            tuple(f.decode("utf-8", "surrogateescape") for f in v)
+            for v in exclave.values(old, "pkg")
+        ]
     if keep_hashes:
         m = exclave.values(old, "manifest")
         manifest_hash, tree = (m[0][0].decode() if m else None), bool(exclave.values(old, "tree"))
     recs = [R("hashes", [("t", b"1")]), R("tool", [("s", TOOL_VERSION.encode())])]
     if manifest_hash or tree:
-        recs.append(R("launcher", [("s", exclave.b2_file(os.path.join(ex, ".exclave", "launcher")).encode())]))
+        recs.append(
+            R(
+                "launcher",
+                [("s", exclave.b2_file(os.path.join(ex, ".exclave", "launcher")).encode())],
+            )
+        )
     for name, ver, arch, h in sorted(pkgs):
-        recs.append(R("pkg", [("s", name.encode()), ("s", ver.encode()), ("s", arch.encode()), ("s", h.encode())]))
+        recs.append(
+            R(
+                "pkg",
+                [
+                    ("s", name.encode()),
+                    ("s", ver.encode()),
+                    ("s", arch.encode()),
+                    ("s", h.encode()),
+                ],
+            )
+        )
     if manifest_hash:
         recs.append(R("manifest", [("s", manifest_hash.encode())]))
     if tree:
@@ -430,6 +552,7 @@ def dependency_report(pkgs, root=None):
     satisfied when the tree under root, extracted and synthesised, resolves it. A report, not a refusal: the set
     is the user's."""
     import elfcheck
+
     tree = elfcheck.Tree(root) if root else None
     rd = {"apk": apk, "rpm": rpm}.get(pkgs[0][1].get("_format") if pkgs else None, deb)
     have = {n: f.get("Version", "") for n, f in pkgs}
@@ -442,14 +565,21 @@ def dependency_report(pkgs, root=None):
     for n, f in sorted(pkgs):
         for field in ("Pre-Depends", "Depends"):
             for alts in rd.parse_deps(f.get(field, "")):
-                ok = any(name.startswith("/") and (tree is None or tree.resolve(name) is not None) for name, _, _ in alts)
+                ok = any(
+                    name.startswith("/") and (tree is None or tree.resolve(name) is not None)
+                    for name, _, _ in alts
+                )
                 for name, op, ver in alts:
                     if name in have and rd.satisfies(have[name], op, ver):
                         ok = True
-                    elif name in provides and any(op is None or (pv and rd.satisfies(pv, op, ver)) for pv in provides[name]):
+                    elif name in provides and any(
+                        op is None or (pv and rd.satisfies(pv, op, ver)) for pv in provides[name]
+                    ):
                         ok = True
                 if not ok:
-                    want = " | ".join(a[0] + (" (%s %s)" % (a[1], a[2]) if a[1] else "") for a in alts)
+                    want = " | ".join(
+                        a[0] + (" (%s %s)" % (a[1], a[2]) if a[1] else "") for a in alts
+                    )
                     out.append("%s needs %s, not in the set" % (n, want))
     return out
 
@@ -467,7 +597,11 @@ def log_lines(logs):
                 r = int(parts[1])
             except ValueError:
                 continue
-            yield parts[0], r, re.sub(r"\\([n\\])", lambda m: "\n" if m.group(1) == "n" else "\\", parts[2])
+            yield (
+                parts[0],
+                r,
+                re.sub(r"\\([n\\])", lambda m: "\n" if m.group(1) == "n" else "\\", parts[2]),
+            )
 
 
 # ---------------------------------------------------------------- pruning (10.4)
@@ -505,9 +639,12 @@ def licence_files(root):
     Alpine's -doc packages put theirs."""
     found = []
     for dirpath, dirnames, _ in os.walk(root):
-        if os.path.basename(dirpath) != "share" or os.path.basename(os.path.dirname(dirpath)) != "usr":
+        if (
+            os.path.basename(dirpath) != "share"
+            or os.path.basename(os.path.dirname(dirpath)) != "usr"
+        ):
             continue
-        dirnames[:] = []                                          # below a usr/share/, only its licence texts
+        dirnames[:] = []  # below a usr/share/, only its licence texts
         found += sorted(glob.glob(os.path.join(dirpath, "doc", "*", "copyright")))
         for top in ("common-licenses", "licenses"):
             for d, _, filenames in os.walk(os.path.join(dirpath, top)):
@@ -521,6 +658,7 @@ def prune(ex, logs, own, log=print):
     Directories are never removed, so ownership and `ls` do not change. Returns (kept, removed, bytes)."""
     import exclave
     import elfcheck
+
     root = os.path.join(ex, "tree")
     keep, whole, programs = set(), set(), 0
     for what, r, v in log_lines(logs):
@@ -533,24 +671,26 @@ def prune(ex, logs, own, log=print):
             continue
         real = os.path.join(root, final.lstrip("/"))
         if os.path.isdir(real):
-            if what == "open":                                # a directory a program opened may be listed: keep it whole
+            if what == "open":  # a directory a program opened may be listed: keep it whole
                 whole.add(final)
         else:
             keep.add(final)
             if what in ("exec", "load"):
                 programs += 1
-    if not programs:                                          # an empty, foreign or failed log would empty the exclave
+    if not programs:  # an empty, foreign or failed log would empty the exclave
         raise BuildError("the logs name no program in this exclave; nothing to prune to")
     for f in IDENTITY_FILES + ["/etc/ld.so.cache"]:
         if os.path.lexists(_v(root, f)):
             keep.add(f)
-    for v in licence_files(root):                                 # the packages' licence texts go with every copy (10.4)
+    for v in licence_files(root):  # the packages' licence texts go with every copy (10.4)
         final = _resolve_keep(root, v, keep)
         if final:
             keep.add(final)
-    for d in whole:                                               # its own entries: a getdents shows names, nothing below them
+    for d in whole:  # its own entries: a getdents shows names, nothing below them
         for name in os.listdir(_v(root, d)):
-            if not os.path.isdir(os.path.join(_v(root, d), name)) or os.path.islink(os.path.join(_v(root, d), name)):
+            if not os.path.isdir(os.path.join(_v(root, d), name)) or os.path.islink(
+                os.path.join(_v(root, d), name)
+            ):
                 keep.add("/" + os.path.relpath(os.path.join(_v(root, d), name), root))
     # the libraries every kept ELF needs, by the loader's own search (10.3)
     tree = elfcheck.Tree(root)
@@ -562,7 +702,7 @@ def prune(ex, logs, own, log=print):
                 if f.read(4) == b"\x7fELF":
                     elfs.append(v)
     for lib in elfcheck.needed_closure(tree, elfs, own):
-        final = _resolve_keep(root, lib, keep)                 # the chain of links, then the file they reach
+        final = _resolve_keep(root, lib, keep)  # the chain of links, then the file they reach
         if final:
             keep.add(final)
     # the log names canonical paths, so every alias a program used is a symlink to keep: every symlink in
@@ -581,13 +721,19 @@ def prune(ex, logs, own, log=print):
         for name in filenames + [x for x in dirnames if os.path.islink(os.path.join(dirpath, x))]:
             real = os.path.join(dirpath, name)
             v = "/" + os.path.relpath(real, root)
-            w = "/" + os.path.relpath(os.path.join(os.path.dirname(dirpath), name), root) if in_real else v
+            w = (
+                "/" + os.path.relpath(os.path.join(os.path.dirname(dirpath), name), root)
+                if in_real
+                else v
+            )
             if w in keep:
                 kept += 1
                 continue
             st = os.lstat(real)
             is_wrap = not in_real and os.path.exists(os.path.join(dirpath, ".real", name))
-            if stat.S_ISREG(st.st_mode) and not is_wrap:      # originals and plain files; a wrapper is a link to the launcher
+            if (
+                stat.S_ISREG(st.st_mode) and not is_wrap
+            ):  # originals and plain files; a wrapper is a link to the launcher
                 freed += st.st_size
             os.remove(real)
             removed += 1
@@ -597,6 +743,7 @@ def prune(ex, logs, own, log=print):
 def unwrap(ex, log=print):
     """Undo wrapping: every .real/NAME moves back over its wrapper. Leaves a plain tree."""
     import exclave
+
     root = os.path.join(ex, "tree")
     n = 0
     for dirpath, dirnames, filenames in os.walk(root, topdown=False):
