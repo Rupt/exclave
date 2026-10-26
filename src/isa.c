@@ -1,4 +1,4 @@
-/* isa.c — the CPU feature check (DESIGN.md 7.7): x86-64 psABI levels by cpuid; aarch64 levels by AT_HWCAP. */
+/* isa.c — the CPU feature check (DESIGN.md 7.7): x86-64 psABI levels by cpuid and XCR0; aarch64 levels by AT_HWCAP. */
 #include "common.h"
 
 #if defined(__aarch64__)
@@ -15,6 +15,30 @@ int isa_supported(const char *isa, unsigned long *auxv)
 static void cpuid(unsigned leaf, unsigned sub, unsigned *a, unsigned *b, unsigned *c, unsigned *d)
 {
     __asm__ volatile ("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(leaf), "c"(sub));
+}
+
+/* XCR0, the state components the kernel has enabled; xgetbv faults unless cpuid says OSXSAVE */
+static unsigned long xgetbv0(void)
+{
+    unsigned lo, hi;
+    __asm__ volatile ("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+    return (unsigned long)hi << 32 | lo;
+}
+
+/* The decision, from cpuid leaf 1's ecx, leaf 7's ebx, leaf 0x80000001's ecx and XCR0. A vector level needs the
+ * CPU's features and the register state the kernel enables, without which its instructions fault: SSE and AVX state
+ * for v3, and the AVX-512 opmask and both ZMM halves too for v4, as glibc's cpu_features asks. */
+int isa_x86_level_ok(int level, unsigned c1, unsigned b7, unsigned cx, unsigned long xcr0)
+{
+    /* v2: CMPXCHG16B, LAHF-SAHF, POPCNT, SSE3, SSE4.1, SSE4.2, SSSE3 */
+    int v2 = (c1 >> 13 & 1) && (cx & 1) && (c1 >> 23 & 1) && (c1 & 1) && (c1 >> 19 & 1) && (c1 >> 20 & 1) && (c1 >> 9 & 1);
+    if (level == 2) return v2;
+    /* v3: AVX, AVX2, BMI1, BMI2, F16C, FMA, LZCNT, MOVBE, OSXSAVE, and SSE and AVX state enabled */
+    int v3 = v2 && (c1 >> 28 & 1) && (b7 >> 5 & 1) && (b7 >> 3 & 1) && (b7 >> 8 & 1) && (c1 >> 29 & 1) && (c1 >> 12 & 1) && (cx >> 5 & 1) && (c1 >> 22 & 1) && (c1 >> 27 & 1)
+             && (xcr0 & 0x6) == 0x6;
+    if (level == 3) return v3;
+    /* v4: AVX512F, AVX512BW, AVX512CD, AVX512DQ, AVX512VL, and opmask, ZMM_Hi256 and Hi16_ZMM state enabled */
+    return v3 && (b7 >> 16 & 1) && (b7 >> 30 & 1) && (b7 >> 28 & 1) && (b7 >> 17 & 1) && (b7 >> 31 & 1) && (xcr0 & 0xe6) == 0xe6;
 }
 
 int isa_supported(const char *isa, unsigned long *auxv)
@@ -35,13 +59,6 @@ int isa_supported(const char *isa, unsigned long *auxv)
     unsigned b7 = b;
     cpuid(0x80000001u, 0, &a, &b, &c, &d);
     unsigned cx = c;
-    /* v2: CMPXCHG16B, LAHF-SAHF, POPCNT, SSE3, SSE4.1, SSE4.2, SSSE3 */
-    int v2 = (c1 >> 13 & 1) && (cx & 1) && (c1 >> 23 & 1) && (c1 & 1) && (c1 >> 19 & 1) && (c1 >> 20 & 1) && (c1 >> 9 & 1);
-    if (level == 2) return v2;
-    /* v3: AVX, AVX2, BMI1, BMI2, F16C, FMA, LZCNT, MOVBE, OSXSAVE */
-    int v3 = v2 && (c1 >> 28 & 1) && (b7 >> 5 & 1) && (b7 >> 3 & 1) && (b7 >> 8 & 1) && (c1 >> 29 & 1) && (c1 >> 12 & 1) && (cx >> 5 & 1) && (c1 >> 22 & 1) && (c1 >> 27 & 1);
-    if (level == 3) return v3;
-    /* v4: AVX512F, AVX512BW, AVX512CD, AVX512DQ, AVX512VL */
-    return v3 && (b7 >> 16 & 1) && (b7 >> 30 & 1) && (b7 >> 28 & 1) && (b7 >> 17 & 1) && (b7 >> 31 & 1);
+    return isa_x86_level_ok(level, c1, b7, cx, (c1 >> 27 & 1) ? xgetbv0() : 0);
 }
 #endif

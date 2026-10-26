@@ -386,6 +386,7 @@ test/inputs.sh       the development inputs, remade from the network through ~/.
 test/exercise.py     one program run under bwrap and under the launcher, the answers side by side: how a limitation is measured before it is fixed
 test/docker_profile.py   an exclave under Docker's default seccomp profile, which test/inputs.sh fetches
 test/scratch_test.c  the scratch pool's sweep under the interleaving that once shared a chunk
+test/isa_test.c      the CPU level check against made-up cpuid and XCR0 values and against gcc's own answer
 test/syscalls.py     every kernel syscall classified; test/bench.py the performance table
 test/realsoft.py     real projects built inside and outside an exclave; test/matrix.py the kernel matrix in VMs, test/vm_run.py one VM
 test/dogfood.py      the tool's exclave building an exclave that must reproduce the host-built hashes file

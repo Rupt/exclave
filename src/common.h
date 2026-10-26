@@ -277,3 +277,6 @@ void sig_restorer(void);
 
 /* ---------- CPU level (isa.c) ---------- */
 int isa_supported(const char *isa, unsigned long *auxv);   /* 1 yes, 0 no, -1 unknown string; auxv for AT_HWCAP on aarch64 */
+#if !defined(__aarch64__)
+int isa_x86_level_ok(int level, unsigned c1, unsigned b7, unsigned cx, unsigned long xcr0);   /* the x86-64 decision, testable on the host */
+#endif

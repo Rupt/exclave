@@ -25,7 +25,9 @@ unit() {
         && cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/filter_test" "$here/filter_test.c" "$repo/src/filter.c" "$repo/src/str.c" \
         && "$out/filter_test" && python3 "$here/syscalls.py" \
         && cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DSCRATCH_TEST -o "$out/scratch_test" "$here/scratch_test.c" "$repo/src/scratch.c" \
-        && "$out/scratch_test"   # the parser, the filter and the scratch pool just built, not stale builds
+        && "$out/scratch_test" \
+        && cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/isa_test" "$here/isa_test.c" "$repo/src/isa.c" "$repo/src/str.c" \
+        && "$out/isa_test"   # the parser, the filter, the scratch pool and the CPU check just built, not stale builds
 }
 stack() {
     python3 "$here/stackcheck.py" "$repo"/build/launcher.debug-*.ci || return 1

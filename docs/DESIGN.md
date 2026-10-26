@@ -1404,8 +1404,15 @@ does not get, and 14.2 why gdb's JIT interface is not used.
 ### 7.7 CPU check
 
 The manifest's `cpu` (6.2) is compared on x86-64 with `cpuid` leaves 1,
-7 and `0x80000001` for the `x86-64-v2`, `v3` and `v4` feature sets, and
-on aarch64 with `AT_HWCAP` for `armv8.1-a` (LSE atomics and CRC32) and
+7 and `0x80000001` for the `x86-64-v2`, `v3` and `v4` feature sets. The
+vector levels also need the register state the kernel has enabled, read
+from XCR0 with `xgetbv`, since a kernel booted with that state off
+(`noxsave`, `clearcpuid`) leaves the instructions faulting on a CPU that
+has them: SSE and AVX state for `v3`, and the AVX-512 opmask and both
+ZMM halves too for `v4`, as glibc asks. `test/isa_test.c` checks the
+decision against made-up `cpuid` and XCR0 values and against gcc's
+`__builtin_cpu_supports` on the machine it runs on. On aarch64 the
+levels are read from `AT_HWCAP`: `armv8.1-a` (LSE atomics and CRC32) and
 `armv8.2-a` (with `DC CVAP`); `x86-64`, and `aarch64` or `armv8-a`, are
 the baselines. Each launcher knows its own machine's names only. A
 mismatch, or a `cpu` string the launcher does not know, is a clear
@@ -3502,8 +3509,8 @@ commit. It runs these steps in parallel, each with its own log under
 `build/gate/`, and prints one line per step, ok, SKIP or FAIL:
 
 - the unit step: the manifest parser, the grammar comparison, the
-  filter test, `test/syscalls.py` and the scratch-pool test, each built
-  from the current sources;
+  filter test, `test/syscalls.py`, the scratch-pool test and the CPU
+  level test, each built from the current sources;
 - the stack budget of both launchers (the aarch64 one when it is
   built);
 - for every exclave given: the suite in the given order and in a
