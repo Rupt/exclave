@@ -1,13 +1,14 @@
-"""elfcheck.py — the static and dynamic checks (DESIGN.md 10.3).
+"""The static and dynamic checks of an exclave's ELF files (DESIGN.md 10.3).
 
-Static: every ELF under tree/ outside data directories, originals in place of wrappers, must name
-one interpreter between them (through the tree's symlinks), every DT_NEEDED must resolve under tree/
-by the loader's own algorithm, every library reached must depend on that loader's libc and nothing
-else. Anything that would resolve on the host, and anything that would mix libcs, is reported and
-the exclave is refused. Static executables are reported.
+The static check reads every ELF file under tree/ outside data directories, taking originals in
+place of wrappers. All of them must name one interpreter, resolved through the tree's symlinks;
+every DT_NEEDED must resolve inside the tree by the loader's own search; and every library reached
+must depend on that loader's libc and no other. A library that would load from the host, or a mix
+of libcs, is an error that refuses the exclave. Static executables are listed.
 
-Dynamic: given EXCLAVE_LOG files a workload wrote, every library opened must be on an exclave path,
-and NSS modules named by the host's nsswitch.conf but absent from the exclave are reported.
+The dynamic check reads the EXCLAVE_LOG files a workload wrote. Every library opened must lie on a
+path the exclave owns, and NSS modules that this host's nsswitch.conf names but the exclave lacks
+are reported.
 """
 
 import contextlib
@@ -17,62 +18,80 @@ import re
 import stat
 import struct
 import subprocess
+from dataclasses import dataclass, field
 from typing import BinaryIO
-lazy from collections.abc import Callable, Iterable, Sequence
+lazy from collections.abc import Iterable, Sequence
 
-lazy from exclave import build
+from exclave import layout
 
 PT_LOAD, PT_DYNAMIC, PT_INTERP = 1, 2, 3
 DT_NULL, DT_NEEDED, DT_STRTAB, DT_STRSZ, DT_SONAME, DT_RPATH, DT_RUNPATH = 0, 1, 5, 10, 14, 15, 29
 ET_DYN = 3
-# the machines the launcher is built for (7.1): ELF e_machine, uname -m, Debian's multiarch triplet
-MACHINES = {62: ("x86_64", "x86_64-linux-gnu"), 183: ("aarch64", "aarch64-linux-gnu")}
-MACHINE = 62  # the exclave's, set from its launcher by static_check
-DEFAULT_DIRS = [
-    "/lib/x86_64-linux-gnu",
-    "/usr/lib/x86_64-linux-gnu",
-    "/lib64",
-    "/usr/lib64",
-    "/lib",
-    "/usr/lib",
-]  # Debian's and Fedora's glibc; the tree's loader is asked when it can answer
 MUSL_DIRS = ["/lib", "/usr/local/lib", "/usr/lib"]
-HWCAPS = ["glibc-hwcaps/x86-64-v4", "glibc-hwcaps/x86-64-v3", "glibc-hwcaps/x86-64-v2"]
-LIBC_SONAME = {"glibc": "libc.so.6", "musl": "libc.musl-x86_64.so.1"}
-# what the loader substitutes for $LIB and $PLATFORM; set by set_machine
-LIB_DIR, PLATFORM = "lib/x86_64-linux-gnu", "x86_64"
+GLIBC_SONAME = "libc.so.6"
 
 
-def set_machine(machine: int) -> None:
-    """Set the exclave's machine.
+@dataclass(frozen=True, slots=True)
+class Machine:
+    """A machine the launcher is built for (7.1), and what its loaders search."""
 
-    The exclave's machine decides the multiarch directory, the hwcaps subdirectories and musl's
-    soname.
-    """
-    global MACHINE, DEFAULT_DIRS, HWCAPS, LIBC_SONAME, LIB_DIR, PLATFORM  # noqa: PLW0603 -- read by every search below
-    MACHINE = machine
-    uname, triplet = MACHINES.get(machine, ("unknown", "unknown"))
-    LIB_DIR, PLATFORM = "lib/" + triplet, uname
-    DEFAULT_DIRS = [
-        "/lib/" + triplet,
-        "/usr/lib/" + triplet,
-        "/lib64",
-        "/usr/lib64",
-        "/lib",
-        "/usr/lib",
-    ]
-    HWCAPS = (
-        ["glibc-hwcaps/x86-64-v4", "glibc-hwcaps/x86-64-v3", "glibc-hwcaps/x86-64-v2"]
-        if machine == 62
-        else []
-    )
-    LIBC_SONAME = {"glibc": "libc.so.6", "musl": f"libc.musl-{uname}.so.1"}
+    e_machine: int  # the ELF header's e_machine
+    uname: str  # uname -m, which glibc's loader also substitutes for $PLATFORM
+    triplet: str  # Debian's multiarch triplet
+    hwcaps: tuple[str, ...]  # the glibc-hwcaps subdirectories searched first, best first
+
+    @property
+    def lib_dir(self) -> str:
+        """What glibc's loader substitutes for $LIB."""
+        return "lib/" + self.triplet
+
+    @property
+    def default_dirs(self) -> list[str]:
+        """The default search directories of glibc on Debian and Fedora.
+
+        Used where the tree's own loader cannot be asked for its list.
+        """
+        return [f"/lib/{self.triplet}", f"/usr/lib/{self.triplet}", *_LIB64_DIRS]
+
+    @property
+    def musl_soname(self) -> str:
+        return f"libc.musl-{self.uname}.so.1"
 
 
-def glibc_version(tree: Tree) -> tuple[int, int] | None:
-    """(major, minor) of the tree's glibc, from libc.so.6's banner, or None."""
-    for d in [*DEFAULT_DIRS, "/lib64", "/usr/lib64"]:
-        r = tree.resolve(d + "/libc.so.6")
+_LIB64_DIRS = ["/lib64", "/usr/lib64", "/lib", "/usr/lib"]
+X86_64 = Machine(
+    62,
+    "x86_64",
+    "x86_64-linux-gnu",
+    ("glibc-hwcaps/x86-64-v4", "glibc-hwcaps/x86-64-v3", "glibc-hwcaps/x86-64-v2"),
+)
+AARCH64 = Machine(183, "aarch64", "aarch64-linux-gnu", ())
+MACHINES = {m.e_machine: m for m in (X86_64, AARCH64)}
+
+
+def native_machine() -> Machine | None:
+    """Return this machine, or None where no launcher is built for it."""
+    return next((m for m in MACHINES.values() if m.uname == platform.machine()), None)
+
+
+def launcher_machine(ex: str) -> int | None:
+    """Return the e_machine of the exclave's launcher, or None without a readable one."""
+    try:
+        return Elf(layout.launcher_path(ex)).machine
+    except ValueError, OSError:
+        return None
+
+
+def machine_for(ex: str) -> Machine:
+    """Return the exclave's machine: its launcher's, or this machine's before it has one."""
+    known = MACHINES.get(launcher_machine(ex) or 0)
+    return known or native_machine() or X86_64
+
+
+def glibc_version(tree: Tree, machine: Machine) -> tuple[int, int] | None:
+    """Return the (major, minor) version in the tree's libc.so.6 banner, or None."""
+    for d in machine.default_dirs:
+        r = tree.resolve(d + "/" + GLIBC_SONAME)
         if r and os.path.isfile(tree.payload(r)):
             with open(tree.payload(r), "rb") as f:
                 m = re.search(
@@ -83,18 +102,19 @@ def glibc_version(tree: Tree) -> tuple[int, int] | None:
     return None
 
 
-def loader_dirs(tree: Tree, interp: str | None) -> list[str]:
-    """The default search directories of the loader in the tree.
+def loader_dirs(tree: Tree, interp: str | None, machine: Machine) -> list[str]:
+    """Return the default search directories of the tree's loader.
 
-    glibc prints them with --list-diagnostics (2.33 and later); musl's are fixed; older loaders get
-    Debian's list.
+    glibc 2.33 and later prints them with --list-diagnostics; musl's are fixed; an older glibc is
+    taken to search Debian's and Fedora's defaults.
     """
     if interp is None:
-        return list(DEFAULT_DIRS)
+        return machine.default_dirs
     if "musl" in os.path.basename(interp):
         return list(MUSL_DIRS)
     try:
-        out = subprocess.run(
+        # the tree's own loader, run on this host, as wrapping requires (10.1)
+        out = subprocess.run(  # noqa: S603 -- an argument vector, no shell
             [tree.payload(interp), "--list-diagnostics"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -106,18 +126,20 @@ def loader_dirs(tree: Tree, interp: str | None) -> list[str]:
             return [d.rstrip("/") for d in dirs]
     except OSError, subprocess.SubprocessError:
         pass
-    return list(DEFAULT_DIRS)
+    return machine.default_dirs
 
 
 class ForeignElfError(ValueError):
-    """A well-formed ELF file of another class, byte order or machine.
-
-    Not this exclave's to run, not checked.
-    """
+    """A well-formed ELF file of another class or byte order, which the checks skip (13)."""
 
 
 class Elf:
-    """The parts of an ELF64 file the checks need."""
+    """The parts of a little-endian ELF64 file that the checks read.
+
+    Raises:
+        ForeignElfError: For an ELF32 or big-endian file.
+        ValueError: For a file that is not ELF, or is truncated or malformed.
+    """
 
     path: str
     type: int
@@ -209,6 +231,7 @@ class Elf:
                             self.soname = sval
 
     def _v2o(self, vaddr: int) -> int:
+        """Return the file offset of a virtual address in a loaded segment."""
         for va, off, sz in self.loads:
             if va <= vaddr < va + sz:
                 return off + vaddr - va
@@ -217,18 +240,27 @@ class Elf:
 
 
 class Tree:
-    """Virtual-path resolution inside tree/, wrappers redirected to originals."""
+    """Virtual paths resolved inside tree/ as a chroot would, wrappers standing for originals."""
 
     def __init__(self, root: str) -> None:
         self.root = root
 
     def real(self, vpath: str) -> str:
+        """Return the real path of vpath, its symlinks unresolved."""
         return os.path.join(self.root, vpath.lstrip("/"))
 
-    def resolve(self, vpath: str, *, follow_last: bool = True) -> str | None:
-        """Canonical virtual path with symlinks resolved as a chroot would.
+    def resolve(
+        self, vpath: str, *, follow_last: bool = True, links: set[str] | None = None
+    ) -> str | None:
+        """Return vpath's canonical virtual path, every symlink resolved inside the tree.
 
-        None if a component is missing.
+        Args:
+            vpath: The virtual path to resolve.
+            follow_last: Whether a symlink in the last component is followed.
+            links: If given, every symlink met on the way is added to it, by virtual path.
+
+        Returns:
+            The canonical virtual path, or None when a component is missing or the symlinks loop.
         """
         cur, rest, hops = "", [p for p in vpath.split("/") if p], 0
         while rest:
@@ -244,8 +276,10 @@ class Tree:
                 return None
             if os.path.islink(real) and (rest or follow_last):
                 hops += 1
-                if hops > 40:
+                if hops > 40:  # the kernel's limit, ELOOP
                     return None
+                if links is not None:
+                    links.add(cand)
                 t = os.readlink(real)
                 rest = [p for p in t.split("/") if p] + rest
                 if t.startswith("/"):
@@ -255,44 +289,39 @@ class Tree:
         return cur or "/"
 
     def payload(self, vpath: str) -> str:
-        real = self.real(vpath)
-        d, n = os.path.split(real)
-        p = os.path.join(d, ".real", n)
-        return p if os.path.exists(p) else real
+        """Return the real path of the file vpath names: a wrapper's original, or the file."""
+        return layout.payload_path(self.real(vpath))
 
 
+@dataclass(slots=True)
 class Report:
-    lines = 0
+    """A check's findings. Errors refuse the exclave; warnings and static executables do not."""
 
-    def __init__(self) -> None:
-        self.errors: list[str] = []
-        self.warnings: list[str] = []
-        self.static: list[str] = []
-        self.seen: dict[tuple[str, tuple[str, ...]], bool] = {}
-
-    def ok(self) -> bool:
-        return not self.errors
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    static: list[str] = field(default_factory=list)
+    # every (ELF file, inherited RPATHs) the static check followed
+    seen: set[tuple[str, tuple[str, ...]]] = field(default_factory=set)
+    lines: int = 0  # log lines the dynamic check read
 
 
-def _expand(s: str, origin: str) -> str:
-    """The loader's substitutions in an RPATH, a RUNPATH or a DT_NEEDED that is a path.
-
-    For the exclave's machine (glibc's dl-load.c).
-    """
+def _expand(s: str, origin: str, machine: Machine) -> str:
+    """Make glibc's substitutions (dl-load.c) in an RPATH, a RUNPATH or a DT_NEEDED path."""
     return (
         s.replace("$ORIGIN", origin)
         .replace("${ORIGIN}", origin)
-        .replace("$LIB", LIB_DIR)
-        .replace("${LIB}", LIB_DIR)
-        .replace("$PLATFORM", PLATFORM)
-        .replace("${PLATFORM}", PLATFORM)
+        .replace("$LIB", machine.lib_dir)
+        .replace("${LIB}", machine.lib_dir)
+        .replace("$PLATFORM", machine.uname)
+        .replace("${PLATFORM}", machine.uname)
     )
 
 
 def read_cache(tree: Tree) -> dict[str, list[str]] | None:
-    """/etc/ld.so.cache in the glibc-ld.so.cache1.1 format: {soname: [paths in file order]}.
+    """Read the tree's /etc/ld.so.cache, in the glibc-ld.so.cache1.1 format.
 
-    None if absent.
+    Returns:
+        Each soname's paths in the cache's order, or None when the tree has no cache.
     """
     real = tree.real("/etc/ld.so.cache")
     if not os.path.isfile(real):
@@ -328,38 +357,32 @@ def read_cache(tree: Tree) -> dict[str, list[str]] | None:
     return table
 
 
-VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")  # noqa: S108 -- prefixes, not files
+@dataclass(frozen=True, slots=True)
+class Ownership:
+    """The exclave's ownership as the launcher computes it at startup (8.1).
 
-
-class Owned(list[str]):
-    """8.1's ownership as the launcher computes it.
-
-    The own prefixes, the list itself, and the manifest's host records, .host, which take a path
-    back from an own prefix no longer than theirs.
+    own holds the exclave's own prefixes. host holds the manifest's host records, each of which
+    gives paths under it back to the host when it is at least as long as the longest own prefix
+    covering them.
     """
 
-    def __init__(self, own: Iterable[str] = (), host: Iterable[str] = ()) -> None:
-        list.__init__(self, own)
-        self.host = list(host)
+    own: tuple[str, ...]
+    host: tuple[str, ...] = ()
 
 
-def _under(v: str, p: str) -> bool:
-    return v == p or v.startswith(p.rstrip("/") + "/")
+def host_owned(vpath: str, own: Ownership) -> bool:
+    """Return whether the launcher would resolve vpath on the host (8.1, vis.c base_is_host).
 
-
-def host_owned(vdir: str, own: Sequence[str]) -> bool:
-    """The launcher's base rule for a path (8.1, vis.c base_is_host).
-
-    Volatile, or its longest host record at least as long as its longest own prefix, which a path
-    under neither is.
+    It does when vpath is under a volatile prefix, or when the longest host record covering it is
+    at least as long as the longest own prefix covering it. A path covered by neither is the host's.
     """
-    if any(_under(vdir, v) for v in VOLATILE):
+    if layout.under_any(vpath, layout.VOLATILE):
         return True
 
     def longest(prefixes: Iterable[str]) -> int:
-        return max((len(p) for p in prefixes if _under(vdir, p)), default=-1)
+        return max((len(p) for p in prefixes if layout.under(vpath, p)), default=-1)
 
-    return longest(getattr(own, "host", ())) >= longest(own)
+    return longest(own.host) >= longest(own.own)
 
 
 def find_library(
@@ -369,18 +392,32 @@ def find_library(
     vpath: str,
     rpaths: list[str],
     *,
+    machine: Machine,
     cache: dict[str, list[str]] | None,
-    own: Sequence[str] = (),
+    default_dirs: list[str],
+    interp: str | None,
+    own: Ownership | None = None,
     host_hits: list[str] | None = None,
-    default_dirs: list[str] | None = None,
-    interp: str | None = None,
 ) -> str | None:
-    """The virtual path ld.so would load for DT_NEEDED name from the object at vpath, or None.
+    """Return the virtual path the loader would load for a DT_NEEDED entry, or None.
 
-    rpaths: the DT_RPATH of every object on the chain that led here (inherited when the object has
-    no RUNPATH). A search directory the exclave does not own is the host's at run time: such a
-    directory is recorded in host_hits, since the loader would take the host's library from it,
-    default directories included. The loader satisfies its own soname without a search.
+    The loader satisfies its own soname without a search. A name with a slash is loaded as a path.
+    Otherwise the search is glibc's: RPATH (with those inherited) unless there is a RUNPATH, then
+    RUNPATH, the cache and the default directories, each directory's hwcaps subdirectories first.
+
+    Args:
+        tree: The exclave's tree.
+        name: The DT_NEEDED entry.
+        elf: The object that needs it.
+        vpath: That object's virtual path, for $ORIGIN.
+        rpaths: The DT_RPATHs inherited from the objects that led to this one.
+        machine: The exclave's machine.
+        cache: The tree's ld.so.cache, as read_cache returns it.
+        default_dirs: The loader's default directories, as loader_dirs returns them.
+        interp: The loader's virtual path, or None for a static program.
+        own: The exclave's ownership, to find search directories that are the host's.
+        host_hits: If given, every searched directory that is the host's at run time is appended:
+            the loader would take the host's library from it.
     """
     if interp and name == os.path.basename(interp) and tree.resolve(interp):
         return tree.resolve(interp)
@@ -388,19 +425,23 @@ def find_library(
     # musl does not
     if "/" in name:
         if interp and "musl" not in os.path.basename(interp):
-            name = os.path.normpath(_expand(name, os.path.dirname(vpath)))
+            name = os.path.normpath(_expand(name, os.path.dirname(vpath), machine))
         return tree.resolve(name) if name.startswith("/") else None
     origin = os.path.dirname(vpath)
     search: list[str] = []
     if not elf.runpath:
         for r in ([elf.rpath] if elf.rpath else []) + rpaths:
-            search += [_expand(p, origin) for p in r.split(":") if p]
+            search += [_expand(p, origin, machine) for p in r.split(":") if p]
     if elf.runpath:
-        search += [_expand(p, origin) for p in elf.runpath.split(":") if p]
+        search += [_expand(p, origin, machine) for p in elf.runpath.split(":") if p]
+
+    def host_dir(d: str) -> bool:
+        return own is not None and host_owned(os.path.normpath(d), own)
+
     for d in search:
-        if own and host_owned(os.path.normpath(d), own) and host_hits is not None:
+        if host_hits is not None and host_dir(d):
             host_hits.append(d)
-        for sub in [*HWCAPS, ""]:
+        for sub in [*machine.hwcaps, ""]:
             cand = tree.resolve(os.path.join(d, sub, name) if sub else os.path.join(d, name))
             if cand and os.path.isfile(tree.payload(cand)):
                 return cand
@@ -408,48 +449,49 @@ def find_library(
         cand = tree.resolve(p)
         if cand and os.path.isfile(tree.payload(cand)):
             return cand
-    for d in default_dirs or DEFAULT_DIRS:
-        if own and host_owned(os.path.normpath(d), own) and host_hits is not None:
+    for d in default_dirs:
+        if host_hits is not None and host_dir(d):
             host_hits.append(d)
-        for sub in [*HWCAPS, ""]:
+        for sub in [*machine.hwcaps, ""]:
             cand = tree.resolve(os.path.join(d, sub, name) if sub else os.path.join(d, name))
             if cand and os.path.isfile(tree.payload(cand)):
                 return cand
     return None
 
 
-def _has_musl_loader(tree: Tree) -> bool:
-    """Whether the tree has musl's loader for the exclave's machine (set_machine).
-
-    That loader reads no ld.so.cache.
-    """
-    r = tree.resolve(f"/lib/ld-musl-{PLATFORM}.so.1")
+def _has_musl_loader(tree: Tree, machine: Machine) -> bool:
+    """Return whether the tree has musl's loader, which reads no ld.so.cache."""
+    r = tree.resolve(f"/lib/ld-musl-{machine.uname}.so.1")
     return bool(r and os.path.isfile(tree.payload(r)))
 
 
-def static_check(
-    ex: str,
-    own: Sequence[str],
-    data_prefixes: Sequence[str] = (),
-    _log: Callable[..., object] = print,
-) -> Report:
-    """Returns a Report. own: the ownership set of 8.1 as the launcher computes it."""
+def static_check(ex: str, own: Ownership, data_prefixes: Sequence[str] = ()) -> Report:
+    """Run the static check on the exclave as it stands (10.3).
+
+    Args:
+        ex: The exclave.
+        own: Its ownership, as the launcher would compute it.
+        data_prefixes: The manifest's data directories, which are not checked.
+
+    Returns:
+        The findings; any error refuses the exclave.
+    """
     tree, rep = Tree(os.path.join(ex, "tree")), Report()
-    native = {v[0]: k for k, v in MACHINES.items()}.get(platform.machine())
-    try:
-        # the exclave's machine is its launcher's
-        set_machine(Elf(os.path.join(ex, ".exclave", "launcher")).machine)
-    except ValueError, OSError:
-        set_machine(native or 62)  # no launcher yet: the machine the check runs on
-    # 10.1: an exclave is wrapped on a machine of its architecture, where its loader can be asked
-    if native != MACHINE:
+    native = native_machine()
+    if native is None:
+        rep.errors.append(f"no launcher is built for this machine, {platform.machine()} (7.1)")
+        return rep
+    e_machine = launcher_machine(ex)
+    # An exclave is checked on a machine of its own architecture, where its loader can be asked
+    # (10.1); one without a launcher yet is taken to be this machine's.
+    if e_machine is not None and e_machine != native.e_machine:
+        theirs = MACHINES[e_machine].uname if e_machine in MACHINES else f"machine {e_machine}"
         rep.errors.append(
-            "the exclave's launcher is for {} and this machine is {}: wrap the exclave on a "
-            "machine of its architecture (10.1)".format(
-                MACHINES.get(MACHINE, ("?",))[0], platform.machine()
-            )
+            f"the exclave's launcher is for {theirs} and this machine is {platform.machine()}: "
+            "wrap the exclave on a machine of its architecture (10.1)"
         )
         return rep
+    machine = native
     cache = read_cache(tree)
     if host_owned("/etc", own):  # the loader would read the host's cache and preload list
         rep.errors.append(
@@ -458,7 +500,7 @@ def static_check(
         )
     elif cache is None:
         # musl has no cache; glibc without one searches its defaults only
-        if not _has_musl_loader(tree):
+        if not _has_musl_loader(tree, machine):
             rep.warnings.append(
                 "no /etc/ld.so.cache: only the loader's default directories are searched at run "
                 "time"
@@ -477,14 +519,13 @@ def static_check(
                             f"ld.so.cache entry {soname} names {p}, which is not a shared library "
                             "(the launcher?)"
                         )
-    seen = rep.seen
     executables: list[tuple[str, Elf]] = []
     libraries: list[tuple[str, Elf]] = []
     interps: dict[str, tuple[str, str]] = {}
     for dirpath, dirnames, filenames in os.walk(tree.root):
         rel = "/" + os.path.relpath(dirpath, tree.root).replace(os.sep, "/")
         rel = "" if rel == "/." else rel
-        if any(rel == p or rel.startswith(p + "/") for p in data_prefixes):
+        if layout.under_any(rel, data_prefixes):
             dirnames[:] = []
             continue
         dirnames[:] = [d for d in dirnames if d != ".real"]
@@ -519,11 +560,9 @@ def static_check(
             except ValueError as exc:
                 rep.errors.append(f"{vpath}: {exc}")
                 continue
-            if e.machine != MACHINE:
+            if e.machine != machine.e_machine:
                 rep.warnings.append(
-                    "{}: not {}: a foreign object, not checked (13)".format(
-                        vpath, MACHINES.get(MACHINE, ("?",))[0]
-                    )
+                    f"{vpath}: not {machine.uname}: a foreign object, not checked (13)"
                 )
                 continue
             if e.debug_only:  # debug information, which nothing loads or runs
@@ -536,12 +575,12 @@ def static_check(
                     rep.errors.append(
                         f"{vpath} wants interpreter {e.interp}, which does not resolve in the tree"
                     )
-                elif any(r == p or r.startswith(p.rstrip("/") + "/") for p in data_prefixes):
+                elif layout.under_any(r, data_prefixes):
                     rep.errors.append(
                         f"{vpath} wants interpreter {e.interp}, which resolves into the data "
                         f"directory {r}: never executed or loaded (6.2)"
                     )
-                elif own and host_owned(r, own):
+                elif host_owned(r, own):
                     rep.errors.append(
                         f"{vpath} wants interpreter {e.interp}, which resolves to {r}, a path the "
                         "exclave does not own: the launcher refuses a host loader (7.4.5)"
@@ -553,23 +592,17 @@ def static_check(
             )
     # one loader, and so one libc, per exclave (7.3): read from the ELF files, not declared anywhere
     if len(interps) > 1:
-        rep.errors.append(
-            "the tree mixes loaders {} (one world inside an exclave, 7.3)".format(
-                ", ".join(f"{i} ({v})" for r, (i, v) in sorted(interps.items()))
-            )
-        )
+        mixed = ", ".join(f"{i} ({v})" for _, (i, v) in sorted(interps.items()))
+        rep.errors.append(f"the tree mixes loaders {mixed} (one world inside an exclave, 7.3)")
     interp = next(iter(interps.values()))[0] if interps else None
-    libc_soname = (
-        LIBC_SONAME["musl"]
-        if interp and "musl" in os.path.basename(interp)
-        else LIBC_SONAME["glibc"]
-    )
-    default_dirs = loader_dirs(tree, interp)
+    musl = bool(interp) and "musl" in os.path.basename(interp or "")
+    libc_soname = machine.musl_soname if musl else GLIBC_SONAME
+    default_dirs = loader_dirs(tree, interp, machine)
     # 6.2: the locale inside an exclave is C.UTF-8, built into glibc 2.35 and later and into musl;
     # an older glibc needs the C.utf8 directory or every program runs in the plain C locale, and
     # bash and perl say so
-    if interp and "musl" not in os.path.basename(interp):
-        ver = glibc_version(tree)
+    if interp and not musl:
+        ver = glibc_version(tree, machine)
         if (
             ver
             and ver < (2, 35)
@@ -587,9 +620,9 @@ def static_check(
 
     def check(vpath: str, e: Elf, rpaths: list[str], chain: list[str]) -> None:
         key = (vpath, tuple(rpaths))
-        if key in seen:
+        if key in rep.seen:
             return
-        seen[key] = True
+        rep.seen.add(key)
         if chain:
             reached.add(vpath)
         below = rpaths if e.runpath else ([e.rpath] if e.rpath else []) + rpaths
@@ -601,11 +634,12 @@ def static_check(
                 e,
                 vpath,
                 rpaths,
+                machine=machine,
                 cache=cache,
-                own=own,
-                host_hits=host_hits,
                 default_dirs=default_dirs,
                 interp=interp,
+                own=own,
+                host_hits=host_hits,
             )
             for d in host_hits:
                 rep.errors.append(
@@ -613,13 +647,12 @@ def static_check(
                     "host's library would load"
                 )
             if not found:
+                path = " > ".join([*chain, vpath])
                 rep.errors.append(
-                    "{} needs {}, which does not resolve in the tree (chain {})".format(
-                        vpath, n, " > ".join([*chain, vpath])
-                    )
+                    f"{vpath} needs {n}, which does not resolve in the tree (chain {path})"
                 )
                 continue
-            if any(found == p or found.startswith(p.rstrip("/") + "/") for p in data_prefixes):
+            if layout.under_any(found, data_prefixes):
                 rep.errors.append(
                     f"{vpath} needs {n}, which resolves into the data directory {found}: never "
                     "loaded (6.2)"
@@ -644,10 +677,11 @@ def static_check(
     return rep
 
 
-def needed_closure(tree: Tree, vpaths: Sequence[str], own: Sequence[str]) -> set[str]:
-    """The virtual paths of every library the given ELF files reach through DT_NEEDED.
+def needed_closure(tree: Tree, vpaths: Sequence[str], machine: Machine) -> set[str]:
+    """Return the virtual paths of every library the given ELF files reach through DT_NEEDED.
 
-    By the loader's search with RPATH inherited down the chain; for pruning (10.4).
+    Each is found by the loader's search, RPATHs inherited down the chain, and each loader the
+    files name is included, since the launcher loads it and no logged call does (10.4).
     """
     out: set[str] = set()
     seen: set[tuple[str, tuple[str, ...]]] = set()
@@ -656,7 +690,7 @@ def needed_closure(tree: Tree, vpaths: Sequence[str], own: Sequence[str]) -> set
     for v in vpaths:
         with contextlib.suppress(ValueError, OSError):
             interp = interp or Elf(tree.payload(v)).interp
-    default_dirs = loader_dirs(tree, interp)
+    default_dirs = loader_dirs(tree, interp, machine)
 
     def visit(vpath: str, e: Elf, rpaths: list[str]) -> None:
         key = (vpath, tuple(rpaths))
@@ -664,7 +698,6 @@ def needed_closure(tree: Tree, vpaths: Sequence[str], own: Sequence[str]) -> set
             return
         seen.add(key)
         if e.interp:
-            # the loader is loaded by the launcher, never through a logged syscall
             out.add(e.interp)
         below = rpaths if e.runpath else ([e.rpath] if e.rpath else []) + rpaths
         for n in e.needed:
@@ -674,9 +707,8 @@ def needed_closure(tree: Tree, vpaths: Sequence[str], own: Sequence[str]) -> set
                 e,
                 vpath,
                 rpaths,
+                machine=machine,
                 cache=cache,
-                own=own,
-                host_hits=None,
                 default_dirs=default_dirs,
                 interp=interp,
             )
@@ -697,21 +729,17 @@ def needed_closure(tree: Tree, vpaths: Sequence[str], own: Sequence[str]) -> set
     return out
 
 
-def dynamic_check(
-    ex: str,
-    logs: Iterable[str],
-    own: Sequence[str],
-    log: Callable[..., object] = print,  # noqa: ARG001 -- the suite passes it by name
-) -> Report:
-    """Read EXCLAVE_LOG files.
+def dynamic_check(ex: str, logs: Iterable[str], own: Ownership) -> Report:
+    """Run the dynamic check on EXCLAVE_LOG files a workload wrote (10.3).
 
-    Report libraries opened outside the exclave and NSS modules the host names that the exclave
-    lacks.
+    A library opened on a path the host owns is an error; one under the workload's own working
+    directory, its build output presumably, is a warning. NSS modules this host's nsswitch.conf
+    names that the exclave lacks are warnings too.
     """
     rep = Report()
     libs: set[str] = set()
     cwds: set[str] = set()
-    for what, r, path in build.log_lines(logs):
+    for what, r, path in layout.log_lines(logs):
         rep.lines += 1
         # 8.1 rule 4 as the launcher applied it; the plain "cwd" line is a diagnostic and gives
         # nothing
@@ -721,9 +749,9 @@ def dynamic_check(
                 cwds.add(c)
         if what == "launcher" and path.startswith("cwd ") and not path.startswith("cwd given"):
             c = path[len("cwd ") :]
-            # a working directory under a volatile prefix is the host's by 8.1 rule 3, with nothing
-            # to give: the build's own directory all the same; never /
-            if any(c == v or c.startswith(v + "/") for v in VOLATILE):
+            # A working directory under a volatile prefix is already the host's (8.1 rule 3), so
+            # the launcher logs no "given" line for it; it is the workload's own all the same.
+            if layout.under_any(c, layout.VOLATILE):
                 cwds.add(c)
         if what == "open" and r >= 0 and re.search(r"\.so(\.\d+)*$", path):
             libs.add(path)
@@ -740,6 +768,7 @@ def dynamic_check(
         else:
             rep.errors.append("library opened on the host: " + lib)
     tree = Tree(os.path.join(ex, "tree"))
+    dirs = machine_for(ex).default_dirs
     if os.path.exists("/etc/nsswitch.conf"):
         mods: set[str] = set()
         with open("/etc/nsswitch.conf", encoding="utf-8", errors="replace") as f:
@@ -751,7 +780,7 @@ def dynamic_check(
                         if re.fullmatch(r"[A-Za-z0-9_]+", w) and w not in ("files", "dns"):
                             mods.add(w)
         for m in sorted(mods):
-            if not any(tree.resolve(os.path.join(d, f"libnss_{m}.so.2")) for d in DEFAULT_DIRS):
+            if not any(tree.resolve(os.path.join(d, f"libnss_{m}.so.2")) for d in dirs):
                 rep.warnings.append(
                     f"this host's nsswitch.conf names {m}; the exclave has no libnss_{m}.so.2"
                 )

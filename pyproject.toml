@@ -61,9 +61,15 @@ line-ending = "lf"
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
-    # Docstrings are checked when present, not required: a short function whose
-    # name says what it does is worse for a sentence repeating it.
-    "D1",
+    # Docstrings are checked when present, and required only of modules and
+    # packages: a short function whose name says what it does is worse for a
+    # sentence repeating it.
+    "D101",
+    "D102",
+    "D103",
+    "D105",
+    "D106",
+    "D107",
     # Conflicts with the formatter, which owns string layout.
     "COM812",
     "ISC001",
@@ -74,14 +80,11 @@ ignore = [
     # Kernel numbers, offsets and errnos are the subject here; a name for each
     # would hide the number a reader checks against the kernel's headers.
     "PLR2004",
-    # `assert` is for sanity checks, which is what it is for.
+    # Asserts narrow types and state invariants; none validates input, so
+    # running with -O changes nothing.
     "S101",
     # Command-line tools and test drivers: print is their output.
     "T20",
-    # The tool and the tests run programs by design: the launcher, compilers,
-    # bwrap, QEMU. Every argument vector is built from paths, never a shell string.
-    "S603",
-    "S607",
     # Paths here are strings in two namespaces, the exclave's virtual paths and
     # the host's real ones, joined and compared as the kernel would; a Path would
     # invite treating a virtual path as a file on this machine.
@@ -93,28 +96,37 @@ ignore = [
     "PLR0911",
     "PLR0912",
     "PLR0915",
-    # Scripts in directories, not packages.
-    "INP001",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "test/**" = [
+    # Scripts in a directory, not a package.
+    "INP001",
+    # The tests run programs by design: the launcher, compilers, bwrap, QEMU.
+    # Every argument vector is built from paths, never a shell string.
+    "S603",
+    "S607",
     # Tests make files in /tmp and give them odd modes on purpose: the kernel's
     # answers about exactly those are what they check.
     "S103",
     "S108",
     # Random trees and mazes for the oracles, not secrets.
     "S311",
-    # A module imported inside the one test that needs it, so the suite starts
-    # without it.
-    "PLC0415",
 ]
 "fetch/**" = [
+    # Scripts in a directory, not a package.
+    "INP001",
     # Fetching from the repository the caller names is the whole program.
     "S310",
+]
+"fetch/rpms.py" = [
     # Repository metadata from that repository, read without entities or
     # external references.
     "S314",
+]
+"src/gdb.py" = [
+    # Data the launcher carries for gdb, not part of a package.
+    "INP001",
 ]
 
 [tool.ruff.lint.flake8-tidy-imports]
@@ -146,12 +158,13 @@ error-on-warning = true
 output-format = "concise"
 
 [tool.ty.rules]
+# The rules ty leaves off by default; every rule that warns is an error already
+# (error-on-warning).
 possibly-unresolved-reference = "error"
-unused-ignore-comment = "error"
-deprecated = "error"
 division-by-zero = "error"
-index-out-of-bounds = "error"
-invalid-ignore-comment = "error"
 possibly-missing-attribute = "error"
 possibly-missing-import = "error"
-redundant-cast = "error"
+# A condition that is always true or always false is dead code or a mistake.
+redundant-condition-strict = "error"
+# Every suppression names the rule it hides.
+blanket-ignore-comment = "error"

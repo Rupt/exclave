@@ -1,6 +1,6 @@
-"""bench.py — the performance table (DESIGN.md 13 item 2, 16).
+"""Measure the performance table of DESIGN.md 16 (and 13 item 2): native against the exclave.
 
-Best of three, native against the exclave.
+Each figure is the best of three runs.
 
     test/bench.py --exclave EXCLAVE [--sqlite PATH] [--work DIR] [--launcher LAUNCHER]
 
@@ -14,6 +14,8 @@ import subprocess
 import sys
 import time
 lazy from collections.abc import Callable
+
+import tree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -116,18 +118,16 @@ def main() -> None:
         default=os.path.join(REPO, "build", "launcher"),
         help="the launcher to measure (default: the build)",
     )
-    a = ap.parse_args()
-    work = os.path.abspath(a.work)
+    args = ap.parse_args()
+    work = os.path.abspath(args.work)
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
-    import tree
-
     # a copy relinked with the build (17)
     ex = tree.fresh_exclave(
-        os.path.abspath(a.exclave),
+        os.path.abspath(args.exclave),
         os.path.join(work, "exclave"),
-        launcher=os.path.abspath(a.launcher),
+        launcher=os.path.abspath(args.launcher),
     )
     cgcc, hgcc = (
         os.path.join(ex, "tree", "usr", "bin", GCC),
@@ -274,12 +274,14 @@ def main() -> None:
             best(lambda: _time(lambda: project(cgcc))),
         )
     )
-    if a.sqlite and os.path.exists(a.sqlite) and hgcc:
+    if args.sqlite and os.path.exists(args.sqlite) and hgcc:
         rows.append(
             (
                 "gcc -O2 -c sqlite3.c, s",
-                best(lambda: timed([hgcc, "-O2", "-c", a.sqlite, "-o", "sq_host.o"], work, env)),
-                best(lambda: timed([cgcc, "-O2", "-c", a.sqlite, "-o", "sq_exclave.o"], work, env)),
+                best(lambda: timed([hgcc, "-O2", "-c", args.sqlite, "-o", "sq_host.o"], work, env)),
+                best(
+                    lambda: timed([cgcc, "-O2", "-c", args.sqlite, "-o", "sq_exclave.o"], work, env)
+                ),
             )
         )
         with (

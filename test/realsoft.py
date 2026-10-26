@@ -1,4 +1,4 @@
-"""realsoft.py — build real projects inside an exclave and on the host, compare results and time.
+"""Build real projects inside an exclave and on the host, and compare their results and times.
 
     test/realsoft.py --exclave EXCLAVE --src DIR [--work DIR] [--jobs N] [--only NAME,...]
 
@@ -15,6 +15,8 @@ import subprocess
 import sys
 import tarfile
 import time
+
+import tree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -75,26 +77,24 @@ def main() -> int:
     ap.add_argument("--work", default=os.path.join(REPO, "build", "realsoft-work"))
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--only")
-    a = ap.parse_args()
-    work = os.path.abspath(a.work)
+    args = ap.parse_args()
+    work = os.path.abspath(args.work)
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
-    import tree
-
     # a copy relinked with the build (17)
-    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "exclave"))
-    env = {"PATH": "/usr/bin:/bin", "HOME": work, "J": str(a.jobs), "LANG": "C"}
+    ex = tree.fresh_exclave(os.path.abspath(args.exclave), os.path.join(work, "exclave"))
+    env = {"PATH": "/usr/bin:/bin", "HOME": work, "J": str(args.jobs), "LANG": "C"}
     rows: list[tuple[str, str, str, str, str]] = []
     failures: list[str] = []
     for name, (prefix, conf, mk, check) in PROJECTS.items():
-        if a.only and name not in a.only.split(","):
+        if args.only and name not in args.only.split(","):
             continue
-        tarballs = [f for f in os.listdir(a.src) if f.startswith(prefix)]
+        tarballs = [f for f in os.listdir(args.src) if f.startswith(prefix)]
         if not tarballs:
             rows.append((name, "no tarball", "", "", ""))
             continue
-        tb = os.path.join(a.src, max(tarballs))
+        tb = os.path.join(args.src, max(tarballs))
         results: dict[str, tuple[float, float | None, str]] = {}
         for world in ("host", "exclave"):
             d = os.path.join(work, world)
@@ -132,7 +132,7 @@ def main() -> int:
         )
     print(
         "| Project | configure host / exclave (s) "
-        f"| make -j{a.jobs:d} host / exclave (s) "
+        f"| make -j{args.jobs:d} host / exclave (s) "
         "| result on the host | result in the exclave |"
     )
     print("|---|---|---|---|---|")

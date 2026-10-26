@@ -1,4 +1,4 @@
-"""sysroot.py — a sysroot as a data directory (DESIGN.md 9, 6.2).
+"""Build against a sysroot shipped as a data directory of a gcc exclave (DESIGN.md 9, 6.2).
 
 A glibc from one distribution inside a gcc exclave from another, and an output of that gcc that runs
 wherever that glibc's version is old enough.
@@ -25,7 +25,8 @@ import sys
 
 import tree
 
-from exclave import cli
+from exclave import grammar, layout
+lazy from exclave import elfcheck
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -59,30 +60,30 @@ def main() -> int:
     ap.add_argument("--out", required=True, help="where to put the built program")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "sysroot-work"))
     ap.add_argument("--prefix", default="/opt/sysroot-el7")
-    a = ap.parse_args()
-    work = os.path.abspath(a.work)
+    args = ap.parse_args()
+    work = os.path.abspath(args.work)
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
     ex, sysroot_ex = os.path.join(work, "gcc.exclave"), os.path.join(work, "sysroot.exclave")
-    tree.fresh_exclave(a.exclave, ex)  # a copy of its own, relinked with the build (17)
+    tree.fresh_exclave(args.exclave, ex)  # a copy of its own, relinked with the build (17)
     rc, out, err = run([*TOOL, "unwrap", ex])
     if rc:
         sys.exit("unwrap: " + out + err)
-    rpms = sorted(glob.glob(os.path.join(a.rpms, "*.rpm")))
+    rpms = sorted(glob.glob(os.path.join(args.rpms, "*.rpm")))
     rc, out, err = run([*TOOL, "unpack", sysroot_ex, *rpms])
     if rc:
         sys.exit("unpack: " + out + err)
-    dst = os.path.join(ex, "tree", a.prefix.lstrip("/"))
+    dst = os.path.join(ex, "tree", args.prefix.lstrip("/"))
     shutil.copytree(
-        os.path.join(sysroot_ex, "tree"), dst, symlinks=True, copy_function=cli.link_or_copy
+        os.path.join(sysroot_ex, "tree"), dst, symlinks=True, copy_function=layout.link_or_copy
     )
     with open(os.path.join(ex, ".exclave", "manifest"), "wb") as f:
         f.write(
-            cli.dump(
+            grammar.dump(
                 [
-                    cli.Record("exclave", [("t", b"1")]),
-                    cli.Record("data", [("s", a.prefix.encode())]),
+                    grammar.Record("exclave", [("t", b"1")]),
+                    grammar.Record("data", [("s", args.prefix.encode())]),
                 ],
                 "exclave",
             )
@@ -104,8 +105,8 @@ def main() -> int:
     rc, out, err = run(
         [
             os.path.join(ex, "tree", "usr", "bin", gcc),
-            "--sysroot=" + a.prefix,
-            "-B" + a.prefix + "/usr/lib64/",
+            "--sysroot=" + args.prefix,
+            "-B" + args.prefix + "/usr/lib64/",
             "-o",
             prog,
             src,
@@ -121,10 +122,10 @@ def main() -> int:
     versions = sorted(
         set(re.findall(r"GLIBC_([0-9.]+)", out)), key=lambda v: [int(x) for x in v.split(".")]
     )
-    from exclave import elfcheck
-
     # the banner in libc.so.6, any glibc
-    gv = elfcheck.glibc_version(elfcheck.Tree(os.path.join(sysroot_ex, "tree")))
+    gv = elfcheck.glibc_version(
+        elfcheck.Tree(os.path.join(sysroot_ex, "tree")), elfcheck.machine_for(sysroot_ex)
+    )
     if gv is None:
         sys.exit("cannot read the sysroot's glibc version from its libc.so.6")
     have = f"{gv[0]:d}.{gv[1]:d}"
@@ -140,8 +141,8 @@ def main() -> int:
     print(f"inside the exclave: {inside.strip()!r}; on this host: {native.strip()!r}")
     if rc or rc2 or inside != native:
         sys.exit("the output does not run the same inside and outside: " + err + err2)
-    shutil.copy2(prog, a.out)
-    print("wrote " + a.out)
+    shutil.copy2(prog, args.out)
+    print("wrote " + args.out)
     return 0
 
 

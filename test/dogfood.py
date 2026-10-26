@@ -1,4 +1,4 @@
-"""dogfood.py — the tool as an exclave, and an exclave built from inside it (DESIGN.md 10.5).
+"""Make the tool's own exclave, and make an exclave from inside it (DESIGN.md 10.5).
 
     scripts/dogfood --inputs DIR [--work DIR] [--keep]
 
@@ -41,12 +41,12 @@ def main() -> int:
     ap.add_argument("--inputs", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "dogfood-work"))
     ap.add_argument("--keep", action="store_true")
-    a = ap.parse_args()
-    tool_debs, gcc_debs = (os.path.join(a.inputs, d) for d in ("debs-base", "debs-gcc13"))
+    args = ap.parse_args()
+    tool_debs, gcc_debs = (os.path.join(args.inputs, d) for d in ("debs-base", "debs-gcc13"))
     for d in (tool_debs, gcc_debs):
         if not os.path.isdir(d) or not debs(d):
-            sys.exit(f"FAIL {d} has no .deb files: run scripts/inputs {a.inputs}")
-    work = os.path.abspath(a.work)
+            sys.exit(f"FAIL {d} has no .deb files: run scripts/inputs {args.inputs}")
+    work = os.path.abspath(args.work)
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
@@ -126,7 +126,7 @@ def main() -> int:
             work,
         )
         print("     " + out.splitlines()[0])
-        if not a.keep:
+        if not args.keep:
             shutil.rmtree(work, ignore_errors=True)
         return 0
     print("FAIL the two hashes files differ:")

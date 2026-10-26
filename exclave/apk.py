@@ -1,39 +1,39 @@
-"""apk.py — reading Alpine packages (DESIGN.md 10.1).
+"""The Alpine package reader (DESIGN.md 10.1).
 
-The second reader of `unpack`, chosen by the file. An .apk is three gzip members back to back, each
-a tar stream: the signature, the control files (.PKGINFO and the install scripts, dot-files at the
-top), and the data. Python's gzip reads the members as one stream and tarfile reads the headers as
-one archive, since the first two streams carry no end-of-archive blocks. The interface is deb.py's,
-so build.py serves every reader: control(path) -> (fields, scripts) with Debian's field names,
-open_tar(path, "data.tar") -> the data members, parse_deps, satisfies.
+An .apk is three gzip members back to back, each a tar stream: the signature, the control files
+(.PKGINFO and the install scripts, dot-files at the top level), and the data. Decompressed as one
+stream they read as one tar archive, since the first two streams carry no end-of-archive blocks.
 
-What unpack does differently for an Alpine set, here and in build.py:
+Alpine's formats differ from Debian's in ways the rest of the tool sees through this reader:
 
 - `depend` and `provides` name packages, shared objects (`so:libc.musl-x86_64.so.1`), commands
-  (`cmd:gcc`) and pkg-config modules (`pc:zlib`). Versions are ordered as apk-tools orders them,
-  `_rc` before the release and `-r` revisions after. A file dependency, such as `/bin/sh`, names
-  something some package must ship; the dependency report asks the extracted tree whether one does.
-- Alpine's /bin, /sbin and /lib are directories of their own, so the merged-/usr links are not made.
-- One synthesis rule: busybox's post-install makes its applet links with `busybox --install`;
-  build.py makes them from the paths the package ships in /etc/busybox-paths.d, each a relative
-  link to /bin/busybox, so that tree/bin/sh run from outside the exclave reaches the wrapper in the
-  tree (DESIGN.md 13 item 37).
-- musl has no ld.so.cache, and the static check asks for none.
-- Licence texts come only with a package's `-doc` package (DESIGN.md 10.4).
+  (`cmd:gcc`) and pkg-config modules (`pc:zlib`). There are no alternatives. A file dependency,
+  such as `/bin/sh`, names something some package must ship.
+- Versions are ordered as apk-tools orders them: `_rc` before the release, `-r` revisions after.
+- Alpine's /bin, /sbin and /lib are directories of their own, not links into /usr.
+- busybox's post-install makes its applet links with `busybox --install`. The tool makes them
+  instead from the paths busybox lists in /etc/busybox-paths.d, each a relative link to
+  /bin/busybox, so that tree/bin/sh run from outside the exclave reaches the wrapper in the tree
+  (DESIGN.md 13 item 37).
+- musl's loader reads no ld.so.cache, so the static check asks for none.
+- A package's licence text comes only in its `-doc` package.
 """
 
+import gzip
+import io
 import re
 import tarfile
+import zlib
 from typing import IO, Self
 
-type Dep = tuple[str, str | None, str | None]
+from exclave.reader import Dep, PackageError
 
 
-class ApkError(Exception):
-    pass
+class ApkError(PackageError):
+    """An .apk, or a field in one, that cannot be read."""
 
 
-MERGED_USR = False  # Alpine's /bin, /sbin and /lib are directories of their own
+MERGED_USR: bool = False
 SCRIPTS = (
     ".pre-install",
     ".post-install",
@@ -46,20 +46,14 @@ SCRIPTS = (
 
 
 def _norm(name: str) -> str:
-    """A member name without its leading ./ or /.
-
-    The control files are then the ones that start with a dot.
-    """
+    """Return a member name without its leading ./ or /, so control files start with a dot."""
     while name.startswith("./"):
         name = name[2:]
     return name.lstrip("/")
 
 
 class _Members:
-    """The data members of an .apk as a tarfile would present them.
-
-    The top-level dot-files are control.
-    """
+    """The data members of an .apk, the archive without its top-level control dot-files."""
 
     def __init__(self, tar: tarfile.TarFile) -> None:
         self.tar = tar
@@ -78,22 +72,32 @@ class _Members:
 
 
 def _open(path: str) -> tarfile.TarFile:
+    """Open the .apk as one tar archive held in memory, every header read.
+
+    Raises:
+        ApkError: When the file is not gzip or the archive inside is corrupt.
+    """
     try:
-        return tarfile.open(path, mode="r:gz")
-    except (tarfile.TarError, OSError, EOFError) as e:
+        with open(path, "rb") as f:
+            data = gzip.decompress(f.read())
+        t = tarfile.open(fileobj=io.BytesIO(data), mode="r:")  # noqa: SIM115 -- returned open
+        t.getmembers()
+    except (tarfile.TarError, OSError, EOFError, zlib.error) as e:
         msg = f"{path}: not an apk: {e}"
         raise ApkError(msg) from e
+    return t
 
 
-def open_tar(path: str, _member: str) -> _Members:
-    """The data members; `member` is accepted for deb.py's signature and ignored."""
+def open_data(path: str) -> _Members:
+    """Return the package's payload, the files it installs."""
     return _Members(_open(path))
 
 
 def control(path: str) -> tuple[dict[str, str], dict[str, str]]:
-    """(fields, scripts).
+    """Return the package's control fields and its install scripts by name.
 
-    .PKGINFO as Debian-style fields, the install scripts by their apk names.
+    .PKGINFO's keys are given Debian's field names: pkgname is Package, depend is Depends, and so
+    on; noarch is spelt all.
     """
     fields: dict[str, str] = {}
     scripts: dict[str, str] = {}
@@ -130,7 +134,6 @@ def control(path: str) -> tuple[dict[str, str], dict[str, str]]:
     ):
         if src in raw:
             fields[dst] = " ".join(raw[src])
-    fields["_format"] = "apk"
     return fields, scripts
 
 
@@ -139,11 +142,14 @@ _TOKEN = re.compile(r"^(!?)([^\s<>=~!][^\s<>=~]*?)(?:(<=|>=|><|<|>|=|~)(.+))?$")
 
 
 def parse_deps(field: str | None) -> list[list[Dep]]:
-    """'so:libc.musl-x86_64.so.1 zlib>=1.2 !conflict /bin/sh' -> [[(name, op, version)]].
+    """Parse a depend or provides field into groups of one alternative each.
 
-    One alternative each, since apk has none; a '!' item is a conflict and is not a dependency; a
-    path item, /bin/sh, names a file some package must ship, which the fetcher skips and the report
-    asks of the extracted tree.
+    For example, `so:libc.musl-x86_64.so.1 zlib>=1.2 !conflict /bin/sh` gives
+    `[[("so:libc.musl-x86_64.so.1", None, None)], [("zlib", ">=", "1.2")], [("/bin/sh", None,
+    None)]]`: a `!` item is a conflict, not a dependency, and is dropped.
+
+    Raises:
+        ApkError: For an item that is not a dependency.
     """
     out: list[list[Dep]] = []
     for tok in (field or "").split():
@@ -174,20 +180,22 @@ _VER = re.compile(
 )
 
 
-def _key(v: str) -> tuple[list[int], str, list[tuple[int, int]], int, str]:
+def _key(v: str) -> tuple[list[int], str, list[tuple[int, int]], int]:
+    """Split a version into numbers, letter, suffixes and revision, the parts apk-tools compares."""
     m = _VER.match(v)
     if not m:
-        return ([0], "", [], 0, v)  # a version apk would not accept: compared as 0
+        return ([0], "", [], 0)  # a version apk would not accept: compared as 0
     nums = [int(x) for x in m.group(1).split(".")]
     sufs = [
         (_SUFFIX[s.rstrip("0123456789")], int(s[len(s.rstrip("0123456789")) :] or 0))
         for s in m.group(3).split("_")
         if s
     ]
-    return (nums, m.group(2) or "", sufs, int(m.group(4) or 0), "")
+    return (nums, m.group(2) or "", sufs, int(m.group(4) or 0))
 
 
 def vercmp(a: str, b: str) -> int:
+    """Return -1, 0 or 1 as a sorts before, with or after b, in apk-tools' order."""
     ka, kb = _key(a), _key(b)
     for x, y in zip(ka[0], kb[0], strict=False):
         if x != y:
@@ -208,6 +216,10 @@ def vercmp(a: str, b: str) -> int:
 
 
 def satisfies(version: str, op: str | None, want: str | None) -> bool:
+    """Return whether version meets the constraint `op want`; no operator is always met.
+
+    `~` is a fuzzy match: the version is want, or starts with want and a separator.
+    """
     if op is None:
         return True
     assert want is not None  # an operator always comes with its version

@@ -1,4 +1,4 @@
-"""grammar_test.py — the property tests of DESIGN.md 6.2 and 17 item 3.
+"""Run the property tests of the manifest grammar (DESIGN.md 6.2, 17 item 3).
 
     test/grammar_test.py [--cases N] [--seed S] [--c-parser PATH]
 
@@ -17,7 +17,7 @@ import sys
 import tempfile
 lazy from collections.abc import Callable
 
-from exclave import cli
+from exclave import grammar
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -45,22 +45,22 @@ def properties(rng: random.Random, cases: int) -> int:
         b = rand_bytes(rng, path=True).replace(b"/", b"_")
         if b in (b".", b".."):
             b = b"_" + b
-        q = cli.quote(b)
+        q = grammar.quote(b)
         if seen.setdefault(q, b) != b:
             bad += 1  # encode is injective
-        text = ("exclave 1\n\nown {}\n".format(cli.quote(b"/" + b))).encode()
+        text = ("exclave 1\n\nown {}\n".format(grammar.quote(b"/" + b))).encode()
         try:
-            recs = cli.parse(text, "exclave")
-        except cli.GrammarError as e:
+            recs = grammar.parse(text, "exclave")
+        except grammar.GrammarError as e:
             bad += 1
             print(f"FAIL parse of encoded {b!r}: {e}")
             continue
         if recs[1].fields[0][1] != b"/" + b:  # decode(encode(b)) == b
             bad += 1
             print(f"FAIL round trip {b!r}")
-        canon = cli.dump(recs, "exclave")
+        canon = grammar.dump(recs, "exclave")
         # format is idempotent
-        if canon != text or cli.dump(cli.parse(canon, "exclave"), "exclave") != canon:
+        if canon != text or grammar.dump(grammar.parse(canon, "exclave"), "exclave") != canon:
             bad += 1
             print(f"FAIL canonical form {b!r}")
     return bad
@@ -96,7 +96,9 @@ def near_manifest(rng: random.Random) -> bytes:
         key = rng.choice(["own", "host", "data", "cpu", "cpu", "bogus"])
         val = rand_bytes(rng)
         recs.append(
-            "{} {}".format(key, cli.quote((b"/" if key in ("own", "host", "data") else b"") + val))
+            "{} {}".format(
+                key, grammar.quote((b"/" if key in ("own", "host", "data") else b"") + val)
+            )
         )
     if rng.random() < 0.3:
         recs.insert(rng.randint(0, len(recs)), "# " + rand_bytes(rng).decode("utf-8", "replace"))
@@ -115,9 +117,9 @@ def compare(rng: random.Random, cases: int, c_parser: str) -> int:
             with open(path, "wb") as f:
                 f.write(text)
             try:
-                cli.parse(text, "exclave")
+                grammar.parse(text, "exclave")
                 py = True
-            except cli.GrammarError:
+            except grammar.GrammarError:
                 py = False
             c = subprocess.run([c_parser, path], capture_output=True, check=False).returncode == 0
             if py != c:
@@ -145,9 +147,9 @@ def positions(c_parser: str) -> int:
             with open(path, "wb") as f:
                 f.write(text)
             try:
-                cli.parse(text, "exclave")
+                grammar.parse(text, "exclave")
                 py = "accepted"
-            except cli.GrammarError as e:
+            except grammar.GrammarError as e:
                 py = str(e)
             c = subprocess.run(
                 [c_parser, path], capture_output=True, text=True, check=False
@@ -171,19 +173,19 @@ def main() -> int:
     ap.add_argument(
         "--c-parser", default=os.path.join(os.path.dirname(HERE), "build", "gate", "manifest_test")
     )
-    a = ap.parse_args()
-    rng = random.Random(a.seed)
-    bad = properties(rng, a.cases)
+    args = ap.parse_args()
+    rng = random.Random(args.seed)
+    bad = properties(rng, args.cases)
     print(
-        f"{a.cases:d} byte strings: encode injective, decode(encode(b)) == b, "
+        f"{args.cases:d} byte strings: encode injective, decode(encode(b)) == b, "
         f"format idempotent: {bad:d} problems"
     )
-    div = compare(rng, a.cases // 3, a.c_parser) if os.path.exists(a.c_parser) else -1
+    div = compare(rng, args.cases // 3, args.c_parser) if os.path.exists(args.c_parser) else -1
     if div < 0:
-        print(f"no C parser at {a.c_parser}: the two-parser comparison did not run")
+        print(f"no C parser at {args.c_parser}: the two-parser comparison did not run")
     else:
-        print(f"{a.cases // 3:d} near-manifests through both parsers: {div:d} divergences")
-        bad += positions(a.c_parser)
+        print(f"{args.cases // 3:d} near-manifests through both parsers: {div:d} divergences")
+        bad += positions(args.c_parser)
         print(f"{len(POSITIONS):d} errors on known lines: both parsers name the line")
     return 1 if bad or div > 0 else 0
 

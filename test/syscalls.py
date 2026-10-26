@@ -1,4 +1,4 @@
-"""syscalls.py — the path-syscall table test (DESIGN.md 17, item 5).
+"""Check the launcher's syscall classification against the kernel's table (DESIGN.md 17 item 5).
 
 Every syscall in the kernel's table for this machine is classified here: x86-64's unistd_64.h, or
 the generic table aarch64 uses. One at or below the filter's ceiling that this file does not know
@@ -10,10 +10,12 @@ numbers in src/sys.h's block for this machine must be the kernel's.
     test/syscalls.py [unistd.h]     default: the host's table for this machine
 """
 
+import errno
 import os
 import platform
 import re
 import sys
+lazy import ctypes
 lazy from collections.abc import Sequence
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -524,9 +526,6 @@ def kernel_probe(lo: int, hi: int) -> list[int]:
     A userspace header lags the kernel by years, so the table must be checked against the kernel
     itself.
     """
-    import ctypes
-    import errno
-
     libc = ctypes.CDLL(None, use_errno=True)
     present = []
     for nr in range(lo, hi + 1):

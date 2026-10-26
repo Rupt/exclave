@@ -1,6 +1,4 @@
-"""matrix.py — the kernel matrix (DESIGN.md 12, 17 item 5).
-
-An exclave built here, run in virtual machines.
+"""Run an exclave built here in virtual machines, one per kernel (DESIGN.md 12, 17 item 5).
 
     scripts/matrix --exclave EXCLAVE [--only NAME,...] [--work DIR] [--images DIR] [--memory MB]
                    [--jobs N] [--arm64 --debs-arm64 DIR] [--docker-profile FILE]
@@ -11,14 +9,17 @@ where it exists), the exclave, the pinned Python built for the VM's machine and 
 repository's test tree and launcher are copied in over SSH, and the regression suite runs there;
 the oracles, the syscall probe and, given the profile, the Docker-profile run follow where
 bubblewrap works. Three VMs at a time (--jobs), 1 GB each, 2 GB for the emulated row. Results go to
-build/matrix-results.md.
+build/matrix-results.md. The exit status is 1 when any row failed: its image could not be fetched,
+its VM did not boot, or its suite, its sysroot check or one of its oracles failed.
 """
 
 import argparse
 import concurrent.futures
 import contextlib
+import dataclasses
 import io
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -35,110 +36,125 @@ REPO = os.path.dirname(HERE)
 UV = os.path.join(REPO, ".uv", "bin", "uv")
 PYDIR = f"python{sys.version_info[0]}.{sys.version_info[1]}"
 
-# name, expected kernel, ssh user, image URL candidates (first that downloads wins), package family,
-# notes, arch
-type VmRow = tuple[str, str, str, list[str], str, str, str]
+
+@dataclasses.dataclass(frozen=True)
+class VmRow:
+    """A VM of the matrix."""
+
+    name: str
+    kernel: str  # the kernel the image is expected to boot
+    user: str  # the image's SSH user
+    urls: list[str]  # image URL candidates: the first that downloads wins
+    family: str  # the package family, a key of PACKAGES
+    notes: str
+    arch: str
+
+
 VMS: list[VmRow] = [
-    (
-        "centos-7",
-        "3.10",
-        "centos",
-        ["https://cloud.centos.org/centos/7/images/CentOS-7-x86_64-GenericCloud-2211.qcow2"],
-        "centos7",
-        "EOL; yum repos moved to vault",
-        "x86_64",
+    VmRow(
+        name="centos-7",
+        kernel="3.10",
+        user="centos",
+        urls=["https://cloud.centos.org/centos/7/images/CentOS-7-x86_64-GenericCloud-2211.qcow2"],
+        family="centos7",
+        notes="EOL; yum repos moved to vault",
+        arch="x86_64",
     ),
-    (
-        "ubuntu-18.04",
-        "4.15",
-        "ubuntu",
-        ["https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg-amd64.img"],
-        "apt",
-        "",
-        "x86_64",
+    VmRow(
+        name="ubuntu-18.04",
+        kernel="4.15",
+        user="ubuntu",
+        urls=["https://cloud-images.ubuntu.com/bionic/current/bionic-server-cloudimg-amd64.img"],
+        family="apt",
+        notes="",
+        arch="x86_64",
     ),
-    (
-        "rocky-8",
-        "4.18",
-        "rocky",
-        [
+    VmRow(
+        name="rocky-8",
+        kernel="4.18",
+        user="rocky",
+        urls=[
             "https://dl.rockylinux.org/pub/rocky/8/images/x86_64/Rocky-8-GenericCloud.latest.x86_64.qcow2"
         ],
-        "dnf",
-        "",
-        "x86_64",
+        family="dnf",
+        notes="",
+        arch="x86_64",
     ),
-    (
-        "ubuntu-20.04",
-        "5.4",
-        "ubuntu",
-        ["https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img"],
-        "apt",
-        "",
-        "x86_64",
+    VmRow(
+        name="ubuntu-20.04",
+        kernel="5.4",
+        user="ubuntu",
+        urls=["https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img"],
+        family="apt",
+        notes="",
+        arch="x86_64",
     ),
-    (
-        "debian-11",
-        "5.10",
-        "debian",
-        ["https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2"],
-        "apt",
-        "",
-        "x86_64",
+    VmRow(
+        name="debian-11",
+        kernel="5.10",
+        user="debian",
+        urls=[
+            "https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2"
+        ],
+        family="apt",
+        notes="",
+        arch="x86_64",
     ),
-    (
-        "ubuntu-22.04",
-        "5.15",
-        "ubuntu",
-        ["https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"],
-        "apt",
-        "",
-        "x86_64",
+    VmRow(
+        name="ubuntu-22.04",
+        kernel="5.15",
+        user="ubuntu",
+        urls=["https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"],
+        family="apt",
+        notes="",
+        arch="x86_64",
     ),
-    (
-        "debian-12",
-        "6.1",
-        "debian",
-        ["https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"],
-        "apt",
-        "",
-        "x86_64",
+    VmRow(
+        name="debian-12",
+        kernel="6.1",
+        user="debian",
+        urls=[
+            "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"
+        ],
+        family="apt",
+        notes="",
+        arch="x86_64",
     ),
-    (
-        "fedora",
-        "6.x",
-        "fedora",
-        [
+    VmRow(
+        name="fedora",
+        kernel="6.x",
+        user="fedora",
+        urls=[
             "https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-42-1.1.x86_64.qcow2",
             "https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2",
             "https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2",
         ],
-        "dnf",
-        "SELinux enforcing",
-        "x86_64",
+        family="dnf",
+        notes="SELinux enforcing",
+        arch="x86_64",
     ),
-    (
-        "alpine",
-        "6.x",
-        "alpine",
-        [
+    VmRow(
+        name="alpine",
+        kernel="6.x",
+        user="alpine",
+        urls=[
             "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.3-x86_64-bios-cloudinit-r0.qcow2",
             "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/cloud/nocloud_alpine-3.20.3-x86_64-bios-cloudinit-r0.qcow2",
         ],
-        "apk",
-        "musl host, busybox",
-        "x86_64",
+        family="apk",
+        notes="musl host, busybox",
+        arch="x86_64",
     ),
     # aarch64 under TCG (12): the same suite and oracles, the arm64 launcher and exclave, ten to
     # twenty times slower
-    (
-        "noble-arm64",
-        "6.8",
-        "ubuntu",
-        ["https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img"],
-        "apt",
-        "aarch64, TCG emulation",
-        "aarch64",
+    VmRow(
+        name="noble-arm64",
+        kernel="6.8",
+        user="ubuntu",
+        urls=["https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img"],
+        family="apt",
+        notes="aarch64, TCG emulation",
+        arch="aarch64",
     ),
 ]
 
@@ -152,12 +168,20 @@ PACKAGES: dict[str, list[str]] = {
 }
 
 
-# a row of the results table: VM, kernel, suite, oracles, notes
-type Row = tuple[str, str, str, str, str]
+@dataclasses.dataclass(frozen=True)
+class Row:
+    """A row of the results table, and whether it records a failure."""
+
+    vm: str
+    kernel: str
+    suite: str
+    oracles: str
+    notes: str
+    failed: bool
 
 
-def log(*a: object) -> None:
-    print(time.strftime("%H:%M:%S"), *a, flush=True)
+def log(*words: object) -> None:
+    print(time.strftime("%H:%M:%S"), *words, flush=True)
 
 
 def fetch(url: str, dst: str, tries: int = 4) -> bool:
@@ -193,11 +217,23 @@ def fetch(url: str, dst: str, tries: int = 4) -> bool:
                 continue
             os.replace(tmp, dst)
             return True  # noqa: TRY300 -- a failed rename is logged and retried like a download
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 -- any failure is logged and the download retried
             log("failed:", e)
             if attempt == tries - 1 and os.path.exists(tmp) and os.path.getsize(tmp) == 0:
                 os.remove(tmp)
     return False
+
+
+def oracle_step(script: str, opts: str, lines: int) -> str:
+    """A shell step that runs an oracle on the VM's exclave and keeps its last lines.
+
+    The last line kept is the oracle's exit status, which the pipe through tail would otherwise
+    lose.
+    """
+    return (
+        f"{{ $PWD/python/bin/python3 repo/test/{script} --exclave $PWD/ex {opts} 2>&1; "
+        f'echo "oracle exit status $?"; }} | tail -{lines:d}'
+    )
 
 
 def free_port() -> int:
@@ -448,12 +484,12 @@ def main() -> int:
         help="Docker's default seccomp profile (scripts/inputs fetches it); "
         "without it the Docker-profile run is left out",
     )
-    a = ap.parse_args()
+    args = ap.parse_args()
     if not shutil.which("qemu-system-x86_64") or not shutil.which("cloud-localds"):
         sys.exit("need qemu-system-x86_64 and cloud-localds")
-    ex, work = os.path.abspath(a.exclave), os.path.abspath(a.work)
+    ex, work = os.path.abspath(args.exclave), os.path.abspath(args.work)
     os.makedirs(work, exist_ok=True)
-    os.makedirs(a.images, exist_ok=True)
+    os.makedirs(args.images, exist_ok=True)
     key = os.path.join(work, "id_ed25519")
     if not os.path.exists(key):
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
@@ -470,58 +506,57 @@ def main() -> int:
         if (arch, libc) in payloads:
             return payloads[arch, libc]
         payload = os.path.join(work, f"payload-{arch}-{libc}.tar.gz")
-        if True:  # packed afresh every run: a kept payload once carried a stale test tree
-            log("packing the test tree for", arch)
-            with tarfile.open(payload, "w:gz", compresslevel=1) as t:
-                # src: the filter model the suite builds in the VM (filter_model)
-                for d in ("test", "exclave", "src"):
-                    t.add(os.path.join(REPO, d), arcname="repo/" + d)
-                # the text the launcher carries, which exclave_readme compares
-                t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")
-                t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
-                # the exclave package installed into that Python as uv sync installs it here, in
-                # editable form: a .pth naming the checkout, relative to site-packages
-                pth = b"../../../../repo\n"
-                info = tarfile.TarInfo(f"python/lib/{PYDIR}/site-packages/_exclave.pth")
-                info.size = len(pth)
-                t.addfile(info, io.BytesIO(pth))
-                if a.docker_profile:
-                    t.add(a.docker_profile, arcname="docker-seccomp.json")
-                # the Go regression's programs, built here for the VM's machine: the VMs have no go
-                go = tree.go_toolchain()
-                if go:
-                    for n, p in tree.go_build(go, os.path.join(work, "go-" + arch), arch, work):
-                        t.add(p, arcname=f"repo/build/go/{arch}/{n}")
-                if arch == "x86_64":
-                    t.add(ex, arcname="ex")
-                    t.add(os.path.join(REPO, "build", "launcher"), arcname="repo/build/launcher")
-                    if os.path.exists(os.path.join(REPO, "build", "launcher-old")):
-                        t.add(
-                            os.path.join(REPO, "build", "launcher-old"),
-                            arcname="repo/build/launcher-old",
-                        )
-                    # test/sysroot.py's output: runs natively on every glibc
-                    if os.path.exists(os.path.join(REPO, "build", "sysroot-hello")):
-                        t.add(
-                            os.path.join(REPO, "build", "sysroot-hello"),
-                            arcname="repo/build/sysroot-hello",
-                        )
-                else:
-                    if not a.debs_arm64:
-                        sys.exit(
-                            "the aarch64 VM needs --debs-arm64 DIR, "
-                            "a directory of arm64 .deb files for the gcc exclave"
-                        )
-                    t.add(a.debs_arm64, arcname="debs")
+        # packed afresh every run, so the VMs never test a stale tree
+        log("packing the test tree for", arch)
+        with tarfile.open(payload, "w:gz", compresslevel=1) as t:
+            # src: the filter model the suite builds in the VM (filter_model)
+            for d in ("test", "exclave", "src"):
+                t.add(os.path.join(REPO, d), arcname="repo/" + d)
+            # the text the launcher carries, which exclave_readme compares
+            t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")
+            t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
+            # the exclave package installed into that Python as uv sync installs it here, in
+            # editable form: a .pth naming the checkout, relative to site-packages
+            pth = b"../../../../repo\n"
+            info = tarfile.TarInfo(f"python/lib/{PYDIR}/site-packages/_exclave.pth")
+            info.size = len(pth)
+            t.addfile(info, io.BytesIO(pth))
+            if args.docker_profile:
+                t.add(args.docker_profile, arcname="docker-seccomp.json")
+            # the Go regression's programs, built here for the VM's machine: the VMs have no go
+            go = tree.go_toolchain()
+            if go:
+                for n, p in tree.go_build(go, os.path.join(work, "go-" + arch), arch, work):
+                    t.add(p, arcname=f"repo/build/go/{arch}/{n}")
+            if arch == "x86_64":
+                t.add(ex, arcname="ex")
+                t.add(os.path.join(REPO, "build", "launcher"), arcname="repo/build/launcher")
+                if os.path.exists(os.path.join(REPO, "build", "launcher-old")):
                     t.add(
-                        os.path.join(REPO, "build", "launcher-aarch64"),
-                        arcname="repo/build/launcher",
+                        os.path.join(REPO, "build", "launcher-old"),
+                        arcname="repo/build/launcher-old",
                     )
-                    if os.path.exists(os.path.join(REPO, "build", "launcher-old-aarch64")):
-                        t.add(
-                            os.path.join(REPO, "build", "launcher-old-aarch64"),
-                            arcname="repo/build/launcher-old",
-                        )
+                # test/sysroot.py's output: runs natively on every glibc
+                if os.path.exists(os.path.join(REPO, "build", "sysroot-hello")):
+                    t.add(
+                        os.path.join(REPO, "build", "sysroot-hello"),
+                        arcname="repo/build/sysroot-hello",
+                    )
+            else:
+                if not args.debs_arm64:
+                    sys.exit(
+                        "the aarch64 VM needs --debs-arm64 DIR, "
+                        "a directory of arm64 .deb files for the gcc exclave"
+                    )
+                t.add(args.debs_arm64, arcname="debs")
+                t.add(
+                    os.path.join(REPO, "build", "launcher-aarch64"), arcname="repo/build/launcher"
+                )
+                if os.path.exists(os.path.join(REPO, "build", "launcher-old-aarch64")):
+                    t.add(
+                        os.path.join(REPO, "build", "launcher-old-aarch64"),
+                        arcname="repo/build/launcher-old",
+                    )
         payloads[arch, libc] = payload
         return payload
 
@@ -529,16 +564,19 @@ def main() -> int:
 
     def run_row(row: VmRow) -> Row:
         """One VM's row: boot, copy in, run the suite and the oracles, stop."""
-        name, kernel, user, urls, family, row_notes, arch = row
-        notes = row_notes
+        name, arch, notes = row.name, row.arch, row.notes
         slow = 10 if arch != "x86_64" else 1
-        payload = payload_for(arch, "musl" if family == "apk" else "gnu")
-        image = os.path.join(a.images, name + ".qcow2")
-        if not any(fetch(u, image) for u in urls):
-            return (name, kernel, "image not available", "", notes)
+        payload = payload_for(arch, "musl" if row.family == "apk" else "gnu")
+        image = os.path.join(args.images, name + ".qcow2")
+
+        def failure(kernel: str, why: str) -> Row:
+            return Row(name, kernel, why, "", notes, failed=True)
+
+        if not any(fetch(u, image) for u in row.urls):
+            return failure(row.kernel, "image not available")
         seed = os.path.join(work, name + "-seed.iso")
         with open(os.path.join(work, name + "-user-data"), "w") as f:
-            f.write(user_data(family, pubkey))
+            f.write(user_data(row.family, pubkey))
         with open(os.path.join(work, name + "-meta-data"), "w") as f:
             f.write(f"instance-id: exclave-{name}\nlocal-hostname: {name}\n")
         subprocess.run(
@@ -553,10 +591,10 @@ def main() -> int:
         with start_lock:
             port = free_port()
             log("booting", name)
-            vm = VM(name, image, work, user, port, memory=a.memory, arch=arch)
+            vm = VM(name, image, work, row.user, port, memory=args.memory, arch=arch)
         try:
             if not vm.wait(deadline=600 * slow):
-                return (name, kernel, f"did not come up (see {name}-console.log)", "", notes)
+                return failure(row.kernel, f"did not come up (see {name}-console.log)")
             _rc, uname = vm.ssh("uname -r")
             uname = uname.strip()
             log(name, "kernel", uname)
@@ -566,7 +604,7 @@ def main() -> int:
                 timeout=600 * slow,
             )
             if "unpacked" not in out:
-                return (name, uname, "cannot unpack: " + out[-200:], "", notes)
+                return failure(uname, "cannot unpack: " + out[-200:])
             if arch != "x86_64":  # the exclave is made here, on its own architecture (10.1)
                 _rc, out = vm.ssh(
                     "cd m && $PWD/python/bin/python3 -m exclave unpack ex debs/*.deb "
@@ -576,12 +614,8 @@ def main() -> int:
                 )
                 log(name, "exclave:", " | ".join(x.strip() for x in out.splitlines()[-3:]))
                 if "ex is wrapped" not in out:
-                    return (
-                        name,
-                        uname,
-                        "cannot make the exclave: " + out[-300:].replace("\n", " | "),
-                        "",
-                        notes,
+                    return failure(
+                        uname, "cannot make the exclave: " + out[-300:].replace("\n", " | ")
                     )
             else:
                 # the exclave given carries the launcher that made it: the row tests the checkout's
@@ -591,14 +625,10 @@ def main() -> int:
                     timeout=600 * slow,
                 )
                 if "relinked" not in out:
-                    return (
-                        name,
-                        uname,
-                        "cannot relink the exclave: " + out[-200:].replace("\n", " | "),
-                        "",
-                        notes,
+                    return failure(
+                        uname, "cannot relink the exclave: " + out[-200:].replace("\n", " | ")
                     )
-            _rc, out = vm.ssh(
+            suite_rc, out = vm.ssh(
                 "cd m && $PWD/python/bin/python3 repo/test/run.py --exclave $PWD/ex "
                 f"--work $PWD/work --budget {60 * slow:d} 2>&1",
                 timeout=2400 * slow,
@@ -653,7 +683,7 @@ def main() -> int:
             notes += "; sysroot: " + sysroot + ("" if ok else " FAIL")
             if not ok:
                 fails.append("FAIL sysroot output did not run natively: " + sysroot)
-            oracle = ""
+            oracle, oracle_failed = "", False
             # Ubuntu 24.04 images deny unprivileged user namespaces through AppArmor
             # (kernel.apparmor_restrict_unprivileged_userns); the VM is the matrix's own, so it
             # lifts the sysctl where it exists, as the reference machine's permitted session does
@@ -663,21 +693,23 @@ def main() -> int:
                 "cd m && bwrap --ro-bind / / true 2>&1 && echo bwrap-ok"
             )
             if "bwrap-ok" in out:
-                _rc, out = vm.ssh(
-                    "cd m && $PWD/python/bin/python3 repo/test/oracle_resolve.py "
-                    "--exclave $PWD/ex --work $PWD/rw 2>&1 | tail -30; echo ====; "
-                    "$PWD/python/bin/python3 repo/test/oracle_ns.py "
-                    "--exclave $PWD/ex --work $PWD/nw 2>&1 | tail -40; echo ====; "
-                    "$PWD/python/bin/python3 repo/test/oracle_syscalls.py "
-                    "--exclave $PWD/ex --work $PWD/sw --show 5000 2>&1 | tail -20000; echo ====; "
-                    + (
-                        "$PWD/python/bin/python3 repo/test/docker_profile.py --exclave $PWD/ex "
-                        "--profile $PWD/docker-seccomp.json --work $PWD/dw 2>&1 | tail -20"
-                        if a.docker_profile
-                        else "echo 'docker profile: not given'"
-                    ),
-                    timeout=2400 * slow,
+                steps = [
+                    oracle_step("oracle_resolve.py", "--work $PWD/rw", 30),
+                    oracle_step("oracle_ns.py", "--work $PWD/nw", 40),
+                    oracle_step("oracle_syscalls.py", "--work $PWD/sw --show 5000", 20000),
+                ]
+                if args.docker_profile:
+                    profile = "--profile $PWD/docker-seccomp.json --work $PWD/dw"
+                    steps.append(oracle_step("docker_profile.py", profile, 20))
+                skipped = (
+                    "" if args.docker_profile else "; echo ====; echo 'docker profile: not given'"
                 )
+                _rc, out = vm.ssh(
+                    "cd m && " + "; echo ====; ".join(steps) + skipped, timeout=2400 * slow
+                )
+                # an oracle that failed, or one whose status line never came, fails the row
+                statuses = re.findall(r"^oracle exit status (\d+)$", out, re.MULTILINE)
+                oracle_failed = len(statuses) != len(steps) or any(s != "0" for s in statuses)
                 with open(os.path.join(work, name + "-oracles.log"), "w") as f:
                     f.write(out)
                 keep = [
@@ -696,40 +728,41 @@ def main() -> int:
                 log(name, oracle)
             else:
                 oracle = "no user namespaces"
-            return (
+            return Row(
                 name,
                 uname,
                 suite + ("; " + "; ".join(f[:80] for f in fails[:4]) if fails else ""),
                 oracle,
                 notes,
+                failed=bool(suite_rc or fails or oracle_failed),
             )
-        except Exception as e:  # noqa: BLE001
-            return (name, kernel, f"error: {e}", "", notes)
+        except Exception as e:  # noqa: BLE001 -- a row's failure is reported in its row
+            return failure(row.kernel, f"error: {e}")
         finally:
             vm.stop()
 
+    only = args.only.split(",") if args.only else []
     rows = [
         r
         for r in VMS
-        if (not a.only or r[0] in a.only.split(","))
+        if (not only or r.name in only)
         # the emulated rows run only when asked: ten to twenty times slower
-        and (r[6] == "x86_64" or a.arm64 or (a.only and r[0] in a.only.split(",")))
+        and (r.arch == "x86_64" or args.arm64 or r.name in only)
     ]
-    for arch, libc in {(r[6], "musl" if r[4] == "apk" else "gnu") for r in rows}:
-        payload_for(
-            arch, libc
-        )  # packed before the VMs start, once each, so no two rows pack at once
+    # packed before the VMs start, once each, so no two rows pack at once
+    for arch, libc in {(r.arch, "musl" if r.family == "apk" else "gnu") for r in rows}:
+        payload_for(arch, libc)
     # several VMs at a time, each with its own overlay, seed and port; the table keeps VMS's order
-    with concurrent.futures.ThreadPoolExecutor(max_workers=a.jobs) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         results = list(pool.map(run_row, rows))
     table = ["| VM | kernel | suite | oracles | notes |", "|---|---|---|---|---|"] + [
-        "| {} | {} | {} | {} | {} |".format(*r) for r in results
+        f"| {r.vm} | {r.kernel} | {r.suite} | {r.oracles} | {r.notes} |" for r in results
     ]
     text = "\n".join(table) + "\n"
     print(text)
     with open(os.path.join(REPO, "build", "matrix-results.md"), "w") as f:
         f.write(text)
-    return 0
+    return 1 if any(r.failed for r in results) else 0
 
 
 if __name__ == "__main__":

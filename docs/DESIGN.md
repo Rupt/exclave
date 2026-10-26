@@ -1817,7 +1817,10 @@ set that mixes formats is refused. From `.deb` files, in five steps:
    merged-`/usr` and `zutils` transitions that every Ubuntu 24.04
    closure carries, leave a fresh tree unchanged and are ignored. A
    member whose path resolves outside the tree through a symlink is
-   refused, and so is a member under the reserved name `.real` (6.1).
+   refused, as is a hard link whose target does, and so is a member
+   under the reserved name `.real` (6.1). A package file that cannot
+   be read is refused in one line, and a failed unpack leaves no
+   output behind.
    `ar` and `tar` are read in Python, xz, gzip and bzip2 through the
    standard library, and zstd through its `compression.zstd`. Modes
    and modification times come from the archive, with setuid and setgid

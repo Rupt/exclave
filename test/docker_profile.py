@@ -1,4 +1,4 @@
-"""docker_profile.py — an exclave under Docker's default seccomp profile (DESIGN.md 12, 17 item 5).
+"""Run an exclave under Docker's default seccomp profile (DESIGN.md 12, 17 item 5).
 
 Docker's default profile (a JSON allow-list with a default errno) is assembled here into a classic
 BPF program and installed by bwrap around an exclave's workload, with the host's tree visible
@@ -14,8 +14,6 @@ exits 0 when it cannot run.
 import argparse
 import json
 import os
-
-# seccomp's architecture word and Docker's names for this machine, whose profile entries name arches
 import platform
 import shutil
 import struct
@@ -24,10 +22,14 @@ import sys
 from typing import Any
 lazy from collections.abc import Callable
 
+import tree
+lazy import syscalls
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
 
+# seccomp's architecture word and Docker's names for this machine, whose profile entries name arches
 MACHINE = platform.machine()
 AUDIT_ARCH = {"x86_64": 0xC000003E, "aarch64": 0xC00000B7}[MACHINE]
 ARCH_NAMES = {"x86_64": ("amd64", "x86_64"), "aarch64": ("arm64", "aarch64")}[MACHINE]
@@ -52,13 +54,11 @@ DEFAULT_CAPS = {
 
 
 def kernel_table(ex: str | None = None) -> dict[str, int]:
-    """The machine's syscall table from the exclave's headers or the host's.
+    """Return the machine's syscall table from the exclave's headers or the host's.
 
     A gcc exclave ships linux-libc-dev.
     """
-    from syscalls import kernel_table as table
-
-    return table(roots=([os.path.join(ex, "tree")] if ex else []) + ["/"])
+    return syscalls.kernel_table(roots=([os.path.join(ex, "tree")] if ex else []) + ["/"])
 
 
 class BPF:
@@ -102,9 +102,9 @@ class BPF:
 def build(
     profile: dict[str, Any], table: dict[str, int], kernel: tuple[int, int] | None = None
 ) -> BPF:
-    """The profile as a BPF program for this machine.
+    """Build the profile as a BPF program for this machine.
 
-    kernel: a (major, minor) to apply the profile's minKernel conditions against; None takes every
+    kernel is a (major, minor) to apply the profile's minKernel conditions against; None takes every
     such entry.
     """
     default = profile.get("defaultAction", "SCMP_ACT_ERRNO")
@@ -167,19 +167,12 @@ def build(
                 b.emit(BPF.AND_K, 0, 0, (val >> 32) & 0xFFFFFFFF)
                 j = b.emit(BPF.JEQ_K, 0, 0, (val2 >> 32) & 0xFFFFFFFF)
                 skip.append((j, 2))
-            elif op in ("SCMP_CMP_EQ", "SCMP_CMP_NE"):
+            elif op == "SCMP_CMP_EQ":
                 b.emit(BPF.LD_ABS, 0, 0, hi)
                 j1 = b.emit(BPF.JEQ_K, 0, 0, (val >> 32) & 0xFFFFFFFF)
                 b.emit(BPF.LD_ABS, 0, 0, lo)
                 j2 = b.emit(BPF.JEQ_K, 0, 0, val & 0xFFFFFFFF)
-                if op == "SCMP_CMP_EQ":
-                    skip += [(j1, 2), (j2, 2)]
-                else:  # NE: equal means the rule does not apply
-                    b.jump_to(j1, 2, b.label)  # hi differs: applies
-                    # unreachable: assemble() refuses SCMP_CMP_NE before building
-                    b.jump_to(j2, 1, lambda j2=j2: j2 + 1)
-                    skip_eq = b.emit(BPF.JA, 0, 0, 0)
-                    b.jump_to(skip_eq, 3, None)  # ty: ignore[invalid-argument-type] -- unreachable, as above
+                skip += [(j1, 2), (j2, 2)]
             elif op in ("SCMP_CMP_LT", "SCMP_CMP_LE", "SCMP_CMP_GT", "SCMP_CMP_GE"):
                 b.emit(BPF.LD_ABS, 0, 0, lo)  # 32-bit compare: enough for the profile's uses
                 if op == "SCMP_CMP_GE":
@@ -213,9 +206,9 @@ def assemble(
 ) -> bytes:
     with open(profile_path) as f:
         profile = json.load(f)
+    """Assemble the profile into a BPF program for this machine (build), refusing what it lacks."""
     table = kernel_table(ex)
-    BPF()
-    # the NE case above is awkward; the default profile has no NE rules, so refuse rather than guess
+    # the default profile has no SCMP_CMP_NE rule and build implements none: refuse one plainly
     for entry in profile.get("syscalls", []):
         for cond in entry.get("args") or []:
             if cond["op"] == "SCMP_CMP_NE":
@@ -231,7 +224,7 @@ def main() -> int:
     ap.add_argument("--exclave", required=True)
     ap.add_argument("--profile", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "docker-work"))
-    a = ap.parse_args()
+    args = ap.parse_args()
     if (
         not shutil.which("bwrap")
         or subprocess.run(
@@ -243,14 +236,12 @@ def main() -> int:
     ):
         print("bwrap or user namespaces unavailable; the Docker-profile run cannot run here")
         return 0
-    import tree  # the exclave's compiler and shell as the tree spells them
-
-    work = os.path.abspath(a.work)
+    work = os.path.abspath(args.work)
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
     # a copy relinked with the build (17)
-    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "exclave"))
+    ex = tree.fresh_exclave(os.path.abspath(args.exclave), os.path.join(work, "exclave"))
     root = os.path.join(ex, "tree")
     cc = tree.compiler(root, MACHINE) or "cc"
     with open(os.path.join(work, "hello.c"), "w") as f:
@@ -274,7 +265,7 @@ def main() -> int:
         ("Docker's default profile", None),
         ("the profile as Docker installs it before kernel 4.8, process_vm_readv refused", (3, 10)),
     ):
-        prog = assemble(a.profile, ex, kernel)
+        prog = assemble(args.profile, ex, kernel)
         r, w = os.pipe()
         os.write(w, prog)
         os.close(w)

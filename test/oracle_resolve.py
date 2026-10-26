@@ -1,4 +1,4 @@
-"""oracle_resolve.py — the kernel as the oracle for canonicalisation (DESIGN.md 17, item 2).
+"""Check the launcher's path resolution against the kernel's: the resolution oracle (17 item 2).
 
 A random maze of directories, files and symlinks (relative, absolute, dangling, looping, with `..`
 and trailing slashes) is added to a copy of an exclave under /maze. Every generated path is resolved
@@ -12,10 +12,13 @@ import argparse
 import ctypes
 import errno
 import os
+import platform
 import random
 import shutil
 import subprocess
 import sys
+
+import tree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -145,8 +148,8 @@ def main() -> int:
     ap.add_argument("--paths", type=int, default=3000)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--keep", action="store_true")
-    a = ap.parse_args()
-    rng = random.Random(a.seed)
+    args = ap.parse_args()
+    rng = random.Random(args.seed)
     probe = OpenHow(O_PATH, 0, RESOLVE_IN_ROOT)
     if (
         libc.syscall(SYS_openat2, -100, b".", ctypes.byref(probe), ctypes.sizeof(probe)) < 0
@@ -157,20 +160,16 @@ def main() -> int:
             "the resolution oracle cannot run here"
         )
         return 0
-    work = os.path.abspath(a.work)
+    work = os.path.abspath(args.work)
     if os.path.exists(work):
         shutil.rmtree(work)
-    import tree
-
     # a copy relinked with the build (17)
-    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "exclave"))
+    ex = tree.fresh_exclave(os.path.abspath(args.exclave), os.path.join(work, "exclave"))
     root = os.path.join(ex, "tree")
     dirs, files, links = make_maze(root, rng)
     with open(os.path.join(ex, ".exclave", "manifest"), "w") as f:
         # /maze is a non-empty top-level directory: the exclave's by the tree alone (8.1)
         f.write("exclave 1\n")
-    import platform
-
     cc = tree.compiler(root, platform.machine())
     if not cc:
         sys.exit("no C compiler in the exclave")
@@ -185,7 +184,7 @@ def main() -> int:
     )
     if r.returncode:
         sys.exit("cannot compile resolve.c: " + r.stderr.decode(errors="replace"))
-    paths = gen_paths(rng, dirs, files, links, a.paths)
+    paths = gen_paths(rng, dirs, files, links, args.paths)
     p = subprocess.run(
         [os.path.join(ex, ".exclave", "launcher"), prog],
         input="\n".join(paths).encode() + b"\n",
@@ -214,7 +213,7 @@ def main() -> int:
             if fails <= 25:
                 print(f"DIFF {path[:60]:<60} kernel={k} launcher={ans}")
     print(f"{len(paths)} paths: {agree} agree, {fails} differ")
-    if not a.keep and not fails:
+    if not args.keep and not fails:
         shutil.rmtree(work, ignore_errors=True)
     return 1 if fails else 0
 

@@ -1,4 +1,4 @@
-"""vm_run.py — run a script beside some files in each VM of the kernel matrix (DESIGN.md 12).
+"""Run a script beside some files in each VM of the kernel matrix (DESIGN.md 12).
 
     test/vm_run.py --script SH [--only NAME,...] [--work DIR] [--images DIR] [--memory MB] FILE...
 
@@ -31,8 +31,8 @@ def main() -> int:
     )
     ap.add_argument("--memory", type=int, default=2048)
     ap.add_argument("files", nargs="*")
-    a = ap.parse_args()
-    work = os.path.abspath(a.work)
+    args = ap.parse_args()
+    work = os.path.abspath(args.work)
     os.makedirs(work, exist_ok=True)
     key = os.path.join(work, "id_ed25519")
     if not os.path.exists(key):
@@ -41,16 +41,17 @@ def main() -> int:
         pubkey = f.read().strip()
     rows: list[tuple[str, str]] = []
     fails = 0
-    for name, _kernel, user, urls, family, _notes, arch in matrix.VMS:
-        if arch != "x86_64" or (a.only and name not in a.only.split(",")):
+    for row in matrix.VMS:
+        name = row.name
+        if row.arch != "x86_64" or (args.only and name not in args.only.split(",")):
             continue
-        image = os.path.join(a.images, name + ".qcow2")
-        if not any(matrix.fetch(u, image) for u in urls):
+        image = os.path.join(args.images, name + ".qcow2")
+        if not any(matrix.fetch(u, image) for u in row.urls):
             rows.append((name, "image not available"))
             fails += 1
             continue
         with open(os.path.join(work, name + "-user-data"), "w") as f:
-            f.write(matrix.user_data(family, pubkey))
+            f.write(matrix.user_data(row.family, pubkey))
         with open(os.path.join(work, name + "-meta-data"), "w") as f:
             f.write(f"instance-id: exclave-{name}\nlocal-hostname: {name}\n")
         subprocess.run(
@@ -63,16 +64,18 @@ def main() -> int:
             check=True,
         )
         matrix.log("booting", name)
-        vm = matrix.VM(name, image, work, user, matrix.free_port(), memory=a.memory, arch=arch)
+        vm = matrix.VM(
+            name, image, work, row.user, matrix.free_port(), memory=args.memory, arch=row.arch
+        )
         try:
             if not vm.wait(deadline=600):
                 rows.append((name, f"did not come up (see {name}-console.log)"))
                 fails += 1
                 continue
             uname = vm.ssh("uname -r")[1].strip()
-            for p in [*a.files, a.script]:
+            for p in [*args.files, args.script]:
                 vm.scp(p, os.path.basename(p))
-            rc, out = vm.ssh(f"sh {os.path.basename(a.script)} 2>&1", timeout=3600)
+            rc, out = vm.ssh(f"sh {os.path.basename(args.script)} 2>&1", timeout=3600)
             with open(os.path.join(work, name + ".log"), "w") as f:
                 f.write(out)
             tail = " | ".join(line.strip() for line in out.strip().splitlines()[-3:])

@@ -1,4 +1,4 @@
-"""oracle_ns.py — the namespace oracle (DESIGN.md 17, item 1).
+"""Compare an exclave under the launcher with its tree under bwrap: the namespace oracle (17).
 
 The same tree runs twice: under `bwrap` with the unwrapped tree bound read-only at `/`, and under
 the launcher. Exit status, stdout and stderr are compared, and the read-only matrix program of
@@ -9,6 +9,7 @@ than against the launcher. Needs user namespaces and bwrap; says so and exits 0 
 """
 
 import argparse
+import dataclasses
 import os
 import platform
 import re
@@ -17,26 +18,52 @@ import subprocess
 import sys
 lazy from collections.abc import Iterable
 
-from exclave import build, cli
+import tree
+
+from exclave import build, layout
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
+# the identity files the launcher answers from the host (8.4)
+IDENTITY = build.IDENTITY_FILES
 
-# the exclave's multiarch directory: the suite runs on the exclave's own machine
-TRIPLET = f"{platform.machine()}-linux-gnu"
-GCC = TRIPLET + "-gcc-13"  # replaced by what the tree says once the exclave is known (test/tree.py)
-# likewise: the shell, the file behind it, libc, the link's text
-SH, SHX, LIBC, SH_LINK = ("/usr/bin/sh", "/usr/bin/dash", "/lib/x86_64-linux-gnu/libc.so.6", "dash")
-IDENTITY = [
-    "/etc/passwd",
-    "/etc/group",
-    "/etc/nsswitch.conf",
-    "/etc/host.conf",
-    "/etc/resolv.conf",
-    "/etc/hosts",
-    "/etc/ssl/certs/ca-certificates.crt",
-]
+
+@dataclasses.dataclass(frozen=True)
+class Spellings:
+    """The tree's own names for what the workloads use, passed to both worlds (test/tree.py)."""
+
+    gcc: str  # the C compiler
+    sh: str  # the shell's virtual path
+    shx: str  # the file behind the shell
+    libc: str
+    sh_link: str  # the text of the shell's link, or "" when it is no link
+
+    @classmethod
+    def of(cls, root: str) -> Spellings:
+        """Read the spellings from the tree at root."""
+        machine = platform.machine()
+        sh = tree.vbin(root, "sh")
+        real_sh = os.path.join(root, sh.lstrip("/"))
+        return cls(
+            gcc=tree.compiler(root, machine) or f"{machine}-linux-gnu-gcc-13",
+            sh=sh,
+            shx=tree.resolve(root, sh),
+            libc=tree.libc(root, machine),
+            sh_link=os.readlink(real_sh) if os.path.islink(real_sh) else "",
+        )
+
+    def env(self) -> dict[str, str]:
+        """Return the environment that names them to a workload."""
+        return {
+            "CC": self.gcc,
+            "SH": self.sh,
+            "SHX": self.shx,
+            "LIBC": self.libc,
+            "EXCLAVE_TEST_SH": self.sh,
+            "EXCLAVE_TEST_SH_LINK": self.sh_link,
+        }
+
 
 # shell workloads by virtual path; $W is the host work directory, writable in both worlds
 WORKLOADS = [
@@ -83,13 +110,19 @@ EXTRA_BINDS: list[str] = []
 
 
 def norm(text: str, work: str) -> str:
+    """Spell the work directory as $W."""
     return text.replace(work, "$W")
 
 
-def run_bwrap(root: str, work: str, cmd: str, extra: Iterable[str] = ()) -> tuple[int, str, str]:
-    # the work directory is bound at its own path; its top-level directory becomes a tmpfs so that
-    # bwrap can make the mount point inside the read-only root (the tree ships that directory as an
-    # empty placeholder)
+def run_bwrap(
+    root: str, work: str, cmd: str, spellings: Spellings, extra: Iterable[str] = ()
+) -> tuple[int, str, str]:
+    """Run a shell command under bwrap with root read-only at /, where the kernel answers.
+
+    The work directory is bound at its own path. Its top-level directory becomes a tmpfs, so that
+    bwrap can make the mount point inside the read-only root, where the tree ships that directory as
+    an empty placeholder.
+    """
     top = "/" + work.split("/")[1]
     args = [
         "bwrap",
@@ -128,28 +161,13 @@ def run_bwrap(root: str, work: str, cmd: str, extra: Iterable[str] = ()) -> tupl
         "--setenv",
         "TZ",
         "UTC0",
+        # the border constants of 6.2
         "--setenv",
         "SHELL",
-        "/bin/sh",  # the border constants of 6.2
-        "--setenv",
-        "CC",
-        GCC,
-        "--setenv",
-        "SH",
-        SH,
-        "--setenv",
-        "SHX",
-        SHX,
-        "--setenv",
-        "LIBC",
-        LIBC,
-        "--setenv",
-        "EXCLAVE_TEST_SH",
-        SH,
-        "--setenv",
-        "EXCLAVE_TEST_SH_LINK",
-        SH_LINK,
-    ]  # the tree's spellings (test/tree.py)
+        "/bin/sh",
+    ]
+    for k, v in spellings.env().items():
+        args += ["--setenv", k, v]
     for f in IDENTITY:
         if os.path.exists(f) and os.path.lexists(os.path.join(root, f.lstrip("/"))):
             if os.path.islink(f):
@@ -171,21 +189,18 @@ def run_bwrap(root: str, work: str, cmd: str, extra: Iterable[str] = ()) -> tupl
 
 
 def run_launcher(
-    ex: str, work: str, cmd: str | list[str], prog: str | None = None
+    ex: str, work: str, cmd: str | list[str], spellings: Spellings, prog: str | None = None
 ) -> tuple[int, str, str]:
+    """Run a workload under the launcher: cmd by the tree's shell, or prog with arguments cmd."""
     env = {
         "PATH": "/usr/bin:/bin",
         "HOME": work,
         "W": work,
-        "CC": GCC,
-        "SH": SH,
-        "SHX": SHX,
-        "LIBC": LIBC,
-        "EXCLAVE_TEST_SH": SH,
-        "EXCLAVE_TEST_SH_LINK": SH_LINK,
+        **spellings.env(),
+        # replaced at the border (6.2)
         "LANG": "en_GB.UTF-8",
         "TZ": "Asia/Tokyo",
-    }  # the last two replaced at the border (6.2)
+    }
     if prog:
         p = subprocess.run(
             [os.path.join(ex, ".exclave", "launcher"), prog, *cmd],
@@ -197,13 +212,7 @@ def run_launcher(
     else:
         assert isinstance(cmd, str)
         p = subprocess.run(
-            [
-                os.path.join(
-                    ex, "tree", __import__("tree").vbin(os.path.join(ex, "tree"), "sh").lstrip("/")
-                ),
-                "-c",
-                cmd,
-            ],
+            [os.path.join(ex, "tree", spellings.sh.lstrip("/")), "-c", cmd],
             cwd=work,
             env=env,
             capture_output=True,
@@ -219,7 +228,7 @@ def main() -> int:
     ap.add_argument("--exclave", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "oracle-work"))
     ap.add_argument("--keep", action="store_true")
-    a = ap.parse_args()
+    args = ap.parse_args()
     if not shutil.which("bwrap"):
         print("no bwrap; the namespace oracle cannot run here")
         return 0
@@ -231,18 +240,18 @@ def main() -> int:
     ).returncode:
         print("bwrap cannot create namespaces here (user namespaces denied); the oracle cannot run")
         return 0
-    work = os.path.abspath(a.work)
+    work = os.path.abspath(args.work)
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
-    import tree
-
     # the launcher's world: a copy relinked with the build (17)
-    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "exclave"))
+    ex = tree.fresh_exclave(os.path.abspath(args.exclave), os.path.join(work, "exclave"))
     # an unwrapped copy of the tree for bwrap: hard links, then the originals moved back over the
     # wrappers
     root = os.path.join(work, "bare", "tree")
-    shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=cli.link_or_copy)
+    shutil.copytree(
+        os.path.join(ex, "tree"), root, symlinks=True, copy_function=layout.link_or_copy
+    )
     build.unwrap(os.path.join(work, "bare"), log=lambda *_: None)
     with open(os.path.join(root, "usr", "share", "exclave-test-marker"), "w") as f:
         f.write("marker\n")
@@ -259,7 +268,8 @@ def main() -> int:
             tp = os.path.join(root, t.lstrip("/"))
             if not os.path.lexists(tp) and not t.startswith(("/run/", "/tmp/", "/dev/", "/proc/")):
                 os.makedirs(os.path.dirname(tp), exist_ok=True)
-                open(tp, "wb").close()
+                with open(tp, "wb"):
+                    pass
     with open(os.path.join(work, "hello.c"), "w") as f:
         f.write(
             "#include <stdio.h>\n"
@@ -268,20 +278,8 @@ def main() -> int:
     fails = 0
     # 1. the read-only matrix against the kernel: the same program, the same expectations, a real
     # read-only bind
-    global GCC, SH, SHX, LIBC, SH_LINK  # noqa: PLW0603 -- the tree's spellings, which run_bwrap and run_launcher read
-    r = os.path.join(ex, "tree")
-    GCC = tree.compiler(r, platform.machine()) or GCC
-    SH, SHX, LIBC = (
-        tree.vbin(r, "sh"),
-        tree.resolve(r, tree.vbin(r, "sh")),
-        tree.libc(r, platform.machine()),
-    )
-    SH_LINK = (
-        os.readlink(os.path.join(r, SH.lstrip("/")))
-        if os.path.islink(os.path.join(r, SH.lstrip("/")))
-        else ""
-    )
-    gcc = os.path.join(ex, "tree", tree.vbin(os.path.join(ex, "tree"), GCC).lstrip("/"))
+    sp = Spellings.of(os.path.join(ex, "tree"))
+    gcc = os.path.join(ex, "tree", tree.vbin(os.path.join(ex, "tree"), sp.gcc).lstrip("/"))
     prog = os.path.join(work, "ro_matrix")
     r = subprocess.run(
         [gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "ro_matrix.c")],
@@ -296,7 +294,7 @@ def main() -> int:
         )
     hostdir = os.path.join(work, "hostdir")
     os.makedirs(hostdir, exist_ok=True)
-    _rc, out, err = run_bwrap(root, work, f"{prog} {hostdir} /usr/bin/dash")
+    _rc, out, err = run_bwrap(root, work, f"{prog} {hostdir} /usr/bin/dash", sp)
     # under bwrap there is no wrapper, so the redirect line of the program is not meaningful there
     bad = [line for line in out.splitlines() if line.startswith("FAIL") and "wrapper" not in line]
     if bad or "ro_matrix:" not in out:
@@ -312,17 +310,17 @@ def main() -> int:
         )
     # 2. workloads twice
     for cmd in WORKLOADS:
-        shown = cmd.replace("$W", "$W")
+        shown = cmd
         for f in ("moved", "linked", "symlinked", "dashcopy", "hello", "hello.o", "s.sh", "lnk"):
             p = os.path.join(work, f)
             if os.path.lexists(p):
                 os.remove(p)
-        b = run_bwrap(root, work, cmd)
+        b = run_bwrap(root, work, cmd, sp)
         for f in ("moved", "linked", "symlinked", "dashcopy", "hello", "hello.o", "s.sh", "lnk"):
             p = os.path.join(work, f)
             if os.path.lexists(p):
                 os.remove(p)
-        o = run_launcher(ex, work, cmd)
+        o = run_launcher(ex, work, cmd, sp)
         bn = (
             b[0],
             norm(b[1], work),
@@ -345,7 +343,7 @@ def main() -> int:
                 f"     launcher: rc={on[0]} out={on[1][:300]!r} err={on[2][:200]!r}"
             )
     print(f"{len(WORKLOADS) + 1} workloads, {fails} failures")
-    if not a.keep and not fails:
+    if not args.keep and not fails:
         shutil.rmtree(work, ignore_errors=True)
     return fails
 

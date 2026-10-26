@@ -384,12 +384,15 @@ src/scratch.c        handler memory: mmap'd chunks with liveness reclamation (7.
 src/isa.c            the CPU check (7.7): x86-64 psABI levels by cpuid and XCR0, aarch64 levels by AT_HWCAP
 src/str.c            string helpers, arena, the shebang parser
 src/log.c            EXCLAVE_LOG and fatal messages
-exclave/cli.py       the command line: grammar, unpack, wrap, unwrap, check, prune, format, hash, relink; the package's entry point
-exclave/deb.py       ar, tar, compression, control stanzas, dependency fields, Debian version order
-exclave/apk.py       the Alpine reader with deb.py's interface: gzip streams, .PKGINFO, apk's dependency and version syntax
-exclave/rpm.py       the rpm reader with the same interface: lead and headers, the cpio payload, rpm's flags and version order
+exclave/cli.py       the command line: unpack, wrap, unwrap, check, prune, format, hash, relink; the package's entry point
+exclave/grammar.py   the strict grammar of the manifest and the hashes file (6.2), and its canonical form
+exclave/layout.py    an exclave's files: wrappers and originals, the launcher, hashing, EXCLAVE_LOG lines
+exclave/reader.py    the interface every package reader provides
+exclave/deb.py       the Debian reader: ar, tar, compression, control stanzas, dependency fields, version order
+exclave/apk.py       the Alpine reader: gzip streams, .PKGINFO, apk's dependency and version syntax
+exclave/rpm.py       the rpm reader: lead and headers, the cpio payload, rpm's flags and version order
 exclave/build.py     extraction rules, synthesis, placeholders, dependency report, pruning, tree hash, hashes file, unwrap
-exclave/elfcheck.py  the static and dynamic checks of 10.3
+exclave/elfcheck.py  the static and dynamic checks of 10.3, and the loader's library search they share with pruning
 fetch/debs.py        resolve a closure from a Debian archive and download it, checked against the index; the Release signature is not verified, so prefer an https mirror
 fetch/apks.py        the same for an Alpine repository: each package's checksums as apk checks them; the index's signature is not verified
 fetch/rpms.py        the same for a yum or dnf repository, verified by the index's SHA-256

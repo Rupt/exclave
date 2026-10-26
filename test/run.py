@@ -1,24 +1,28 @@
-"""run.py — the regression suite (DESIGN.md 17.4, the part a single machine can run).
+"""Run the regression suite: the part of DESIGN.md 17.4 that a single machine can run.
 
-    test/run.py [--tree DIR | --exclave EXCLAVE] [--work DIR] [--keep] [-k NAME|SUBSTRING]
-                [--order given|reverse|random] [--seed N] [--budget SECONDS]
+    scripts/test [--tree DIR | --exclave EXCLAVE] [--work DIR] [--keep] [-k NAME|SUBSTRING]
+                 [--order given|reverse|random] [--seed N] [--budget SECONDS]
 
-Makes an exclave from TREE (default $EXCLAVE_TEST_TREE), or from the tree of an existing EXCLAVE,
-unwrapped, under WORK (default build/test-work) with a few test files added to the tree, compiles
-test/progs/*.c with the tree's own C compiler (test/tree.py), and runs every named test; with
---exclave, on the fixture kept under build/fixtures/ when there is one (17). Needs python3 and a
-tree with a C compiler (see README.md). Optional: strace for the isolation test, /usr/bin/gcc-13
-for the identical-object test. Exit status is the number of failures.
+The suite makes an exclave under WORK (default build/test-work) from TREE (default
+$EXCLAVE_TEST_TREE) or from the unwrapped tree of an existing EXCLAVE, adds a few test files to its
+tree, compiles test/progs/*.c with the tree's own C compiler (test/tree.py), and runs every named
+test. Given --exclave, it runs on the pruned fixture kept under build/fixtures/ when there is one
+(17).
 
-Tests are independent: every test makes what it needs (the fixtures made at setup are the exclave,
-the compiled programs and the environment, never another test's output), so any subset runs in any
-order; `--order reverse` and `--order random` are how that is checked.
+It runs on the pinned Python (scripts/test) and needs a tree with a C compiler (see README.md).
+strace is optional, for the isolation test, and so is /usr/bin/gcc-13, for the identical-object
+test. The exit status is the number of failures, at most 255.
+
+Tests are independent. Every test makes what it needs: the fixtures made at setup are the exclave,
+the compiled programs and the environment, never another test's output. Any subset therefore runs
+in any order, and `--order reverse` and `--order random` check that.
 """
 
 import argparse
 import os
 import platform
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -27,10 +31,19 @@ import subprocess
 import sys
 import time
 from typing import TYPE_CHECKING, Protocol
+lazy import ctypes
+lazy import gzip
+lazy import hashlib
+lazy import io
+lazy import random
+lazy import resource
+lazy import tarfile
+lazy import tempfile
 
 import tree
 
-from exclave import build, cli
+from exclave import build, cli, grammar, layout
+lazy from exclave import elfcheck
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -128,12 +141,9 @@ TESTS: list[Test] = []
 
 
 def test(f: Test) -> Test:
+    """Register a test with the suite."""
     TESTS.append(f)
     return f
-
-
-def sh_quote(s: str) -> str:
-    return "'" + s.replace("'", "'\\''") + "'"
 
 
 def run(
@@ -193,6 +203,7 @@ def inside(
 
 
 def expect(cond: object, msg: str) -> None:
+    """Fail the test with msg unless cond holds."""
     if not cond:
         raise AssertionError(msg)
 
@@ -212,11 +223,11 @@ copy_exclave = tree.copy_exclave
 
 
 def shared_state(ctx: Ctx) -> tuple[bytes, bytes, tuple[tuple[str, int, int, int], ...]]:
-    """What every test shares and none may change.
+    """Return what every test shares and none may change.
 
-    The exclave's manifest, its hashes file, and for every entry of its tree the path, size, mode
-    and mtime, which an added file, a removed one or a write through a hard link changes; a walk of
-    some thousand lstats, cheap enough to compare after every test.
+    That is the exclave's manifest, its hashes file, and the path, size, mode and mtime of every
+    entry of its tree. An added file, a removed one or a write through a hard link changes these.
+    The walk is one lstat per entry, cheap enough to repeat after every test.
     """
     ex = ctx.exclave
     entries = []
@@ -243,17 +254,16 @@ def shared_state(ctx: Ctx) -> tuple[bytes, bytes, tuple[tuple[str, int, int, int
 
 
 def fixture_keys(ex: str) -> tuple[str, str] | None:
-    """The keys of the pruned fixture (17): the exclave's, and the sources'; None without hashes.
+    """Return the keys of the pruned fixture (17): the exclave's and the sources'.
 
-    The fixture is named by the exclave's hashes file, which hashes its tree, so each exclave has
-    one. What the tests touch is decided by their sources, the tool's and the launcher's, whose key
-    the fixture keeps as a stamp: a fixture made with other sources is almost always still enough,
-    and a run on it checks any failure again on the whole exclave (main).
+    The fixture is named by a hash of the exclave's hashes file, which hashes its tree, so each
+    exclave has its own. What the tests touch depends on the sources of the suite, the tool and the
+    launcher, and the fixture keeps their key as a stamp. A fixture made with other sources is
+    almost always still enough, and a failure on it is checked again on the whole exclave. Returns
+    None when the exclave has no hashes file.
     """
-    import hashlib
-
-    lock = os.path.join(ex, ".exclave", "hashes")
-    if not os.path.isfile(lock):
+    hashes = os.path.join(ex, ".exclave", "hashes")
+    if not os.path.isfile(hashes):
         return None
     files = [os.path.join(HERE, "run.py"), os.path.join(HERE, "tree.py")]
     files += sorted(os.path.join(HERE, "progs", f) for f in os.listdir(os.path.join(HERE, "progs")))
@@ -270,7 +280,7 @@ def fixture_keys(ex: str) -> tuple[str, str] | None:
     sources = hashlib.blake2b(digest_size=6)
     for f in files:
         sources.update(os.path.basename(f).encode() + b"\0" + read_bytes(f) + b"\0")
-    return hashlib.blake2b(read_bytes(lock), digest_size=6).hexdigest(), sources.hexdigest()
+    return hashlib.blake2b(read_bytes(hashes), digest_size=6).hexdigest(), sources.hexdigest()
 
 
 STAMP = ".sources"  # in a fixture: the sources' key it was made with
@@ -279,9 +289,9 @@ STAMP = ".sources"  # in a fixture: the sources' key it was made with
 def make_fixture(ctx: Ctx, dst: str, sources: str) -> None:
     """Keep the shared exclave, pruned to what this run touched, for the next run (17).
 
-    The prune is the tool's own, from every EXCLAVE_LOG file the run wrote: the same tree the tests
-    just passed on, about a fifth of its files. Made only from a run with no failure, so that a
-    partial log never fixes a partial fixture.
+    The prune is the tool's own, from every EXCLAVE_LOG file the run wrote, so the fixture is the
+    tree the tests just passed on. Call it only after a run with no failure, so that a partial log
+    never makes a partial fixture.
     """
     logs = sorted(
         os.path.join(dp, f) for dp, dn, fn in os.walk(ctx.work) for f in fn if f.endswith(".log")
@@ -297,10 +307,10 @@ def make_fixture(ctx: Ctx, dst: str, sources: str) -> None:
         return
     with open(os.path.join(tmp, STAMP), "w") as f:
         f.write(sources + "\n")
-    if os.path.isdir(dst):  # another run made it meanwhile
-        shutil.rmtree(tmp, ignore_errors=True)
-    else:
+    try:
         os.rename(tmp, dst)
+    except OSError:  # another run made it meanwhile
+        shutil.rmtree(tmp, ignore_errors=True)
     # one fixture per exclave name: those of the exclave's earlier contents go
     name = os.path.basename(dst).rsplit("-", 1)[0]
     for old in os.listdir(os.path.dirname(dst)):
@@ -311,7 +321,7 @@ def make_fixture(ctx: Ctx, dst: str, sources: str) -> None:
 
 
 def hello_source(ctx: Ctx) -> str:
-    """hello.c in the work directory: a fixture any test may make, made once."""
+    """Return hello.c in the work directory, writing it if no test has yet."""
     src = os.path.join(ctx.work, "hello.c")
     if not os.path.exists(src):
         with open(src, "w") as f:
@@ -324,12 +334,13 @@ def hello_source(ctx: Ctx) -> str:
 
 # ------------------------------------------------------------------ setup
 def make_exclave(ctx: Ctx) -> None:
+    """Make the shared exclave from ctx.tree, add the test files and wrap it."""
     ex = os.path.join(ctx.work, "exclave")
     root = os.path.join(ex, "tree")
     os.makedirs(os.path.join(ex, ".exclave"))
     shutil.copy2(ctx.launcher_src, os.path.join(ex, ".exclave", "launcher"))
     os.chmod(os.path.join(ex, ".exclave", "launcher"), 0o755)
-    shutil.copytree(ctx.tree, root, symlinks=True, copy_function=cli.link_or_copy)
+    shutil.copytree(ctx.tree, root, symlinks=True, copy_function=layout.link_or_copy)
     # a copy made under a setgid directory inherits the bit; the suite tests the launcher, not the
     # copy
     for dirpath, dirnames, _filenames in os.walk(root):
@@ -357,16 +368,16 @@ def make_exclave(ctx: Ctx) -> None:
             f.write(body)
         os.chmod(p, 0o755)
     top = "/" + ctx.work.split("/")[1]
-    recs = [cli.Record("exclave", [("t", b"1")])]
+    recs = [grammar.Record("exclave", [("t", b"1")])]
     ctx.cwd_given = top not in VOLATILE
     if ctx.cwd_given:
-        recs.append(cli.Record("own", [("s", top.encode())]))
+        recs.append(grammar.Record("own", [("s", top.encode())]))
     with open(os.path.join(ex, ".exclave", "manifest"), "wb") as f:
-        f.write(cli.dump(recs, "exclave"))
+        f.write(grammar.dump(recs, "exclave"))
     cli.wrap_files(ex, quiet=True)
     # wrapped: a hashes file with the hashes (6.4)
-    build.write_lock(
-        ex, [], manifest_hash=cli.b2_file(os.path.join(ex, ".exclave", "manifest")), tree=True
+    build.write_hashes(
+        ex, [], manifest_hash=layout.b2_file(os.path.join(ex, ".exclave", "manifest")), tree=True
     )
     ctx.exclave, ctx.root, ctx.launcher = ex, root, os.path.join(ex, ".exclave", "launcher")
     tree_facts(ctx)
@@ -374,15 +385,11 @@ def make_exclave(ctx: Ctx) -> None:
 
 
 def tree_facts(ctx: Ctx) -> None:
-    """What the tree says about its architecture (7.1).
+    """Record in ctx what the tree says about its architecture (7.1).
 
-    The machine, Debian's multiarch triplet, the loader named by the originals' PT_INTERP and the
-    directory it lives in, and the syscall numbers strace shows for a trapped call.
+    That is the machine, Debian's multiarch triplet, the loader named by the originals' PT_INTERP
+    and the directory it lives in, the shell's spellings and the libc.
     """
-    import platform
-
-    from exclave import elfcheck
-
     ctx.machine = platform.machine()
     ctx.triplet = tree.triplet(ctx.root, ctx.machine)
     t = elfcheck.Tree(ctx.root)
@@ -391,10 +398,7 @@ def tree_facts(ctx: Ctx) -> None:
         return tree.vbin(ctx.root, name)
 
     def vreal(vpath: str) -> str:
-        """A virtual path resolved through the tree's links, as a virtual path.
-
-        The file behind the name.
-        """
+        """Resolve a virtual path through the tree's links to the file behind it, a virtual path."""
         return t.resolve(vpath) or vpath
 
     def payload(name: str) -> str:
@@ -568,7 +572,7 @@ def identical_object(ctx: Ctx) -> str | None:
     if not os.path.exists(host):
         return "no host gcc-13"
     src = hello_source(ctx)
-    a, b = os.path.join(ctx.work, "h_host.o"), os.path.join(ctx.work, "h_can.o")
+    a, b = os.path.join(ctx.work, "h_host.o"), os.path.join(ctx.work, "h_exclave.o")
     run([host, "-O2", "-c", src, "-o", a], cwd=ctx.work)
     rc, _out, err = run(
         [wrapper(ctx, ctx.gcc), "-O2", "-c", src, "-o", b], cwd=ctx.work, env=ctx.env
@@ -667,7 +671,7 @@ def isolation(ctx: Ctx) -> str | None:
                 or p.startswith(VOLATILE)
                 or p in allowed_files
                 or ctx.work.startswith(p + "/")
-                or "/" + p.split("/")[1] not in owned
+                or "/" + p.split("/")[1] not in owned.own
             )
             if not ok:
                 bad.append(f"{name} {p}")
@@ -972,7 +976,7 @@ def host_walk_one_step(ctx: Ctx) -> None:
         [cat, os.path.join(base, "h1", "missing", "h3", "f")], cwd=ctx.work, env=ctx.env
     )
     expect(rc != 0 and "No such file" in err, f"a missing directory in the middle: {err!r}")
-    # the answers above hold with or without the one-step check; where the launcher would use it, it
+    # these answers hold with or without the one-step check; where the launcher would use it, it
     # must have run
     if shutil.which("strace") and has_openat2() and mounted_once(ctx.root):
         trace = os.path.join(ctx.work, f"deephost-{os.getpid()}.trace")
@@ -992,8 +996,6 @@ def has_openat2() -> bool:
 
     Asked of the kernel, not of its version.
     """
-    import ctypes
-
     libc = ctypes.CDLL(None, use_errno=True)
     how = (ctypes.c_uint64 * 3)(0o10000000, 0, 0)  # O_PATH
     nr = {"x86_64": 437, "aarch64": 437}.get(os.uname().machine, 437)
@@ -1273,8 +1275,11 @@ def positional_entry(ctx: Ctx) -> None:
     )
     with open(os.path.join(dp, ".exclave", "manifest"), "wb") as f:
         f.write(
-            cli.dump(
-                [cli.Record("exclave", [("t", b"1")]), cli.Record("data", [("s", b"/opt/sdk")])],
+            grammar.dump(
+                [
+                    grammar.Record("exclave", [("t", b"1")]),
+                    grammar.Record("data", [("s", b"/opt/sdk")]),
+                ],
                 "exclave",
             )
         )
@@ -1384,8 +1389,6 @@ def cwd_rules(ctx: Ctx) -> str | None:
     # the launcher's line for rule 4 and the dynamic check's reading of it, both spellings at once:
     # a library the workload opened under that directory is its own output, a warning, where without
     # the line it would pass unseen
-    from exclave import elfcheck
-
     log = os.path.join(ctx.work, f"cwd-given-{os.getpid()}.log")
     rc, out, err = run([wrapper(ctx, "true")], cwd=ctx.work, env=dict(ctx.env, EXCLAVE_LOG=log))
     expect(
@@ -1394,7 +1397,7 @@ def cwd_rules(ctx: Ctx) -> str | None:
     )
     with open(log, "a") as f:
         f.write(f"open 3 {ctx.work}/sub/libown.so.1\n")
-    rep = elfcheck.dynamic_check(ctx.exclave, [log], cli.owned(ctx.exclave), log=lambda *_: None)
+    rep = elfcheck.dynamic_check(ctx.exclave, [log], cli.owned(ctx.exclave))
     expect(
         any("working directory" in w and "libown.so.1" in w for w in rep.warnings)
         and not rep.errors,
@@ -1443,7 +1446,7 @@ def cross_exclave_distinct_launchers(ctx: Ctx) -> None:
     A program in another exclave, whose launcher is a different file, is exec'd as that launcher,
     which then serves its own tree inside the first exclave's filter (the dogfooding case of 10.5).
     """
-    ex2 = os.path.join(ctx.work, "can2")
+    ex2 = os.path.join(ctx.work, "exclave2")
     copy_exclave(ctx.exclave, ex2)
     padded = os.path.join(ctx.work, "launcher2")
     with open(padded, "wb") as f:
@@ -1452,7 +1455,7 @@ def cross_exclave_distinct_launchers(ctx: Ctx) -> None:
     os.chmod(padded, 0o755)
     cli.cmd_relink(ex2, padded)
     rc, out, err = run([*TOOL, "check", ex2])
-    expect(rc == 0, "can2 check: " + out[-300:] + err[-300:])
+    expect(rc == 0, "exclave2 check: " + out[-300:] + err[-300:])
     true2 = os.path.join(ex2, "tree", ctx.vbin("true").lstrip("/"))
     sh2 = ex2 + "/tree" + ctx.vbin("sh")
     rc, out, err = run(
@@ -1621,11 +1624,11 @@ def earlier_note_name(ctx: Ctx) -> None:
         # two bytes more: its own size
         f.write(blob.replace(b"cont\0\0\0\0" + gen, b"conx\0\0\0\0" + gen) + b"\0\0")
     os.chmod(only, 0o755)
-    can4 = os.path.join(ctx.work, "exclave-note-can")
-    copy_exclave(ctx.exclave, can4)
-    cli.cmd_relink(can4, only)
+    note_copy = os.path.join(ctx.work, "exclave-note-copy")
+    copy_exclave(ctx.exclave, note_copy)
+    cli.cmd_relink(note_copy, only)
     _rc, out, err = run(
-        [wrapper(ctx, "sh"), "-c", "{}/tree{}; echo rc=$?".format(can4, ctx.vbin("true"))],
+        [wrapper(ctx, "sh"), "-c", "{}/tree{}; echo rc=$?".format(note_copy, ctx.vbin("true"))],
         cwd=ctx.work,
         env=ctx.env,
     )
@@ -1658,7 +1661,7 @@ def inherited_identity_dropped(ctx: Ctx) -> None:
     planted = "EXCLAVE_EXEC=/planted EXCLAVE_EXECFN=/planted EXCLAVE_COMM=planted"
     for target, loader in ((sh, False), (hostsh, True)):
         rc, out, err = run(
-            [wrapper(ctx, "sh"), "-c", f"{planted} exec {target} -c {sh_quote(show)}"],
+            [wrapper(ctx, "sh"), "-c", f"{planted} exec {target} -c {shlex.quote(show)}"],
             cwd=ctx.work,
             env=ctx.env,
         )
@@ -1963,23 +1966,20 @@ def make_deb(path: str, name: str, members: Sequence[Member], control_extra: str
 
     members: [(tar-name, kind, target_or_bytes, mode)].
     """
-    import io
-    import tarfile
-    import time as _t
 
     def tgz(entries: Sequence[Member]) -> bytes:
         bio = io.BytesIO()
         with tarfile.open(fileobj=bio, mode="w:gz") as t:
             for n, kind, val, mode in entries:
                 ti = tarfile.TarInfo(n)
-                ti.mtime = int(_t.time())
+                ti.mtime = int(time.time())
                 ti.mode = mode
                 if kind == "dir":
                     ti.type = tarfile.DIRTYPE
                     t.addfile(ti)
-                elif kind == "sym":
+                elif kind in ("sym", "hard"):
                     assert isinstance(val, str)
-                    ti.type = tarfile.SYMTYPE
+                    ti.type = tarfile.SYMTYPE if kind == "sym" else tarfile.LNKTYPE
                     ti.linkname = val
                     t.addfile(ti)
                 else:
@@ -2012,17 +2012,13 @@ def make_apk(path: str, name: str, members: Sequence[Member], pkginfo_extra: str
     Two gzip members, the control stream (.PKGINFO) and the data stream, the way apk-tools lays them
     out. members as for make_deb.
     """
-    import gzip
-    import io
-    import tarfile
-    import time as _t
 
     def tgz(entries: Sequence[Member], *, trailer: bool) -> bytes:
         bio = io.BytesIO()
         with tarfile.open(fileobj=bio, mode="w:") as t:
             for n, kind, val, mode in entries:
                 ti = tarfile.TarInfo(n)
-                ti.mtime = int(_t.time())
+                ti.mtime = int(time.time())
                 ti.mode = mode
                 if kind == "dir":
                     ti.type = tarfile.DIRTYPE
@@ -2064,12 +2060,9 @@ def make_rpm(
     Lead, a signature header, a header with the tags the reader uses, a gzip newc cpio payload.
     members as for make_deb; requires and provides are (name, flags, version) triples.
     """
-    import gzip
-    import struct
-    import time as _t
 
-    # entries: [(tag, type, values)]; types 4 int32, 6 string, 8 string array
     def header(entries: Sequence[tuple[int, int, Sequence[int | str]]]) -> bytes:
+        """Pack a header of (tag, type, values) entries: type 4 int32, 6 string, 8 string array."""
         index, data = b"", b""
         for tag, typ, vals in entries:
             if typ == 4:
@@ -2104,7 +2097,7 @@ def make_rpm(
             nm = ("./" + n).encode() + b"\0"
             h = b"070701" + b"".join(
                 b"%08x" % v
-                for v in (ino, m, 0, 0, 1, int(_t.time()), len(body), 0, 0, 0, 0, len(nm), 0)
+                for v in (ino, m, 0, 0, 1, int(time.time()), len(body), 0, 0, 0, 0, len(nm), 0)
             )
             rec = h + nm
             rec += b"\0" * (-len(rec) % 4) + body
@@ -2249,8 +2242,8 @@ def rpm_unpack(ctx: Ctx) -> None:
             os.listdir(os.path.join(root, "usr", "bin"))
         ),
     )
-    lock = cli.load(os.path.join(out, ".exclave", "hashes"), "hashes")
-    pkgs = cli.values(lock, "pkg")
+    lock = grammar.load(os.path.join(out, ".exclave", "hashes"), "hashes")
+    pkgs = grammar.values(lock, "pkg")
     expect(
         [tuple(p[:3]) for p in pkgs]
         == [(b"libfoo", b"1.0-1", MACHINE.encode()), (b"tool", b"1.0-1", MACHINE.encode())],
@@ -2258,7 +2251,8 @@ def rpm_unpack(ctx: Ctx) -> None:
     )
     rc, o, e = run([*TOOL, "wrap", out])
     expect(
-        rc == 0 and cli.values(cli.load(os.path.join(out, ".exclave", "hashes"), "hashes"), "tree"),
+        rc == 0
+        and grammar.values(grammar.load(os.path.join(out, ".exclave", "hashes"), "hashes"), "tree"),
         "wrap: " + o + e,
     )
     make_apk(os.path.join(d, "x-1.0-r0.apk"), "x", [("usr", "dir", None, 0o755)])
@@ -2344,8 +2338,8 @@ def apk_unpack(ctx: Ctx) -> None:
         and os.readlink(os.path.join(root, "usr", "bin", "tool2")) == "../../bin/busybox",
         "applet links relative to their target: {!r}".format(os.listdir(os.path.join(root, "bin"))),
     )
-    lock = cli.load(os.path.join(out, ".exclave", "hashes"), "hashes")
-    pkgs = cli.values(lock, "pkg")
+    lock = grammar.load(os.path.join(out, ".exclave", "hashes"), "hashes")
+    pkgs = grammar.values(lock, "pkg")
     expect(
         [tuple(p[:3]) for p in pkgs]
         == [(b"libfoo", b"1.0-r0", MACHINE.encode()), (b"tool", b"1.0-r0", MACHINE.encode())],
@@ -2353,7 +2347,8 @@ def apk_unpack(ctx: Ctx) -> None:
     )
     rc, o, e = run([*TOOL, "wrap", out])
     expect(
-        rc == 0 and cli.values(cli.load(os.path.join(out, ".exclave", "hashes"), "hashes"), "tree"),
+        rc == 0
+        and grammar.values(grammar.load(os.path.join(out, ".exclave", "hashes"), "hashes"), "tree"),
         "wrap: " + o + e,
     )
     make_deb(os.path.join(d, "x.deb"), "x", [("./usr", "dir", None, 0o755)])
@@ -2447,7 +2442,7 @@ def exclave_readme(ctx: Ctx) -> None:
         "relink replaced a shortcut named README",
     )
     os.remove(os.path.join(bare, "README"))
-    cli.cmd_relink(bare, ctx.launcher)  # an exclave wrapped before there was a README gets one
+    cli.cmd_relink(bare, ctx.launcher)  # relink writes a README where the exclave has none
     with open(os.path.join(bare, "README"), "rb") as f:
         expect(f.read() == cli.README_TEXT, "relink wrote no README")
 
@@ -2456,7 +2451,9 @@ def exclave_readme(ctx: Ctx) -> None:
 def tool_extraction_rules(ctx: Ctx) -> None:
     """10.1: a member reached through a package's own symlink is refused.
 
-    Two spellings of one path under merged usr conflict.
+    So is a hard link whose target is reached through one, which would put a file from outside the
+    tree into it. Two spellings of one path under merged usr conflict. A corrupt package is refused
+    in one line, and unpack leaves nothing behind.
     """
     d = os.path.join(ctx.work, "debs")
     os.makedirs(d, exist_ok=True)
@@ -2476,7 +2473,9 @@ def tool_extraction_rules(ctx: Ctx) -> None:
     )
     root = os.path.join(ctx.work, "root-evil")
     try:
-        build.extract(root, [("evil", os.path.join(d, "evil.deb"), {})], log=lambda *_: None)
+        build.extract(
+            root, [build.Package("evil", os.path.join(d, "evil.deb"), {})], log=lambda *_: None
+        )
     except build.BuildError as e:
         expect("escapes" in str(e), str(e))
     else:
@@ -2486,6 +2485,34 @@ def tool_extraction_rules(ctx: Ctx) -> None:
         read_text(os.path.join(outside, "README")) == "ORIGINAL\n",
         "the file outside the tree was written",
     )
+    make_deb(
+        os.path.join(d, "thief.deb"),
+        "thief",
+        [
+            ("./usr", "dir", None, 0o755),
+            ("./usr/out", "sym", outside, 0o777),
+            ("./usr/copy", "hard", "./usr/out/README", 0o644),
+        ],
+    )
+    root = os.path.join(ctx.work, "root-thief")
+    try:
+        build.extract(root, [build.Package("thief", os.path.join(d, "thief.deb"), {})])
+    except build.BuildError as e:
+        expect("escapes" in str(e), str(e))
+    else:
+        msg = "a hard link to a file outside the tree was extracted"
+        raise AssertionError(msg)
+    with open(os.path.join(d, "thief.deb"), "rb") as f:
+        whole = f.read()
+    with open(os.path.join(d, "corrupt.deb"), "wb") as f:
+        f.write(whole[: len(whole) - 40])  # the data member cut short
+    out = os.path.join(ctx.work, f"corrupt-{os.getpid()}.exclave")
+    rc, _o, e = run([*TOOL, "unpack", out, os.path.join(d, "corrupt.deb")])
+    expect(
+        rc != 0 and e.startswith("exclave: ") and "Traceback" not in e,
+        f"a corrupt package: rc={rc} {e[-300:]!r}",
+    )
+    expect(not os.path.exists(out), "unpack left a partial exclave behind")
     make_deb(
         os.path.join(d, "a.deb"),
         "a",
@@ -2504,7 +2531,10 @@ def tool_extraction_rules(ctx: Ctx) -> None:
     try:
         build.extract(
             root,
-            [("a", os.path.join(d, "a.deb"), {}), ("b", os.path.join(d, "b.deb"), {})],
+            [
+                build.Package("a", os.path.join(d, "a.deb"), {}),
+                build.Package("b", os.path.join(d, "b.deb"), {}),
+            ],
             log=lambda *_: None,
         )
     except build.BuildError as e:
@@ -2523,8 +2553,6 @@ def unpack_and_wrap(ctx: Ctx) -> None:
     the manifest and tree hashes; unwrap, check and a second wrap keep the hashes file; a tree
     assembled by hand becomes an exclave by wrap alone.
     """
-    from exclave import elfcheck
-
     d = os.path.join(ctx.work, "updebs")
     os.makedirs(d, exist_ok=True)
     true_bytes = read_bytes(ctx.payload("true"))
@@ -2562,8 +2590,8 @@ def unpack_and_wrap(ctx: Ctx) -> None:
         "the version constraint was not checked: " + o,
     )
     expect("virt" not in o, "a Provides in the set was reported missing: " + o)
-    lock = cli.load(os.path.join(out, ".exclave", "hashes"), "hashes")
-    pkgs = cli.values(lock, "pkg")
+    lock = grammar.load(os.path.join(out, ".exclave", "hashes"), "hashes")
+    pkgs = grammar.values(lock, "pkg")
     expect(
         [p[0] for p in pkgs] == [b"libfoo1", b"tool"]
         and pkgs[1][1] == b"1"
@@ -2571,10 +2599,10 @@ def unpack_and_wrap(ctx: Ctx) -> None:
         f"pkg records: {pkgs!r}",
     )
     expect(
-        pkgs[1][3].decode() == cli.b2_file(os.path.join(d, "tool.deb")),
+        pkgs[1][3].decode() == layout.b2_file(os.path.join(d, "tool.deb")),
         "the input hash is the file's",
     )
-    expect(not cli.values(lock, "tree"), "an unwrapped exclave has no tree hash yet")
+    expect(not grammar.values(lock, "tree"), "an unwrapped exclave has no tree hash yet")
     expect(
         os.path.exists(os.path.join(out, "tree", "opt"))
         and os.path.exists(os.path.join(out, "tree", "etc", "passwd")),
@@ -2597,11 +2625,11 @@ def unpack_and_wrap(ctx: Ctx) -> None:
     os.remove(os.path.join(out, "tree", "usr", "bin", "t2"))
     rc, o, e = run([*TOOL, "wrap", out])
     expect(rc == 0 and f"{out} is wrapped" in o, "wrap: " + o + e)
-    lock = cli.load(os.path.join(out, ".exclave", "hashes"), "hashes")
+    lock = grammar.load(os.path.join(out, ".exclave", "hashes"), "hashes")
     expect(
-        len(cli.values(lock, "pkg")) == 2
-        and cli.values(lock, "tree")
-        and cli.values(lock, "manifest"),
+        len(grammar.values(lock, "pkg")) == 2
+        and grammar.values(lock, "tree")
+        and grammar.values(lock, "manifest"),
         "the wrapped hashes file keeps its inputs and adds the hashes: "
         f"{[(r.key) for r in lock]!r}",
     )
@@ -2610,9 +2638,11 @@ def unpack_and_wrap(ctx: Ctx) -> None:
         "the default manifest",
     )
     rc, o, e = run([*TOOL, "hash", out])
-    expect(o.strip().encode() == cli.values(lock, "tree")[0][0], "hash agrees with the hashes file")
     expect(
-        cli.is_wrapper(os.path.join(out, "tree", "usr", "bin", "tool"), cli.launcher_ino(out)),
+        o.strip().encode() == grammar.values(lock, "tree")[0][0], "hash agrees with the hashes file"
+    )
+    expect(
+        layout.is_wrapper(os.path.join(out, "tree", "usr", "bin", "tool"), layout.launcher_of(out)),
         "the script was wrapped",
     )
     rc, o, e = run(
@@ -2636,9 +2666,11 @@ def unpack_and_wrap(ctx: Ctx) -> None:
     os.chmod(os.path.join(hand, "tree", "usr", "bin", "hi"), 0o755)
     rc, o, e = run([*TOOL, "wrap", hand])
     expect(rc == 0, "wrap of a bare tree: " + o + e)
-    lock = cli.load(os.path.join(hand, ".exclave", "hashes"), "hashes")
+    lock = grammar.load(os.path.join(hand, ".exclave", "hashes"), "hashes")
     expect(
-        not cli.values(lock, "pkg") and cli.values(lock, "tree") and cli.values(lock, "launcher"),
+        not grammar.values(lock, "pkg")
+        and grammar.values(lock, "tree")
+        and grammar.values(lock, "launcher"),
         "a hand-made exclave's hashes file has no inputs, a launcher hash and a tree hash",
     )
     rep = elfcheck.static_check(hand, cli.owned(hand), [])
@@ -2652,12 +2684,12 @@ def unpack_and_wrap(ctx: Ctx) -> None:
     wrapped = read_bytes(os.path.join(out, ".exclave", "hashes"))
     rc, o, e = run([*TOOL, "unwrap", out])
     expect(rc == 0, "unwrap: " + o + e)
-    lock = cli.load(os.path.join(out, ".exclave", "hashes"), "hashes")
+    lock = grammar.load(os.path.join(out, ".exclave", "hashes"), "hashes")
     expect(
-        len(cli.values(lock, "pkg")) == 2
-        and not cli.values(lock, "tree")
-        and not cli.values(lock, "manifest")
-        and not cli.values(lock, "launcher"),
+        len(grammar.values(lock, "pkg")) == 2
+        and not grammar.values(lock, "tree")
+        and not grammar.values(lock, "manifest")
+        and not grammar.values(lock, "launcher"),
         "an unwrapped exclave's hashes file keeps its inputs and has no hashes: "
         f"{[r.key for r in lock]!r}",
     )
@@ -2930,7 +2962,7 @@ def ownership_fails_closed(ctx: Ctx) -> None:
             "Permission denied" in err and "No such file" not in err,
             f"an unlistable directory must be the exclave's: {err!r}",
         )
-        expect("/secret" in cli.owned(ex2), "the tool's ownership must agree")
+        expect("/secret" in cli.owned(ex2).own, "the tool's ownership must agree")
     finally:
         os.chmod(secret, 0o755)
     # built by the exclave's gcc: runs inside, like every built program
@@ -3045,12 +3077,12 @@ def log_names_and_escapes(ctx: Ctx) -> None:
     )
     empty = os.path.join(ctx.work, "empty.log")
     open(empty, "w").close()
-    before = sum(1 for _ in cli.walk_files(os.path.join(ex2, "tree")))
+    before = sum(1 for _ in layout.walk_files(os.path.join(ex2, "tree")))
     rc, o, e = run([*TOOL, "prune", ex2, empty])
     expect(
         rc != 0
         and "name no program" in o + e
-        and sum(1 for _ in cli.walk_files(os.path.join(ex2, "tree"))) == before,
+        and sum(1 for _ in layout.walk_files(os.path.join(ex2, "tree"))) == before,
         f"an empty log must be refused: {o[-200:]} {e[-200:]}",
     )
 
@@ -3175,8 +3207,6 @@ def prune_and_check_with_logs(ctx: Ctx) -> str:
     two planted where Debian and RPM put them, and drops the rest, and the pruned exclave still
     compiles.
     """
-    from exclave import build
-
     log = os.path.join(ctx.work, "prune.log")
     if os.path.exists(log):
         os.remove(log)
@@ -3203,10 +3233,10 @@ def prune_and_check_with_logs(ctx: Ctx) -> str:
         with open(os.path.join(ex2, "tree", v.lstrip("/")), "w") as f:
             f.write("a licence no workload reads\n")
     licences = set(build.licence_files(os.path.join(ex2, "tree")))
-    before = sum(1 for _ in cli.walk_files(os.path.join(ex2, "tree")))
+    before = sum(1 for _ in layout.walk_files(os.path.join(ex2, "tree")))
     rc, out, err = run([*TOOL, "prune", ex2, log])
     expect(rc == 0 and "pruned" in out, "prune: " + out + err)
-    after = sum(1 for _ in cli.walk_files(os.path.join(ex2, "tree")))
+    after = sum(1 for _ in layout.walk_files(os.path.join(ex2, "tree")))
     expect(after < before // 2, f"pruning removed little: {after} of {before} files remain")
     expect(
         os.path.isdir(os.path.join(ex2, "tree", "usr", "share"))
@@ -3243,8 +3273,6 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
     DT_NEEDED that is a path through $ORIGIN resolves where glibc's loader expands it, and not under
     musl's, which does not.
     """
-    from exclave import elfcheck
-
     x = os.path.join(ctx.root, "usr", "local", "x")
     base = os.path.join(x, "lib")
     made_local = not os.path.exists(os.path.dirname(x))
@@ -3465,8 +3493,6 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
     # the same library, in a directory the host owns by rule 3, opened by a workload run from /: the
     # check must still report it (nothing is given to the host from /), where a run from that
     # directory would note it as the build's own
-    import tempfile
-
     tmp = tempfile.mkdtemp(prefix="exclave-bld-", dir="/tmp")
     try:
         for f in ("libfoo.so", "usefoo"):
@@ -3644,8 +3670,6 @@ def mixed_tree_refused(ctx: Ctx) -> None:
 
     The check reads the loaders from the files; nothing declares one.
     """
-    from exclave import elfcheck
-
     mixed = os.path.join(ctx.work, "mixed.exclave")
     d = os.path.join(mixed, "tree")
     os.makedirs(os.path.join(d, "usr", "bin"), exist_ok=True)
@@ -3665,7 +3689,7 @@ def mixed_tree_refused(ctx: Ctx) -> None:
     # the other loader's directory
     os.makedirs(os.path.dirname(os.path.join(d, ctx.other_interp.lstrip("/"))), exist_ok=True)
     shutil.copy2(ctx.payload(ctx.interp), os.path.join(d, ctx.other_interp.lstrip("/")))
-    rep = elfcheck.static_check(mixed, ["/usr", "/lib", "/lib64"], [])
+    rep = elfcheck.static_check(mixed, elfcheck.Ownership(("/usr", "/lib", "/lib64")), [])
     expect(
         any("mixes loaders" in e for e in rep.errors),
         f"a tree with two loaders was not refused: {rep.errors[:4]!r}",
@@ -3726,7 +3750,6 @@ def openat2_xdev(ctx: Ctx) -> str | None:
         return "no openat2 on this kernel (5.6 and later)"
     expect(rc == 0, out + err)
     got = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
-    import ctypes
 
     libc = ctypes.CDLL(None, use_errno=True)
     no_xdev, no_magic, no_symlinks, beneath, in_root = 1, 2, 4, 8, 16
@@ -3793,7 +3816,7 @@ def exec_identity(ctx: Ctx) -> None:
     AT_EXECFN and comm spelt /dev/fd/N/name relative to a descriptor and /dev/fd/N through one, comm
     then the file's own name; a close-on-exec script descriptor refused with ENOENT before anything
     runs; a header the loader cannot load ENOEXEC and a loader the exclave lacks ENOENT from execve
-    itself, where the child used to die after a successful exec. The kernel under bwrap measured
+    itself, rather than a child that dies after a successful exec. The kernel under bwrap measured
     these answers (test/exercise.py).
     """
     d = os.path.join(ctx.work, "identhost")
@@ -3831,13 +3854,13 @@ def path_length(ctx: Ctx) -> str | None:
     """13 item 13, 7.4.4: an exclave path too long for PATH_MAX is ENAMETOOLONG.
 
     An exclave path whose real spelling, the root prefix and the virtual path, would not fit
-    PATH_MAX is refused with ENAMETOOLONG and never cut to a shorter name, which once answered
+    PATH_MAX is refused with ENAMETOOLONG and never cut to a shorter name, which would answer
     ENOENT for the cut; its parent, which fits, is fine. And a relative path from a working
     directory so deep that the two together pass PATH_MAX is ENAMETOOLONG too, where the kernel,
     walking relatively, succeeds: the stated limitation. On a private copy of the exclave, since the
     chain is made in the tree.
     """
-    copy = os.path.join(ctx.work, "lengthcan")
+    copy = os.path.join(ctx.work, "lengthexclave")
     shutil.rmtree(copy, ignore_errors=True)
     copy_exclave(ctx.exclave, copy)
     rootlen = len(os.path.join(copy, "tree"))
@@ -3962,20 +3985,21 @@ def adversarial(ctx: Ctx) -> None:
 
     Arguments with bits above the word where the kernel takes an int (the probe compares the
     answers; this checks the buffer past the count): a readlink size of zero or minus one as an int
-    once had the handler write past the program's buffer; the launcher's own variables set before an
-    exec, dropped; a working directory deleted under the program, its . and .. kept; an exec with no
-    descriptor to spare, which the handler borrows against a soft limit and which a hard limit
-    refuses (13); mounts and roots from inside, refused by the filter (7.4.2); SIGSYS ignored,
-    handled or on a signalfd; magic links under /proc/1; interpreter loops and chains; an empty
-    executable and a loader that is a directory. A second batch: a descriptor with no path handed to
-    exec (a pipe or a socket is EACCES, only a regular file is run), a hard link across the border
-    (EXDEV), a symlink chain at the kernel's limit of forty and one past it, the read-only rule from
-    other angles (mknod, ftruncate and a shared writable mapping of a read-only descriptor, a device
-    node), odd process shapes (CLONE_FS, CLONE_FILES, not dumpable, PER_LINUX32, a vfork child, a
-    handler on an alternate stack), the cache saturated and a huge environment, io_uring and clone3
-    refused by the filter, and an execute-only file the loader cannot read (EACCES, a limitation).
-    The kernel under bwrap measured the answers, but for the variables, the mounts, the hard limit,
-    the filter's refusals and the execute-only files, which are the launcher's own.
+    must not have the handler write past the program's buffer; the launcher's own variables set
+    before an exec, dropped; a working directory deleted under the program, its . and .. kept; an
+    exec with no descriptor to spare, which the handler borrows against a soft limit and which a
+    hard limit refuses (13); mounts and roots from inside, refused by the filter (7.4.2); SIGSYS
+    ignored, handled or on a signalfd; magic links under /proc/1; interpreter loops and chains; an
+    empty executable and a loader that is a directory. A second batch: a descriptor with no path
+    handed to exec (a pipe or a socket is EACCES, only a regular file is run), a hard link across
+    the border (EXDEV), a symlink chain at the kernel's limit of forty and one past it, the
+    read-only rule from other angles (mknod, ftruncate and a shared writable mapping of a read-only
+    descriptor, a device node), odd process shapes (CLONE_FS, CLONE_FILES, not dumpable,
+    PER_LINUX32, a vfork child, a handler on an alternate stack), the cache saturated and a huge
+    environment, io_uring and clone3 refused by the filter, and an execute-only file the loader
+    cannot read (EACCES, a limitation). The kernel under bwrap measured the answers, but for the
+    variables, the mounts, the hard limit, the filter's refusals and the execute-only files, which
+    are the launcher's own.
     """
     d = os.path.join(ctx.work, "advhost")
     # the interpreter chains' #! lines, which a deep work directory would outgrow
@@ -4126,8 +4150,6 @@ def adversarial(ctx: Ctx) -> None:
     )
     # the descriptor room the launcher borrows at startup (7.4.5) is the program's again by the time
     # it runs, through the positional entry's re-exec and its exec of a wrapper alike
-    import resource
-
     hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
     rc, out, err = run(
         [ctx.launcher, ctx.vbin("sh"), "-c", "ulimit -n"],
@@ -4255,7 +4277,7 @@ def go_paths(ctx: Ctx) -> str | None:
     Go issues syscalls raw, makes threads with clone, installs its own handler for every signal,
     SIGSYS included (7.5.2), and runs on small stacks; built static by go with cgo off and run
     inside as a host program, twice: as go links it for the machine, and from 0x10000 as its aarch64
-    linker does, an image past where the syscall page lay in early versions (13 item 24). Built here
+    linker does, an image reaching past the syscall page's former address (13 item 24). Built here
     by the host's go, or taken from build/go/<machine>, where the matrix puts the ones it built for
     a VM without go; skips with the reason when there is neither.
     """
@@ -4291,9 +4313,9 @@ def low_image(ctx: Ctx) -> None:
     """13 item 24: a program whose image starts at 0x10000 runs in an exclave.
 
     A program whose image starts at 0x10000 and reaches past 0x3f0000, as Go's aarch64 linker lays
-    one out, runs in an exclave; the syscall page lay at 0x3f0000 in early versions and such a
-    program died unmapped. Built here by the exclave's compiler -no-pie from that address, so every
-    exclave kind and both architectures run it.
+    one out, runs in an exclave; at 0x3f0000, the syscall page's former address that 13 item 24
+    records, such a program died unmapped. Built here by the exclave's compiler -no-pie from that
+    address, so every exclave kind and both architectures run it.
     """
     exe = os.path.join(ctx.work, "low_image")
     rc, out, err = run(
@@ -4475,7 +4497,11 @@ def main() -> int:
     ap.add_argument("--exclave", help="use this exclave's tree, unwrapped")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "test-work"))
     ap.add_argument("--keep", action="store_true")
-    ap.add_argument("-k", default="")
+    ap.add_argument(
+        "-k",
+        default="",
+        help="run the test of this name, or else every test whose name contains it",
+    )
     ap.add_argument(
         "--order",
         default="given",
@@ -4487,24 +4513,23 @@ def main() -> int:
         "--budget",
         type=float,
         default=30,
-        help="seconds a test may take before it fails; the slowest takes 2 natively",
+        help="seconds a test may take before it fails (default 30)",
     )
-    ap.add_argument("-v", action="store_true")
-    a = ap.parse_args()
-    if a.exclave:
-        a.tree = os.path.join(a.exclave, "tree")
-    if not a.tree or not os.path.isdir(a.tree):
+    args = ap.parse_args()
+    if args.exclave:
+        args.tree = os.path.join(args.exclave, "tree")
+    if not args.tree or not os.path.isdir(args.tree):
         sys.exit(
             "need --tree DIR (or $EXCLAVE_TEST_TREE) or --exclave EXCLAVE: a gcc tree to wrap; "
             "see README.md"
         )
-    # the pruned fixture (17): the source exclave pruned to what the suite touches, made by the
-    # first run on an exclave and used by every later one until the exclave changes
+    # The pruned fixture (17) is the given exclave pruned to what the suite touches. The first run
+    # on an exclave makes it, and every later run uses it until the exclave changes.
     fixture, sources, stale, logging = None, "", False, False
-    keys = fixture_keys(a.exclave) if a.exclave else None
-    tree_ = os.path.abspath(a.tree)
+    keys = fixture_keys(args.exclave) if args.exclave else None
+    tree_ = os.path.abspath(args.tree)
     if keys:
-        name = os.path.basename(os.path.abspath(a.exclave)).replace(".exclave", "")
+        name = os.path.basename(os.path.abspath(args.exclave)).replace(".exclave", "")
         fixture, sources = os.path.join(REPO, "build", "fixtures", f"{name}-{keys[0]}"), keys[1]
     if fixture and os.path.isdir(fixture):
         tree_ = os.path.join(fixture, "tree")
@@ -4519,45 +4544,45 @@ def main() -> int:
     elif fixture:
         logging = True
         print("fixture: none yet for this exclave; this run makes it")
-    ctx = prepare(a, tree_, os.path.abspath(a.work), logging=logging)
-    # a test's own name runs it alone, spawn beside spawn_threads
-    exact = [t for t in TESTS if t.__name__ == a.k]
-    order = exact or [t for t in TESTS if not a.k or a.k in t.__name__]
-    if a.order == "reverse":
+    ctx = prepare(args, tree_, os.path.abspath(args.work), logging=logging)
+    # -k with an exact test name runs only that test, so `-k spawn` does not also run
+    # spawn_threads; otherwise -k matches substrings
+    exact = [t for t in TESTS if t.__name__ == args.k]
+    order = exact or [t for t in TESTS if not args.k or args.k in t.__name__]
+    if args.order == "reverse":
         order.reverse()
-    elif a.order == "random":
-        import random
-
-        seed = a.seed if a.seed is not None else int(time.time()) % 100000
+    elif args.order == "random":
+        seed = args.seed if args.seed is not None else int(time.time()) % 100000
         random.Random(seed).shuffle(order)
         print(f"random order, seed {seed}")
-    failed = run_tests(ctx, order, a.budget)
+    failed = run_tests(ctx, order, args.budget)
     if stale and failed and fixture:
-        # the fixture may lack a file these sources now touch: the failures again on the whole
-        # exclave decide, and the fixture goes, for the next run to make afresh
+        # A fixture made with other sources may lack a file these sources touch. The failures run
+        # again on the whole exclave, whose answer stands, and the fixture is removed for the next
+        # run to make afresh.
         print(f"rechecking {len(failed)} on the whole exclave, the fixture predating these sources")
         whole = prepare(
-            a, os.path.abspath(a.tree), os.path.abspath(a.work) + "-whole", logging=False
+            args, os.path.abspath(args.tree), os.path.abspath(args.work) + "-whole", logging=False
         )
-        failed = run_tests(whole, failed, a.budget)
+        failed = run_tests(whole, failed, args.budget)
         shutil.rmtree(fixture, ignore_errors=True)
-        if not a.keep and not failed:
+        if not args.keep and not failed:
             shutil.rmtree(whole.work, ignore_errors=True)
-    elif stale and not a.k and fixture:
+    elif stale and not args.k and fixture:
         with open(os.path.join(fixture, STAMP), "w") as f:  # still enough for these sources
             f.write(sources + "\n")
     print(f"{len(order)} tests, {len(failed)} failures")
-    if logging and fixture and not failed and not a.k:
+    if logging and fixture and not failed and not args.k:
         make_fixture(ctx, fixture, sources)
-    if not a.keep and not failed:
+    if not args.keep and not failed:
         shutil.rmtree(ctx.work, ignore_errors=True)
-    return len(failed)
+    return min(len(failed), 255)
 
 
-def prepare(a: argparse.Namespace, tree_: str, work: str, *, logging: bool) -> Ctx:
-    """The fixtures every test is given: the exclave wrapped from tree_, the programs compiled."""
+def prepare(args: argparse.Namespace, tree_: str, work: str, *, logging: bool) -> Ctx:
+    """Make the fixtures every test is given: the exclave wrapped from tree_, the programs."""
     ctx = Ctx()
-    ctx.from_exclave = bool(a.exclave)
+    ctx.from_exclave = bool(args.exclave)
     ctx.tree = tree_
     ctx.work = work
     ctx.launcher_src = os.path.join(REPO, "build", "launcher")
@@ -4580,7 +4605,7 @@ def prepare(a: argparse.Namespace, tree_: str, work: str, *, logging: bool) -> C
 
 
 def run_tests(ctx: Ctx, order: list[Test], budget: float) -> list[Test]:
-    """Run the tests in order, one PASS or FAIL line each; the ones that failed."""
+    """Run the tests in order, print a PASS or FAIL line for each, and return the failures."""
     failed: list[Test] = []
     for t in order:
         t0 = time.time()
@@ -4594,7 +4619,7 @@ def run_tests(ctx: Ctx, order: list[Test], budget: float) -> list[Test]:
             failed.append(t)
             why = str(e).strip().replace("\n", "\n     ")
             print(f"FAIL {t.__name__:<26} {time.time() - t0:5.1f}s {why}")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 -- any exception is that test's FAIL line
             failed.append(t)
             print(f"FAIL {t.__name__:<26} {time.time() - t0:5.1f}s {type(e).__name__}: {e}")
         # a test must leave the fixtures alone, whether it passed or not (17)

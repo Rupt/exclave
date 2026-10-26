@@ -109,7 +109,8 @@ The loop that has served well, in the order it pays:
   open a network connection; `fetch/debs.py`,
   `fetch/apks.py` and `fetch/rpms.py` are the step before
   it. `curl` has not been needed. A package reader (`deb.py`, `apk.py`,
-  `rpm.py`) has one interface and is chosen by the file. A change to
+  `rpm.py`) has one interface, `exclave/reader.py`'s `Reader`, and is
+  chosen by the file. A change to
   the tool's output is checked by `test/dogfood.py`. `src/gdb.py` is
   data the launcher carries for gdb, not code it runs, and it runs on
   gdb's own Python (ruff targets 3.7 there).

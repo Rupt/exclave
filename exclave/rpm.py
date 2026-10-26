@@ -1,16 +1,13 @@
-"""rpm.py — reading RPM packages (DESIGN.md 10.1).
+"""The RPM package reader (DESIGN.md 10.1).
 
-The third reader of `unpack`, chosen by the file. An .rpm is a 96-byte lead, a signature header, a
-header and a compressed cpio payload. The header is an index of tagged entries; the reader takes the
-names, versions, architecture, dependencies and the install scripts from it, and the payload's
-compressor. The payload is cpio in the "newc" form (or "crc"), gzip, xz or zstd, and is read in
-Python, zstd through the standard library's compression.zstd. The interface is deb.py's, so build.py
-serves every reader: control(path) -> (fields, scripts) with Debian's field names, open_tar(path,
-"data.tar") -> the payload members with tarfile's shape, parse_deps, satisfies. `Obsoletes` is
-presented as `Replaces`.
+An .rpm is a 96-byte lead, a signature header, a header and a compressed cpio payload. The header
+is an index of tagged entries, from which the reader takes the name, version, architecture,
+dependencies, install scripts and the payload's compressor. The payload is cpio in the "newc" or
+"crc" form, compressed with gzip, xz, bzip2 or zstd, and all of it is read with the standard
+library. `Obsoletes` is presented as `Replaces`.
 
-What unpack does differently for an rpm set, here and in build.py; the synthesis rules are Debian's
-(DESIGN.md 10.1), and these are the places rpm needs more:
+The synthesis rules are Debian's, read in rpm's spelling (DESIGN.md 10.1). These are the places an
+rpm set needs more:
 
 - cpio records hard links as entries of one inode with the content on the last; the reader gives the
   content to the first and links the rest, as tar would.
@@ -29,16 +26,16 @@ What unpack does differently for an rpm set, here and in build.py; the synthesis
   package ships at a path under which other packages ship files is made before anything is
   extracted, whatever the order of the packages, so those files land where the link points.
 - Fedora 42's `filesystem` package merges sbin into bin in its %posttrans, written in Lua: when
-  every entry of /usr/sbin is a link `../bin/<name>`, the directory becomes a link to bin. build.py
+  every entry of /usr/sbin is a link `../bin/<name>`, the directory becomes a link to bin. The tool
   does the same when that script is present.
 - Red Hat's ld.so.conf says `include ld.so.conf.d/*.conf`, relative to /etc, which ldconfig refuses
-  under -r. build.py runs ldconfig on a temporary copy in the tree with the pattern spelt from /etc,
+  under -r. The tool runs ldconfig on a temporary copy in the tree with the pattern spelt from /etc,
   and removes the copy afterwards.
 - Files shipped unreadable, such as Fedora's /etc/gshadow at mode 0, are made readable by their
   owner, since a tree its owner cannot read can be neither hashed nor copied. A tree that comes from
   outside with such a file is refused by `wrap`, naming the file (DESIGN.md 10.3).
 - Fedora's ca-certificates ships a p11-kit trust source and links every consumer path to the bundle
-  that update-ca-trust extracts in %post. build.py extracts it the same way, one PEM for each anchor
+  that update-ca-trust extracts in %post. The tool extracts it the same way, one PEM for each anchor
   marked trusted and not distrusted, so that the Red Hat identity file of DESIGN.md 8.4 has a copy
   to fall back to.
 """
@@ -49,26 +46,29 @@ import io
 import lzma
 import re
 import struct
+import zlib
 from compression import zstd
-from typing import Any, BinaryIO, Self
+from dataclasses import dataclass
+from typing import Any, BinaryIO, NamedTuple, Self
 
-type Dep = tuple[str, str | None, str | None]
-# a header's values: bytes, int, str or a list of them, each tag's type fixed by rpm's tag table,
-# which the reader follows and a static type cannot express
+from exclave.reader import Dep, PackageError
+
+# A header's values: bytes, int, str or a list of them. Each tag's type is fixed by rpm's tag table,
+# which the reader follows and a static type cannot express.
 type Header = dict[int, Any]
 
 
-class RpmError(Exception):
-    pass
+class RpmError(PackageError):
+    """An .rpm, or a field in one, that cannot be read."""
 
 
-# Fedora, RHEL 7 and later: the filesystem package ships /bin -> usr/bin and /lib64 -> usr/lib64
-# as links, which the merged-usr links match
-MERGED_USR = True
+# Fedora and RHEL 7 and later merge /bin, /sbin and /lib into /usr: their filesystem package ships
+# /bin -> usr/bin and /lib64 -> usr/lib64.
+MERGED_USR: bool = True
 LEAD = 96
 HEADER_MAGIC = b"\x8e\xad\xe8\x01"
-# the tags the reader uses (rpm's rpmtag.h)
-T = {
+# The tags the reader uses, from rpm's rpmtag.h.
+RPMTAG = {
     "NAME": 1000,
     "VERSION": 1001,
     "RELEASE": 1002,
@@ -93,7 +93,7 @@ SENSE_RPMLIB = 1 << 24
 
 
 def _header(f: BinaryIO) -> Header:
-    """One header section: {tag: value} where a value is bytes, int, str or a list of them."""
+    """Read one header section at f's position into {tag: value}."""
     magic = f.read(8)
     if magic[:4] != HEADER_MAGIC:
         msg = "bad header magic"
@@ -127,45 +127,65 @@ def _header(f: BinaryIO) -> Header:
 
 
 def _sections(path: str) -> tuple[Header, int, str]:
-    """(header dict, payload offset, compressor) of an rpm file."""
+    """Return an rpm file's header, the offset of its payload, and the payload's compressor.
+
+    Raises:
+        RpmError: When the file is not an rpm or a header is truncated or corrupt.
+    """
     with open(path, "rb") as f:
         lead = f.read(LEAD)
         if len(lead) < LEAD or lead[:4] != b"\xed\xab\xee\xdb":
             msg = f"{path}: not an rpm"
             raise RpmError(msg)
-        _header(f)  # the signature header, then padding to 8 bytes
-        pos = f.tell()
-        f.seek((pos + 7) & ~7)
-        h = _header(f)
+        try:
+            _header(f)  # the signature header, then padding to 8 bytes
+            f.seek((f.tell() + 7) & ~7)
+            h = _header(f)
+        except (struct.error, ValueError, IndexError) as e:
+            msg = f"{path}: corrupt header: {e}"
+            raise RpmError(msg) from e
         payload = f.tell()
-    comp = h.get(T["PAYLOADCOMPRESSOR"], "gzip")
+    comp = h.get(RPMTAG["PAYLOADCOMPRESSOR"], "gzip")
     return h, payload, comp
 
 
 def _decompress(comp: str, data: bytes) -> bytes:
-    if comp == "gzip":
-        return gzip.decompress(data)
-    if comp in ("xz", "lzma"):
-        return lzma.decompress(data)
-    if comp == "bzip2":
-        return bz2.decompress(data)
-    if comp == "zstd":
-        try:
-            return zstd.decompress(data)
-        except zstd.ZstdError as e:
-            msg = f"zstd failed: {e}"
-            raise RpmError(msg) from e
-    msg = f"unknown payload compressor {comp!r}"
-    raise RpmError(msg)
+    """Decompress a payload by the compressor its header names.
+
+    Raises:
+        RpmError: When the compressor is unknown or the data is corrupt.
+    """
+    decompressors = {
+        "gzip": gzip.decompress,
+        "xz": lzma.decompress,
+        "lzma": lzma.decompress,
+        "bzip2": bz2.decompress,
+        "zstd": zstd.decompress,
+    }
+    if comp not in decompressors:
+        msg = f"unknown payload compressor {comp!r}"
+        raise RpmError(msg)
+    try:
+        return decompressors[comp](data)
+    except (lzma.LZMAError, zstd.ZstdError, OSError, EOFError, ValueError, zlib.error) as e:
+        msg = f"corrupt {comp} payload: {e}"
+        raise RpmError(msg) from e
 
 
-type _CpioEntry = tuple[str, int, int, bytes, int, tuple[int, int, int]]
+class _CpioEntry(NamedTuple):
+    name: str
+    mode: int
+    mtime: int
+    content: bytes
+    nlink: int
+    inode: tuple[int, int, int]  # (device major, device minor, inode number)
 
 
 def _cpio_members(data: bytes) -> list[_CpioEntry]:
-    """The entries of a newc or crc cpio archive.
+    """Return the entries of a newc or crc cpio archive.
 
-    Each as (name, mode, mtime, content, nlink, (devmaj, devmin, ino)).
+    Raises:
+        RpmError: When a header is corrupt.
     """
     out: list[_CpioEntry] = []
     p = 0
@@ -174,7 +194,11 @@ def _cpio_members(data: bytes) -> list[_CpioEntry]:
         if magic not in (b"070701", b"070702"):
             msg = f"bad cpio header at {p}"
             raise RpmError(msg)
-        fields = [int(data[p + 6 + 8 * k : p + 14 + 8 * k], 16) for k in range(13)]
+        try:
+            fields = [int(data[p + 6 + 8 * k : p + 14 + 8 * k], 16) for k in range(13)]
+        except ValueError as e:
+            msg = f"bad cpio header at {p}"
+            raise RpmError(msg) from e
         (
             ino,
             mode,
@@ -195,25 +219,21 @@ def _cpio_members(data: bytes) -> list[_CpioEntry]:
         if name == "TRAILER!!!":
             break
         content = data[start : start + size]
-        out.append((name, mode, mtime, content, nlink, (devmaj, devmin, ino)))
+        out.append(_CpioEntry(name, mode, mtime, content, nlink, (devmaj, devmin, ino)))
         p = (start + size + 3) & ~3
     return out
 
 
+@dataclass(slots=True)
 class _Member:
-    """The part of tarfile.TarInfo that build.extract reads."""
+    """A payload entry with the parts of tarfile.TarInfo that the reader interface names."""
 
-    def __init__(
-        self, name: str, mode: int, mtime: int, kind: str, *, linkname: str, content: bytes
-    ) -> None:
-        self.name, self.mode, self.mtime, self.kind, self.linkname, self.content = (
-            name,
-            mode & 0o7777,
-            mtime,
-            kind,
-            linkname,
-            content,
-        )
+    name: str
+    mode: int  # the permission bits alone
+    mtime: int
+    kind: str  # "dir", "sym", "lnk", "file" or "special"
+    linkname: str = ""
+    content: bytes = b""
 
     def isdir(self) -> bool:
         return self.kind == "dir"
@@ -229,6 +249,8 @@ class _Member:
 
 
 class _Payload:
+    """The payload's members as an archive."""
+
     def __init__(self, members: list[_Member]) -> None:
         self.members = members
 
@@ -245,11 +267,11 @@ class _Payload:
         return io.BytesIO(m.content)
 
 
-def open_tar(path: str, _member: str) -> _Payload:
-    """The payload's members.
+def open_data(path: str) -> _Payload:
+    """Return the package's payload, the files it installs.
 
-    Hard links in cpio are entries of one inode with the content on the last of them; the reader
-    gives the content to the first and makes the rest links to it, as tar would.
+    cpio records a hard link as several entries of one inode, the content on the last of them; the
+    reader gives the content to the first and makes the rest links to it, as tar would.
     """
     _h, payload, comp = _sections(path)
     with open(path, "rb") as f:
@@ -258,40 +280,32 @@ def open_tar(path: str, _member: str) -> _Payload:
     raw = _cpio_members(data)
     first: dict[tuple[int, int, int], _Member] = {}
     members: list[_Member] = []
-    for raw_name, mode, mtime, content, nlink, ident in raw:
-        name = raw_name.removeprefix("./")
-        fmt = mode & 0o170000
+    for entry in raw:
+        name = entry.name.removeprefix("./")
+        perm, fmt = entry.mode & 0o7777, entry.mode & 0o170000
         if fmt == 0o040000:
-            members.append(_Member(name, mode, mtime, "dir", linkname="", content=b""))
+            members.append(_Member(name, perm, entry.mtime, "dir"))
         elif fmt == 0o120000:
-            members.append(
-                _Member(
-                    name,
-                    mode,
-                    mtime,
-                    "sym",
-                    linkname=content.decode("utf-8", "surrogateescape"),
-                    content=b"",
-                )
-            )
+            link = entry.content.decode("utf-8", "surrogateescape")
+            members.append(_Member(name, perm, entry.mtime, "sym", linkname=link))
         elif fmt == 0o100000:
-            if nlink > 1 and ident in first:
-                members.append(
-                    _Member(name, mode, mtime, "lnk", linkname=first[ident].name, content=b"")
-                )
-                if content and not first[ident].content:
-                    first[ident].content = content  # the content travels with the last link
+            first_link = first.get(entry.inode) if entry.nlink > 1 else None
+            if first_link:
+                members.append(_Member(name, perm, entry.mtime, "lnk", linkname=first_link.name))
+                if entry.content and not first_link.content:
+                    first_link.content = entry.content
             else:
-                m = _Member(name, mode, mtime, "file", linkname="", content=content)
-                if nlink > 1:
-                    first[ident] = m
+                m = _Member(name, perm, entry.mtime, "file", content=entry.content)
+                if entry.nlink > 1:
+                    first[entry.inode] = m
                 members.append(m)
         else:
-            members.append(_Member(name, mode, mtime, "special", linkname="", content=b""))
+            members.append(_Member(name, perm, entry.mtime, "special"))
     return _Payload(members)
 
 
 def _deps(h: Header, names: int, versions: int, flags: int) -> list[str]:
+    """Spell the header's dependencies of one kind as parse_deps reads them, rpm's own skipped."""
     out: list[str] = []
     ns, vs, fs = h.get(names, []), h.get(versions, []), h.get(flags, [])
     # a count of one is a scalar
@@ -312,36 +326,38 @@ def _deps(h: Header, names: int, versions: int, flags: int) -> list[str]:
 
 
 def control(path: str) -> tuple[dict[str, str], dict[str, str]]:
-    """(fields, scripts).
+    """Return the package's control fields and its install scripts by name.
 
-    The header as Debian-style fields; the install scripts by rpm's names.
+    The header's tags are given Debian's field names: NAME is Package, REQUIRENAME is Depends, and
+    so on; noarch is spelt all, and the version is epoch:version-release.
     """
     h, _, _ = _sections(path)
     fields = {
-        "Package": h.get(T["NAME"], ""),
-        "Version": "{}-{}".format(h.get(T["VERSION"], ""), h.get(T["RELEASE"], "")),
-        "Architecture": h.get(T["ARCH"], ""),
-        "_format": "rpm",
+        "Package": h.get(RPMTAG["NAME"], ""),
+        "Version": f"{h.get(RPMTAG['VERSION'], '')}-{h.get(RPMTAG['RELEASE'], '')}",
+        "Architecture": h.get(RPMTAG["ARCH"], ""),
     }
     if fields["Architecture"] == "noarch":
         fields["Architecture"] = "all"
-    if T["EPOCH"] in h:
-        fields["Version"] = "{}:{}".format(h[T["EPOCH"]], fields["Version"])
+    if RPMTAG["EPOCH"] in h:
+        fields["Version"] = f"{h[RPMTAG['EPOCH']]}:{fields['Version']}"
     if not fields["Package"]:
         msg = f"{path}: no NAME in its header"
         raise RpmError(msg)
-    fields["Depends"] = " ".join(_deps(h, T["REQUIRENAME"], T["REQUIREVERSION"], T["REQUIREFLAGS"]))
+    fields["Depends"] = " ".join(
+        _deps(h, RPMTAG["REQUIRENAME"], RPMTAG["REQUIREVERSION"], RPMTAG["REQUIREFLAGS"])
+    )
     fields["Provides"] = " ".join(
-        _deps(h, T["PROVIDENAME"], T["PROVIDEVERSION"], T["PROVIDEFLAGS"])
+        _deps(h, RPMTAG["PROVIDENAME"], RPMTAG["PROVIDEVERSION"], RPMTAG["PROVIDEFLAGS"])
     )
     fields["Replaces"] = " ".join(
-        _deps(h, T["OBSOLETENAME"], T["OBSOLETEVERSION"], T["OBSOLETEFLAGS"])
+        _deps(h, RPMTAG["OBSOLETENAME"], RPMTAG["OBSOLETEVERSION"], RPMTAG["OBSOLETEFLAGS"])
     )
     scripts: dict[str, str] = {}
     for key, tag in (
-        ("postinst", T["POSTIN"]),
-        ("preinst", T["PREIN"]),
-        ("posttrans", T["POSTTRANS"]),
+        ("postinst", RPMTAG["POSTIN"]),
+        ("preinst", RPMTAG["PREIN"]),
+        ("posttrans", RPMTAG["POSTTRANS"]),
     ):
         if h.get(tag):
             scripts[key] = h[tag] if isinstance(h[tag], str) else "\n".join(h[tag])
@@ -352,10 +368,14 @@ _TOKEN = re.compile(r"^([^\s<>=]+)(?:(<=|>=|<|>|=)([^\s<>=]+))?$")
 
 
 def parse_deps(field: str | None) -> list[list[Dep]]:
-    """'glibc>=2.17 libc.so.6(GLIBC_2.2.5)(64bit) /bin/sh' -> [[(name, op, version)]].
+    """Parse a dependency field, as control spells it, into groups of one alternative each.
 
-    One alternative each. A version is 'epoch:version-release' as rpm spells it; a file item names a
-    file some package must ship.
+    For example, `glibc>=2.17 libc.so.6(GLIBC_2.2.5)(64bit) /bin/sh` gives `[[("glibc", ">=",
+    "2.17")], [("libc.so.6(GLIBC_2.2.5)(64bit)", None, None)], [("/bin/sh", None, None)]]`. A file
+    item names a file some package must ship.
+
+    Raises:
+        RpmError: For an item that is not a dependency.
     """
     out: list[list[Dep]] = []
     for tok in (field or "").split():
@@ -369,9 +389,10 @@ def parse_deps(field: str | None) -> list[list[Dep]]:
 
 # -------------------------------------------------------------- versions, as rpmvercmp orders them
 def _rpmvercmp(a: str, b: str) -> int:
-    """rpmvercmp: alternating alpha and numeric segments.
+    """Compare two version or release strings as rpmvercmp does.
 
-    Numeric beats alpha, '~' sorts before anything.
+    The strings are compared segment by segment, alphabetic and numeric segments alternating. A
+    numeric segment sorts after an alphabetic one, and `~` before anything.
     """
     if a == b:
         return 0
@@ -402,12 +423,14 @@ def _rpmvercmp(a: str, b: str) -> int:
 
 
 def _evr(v: str) -> tuple[int, str, str]:
+    """Split a version into epoch, version and release."""
     epoch, _, rest = v.partition(":") if ":" in v else ("0", "", v)
     ver, _, rel = rest.partition("-")
     return int(epoch) if epoch.isdigit() else 0, ver, rel
 
 
 def vercmp(a: str, b: str) -> int:
+    """Return -1, 0 or 1 as a sorts before, with or after b, in rpm's order."""
     ea, va, ra = _evr(a)
     eb, vb, rb = _evr(b)
     if ea != eb:
@@ -419,6 +442,7 @@ def vercmp(a: str, b: str) -> int:
 
 
 def satisfies(version: str, op: str | None, want: str | None) -> bool:
+    """Return whether version meets the constraint `op want`; no operator is always met."""
     if op is None:
         return True
     assert want is not None  # an operator always comes with its version

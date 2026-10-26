@@ -1,4 +1,4 @@
-"""exercise.py — one program, two worlds (DESIGN.md 17).
+"""Run one program in two worlds, the kernel's and the launcher's, and mark where they differ (17).
 
 Compile PROG.c with the exclave's compiler, run it under bwrap with the unwrapped tree read-only
 at / (the namespace oracle's world, where the kernel answers) and under the launcher, and print the
@@ -27,20 +27,22 @@ import sys
 import oracle_ns
 import tree
 
-from exclave import build, cli
+from exclave import build, layout
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
 
 def setup(ex0: str, work: str) -> None:
-    """A wrapped copy for the launcher and an unwrapped tree for bwrap, made once per exclave."""
+    """Make a wrapped copy for the launcher and an unwrapped tree for bwrap, once per exclave."""
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
     # a copy relinked with the build (17)
     ex = tree.fresh_exclave(ex0, os.path.join(work, "exclave"))
     root = os.path.join(work, "bare", "tree")
-    shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=cli.link_or_copy)
+    shutil.copytree(
+        os.path.join(ex, "tree"), root, symlinks=True, copy_function=layout.link_or_copy
+    )
     build.unwrap(os.path.join(work, "bare"), log=lambda *_: None)
     for r in (root, os.path.join(ex, "tree")):
         tree.socket_file(os.path.join(r, "usr", "share", "exclave-test.sock"))
@@ -69,7 +71,7 @@ def main() -> int:
     ap.add_argument(
         "args", nargs="*", help="arguments; HOSTDIR is replaced by a fresh writable host directory"
     )
-    a = ap.parse_args()
+    args = ap.parse_args()
     if (
         not shutil.which("bwrap")
         or subprocess.run(
@@ -80,7 +82,7 @@ def main() -> int:
         ).returncode
     ):
         sys.exit("bwrap or user namespaces unavailable; the kernel's world cannot be made here")
-    ex0 = os.path.abspath(a.exclave)
+    ex0 = os.path.abspath(args.exclave)
     with open(os.path.join(ex0, ".exclave", "hashes"), "rb") as f:
         key = hashlib.blake2b(f.read(), digest_size=6).hexdigest()
     work = os.path.join(
@@ -92,18 +94,12 @@ def main() -> int:
         print("the build changed since this copy was made: relinked")
     ex, root = os.path.join(work, "exclave"), os.path.join(work, "bare", "tree")
     r = os.path.join(ex, "tree")
-    machine = os.uname().machine
     # the tree's spellings for both worlds
-    oracle_ns.GCC = tree.compiler(r, machine) or oracle_ns.GCC
-    oracle_ns.SH, oracle_ns.SHX, oracle_ns.LIBC = (
-        tree.vbin(r, "sh"),
-        tree.resolve(r, tree.vbin(r, "sh")),
-        tree.libc(r, machine),
-    )
-    gcc = os.path.join(r, tree.vbin(r, oracle_ns.GCC).lstrip("/"))
-    prog = os.path.join(work, os.path.basename(a.prog).rsplit(".", 1)[0])
+    sp = oracle_ns.Spellings.of(r)
+    gcc = os.path.join(r, tree.vbin(r, sp.gcc).lstrip("/"))
+    prog = os.path.join(work, os.path.basename(args.prog).rsplit(".", 1)[0])
     p = subprocess.run(
-        [gcc, "-O1", "-o", prog, os.path.abspath(a.prog)],
+        [gcc, "-O1", "-o", prog, os.path.abspath(args.prog)],
         cwd=work,
         env={"PATH": "/usr/bin:/bin"},
         stdout=subprocess.PIPE,
@@ -118,11 +114,11 @@ def main() -> int:
         shutil.rmtree(hostdir, ignore_errors=True)
         os.makedirs(hostdir)
 
-    argv = [x.replace("HOSTDIR", hostdir) for x in a.args]
+    argv = [x.replace("HOSTDIR", hostdir) for x in args.args]
     fresh()
-    rc_b, out_b, err_b = oracle_ns.run_bwrap(root, work, " ".join([prog, *argv]))
+    rc_b, out_b, err_b = oracle_ns.run_bwrap(root, work, " ".join([prog, *argv]), sp)
     fresh()
-    rc_o, out_o, err_o = oracle_ns.run_launcher(ex, work, argv, prog=prog)
+    rc_o, out_o, err_o = oracle_ns.run_launcher(ex, work, argv, sp, prog=prog)
     lb, lo = out_b.splitlines(), out_o.splitlines()
     print(f"{'case':<45} | {'kernel (bwrap)':<30} | {'launcher':<30}")
     differ = 0

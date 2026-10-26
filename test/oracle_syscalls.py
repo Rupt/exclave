@@ -1,13 +1,13 @@
-"""oracle_syscalls.py — the differential syscall probe (DESIGN.md 17, item 7).
+"""Compare the kernel's and the launcher's answer to every trapped syscall (DESIGN.md 17 item 7).
 
-Every trapped path and descriptor syscall of src/filter.c, and the two chattr ioctls, is issued with
-every path form of 7.4.4, and every flag that changes resolution, over a random maze, by one program
-(test/progs/probe.c) under two projections of the same tree: the kernel's, a bwrap read-only bind of
-the unwrapped tree at /, and the launcher's. Return value, errno and what a buffer holds afterwards
-must agree case by case; a difference fails unless EXPECTED names its reason. The expectations
-therefore come from the kernel, not from a test's author. Needs user namespaces and bwrap, like
-oracle_ns; says so ("cannot run") and exits 0 when it cannot run, and the gate prints that step as
-SKIP.
+This is the differential syscall probe. One program (test/progs/probe.c) issues every trapped path
+and descriptor syscall of src/filter.c, and the two chattr ioctls, with every path form of 7.4.4
+and every flag that changes resolution, over a random maze. It runs under two projections of the
+same tree: the kernel's, a bwrap read-only bind of the unwrapped tree at /, and the launcher's.
+Return value, errno and what a buffer holds afterwards must agree case by case, and a difference
+fails unless EXPECTED names its reason, so the expectations come from the kernel, not from a test's
+author. Like oracle_ns, the probe needs user namespaces and bwrap; without them it says so ("cannot
+run") and exits 0, and the gate prints that step as SKIP.
 
     test/oracle_syscalls.py --exclave EXCLAVE [--work DIR] [--seed S] [--only NAME] [--keep]
         [--show N] [--expected]
@@ -20,9 +20,9 @@ page (e:), a null pointer (n:) or a pointer into an unmapped page (u:); a string
 xattr_args; an inotify descriptor, a unix socket (k:) or a sockaddr_un (A:); a struct open_how.
 execve runs in a forked child whose exit status is the answer.
 
-Cases. The table covers the 61 trapped path syscalls and six descriptor-addressed ones (fchmod,
+Cases. The table covers the trapped path syscalls and the descriptor-addressed ones (fchmod,
 fchown, fsetxattr, fremovexattr, fstatfs, and ioctl with FS_IOC_SETFLAGS and FS_IOC_FSSETXATTR),
-crossed with every flag that changes resolution and with 66 path forms (class Forms) over a random
+crossed with every flag that changes resolution and with the path forms of class Forms over a random
 maze:
   - inside the exclave: a file, a directory and a symlink of every kind (loop, chained, dangling,
     absolute, relative), a wrapper, the shell's link, an identity file, a placeholder,
@@ -73,10 +73,10 @@ kinds:
     (6.14 checks the permission first).
 More differences are accepted on older kernels, where more of the kernel entries apply.
 
-Counts. On the reference machine the probe runs 19 093 cases in 68 groups (one per syscall, plus the
-cases run after a chdir into the exclave) on each of the gate's four exclaves, none differing;
-between 362 and 368 are accepted, all but 65 of them RESOLVE_CACHED's EAGAIN, whose count moves by a
-few between runs. The count is for x86-64 from the gate's work directory: a syscall missing from the
+Counts. The last line of the output gives the number of cases, of groups (one per syscall, plus
+the cases run after a chdir into the exclave) and of path forms, then the differences and those
+accepted. Most accepted differences are RESOLVE_CACHED's EAGAIN, whose count moves by a few between
+runs. The number of cases depends on the machine and the work directory: a syscall missing from the
 machine's table is left out, and so is a host-area socket address longer than sun_path's 107 bytes,
 which no program could write whole, so a deeper work directory gives fewer cases.
 """
@@ -95,7 +95,7 @@ import tree
 from oracle_resolve import make_maze
 from syscalls import kernel_table
 
-from exclave import build, cli
+from exclave import build, layout
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -131,99 +131,95 @@ FS_IOC_SETFLAGS = 0x40086602  # _IOW('f', 2, long), the same on both machines
 FS_IOC_FSSETXATTR = 0x401C5820  # _IOW('X', 32, struct fsxattr), the same on both machines
 IN_MODIFY = 2
 STATX_BASIC_STATS = 0x7FF
-IDENTITY = [
-    "/etc/passwd",
-    "/etc/group",
-    "/etc/nsswitch.conf",
-    "/etc/host.conf",
-    "/etc/resolv.conf",
-    "/etc/hosts",
-    "/etc/ssl/certs/ca-certificates.crt",
-]
+# the identity files the launcher answers from the host (8.4)
+IDENTITY = build.IDENTITY_FILES
 
 
 def hx(s: str | bytes) -> str:
+    """Return the hex of a path, spelt as the kernel takes it."""
     return s.encode("utf-8", "surrogateescape").hex() if isinstance(s, str) else s.hex()
 
 
 SOCK_STREAM, SOCK_DGRAM = 1, 2
 
+# Each of the one-letter functions makes an argument token for probe.c, named for the token's
+# letter.
 
-# a unix socket descriptor of this type
+
 def K(type_: int) -> str:  # noqa: N802 -- a token's constructor, named for its token's letter
+    """Make a unix socket descriptor of this type."""
     return f"k:{type_}"
 
 
-# a sockaddr_un holding this path, 108 bytes of it at most (unterminated at 108, as the kernel
-# allows)
 def A(path: str) -> str:  # noqa: N802 -- as K
+    """Make a sockaddr_un holding path, at most 108 bytes of it.
+
+    At 108 bytes the path is unterminated, as the kernel allows.
+    """
     return "A:" + path.encode("utf-8", "surrogateescape")[:108].hex()
 
 
-def alen(
-    path: str,
-) -> int:  # its length argument: the family, the bytes, and a NUL when there is room
+def alen(path: str) -> int:
+    """Return A(path)'s length argument: the family, the bytes, and a NUL when there is room."""
     n = min(len(path.encode("utf-8", "surrogateescape")), 108)
     return 2 + n + (1 if n < 108 else 0)
 
 
-# the host area's path, set by main: its depth is the work directory's
-HOST_AREA: list[str | None] = [None]
+def unwritable(host_area: str, path: str) -> bool:
+    """Tell whether path is in the host area and past sun_path's 107 bytes.
 
-
-# a host-area path past sun_path's 107 bytes, which no program can write whole: the kernel's answer
-# would be for the cut name, outside the area, so the case is the work directory's, not
-# translation's
-def unwritable(path: str) -> bool:
-    h = HOST_AREA[0]
-    return bool(h) and path.startswith(h) and len(path.encode("utf-8", "surrogateescape")) > 107
+    No program can write such an address whole. The kernel's answer would be for the cut name,
+    outside the area, so the case tests the work directory's depth rather than the translation,
+    and is left out.
+    """
+    return path.startswith(host_area) and len(path.encode("utf-8", "surrogateescape")) > 107
 
 
 # the relative socket name: one per driver, since a chdir into /tmp binds it in the host's /tmp
 REL_SOCK = f"probe-sock-{os.getpid()}"
 
 
-# the path behind an s: token; None for the fault forms, which a sockaddr cannot carry
 def raw_of(tok: str) -> str | None:
+    """Return the path behind an s: token, or None for the fault forms a sockaddr cannot carry."""
     return (
         bytes.fromhex(tok[2:]).decode("utf-8", "surrogateescape") if tok.startswith("s:") else None
     )
 
 
-# a string argument
 def S(path: str) -> str:  # noqa: N802 -- as K
+    """Make a string argument."""
     return "s:" + hx(path)
 
 
-# an integer argument
 def I(n: int) -> str:  # noqa: E743, N802 -- as K
+    """Make an integer argument."""
     return f"i:{n}"
 
 
-# a descriptor opened on path before the call
 def F(flags: int, path: str) -> str:  # noqa: N802 -- as K
+    """Make a descriptor opened on path with flags before the call."""
     return f"f:{flags}:{hx(path)}"
 
 
-# a buffer
 def B(kind: str, size: int) -> str:  # noqa: N802 -- as K
+    """Make a buffer of a named kind."""
     return f"b:{kind}:{size}"
 
 
-# a string vector
 def V(*strings: str) -> str:  # noqa: N802 -- as K
+    """Make a string vector."""
     return "v:" + ",".join(hx(s) for s in strings)
 
 
-# struct xattr_args
 def X(value: str, flags: int = 0) -> str:  # noqa: N802 -- as K
+    """Make a struct xattr_args."""
     return f"x:{hx(value)}:{flags}"
 
 
-# struct open_how
 def H(  # noqa: N802 -- as K
     flags: int, mode: int = 0, resolve: int = 0, size: int = 24, tail: int | None = None
 ) -> str:
+    """Make a struct open_how."""
     return f"h:{flags}:{mode}:{resolve}:{size}" + (f":{tail}" if tail is not None else "")
 
 
@@ -337,9 +333,10 @@ class Forms:
             ("rel_dot_dir", "./hdir"),
             ("rel_up", "../" + os.path.basename(h) + "/hfile"),
             ("rel_via_link", "hdir/../hlink"),
+            # up to the root from the host area, and into the tree
             ("rel_root_by_dotdot", "../" * h.count("/") + "."),
             ("rel_etc_by_dotdot", "../" * h.count("/") + "etc/passwd"),
-        ]  # up to the root from the host area, and into the tree
+        ]
         self.paths = [(n, S(p)) for n, p in ex + hostf]
         self.paths += [
             ("fault_end", "e:" + hx(self.file)),
@@ -447,11 +444,12 @@ def generate(
     A name absent from this machine's table is skipped.
     """
     out: list[tuple[str, str, list[str], str]] = []
-    group: list[str | None] = [None]  # cases that depend on one another run in one group, in order
+    # cases that depend on one another run in one group, in order; None groups by syscall
+    group: str | None = None
 
     def add(name: str, label: str, *toks: str) -> None:
         if name in nr:
-            out.append((label, name, list(toks), group[0] or name))
+            out.append((label, name, list(toks), group or name))
 
     open_flags = [
         ("rd", O_RDONLY),
@@ -522,10 +520,12 @@ def generate(
         add("fanotify_mark", n, I(-1), I(0), I(0), I(AT_FDCWD), p)
         add("execve", n, p, V("x"), V())
         raw = raw_of(p)
-        if raw is not None and not unwritable(raw):  # a sockaddr_un path is a path (13 item 31)
+        if raw is not None and not unwritable(
+            forms.host, raw
+        ):  # a sockaddr_un path is a path (13 item 31)
             add("bind", n, K(SOCK_STREAM), A(raw), I(alen(raw)))
             add("connect", n, K(SOCK_STREAM), A(raw), I(alen(raw)))
-        group[0] = "chdir"
+        group = "chdir"
         add("chdir", n, p)
         add("getcwd", n + "/after_chdir", B("cwd", 4096), I(4096))
         add("stat", n + "/after_chdir_dot", S("."), B("stat", 256))
@@ -534,7 +534,7 @@ def generate(
         add("bind", n + "/after_chdir_rel", K(SOCK_STREAM), A(REL_SOCK), I(alen(REL_SOCK)))
         add("connect", n + "/after_chdir_rel", K(SOCK_STREAM), A(REL_SOCK), I(alen(REL_SOCK)))
         add("chdir", n + "/back", S(forms.host))
-        group[0] = None
+        group = None
     add("getcwd", "short", B("cwd", 4), I(4))
     add("getcwd", "all_ones", B("cwd", 4096), I(-1))
     for name in ("bind", "connect"):  # the structure's own rules, and a socket file in the tree
@@ -554,7 +554,7 @@ def generate(
         add(name, "len_hi", K(SOCK_STREAM), A("/maze/sock"), I((1 << 32) | alen("/maze/sock")))
         add(name, "null_addr", K(SOCK_STREAM), "n:", I(20))
         add(name, "fault_addr", K(SOCK_STREAM), "u:", I(20))
-        if not unwritable(forms.host + "/hfile"):
+        if not unwritable(forms.host, forms.host + "/hfile"):
             add(
                 name,
                 "not_a_socket",
@@ -818,7 +818,7 @@ def generate(
         "../../home",
         "./",
     ]
-    group[0] = "cwd_in_exclave"
+    group = "cwd_in_exclave"
     add("chdir", "into_exclave", S(forms.dir))
     add("getcwd", "in_exclave", B("cwd", 4096), I(4096))
     for r in rel:
@@ -834,7 +834,7 @@ def generate(
     add("getcwd", "above_root_from_exclave", B("cwd", 4096), I(4096))
     add("chdir", "back", S(forms.host))
     add("getcwd", "back", B("cwd", 4096), I(4096))
-    group[0] = None
+    group = None
     return out
 
 
@@ -906,7 +906,7 @@ def run_bwrap(root: str, host: str, _bindir: str, probe: str, cases: str) -> tup
     for f in IDENTITY:
         if os.path.exists(f) and os.path.lexists(os.path.join(root, f.lstrip("/"))):
             t = os.path.realpath(f) if os.path.islink(f) else f
-            # the volatile ones are bound above
+            # a target under a volatile directory comes with that directory's bind
             if not any(t.startswith(b + "/") for b in ("/run", "/tmp", "/dev", "/proc")):
                 args += ["--bind", t, t]
     work = os.path.dirname(os.path.dirname(host))
@@ -1160,7 +1160,7 @@ def main() -> int:
     ap.add_argument(
         "--expected", action="store_true", help="print the differences accepted under a reason too"
     )
-    a = ap.parse_args()
+    args = ap.parse_args()
     if not shutil.which("bwrap"):
         print("no bwrap; the syscall probe cannot run here")
         return 0
@@ -1175,7 +1175,7 @@ def main() -> int:
             "the syscall probe cannot run"
         )
         return 0
-    given, work = os.path.abspath(a.exclave), os.path.abspath(a.work)
+    given, work = os.path.abspath(args.exclave), os.path.abspath(args.work)
     rmtree(work)
     os.makedirs(work)
     # an earlier run that died left its area behind; a running one (the gate runs several) keeps
@@ -1188,12 +1188,12 @@ def main() -> int:
                 rmtree(os.path.join("/tmp", d))
             except PermissionError:
                 pass
-    rng = random.Random(a.seed)
+    rng = random.Random(args.seed)
     # the kernel's world: an unwrapped copy of the tree; the launcher's: a copy of the exclave; the
     # same maze in both
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(
-        os.path.join(given, "tree"), root, symlinks=True, copy_function=cli.link_or_copy
+        os.path.join(given, "tree"), root, symlinks=True, copy_function=layout.link_or_copy
     )
     build.unwrap(os.path.join(work, "bare"), log=lambda *_: None)
     # the launcher's world: a copy relinked with the build (17)
@@ -1201,7 +1201,6 @@ def main() -> int:
     dirs, files, links = make_maze(root, rng)
     # ".." from the host area is a directory the reset owns
     host = os.path.join(work, "area", "host")
-    HOST_AREA[0] = host
     # an exclave link to a host file, and to a host directory
     os.symlink(host + "/hfile", os.path.join(root, "maze", "lH"))
     os.symlink(host + "/hdir", os.path.join(root, "maze", "lHD"))
@@ -1222,7 +1221,8 @@ def main() -> int:
             tp = os.path.join(root, t.lstrip("/"))
             if not os.path.lexists(tp) and not t.startswith(("/run/", "/tmp/", "/dev/", "/proc/")):
                 os.makedirs(os.path.dirname(tp), exist_ok=True)
-                open(tp, "wb").close()
+                with open(tp, "wb"):
+                    pass
     forms = Forms(root, host, links, dirs, files)
     bindir = os.path.join(work, "bin")
     os.makedirs(bindir)
@@ -1246,8 +1246,8 @@ def main() -> int:
         )
     nr = kernel_table(roots=(root, "/"))
     cases = generate(forms, nr, os.getuid(), os.getgid())
-    if a.only:
-        cases = [c for c in cases if a.only in (c[1], c[3])]
+    if args.only:
+        cases = [c for c in cases if args.only in (c[1], c[3])]
     names = []
     for c in cases:
         if c[3] not in names:
@@ -1285,7 +1285,7 @@ def main() -> int:
             why = expected(n, label, b, o)
             if why:
                 accepted += 1
-                if a.expected:
+                if args.expected:
                     print(
                         "EXPECTED {} {}({}): {}\n     kernel: {}\n     launcher: {}".format(
                             n, label, ", ".join(decode(t) for t in toks), why, b, o
@@ -1294,7 +1294,7 @@ def main() -> int:
                 continue
             differ += 1
             d += 1
-            if shown < a.show:
+            if shown < args.show:
                 shown += 1
                 print(
                     "DIFF {} {}({})\n     kernel: {}\n     launcher: {}".format(
@@ -1303,11 +1303,11 @@ def main() -> int:
                 )
         print(f"{name:<18} {len(mine):5d} cases, {d} differ")
     print(
-        f"{total} cases over {len(names)} syscalls: {differ} differ, "
-        f"{accepted} differences expected"
+        f"{total} cases over {len(names)} groups and {len(forms.paths)} path forms: "
+        f"{differ} differ, {accepted} differences expected"
     )
     rmtree(f"/tmp/exclave-probe-{os.getpid()}")
-    if not a.keep and not differ:
+    if not args.keep and not differ:
         shutil.rmtree(work, ignore_errors=True)
     return 1 if differ else 0
 

@@ -1,27 +1,33 @@
-"""deb.py — reading Debian binary packages and indexes (DESIGN.md 10.1).
+"""The Debian package reader (DESIGN.md 10.1), and the index format the fetchers read.
 
-`ar` and `tar` are read in Python; xz, gzip and bzip2 through the standard
-library; zstd through the `zstd` tool, which the tool's own exclave ships.
+A .deb is an `ar` archive holding `control.tar.*` and `data.tar.*`. Both are read in Python, and
+xz, gzip, bzip2 and zstd are decompressed with the standard library (`lzma`, `gzip`, `bz2`,
+`compression.zstd`). Versions are ordered as dpkg orders them.
 """
 
 import bz2
 import gzip
 import io
 import lzma
+import os
 import re
 import tarfile
+import zlib
 from compression import zstd
 
-type Dep = tuple[str, str | None, str | None]
+from exclave.reader import Dep, PackageError
+
+# Debian and Ubuntu merge /bin, /sbin and /lib into /usr.
+MERGED_USR: bool = True
 
 
-class DebError(Exception):
-    pass
+class DebError(PackageError):
+    """A .deb, or a field in one, that cannot be read."""
 
 
 # ---------------------------------------------------------------- ar
 def ar_members(path: str) -> list[tuple[str, int, int]]:
-    """[(name, offset, size)] of a GNU ar archive."""
+    """Return (name, offset, size) for each member of a GNU ar archive."""
     out = []
     with open(path, "rb") as f:
         if f.read(8) != b"!<arch>\n":
@@ -32,16 +38,18 @@ def ar_members(path: str) -> list[tuple[str, int, int]]:
             if len(h) < 60:
                 break
             name = h[:16].decode("ascii", "replace").strip().rstrip("/")
-            size = int(h[48:58].decode("ascii").strip() or "0")
-            if h[58:60] != b"`\n":
+            size_field = h[48:58].strip() or b"0"
+            if h[58:60] != b"`\n" or not size_field.isdigit():
                 msg = f"{path}: bad ar header"
                 raise DebError(msg)
+            size = int(size_field)
             out.append((name, f.tell(), size))
             f.seek(size + (size & 1), 1)
     return out
 
 
 def ar_read(path: str, member: str) -> tuple[str, bytes]:
+    """Return the full name and the contents of the member named member or member.<suffix>."""
     for name, off, size in ar_members(path):
         if name == member or name.startswith(member + "."):
             with open(path, "rb") as f:
@@ -52,45 +60,65 @@ def ar_read(path: str, member: str) -> tuple[str, bytes]:
 
 
 def decompress(name: str, data: bytes) -> bytes:
-    if name.endswith((".xz", ".lzma")):
-        return lzma.decompress(data)
-    if name.endswith(".gz"):
-        return gzip.decompress(data)
-    if name.endswith(".bz2"):
-        return bz2.decompress(data)
-    if name.endswith(".zst"):
-        try:
-            return zstd.decompress(data)
-        except zstd.ZstdError as e:
-            msg = f"zstd failed on {name}: {e}"
-            raise DebError(msg) from e
-    if name.endswith(".tar"):
-        return data
-    raise DebError("unknown compression: " + name)
+    """Decompress data by the compression its file name's suffix names.
+
+    Raises:
+        DebError: When the suffix is unknown or the data is corrupt.
+    """
+    decompressors = {
+        ".xz": lzma.decompress,
+        ".lzma": lzma.decompress,
+        ".gz": gzip.decompress,
+        ".bz2": bz2.decompress,
+        ".zst": zstd.decompress,
+        ".tar": bytes,
+    }
+    suffix = os.path.splitext(name)[1]
+    if suffix not in decompressors:
+        raise DebError("unknown compression: " + name)
+    try:
+        return decompressors[suffix](data)
+    except (lzma.LZMAError, zstd.ZstdError, OSError, EOFError, ValueError, zlib.error) as e:
+        msg = f"{name}: corrupt {suffix} data: {e}"
+        raise DebError(msg) from e
 
 
 def open_tar(path: str, member: str) -> tarfile.TarFile:
-    """A tarfile for control.tar.* or data.tar.* of a .deb, fully in memory."""
+    """Open the .deb's control.tar.* or data.tar.* member as a tar file held in memory.
+
+    Raises:
+        DebError: When the archive or the tar member cannot be read.
+    """
     name, data = ar_read(path, member)
-    return tarfile.open(fileobj=io.BytesIO(decompress(name, data)), mode="r:")
+    try:
+        t = tarfile.open(fileobj=io.BytesIO(decompress(name, data)), mode="r:")  # noqa: SIM115 -- returned open
+        t.getmembers()  # every header read now, so a corrupt one is refused here
+    except tarfile.TarError as e:
+        msg = f"{path}: corrupt {name}: {e}"
+        raise DebError(msg) from e
+    return t
+
+
+def open_data(path: str) -> tarfile.TarFile:
+    """Return the package's payload, data.tar.*."""
+    return open_tar(path, "data.tar")
 
 
 def control(path: str) -> tuple[dict[str, str], dict[str, str]]:
-    """The control fields and the maintainer scripts of a .deb.
-
-    Returns (fields dict, {script name: text}).
-    """
+    """Return the package's control fields and its maintainer scripts by name."""
+    fields: dict[str, str] = {}
+    scripts: dict[str, str] = {}
     with open_tar(path, "control.tar") as t:
-        fields, scripts = {}, {}
         for m in t.getmembers():
-            n = m.name.lstrip("./")
+            n = m.name.removeprefix("./")
             if not m.isfile():
                 continue
             f = t.extractfile(m)
             assert f is not None  # a regular file always has its content
             data = f.read()
             if n == "control":
-                fields = parse_stanzas(data.decode("utf-8", "replace"))[0]
+                stanzas = parse_stanzas(data.decode("utf-8", "replace"))
+                fields = stanzas[0] if stanzas else {}
             elif n in ("preinst", "postinst", "prerm", "postrm", "config"):
                 scripts[n] = data.decode("utf-8", "replace")
     return fields, scripts
@@ -98,9 +126,9 @@ def control(path: str) -> tuple[dict[str, str], dict[str, str]]:
 
 # ---------------------------------------------------------------- indexes
 def parse_stanzas(text: str) -> list[dict[str, str]]:
-    """RFC822-style stanzas of a Packages or control file: [dict].
+    """Parse the RFC 822-style stanzas of a control or Packages file.
 
-    Continuation lines are joined with LF.
+    A field's continuation lines are joined to it with newlines.
     """
     out: list[dict[str, str]] = []
     cur: dict[str, str] = {}
@@ -132,9 +160,14 @@ _DEP = re.compile(
 
 
 def parse_deps(field: str | None) -> list[list[Dep]]:
-    """'a (>= 1) | b, c:any' -> [[(name, op, version)], [(name, op, version)]].
+    """Parse a Depends-style field into groups of alternatives.
 
-    op and version may be None.
+    For example, `a (>= 1) | b, c:any` gives `[[("a", ">=", "1"), ("b", None, None)],
+    [("c", None, None)]]`. The architecture qualifier, architecture lists and build profiles are
+    dropped.
+
+    Raises:
+        DebError: For an item that is not a dependency.
     """
     out: list[list[Dep]] = []
     if not field:
@@ -166,6 +199,7 @@ def _order(c: str) -> int:
 
 
 def _verrevcmp(a: str, b: str) -> int:
+    """Compare two upstream versions or two revisions as dpkg's verrevcmp does."""
     i = j = 0
     while i < len(a) or j < len(b):
         first_diff = 0
@@ -195,13 +229,17 @@ def _verrevcmp(a: str, b: str) -> int:
 
 
 def _split(v: str) -> tuple[int, str, str]:
+    """Split a version into epoch, upstream version and Debian revision."""
     epoch, rest = v.split(":", 1) if ":" in v else ("0", v)
     up, _, rev = rest.rpartition("-") if "-" in rest else (rest, "", "")
     return int(epoch), up, rev
 
 
 def vercmp(a: str, b: str) -> int:
-    """<0, 0, >0 as dpkg --compare-versions."""
+    """Return a negative number, zero or a positive number as a sorts before, with or after b.
+
+    The order is dpkg's (Debian policy 5.6.12).
+    """
     ea, ua, ra = _split(a)
     eb, ub, rb = _split(b)
     if ea != eb:
@@ -213,6 +251,7 @@ def vercmp(a: str, b: str) -> int:
 
 
 def satisfies(version: str, op: str | None, want: str | None) -> bool:
+    """Return whether version meets the constraint `op want`; no operator is always met."""
     if op is None:
         return True
     assert want is not None  # an operator always comes with its version
