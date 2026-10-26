@@ -8,18 +8,21 @@ this document is the reference behind it, and it reads on its own.
 
 Source comments cite this document by section number, "(7.4.5)", and
 by numbered item, "(13 item 31)", "(17 item 4)"; those numbers are
-stable.
+stable. Two short forms appear in the code: "8.1.N" means rule N of
+8.1, and "17.N" means item N of section 17.
 
 ## 1. Summary
 
 exclave turns Linux software that depends on its environment,
 compilers included, into a directory that behaves like a single static
 executable. The directory can be copied anywhere and any program in it
-run by path, and the software inside never touches a host library,
-header, loader or configuration file. There is no daemon, no image
-store, no package manager, no installation step, no host binary, no
-run-time option, and no privilege of any kind: no root, no setuid
-helper, no user or mount namespaces.
+run by path. The software inside never touches a host library, header
+or loader, and reads no host configuration but eight identity files:
+who the users are, how names resolve, which certificate authorities
+are trusted (8.4). There is no daemon, no image store, no package
+manager, no installation step, no host binary and no privilege of any
+kind: no root, no setuid helper, no user or mount namespaces. There is
+one run-time knob, `EXCLAVE_LOG`, and it only logs.
 
 An **exclave** is that directory, `name.exclave/`:
 
@@ -35,33 +38,48 @@ name.exclave/
 
 Every executable file in `tree/`, ELF or script, is a **wrapper**: a
 hard link to the launcher standing at the program's own path, with the
-**original** beside it in `.real/`. Running `name.exclave/tree/usr/bin/gcc`
-from any shell therefore runs the launcher under gcc's name, so the
-kernel, `ps` and `/proc` see the right process identity. The launcher
-needs no libc and no loader of its own (7.1). It finds its exclave,
-reads the manifest, loads the original and the exclave's own `ld.so`
-into the process itself (7.3), and installs the **translator**: a
-seccomp filter that traps every path-taking syscall, and a resident
-`SIGSYS` handler that rewrites the path so that `tree/` is projected
-onto `/` (7.4). The traps stay in force across `fork` and `execve`, so
-every descendant is translated too (7.4.5). A Linux kernel with seccomp
-filtering and `/proc` is all the launcher needs (12).
+**original** beside it in `.real/`. The launcher needs no libc and no
+loader of its own (7.1), and a Linux kernel with seccomp filtering and
+`/proc` is all it needs (12).
+
+**What happens when a program runs.** Running
+`name.exclave/tree/usr/bin/gcc` from any shell goes like this:
+
+1. The kernel executes the launcher, since the wrapper is a hard link
+   to it, under gcc's name, so the kernel, `ps` and `/proc` see gcc's
+   process identity (7.2).
+2. The launcher walks up from its own path, `/proc/self/exe`, to the
+   directory that holds `.exclave/manifest`, parses the manifest and
+   checks the CPU level (7.2, 7.7).
+3. It reads the top level of `tree/` and compiles the **visibility
+   rule**, which decides for every path whether the tree or the host
+   answers for it (8).
+4. It installs the **translator**: a `SIGSYS` handler, and a seccomp
+   filter that traps every path-taking syscall (7.4).
+5. It maps `.real/gcc` and the loader its `PT_INTERP` names, the
+   exclave's own `ld.so`, into the process, and jumps to the loader
+   (7.3).
+
+From then on every path syscall of gcc traps, and the handler rewrites
+the path so that `tree/` is projected onto `/`, or leaves it to the
+host, and re-issues the call. The filter stays in force across `fork`
+and `execve`, so `cc1`, `as`, `ld` and every other descendant is
+translated too, whatever its file (7.4.5).
 
 Inside an exclave there is one world and one libc: every program,
 wherever its file lives, sees the exclave's tree and runs on the
-exclave's loader. What a path means is decided by the **visibility
-rule** (8). The exclave owns the top-level entries its tree ships, such
-as `/usr` and `/etc`; the host owns everything else, such as `/home`,
-the kernel's volatile directories (`/proc`, `/tmp` and the rest), and a
-few identity files like `/etc/passwd` and `/etc/resolv.conf`. Paths the
-exclave owns are read-only: the handler refuses every write to them with
-the error the kernel gives on a read-only bind mount (8.2). The manifest
-can move a path to either side; anything the tree can say about itself
-the launcher reads from the tree, so the manifest holds little else
-(6.2, 6.3).
+exclave's loader. The exclave owns the top-level entries its tree
+ships, such as `/usr` and `/etc`; the host owns everything else, such
+as `/home`, the kernel's volatile directories (`/proc`, `/tmp` and the
+rest), and the identity files such as `/etc/passwd` and
+`/etc/resolv.conf` (8.1). Paths the exclave owns are read-only: the
+handler refuses every write to them with the error the kernel gives on
+a read-only bind mount (8.2). The manifest can move a path to either
+side; anything the tree can say about itself the launcher reads from
+the tree, so the manifest holds little else (6.2, 6.3).
 
-The **`exclave` command** (10), written in Python and itself shipped as
-an exclave, builds exclaves from files and never fetches anything. It
+The **`exclave` command** (10) is written in Python, takes files and
+never fetches anything, and runs as an exclave of itself (10.5). It
 unpacks `.deb`, `.apk` or `.rpm` packages into an unwrapped exclave, a
 plain directory that ordinary tools can edit, and `wrap` turns any such
 tree into a runnable exclave: it puts the wrappers in place, checks
@@ -74,12 +92,12 @@ exclave is not a security sandbox: a program that wants to escape the
 translation can (3, 13). It is a way to make software hermetic and
 relocatable without asking the host for anything.
 
-The rest of this document specifies the format (6), the launcher (7),
-the visibility rule (8), what compilers need (9) and the command (10);
-then the portability envelope (12), limitations (13), alternatives and
-related work (14, 15), performance (16) and testing (17).
-
----
+**Reading this document.** To use exclave, start with `README.md`.
+What a program inside sees is the format (6) and the visibility rule
+(8); how the launcher achieves it is 7, and what compilers need is 9.
+The command is 10, where exclaves run is 12, and what does not work
+is 13. Why not another approach is 14 and 15, and the cost is 16. A
+contributor wants 17, how a change is tested, and 19, what is settled.
 
 ## 2. Status
 
@@ -99,58 +117,68 @@ What is built and tested:
   exclave from Ubuntu 24.04, which builds zlib, Lua, SQLite and re2c
   from source with their own configure scripts; an Alpine exclave on
   musl; a Fedora exclave; and a clang exclave that compiles C and C++
-  (12, 17).
+  (9, 17).
 - **A glibc sysroot as a data directory**: CentOS 7's glibc inside the
-  gcc exclave, never executed, gives outputs that run natively on every
-  glibc since 2.17 (9).
+  gcc exclave, never executed, links outputs against glibc 2.17, which
+  run natively on any later glibc (9).
 - **aarch64**: the launcher runs there, tested in an emulated row of the
-  kernel matrix on a kernel with 4 KB pages (12, 13 item 43).
+  kernel matrix on a kernel with 4 KB pages (12.1, 13 item 43).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The tool as an exclave**: the gcc exclave it builds from inside its
-  own exclave reproduces the host-built hashes file byte for byte
-  (10.5).
-- **Trace pruning**: a hello-world compile keeps 212 of the gcc
-  exclave's 4 851 files, 87 of them the packages' licence texts (10.4).
+- **The tool as an exclave**, as a development check: `test/dogfood.py
+  --keep` leaves the tool's own exclave in `build/dogfood-work/`, and a
+  gcc exclave built from inside it reproduces the host-built hashes
+  file byte for byte (10.5).
+- **Trace pruning**: in `example.sh`, a hello-world compile against the
+  CentOS 7 sysroot keeps 227 of the gcc exclave's 9 567 files and
+  symlinks, counted as `exclave prune` reports them, the
+  originals in `.real/` included; the pruned copy compiles the program
+  again. 10.4 gives the figure for the test suite's gcc exclave.
 
 `example.sh` walks from a clean checkout to a program built inside an
 exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 74 named tests, each a program that
-  computes, run on the gcc, Alpine, Fedora and clang exclaves
+- **The regression suite**: 74 named tests, most of them programs that
+  compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
-- **Kernel oracles**: the same workloads under `bwrap` with the tree
-  bound read-only, and path resolution against `openat2` with
-  `RESOLVE_IN_ROOT` (17 items 1 and 2).
-- **A differential syscall probe**: every trapped path and descriptor
-  syscall, with every flag and path form, run under `bwrap` and under the
-  launcher; 19 093 cases per exclave with no difference from the kernel
-  (17 item 7).
-- **Docker's default seccomp profile**, under which an exclave must run
-  (17 item 5).
-- **The commit gate**, `test/gate.sh`, which runs all of the above on
-  the four exclaves in about a minute.
-- **The kernel matrix** in QEMU virtual machines: nine distributions
-  from CentOS 7 at kernel 3.10 to Fedora 42 at 6.14, Alpine's musl
-  userland and SELinux included, beside the reference machine at 7.0,
-  and the emulated arm64 row (12).
+- **Kernel oracles**, where user namespaces are available: the same
+  workloads under `bwrap` with the tree bound read-only, and path
+  resolution against `openat2` with `RESOLVE_IN_ROOT` (17 items 1
+  and 2).
+- **The syscall probe**: every trapped path and descriptor syscall,
+  with every flag and path form, run under `bwrap` and under the
+  launcher; 19 093 cases per exclave, each difference from the kernel
+  either fixed or accepted under a named reason (17 item 7).
+- **Docker's default seccomp profile**: a workload in each exclave runs
+  under it, standing for a CI container where user namespaces are
+  blocked (17 item 5).
+- **The commit gate**, `test/gate.sh`, which runs the unit tests, the
+  suite, the oracles and the probe on the four exclaves in under a
+  minute; an oracle that cannot run on the machine, for want of `bwrap`
+  or user namespaces, is reported as SKIP, not as passing (17).
+- **The kernel matrix**: the gcc exclave passes the suite in QEMU
+  virtual machines of nine distributions, from CentOS 7 at kernel 3.10
+  to Fedora 42 at 6.14, Alpine 3.20's musl userland and Fedora's
+  enforcing SELinux among them; an arm64 gcc exclave passes it in an
+  emulated arm64 Ubuntu 24.04. Every oracle a row's kernel can run
+  passes; CentOS 7, without user namespaces, runs none (12.1).
 
 **The reference machine.** Figures in this document were measured,
-unless a section says otherwise, in October 2026 on one machine: Ubuntu
-24.04, kernel 7.0, x86-64, glibc 2.39, 16 cores, a ZFS filesystem. From
-an ordinary terminal there, AppArmor denies user namespaces (4.3).
-
----
+unless a section says otherwise, in October 2026 on one machine: an
+AMD Ryzen AI 7 350 (Zen 5, 8 cores, 16 threads), Ubuntu 24.04, kernel
+7.0, glibc 2.39, a ZFS filesystem. From an ordinary terminal there,
+AppArmor denies user namespaces (4.3).
 
 ## 3. Goals and non-goals
 
 Goals:
 
 1. **Isolation.** Programs see the exclave's files plus what the
-   visibility rule allows. Host libraries, loaders and configuration are
-   invisible.
+   visibility rule allows. Host libraries and loaders are invisible,
+   and so is host configuration, except the eight identity files that
+   describe the host (8.1 rule 5).
 2. **Relocatability.** Any path, any filesystem, any machine of the same
    architecture and CPU level. An exclave moves with `cp -a`, `tar` or
    `rsync -aH`, and nothing in it names its location.
@@ -165,10 +193,10 @@ Goals:
    binaries work without rebuilding or patching; originals stay
    byte-identical.
 7. **Uniform behaviour.** One mechanism, one world, one libc, one shape
-   of exclave, one code path, no run-time options. The same exclave
-   behaves the same on every host and every medium. The tool's
-   commands take paths, and `format --check` is its one flag; the
-   launcher has none.
+   of exclave, one code path. The same exclave behaves the same on
+   every host and every medium. The launcher has one run-time knob,
+   `EXCLAVE_LOG`, which only logs; the tool's commands take paths, and
+   `format --check` is its one flag.
 8. **Verifiability.** Isolation and libc homogeneity are checkable by
    the tool, statically and by trace.
 
@@ -180,8 +208,6 @@ Non-goals:
 - **Anything but little-endian 64-bit Linux**, and cross-architecture
   emulation, including 32-bit programs in a 64-bit exclave.
 - **GPU and other host-driver software** (13).
-
----
 
 ## 4. Problem analysis
 
@@ -243,8 +269,6 @@ native under the launcher (16). Namespaces are therefore not part of
 the design. Where they are available they serve as the test oracle
 (17 item 1).
 
----
-
 ## 5. Concepts and names
 
 | Name | What it is |
@@ -255,24 +279,29 @@ the design. Where they are available they serve as the test oracle
 | **manifest** | `.exclave/manifest`, the one file the launcher reads besides the tree: the CPU level (`cpu`) and the visibility overrides (`data`, `host`, `own`). `exclave 1` alone is a valid manifest (6.2). |
 | **hashes** | `.exclave/hashes`: every input, the launcher, the manifest and the tree by hash; its records begin `hashes 1` and name the `tool` and the `launcher`. A record, not a locator (6.4). |
 | **shortcut** | A symlink the maker puts at the top of the exclave, pointing at a wrapper in the tree; a convention, not a record. |
+| **README** | `name.exclave/README`: what an exclave is and how to run it, for whoever finds one; the tool writes it where the exclave has none, and nothing reads it. |
 | **launcher** | `.exclave/launcher`, one static freestanding `ET_DYN` binary: wrapper, loader and resident translator (7). |
 | **wrapper** | A hard link to the launcher at an executable's own path in the tree. |
 | **original** | The original executable, at `<dir>/.real/<name>` beside its wrapper. |
 | **translator** | The launcher's resident part: the seccomp filter and the **handler**, its `SIGSYS` handler, together (7.4). |
+| **syscall page** | The page at the fixed address `0x7fe00000` through which the launcher makes every syscall of its own; the filter allows a call from it untranslated (7.4.2). |
+| **page generation** | The word in a launcher's ELF note that says which syscall page it uses, so that one launcher can refuse an incompatible other by name (7.4.2, 7.4.5). |
+| **version probe** | The `uname` with a magic argument that a launcher issues at startup: an inherited filter answers with its version, and `EFAULT` means none (7.2, 7.4.2). |
+| **positional entry** | `name.exclave/.exclave/launcher PROGRAM ARGS...`, which runs a program that has no wrapper, a host tool or a built output, inside the exclave (7.2). |
+| **loader path** | How a program without a wrapper runs inside an exclave: the handler, or the positional entry, re-execs the launcher with the target in `EXCLAVE_EXEC`, and that launcher loads it with the exclave's loader (7.4.5, 7.6). |
+| **one-step host check** | One `openat2` with `RESOLVE_NO_SYMLINKS` standing in for the `lstat` of each of three or more plainly host-owned directories in a path walk, where the tree's mount allows it (7.4.4). |
+| **exclave path** | A path the tree answers for, read-only (8.1, 8.2). |
+| **host path** | A path the host answers for, as it would without the exclave (8.1). `host` and `own` records in the manifest move a path to either side. |
 | **placeholder** | An empty top-level directory of the tree, which the exclave does not own; the tool ships placeholders for `/home`, `/tmp`, `/proc` and the other conventional host names (8.1). |
-| **identity file** | One of eight files, such as `/etc/passwd` and `/etc/resolv.conf`, that describe the host and are the host's by default (8.4). |
-| **host path** | A path resolved on the host rather than in the exclave. |
-| **exclave path** | A path the tree answers for (8.1). A working directory under one is given to the host as a subtree; `own` makes a path the exclave's. |
-| **border** | Where a program passes from the host into the exclave; the environment is set there (6.2). |
-| **data directory** | An exclave path that is never executed or loaded, named by a `data` record: a sysroot, headers, documentation. |
+| **identity file** | One of eight files, such as `/etc/passwd` and `/etc/resolv.conf`, that describe the host and are the host's by default (8.1 rule 5, 8.4). |
+| **border** | Where a program passes from the host into the exclave, its launcher finding no inherited filter; the environment is set there (6.2). |
+| **data directory** | An exclave path that is never executed or loaded, named by a `data` record: a sysroot, headers, documentation (6.2). |
 | **`exclave`** (command) | The build tool: `unpack`, `wrap`, `unwrap`, `check`, `prune`, `hash`, `relink` and `format`. Takes files, fetches nothing (10). |
 | **unwrapped** | An exclave before `wrap`: a plain tree, editable with ordinary tools. After `wrap` it is wrapped. |
-| **`EXCLAVE_LOG`** | The one run-time knob. `EXCLAVE_EXEC`, `EXCLAVE_EXECFN` and `EXCLAVE_COMM` are the launcher's own protocol, never an interface; the test scripts' inputs are `EXCLAVE_TEST_…`. |
-| **README** | `name.exclave/README`: what an exclave is and how to run it, for whoever finds one; the tool writes it where the exclave has none, and nothing reads it. |
+| **`EXCLAVE_LOG`** | The one run-time knob, which only logs (6.2). `EXCLAVE_EXEC`, `EXCLAVE_EXECFN` and `EXCLAVE_COMM` are the launcher's own protocol, never an interface; the test scripts' inputs are `EXCLAVE_TEST_…`. |
+| **syscall probe** | The differential test of 17 item 7: every trapped syscall, flag and path form, run under `bwrap` and under the launcher and compared case by case. "The probe" always means this one. |
+| **fixture** | The exclave the suite runs on: a copy of the given exclave pruned to what the suite touches, kept under `build/fixtures/` and remade when the exclave, the suite or the tool changes (17). |
 
-Before the project was named exclave, the format was called a "can"
-(`.can/`, `root/`, the "opener", the "cannery"); 13 item 45 describes
-converting one.
 ## 6. The exclave format
 
 An exclave is a directory. This section describes what it holds, the
@@ -335,23 +364,29 @@ by hand; it is a convention, recorded nowhere.
   nothing under the reserved name is ever invisible.
 - There is no cache directory, at any stage.
 - `README` explains the exclave to someone who has never heard of
-  exclaves and finds the directory: what it is, what it needs, that
-  running it changes nothing and leaves nothing behind, and that it is
-  not a sandbox; what each name at the top is; how to run a program by
-  path, by a symlink or through `.exclave/launcher`; which paths are
-  the exclave's and which the host's; the fixed locale and time zone;
-  that setuid programs and `noexec` mounts do not work; how to move,
-  copy and remove it; how `b2sum -l 256` checks the hashes file's
-  hashes without the tool; the tool's `check`, `unwrap`, `wrap` and
-  `relink`; and where the packages' licence texts are and how to print
-  the launcher's own. Its text is the tool's, the same in every
-  exclave, so it says nothing the tree or the hashes file could say and
-  cannot go stale against them. `unpack`, `wrap` and `relink` write it
-  where the exclave has none, and leave a maker's own, or a shortcut of
-  that name, alone. It is not hashed, like the shortcuts, and the
-  launcher never reads it. The launcher run with no arguments points
-  to it, and a launcher outside any exclave says what it is and where
-  it runs.
+  exclaves and finds the directory. It says:
+  - what an exclave is and needs, that running it changes nothing and
+    leaves nothing behind, and that it is not a sandbox;
+  - what each name at the top is;
+  - how to run a program: by path, by a symlink, or through
+    `.exclave/launcher`;
+  - which paths are the exclave's and which the host's, and the fixed
+    locale and time zone;
+  - that setuid programs and `noexec` mounts do not work;
+  - how to move, copy and remove the exclave;
+  - how `b2sum -l 256` checks the hashes file's hashes without the
+    tool, and what the tool's `check`, `unwrap`, `wrap` and `relink`
+    do;
+  - where the packages' licence texts are, and how to print the
+    launcher's own.
+
+  Its text is the tool's, the same in every exclave, so it says nothing
+  the tree or the hashes file could say and cannot go stale against
+  them. `unpack`, `wrap` and `relink` write it where the exclave has
+  none, and leave a maker's own, or a shortcut of that name, alone.
+  Like the shortcuts it is not hashed, and the launcher never reads it.
+  The launcher run with no arguments points to it; a launcher outside
+  any exclave says what it is and where it runs.
 - `.exclave/` is a hidden directory so that a shortcut can never
   collide with a format file. The `.exclave` suffix on the directory's
   name is a convention, as the shortcuts are.
@@ -469,9 +504,9 @@ needs it reads from the tree (6.3).
 
 **Environment.** The **border** is where a program passes from the
 host into the exclave: a process with no exclave filter of its own
-starting a wrapper, which the probe of 7.4.2 detects. At the border the
-launcher passes the environment through unchanged except for two
-groups, and for its own `EXCLAVE_EXEC`, `EXCLAVE_EXECFN` and
+starting a wrapper, which the version probe detects (7.4.2). At the
+border the launcher passes the environment through unchanged except
+for two groups, and for its own `EXCLAVE_EXEC`, `EXCLAVE_EXECFN` and
 `EXCLAVE_COMM`, which every launcher removes before a program runs,
 inside the exclave too (7.4.5).
 
@@ -493,9 +528,12 @@ itself, the same in every exclave on every host:
 These are the values reproducible builds fix by hand. An exclave that
 wants another locale, zone or shell ships the data and a wrapper script
 that sets the variable before it execs the program, since inside the
-border nothing is touched (13 item 35). `C.UTF-8` is built into glibc
-2.35 and later and into musl; the static check warns when an older
-glibc lacks the `C.utf8` locale directory (10.3).
+border nothing is touched (13 item 35). `C.UTF-8` needs no locale
+files on musl, nor on the reference machine's glibc 2.39, which accepts
+`setlocale(LC_ALL, "C.UTF-8")` with an empty `LOCPATH`. glibc's release
+notes date the built-in locale to 2.35, so for a glibc older than that
+the static check warns when the tree lacks the `C.utf8` locale
+directory (10.3).
 
 Path-valued variables the user passes, `CPATH` or `SSL_CERT_FILE`,
 resolve inside the exclave like any other path, which is why passing
@@ -521,10 +559,11 @@ it started in. The log changes nothing else.
 The manifest and the tree. The launcher finds its exclave as the
 nearest directory above its own path that holds `.exclave/manifest`,
 so the manifest must exist; `wrap` writes `exclave 1` where there is
-none. There is no generated file between the manifest and the tree: an
-index of what the tool had computed from the tree was tried, and every
-record in it was either unused by the launcher or readable from the
-tree in microseconds.
+none. There is no generated file between the manifest and the tree.
+An index of what the tool computed from the tree would go stale
+whenever the tree is edited, and every record such an index could hold
+is either unused by the launcher or readable from the tree in
+microseconds.
 
 - **The ownership set** (8.1) is every top-level entry of `tree/` that
   is not an empty directory, read at startup with one directory
@@ -633,10 +672,11 @@ There is none. An exclave is a directory, and `tar` makes it one file.
 A launcher with an appended archive that extracts itself on first run
 would need a cache directory, which the format has none of (6.1), and
 a `noexec` temporary directory would make its failure ugly.
+
 ## 7. The launcher
 
-The launcher is one static, freestanding, `ET_DYN` binary of 87 936
-bytes stripped on x86-64 and 89 960 on aarch64 (measured October
+The launcher is one static, freestanding, `ET_DYN` binary of 88 000
+bytes stripped on x86-64 and 90 000 on aarch64 (measured October
 2026), with no libc and no `PT_INTERP`; it relocates itself. Every
 executable in an exclave's tree is a hard link to it, a *wrapper*, and
 the program a wrapper stands for, its *original*, sits beside it in
@@ -644,16 +684,16 @@ the program a wrapper stands for, its *original*, sits beside it in
 
 - **Two ELF notes** in a `.note.exclave` section, `exclave` and
   `cont`, each holding one word, the *page generation* (7.4.2), by
-  which one launcher recognises another (7.4.5). `cont` is the name
-  launchers from before the project took its present name look for, so
-  exclaves wrapped by either run each other's programs.
+  which one launcher recognises another (7.4.5); `cont` is the name
+  launchers from before the project's rename look for.
 - **The MIT licence text**, in a `.exclave.license` section that is not
   loaded, since the licence's text goes with every copy.
 - **gdb's script**, in `.debug_gdb_scripts`, and six exported names for
   it to read (7.6).
 
-The build strips everything else and fails if any of these did not
-survive; `build/launcher.debug` keeps the symbols.
+The build of either architecture strips everything else and fails if
+any of these did not survive; `build/launcher.debug` and
+`build/launcher-aarch64.debug` keep the symbols.
 
 ### 7.1 Why freestanding and why `ET_DYN`
 
@@ -686,8 +726,9 @@ its own machine (7.3).
 The kernel has executed the launcher at some path. The launcher:
 
 1. Maps the syscall page and relocates itself (7.4.2).
-2. Probes for an inherited filter (7.4.2), and refuses by name one
-   older than version 6, which would trap its every syscall.
+2. Runs the version probe for an inherited filter (7.4.2), and refuses
+   by name one older than version 6, which would trap its every
+   syscall.
 3. Unblocks `SIGSYS` in the inherited mask, since a parent that blocks
    signals in its children would otherwise kill the first trap
    (7.5.1); borrows two descriptors under a soft limit below 16
@@ -717,20 +758,19 @@ A wrapper run directly from outside any exclave goes through exactly
 these steps; shortcuts (6.1) point at wrappers and add nothing.
 
 **The positional entry.** `gcc.exclave/.exclave/launcher PROGRAM
-ARGS...` runs a program that has no wrapper, a host tool or a built
+ARGS...` runs a program without a wrapper, a host tool or a built
 output, inside the exclave, from outside or inside. It re-execs itself
-once the way a handler does for such a program (7.4.5), with `PROGRAM`
-taken as `execve` would take it, so that the program's `argv`, `cmdline`
-and `comm` are its own. The re-exec'd launcher resolves the target as an
-exec would and makes the checks an exec inside makes, in the same order:
-a program in a data directory is refused, a directory or a special file
-is refused, and the kernel's answer to `X_OK` is final. The exit status
-is a shell's, 126 for a file that exists and cannot run, 127 for one
-that does not. A target that turns out to be a wrapper is exec'd as
-itself, by the name the caller spelt, so that the kernel gives the
-program its identity as an exec inside would; only a program without a
-wrapper goes on to the loader. Without an argument the launcher says
-what it is. It takes no other argument and no flag.
+once as a handler does for such a program (7.4.5), with `PROGRAM` taken
+as `execve` would take it, so that the program's `argv`, `cmdline` and
+`comm` are its own. The re-exec'd launcher resolves the target and
+makes an inside exec's checks in their order: a program in a data
+directory, a directory or a special file is refused, and the kernel's
+`X_OK` answer is final. The exit status is a shell's, 126 for a file
+that exists and cannot run, 127 for one that does not. A target that is
+a wrapper is exec'd as itself, by the name the caller spelt, so that
+the kernel gives the program its identity; only a program without a
+wrapper reaches the loader. Without an argument the launcher says what
+it is; it takes no other argument and no flag.
 
 ### 7.3 The loader
 
@@ -780,66 +820,59 @@ never trap. With `EXCLAVE_LOG` set the handler writes one line per trap
 
 #### 7.4.2 The filter
 
-One classic-BPF program, installed at the border, or over an older
-version's, and inherited across `fork` and `execve`.
-
-**A foreign syscall ABI**, an `arch` that is not the launcher's own or
-the x32 bit, kills the process: loud, never a silent host access.
+One classic-BPF program, installed at the border or over an older
+version's, and inherited across `fork` and `execve`. A foreign syscall
+ABI, an `arch` other than the launcher's own or the x32 bit, kills the
+process: loud, never a silent host access.
 
 **The syscall page.** A call whose instruction pointer lies in the page
 at `0x7fe00000` is allowed. Before anything else runs, every launcher
 maps that page with `MAP_FIXED_NOREPLACE`, writes `syscall; ret` into
 it (`svc #0; ret` on aarch64, then flushes the instruction cache) and
-makes it read-only and executable. Every later syscall of the launcher
-is a `call` into the page, a `blr` on aarch64. Only that bootstrap,
-the probe below and the signal restorer use a bare syscall
+makes it read-only and executable; every later syscall of the launcher
+is a `call` into the page, a `blr` on aarch64. Only that bootstrap, the
+version probe below and the signal restorer use a bare syscall
 instruction.
 
-The address is a constant, the same in every process, so the filters
-of any number of ancestor generations agree after `execve` without
-naming an address a loader chose. It lies high in the low 2 GB, above
-program images, which every linker starts low and grows upward (GNU ld
-and Go's x86-64 linker from `0x400000`, Go's aarch64 linker from
-`0x10000`, as measured); below `0x7fff8000`, where ASan's shadow begins
-on x86-64, so every sanitizer counts it as the program's own low
+The address is a constant, so the filters of any number of ancestor
+generations agree after `execve`. It lies above program images, which
+linkers start low (GNU ld and Go's x86-64 linker at `0x400000`, Go's
+aarch64 linker at `0x10000`); below `0x7fff8000`, where ASan's x86-64
+shadow begins, so every sanitizer counts it as the program's own low
 memory; outside the ranges Wine's preloader reserves; and 64
 KB-aligned, for aarch64 kernels with 64 KB pages. If the page cannot be
 mapped the launcher says so and exits (`EEXIST` meaning another
-launcher is already resident); a program whose image covers it cannot
-run in an exclave (13 item 24).
-
-An address and not a marker: a magic value in a spare argument register
-was tried, and a signal handler interrupting a launcher syscall
-inherits the register, so its own first path syscall reached the host
-untranslated. An address cannot leak that way. A program can trivially
-exempt itself by jumping through the page; an exclave is not a security
-boundary (3).
+launcher is resident); a program whose image covers it cannot run in an
+exclave (13 item 24). It is an address rather than a marker in a spare
+register, which a signal handler interrupting a launcher syscall would
+inherit, sending its own first path syscall to the host untranslated.
+A program can trivially exempt itself by jumping through the page; an
+exclave is not a security boundary (3).
 
 **No forced speculation mitigation.** The filter is installed with
 `SECCOMP_FILTER_FLAG_SPEC_ALLOW`, or without it where a kernel before
-4.17 answers `EINVAL`. Without the flag, a filter forces Speculative
-Store Bypass Disable on the process and its descendants wherever the
-kernel's default is `spec_store_bypass_disable=seccomp`, which slows
-code whose loads follow its stores by up to several times (16).
-Installation sets `PR_SET_NO_NEW_PRIVS`
-first, as seccomp requires without privilege (13 item 3), and falls
-back to `prctl(PR_SET_SECCOMP)` before kernel 3.17.
+4.17 answers `EINVAL`, since without the flag a filter forces
+Speculative Store Bypass Disable on the process and its descendants
+wherever the kernel's default is `spec_store_bypass_disable=seccomp`,
+slowing code whose loads follow its stores by up to several times
+(16.5). Installation sets `PR_SET_NO_NEW_PRIVS` first, as seccomp
+requires without privilege (13 item 3), and falls back to
+`prctl(PR_SET_SECCOMP)` before kernel 3.17.
 
 **Refusals.**
 
-- `clone3` returns `ENOSYS` (7.5.5). Programs that require its own
-  extensions, `CLONE_INTO_CGROUP` and `set_tid`, are container runtimes
-  and out of scope; `CLONE_PIDFD` is available through `clone` since
-  5.2. Honouring `clone3` is not an option: `CLONE_CLEAR_SIGHAND`
-  removes the handler in the child, whose own `execve` then traps
-  before any handler exists.
+- `clone3` returns `ENOSYS` (7.5.5). Honouring it is not an option:
+  `CLONE_CLEAR_SIGHAND` removes the handler in the child, whose own
+  `execve` then traps before any handler exists. Its own extensions,
+  `CLONE_INTO_CGROUP` and `set_tid`, serve container runtimes, which
+  are out of scope; `CLONE_PIDFD` is available through `clone` from 5.2.
 - `io_uring_setup` returns `ENOSYS`, so file operations cannot bypass
   translation.
 - `seccomp(2)` and `prctl(PR_SET_SECCOMP)` return `ENOSYS`, which more
-  programs treat as "no sandbox available, continue" than `EPERM`;
+  programs read as "no sandbox available, continue" than `EPERM`;
   `seccomp(SECCOMP_GET_ACTION_AVAIL)` is allowed as a harmless query. A
-  program that insists on its own sandbox fails at install time with a
-  visible error.
+  program that insists on its own sandbox fails visibly at install
+  time.
 - The rest are in the table of 7.4.3.
 
 **Argument checks.** `rt_sigaction` traps only when a new action is
@@ -849,61 +882,51 @@ they carry a mask. `ioctl` traps for `FS_IOC_SETFLAGS` and
 `FS_IOC_FSSETXATTR`, the `chattr` requests, and nothing else.
 
 **Two stages.** The first is a binary tree on the syscall number alone,
-whose leaf for every number the rule does not single out is `ALLOW`: the
-kernel's action cache (kernel 5.11) proves those syscalls allowed and
-skips the filter for them, and a kernel without the cache runs about a
-dozen instructions rather than the whole rule. The singled-out numbers
-go to the second stage, the rule in its order: the argument checks that
-can only allow (an `ioctl` that is not `chattr`'s, a query of a signal
-action, a wait without a mask, a `prctl` that is not seccomp's, the
-availability query) and the probe; then the syscall page; then the
-refusals; whatever is left traps. On x86-64 the program is 284
-instructions and 376 of the 471 numbers are allowed by number alone; on
-aarch64, 240 and 396. The cost of an untrapped syscall is in (16).
-`test/filter_test.c` runs the program in an interpreter against the rule
-written out on its own, for every number and the arguments each check
-reads, and `test/syscalls.py` matches the lists in `src/filter.c`
-against the running kernel's table, so a new path-taking syscall is
-noticed rather than discovered (17).
+whose leaf for every number the rule does not single out is `ALLOW`, so
+the kernel's action cache (5.11) proves those syscalls allowed and
+skips the filter, and a kernel without the cache runs about a dozen
+instructions. The other numbers go to the second stage, the rule in
+order: the argument checks that can only allow (an `ioctl` other than
+`chattr`'s, a query of a signal action, a wait without a mask, a
+`prctl` other than seccomp's, the availability query) and the version
+probe; the syscall page; the refusals; then the trap. On x86-64 the
+program is 284 instructions and 376 of the 471 numbers are allowed by
+number alone; on aarch64, 240 and 396. 16.3 gives why a tree and what
+an untrapped syscall costs. `test/filter_test.c` runs the program in an
+interpreter against the rule written out on its own, for every number
+and the arguments each check reads, and `test/syscalls.py` matches the
+lists in `src/filter.c` against the running kernel's table, so a new
+path-taking syscall is noticed rather than discovered (17).
 
-**The ceiling.** A syscall numbered above the filter's table (whose
-last entry is 470, `listns`) traps and is answered `ENOSYS`, like any
+**The ceiling.** A syscall numbered above the filter's table, whose
+last entry is 470 (`listns`), traps and is answered `ENOSYS`, like any
 trap the handler does not know, so a path-taking syscall a future
-kernel adds cannot reach the host untranslated. The table test probes
-the running kernel above the table rather than trusting a userspace
-header, which lags the kernel by years.
+kernel adds cannot reach the host untranslated. The table test asks the
+running kernel above the table rather than trusting a userspace header,
+which lags the kernel by years.
 
 **Versioned reuse.** The filter answers a `uname` whose argument is a
 magic 64-bit value with `SECCOMP_RET_ERRNO` carrying `0x800` plus its
-version. The startup probe issues that `uname` with a bare syscall
-instruction, not through the page: an errno of that form names the
-newest inherited filter, `EFAULT` means none. A launcher installs its
-own filter only when nothing equal or newer is inherited, since every
-filter in the stack runs on every syscall. A launcher under a newer
-filter may therefore receive traps for syscalls it does not know; it
-answers them `ENOSYS` and never re-issues them, since every
-path-taking syscall the kernel has added has a libc fallback and a
-re-issue would be an untranslated host access. The version moves
-whenever the trap set grows or the page moves, and is 6:
+version. The *version probe* at startup issues that `uname` with a
+bare syscall instruction, not through the page: an errno of that form
+names the newest inherited filter, `EFAULT` none. Since every filter in
+the stack runs on every syscall, a launcher installs its own only when
+nothing equal or newer is inherited. A launcher under a newer filter
+may then receive traps for syscalls it does not know; it answers them
+`ENOSYS` and never re-issues them, since every path-taking syscall the
+kernel has added has a libc fallback and a re-issue would be an
+untranslated host access.
 
-| Version | Adds |
-|---|---|
-| 2 | the `*xattrat` and `file_*attr` syscalls |
-| 3 | `openat2` |
-| 4 | `bind` and `connect` |
-| 5 | `FS_IOC_FSSETXATTR` by its correct number |
-| 6 | the syscall page at `0x7fe00000`, where it was `0x3f0000` |
-
-Across the page's move neither direction can run, since every filter
-in the stack must allow the running launcher's page. A launcher under
-a filter older than 6 refuses by name at startup; and a launcher's
-notes carry the page generation, 2 since the move and 1 before (or no
-word), so that a handler sends an older launcher to its own child,
-which refuses it by name (7.4.5). An exclave wrapped before the move is
-relinked with `exclave relink` (13 item 45). `make` also builds
-`build/launcher-old`, the same sources at version 3, without the
-syscalls version 4 added, the last version to add syscalls; the
-regression of 17 item 4 nests it inside the current launcher.
+The version moves whenever the trap set grows or the syscall page
+moves, and is 6. Filters before 6 allow a page at another address, so
+neither launcher can run under the other's filter: a launcher under a
+filter older than 6 refuses by name at startup, and a handler sends a
+launcher whose note carries a page generation older than the present
+2, or no word, to its own child, which refuses it by name (7.4.5, 13
+item 45). `make` also builds `build/launcher-old`, the same sources at
+version 3, without `bind` and `connect`, which version 4 added, the
+last version to add syscalls; the regression of 17 item 4 nests it
+inside the current launcher.
 
 #### 7.4.3 Intercepted syscalls
 
@@ -911,13 +934,13 @@ regression of 17 item 4 nests it inside the current launcher.
 |---|---|---|
 | Path, follow final symlink | `openat`, `openat2` (below), `newfstatat`, `statx`, `faccessat`, `faccessat2`, `truncate`, `chdir`, `statfs`, `utimensat`, `fchmodat`, `fchmodat2`, `fchownat`, `*xattr` and the `*xattrat` family, `file_getattr`, `file_setattr`, `inotify_add_watch`, `fanotify_mark`, `execve`, `execveat`, and their legacy forms | translate, apply the read-only rules, re-issue |
 | Path, no follow | `readlinkat`, `unlinkat`, `mkdirat`, `mknodat`, `symlinkat` (the link's path; its target is stored verbatim), `renameat2`, `linkat` unless `AT_SYMLINK_FOLLOW`, `l*xattr`, `lchown`, `lstat`, `open` with `O_NOFOLLOW`, `open` with `O_CREAT\|O_EXCL` | translate all but the final component |
-| Descriptor-addressed | any of the above with an empty path and `AT_EMPTY_PATH`; a NULL path where the kernel accepts one (`fstatat` and `statx` since 6.11, the `*xattrat` family, `file_getattr` and `file_setattr` under `AT_EMPTY_PATH`, `utimensat(fd, NULL, ...)` behind `futimens`) and `EFAULT` elsewhere; so `statx(fd, "", AT_EMPTY_PATH)` behind Rust's `File::metadata` and `execveat(fd, "", AT_EMPTY_PATH)` behind `fexecve`; and `fchmod`, `fchown`, `fsetxattr`, `fremovexattr`, `fstatfs` and the `chattr` ioctls (`ftruncate` needs a writable descriptor, which an exclave file never has) | resolve the descriptor through `/proc/self/fd`, no component walk, no trailing-slash rule; `AT_FDCWD` is the working directory; apply the read-only rules; an `O_PATH` descriptor is `EBADF` for the five attribute calls, as natively; for `execveat` a descriptor on a symlink itself is `ELOOP`, and one on anything but a regular file, a pipe or a socket included, is `EACCES`; an original's descriptor given to `execveat` is mapped back to its wrapper |
+| Descriptor-addressed | any of the above with an empty path and `AT_EMPTY_PATH`; a NULL path where the kernel accepts one (`fstatat` and `statx` since 6.11, the `*xattrat` family, `file_getattr` and `file_setattr` under `AT_EMPTY_PATH`, `utimensat(fd, NULL, ...)` behind `futimens`) and `EFAULT` elsewhere (the empty-path forms are behind Rust's `File::metadata` and `fexecve`); and `fchmod`, `fchown`, `fsetxattr`, `fremovexattr`, `fstatfs` and the `chattr` ioctls (`ftruncate` needs a writable descriptor, which an exclave file never has) | resolve the descriptor through `/proc/self/fd`, no component walk, no trailing-slash rule; `AT_FDCWD` is the working directory; apply the read-only rules; an `O_PATH` descriptor is `EBADF` for the five attribute calls, as natively; for `execveat` a descriptor on a symlink itself is `ELOOP`, and one on anything but a regular file, a pipe or a socket included, is `EACCES`; an original's descriptor given to `execveat` is mapped back to its wrapper |
 | A path inside a structure | `bind` and `connect` with an `AF_UNIX` address whose path is not abstract | below |
 | Reverse-translate results | `getcwd`; `readlinkat` of `/proc/self/{exe,cwd,fd/*}` and of the process's own pid; `readlinkat` of an identity file; `statfs` and `fstatfs` on exclave paths | strip the tree's prefix, and the `.real/` of an original, which then names its wrapper; answer the program's virtual path for `exe` on the loader path (7.6); answer the host's link text for an identity file (8.4); report `ST_RDONLY` |
 | Self-defence | `rt_sigaction` with a new action; the mask-carrying calls above | scrub `SIGSYS` from the mask (7.5.1), with no canonicalisation |
 | Denied | `clone3`, `io_uring_setup`, `seccomp` except the availability query, `prctl(PR_SET_SECCOMP)`, `uselib`, the mount API (`open_tree`, `open_tree_attr`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr`) | `ENOSYS` |
 | Denied | `mount`, `umount2`, `pivot_root`, `chroot`, `acct` | `EPERM` |
-| Deferred | `name_to_handle_at` | `ENOSYS`; nothing met so far issues it, and a handle would name a real inode |
+| Deferred | `name_to_handle_at` | `ENOSYS`; no program seen issues it, and a handle would name a real inode |
 | Unknown | anything a newer ancestor filter traps | `ENOSYS`, logged |
 
 Which error comes first on an exclave path, as the kernel orders them
@@ -925,32 +948,37 @@ on a read-only bind mount, is 8.2's.
 
 **Relative paths.** A relative path begins with the kernel's own search
 check on the directory it starts from, `faccessat(dfd, ".", X_OK)`,
-which the kernel makes before any lookup (`link_path_walk`) and the
-absolute re-issue would otherwise skip: a working directory that has
-lost its execute bit answers `EACCES`, a descriptor that is not a
-directory `ENOTDIR`, a closed one `EBADF`, one syscall per relative
-path. The path is then resolved from the virtual working directory, or
-from the descriptor's directory read through `/proc/self/fd/<dfd>`,
-which closes the `..`-and-symlink escape from `tree/`, and re-issued
-absolute (13 items 13 and 14). The walk starts in that directory as the
-kernel names it, which holds no symlink, rather than walking its
-ancestors again, as the kernel never does; where the name could
-mislead it walks them: a tree directory known by a host name, a host
-name the rule does not plainly give the host, `/proc`, a host directory
-on a filesystem that could hold the tree's root under another name (the
-condition of the one-step check, 7.4.4), and an `openat2` with
-`resolve` flags. A deleted directory has no path to name: the relative
-path is spelt through its magic link, `/proc/self/fd/<dfd>/` or
-`/proc/self/cwd/`, and resolved by the kernel, so `.` and `..` keep
-working and a walk from there stays the host's.
+which the kernel makes before any lookup (`link_path_walk`) and an
+absolute re-issue would skip. A working directory that has lost its
+execute bit answers `EACCES`, a descriptor that is not a directory
+`ENOTDIR`, a closed one `EBADF`; the check costs one syscall per
+relative path. The path is then resolved from the virtual working
+directory, or from the descriptor's directory read through
+`/proc/self/fd/<dfd>`, and re-issued absolute, which closes the
+`..`-and-symlink escape from `tree/` (13 items 13 and 14).
+
+The walk starts in that directory as the kernel names it, which holds
+no symlink, and does not walk its ancestors again, as the kernel never
+does. It walks them only where the name could mislead: a tree
+directory known by a host name; a host name the rule does not plainly
+give the host; `/proc`; a host directory on a filesystem that could
+hold the tree's root under another name (the condition of the one-step
+check, 7.4.4); and an `openat2` with `resolve` flags. A deleted
+directory has no path to name, so the relative path is spelt through
+its magic link, `/proc/self/fd/<dfd>/` or `/proc/self/cwd/`, and
+resolved by the kernel; `.` and `..` keep working and a walk from
+there stays the host's.
 
 `chdir` is performed for real, so that `getcwd` has a real directory
 to reverse-translate. A trailing slash is preserved through
 translation, so that `stat("/file/")` fails as the kernel would.
-`O_EXCL` without `O_CREAT` follows symlinks, as the kernel does. A
-program's own executable, on the loader path, answers `ETXTBSY` to a
-write-open or a `truncate` from the program itself, as the kernel
-answers for the programs it executes; other processes are 13 item 40.
+`O_EXCL` without `O_CREAT` follows symlinks, as the kernel does.
+
+A program on the loader path answers `ETXTBSY` when the process that
+loaded it write-opens or truncates its file, before any read-only
+answer, as the kernel answers for the programs it executes. A write by
+another process is 13 item 29 on an exclave path (`EROFS`) and 13 item
+40 on a host path (it succeeds).
 
 **`openat2`** is the same open as `openat` after the kernel's checks on
 `struct open_how`, made first and in the kernel's order: the struct's
@@ -983,8 +1011,8 @@ dropped from the re-issue:
   might have said `EAGAIN`.
 
 The resolved path is re-issued as `openat2` itself, so that a kernel
-without it answers `ENOSYS` as it would natively. The probe of 17 item
-7 measures every flag against the kernel.
+without it answers `ENOSYS` as it would natively. The syscall probe
+(17 item 7) measures every flag against the kernel.
 
 **`bind` and `connect`.** The handler copies the `sockaddr_un` in, with
 the kernel's length rules, and translates `sun_path` like any path, a
@@ -1080,20 +1108,22 @@ the host's by the rule (not an identity file, not on the way to one,
 not the tree's root by name, not under `/proc`, no `.` or `..`), one
 `openat2` with `O_PATH`, `O_DIRECTORY` and `RESOLVE_NO_SYMLINKS` stands
 in for their `lstat`s: it succeeds only if each is a directory reached
-without a link. Another spelling of the tree's root needs a bind mount
-or a second mount of its filesystem, or a filesystem that folds case,
-where `x.exclave/TREE` is the tree's root on the same mount. So the
-check is used only where `/proc/self/mountinfo`, read when first needed
-and then decided for the process, shows the tree's filesystem mounted
-once with the tree's own device number, which a btrfs subvolume and a
-chroot that does not see the mount fail; and after the `openat2`
-succeeds, the kernel's name for what it reached, read back from
-`/proc/self/fd`, must be the path itself, which a case-folded spelling
-of the tree's root fails, since the tree's root, pinned by the
-program's mappings, keeps its own name. Any failure, a kernel before
-5.6 included, leaves the directories to the walk until it restarts at
-a link, and the final component is always the walk's. The assumption is
-the cache's: no second mount of the tree's filesystem appears while an
+without a link.
+
+Another spelling of the tree's root needs a bind mount or a second
+mount of its filesystem, or a filesystem that folds case, where
+`x.exclave/TREE` is the tree's root on the same mount. So the check is
+used only where `/proc/self/mountinfo`, read when first needed and then
+decided for the process, shows the tree's filesystem mounted once with
+the tree's own device number; a btrfs subvolume and a chroot that does
+not see the mount fail this. After the `openat2` succeeds, the kernel's
+name for what it reached, read back from `/proc/self/fd`, must be the
+path itself; a case-folded spelling of the tree's root fails this,
+since the tree's root, pinned by the program's mappings, keeps its own
+name. Any failure, a kernel before 5.6 included, leaves the
+directories to the walk until it restarts at a link, and the final
+component is always the walk's. The assumption is the cache's: no
+second mount of the tree's filesystem appears while an
 exclave process runs, by the host's hand or by a program's `setns` into
 a namespace that has one; inside, `mount` is refused (7.4.3).
 
@@ -1131,19 +1161,19 @@ given, the remaining arguments; five nested interpreters, the sixth
 
 **The launcher's own protocol.** `EXCLAVE_EXEC`, `EXCLAVE_EXECFN` and
 `EXCLAVE_COMM` are how one launcher tells the next what to run and under
-what name, not an interface. `EXCLAVE_EXEC`, set by a handler or by the
-positional entry, is absolute and is read only by a launcher run as a
-program, never by a wrapper (7.2). The name a program is exec'd by
-travels with it (7.6). The kernel spells it as given, or `/dev/fd/N` for
-a descriptor and `/dev/fd/N/name` for a path relative to one
-(`alloc_bprm` in `fs/exec.c`), and from it sets `AT_EXECFN`, `comm` as
-its last component (or, since 6.12, the file's own name for a bare
-descriptor), and a script's `$0`. The handler spells the name the same
-way and carries it, with the `comm` it computed, in `EXCLAVE_EXECFN` and
-`EXCLAVE_COMM` on every exec it makes, of a wrapper and of the launcher
-alike, any inherited copy of the three dropped. The launcher it execs
-takes them for the program's identity, a wrapper only when a filter is
-inherited, so that from the host they are as inert as `EXCLAVE_EXEC`.
+what name, not an interface. `EXCLAVE_EXEC`, set by a handler or the
+positional entry, is absolute and read only by a launcher run as a
+program, never by a wrapper (7.2). The kernel spells the name a program
+is exec'd by as given, or `/dev/fd/N` for a descriptor and
+`/dev/fd/N/name` for a path relative to one (`alloc_bprm` in
+`fs/exec.c`), and from it sets `AT_EXECFN`, `comm` as its last
+component (from 6.12, the file's own name for a bare descriptor) and a
+script's `$0`. The handler spells the name the same way and carries it,
+with the `comm` it computed, in `EXCLAVE_EXECFN` and `EXCLAVE_COMM` on
+every exec it makes, of a wrapper or of the launcher, dropping any
+inherited copy of the three. The launcher it execs takes them for the
+program's identity (7.6), a wrapper only when a filter is inherited, so
+that from the host they are as inert as `EXCLAVE_EXEC`.
 Every launcher removes all three from the environment a program is
 given; the kernel's copy in `/proc/<pid>/environ` keeps them (13 item
 46). A script's interpreter therefore receives the script's path as the
@@ -1161,8 +1191,8 @@ found", which is the truth, and so does a program whose interpreter is
 a host file (7.3). A tool in `~/bin` linked against host libraries runs
 inside an exclave only if those libraries are in it, and fails visibly
 otherwise; a tool not on the exclave's `PATH` is not found by name at
-all, which is the hermeticity the design sells (13 item 7). A program
-without a wrapper must go through the launcher rather than a plain
+all, which is the hermeticity the design is for (13 item 7). A program
+without a wrapper goes through the launcher rather than a plain
 `execve`, because the inherited filter would trap the kernel-chosen
 loader's first `openat` before any handler existed, killing it.
 
@@ -1182,7 +1212,8 @@ natively. At the hard limit the exec is `EMFILE` (13 item 12).
 
 ### 7.5 Signals, threads and memory
 
-Each rule below was found by running real software, not by reasoning.
+Each rule below comes from real software failing without it, not from
+reasoning.
 
 #### 7.5.1 `SIGSYS` must never be blocked
 
@@ -1190,9 +1221,8 @@ Seccomp delivers `SIGSYS` with `force_sig`: if the signal is blocked or
 ignored at that moment, the kernel resets the handler to the default
 and kills the process. The handler therefore scrubs `SIGSYS` from every
 mask a program tries to set: `rt_sigprocmask`, the `sa_mask` of every
-`rt_sigaction` that installs an action, and the masks of
-`rt_sigsuspend`, `ppoll`, `pselect6`, `epoll_pwait`, `epoll_pwait2`
-and `io_pgetevents`. `rt_sigtimedwait` and `signalfd` name signals to
+`rt_sigaction` that installs an action, and the mask of every wait
+that carries one (7.4.2). `rt_sigtimedwait` and `signalfd` name signals to
 receive, not to block, and are left alone. The case is common: a
 program installs a handler with `sigfillset` on `sa_mask`, a textbook
 idiom, and touches a path inside it. A consequence is that
@@ -1210,9 +1240,9 @@ restores the mask from the frame at `sigreturn`. The handler re-issues
 it with `SIGSYS` scrubbed from the set, which makes the kernel apply
 block, unblock or set semantics and fill `oldset` with the pre-trap
 mask, then copies the resulting mask into the frame's `uc_sigmask` so
-that it survives the return. `rt_sigsuspend`, `ppoll`, `pselect6`,
-`epoll_pwait`, `epoll_pwait2` and `io_pgetevents` are re-issued through
-the page with a scrubbed copy of their mask, six arguments and all.
+that it survives the return. The mask-carrying waits are re-issued
+through the page with a scrubbed copy of their mask, six arguments and
+all.
 `rt_sigaction` on `SIGSYS` itself is accepted and ignored (13 item 23);
 its `oldact` and every query report the truth, the launcher's handler,
 since only installs trap. The frame is read at the offsets of the
@@ -1230,8 +1260,8 @@ interrupted by Ctrl-C exactly as outside, and a program's own signal
 handler may run inside the launcher's. It then finds the registers as
 the launcher left them. A Go program without cgo keeps its goroutine in
 `x28` on aarch64 and its signal handler reads the register as it finds
-it, so Go's preemption signal, landing in the launcher's handler, read
-the launcher's value and faulted; the aarch64 launcher is therefore
+it, so Go's preemption signal, landing in the launcher's handler, would
+read the launcher's value and fault; the aarch64 launcher is therefore
 built with `x28` reserved (`-ffixed-x28`). On x86-64 Go reloads it from
 thread-local storage.
 
@@ -1249,62 +1279,57 @@ guard pages safe; where none exists it is a no-op.
 #### 7.5.4 Scratch memory and the stack budget
 
 The handler uses at most 3 KB of the program's stack beyond the
-kernel's own signal frame on either architecture: 2 568 bytes on x86-64
+kernel's signal frame: 2 568 bytes on x86-64
 and 2 480 on aarch64 (measured October 2026) for a five-deep chain of
 host `#!` scripts, whose six nested exec frames keep their buffers in
 scratch, and under 1.7 KB on every other path. The kernel's frame is
 `AT_MINSIGSTKSZ` bytes, about 3 KB on AVX-512 hardware and up to 11 KB
-with AMX, so the true per-trap cost is the frame plus the handler's,
-and it multiplies under nesting (13 item 30). glibc's `posix_spawn`
-child runs on a 36 KB stack on the reference machine, measured, with no
-guard page. The budget is asserted on the call graph gcc writes with
-`-fcallgraph-info=su` (`test/stackcheck.py`): the deepest chain of
-frames from `on_sigsys`, `exec_target`'s recursion counted six deep and
-any other recursion a failure, so a function counts because it is
-called, not because a list names it; the launcher makes no call through
-a pointer, which would have no edge.
+with AMX; a trap costs the two together, multiplied under nesting (13
+item 30), and glibc's `posix_spawn` child runs on a 36 KB stack with
+no guard page. `test/stackcheck.py` asserts the budget on the call
+graph gcc writes with `-fcallgraph-info=su`: the deepest chain from
+`on_sigsys`, `exec_target`'s recursion counted six deep and any other
+recursion a failure. The launcher makes no call through a pointer,
+which would have no edge.
 
 Path buffers, argument vectors and per-thread state live in scratch
-chunks obtained with `mmap` on demand; a fixed pool failed 40% of
-`stat` calls under 64 threads. A chunk records its owner's `(pid, tid)`
-and the frame that claimed it, and is released explicitly when the
-handler returns. Every copy from or into program memory names the pid
-recorded in the trap's own chunk, never a process-wide value, which a
-`vfork` child's handler, sharing the parent's memory, could overwrite
-while a thread of the parent is in its own handler.
+chunks mapped on demand, since a fixed pool failed 40% of `stat` calls
+under 64 threads when tried. A chunk records its owner's `(pid, tid)`
+and the frame that claimed it, and is released when the handler
+returns. Every copy from or into program memory names the pid recorded
+in the trap's own chunk, never a process-wide value, which a `vfork`
+child's handler, sharing the parent's memory, could overwrite.
 
 Two ways of leaving a chunk busy are expected. A `vfork` child that
 replaces its image from inside the handler leaves its chunk busy in the
-parent's memory until it exits (13 item 26). A program that `longjmp`s
-out of a nested handler leaves its chunk busy in a live thread; that
-one is released on the thread's next trap, since a chunk whose frame is
-at or below the current handler's frame cannot be a live ancestor on
-that stack, so it is a leak and not depth, and the textbook `alarm`
-plus `siglongjmp` timeout runs for ever. A handler that switches stacks
-between traps could confuse the comparison (13 item 27). Reclaiming
-other threads' chunks by stack position is not done: it is meaningless
-across alternate stacks and coroutines.
+parent until it exits (13 item 26). A program that `longjmp`s out of a
+nested handler leaves its chunk busy in a live thread; the thread's
+next trap releases it, since a chunk whose frame is at or below the
+current handler's frame cannot be a live ancestor on that stack, so the
+textbook `alarm` plus `siglongjmp` timeout runs for ever. A handler
+that switches stacks between traps could confuse the comparison (13
+item 27). Other threads' chunks are not reclaimed by stack position,
+which means nothing across alternate stacks and coroutines.
 
 When nothing is free the handler sweeps chunks whose owner no longer
-exists, `tgkill(pid, tid, 0)` or `kill(pid, 0)` answering `ESRCH`, and
-then grows the pool: a slot reserved by an atomic add, a chunk mapped
-and claimed, then published. Nothing takes a lock, since a lock held by
-the frame a signal interrupted, or by another thread at the moment of a
-`fork`, would never be released. The pool holds 4 096 chunks; past that
-a trap answers `ENOMEM` (13 item 26). A recycled identifier only delays
-reclamation, the safe direction. Releasing before `execve` is not done:
-a sibling thread could reuse the chunk while the kernel still reads the
-argument vectors it holds.
+exists, `tgkill(pid, tid, 0)` or `kill(pid, 0)` answering `ESRCH`, then
+grows the pool: a slot reserved by an atomic add, a chunk mapped and
+claimed, then published. Nothing takes a lock, since a lock held by the
+interrupted frame, or by another thread at a `fork`, would never be
+released. The pool holds 4 096 chunks; past that a trap answers
+`ENOMEM` (13 item 26). A recycled identifier only delays reclamation,
+the safe direction. No chunk is released before `execve`, since a
+sibling thread could reuse it while the kernel still reads the argument
+vectors it holds.
 
 **The sequence rule.** Every claim and every release advances a
 chunk's sequence, and a sweep releases a chunk only by advancing the
-sequence it read before it judged the owner, in one compare-and-swap.
-A sweep overtaken between its judgement and its release, by another
-sweep's release and a new claim, finds the sequence moved and leaves
-the new holder alone. Without the rule two handlers could share one
-chunk, which `posix_spawn`'s vfork children, leaving chunks with dead
-owners, made likely on two CPUs (13 item 44); `test/scratch_test.c`
-forces the interleaving.
+sequence it read before judging the owner, in one compare-and-swap. A
+sweep overtaken by another sweep's release and a new claim finds the
+sequence moved and leaves the new holder alone. Without the rule two
+handlers could share a chunk, which `posix_spawn`'s `vfork` children,
+leaving chunks with dead owners, make likely on two CPUs (13 item 44);
+`test/scratch_test.c` forces the interleaving.
 
 #### 7.5.5 Threads and `clone3`
 
@@ -1317,10 +1342,10 @@ internal signals, which traps for the mask scrub. That is the cost of
 refusing `clone3`: a handful of traps per `posix_spawn`, two
 `rt_sigaction`s and one `rt_sigprocmask` for a parent with no handlers.
 What a spawn costs in all is the child launcher's start and the kernel's
-work behind it (16). Honouring `clone3` instead by copying the signal
-frame onto the new stack left the FPU save-area pointer at the parent's
-stack, and every new thread started with a corrupt `MXCSR`; refusing
-`clone3` removes the mechanism and the bug with it.
+work behind it (16.4). Honouring `clone3` by copying the signal frame
+onto the new stack would leave the FPU save-area pointer at the
+parent's stack and start every new thread with a corrupt `MXCSR`
+(14.3).
 
 #### 7.5.6 `EFAULT`
 
@@ -1340,16 +1365,15 @@ For a wrapped program the kernel runs the launcher under the program's
 own path, so `/proc/<pid>/exe`, `comm`, `cmdline`, audit records and
 core-dump names are the program's for every observer. For a program on
 the loader path, built outputs and host-path programs, the kernel's
-`exe` and `maps` name the launcher and `.real/` files; `cmdline` is the
-original `argv`, and `comm` and `AT_EXECFN` are what the kernel would
-have set, carried by the handler that exec'd it (7.4.5); and from
-inside, `readlink` of `/proc/self/exe` and of the process's own pid
-answers the program's virtual path while `open` and `stat` of it reach
-the real file. glibc's `ld.so` takes `$ORIGIN` from `/proc/self/exe`, so
-a built binary with `RUNPATH=$ORIGIN/../lib` finds its libraries inside
-the exclave; Go's `os.Executable`, Rust's `current_exe` and self-reading
-programs get the right file. The residue, `exe` and `maps` for outside
-observers of loader-path programs, is 13 item 10.
+`exe` and `maps` name the launcher and `.real/` files, which is 13 item
+10 for outside observers; `cmdline` is the original `argv`, and `comm`
+and `AT_EXECFN` are what the kernel would have set, carried by the
+handler that exec'd it (7.4.5). From inside, `readlink` of
+`/proc/self/exe` and of the process's own pid answers the program's
+virtual path while `open` and `stat` of it reach the real file, so
+glibc's `$ORIGIN`, Go's `os.Executable`, Rust's `current_exe` and
+self-reading programs get the right file, and a built binary with
+`RUNPATH=$ORIGIN/../lib` finds its libraries inside the exclave.
 
 A program run from a descriptor that has no path, `fexecve` of a
 `memfd` or of a file unlinked since it was opened, is a host program the
@@ -1365,31 +1389,17 @@ to its interpreter as `/dev/fd/N`, the kernel's spelling, and a
 close-on-exec script is `ENOENT`, as the kernel answers, since the
 interpreter could not open it (13 item 25).
 
-gdb is the tool that cares, and what it sees is the launcher, the
-executable of every wrapper. The launcher therefore exports six names,
-the base, entry and real file of the program it mapped, the base and
-file of the loader, and `exclave_debug_hook`, a function it calls once
-before the jump; and it carries a Python script (`src/gdb.py`) in a
-`.debug_gdb_scripts` section, which gdb auto-loads whenever a launcher
-is the executable, at launch and at every exec of one. The script tells
-gdb to pass `SIGSYS`, breakpoints the hook, and there adds the
-program's symbol file at its base and the loader's at its own. At the
-program's entry point, when the loader has mapped every library, it
-walks the loader's link map, `_r_debug` on glibc and `_dl_debug_addr`
-on musl, and adds each library's file at its load address, resolving
-the recorded name in the tree as the translator would and taking the
-original of a wrapper; a breakpoint on the map's `r_brk` repeats the
-walk after every `dlopen`. Nothing is
-typed: `gdb --args gcc.exclave/gcc -c x.c` stops at a `break` in the
-program or in the exclave's libc with the right frames and source
-lines, and with `set follow-fork-mode child` the same happens in
-`cc1`, whose exec loads the script again. What gdb does not get is its
-own shared-library list, `info sharedlibrary`, which comes from a
-`DT_DEBUG` entry the launcher does not carry; `info files` lists what
-the script added. A breakpoint in a musl exclave's libc does not hit
-(13 item 1). The one setting the user owns is gdb's auto-load
-safe-path, which must admit the exclave, once, in `.gdbinit`. 13.1 has
-the recipe; 14 says why gdb's JIT interface is not used for this.
+gdb sees the launcher, the executable of every wrapper, so the
+launcher exports six names, the base, entry and real file of the
+program it mapped, the base and file of the loader, and
+`exclave_debug_hook`, which it calls once before the jump, and carries
+a Python script, `src/gdb.py`, that gdb auto-loads from
+`.debug_gdb_scripts` at launch and at every exec of a launcher. The
+script adds the program's, the loader's and every library's symbols
+from the tree, so a `break` in the program or the exclave's libc stops
+with the right frames once the exclave is in gdb's auto-load safe-path;
+13.1 gives the script's mechanics and the recipe, 13 item 1 what gdb
+does not get, and 14.2 why gdb's JIT interface is not used.
 
 ### 7.7 CPU check
 
@@ -1411,6 +1421,7 @@ translation would have one use, running maintainer scripts in a scratch
 copy of a tree, and that needs a writable root, which is a second world
 (8.2); the tool synthesises what maintainer scripts would have done
 instead (10.1).
+
 ## 8. Visibility rule
 
 Every path a program names is either an **exclave path**, which the
@@ -1505,11 +1516,11 @@ When several parts apply, the launcher decides in this order:
 
 Exclave paths cannot be written, and the handler alone enforces it:
 the tree is not mounted read-only and its modes are not changed. The
-rule is small enough to state in full. It was measured against a
-read-only bind mount in a user namespace, the oracle of 17 item 1, and
-is checked syscall by syscall against the kernel by the probe of
-17 item 7. `fs/namei.c`, `fs/open.c` and `fs/utimes.c` are the
-references for the kernel's order.
+rule is small enough to state in full. It answers what the kernel
+answers on a read-only bind mount in a user namespace, which the
+oracle of 17 item 1 measures and the syscall probe of 17 item 7 checks
+syscall by syscall. `fs/namei.c`, `fs/open.c` and `fs/utimes.c` are
+the references for the kernel's order.
 
 - Write-mode opens, `O_TRUNC`, `O_TMPFILE`, creation, `mkdir`, `mknod`,
   `unlink`, `rmdir`, `rename`, `link`, `symlink`, `chmod`, `chown`,
@@ -1567,10 +1578,12 @@ references for the kernel's order.
     mount first; and a socket or a FIFO in the tree is opened as the
     kernel opens it, `ENXIO` for a socket (`do_open`, `may_open`,
     `do_dentry_open`, `vfs_truncate`, measured on the reference
-    kernel). `vfs_truncate` wanted the mount first until after Linux
-    6.1, and `utimensat` refused `AT_EMPTY_PATH` and checked the
-    nanoseconds before the lookup until 5.9; the probe accepts those
-    orders on the matrix rows that run such kernels.
+    kernel). Older kernels order two of these differently: on 6.1 and
+    earlier `truncate` checks the mount before the permission (6.14
+    checks the permission first), and before 5.9 `utimensat` refuses
+    `AT_EMPTY_PATH` and checks the nanoseconds before the lookup. The
+    handler answers as the newer kernels do, and the syscall probe
+    accepts the older orders on the matrix rows that run such kernels.
   - `utimensat` answers a flag it does not take, or a NULL path with
     `AT_FDCWD`, before any lookup, with `EINVAL` and `EFAULT`, and a
     nanosecond out of range after the lookup and before the mount;
@@ -1585,11 +1598,17 @@ references for the kernel's order.
   (kernel 2.6.36 and later; measured on glibc 2.39). `/proc/mounts`
   shows the host's mounts (13 item 11).
 
-Two orders the handler does not follow are stated in 13:
-`fanotify_mark`'s flag check (13 item 41), and `EROFS` before
-`ETXTBSY` for an executable another process runs (13 item 29). The
-oracles measure the rest on the kernel matrix, since orderings have
-moved between kernels.
+A running program's file is the one case where the answer depends on
+who writes. The process that loaded a program on the loader path gets
+`ETXTBSY` for a write-open or `truncate` of that program's file,
+before any read-only answer, as the kernel answers for the programs it
+executes (7.4.3). Another process's write-open without `O_TRUNC` of an
+exclave file that is running answers `EROFS` where the kernel answers
+`ETXTBSY` (13 item 29); on a host path it succeeds (13 item 40).
+
+Two orders the handler does not follow are stated in 13: that one,
+and `fanotify_mark`'s flag check (13 item 41). The oracles measure the
+rest on the kernel matrix, since orderings differ between kernels.
 
 There is no `chmod` of the tree: modes are fragile across copies and
 version control, a write-protected tree resists `rm -r`, and the owner
@@ -1641,8 +1660,6 @@ the checking host's `nsswitch.conf` names that the exclave lacks
 (10.3), so an exclave's maker who checks on such a host learns of it
 before a user does.
 
----
-
 ## 9. Compilers specifically
 
 - **Hermetic sysroot by default.** A gcc exclave carries its own glibc
@@ -1655,11 +1672,11 @@ before a user does.
   `-static`.
 - **Cross toolchains** are one exclave with one libc for the tools and a
   `data` sysroot for the target; their outputs run inside only when the
-  target libc is the exclave's. A musl development exclave, built from
-  Alpine, runs musl outputs.
+  target libc is the exclave's. A musl development exclave, such as
+  the Alpine exclave below, runs musl outputs.
 - **An older glibc as a sysroot.** CentOS 7's `glibc`, `glibc-devel`,
   `glibc-headers`, `kernel-headers` and `libgcc` rpms, unpacked by the
-  rpm reader, are copied into the noble gcc exclave at
+  rpm reader, are copied into the Ubuntu 24.04 gcc exclave at
   `/opt/sysroot-el7` and recorded as `data "/opt/sysroot-el7"`, so that
   nothing there is wrapped, checked or executed. The compile is
   `gcc --sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/`: the
@@ -1669,19 +1686,37 @@ before a user does.
   `libc.so` linker script names `/lib64/libc.so.6`, which `ld` prefixes
   with the sysroot because the script lies inside it. The output binds
   `GLIBC_2.2.5` alone, and runs inside the exclave on the exclave's
-  loader on the reference machine, and natively on every glibc VM of
-  the matrix, CentOS 7 included; Alpine's musl has no loader for a
-  glibc program (12). `test/sysroot.py` makes the exclave and the
-  output. A static link made the same way needs `glibc-static` in the
-  sysroot.
-- **A clang exclave**: the noble `clang-18` closure with `libc6-dev`,
-  `libgcc-13-dev`, `libstdc++-13-dev` and `binutils`, wrapped with no
-  error. A maker who wants `cc` adds `cc -> ../../bin/clang-18` and
+  loader and natively on the reference machine. `test/sysroot.py`
+  makes the exclave and the output, and the kernel matrix runs the
+  output natively on each glibc row, CentOS 7 at glibc 2.17 included
+  (12.1); Alpine's musl has no loader for a glibc program. A static
+  link made the same way needs `glibc-static` in the sysroot.
+- **A clang exclave**: Ubuntu 24.04's `clang-18` closure with
+  `libc6-dev`, `libgcc-13-dev`, `libstdc++-13-dev` and `binutils`,
+  wrapped with no error. A maker who wants `cc` adds `cc -> ../../bin/clang-18` and
   `c++ -> ../../bin/clang++-18` in the exclave's own `/usr/local/bin`,
   which is what puts a name on the exclave's `PATH` (6.2). The test
   inputs' clang exclave has none, and the test suite finds its compiler
   as `clang-18`. C and C++ compile and run inside; the sanitizer
-  runtimes are in a package that set does not include.
+  runtimes are in a package that set does not include. It is one of
+  the gate's four exclaves (17).
+- **An Alpine exclave**: `gcc musl-dev binutils make linux-headers`
+  and the base, 20 packages from Alpine 3.21 fetched with
+  `tools/fetch-apks.py`, unpacked and wrapped: 87 ELF files, no error
+  from the static check, and a tree hash that reproduces from the same
+  files. Its gcc 14.2 compiles and runs C inside, dynamically linked
+  on musl 1.2.5 and statically linked. The static output runs on a
+  glibc host; the dynamic one does not, since such a host has no musl
+  loader. A compile touches no host path, and it is one of the gate's
+  four exclaves (17).
+- **A Fedora exclave**: `gcc glibc-devel binutils make` and the base,
+  87 packages from Fedora 42 fetched with `tools/fetch-rpms.py`, with
+  `glibc-minimal-langpack` chosen for the langpack, unpacked and
+  wrapped: 351 ELF files, no error from the static check, and a tree
+  hash that reproduces from the same files. Its gcc 15 compiles and
+  runs C inside on glibc 2.41; a static link needs `glibc-static`,
+  which the set does not include. A compile touches no host path, and
+  it is one of the gate's four exclaves (17).
 - **Targeting the host's own libraries** is not a manifest setting. A
   `host` record over the exclave's library directory takes the
   exclave's loader and libc with it, so no dynamic program in the
@@ -1702,6 +1737,7 @@ before a user does.
   same small binary at the same mtime, so ccache's default
   `compiler_check = mtime` would share entries between two different
   exclaves. ccache needs `compiler_check = %compiler% -v`.
+
 ## 10. The `exclave` command
 
 The `exclave` command builds exclaves. It is a Python program, standard
@@ -1751,12 +1787,11 @@ set that mixes formats is refused. From `.deb` files, in five steps:
    `Pre-Depends` is checked within the set, honouring `Provides` and
    version constraints, and each one the set does not satisfy is
    reported by name: `tool needs absent-pkg, not in the set`. This is a
-   report, not a refusal, because the set is its maker's choice. The
-   static check (10.3) remains the gate on correctness, and a data file
-   a missing package would have shipped shows up as a failed open in
-   `EXCLAVE_LOG`. The Essential set, which every package assumes and none
+   report, not a refusal, because the set is its maker's choice; the
+   static check (10.3) is the gate on correctness, and a missing data
+   file shows up as a failed open in `EXCLAVE_LOG`. The Essential set, which every package assumes and none
    declares, is the fetcher's concern; `tools/fetch-debs.py` adds it
-   unless told not to.
+   unless given `--no-essential`.
 2. **Extract** each `data.tar.*` into `tree/`, after creating the
    distribution's merged-`/usr` symlinks (`bin`, `sbin`, `lib`, `lib32`,
    `lib64`, `libx32` to their `usr/` counterparts). Directories and
@@ -1771,16 +1806,17 @@ set that mixes formats is refused. From `.deb` files, in five steps:
    member whose path resolves outside the tree through a symlink is
    refused, and so is a member under the reserved name `.real` (6.1).
    `ar` and `tar` are read in Python, xz, gzip and bzip2 through the
-   standard library, and zstd through the `zstd` command that the tool's
-   exclave ships. Modes and modification times come from the archive,
-   with setuid and setgid bits dropped (they mean nothing under
-   `no_new_privs`, 12) and every file made readable by its owner;
-   special files are skipped with a note.
+   standard library, and zstd through a `zstd` command, which the tool's
+   exclave ships and a host run of the tool needs on its `PATH`. Modes
+   and modification times come from the archive, with setuid and setgid
+   bits dropped (they mean nothing under `no_new_privs`, 12) and every
+   file made readable by its owner; special files are skipped with a
+   note.
 3. **Synthesise** the effects of maintainer scripts; the scripts are
    never run. The rules, keyed by package, approximate dpkg's configure
-   step for the case without privilege. A tree whose maintainer scripts
-   must really run comes from outside, from `debootstrap`, a container
-   export or a chroot, and `wrap` makes an exclave of it. The rules:
+   step for the case without privilege; a tree whose scripts must really
+   run comes from `debootstrap`, a container export or a chroot, and
+   `wrap` makes an exclave of it. The rules:
    every `update-alternatives --install` line in a `postinst`, with
    its slaves, the highest priority winning, which yields `awk`,
    `which`, `pager`, `cc` and the rest without a per-package list;
@@ -1811,7 +1847,7 @@ so. `wrap` must run on a machine of the exclave's architecture: the
 static check asks the tree's loader for its directories and checks the
 objects of the launcher's machine, and on any other machine it refuses
 with the reason. The kernel matrix makes its arm64 exclave inside the
-arm64 virtual machine for this reason (12).
+arm64 virtual machine for this reason (17).
 
 The result of `unpack` is an unwrapped exclave, which is a directory.
 Anything may be done to it before it is wrapped, with the tools one uses
@@ -1857,93 +1893,40 @@ check (10.3).
 
 **Hash** prints the tree hash (6.4).
 
+**Alpine and rpm sets** go through the same five steps. The apk reader
+presents `.PKGINFO`, and the rpm reader its header, with the field names
+of a `.deb`, so the dependency report, extraction and the hashes file
+are the same code; the synthesis rules are Debian's, read in each
+format's spelling. Alpine keeps `/bin`, `/sbin` and `/lib` as
+directories of their own, so no merged-`/usr` links are made, and adds
+one rule, busybox's applet links (13 item 37). rpm adds a handful, among
+them cpio hard links, `rpmvercmp` ordering, Fedora 42's merge of `sbin`
+into `bin` and Fedora's p11-kit CA bundle. The module docstrings of
+`exclave/apk.py` and `exclave/rpm.py` list each format's differences.
+
 **The step before the tool** belongs to whoever makes the exclave.
-`tools/fetch-debs.py` is the worked example: it resolves the closure of
-`Depends` and `Pre-Depends` from an archive's `Packages` index, adds the
-Essential set, chooses providers of virtual packages by priority,
-verifies the index against the suite's `Release` digests and every
-download against the index's SHA-256, and fills a directory. It knows
-about mirrors and snapshot services because those are locators. The
-tool does not, because a hash is not a locator. The fetchers are not
-part of the tool's exclave.
+Three fetchers in `tools/`, one for each format, are worked examples;
+they are not part of the tool's exclave. Each resolves a closure from a
+repository's index, chooses providers of virtual names by priority,
+verifies every download against the index's checksum, and fills a
+directory. They know about mirrors and snapshot services because those
+are locators; the tool does not, because a hash is not a locator.
 
-**The apk reader** reads Alpine's packages. An `.apk` is three gzip
-members back to back, each a tar stream: a signature, the control files
-and the data. The reader presents `.PKGINFO` with the field names of a
-`.deb`, so the dependency report, extraction and the hashes file are
-the same code.
+- `tools/fetch-debs.py` resolves `Depends` and `Pre-Depends` from an
+  archive's `Packages` index, adds the Essential set, and checks the
+  index against the suite's `Release` digests.
+- `tools/fetch-apks.py` resolves `D:` dependencies through the index's
+  `p:` provides and checks each package's checksums as apk does: the
+  index's checksum against the control section, and `.PKGINFO`'s
+  `datahash` against the data section.
+- `tools/fetch-rpms.py` reads a yum or dnf repository's `repomd.xml` and
+  `primary.xml` and resolves `Requires` through `Provides` and the files
+  the index lists.
 
-- `depend` and `provides` name packages, shared objects
-  (`so:libc.musl-x86_64.so.1`), commands (`cmd:gcc`) and pkg-config
-  modules (`pc:zlib`). Versions are ordered as apk-tools orders them,
-  `_rc` before the release and `-r` revisions after. A file dependency,
-  such as `/bin/sh`, names something some package must ship; the report
-  asks the extracted tree whether one does.
-- Alpine's `/bin`, `/sbin` and `/lib` are directories of their own, so
-  the merged-`/usr` links are not made.
-- Alpine needs one synthesis rule. busybox's post-install makes its
-  applet links with `busybox --install`; the tool makes them from the
-  paths the package ships in `/etc/busybox-paths.d`, each a relative
-  link to `/bin/busybox`, so that `tree/bin/sh` run from outside the
-  exclave reaches the wrapper in the tree (13).
-- musl has no `ld.so.cache`, and the static check asks for none.
-
-`tools/fetch-apks.py` is the example step before the tool for Alpine.
-It resolves the closure of `D:` dependencies through the index's `p:`
-provides, chooses providers by priority, and verifies every file as apk
-does: the index's checksum against the control section, and `.PKGINFO`'s
-`datahash` against the data section.
-
-**The rpm reader** reads RPM packages. An `.rpm` is a lead, a signature
-header, a header and a compressed cpio payload. The header is an index
-of tagged entries, from which the reader takes the name, version and
-release, the architecture, `Requires` and `Provides` with rpm's flags
-and versions, `Obsoletes` as `Replaces`, the install scripts, and the
-payload's compressor (gzip, xz or zstd).
-
-- cpio records hard links as entries of one inode with the content on
-  the last; the reader gives the content to the first and links the
-  rest, as tar would.
-- Versions are ordered as `rpmvercmp` orders them: epoch first, then
-  version and release segment by segment.
-- Dependencies come as rpm spells them: package names, the provides a
-  library's package declares (`libc.so.6(GLIBC_2.2.5)(64bit)`,
-  `rtld(GNU_HASH)`), and file names. `rpmlib(...)` features and rich
-  dependencies (`(a or b)`) are rpm's own and are skipped.
-- The synthesis rules are Debian's: `alternatives --install` lines in
-  `%post` in either spelling, the tree's own `ldconfig` where it is
-  static, and the identity files as placeholders. `setup` ships
-  `/etc/passwd`, so nothing is made for it.
-- Fedora, RHEL and CentOS 7 have merged `/usr`, so the links of step 2
-  are made. A symlink that one package ships at a path under which other
-  packages ship files is made before anything is extracted, whatever the
-  order of the packages, so those files land where the link points.
-- Fedora 42's `filesystem` package merges `sbin` into `bin` in its
-  `%posttrans`, written in Lua: when every entry of `/usr/sbin` is a
-  link `../bin/<name>`, the directory becomes a link to `bin`. The tool
-  does the same when that script is present.
-- Red Hat's `ld.so.conf` says `include ld.so.conf.d/*.conf`, relative to
-  `/etc`, which `ldconfig` refuses under `-r`. The tool runs `ldconfig`
-  on a temporary copy in the tree with the pattern spelt from `/etc`,
-  and removes the copy afterwards.
-- Files shipped unreadable, such as Fedora's `/etc/gshadow` at mode 0,
-  are made readable by their owner, since a tree that its owner cannot
-  read can be neither hashed nor copied. A tree that comes from outside
-  with such a file is refused by `wrap`, naming the file (10.3).
-- An `alternatives --install` line replaces a file or link already
-  standing at the link path, as both implementations do. Fedora's
-  binutils needs this: it ships gold at `/usr/bin/ld` and removes it in
-  `%post` before installing `ld.bfd` as the alternative.
-- Fedora's `ca-certificates` ships a p11-kit trust source and links every
-  consumer path to the bundle that `update-ca-trust` extracts in `%post`.
-  The tool extracts it the same way, one PEM for each anchor marked
-  trusted and not distrusted, so that the Red Hat identity file of 8.4
-  has a copy to fall back to.
-
-`tools/fetch-rpms.py` is the example step before the tool for yum and
-dnf repositories: it reads `repomd.xml` and `primary.xml`, resolves the
-closure of `Requires` through `Provides` and the files the index lists,
-and verifies each download against the index's SHA-256.
+None verifies a signature, the `Release` file's, the apk index's or the
+rpm metadata's, so the mirror is trusted (13 item 32). `fetch-debs.py`'s
+default mirrors are plain `http://`, so with them the network path is
+trusted too; an `https` mirror or `--snapshot` leaves only the mirror.
 
 ### 10.2 Built software
 
@@ -1959,20 +1942,17 @@ cp -a stage/usr/local tool.exclave/tree/usr/
 exclave wrap tool.exclave                          # the static check says whether it all links inside
 ```
 
-There is no recipe format, no builder exclave and no closure copying.
-The runtime the result needs is packages the script already has, and
-the static check verifies that every library resolves inside the
-exclave. Optimisation flags are the build's own, and the manifest's
+There is no recipe format, no builder exclave and no closure copying:
+recipes and their parameters are the beginning of a distribution, which
+exclave is not (3). The runtime the result needs is packages the script
+already has, and the static check verifies that every library resolves
+inside the exclave. Optimisation flags are the build's own, and the manifest's
 `cpu` record (6.2) is declared by whoever makes the exclave. This is how
 to get any CPU level, or `-march=native`, from a baseline distribution,
 and how exclaves bootstrap exclaves: gcc 14 built inside the gcc 13
 exclave and wrapped with gcc 13's runtime packages is a gcc 14 exclave.
 The hashes file of such an exclave records the runtime packages and the
 tree; it cannot re-derive the prefix, and does not claim to.
-
-A `from-source` command with recipes and parameters was tried and
-removed: it was the beginning of a distribution, which exclave is not
-(3).
 
 ### 10.3 Checks
 
@@ -2089,11 +2069,13 @@ they reach rather than by what the log says: the `cc` that a program
 ran appears in the log as the gcc it resolved to.
 
 Afterwards the hashes file's tree hash is rewritten and the static
-check runs. Measured on the test suite's copy of the gcc exclave, a
-hello-world compile keeps 212 of 4 851 files, 87 of them licence texts;
-the count moves by a file or two with where the work directory lies.
+check runs. On the gcc 13 exclave that `test/inputs.sh` makes, a
+hello-world compile keeps 220 of 5 204 files and symlinks, counted as
+`prune` prints them, originals included; 87 of them are licence texts.
+The count moves by a file or two with where the work directory lies.
 The pruned exclave compiles the same program and passes the static
-check.
+check. (The README's example, an exclave with a CentOS 7 sysroot copied
+in, keeps 227 of 9 567 by the same count.)
 
 Failed opens in a later `EXCLAVE_LOG` show what pruning removed, by
 name, including a missing intermediate directory. The cycle is: prune,
@@ -2107,77 +2089,56 @@ copied into the unwrapped exclave by hand, and `exclave wrap` wraps it.
 Its shortcut is a shell script that runs `python3` on the tool, which is
 one reason scripts are wrapped (6.1).
 
-Every later tool is built by the previous one. That is a
-cross-exclave invocation, with each exclave holding a launcher of its
-own, and it is tested as one. `test/dogfood.py --inputs DIR` takes two
-package sets that `test/inputs.sh DIR` fetched with
+A tool's exclave can build the next one. That is a cross-exclave
+invocation, with each exclave holding a launcher of its own, and
+`test/dogfood.py` tests it as one. `test/dogfood.py --inputs DIR` takes
+two package sets that `test/inputs.sh DIR` fetched with
 `tools/fetch-debs.py`, the tool's (`debs-tool`) and the gcc 13 closure
 (`debs-gcc13`), and touches no network. It builds the tool's exclave,
 then builds the same gcc exclave twice from the same files: once with
 the checkout's tool on the host, and once with the tool's exclave from
 inside it. It requires the two hashes files, tree hash included, to be
-identical, and they are.
-
----
+identical.
 
 ## 11. Layers
 
 exclave has no layers. An exclave is one tree, and nothing is unioned
 beneath it at run time.
 
-A `use` record that unioned another exclave's tree beneath this one at
-`/`, or attached it at a prefix, was designed and removed. It needed a
-second root in the translator (7.4), a rule that the two libcs be
-equal, relative paths that named another exclave's location, and an
-answer to whether `getdents64` should merge listings, which was never
-found.
+A record that unioned another exclave's tree beneath this one at `/`,
+or attached it at a prefix, would need a second root in the translator
+(7.4), a rule that the two libcs be equal, relative paths that name
+another exclave's location, and an answer to whether `getdents64`
+merges the two listings, which no choice gets right for every program.
 
 Composition happens at build time instead, which the unwrapped exclave
 of 10.1 makes easy: unpack two package sets into one exclave, or copy a
-sysroot into a data directory (9). The cost is disk space. Nothing built
-with exclave so far has needed a layer.
-
----
+sysroot into a data directory (9). The cost is disk space.
 
 ## 12. Portability envelope
 
 | Dimension | Requirement or behaviour |
 |---|---|
-| Kernel | A seccomp filter with `SECCOMP_RET_TRAP` (Linux 3.5), installed with `seccomp(2)` or `prctl(PR_SET_SECCOMP)`. `SECCOMP_RET_KILL_PROCESS` (Linux 4.14) degrades to killing the thread on older kernels. `/proc` mounted. `process_vm_readv` for speed, with a pipe keeping `EFAULT` fidelity where it is refused (7.5.6). Measured on the matrix below, from 3.10 to 7.0 |
+| Kernel | A seccomp filter with `SECCOMP_RET_TRAP` (Linux 3.5), installed with `seccomp(2)` or `prctl(PR_SET_SECCOMP)`. `SECCOMP_RET_KILL_PROCESS` (Linux 4.14) degrades to killing the thread on older kernels. `/proc` mounted. `process_vm_readv` for speed, with a pipe keeping `EFAULT` fidelity where it is refused (7.5.6). Measured from 3.10 to 7.0 (12.1) |
 | Ubuntu 23.10+ desktops, Docker and CI default profiles, RHEL 7, HPC, hardened kernels | Designed to work: no privilege, user namespace or mount is needed. Docker's default seccomp profile was checked syscall by syscall, and a workload runs under it, twice: as assembled for the running kernel and as Docker installs it before Linux 4.8, where `process_vm_readv` is refused (17) |
 | Read-only media, NFS, FUSE homes | Work: nothing is written |
 | `noexec` media, including a `noexec` `/tmp` in CI | Not supported: neither `execve` nor `mmap(PROT_EXEC)` of a file is allowed there |
 | Snap-confined terminals, gVisor-based CI, WSL1, SELinux `execmem` policies | Untested. snapd and gVisor install their own filters; WSL1 has no seccomp |
 | `no_new_privs` | The filter requires it, and it also disables file capabilities and AppArmor transitions on exec: `sudo`, `su`, `pkexec`, `ping` and setcap binaries fail inside an exclave, including when run from build scripts |
 | Media without symlinks or hard links (FAT) | `cp -rL` copies the launcher once per wrapper and replaces symlinks with copies; the copy works, since whether a file is a wrapper is read from the file (7.4.4) |
-| Architectures | x86-64 and aarch64, from one source as two launchers (7.1). An exclave runs programs of its launcher's machine only. aarch64 is tested in the emulated matrix row below, on a kernel with 4 KB pages; kernels with 16 KB or 64 KB pages (Asahi, RHEL's and Ubuntu's 64k kernels) are untested (13 item 43). Another 64-bit little-endian machine would need the same list: the syscall table, `_start`, the signal frame offsets, a restorer, the relocation type and the CPU check |
+| Architectures | x86-64 and aarch64, from one source as two launchers (7.1). An exclave runs programs of its launcher's machine only. aarch64 is tested in the emulated matrix row (12.1), on a kernel with 4 KB pages; kernels with 16 KB or 64 KB pages (Asahi, RHEL's and Ubuntu's 64k kernels) are untested (13 item 43). Another 64-bit little-endian machine would need the same list: the syscall table, `_start`, the signal frame offsets, a restorer, the relocation type and the CPU check |
 | Overhead | Within noise on a compute-bound compile; about a third more on thirty small compiles; about twice native per `posix_spawn`; 6 to 10 times native on a tight `stat` loop (16) |
 
 What remains host-dependent is the same set that static linking leaves:
 the kernel ABI, the CPU level (7.7), and the eight host identity files
 (8.4).
 
-### The kernel matrix
+### 12.1 The kernel matrix
 
-`test/matrix.py --exclave EXCLAVE` runs one gcc exclave, built on the
-reference machine, in virtual machines. Each VM boots the
-distribution's own cloud image under QEMU with KVM; cloud-init installs
-`python3`, `strace` and, where the distribution has it, `bubblewrap`.
-The exclave, the test tree and the checkout's launcher are copied in,
-and the exclave is relinked there with that launcher. Each row then
-runs:
-
-- **the suite**: the 74 named regressions of `test/run.py` (17), with
-  the Go regression's programs built on the reference machine for the
-  VM's machine;
-- **the oracles**: the resolution oracle (needs `openat2`, Linux 5.6), the
-  namespace oracle (needs user namespaces), the syscall probe (17 item
-  7; needs user namespaces, and accepts what a kernel lacks or decides
-  differently under a named reason), and the Docker-profile run (needs
-  `bwrap` and user namespaces), which reads Docker's default seccomp profile given as
-  `--docker-profile FILE`.
-
-Measured October 2026:
+`test/matrix.py` runs one gcc exclave, built on the reference machine,
+in a virtual machine of each distribution's own cloud image, with the
+suite's 74 named regressions and every oracle its kernel can run; 17
+describes the procedure. Measured October 2026:
 
 | Distribution | Kernel | Suite | Oracles | Notes |
 |---|---|---|---|---|
@@ -2185,78 +2146,41 @@ Measured October 2026:
 | Ubuntu 18.04 | 4.15 | 74 of 74 | namespace, probe and Docker profile pass; no `openat2` | bwrap 0.2 |
 | Rocky Linux 8 | 4.18 | 74 of 74 | all pass | |
 | Ubuntu 20.04 | 5.4 | 74 of 74 | namespace, probe and Docker profile pass; no `openat2` | |
-| Debian 11 | 5.10 | 74 of 74 | all pass | the security suite lists a `bubblewrap` it no longer serves; the matrix installs the release's |
+| Debian 11 | 5.10 | 74 of 74 | all pass | the security suite lists a `bubblewrap` it does not serve; the matrix installs the release's |
 | Ubuntu 22.04 | 5.15 | 74 of 74 | all pass | |
 | Debian 12 | 6.1 | 74 of 74 | all pass | |
-| Alpine 3.21 | 6.6 | 74 of 74 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
+| Alpine 3.20 | 6.6 | 74 of 74 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
 | Fedora 42 | 6.14 | 74 of 74 | all pass | SELinux enforcing |
-| Ubuntu 24.04 arm64 | 6.8 | 74 of 74 | all pass | aarch64 under TCG, `-cpu max`, 4 vCPUs; the exclave is made inside the VM |
+| Ubuntu 24.04 arm64 | 6.8 | 74 of 74 | all pass | aarch64 under TCG, `-cpu max`, 4 vCPUs, at about a tenth of native speed: the suite takes 55 minutes, the row 81; the exclave is made inside the VM (10.1) |
 | reference machine | 7.0 | 74 of 74 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
-run passes.
+run passes. Two checks outside the suite run natively on each row:
 
-Each row also checks two things outside the suite:
-
-- **`noexec`.** The matrix mounts a `noexec` tmpfs as root and puts a
-  program built by the exclave's gcc there. The VM's own shell answers
-  126, permission denied; so do the launcher's positional entry and an
-  exclave's shell, since both ask the kernel for `X_OK` before anything
-  is loaded (7.2, 7.4.5).
+- **`noexec`.** A program built by the exclave's gcc, placed on a
+  `noexec` tmpfs, is refused with status 126, permission denied, by the
+  VM's own shell, by the launcher's positional entry and by an
+  exclave's shell; the launcher asks the kernel for `X_OK` before it
+  loads anything (7.2, 7.4.5).
 - **A sysroot build.** The output of `test/sysroot.py`, a hello program
   linked inside the Ubuntu 24.04 gcc exclave against the CentOS 7
-  sysroot (9), runs natively. It prints its line with status 0 on the
-  eight glibc VMs, from CentOS 7's glibc 2.17 to Fedora 42's 2.41. On
-  Alpine's musl it has no loader, which the step records as the musl
-  host's answer rather than a failure.
+  sysroot (9), runs natively. Measured October 2026, it prints its line
+  with status 0 on the eight glibc VMs, from CentOS 7's glibc 2.17 to
+  Fedora 42's 2.41. On Alpine's musl it has no loader, which the step
+  records as the musl host's answer rather than a failure.
 
-Hosts differ in ways the matrix exposes and the rules now cover. A
-host's libc may be unable to load the exclave's outputs, so only the
-run inside is meaningful there (9). A setgid home directory makes every
-extracted directory inherit the bit, so `install -d` on an existing
-directory asks for a `chmod` that the read-only rule refuses, exactly
-as a read-only mount would (8.2). A zone file named by `/etc/localtime`
-may itself be a host symlink (8.4). `openat2` may answer `EAGAIN` for a
-`..` under `RESOLVE_IN_ROOT`, which openat2(2) defines as "retry", and
-the resolution oracle retries. Ubuntu 24.04's image denies unprivileged
-user namespaces through AppArmor, as the reference machine's plain
-terminal does; the matrix lifts that sysctl in its own VM before the
-oracles.
+Hosts differ in ways the matrix exposes, and the rules account for
+each. A host's libc may be unable to load the exclave's outputs, so
+only the run inside is meaningful there (9). A setgid home directory
+makes every extracted directory inherit the bit, so `install -d` on an
+existing directory asks for a `chmod` that the read-only rule refuses,
+exactly as a read-only mount would (8.2). `openat2` may answer `EAGAIN`
+for a `..` under `RESOLVE_IN_ROOT`, which openat2(2) defines as
+"retry", and the resolution oracle retries. Ubuntu 24.04's image denies
+unprivileged user namespaces through AppArmor, as the reference
+machine's plain terminal does, so the matrix lifts that restriction in
+its own VM before the oracles.
 
-**The aarch64 row** runs only when asked:
-
-```
-test/matrix.py --exclave EXCLAVE --only noble-arm64 --debs-arm64 DIR --docker-profile FILE
-```
-
-It boots the Ubuntu 24.04 arm64 cloud image under `qemu-system-aarch64
--M virt -cpu max` with TCG and the AAVMF firmware, since the reference
-machine has no KVM for another architecture. It carries the cross-built
-launchers and the arm64 package files, and makes the gcc exclave inside
-the VM with the tool, on the exclave's own architecture (10.1). The
-suite, the oracles, the Docker-profile run and the `noexec` check then
-run as on the other rows. Under emulation the suite takes 55 minutes and
-the whole row 81: the suite runs on the full exclave, since a fresh VM
-has no pruned fixture (17).
-
-**An Alpine exclave**: `gcc musl-dev binutils make linux-headers` and
-the base, 20 packages from Alpine 3.21 fetched with
-`tools/fetch-apks.py`, unpacked and wrapped. It has 87 ELF files, the
-static check finds no error, and the tree hash reproduces from the same
-files. Its gcc 14.2 compiles and runs C inside, dynamically linked on
-musl 1.2.5 and statically linked. The static output runs on the host;
-the dynamic one does not, since the host has no musl loader (9). A
-compile touches no host path. The suite passes on it (17), and it is an
-exclave of the gate and a row of the matrix.
-
-**A Fedora exclave**: `gcc glibc-devel binutils make` and the base, 87
-packages from Fedora 42 fetched with `tools/fetch-rpms.py`, with
-`glibc-minimal-langpack` chosen for the langpack, unpacked and wrapped.
-The static check finds 351 ELF files and no error, and the tree hash
-reproduces from the same files. Its gcc 15 compiles and runs C inside on
-glibc 2.41. A static link needs `glibc-static`, which the set does not
-include. A compile touches no host path, and the suite passes on it
-(17).
 ## 13. Limitations and risks
 
 Each item states a limitation, what happens, why, and the workaround
@@ -2344,8 +2268,7 @@ and stay fixed.
     a working directory so deep that the two together pass `PATH_MAX`
     answers `ENAMETOOLONG` too, where the kernel, walking relatively,
     succeeds, because the handler resolves in virtual space and
-    re-issues absolutely. Re-issuing a walk that stays on the host as
-    given, as `openat2` does (item 22), would make that case succeed.
+    re-issues absolutely.
 
 14. **A concurrent `chdir` can race a relative path.** If another
     thread changes directory during a relative-path syscall, the
@@ -2385,20 +2308,18 @@ and stay fixed.
     The translator is a seccomp filter; there is no fallback.
 
 22. **`name_to_handle_at` and parts of `openat2` differ.**
-    `name_to_handle_at` answers `ENOSYS` (7.4.3). An `openat2` whose
-    walk starts in the exclave, enters it, or restarts at the root
-    through an absolute path or link target sees two mounts under
-    `RESOLVE_NO_XDEV`, the exclave and the host, and not the host's own
-    mount boundaries. A walk that never touches the exclave is the
-    kernel's own, with every `resolve` flag, on the host's real mounts
-    (7.4.3); a `..` that reaches the root has touched the exclave, since
-    the root is the tree's. `RESOLVE_CACHED` is dropped. A scoped `..`
-    under `RESOLVE_IN_ROOT` or `RESOLVE_BENEATH` never answers
-    `EAGAIN`, which the kernel returns when a rename or a mount anywhere
-    on the system raced its walk (`handle_dots` in `fs/namei.c`,
-    openat2(2)): the launcher walks in user space and sees no such
-    race, so a program that retries on `EAGAIN` gets the retry's answer
-    at once.
+    `name_to_handle_at` answers `ENOSYS` (7.4.3). An `openat2` walk
+    that never touches the exclave is the kernel's own, with every
+    `resolve` flag, on the host's real mounts. One that starts in the
+    exclave, enters it, or restarts at the root, which is the tree's,
+    through an absolute path, a link target or `..`, sees two mounts
+    under `RESOLVE_NO_XDEV`, the exclave and the host, and not the
+    host's own mount boundaries (7.4.3). `RESOLVE_CACHED` is dropped. A
+    scoped `..` under `RESOLVE_IN_ROOT` or `RESOLVE_BENEATH` never
+    answers `EAGAIN`, which the kernel returns when a rename or a mount
+    anywhere on the system raced its walk (`handle_dots` in
+    `fs/namei.c`): the launcher walks in user space and sees no such
+    race, so a program that retries gets the retry's answer at once.
 
 23. **A program's own `SIGSYS` handler is never installed.** The
     install succeeds and does nothing, since the launcher's handler
@@ -2410,11 +2331,10 @@ and stay fixed.
     naming the segment it could not map. Images start low and grow
     upward, so only an image of almost 2 GB reaches it, a
     small-code-model program with nearly 2 GB of static data, or one
-    linked there on purpose. A Go aarch64 program linked from `0x10000`,
-    whose image spans `0x10000` to `0xa25e40`, runs; the `low_image`
-    test runs a C program laid out the same way on every exclave kind.
-    A launcher built for an earlier address and the current one refuse
-    to run under each other (item 45, 7.4.2).
+    linked there on purpose. A Go aarch64 program linked from `0x10000`
+    runs, and the `low_image` test runs a C program laid out the same
+    way on every exclave kind. A launcher built for an earlier address
+    and the current one cannot run under each other (item 45, 7.4.2).
 
 25. **A program run from a descriptor with no path cannot re-open
     itself.** `fexecve` of a `memfd` or of an unlinked file runs on the
@@ -2423,12 +2343,11 @@ and stay fixed.
     the program cannot re-open its executable through `/proc/self/exe`.
 
 26. **A `vfork` child's exec leaves its scratch chunk busy in the
-    parent until the child exits** (7.5.4). That is about 27 kB of
-    resident memory per live spawned child, 8 MB measured for 300. A
-    parent with 4 096 live children has exhausted the pool and answers
-    `ENOMEM` to every trapped syscall. A large argument vector built by
-    such a child leaves an unused mapping of pointers in the parent,
-    once per such exec.
+    parent until the child exits** (7.5.4). A parent with 4 096 live
+    spawned children has exhausted the pool and answers `ENOMEM` to
+    every trapped syscall. A large argument vector built by such a
+    child leaves an unused mapping of pointers in the parent, once per
+    such exec.
 
 27. **A signal handler that switches stacks between traps** may confuse
     the frame comparison that releases chunks left behind by `longjmp`
@@ -2438,11 +2357,16 @@ and stay fixed.
 28. **`/proc/<pid>/exe` of a wrapped script names its interpreter**, as
     natively; the original's path in `.real/` never appears.
 
-29. **A write-open of an exclave file another process is executing
-    answers `EROFS`.** The kernel would answer `ETXTBSY` first; the
-    handler refuses the write by its read-only rule (8.2) without
-    opening the file, so it never learns that the file is running (17
-    items 1 and 7).
+29. **A write-open without `O_TRUNC` of an exclave file another
+    process is executing answers `EROFS`.** The kernel would answer
+    `ETXTBSY` first; the handler refuses the write by its read-only rule
+    (8.2) without opening the file, so it never learns that the file is
+    running (17 items 1 and 7). With `O_TRUNC` the kernel answers
+    `EROFS` as well. The loader-path program's own process gets
+    `ETXTBSY` (7.4.3), ahead of any read-only answer, so an `O_TRUNC`
+    open or a `truncate` of its own file on an exclave path, such as a
+    `.real/` original run directly, answers `ETXTBSY` where the kernel
+    would answer `EROFS`.
 
 30. **Small alternate signal stacks overflow.** The handler runs on
     whatever stack the trap lands on, and needs the kernel's frame
@@ -2450,36 +2374,36 @@ and stay fixed.
     3 KB budget (7.5.4). Rust's 8 KB stack is enough; a stack of exactly
     `MINSIGSTKSZ` is not.
 
-31. **Some paths inside structures are not translated.** `bind` and
-    `connect` read their `sockaddr_un` and translate it (7.4.3). A
-    datagram destination in `sendto`, `sendmsg` or `sendmmsg` reaches
-    the kernel as written: the filter cannot see the address family,
-    and trapping every datagram send would tax every UDP program for a
-    case no program has been seen to use. The visibility rule makes the
+31. **Some paths inside structures are not translated.** A datagram
+    destination in `sendto`, `sendmsg` or `sendmmsg` reaches the kernel
+    as written: the filter cannot see the address family, and trapping
+    every datagram send would tax every UDP program for a case no
+    program has been seen to use. The visibility rule makes the
     untranslated path right for `/tmp`, `/run` and `/var/run` and wrong
     for a socket under an exclave path. `bpf` object pins, `quotactl`
     and `swapon` are likewise untranslated (`test/syscalls.py` lists
-    them); `fsconfig` is refused with the rest of the mount API
-    (7.4.3). A host socket reached through an exclave symlink or a
-    magic link, whose real path is longer than `sun_path`'s 107 bytes,
-    is named through a descriptor of its directory (7.4.3), so
-    `getsockname` on it answers `/proc/self/fd/N/NAME` rather than a
-    path, and a last component too long for that spelling answers
-    `ENAMETOOLONG`. A socket file inside the tree with a listener bound
-    on its real path from outside the exclave answers `ECONNREFUSED`,
-    since nothing inside can bind there.
+    them); `fsconfig` is refused with the rest of the mount API. `bind`
+    and `connect` translate their `sockaddr_un` (7.4.3) with two visible
+    differences: `getsockname` on a host socket whose real path passes
+    `sun_path`'s 107 bytes answers `/proc/self/fd/N/NAME`, and a socket
+    file in the tree bound by a listener outside the exclave answers
+    `ECONNREFUSED`.
 
-32. **The tool trusts its input files.** It records their hashes and
-    checks nothing about their origin, which it cannot know. Verifying
-    an archive's signatures is the fetcher's job; `tools/fetch-debs.py`,
+32. **The tool trusts its input files, and the fetchers trust the
+    mirror.** The tool records its inputs' hashes and checks nothing
+    about their origin, which it cannot know. `tools/fetch-debs.py`,
     `tools/fetch-apks.py` and `tools/fetch-rpms.py` verify every
-    download against its index's digest but not the index's signature,
-    so the mirror is trusted. The tool also runs two of the packages'
-    binaries on the host, outside any exclave: the tree's static
-    `ldconfig` during `unpack`, to make the cache (10.1), and the
-    tree's loader with `--list-diagnostics` during the static check, to
-    learn its search directories (10.3). A package one would not run is
-    a package one should not unpack.
+    download against its index's digest, but none verifies a signature:
+    not a Debian or Ubuntu `Release` file's, not the apk index's, not an
+    rpm repository's metadata's. The mirror is therefore trusted, and
+    with `fetch-debs.py`'s default mirrors, which are plain `http://`,
+    so is the network path; an `https` mirror or `--snapshot` leaves
+    only the mirror. The tool also runs two of the packages' binaries
+    on the host, outside any exclave: the tree's static `ldconfig`
+    during `unpack`, to make the cache (10.1), and the tree's loader
+    with `--list-diagnostics` during the static check, to learn its
+    search directories (10.3). A package one would not run is a package
+    one should not unpack.
 
 33. **The launcher's tables are fixed in size** (8.1). A manifest or a
     tree beyond them is refused, by `exclave wrap` before it is made
@@ -2525,12 +2449,12 @@ and stay fixed.
 40. **A running program on a host path is not protected from other
     processes' writes.** The kernel executes the launcher, not the
     file, so its `ETXTBSY` covers wrappers and not originals or built
-    outputs. The launcher answers `ETXTBSY` when the process that
-    loaded the program write-opens or truncates that file itself
-    (7.4.3), and nothing to another process, whose write succeeds and
-    may leave the running program to take `SIGBUS`. Natively
-    `gcc -o prog` over a running `prog` fails; in an exclave it does
-    not.
+    outputs. The launcher answers `ETXTBSY` only to the process that
+    loaded the program (item 29, 7.4.3); another process's write
+    succeeds and may leave the running program to take `SIGBUS`.
+    Natively `cp new prog` over a running `prog` fails with "Text file
+    busy"; in an exclave it succeeds. Linkers unlink their output
+    first, so relinking is safe either way.
 
 41. **`fanotify_mark` checks in a different order from the kernel**
     (8.2, 17 item 7). Its path is resolved before its flags and
@@ -2538,17 +2462,11 @@ and stay fixed.
     difference is unreachable in practice: fanotify needs
     `CAP_SYS_ADMIN`, which no exclave process has.
 
-42. **A difference the probe sees that the kernel owns.**
-    `FS_IOC_SETFLAGS` with a zero flag word on a host file, a
-    descriptor the handler passes through untouched, answered
-    `EOPNOTSUPP` through the launcher and succeeded under `bwrap` on
-    kernels 5.10, 5.15 and 6.1. It reproduces natively on 6.1 without
-    the launcher: a file recreated moments after its predecessor was
-    deleted, as the probe's reset does, refuses to have its extent flag
-    cleared in 49 of 50 rounds and accepts it two seconds later;
-    `bwrap`'s start-up supplied that delay on the kernel's side. The
-    probe keeps the case to exclave files and special descriptors,
-    since its own reset provokes the race.
+42. **An ext4 race that the probe's own reset provokes.** On kernels
+    5.10 to 6.1, natively too, ext4 refuses to clear the extent flag
+    (`FS_IOC_SETFLAGS`) of a file recreated moments after its
+    predecessor was deleted, so the probe (17 item 7) keeps that case
+    off host files.
 
 43. **aarch64 kernels with 16 KB or 64 KB pages are untested.** The
     loader rounds segments to the kernel's `AT_PAGESZ` and refuses by
@@ -2560,24 +2478,34 @@ and stay fixed.
     kernel; a row with `linux-image-generic-64k` would make support a
     measured fact.
 
-44. **Two handlers never share a scratch chunk** (7.5.4). This is a
-    rule, not a limitation. Every claim and every release of a chunk
-    advances its sequence number. A sweep that finds a busy chunk's
-    owner dead releases it only by a compare-and-swap of the sequence
-    it read, so a sweep overtaken by another sweep's release and a new
-    claim finds the sequence moved and leaves the new holder alone.
-    `test/scratch_test.c` forces that interleaving.
+44. **Two handlers never share a scratch chunk**: a rule, not a
+    limitation (7.5.4).
 
-45. **Bundles made before the project was named exclave are not
-    converted by a command.** Such a bundle, a "can", has `.can/` for
-    `.exclave/` and `root/` for `tree/`. The `exclave` command refuses a
-    directory with `.can/` by name rather than reading it. A can's
-    launcher (then the "opener") built before the syscall page moved
-    to its present address (item 24) and the current launcher refuse to
-    run under each other, and say where to look. The conversion is a
-    few renames and record edits made with `mv` and `sed`, then
-    `relink`, `unwrap` and `wrap`; README.md, "Bundles made before the
-    rename", gives it.
+45. **A bundle made before the project's rename, a "can", is converted
+    by hand.** A can is an exclave in the format's earlier names:
+    `.can/` for `.exclave/`, `root/` for `tree/`, `opener` and `lock`
+    for `launcher` and `hashes`. A can still runs as it is, from
+    anywhere, and runs an exclave's programs as an exclave runs its
+    own. The `exclave` command refuses one by name rather than reading
+    it. A can's launcher whose syscall page is at the earlier address
+    (item 24) and the current launcher cannot run under each other: the
+    current one refuses either nesting and points here (7.4.2); the
+    conversion, which relinks, fixes it. Converting a can is renames,
+    two edits and three commands, `exclave/exclave.py` standing for the
+    command:
+
+    ```
+    cd OLD.can && mv .can .exclave && mv root tree && mv .exclave/opener .exclave/launcher && mv .exclave/lock .exclave/hashes
+    sed -i -e 's/^can 1$/exclave 1/' -e 's/^isa /cpu /' .exclave/manifest
+    sed -i -e 's/^lock 1$/hashes 1/' -e 's/^cannery /tool /' -e 's/^opener /launcher /' .exclave/hashes
+    cd .. && mv OLD.can OLD.exclave                               # the suffix is a convention; any name works
+    exclave/exclave.py relink OLD.exclave build/launcher          # the current launcher behind every wrapper
+    exclave/exclave.py unwrap OLD.exclave && exclave/exclave.py wrap OLD.exclave   # the manifest's hash, recorded again
+    ```
+
+    The converted exclave's hashes file equals the one a fresh `unpack`
+    and `wrap` of the same packages writes, apart from the launcher's
+    hash.
 
 46. **The launcher's own variables stay in `/proc/<pid>/environ`.**
     `EXCLAVE_EXECFN`, `EXCLAVE_COMM` and, on the loader path,
@@ -2620,27 +2548,43 @@ sharedlibrary` is empty (7.6, item 1). Every translated syscall is a
 `SIGSYS` stop that gdb passes through, so a run under gdb slows in
 proportion to its traps.
 
+How the script works. The launcher exports six names: the base, entry
+and real file of the program, the base and file of its loader, and
+`exclave_debug_hook`, a function it calls once before jumping into the
+program. `src/gdb.py`, carried in `.debug_gdb_scripts`, is auto-loaded
+at launch and at every exec of a launcher. It makes gdb pass `SIGSYS`
+without stopping and breaks on the hook, where it adds the program's
+symbol file at its base and the loader's at its own. At the program's
+entry it walks the loader's link map (`_r_debug` on glibc,
+`_dl_debug_addr` on musl) and adds each library at its load address,
+resolving names in the tree as the translator does and taking a
+wrapper's original; a breakpoint on `r_brk` repeats the walk after
+every `dlopen`. `info sharedlibrary` is empty because the launcher
+carries no `DT_DEBUG`. With `set follow-fork-mode child` the same
+happens in `cc1`.
+
 `perf record` needs nothing special and symbolises `cc1` down to
 functions. perf cannot read the maps of a process under a different
 AppArmor label, so run it under the same label as the program.
+
 ## 14. Alternatives considered
 
-Each choice below was weighed against the design and rejected, most of
-them after being built or measured. The reasons are kept so that a
-choice can be reopened when the balance moves.
+Each alternative below was weighed and rejected, most after being built
+or measured; the reasons are kept so that a choice can be reopened when
+the balance moves. This section is the home of every "why not"; 16.7
+and 19 point here.
 
 ### 14.1 How the tree is projected
 
 **User and mount namespaces.** A read-only bind mount of the tree at
-`/` is the obvious projection, and the kernel's own answers are what
-the launcher imitates. It is unavailable where exclave is most needed:
-from an ordinary terminal on Ubuntu 23.10 and 24.04, inside Docker's
-default profile, and on many HPC hosts and hardened kernels (4.3,
-15.7). A second backend for hosts that allow namespaces would make an
-exclave behave differently by machine and double the code, for no
-measurable gain on a compute-bound compile, which already runs within
-noise of native (16.8). Namespaces are the test oracle where they are
-available (17 item 1), not a mechanism.
+`/` is the obvious projection, and its answers are what the launcher
+imitates. It is unavailable where exclave is most needed: from an
+ordinary terminal on Ubuntu 23.10 and 24.04, inside Docker's default
+profile, on many HPC hosts and hardened kernels (4.3, 15.7). A second
+backend where namespaces are allowed would make an exclave behave
+differently by machine and double the code, for no measurable gain on
+a compute-bound compile (16.8). Namespaces are the test oracle (17
+item 1), not a mechanism.
 
 **A ptrace supervisor**, as PRoot and CARE use (15.1). Every
 intercepted syscall stops the tracee twice and switches to another
@@ -2649,54 +2593,53 @@ can be debugged or traced. exclave services the syscall in the process
 that made it.
 
 **seccomp user notification** (`SECCOMP_RET_USER_NOTIF`). A supervisor
-again, with a context switch per trap, which is slower than a signal.
-It cannot change the target's registers, so `chdir` and `execve` would
-have to be emulated rather than re-issued, and the manual page warns
-that path arguments read from the target are open to time-of-check
-races. With `SECCOMP_IOCTL_NOTIF_ADDFD` it can open a file for the
-target, which covers `open` and nothing like `chdir`.
+again, with a context switch per trap, slower than a signal. It cannot
+change the target's registers, so `chdir` and `execve` would be
+emulated rather than re-issued, and seccomp_unotify(2) warns that calls
+such as `open` "are vulnerable to ToCToU attacks".
+`SECCOMP_IOCTL_NOTIF_ADDFD` (5.9, atomic with `SECCOMP_ADDFD_FLAG_SEND`
+from 5.14) installs a descriptor the supervisor opened, which covers
+`open` and nothing like `chdir`.
 
-**Syscall User Dispatch** (`PR_SET_SYSCALL_USER_DISPATCH`, 5.11) is the
-kernel's in-process `SIGSYS` mechanism, built for Wine. It dispatches
-every syscall outside an exempt range rather than a chosen set, costs
-the same signal as a seccomp trap, and is reset by `fork` and `exec`,
-so a child would run unprotected between the two. It is explicitly not
-a sandboxing mechanism. Its existence does show that in-process
-`SIGSYS` emulation is a supported use of the kernel.
+**Syscall User Dispatch** (`PR_SET_SYSCALL_USER_DISPATCH`, 5.11), the
+kernel's in-process `SIGSYS` mechanism built for Wine, dispatches every
+syscall outside an exempt code range rather than a chosen set, costs
+the same signal as a seccomp trap, and is reset by "any fork or exec of
+the existing process", so a child would run untranslated between the
+two. Its documentation calls it "not a mechanism for sandboxing system
+calls"; it does show that in-process `SIGSYS` emulation is a supported
+use of the kernel.
 
 **libc interposition** through `LD_PRELOAD`, as fakechroot does
-(15.1). It sees only calls through libc's exported functions: libc's
-internal opens, raw syscalls, static programs and Go programs escape
-it, and the loader's own work happens before any constructor runs. A
-preload is visible to the program, and keeping `EFAULT` for a bad
-pointer needs the same copy the handler makes. Interposing inside the
-exclave's own glibc would avoid the signal for libc-mediated calls but
-has the same holes.
+(15.1), sees only libc's exported functions: libc's internal opens,
+raw syscalls, static and Go programs escape it, and the loader works
+before any constructor runs. A preload is visible to the program, and
+keeping `EFAULT` needs the copy the handler makes anyway. Interposing
+inside the exclave's own glibc would avoid the signal for
+libc-mediated calls, with the same holes.
 
-**Rewriting syscall sites** (zpoline, lazypoline, rr's patching, 15.1).
-After the first trap at an address, the program's `syscall` instruction
-could be patched into a call to the handler, removing the signal. The
-two-byte `syscall` on x86-64 has room only for `call *%rax`, which needs
-a mapping at address 0, refused without privilege
-(`vm.mmap_min_addr`); patching longer sequences changes the program's
-text under every other thread, a debugger, a JIT and any checksum. It
-would remove at most the signal, about half of the 1.3 µs floor of a
-trap (16.2), and the trap would still be needed underneath for every
-site not rewritten. Of the published rewriters, a load-time one such as
-SaBRe is the compatible shape, since the launcher already does the
-loading; it is the lever if a syscall-bound workload ever matters
-(16.7).
+**Rewriting syscall sites** (zpoline, lazypoline, rr, 15.1): after the
+first trap at an address, patching the `syscall` instruction into a
+call to the handler. The two-byte `syscall` on x86-64 has room only for
+`call *%rax`, which needs a mapping at address 0, refused without
+privilege (`vm.mmap_min_addr`); patching longer sequences changes the
+program's text under other threads, a debugger, a JIT and any checksum.
+It would remove at most the signal, half of the 1.3 µs floor of a trap
+(16.2), and the trap stays for every site not rewritten. A load-time
+rewriter such as SaBRe is the compatible shape, since the launcher
+already loads the program; it is the lever if a syscall-bound workload
+ever matters.
 
-**FUSE or a union filesystem.** Needs the host's `fusermount`,
-and cannot make the tree appear at `/usr`.
+**FUSE or a union filesystem.** Needs the host's `fusermount`, and
+cannot make the tree appear at `/usr`.
 
 **`openat2` with `RESOLVE_IN_ROOT` as the resolver.** Cannot express
 host-owned prefixes inside the root (8.1), and needs kernel 5.6. It is
 the oracle for canonicalisation instead (17 item 2).
 
 **Kernel-side loader substitution through BPF `binfmt_misc`** (15.3).
-Registration needs root. Once common it could accelerate dispatch on
-hosts where it is allowed; it cannot be the mechanism, for the same
+Registration needs root. Where a user may register it, it could
+accelerate dispatch; it cannot be the mechanism, for the same
 uniformity reason as namespaces.
 
 ### 14.2 How a program finds its loader and keeps its identity
@@ -2705,21 +2648,19 @@ uniformity reason as namespaces.
 prefixes (15.2). Works only for software that cooperates, since an
 address can be computed arbitrarily, and must be redone on every move.
 
-**Patching the interpreter string** (`PT_INTERP`) of every executable,
-to an absolute path as udocker, uninative and Linuxbrew do (15.2), ties
-the tree to one location. A location-independent string,
-`/proc/self/fd/999` with the launcher held open on that descriptor, was
-built and worked, and gave patched programs the identity of a kernel
-exec. It was retired: it is per-process state that a program can
-disturb by closing or reusing the descriptor; it rests on an
-undocumented ordering inside the kernel's exec; a stray file on the
-descriptor silently runs the program on the host's loader with no
-translation; a patched file run alone fails cryptically; scanners flag
-the interpreter string; and its identity did not extend to programs
+**Patching the interpreter string** (`PT_INTERP`) to an absolute path,
+as udocker, uninative and Linuxbrew do (15.2), ties the tree to one
+location. The location-independent string `/proc/self/fd/999`, with the
+launcher held open on that descriptor, gives patched programs the
+identity of a kernel exec, but it is per-process state that a program
+can close or reuse; it rests on an undocumented ordering inside the
+kernel's exec; a stray file on the descriptor runs the program on the
+host's loader, untranslated; a patched file run alone fails
+cryptically; scanners flag the string; and it does not reach programs
 built inside the exclave. Wrappers, a hard link to the launcher at each
 executable's path with the original in `.real/` (6.1), give shipped
-programs the same identity with none of this, and the loader path
-(7.6) covers the rest.
+programs the same identity with none of this, and the loader path (7.6)
+covers the rest.
 
 **Copies with patched headers in a cache.** A cache directory, which
 6.1 forbids, for a benefit wrappers provide without one.
@@ -2734,231 +2675,167 @@ exclave did not ship on the host's own libraries breaks `make check`
 whenever the exclave's libc differs from the host's, and is a second
 mode to maintain. Inside an exclave there is one world.
 
-**gdb's JIT interface for the program's symbols.** gdb reads a JIT
-symbol file at the addresses its sections carry, with no offset, so a
-position-independent program's DWARF would have to be relocated by the
-launcher. A `DT_DEBUG` mirror for the libraries would make gdb look
-them up on the host's `/` and read the launcher where a library is a
-wrapper. The script the launcher carries (7.6) adds every file at its
-base, originals included.
+**gdb's JIT interface, or a `DT_DEBUG` mirror.** gdb reads a JIT
+symbol file at the addresses its sections carry, so a
+position-independent program's DWARF would need relocating; a mirror
+would make gdb look libraries up on the host's `/` and read the
+launcher for a wrapper. The script the launcher carries (7.6) adds
+every file at its base, originals included.
 
 ### 14.3 Inside the launcher
 
 | Alternative | Why not |
 |---|---|
-| `chmod -R a-w` for read-only | No run-time code, but a write-protected tree resists `rm -r`, modes are lost by version control and careless copies, and the owner can restore the bits. Refusal in the handler depends on nothing; its price is the error precedence of 8.2, which the oracle measures. |
-| Resolving host symlinks in the host's domain | A host link into `/usr` would reach the host's `/usr`. Symlinks resolve in the exclave's view, and the identity files are handled at startup (8.4). |
-| Honouring `clone3` by preparing the child's signal frame | Left every new thread with the parent's FPU save-area pointer and corrupt `MXCSR`. `ENOSYS` costs a handful of traps per `posix_spawn` (7.5.5). |
-| Reclaiming scratch by comparing stack pointers across threads | Meaningless across alternate stacks and coroutines. Scratch is reclaimed by liveness sweeps, and a thread's own frame comparison releases only its own chunks after a `longjmp` (7.5.4). |
-| Synthesising host entries into `getdents64` | Invents results and traps every directory read. Empty placeholder directories in the tree give `ls /` the same answer for free (8.3). |
-| A canonicalisation cache shared across processes | Each process learns the exclave's directories afresh, a few hundred `lstat`s per compile. A descriptor inherited through `execve` is visible to the program (descriptor counts, `close_range`, test suites that check for leaks); a file outside the exclave would be state that a tree edited between runs makes wrong, the reason there is no index (14.5). |
-| Caching host paths | A host directory can be replaced at any time. The one-step check of 16.6 item 4 gets most of the benefit without remembering anything. |
+| `chmod -R a-w` for read-only | The tree resists `rm -r`, loses its modes to version control and careless copies, and its owner can restore the bits. Refusal in the handler depends on nothing; its price is 8.2's error precedence. |
+| Resolving host symlinks in the host's domain | A host link into `/usr` would reach the host's `/usr`. Links resolve in the exclave's view; the identity files are handled at startup (8.4). |
+| Honouring `clone3` by copying the signal frame onto the child's stack | The copy leaves the FPU save-area pointer at the parent's stack, and every new thread starts with a corrupt `MXCSR`. `ENOSYS` costs a few traps per `posix_spawn` (7.5.5). |
+| Reclaiming scratch by comparing stack pointers across threads | Meaningless across alternate stacks and coroutines; scratch is reclaimed by liveness sweeps (7.5.4). |
+| Synthesising host entries into `getdents64` | Invents results and traps every directory read. Empty placeholders in the tree give `ls /` the same answer for free (8.3). |
+| A canonicalisation cache shared across processes | Would save a few hundred `lstat`s per compile, but an inherited descriptor is visible to the program (descriptor counts, `close_range`, leak checks), and a file outside the exclave is state an edited tree makes wrong (14.5). |
+| Caching host paths | A host directory can be replaced at any time. The one-step host check (7.4.4) gets most of the benefit without remembering anything. |
+| Skipping the empty top-level directories at startup | The placeholders are how `ls /` lists the host's directories (8.3), and only reading a directory says it is empty: twelve reads per start in the gcc exclave. |
+| Dropping `getpid` and `gettid` per trap | About 100 ns a trap, but a process-wide value is wrong in a `vfork` child while a parent's thread is in its handler (7.5.4), and the launcher has no thread-local storage. |
+| A smaller first cache table | The cache's 256 KB table and 1 MB string area fault in as entries land, part of about 70 extra page faults per process; a smaller table trades them for rehashing. |
 
 ### 14.4 The environment
 
 | Alternative | Why not |
 |---|---|
-| An environment allowlist | Left users of an exclave unable to pass `CC`, `CPATH`, `MAKEFLAGS` or a CA bundle, and applied at every exec would break `ldd`, libtool and `fakeroot`. Path-valued variables resolve inside the exclave, so passing them through is safe; only the loader and libc variables that name host files are dropped, and `PATH` is replaced (6.2). |
-| The user's locale and time zone inside an exclave | Locale data is bound to its glibc's version and cannot be read from the host, so `LANG` could be honoured only when the exclave happened to ship the locale, with a silent fall to `C` otherwise; the zone needed two host-resolution rules. Four fixed values at the border (6.2) need none, and are what reproducible builds set anyway. |
-| Recording the maker's locale in the exclave | A manifest record for what a rule can say. The rule is `C.UTF-8`; an exclave that wants another ships it with a wrapper script. |
+| An environment allowlist | Users could not pass `CC`, `CPATH`, `MAKEFLAGS` or a CA bundle, and applied at every exec it would break `ldd`, libtool and `fakeroot`. Path-valued variables resolve inside the exclave, so passing them is safe (6.2). |
+| The user's locale and time zone | Locale data is bound to its glibc's version, so `LANG` would work only where the exclave ships the locale and fall silently to `C` elsewhere; the zone would need two host-resolution rules. Four fixed values at the border (6.2) need none, and are what reproducible builds set. |
+| Recording the maker's locale in the exclave | A manifest record for what a rule says. An exclave that wants another locale sets it in a wrapper script. |
 
 ### 14.5 The format and the tool
 
 | Alternative | Why not |
 |---|---|
-| A generated index beside the manifest | Every record the launcher would use is readable from the tree in microseconds, and a tree edited without re-indexing would be silently wrong. The manifest holds only what the tree cannot say (6.3). |
+| A generated index beside the manifest | Every record the launcher uses is readable from the tree in microseconds, and a tree edited without re-indexing would be silently wrong (6.3). |
 | Layers at run time | A second root in the translator, a libc rule, a record naming another exclave's location and an unanswered listing question, to save disk. Composition is a copy at build time (11). |
-| The tool fetching from archives | Acquisition is a separate problem with its own trust argument and failure surface: a hash verifies, a name locates, and locating belongs to the step before the tool, `tools/fetch-debs.py` and its siblings (10). |
+| The tool fetching from archives | Acquisition has its own trust argument and failure surface; it is the step before the tool, `tools/fetch-debs.py` and its siblings (10). |
 | `from-source` with build recipes | The beginning of a distribution. A build script builds inside an exclave, and an exclave is made of the staging directory plus the runtime packages (10.2). |
-| `env` and `entry` records | Both duplicate what a file does: a symlink in `/usr/local/bin`, a wrapper script, a symlink at the top of the exclave (6.2). |
+| `env` and `entry` records | Both duplicate a file: a symlink in `/usr/local/bin`, a wrapper script, a symlink at the top of the exclave (6.2). |
 | Several roots per CPU level, `chroot` re-rooting, maintainer scripts run in a scratch exclave | Two exclaves are two exclaves; a writable root would be a second world; a tree that needs its scripts run comes from outside (7.7, 7.8, 10.1). |
 | A single-file form | A cache directory, which 6.1 forbids. `tar` makes a directory one file (6.6). |
-
----
 
 ## 15. Related work
 
 The problem of 4.1, a program bound to its host by its interpreter,
-its libraries, its compiled-in data paths and its environment, has
-been attacked from two directions: projecting a tree onto the paths the
-program expects, and relocating the program so that it expects other
-paths. This section surveys both, as of September 2026, with what each
-needs from the host and how exclave differs. 15.5 compares them in one
-table.
+libraries, compiled-in data paths and environment, has been attacked
+from two directions: projecting a tree onto the paths the program
+expects, and relocating the program to expect others. This survey,
+made in September 2026, gives what each system needs from the host and
+how exclave differs; 15.5 compares them in one table, and 14 says why
+exclave does not take their mechanisms.
 
 ### 15.1 Systems that project a tree
 
-**PRoot and CARE.** PRoot is a user-space `chroot`, `mount --bind` and
-`binfmt_misc` built on ptrace: a supervisor rewrites the path arguments
-of every syscall in the tracee and, for `execve`, substitutes the
-pack's loader. CARE extends it into an archiver: run a program once
-under PRoot, record every file it touches, and ship the archive with
-PRoot inside. Both are unprivileged and universal. They pay a ptrace
-round trip on every intercepted syscall and hold the ptrace slot;
-PRoot's seccomp acceleration reduces the stops but, in udocker's
-documentation, "may exhibit problems in Linux kernels above 4.0", and
-udocker defaults to the unaccelerated mode. `exclave prune` is CARE's
-trace-then-package idea (10.4); exclave has no supervisor.
-
-**CDE** (Guo, 2011), the first automatic packager: `cde prog` runs a
-program under ptrace and copies every file it opens into
-`cde-package/`, and `cde-exec` replays with ptrace path redirection.
-Its paper is the reference for the completeness problems of trace
-capture, which trace pruning inherits (10.4).
+**PRoot, CARE and CDE.** PRoot is a user-space `chroot`, `mount
+--bind` and `binfmt_misc` on ptrace: a supervisor rewrites the path
+arguments of every syscall and, for `execve`, substitutes the pack's
+loader. CARE runs a program once under PRoot, records every file it
+touches and ships the archive with PRoot inside; CDE (Guo, 2011), the
+first automatic packager, did the same, and its paper is the reference
+for the completeness problems of trace capture that `exclave prune`
+inherits (10.4). All pay a ptrace round trip per intercepted syscall;
+PRoot's seccomp acceleration "may exhibit problems in Linux kernels
+above 4.0", in udocker's words, and udocker leaves it off.
 
 **fakechroot, and the fakechroot engine of `guix pack -RR`.** An
-`LD_PRELOAD` library interposes libc's path functions. For `execve` it
-runs the chroot's `ld.so` directly, because "the dynamic linker is
-always loaded from the real environment". Guix uses it as its fastest
-unprivileged engine: a wrapper finds the loader relative to itself,
-the preload library interposes `open`, `stat` and the rest, and the
-`la_objsearch` audit hook steers `ld.so`'s own library search. Guix
-reports "very little overhead, and only on file system function calls",
-against PRoot's "prohibitive" cost for MPI and multi-threaded work. A
-preload sees only libc's exported calls (14.1); exclave's trap sees
-every syscall.
+`LD_PRELOAD` library interposes libc's path functions and, for
+`execve`, runs the chroot's `ld.so` directly. Guix adds a wrapper that
+finds the loader relative to itself and an `la_objsearch` audit hook
+for `ld.so`'s own search, and reports "very little overhead, and only
+on file system function calls", against PRoot's "prohibitive" cost for
+MPI and multi-threaded work. A preload sees only libc's exported calls
+(14.1).
 
-**udocker** runs container images without root by delegating to PRoot,
-fakechroot, runc or crun, or Singularity. Its fakechroot modes rewrite
-the loader's path in each executable's header with PatchELF, "forcing
-the execution of the loader provided with the container", and warn that
-such containers "cannot be moved across hosts", since the substituted
-path is absolute. exclave patches nothing: the launcher stands at each
-executable's path and the original sits beside it, byte-identical, so
-the exclave moves with a copy.
+**udocker** runs container images without root through PRoot,
+fakechroot, runc, crun or Singularity. Its fakechroot modes rewrite
+each executable's interpreter with PatchELF to an absolute path, so
+such containers "cannot be moved across hosts"; exclave patches
+nothing.
 
-**`guix pack -RR`, nix-user-chroot, nix-portable, conty, junest** all
-prefer user namespaces and fall back to PRoot or fakechroot where they
-are denied; Guix chooses among three engines at run time. conty bundles
-`bwrap` and `squashfuse` into one file but still needs namespaces.
-Their behaviour varies by host, which is what exclave's single
+**`guix pack -RR`, nix-user-chroot, nix-portable, conty, junest** prefer
+user namespaces and fall back to PRoot or fakechroot where they are
+denied, so their behaviour varies by host, which exclave's single
 mechanism avoids (4.3, 14.1).
 
-**gVisor systrap**, gVisor's default platform since 2023: a seccomp
+**gVisor systrap**, gVisor's default platform from 2023: a seccomp
 filter returns `SECCOMP_RET_TRAP` for every syscall, a stub `SIGSYS`
-handler in the sandboxed process writes the request to shared memory,
-and the sentry in another process services it. It replaced ptrace
-because "this alone proved to be faster than using PTRACE_SYSEMU".
-exclave has the same trap-and-handle-in-process shape, but services the
-syscall in the process and traps only path-taking syscalls.
+handler writes the request to shared memory, and the sentry in another
+process services it. It replaced ptrace because "this alone proved to
+be faster than using PTRACE_SYSEMU". exclave has the same trap shape,
+but services the syscall in the process and traps only path-taking
+syscalls.
 
 **Binary rewriting: zpoline, SaBRe, syscall_intercept, lazypoline,
-rr.** zpoline replaces `syscall` with `callq *%rax` and needs a
-trampoline at virtual address 0, which needs `vm.mmap_min_addr`
-lowered, a privileged setting; it reports overhead "28.1 to 761 times
-lower" than ptrace-class mechanisms. SaBRe rewrites at load time with
-its own loader; syscall_intercept hot-patches glibc under
-`LD_PRELOAD`. lazypoline (2024) uses Syscall User Dispatch as an
-exhaustive slow path and zpoline-style rewriting of each site on its
-first trap as the fast path; it notes that dispatch "still incurs a
-significant slowdown for syscall-intensive workloads due to the
-overhead of the required signal handling", and that static rewriters
-"cannot interpose syscalls triggered by JIT-compiled code". rr patches
-the few fixed instruction sequences that commonly follow a `syscall`
-(such as `cmpl $0xfffff001,%eax`) with a five-byte call into its
-library, unprivileged but pattern-dependent. rr also breaks recursion
-by the instruction pointer: it maps a page holding an untraced
-`syscall` into every tracee, and its filter allows a syscall only from
-there. The launcher's syscall page (7.4.2) is the same idea at a fixed
-address, so that filters inherited across `execve` agree. Any future
-acceleration of exclave would take lazypoline's shape: the trap stays
-as the exhaustive path, with rewriting where it is safe (14.1, 16.7).
+rr.** zpoline's trampoline at address 0 needs a lowered
+`vm.mmap_min_addr`; SaBRe rewrites at load time, syscall_intercept
+patches glibc under `LD_PRELOAD`; lazypoline (2024) keeps Syscall User
+Dispatch as the exhaustive slow path and rewrites each site on its
+first trap, the shape any acceleration of exclave would take (14.1).
+rr allows a syscall only from a page holding an untraced `syscall`;
+the launcher's syscall page (7.4.2) is that idea at a fixed address, so
+that filters inherited across `execve` agree.
 
 **Reverie and hermit**, Meta's interception framework and the
-deterministic-execution sandbox built on it: ptrace with seccomp
-assistance. The state of the art for what a supervisor can do.
+deterministic sandbox on it, are the state of the art for a ptrace
+supervisor with seccomp assistance.
 
-**seccomp user notification with descriptor injection.**
-`SECCOMP_IOCTL_NOTIF_ADDFD` (5.9) lets a supervisor open a file on the
-target's behalf and install the descriptor;
-`SECCOMP_ADDFD_FLAG_SEND` (5.14) makes it atomic. Container runtimes
-use it to implement `mount` for unprivileged containers. The manual
-page notes that calls like `open` "are vulnerable to ToCToU attacks and
-require that the more privileged supervisor can inspect the argument".
-Rejected in 14.1.
+**MBOX** (Kim and Zeldovich, 2013) layers a private filesystem over the
+host on seccomp and ptrace and lets the user commit changes back, the
+alternative to a tree read-only by refusal (8.2).
 
-**Syscall User Dispatch** (5.11): `prctl(PR_SET_SYSCALL_USER_DISPATCH)`
-with an exempt code range and a per-thread selector byte. Its
-documentation says it is "not a mechanism for sandboxing system calls",
-and that "any fork or exec of the existing process resets the
-mechanism". Rejected in 14.1.
-
-**MBOX** (Kim and Zeldovich, 2013), an unprivileged sandbox on seccomp
-and ptrace that layers a private filesystem over the host and lets the
-user "examine changes in the sandbox filesystem and selectively commit
-them back", at 0.1% to 45% CPU overhead. Its commit-back model is the
-alternative to an exclave's tree, which is read-only by refusal (8.2).
-
-**Systrace, Janus, Ostia, and "Traps and Pitfalls"** (Garfinkel,
-2003), the security-interposition lineage. Ostia's delegating
-architecture, an agent making syscalls on the sandboxed process's
-behalf, is the ancestor of seccomp user notification. The pitfalls
-paper's categories, incorrect replication of OS semantics, indirect
-resource paths, races, symbolic links, relative paths and the working
-directory, signals, threads, descriptor manipulation and argument
-copying, are exclave's test checklist (17 item 6); the kernel oracles
-of 17 exist because the first category is the one no design escapes.
+**Systrace, Janus, Ostia and "Traps and Pitfalls"** (Garfinkel, 2003),
+the security-interposition lineage. The paper's pitfalls are exclave's
+test checklist (17 item 6); its first, incorrect replication of OS
+semantics, is the one no design escapes, and the reason for the kernel
+oracles of 17.
 
 ### 15.2 Systems that relocate binaries
 
-**exodus** copies a binary and its libraries into a bundle and
-"compiles a small statically linked launcher binary that invokes the
-relocated linker directly with any hardcoded RPATH library paths
-overridden". It addresses the interpreter and the libraries only; data
-paths and the environment are untouched, so gcc's `cc1` and headers
-would not be found.
+**exodus** bundles a binary and its libraries with "a small statically
+linked launcher binary that invokes the relocated linker directly". It
+addresses the interpreter and the libraries only, so gcc's `cc1` and
+headers would not be found.
 
 **sharun** is a modern exodus: its `userland-execve-rust` maps the
-bundled interpreter, builds a stack with auxiliary vector, arguments
-and environment, and jumps to the entry, as the launcher's loader does
-(7.3). Its `--hard-links` option hard-links the launcher under each
-program's name "for correct /proc/self/exe", and its `lib4bin` has a
-strace mode to find `dlopen`ed libraries, the gap exclave's dynamic
-check closes (10.3).
+bundled interpreter, builds the stack and jumps to the entry, as the
+launcher's loader does (7.3); its `--hard-links` option links the
+launcher under each program's name "for correct /proc/self/exe".
 
-**Ermine and Statifier.** Statifier snapshots a dynamically linked
-process, loader and libraries into one file; Ermine packs the loader,
-the executable, its libraries and data files into one executable, with
-its own virtual filesystem for the data. Single-program, and commercial
-or unmaintained.
+**Ermine and Statifier** pack one program, its loader and libraries
+(Ermine also its data files) into one executable; single-program, and
+commercial or unmaintained.
 
-**Spack and conda: padded prefixes.** Spack relocates binary caches by
-rewriting `RPATH` with patchelf and by string replacement of the
-install prefix, made safe by padding install paths to a fixed length
-(`padded_length: 256`); conda does the same with a placeholder prefix.
-Rewriting hard-coded strings "is impossible to do generally since
-addresses could be computed arbitrarily": it works for cooperative
-software and must be redone on every move (14.2).
+**Spack and conda** relocate binary caches by rewriting `RPATH` and by
+string replacement of the install prefix, made safe by padding install
+paths to a fixed length. Rewriting hard-coded strings "is impossible to
+do generally since addresses could be computed arbitrarily" (14.2).
 
 **Yocto's uninative** is the largest production precedent for patching
-interpreter strings. Every native tool restored from Yocto's
-shared-state cache has its interpreter rewritten with patchelf to a
-bundled contemporary glibc's loader, "a way of allowing a single set of
-cross/native sstate to work over multiple distros, even old ones". The
-substituted path is absolute, so the cache is tied to the build
-directory.
+interpreter strings: every native tool restored from Yocto's
+shared-state cache has its interpreter rewritten to a bundled glibc's
+loader, "a way of allowing a single set of cross/native sstate to work
+over multiple distros". The path is absolute, so the cache is tied to
+the build directory, as **Linuxbrew**'s bottles are tied to the prefix
+`/home/linuxbrew/.linuxbrew`.
 
-**Linuxbrew** requires the fixed prefix `/home/linuxbrew/.linuxbrew`
-for its binary bottles, because they carry absolute interpreter and
-`RPATH` strings pointing at Homebrew's own glibc. Same limitation, same
-reason.
-
-**Cosmopolitan's Actually Portable Executables** are statically linked
-and self-loading: an embedded loader maps the program's segments with
-`mmap` "the same way the kernel does, based on ELF phdrs", using raw
-syscalls and no libc. The launcher's loader is the same idea applied to
-someone else's binaries; APE requires building with Cosmopolitan.
+**Cosmopolitan's Actually Portable Executables** carry a loader that
+maps the program's segments "the same way the kernel does, based on ELF
+phdrs", with raw syscalls and no libc. The launcher's loader is the
+same idea applied to someone else's binaries; APE requires building
+with Cosmopolitan.
 
 **Zig** ships its libc as headers and sources, locates everything
 relative to its own executable, and builds startup objects on demand.
 It owns its compiler's source, which exclave does not (4.2).
 
 **Plash** (Seaborn, 2005) ran unmodified programs on a modified glibc
-whose file operations went over a socket to a server holding the
-authority. It is the earliest system in this family to accept that
-owning the libc inside the environment is the price of running
-unmodified programs, which is exclave's one-libc rule seen from the
-other side (9).
+that sent file operations to a server holding the authority, accepting
+early that owning the libc inside the environment is the price of
+running unmodified programs: exclave's one-libc rule seen from the
+other side (13 item 8).
 
 ### 15.3 The interpreter trick
 
@@ -2967,36 +2844,24 @@ other side (9).
 into memory and updates the auxiliary vector accordingly" before
 handing over, is documented in tmp.0ut issue 2 in an offensive context.
 It is the launcher's loader (7.3), including the `AT_BASE` rewrite, and
-is evidence that glibc's loader tolerates being mapped by someone else.
+evidence that glibc's loader tolerates being mapped by someone else.
 
 **nix-ld** is the closest existing implementation of the launcher's
-loader. It is installed at `/lib64/ld-linux-x86-64.so.2` on NixOS so
-that unpatched binaries run; it is `#![no_std]`, applies its own
-relocations at startup, and when started as an interpreter maps the
-real loader, sets `AT_BASE` to its load bias and jumps with the
-original stack pointer. Run directly, it `execve`s the real loader.
+loader. Installed at `/lib64/ld-linux-x86-64.so.2` on NixOS so that
+unpatched binaries run, it is `#![no_std]`, applies its own relocations
+at startup, and when started as an interpreter maps the real loader,
+sets `AT_BASE` to its load bias and jumps with the original stack
+pointer. Run directly, it `execve`s the real loader.
 
 **BPF `binfmt_misc`.** A proposal to let `PT_INTERP` be relative to the
-executable, for hermetic Nix-style binaries, met objections on
-path-manipulation grounds; Christian Brauner called it "ripe for
-malicious loader injection attacks" and built the alternative, a BPF
-`struct_ops` for `binfmt_misc` with `match()` and `load()` callbacks, a
-loader-substitution mode that overrides `PT_INTERP` with a
-BPF-selected interpreter, interpreters pre-opened by the kernel, and a
-dispatch mode under which programs keep their own name. As of September
-2026 all but its resource-limit series is in linux-next for 7.3.
-Registration through `/proc/sys/fs/binfmt_misc/register` is root's. The
-kernel community has thus accepted that hermetic binaries need a
-substituted loader, and provided a privileged mechanism; the launcher's
-wrappers and loader are the unprivileged analogue. Brauner's objection
-applies to exclave as it does to `LD_PRELOAD`: an exclave is not a
-security boundary (3). Where a user may register it, the interface
-could accelerate an exclave; it is not a mechanism (14.1).
-
-An RFC for a `/proc/self/interpreter` symlink (Piccoli, 2023), exposing
-a process's interpreter to tools that need to find it, did not land.
-exclave needs no such lookup, since the launcher maps the loader
-itself.
+executable was called "ripe for malicious loader injection attacks" by
+Christian Brauner, who proposed instead a BPF `struct_ops` for
+`binfmt_misc` (LWN, 2026) that can override `PT_INTERP` with a
+BPF-selected interpreter, registered by root. That accepts that
+hermetic binaries need a substituted loader, through a privileged
+mechanism; the launcher's wrappers and loader are the unprivileged
+analogue, and the objection applies to exclave as to `LD_PRELOAD`: an
+exclave is not a security boundary (3).
 
 Each piece of the launcher, a no-libc loader that maps the real
 `ld.so`, interpreter substitution at scale, hard-linked launchers for
@@ -3008,24 +2873,13 @@ syscall translator before the real loader runs.
 
 exclave puts a hard link to the launcher at every executable's path
 and keeps the original in a `.real/` directory beside it (6.1). The
-pattern is old:
-
-- **busybox and toybox** are one binary hard-linked or symlinked under
-  hundreds of names, dispatching on `argv[0]`; the kernel's
-  `/proc/<pid>/exe` names the link that was executed, the fact the
-  wrapper design rests on.
-- **Nix's `makeWrapper`** renames a program to `.foo-wrapped` and puts
-  a wrapper at `foo`, with the same consequences for `argv[0]` and
-  `exe`.
-- **ccache's and distcc's masquerade directories** put a link to the
-  tool under each compiler's name and rely on `argv[0]`.
-- **`dpkg-divert`** moves a package's file aside to `foo.distrib` and
-  lets another take its name.
-- **sharun's `--hard-links`** links its launcher under each program's
-  name "for correct /proc/self/exe".
-- **libtool's uninstalled wrappers** put a script at the program's name
-  and the real binary in `.libs/`, which has let `make check` run
-  programs before installation for thirty years.
+pattern is old. busybox and toybox are one binary under hundreds of
+names, and the kernel's `/proc/<pid>/exe` names the link that was
+executed, the fact the wrapper design rests on. Nix's `makeWrapper`
+moves a program to `.foo-wrapped`; ccache and distcc put a link under
+each compiler's name; `dpkg-divert` moves a file aside to
+`foo.distrib`; libtool's uninstalled wrappers keep the real binary in
+`.libs/`, so that `make check` runs programs before installation.
 
 What exclave adds: the wrapper is the launcher itself rather than a
 script, so the kernel executes it with the program's identity and no
@@ -3098,18 +2952,13 @@ Read from source:
 **Ubuntu's user-namespace restriction.** Ubuntu 23.10 and 24.04 set
 `kernel.apparmor_restrict_unprivileged_userns=1`: "applications
 requiring unprivileged namespaces require explicit allowance by their
-AppArmor profile", and Ubuntu ships profiles for common applications
-and some third-party ones such as Google Chrome and Discord. Turning it
-off is `echo 0 | sudo tee
-/proc/sys/kernel/apparmor_restrict_unprivileged_userns`, root's and lost
-on reboot. This matches the measurement of 4.3. Three bypasses of the
-restriction were published on oss-security in 2025; they are bugs, not
-a mechanism to build on.
+AppArmor profile". Turning it off is root's and lost on reboot. This
+matches the measurement of 4.3. The bypasses published on oss-security
+in 2025 are bugs, not a mechanism to build on.
 
 **HPC container tools.** Apptainer, Charliecloud and Enroot all need
 unprivileged user namespaces, or in Apptainer's older mode a setuid
-helper; Enroot's requirements name `unprivileged_userns_clone`. No
-shipped tool covers the host that denies user namespaces.
+helper. None covers the host that denies user namespaces.
 
 **Docker's default seccomp profile**, `seccomp/default.json` in
 `moby/profiles` at commit `3c28324` (Apache-2.0), which
@@ -3127,19 +2976,15 @@ runs an exclave under (17 item 5). For the syscalls the launcher needs:
 So the trap, the handling of `openat2` and the `process_vm_readv` copy
 that keeps `EFAULT` (7.5.6) all work under the default profile, and gdb
 inside a container works. The launcher's own filter refuses `clone3`
-everywhere (7.4.2), so glibc uses `clone` in or out of Docker, and
-resets signal handlers in a spawned child by hand, whose masks the
-handler scrubs (7.5.1, 7.5.5). The profile blocks nothing the design
-needs (12).
+everywhere (7.4.2, 7.5.5). The profile blocks nothing the design needs
+(12).
 
 **Steam's runtime** documents the one case in which a closed
 environment must import host libraries: graphics drivers "come from
-the host system", because the user-space driver must match the kernel
-driver, while glibc "comes from the newest of host system and container
-runtime". Steam loads such host libraries in an isolated namespace with
-libcapsule. Compilers never meet this; software that talks to a GPU
-will, and an exclave would need a libcapsule-style import of host
-libraries rather than a host path. It is outside exclave's scope.
+the host system", since the user-space driver must match the kernel's,
+and Steam loads them in an isolated namespace with libcapsule. GPU
+software would need such an import, and is outside exclave's scope (13
+item 9).
 
 ### 15.8 Sources
 
@@ -3159,23 +3004,20 @@ libraries rather than a host path. It is outside exclave's scope.
 - [uninative: Add uninative, OpenEmbedded commit](https://git.openembedded.org/openembedded-core/commit/?id=e66c96ae9c7ba21ebd04a4807390f0031238a85a); [Linuxbrew bottles](https://github.com/Linuxbrew/brew/wiki/Bottles); [Plash](http://plash.beasts.org/environment.html)
 - [Cosmopolitan APE specification](https://github.com/jart/cosmopolitan/blob/master/ape/specification.md); [APE loader](https://justine.lol/apeloader/)
 - [Preloading the linker for fun and profit, tmp.0ut 2](https://tmpout.sh/2/6.html); [nix-ld](https://github.com/nix-community/nix-ld); [nix-ld: a clean solution for issues with pre-compiled executables on NixOS](https://blog.thalheim.io/2022/12/31/nix-ld-a-clean-solution-for-issues-with-pre-compiled-executables-on-nixos/)
-- [Bringing BPF to binfmt_misc, LWN 2026](https://lwn.net/Articles/1086947/); [RFC: /proc/self/interpreter symlink, 2023](https://lkml.rescloud.iu.edu/2309.0/05708.html)
+- [Bringing BPF to binfmt_misc, LWN 2026](https://lwn.net/Articles/1086947/)
 - [fs/binfmt_elf.c](https://github.com/torvalds/linux/blob/master/fs/binfmt_elf.c); [kernel/signal.c](https://github.com/torvalds/linux/blob/master/kernel/signal.c); [glibc elf/rtld.c](https://github.com/bminor/glibc/blob/master/elf/rtld.c); [musl ldso/dlstart.c](https://git.musl-libc.org/cgit/musl/tree/ldso/dlstart.c); [binfmt_misc admin guide](https://www.kernel.org/doc/html/latest/admin-guide/binfmt-misc.html)
 - [Understanding AppArmor User Namespace Restriction, Ubuntu](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007); [Ubuntu 24.04 release notes](https://documentation.ubuntu.com/release-notes/24.04/); [Three bypasses of Ubuntu's unprivileged user namespace restrictions, oss-security 2025](https://seclists.org/oss-sec/2025/q1/253)
 - Docker's default seccomp profile: [`seccomp/default.json` in moby/profiles at 3c28324](https://github.com/moby/profiles/blob/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json)
 - [Steam Runtime possible designs](https://github.com/ValveSoftware/steam-runtime/blob/master/doc/possible-designs.md); [Apptainer user namespaces](https://apptainer.org/docs/admin/main/user_namespace.html); [Charliecloud](https://charliecloud.io/latest/); [enroot requirements](https://github.com/NVIDIA/enroot/blob/main/doc/requirements.md)
 
----
-
 ## 16. Performance
 
-What an exclave costs a program, where the cost goes, what was done
-about it and what was left alone. The figures come from the reference
-machine (2), an AMD Ryzen AI 7 350 (Zen 5) with the tree on ZFS, and
-the gcc exclave of `test/inputs.sh`, measured October 2026 unless
-stated. The older kernels are the x86-64 rows of the matrix (12), run
-under KVM on the same machine by `test/vm_run.py`. 13 item 2 states the
-limitation; 16.9 says how to reproduce every figure.
+What an exclave costs a program, where the cost goes, and what the
+launcher does about it. The figures come from the reference machine
+(2), with the tree on ZFS, and the gcc exclave of `test/inputs.sh`,
+measured October 2026 unless stated; the older kernels are the x86-64
+rows of the matrix (12.1), run under KVM on the same machine. 13 item 2
+states the limitation; 16.9 says how to reproduce the figures.
 
 ### 16.1 The cost model
 
@@ -3188,18 +3030,16 @@ An exclave costs a program in four places:
    the kernel's action cache (5.11 and later) has proved the answer
    constant for that syscall number (16.3).
 3. **Every process start**: the launcher's startup (7.2), its loader
-   (7.3) and the new process's cold canonicalisation cache; at the
-   border also the filter install (16.4).
-4. **Everything else the process does**, which should cost nothing.
-   On kernels that force a speculation mitigation on a process that
-   installs a seccomp filter, it would not, which the launcher prevents
-   (16.5).
+   (7.3) and a cold canonicalisation cache; at the border also the
+   filter install (16.4).
+4. **Everything else**, which costs nothing, except on kernels that
+   force a speculation mitigation on a process that installs a seccomp
+   filter, which the launcher prevents (16.5).
 
-In summary: a trapped `stat` costs 1.9 to 3.6 µs where the host's
-costs 0.3; an untrapped syscall about 10 ns more than natively; a
-`posix_spawn` about twice the native time; small compiles about a third
-more than natively; a compute-bound compile the same as natively
-(16.8).
+In summary (16.8): a trapped `stat` costs 1.9 to 3.6 µs where the
+host's costs 0.3; an untrapped syscall about 10 ns more than natively;
+a `posix_spawn` about twice the native time; small compiles about a
+third more; a compute-bound compile the same as natively.
 
 ### 16.2 What a trap costs
 
@@ -3212,112 +3052,76 @@ re-issues a `stat` on a fixed real path, costs 1.3 µs, against 0.41 µs
 for that `stat` natively. The signal is half of the floor, and nothing
 a handler does removes it.
 
-**What a trap costs**, best of three by `test/bench.py`:
+**Above the floor** is the handler's own computation; the trapped rows
+of 16.8 give it by kind of path. A warm seven-component exclave-path
+`stat` costs 2.46 µs, about 1.2 µs above the floor, and makes four
+syscalls besides the trapped one: `getpid`, `gettid`,
+`process_vm_readv` and the re-issue. The visibility rule (8.1) is
+compiled at startup into one table and asked once per candidate
+component (16.6 item 3).
 
-| Workload | native | exclave |
-|---|---|---|
-| `stat()`, three-component exclave path | 304 ns | 1.90 µs |
-| `stat()`, seven-component exclave path | 346 ns | 2.46 µs |
-| `stat()`, seven-component host path | 360 ns | 3.57 µs |
-| `stat()`, relative name, working directory six components deep on the host | 277 ns | 2.74 µs |
-| `realpath()` of that working directory | 0.98 µs | 13.3 µs |
+**Host paths** are not cached (7.4.4), since a host directory can
+change at any time, so a walk through them makes one `lstat` per
+component, except where one `openat2` can stand in for the directories
+ahead (16.6 item 4).
 
-A warm exclave-path `stat` makes four syscalls besides the trapped one:
-`getpid`, `gettid`, `process_vm_readv` and the re-issue. What it costs
-above the floor is the handler's own computation; for a seven-component
-exclave path that is about 1.2 µs.
-
-**Where the handler's time went, and the compiled rule.** Before the
-changes of 16.6, a seven-component exclave-path `stat` cost 4.9 µs. A
-profile with an unstripped launcher (16.9) put about 70% of it in the
-launcher's own code and half of the whole in the visibility rule (8.1).
-The rule was a linear scan of every `own` record, `host` record,
-identity file and volatile directory, about forty string comparisons,
-and the walk asked it five to eight times per component, from each of
-the checks that needed an owner. A one-entry memo of the last answer
-saved only 15 to 20%, since every component is a new string. The rule
-is now compiled at startup into one table and asked once per candidate
-(16.6 item 3), and the same `stat` costs 2.4 µs.
-
-**Host paths** are not cached (7.4.4), because a host directory can
-change at any time, so a walk through them made one `lstat` per
-component: eight `newfstatat` for a seven-component host `stat`, 61% of
-its time in the kernel. Where every directory ahead is plainly the
-host's, one `openat2` stands in for them (16.6 item 4).
-
-**Relative paths** first make `getcwd` and the search check of 7.4.3.
-Since `getcwd` returns a path with no symlink in it, walking the
-working directory's components again from the root would repeat work
-the kernel has done; the walk starts in the directory as the kernel
-names it (16.6 item 5).
+**Relative paths** first make `getcwd` and the search check of 7.4.3,
+then start the walk in the working directory as the kernel names it,
+since that name has no symlink in it (16.6 item 5).
 
 **What a small compile traps.** `gcc -O0 hello.c` through an exclave
 makes about 1 250 traps. 746 of them are `readlink`, almost all
 answered `EINVAL` on a directory: glibc's `realpath` reads every
 component of a path as a link, so a path *n* deep costs *n* traps, and
 each trap walks the path again. This is why `realpath` is the most
-expensive row of the table above.
+expensive row of 16.8.
 
 ### 16.3 Untrapped syscalls and the filter
 
-Every syscall a program makes runs the filter, unless the kernel's
-action cache, from 5.11, has proved the answer for its number
-constant. The cache can prove it only where the answer does not depend
-on the instruction pointer or an argument.
+Every syscall runs the filter unless the kernel's action cache (5.11)
+has proved the answer for its number constant, which it can only where
+the answer depends on neither the instruction pointer nor an argument.
+The filter's first stage is a binary decision tree on the
+syscall number whose leaf for every number the rule does not single
+out is `ALLOW` (7.4.2 gives the program's size and how many numbers
+that is). The action cache proves those numbers allowed and skips the
+filter for them; where the cache is absent an allowed syscall runs
+11.7 instructions on average and 27 at most.
 
-The filter has two stages (7.4.2). The first is a binary decision tree
-on the syscall number alone, whose leaf for every number the rule does
-not single out is `ALLOW`: the action cache proves those syscalls
-allowed and skips the filter for them, and a kernel without the cache
-runs a dozen instructions. The remaining numbers go on to the second
-stage, the rule in its order: the argument checks that can only allow,
-the probe, the syscall page, the refusals, and the trap.
+An untrapped `getppid` costs 53 to 55 ns against 43 to 45 natively,
+and `read(-1)` 54 against 46; what is left is the kernel's seccomp
+entry, which any filter costs. The install takes 75 to 100 µs, most of
+it the kernel compiling and checking the program.
+`test/filter_test.c`, in the gate's unit step, runs the program in an
+interpreter against the rule written out separately, in 569 590 cases,
+and asks of every number what the action cache asks.
 
-On x86-64 the program is 284 instructions and 376 of the 471 numbers
-are allowed by number alone; on aarch64, 240 instructions and 396
-numbers. Where the cache is absent an allowed syscall runs 11.7
-instructions on average and 27 at most. An untrapped `getppid` costs
-53 to 55 ns against 43 to 45 natively, and `read(-1)` 54 against 46;
-what is left is the kernel's seccomp entry, which any filter costs. The
-install takes 75 to 100 µs, most of it the kernel compiling and
-checking the program. `test/filter_test.c`, in the gate's unit step,
-runs the program in an interpreter against the rule written out
-separately, in 569 590 cases, and asks of every number what the action
-cache asks.
-
-Why a tree: a filter that compared the instruction pointer with the
-syscall page first made no answer constant for any number, so every
-syscall ran the arch check, the probe check, the page check and then a
-linear chain of about 110 compare pairs, 322 instructions in all and
-134 on average for an allowed syscall. That cost an untrapped
-`getppid` 78 ns against 43, and on CentOS 7's 3.10, where the filter is
-interpreted rather than compiled, 1.5 µs against 84 ns, on every
-syscall the program made. Allowing every unlisted number by a linear
-membership test before the page check cut `getppid` to 56 ns but
-doubled the install, to about 200 µs, because the kernel builds its
-action cache by emulating the filter once per syscall number, and a
-linear test makes each emulation long. A tree keeps both costs down.
+Why a tree: a filter that tests the instruction pointer first makes no
+number constant for the action cache, so an untrapped `getppid` costs
+78 ns against 43, and 1.5 µs against 84 ns on CentOS 7's 3.10, which
+interprets the filter. A linear allow-list ahead of the page check
+brings `getppid` to 56 ns but doubles the install, to about 200 µs,
+because the kernel builds its action cache by emulating the filter once
+per number.
 
 ### 16.4 Process start
 
 A `posix_spawn` of `/usr/bin/true` from inside an exclave costs about
-twice the native time (2.0 times, alternated runs). `perf` puts 78% of
-a spawn in the kernel: process creation, `execve` and page faults (124
-per spawn against 55 natively). At the border, the first start from
-the host, the filter install adds 75 to 100 µs (16.3).
+twice the native time (2.0 times, alternated runs) and makes 550
+syscalls. `perf` puts 78% of a spawn in the kernel: process creation,
+`execve` and page faults (124 per spawn against 55 natively). At the
+border the filter install adds 75 to 100 µs (16.3).
 
 The launcher's part of a start is its startup (7.2), which reads each
 empty top-level directory of the tree once to know it is a placeholder
-(8.3), twelve in the gcc exclave, and `lstat`s each identity file once
-(8.4); the loader (7.3), which reads the program's notes through the
-descriptor it maps from; and in the parent, the exec handler (7.4.5),
-which reads the head of every environment variable to drop the
-launcher's own. It reads those heads with one `process_vm_readv` for up
-to 256 variables rather than one call each, about a hundred calls in a
-desktop session (running a spawn under `env -i` saved about 25 µs
-before the batching), and falls back to reading one variable on its own
-when the batch cannot read it whole, at the end of a mapping. A
-`posix_spawn` of `true` makes 550 syscalls.
+(8.1 rule 1), twelve in the gcc exclave, and `lstat`s each identity
+file once (8.4); the loader (7.3), which reads the program's notes
+through the descriptor it maps from; and, in the parent, the exec
+handler (7.4.5), which reads the head of every environment variable to
+drop the launcher's own. It reads the heads with one `process_vm_readv`
+for up to 256 variables rather than one call each, about a hundred
+calls in a desktop session, and reads a variable on its own when the
+batch cannot read it whole, at the end of a mapping.
 
 A spawn traps little: glibc 2.39's `posix_spawn` makes two trapping
 `rt_sigaction` calls and one trapping `rt_sigprocmask`, since queries
@@ -3326,19 +3130,18 @@ leave its RSS flat, +152 kB against +200 kB natively (17 item 4).
 
 ### 16.5 Speculative Store Bypass
 
-A process that installs a seccomp filter without
-`SECCOMP_FILTER_FLAG_SPEC_ALLOW`, on a kernel whose default is
-`spec_store_bypass_disable=seccomp`, is switched to Speculative Store
-Bypass Disable, forced, and every descendant inherits it. That default
-holds on every kernel from 4.17 up to 5.15 unless the distribution
-changed it, and on the backports before. An exclave is not a security
-boundary (3), and its programs did not ask for the mitigation, so the
+On a kernel whose default is `spec_store_bypass_disable=seccomp`, from
+4.17 up to 5.15 unless the distribution changed it and on backports
+before, a process that installs a seccomp filter without
+`SECCOMP_FILTER_FLAG_SPEC_ALLOW` is forced into Speculative Store
+Bypass Disable, with every descendant. An exclave is not a security
+boundary (3) and its programs did not ask for the mitigation, so the
 launcher passes the flag, and installs without it where the kernel
-answers `EINVAL` (before 4.17; CentOS 7's 3.10 accepts the flag, a
+answers `EINVAL` (before 4.17; CentOS 7's 3.10 accepts it, a
 backport).
 
 `Speculation_Store_Bypass` in `/proc/self/status`, natively and in an
-exclave whose filter was installed without the flag, by a static probe
+exclave whose filter is installed without the flag, by a static probe
 on each x86-64 row of the matrix:
 
 | Kernel | native | without the flag |
@@ -3361,133 +3164,95 @@ on each of the five affected kernels.
 | in an exclave, without the flag | 0.29 to 0.31 s | 0.15 to 0.17 s | 0.34 to 0.35 s |
 | in an exclave, with the flag | 0.28 to 0.30 s | 0.08 to 0.10 s | 0.06 s |
 
-Without the flag the matcher ran 1.7 times slower and the interpreter
-loop 5.8 times; sorting, whose loads rarely follow its stores, did not
-care. A context-mixing compressor on a 1 MB trace took 1.22 to 1.38 s
-on the reference machine and 1.73 to 1.78 s with the mitigation forced
-by `prctl`, about 40% more. With the flag, programs in an exclave run
-at native speed on these kernels; the regression
-`speculation_unchanged` checks on every matrix row that a program at
-the border and one it spawns report what a native one does.
+Without the flag the matcher runs 1.7 times slower and the interpreter
+loop 5.8 times; sorting, whose loads rarely follow its stores, does not
+care. A context-mixing compressor on a 1 MB trace takes about 40% more
+on the reference machine with the mitigation forced by `prctl` (1.73 to
+1.78 s against 1.22 to 1.38 s). With the flag, programs in an exclave
+run at native speed on these kernels.
 
 ### 16.6 Optimisations
 
-The changes that brought the costs of 16.2 to 16.4 to their present
-figures, by payoff. Each was gated on its own, and each has a check
-that fails without it. The figures were measured as each change
-landed, before the read-backs that items 4 and 7 make; 16.8 has the
-figures of the launcher as it is.
+The mechanisms the launcher has for speed, by payoff, each with what it
+buys and the check that holds it; 16.8 has the figures of the launcher
+as a whole.
 
-1. **`SECCOMP_FILTER_FLAG_SPEC_ALLOW`** on the install (16.5): native
-   speed for code whose loads follow its stores on the five affected
-   kernels, the matcher 0.16 s to 0.09 s and the interpreter loop
-   0.35 s to 0.06 s; nothing on kernels that never forced the
-   mitigation. Check: `speculation_unchanged`.
-2. **The filter as a decision tree on the syscall number** (16.3):
-   `getppid` 76 ns to 53 and `read(-1)` 65 ns to 54, with the install
-   unchanged. Check: `test/filter_test.c`. The old and new filters were
-   also compared in 146 805 568 cases on each architecture, with no
-   difference.
-3. **The visibility rule compiled once.** The `own` records, `host`
-   records, identity files, volatile directories, the exclave's own
-   directory and the working directory given to the host are all known
-   at startup. Every string the rule matches against is an entry of one
-   table built then; a path's owner is decided by its longest matching
-   prefix, looked up at its `/` boundaries in one pass, and the walk
-   asks once per candidate, building a real path only for a component
-   it has not yet remembered (8.1, 7.4.4). A seven-component
-   exclave-path `stat` went from 4.9 µs to 2.4. Check: a launcher that
-   asked both the table and the old scans, and died on any difference,
-   passed the gate before the scans were deleted; the two rules were
-   also compared in over 16 million queries with no difference.
-4. **Host directories checked in one step.** Where the remaining
-   directories of a walk are all plainly the host's by the rule, one
-   `openat2` with `RESOLVE_NO_SYMLINKS` (5.6 and later) says whether
-   the kernel would meet a symlink on the way: it succeeds only if each
-   is a directory reached without a link. The walk also has to see the
-   tree's root under another name; where the tree's filesystem is
-   mounted once, with the tree's own device, a directory has one path
-   within it and the rule has already refused the tree's own name. The
-   check then reads back the kernel's name for what it reached, and
-   walks unless it is the path itself, because on a case-insensitive
-   filesystem `x.exclave/TREE` is the tree's root under another
-   spelling on the same mount. A link, a missing directory, a refusal,
-   a second mount, or a kernel without `openat2` falls back to the
-   component walk, so errors stay the walk's; the last component is
-   always the walk's. `/proc/self/mountinfo` is read once, also where
-   it cannot answer, as in a chroot that does not see the tree's mount,
-   and a chain the check could not vouch for is not tried again at
-   every component. A seven-component host `stat` went from 3.9 µs,
-   after item 3, to 2.7. Checks: `host_walk_one_step`, which a launcher
-   without `RESOLVE_NO_SYMLINKS` fails, and `casefold_alias`. Kernels
-   before 5.6 keep the component walk; an `O_PATH` open read back
-   through `/proc/self/fd` could serve them and is not built.
+1. **`SECCOMP_FILTER_FLAG_SPEC_ALLOW` on the install** (16.5). Code
+   whose loads follow its stores runs at native speed on the five
+   kernels that would force the mitigation, rather than up to 5.8 times
+   slower. Check: `speculation_unchanged`, on every matrix row.
+2. **The filter as a decision tree on the syscall number** (16.3). The
+   action cache skips the filter for every number allowed by number
+   alone, and an untrapped syscall costs about 10 ns over native.
+   Check: `test/filter_test.c`.
+3. **The visibility rule compiled once.** Everything the rule matches
+   a path against, the `own` and `host` records, identity files,
+   volatile directories, the exclave's own directory and the working
+   directory given to the host, is an entry of one table built at
+   startup. A path's owner is its longest matching prefix, looked up at
+   its `/` boundaries in one pass; the walk asks once per candidate and
+   builds a real path only for a component it has not yet remembered
+   (8.1, 7.4.4). The same rule as linear scans, about forty comparisons
+   asked five to eight times per component, would make a
+   seven-component exclave-path `stat` 4.9 µs rather than 2.4. Check:
+   the resolution oracle and the syscall probe (17 items 2 and 7).
+4. **Host directories checked in one step** (specified in 7.4.4).
+   Where the directories ahead of a walk are all plainly the host's,
+   one `openat2` with `RESOLVE_NO_SYMLINKS` stands in for their
+   `lstat`s, and anything it cannot vouch for is left to the walk;
+   kernels before 5.6 keep the walk. Checks: `host_walk_one_step`,
+   which fails where the launcher could use the check and does not,
+   and `casefold_alias`.
 5. **Relative paths start from the working directory as the kernel
    names it.** `getcwd` and `/proc/self/fd/N` return a path without
-   symlinks, so the walk starts with that directory already resolved,
-   unless the name could mislead, rather than walking its ancestors
-   again from the root, which the kernel never does (7.4.3). A relative
-   `stat` from a host directory six deep went from 4.9 µs, after item
-   4, to 2.7. Check: `bind_mount_alias`, run from a working directory
-   inside a bind mount of the tree, where a launcher that ignored the
-   mount condition wrote through it.
+   symlinks, so the walk starts with that directory resolved, unless
+   the name could mislead (7.4.3), rather than walking its ancestors
+   again from the root, which the kernel never does. Check:
+   `bind_mount_alias`, from a working directory inside a bind mount of
+   the tree, which a launcher ignoring the mount condition writes
+   through.
 6. **Exec and startup trimmed** (16.4). The environment's heads are
    read in batches; the exec's wrapper check is the walk's remembered
    answer; the loader reads the program's notes through the descriptor
-   it maps from rather than opening the program again; an identity file
-   is `lstat`ed once. A `posix_spawn` of `true` makes 550 syscalls where
-   it made 679; the time is within the run-to-run spread. Check:
-   `exec_vectors` places a variable at the end of a mapping.
+   it maps from; an identity file is `lstat`ed once. A `posix_spawn` of
+   `true` makes 550 syscalls rather than 679, within the run-to-run
+   spread in time. Check: `exec_vectors` places a variable at the end
+   of a mapping.
 7. **Paths through the tree's real root start at the root.** A program
    that finds its files from its `argv[0]`, as gcc does, spells them
-   through `<exclave>/tree/` when it was run by that path from outside.
-   The walk `lstat`ed every directory above the tree before it saw the
-   tree's root by name: 3 300 of a small compile's 4 339 `lstat`s. The
-   launcher already knows that name, from `/proc/self/exe`, so such a
-   path starts at the root, after one `faccessat` of the exclave's
-   directory, which keeps the walk's answer where a directory above the
-   tree is not searchable or the exclave was moved while it runs. An
-   `openat2` with `resolve` flags still walks. A small compile's
-   `lstat`s went from 4 339 to about 1 000.
+   through `<exclave>/tree/` when run by that path from outside. The
+   launcher knows that name from `/proc/self/exe`, so such a path starts
+   at the root after one `faccessat` of the exclave's directory, which
+   keeps the walk's answer where a directory above the tree is not
+   searchable or the exclave was moved while it runs (7.4.4); an
+   `openat2` with `resolve` flags still walks. A small compile makes
+   about 1 000 `lstat`s rather than 4 339. Check:
+   `real_root_is_the_tree`, with that spelling and its relative and
+   doubled-slash forms.
 
 Items 4 and 7 are shortcuts past the walk, and a shortcut drops every
 question the walk asked, the ones nobody wrote down included. Each
-therefore asks the kernel what it actually reached, which costs a small
-compile about a millisecond of CPU: the read-back of item 4 is about
-0.7 µs per host chain.
+therefore asks the kernel what it actually reached: item 4 reads back
+the kernel's name for what it opened, about 0.7 µs per host chain, and
+item 7 makes its `faccessat`. That costs a small compile about a
+millisecond of CPU.
 
-### 16.7 What was left alone
+### 16.7 What is left alone
 
-Each of these was considered and not done. Each states what it would
-buy, so that the decision can be reopened when the balance moves.
+Each of these would cut a cost of 16.1 and is not done, for the reason
+the pointer gives.
 
-- **Rewriting syscall sites** (14.1): would remove at most the 0.6 µs
-  signal of the 1.3 µs floor, and nothing of the handler's own work.
-- **A supervisor on `SECCOMP_RET_USER_NOTIF`** (14.1): a context switch
-  per trap is slower than a signal, and registers cannot be changed.
-- **libc interposition through the exclave's own glibc** (14.1): no
-  signal for libc-mediated calls, but a preload is visible to the
-  program, static and Go programs bypass it, and `EFAULT` fidelity
-  needs the same copy the handler makes.
-- **Syscall User Dispatch** (14.1) costs the same signal and is reset
-  by exec.
-- **A canonicalisation cache shared across processes** (14.3): each
-  process learns the exclave's directories afresh, a few hundred
-  `lstat`s per compile. Worth reopening only if cold caches dominate.
-- **Caching host paths** (14.3): item 4 of 16.6 gets most of the
-  benefit without remembering anything.
-- **Skipping the empty top-level directories at startup**: the
-  placeholders are how `ls /` lists the host's directories (8.3), and
-  only reading a directory says whether it is empty. Twelve reads per
-  start remain in the gcc exclave.
-- **Dropping `getpid` and `gettid` per trap**: about 100 ns, but a
-  process-wide value is wrong in a `vfork` child while a thread of the
-  parent is in its handler (7.5.4), and the launcher has no
-  thread-local storage of its own.
-- **The page faults of the launcher's tables**: the cache's 256 KB
-  table and 1 MB string area fault in as entries land, part of about
-  70 extra page faults per process. Small next to the rest; a smaller
-  first table would trade it against rehashing.
+- Rewriting syscall sites: at most the 0.6 µs signal (14.1).
+- A seccomp user-notification supervisor, or Syscall User Dispatch
+  (14.1).
+- libc interposition through the exclave's own glibc (14.1).
+- A canonicalisation cache shared across processes (14.3).
+- Caching host paths (14.3).
+- Skipping the empty top-level directories at startup (14.3).
+- Dropping `getpid` and `gettid` per trap (14.3).
+- A smaller first cache table (14.3).
+- The one-step host check before 5.6, through an `O_PATH` open read
+  back from `/proc/self/fd`: possible, and not built (16.6 item 4).
 
 If overhead matters again, the next steps are the spawn, where `perf`
 puts 78% in the kernel, so a profile with kernel symbols comes first;
@@ -3495,11 +3260,11 @@ then glibc's `realpath`, which costs *n* traps for a path *n* deep.
 
 ### 16.8 Measured results
 
-Best of three, October 2026, on a day when the machine ran other work,
-so that its pace moved between whole benchmark runs (the native
-`posix_spawn` took between 170 and 410 µs). The per-call rows are from
-`test/bench.py --launcher`; the compile rows from runs that alternated
-native and exclave, so that both saw the same pace.
+Best of three, October 2026, on a machine running other work, whose
+pace moved between whole runs (the native `posix_spawn` took 170 to
+410 µs). The per-call rows are from `test/bench.py --launcher`; the
+compile rows alternated native and exclave runs, so both saw the same
+pace.
 
 | Workload | native | exclave |
 |---|---|---|
@@ -3518,13 +3283,9 @@ native and exclave, so that both saw the same pace.
 | syscalls for one `gcc -O0 hello.c`, all processes (`strace -f -c`) | 2 650 | 11 889 |
 
 Thirty small compiles cost 32% more than natively, the 61-file project
-35% more, and a small compile's CPU time 27% more. A seven-component
-exclave-path `stat` is within 1.2 µs of the floor of 16.2. The
-compute-bound compile runs within noise of native and produces an
-identical object. The same holds on the kernels that force the
-speculation mitigation, since the launcher no longer lets it be forced
-(16.5).
-
+35% more, and a small compile's CPU time 27% more. The compute-bound
+compile runs within noise of native and produces an identical object,
+also on the kernels that would force the speculation mitigation (16.5).
 What is left of a small compile's overhead, by `perf` and `strace`:
 about 1 250 traps at the 1.3 µs floor; five process starts, each more
 the kernel's exec, page faults and process creation than the launcher's
@@ -3532,12 +3293,11 @@ code; and the launcher's own walk, 8% of the compile's CPU time, half
 of it in canonicalisation.
 
 **Real software.** An exclave of `gcc g++ make libc6-dev python3`
-(120 packages), the sources of four projects
-extracted twice, each built by the host's toolchain and by the
-exclave's through the exclave's own shell, `make -j4`, then the
-project's own test or a run of the result, by `test/realsoft.py`.
-Measured September 2026 with an earlier launcher, before the changes
-of 16.6:
+(120 packages); four projects, each built from its source by the
+host's toolchain and by the exclave's through the exclave's own shell,
+`make -j4`, then the project's own test or a run of the result, by
+`test/realsoft.py`. Measured September 2026 with an earlier launcher,
+before the optimisations of 16.6:
 
 | Project | configure, host / exclave | make, host / exclave | result |
 |---|---|---|---|
@@ -3548,35 +3308,35 @@ of 16.6:
 
 Configure scripts, which spawn a process per test, cost about a third
 more; the compile-heavy builds nothing to a fifth more. Everything a
-build touched on the way, `/tmp`, the source directory and the working
-directory, resolved without a manifest record being added.
+build touched, `/tmp`, the source directory and the working directory,
+resolved without a manifest record being added.
 
 ### 16.9 Reproducing
 
 - `test/bench.py --exclave EXCLAVE [--sqlite PATH] [--launcher
-  LAUNCHER]` prints the table of 16.8 and the per-call rows of 16.2 and
-  16.3, best of three, native against a copy of the exclave relinked
-  with the given launcher (by default `build/launcher`). The exclave
-  must contain gcc-13; the host's `gcc-13`, else its `gcc`, gives the
-  native column. `--sqlite` names the `sqlite3.c` amalgamation that
-  `test/inputs.sh` extracts, for the compute-bound row. To compare two
-  launchers, run it once with each.
-- `test/realsoft.py --exclave EXCLAVE --src DIR` builds the projects
-  of 16.8 from the source tarballs `test/inputs.sh` fetches into
-  `DIR/src`.
+  LAUNCHER]` prints the per-call and compile rows of 16.8, best of
+  three, native against a copy of the exclave relinked with the given
+  launcher (by default `build/launcher`). The exclave must contain
+  gcc-13; the host's `gcc-13`, else its `gcc`, gives the native column.
+  `--sqlite` names the `sqlite3.c` amalgamation `test/inputs.sh`
+  extracts. To compare two launchers, run it once with each.
+- `test/realsoft.py --exclave EXCLAVE --src INPUTS/src`, where `INPUTS`
+  is the directory `test/inputs.sh` filled, builds the projects of
+  16.8.
 - `test/vm_run.py --script SH FILE...` runs a script beside the given
-  files on every x86-64 kernel of the matrix. A static program that
+  files on every x86-64 kernel of the matrix; a static program that
   prints the `Speculation_Store_Bypass` line of `/proc/self/status`,
   run natively and through `EXCLAVE/.exclave/launcher`, gives the
   first table of 16.5.
-- `EXCLAVE_LOG` (13.1) lists every trap of a workload with its path,
-  which is how the traps of 16.2 were counted; `strace -f -c` counts
-  the syscalls.
+- `EXCLAVE_LOG` (6.2) lists every trap of a workload with its path,
+  which is how the traps of 16.2 are counted; `strace -f -c` counts the
+  syscalls.
 - `perf record` names the launcher's functions only when the exclave
-  carries an unstripped launcher: `build/launcher` is stripped, and
-  `perf` then folds the launcher's code into the nearest exported name,
-  `_start` or `sig_restorer`. Make the copy with
+  carries an unstripped launcher; with the stripped `build/launcher`,
+  `perf` folds the launcher's code into `_start` or `sig_restorer`.
+  Make the copy with
   `tree.fresh_exclave(SRC, DST, launcher="build/launcher.debug")`.
+
 ## 17. Testing
 
 The launcher reimplements part of the kernel's path walk, so the tests
@@ -3596,7 +3356,7 @@ meaning items 4 and 7.
    output are compared. The read-only bind is the oracle for 8.2's error
    matrix. It runs on every kernel of the matrix that has user
    namespaces, because the order in which the kernel checks for errors
-   has moved between kernels.
+   differs between kernels.
 2. **The kernel as the oracle for canonicalisation.** `openat2` with
    `RESOLVE_IN_ROOT` resolves a path with chroot semantics. Random trees
    full of symlink mazes, `..` and trailing slashes are resolved both
@@ -3605,93 +3365,41 @@ meaning items 4 and 7.
 3. **Grammar property tests** as stated in 6.2, plus mutated manifests
    for both parsers. The launcher's manifest parser is the one place
    where a malformed byte meets freestanding C on every exec.
-4. **Named regressions.** Each is a program that computes, not just
-   spawns, and asserts the kernel's answer or the rule's. They cover:
-   - *Signals and threads*: threaded floating point after
-     `pthread_create`; a `sigfillset` handler touching a path; a
-     timer's `SA_ONSTACK` handler that traps and unlinks while the main
-     thread is blocked in a trapped `open` on a FIFO; a FIFO `open`
-     interrupted by `SIGINT`; an `SA_ONSTACK` handler trapping while the
-     main thread is inside the handler; `siglongjmp` out of a trapped
-     `open` 200 times; a Go program doing path syscalls from goroutines;
-     64 threads calling `stat`; threads trapping while another thread
-     spawns, with each wrong answer named; a forked child whose traps
-     nest while every chunk of the scratch pool is held by threads
-     blocked in the parent; a sweep of the scratch pool overtaken
-     between its judgement and its release by another sweep and a new
-     claim (`test/scratch_test.c`).
-   - *Spawning and exec*: `posix_spawn` with a large argv; 100 000
-     `posix_spawn`s from one process with RSS measured before and after
-     (a row of `test/bench.py`, 16); `fexecve` of a wrapper and of an
-     original's descriptor; exec of a `memfd`, of an unlinked file and
-     of a script in each, with and without close-on-exec; direct
-     execution of an ELF and of a script in `tree/` from outside; a
-     script without `#!` run by `dash` and by `bash`; a `#!` line
-     without a newline; `execvp` past a non-executable `PATH` hit; a
-     program that re-execs `/proc/self/exe`; a program that reads its
-     own ELF header; argument vectors unbounded and faulty; an
-     executable stack; a program whose image starts at `0x10000`; the
-     identity a program exec'd from inside gets (`comm`, `AT_EXECFN` and
-     a script's `$0`) for a host ELF and a host script by path, relative
-     to a descriptor and through one, a close-on-exec script, a header
-     the loader cannot load, and a loader the exclave lacks refused by
-     `execve` itself.
-   - *The launcher and its filter*: an exclave launched with `SIGSYS`
-     blocked by its parent; `kill -SYS`; an older launcher nested inside
-     a newer one, with a syscall the inner one does not know; a launcher
-     known by either note name alone, run from inside; inherited copies
-     of the launcher's own variables dropped at exec; a program
-     installing its own seccomp filter; cross-exclave invocation with
-     two distinct launchers; the filter's model built and run inside the
-     exclave; the speculation state of a process in an exclave against a
-     native one; `personality(ADDR_NO_RANDOMIZE)`; what a hostile
-     program or a fuzzer would try, in one program (`adversarial`), each
-     case answered in microseconds.
-   - *Paths and the border*: a launch from a working directory given to
-     the host, with a subdirectory include and an output path in a
-     subdirectory, and from inside `tree/usr/bin`; `chdir` into a
-     subdirectory of a working directory given to the host; a host
-     symlink into `/usr`; deep host paths through the one-step check,
-     including a host link into `/usr`; the full read-only matrix of 8.2,
-     including `mkdir -p` and `install -d` on an existing directory,
-     `link` and `rename` across the border, and `chattr`; wrapper
-     redirect for `open` and `stat`; `stat("/file/")`; a bad path
-     pointer; `readlink` of an identity symlink; `statvfs("/usr")`;
-     `openat2` with each `resolve` flag from a descriptor inside the
-     exclave, and on walks that never touch the exclave, against the
-     kernel natively on the host's own mounts; a unix socket bound,
-     connected and sent to at a path of every class, also from a
-     working directory inside the tree; an exclave path at the limit of
-     `PATH_MAX` under the tree's prefix, and a relative path from a
-     working directory past it; the exclave's own directory and the
-     tree's real root seen from inside, and through a bind mount; the
-     tree's real root spelt relatively and with a doubled slash, and in
-     another case on a case-insensitive filesystem; `/proc/self/fd`
-     magic links; the `*xattrat` calls; a C program calling `futimens`
-     and `fstatat` with `AT_EMPTY_PATH`.
-   - *Programs that matter*: `ld.so --verify` and `ld.so --list` inside
-     the exclave; `dlopen` of `libc.so.6`; locale and gconv loading; the
-     locale and zone variables replaced at the border and untouched
-     inside; an environment variable at the end of a mapping; a Rust
-     program calling `File::metadata` and spawning with
-     `Command::spawn`; a built binary with `RUNPATH=$ORIGIN` run inside
-     the exclave that built it; built outputs run inside the exclave
-     that built them; an object compiled inside and on the host compared
-     byte for byte; gdb through the script the launcher carries; a
-     program on a `noexec` mount (in the matrix VMs, which can mount one
-     as root).
-   - *Ownership and the log*: ownership read from the tree and failing
-     closed; the root listing; the positional entry; the log's names and
-     escapes.
-   - *The tool*: the three package readers, extraction and synthesis;
-     `wrap`'s refusals, a mixed tree among them; pruning and the licence
-     texts it keeps; the licence the launcher carries; `check` with logs
-     and the static check's loader model; an exclave in the earlier
+4. **Named regressions.** Most are programs that compute, not just
+   spawn; the rest exercise the tool. Each asserts the kernel's answer
+   or the rule's. They fall into six groups:
+   - *signals and threads*: `SA_ONSTACK` handlers that trap, a FIFO
+     `open` interrupted by `SIGINT` or left by `siglongjmp`, Go's
+     goroutines, 64 threads trapping at once and threads trapping while
+     another spawns, and the scratch pool under contention
+     (`test/scratch_test.c`);
+   - *spawning and exec*: 100 000 `posix_spawn`s with RSS measured (16),
+     `fexecve`, `memfd`
+     and unlinked files, scripts with and without `#!`, `PATH` search,
+     faulty argument vectors, unusual images, and the identity a program
+     exec'd from inside gets;
+   - *the launcher and its filter*: a blocked or sent `SIGSYS`, older
+     and newer launchers nested and side by side, a program installing
+     its own filter, the speculation state, and an adversarial program
+     (`adversarial`);
+   - *paths and the border*: working directories on either side, host
+     symlinks, the read-only matrix of 8.2, unix sockets, `PATH_MAX`,
+     `openat2`'s `resolve` flags, `/proc` magic links and the `*xattrat`
+     calls;
+   - *programs that matter*: the loader, `dlopen`, locales and gconv,
+     Rust and Go, built outputs run inside, a byte-for-byte comparison
+     with a host compile, gdb, and a `noexec` mount;
+   - *ownership, the log and the tool*: ownership failing closed, the
+     log's names and escapes, the three package readers, `wrap`'s
+     refusals, pruning, `check`, and a directory in the pre-rename
      `.can/` layout refused by name by every command.
+
+   The tests in `test/run.py` say what each asserts, in their
+   docstrings and their failure messages.
 5. **Kernel matrix.** Docker's default seccomp profile stands for the
    environment where user namespaces are blocked. VMs run kernels 3.10,
    4.15, 4.18, 5.4, 5.10, 5.15, 6.1, 6.6 and 6.14, and an emulated
-   aarch64 row runs 6.8. The results are in 12. The kernel source a
+   aarch64 row runs 6.8; the results are in 12.1. The kernel source a
    rule follows is cited beside the handler code that follows it, so a
    breakage can be diagnosed. The path-syscall list is checked against
    the kernel's own syscall table.
@@ -3752,6 +3460,20 @@ includes a bad pointer that must be `EFAULT` either way.
 it. It walks gcc's call graph from `on_sigsys` in both launchers' builds
 and enforces the handler's stack budget of 7.5.4.
 
+**Requirements.** The build needs gcc and make; the tool and the
+drivers need python3. The namespace oracle, the syscall probe, the
+Docker profile run and the exerciser need `bwrap` (bubblewrap) and
+unprivileged user namespaces; the resolution oracle needs `openat2`
+(Linux 5.6). The suite uses `strace`, `gdb`, Go and `rustc`; a test
+whose tool is missing skips and names it. The gate's plain-label run
+needs AppArmor's `aa-exec` and is left out without it. Optionally,
+`aarch64-linux-gnu-gcc` builds the aarch64 launcher, and the matrix
+needs QEMU with KVM and `cloud-image-utils` (`qemu-system-arm` and the
+AAVMF firmware for the emulated row). Where `bwrap` cannot create a user namespace (Ubuntu
+23.10 and later from a plain terminal, most containers), an oracle or
+the probe says it cannot run and exits 0, and the gate prints that step
+as SKIP rather than ok.
+
 **Running it.** From a clean checkout, three commands reach a passing
 gate:
 
@@ -3762,26 +3484,22 @@ D=~/.cache/exclave-inputs
 EXCLAVE_TEST_INPUTS=$D test/gate.sh $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave
 ```
 
-`test/inputs.sh DIR` is the one test script that downloads. It makes
-the gate's four exclaves: Ubuntu 24.04's gcc-13 closure, Alpine 3.21's
-gcc, Fedora 42's gcc, and Ubuntu 24.04's clang-18 closure. It also
-makes the inputs that dogfood and the example runs take: the python3,
-zstd and xz-utils closure for the tool's own exclave, the packages
-`test/realsoft.py` builds with, CentOS 7's glibc for the sysroot of 9,
-the arm64 gcc-13 closure for the emulated row, Docker's default
-seccomp profile, and the source tarballs of `test/realsoft.py` and
-`test/bench.py`. Packages come through `tools/fetch-debs.py`,
-`tools/fetch-apks.py` and `tools/fetch-rpms.py`, which verify each
-download against the repository index's checksum and cache it under
-`~/.cache`. Every other third-party file is pinned by its BLAKE2b-256
-in the script and refused if the hash differs. An item `DIR` already
-has is skipped, so a rerun costs nothing. Nothing under `~/.cache` is
-assumed to persist: whatever is missing is fetched again. The
-repository itself holds no third-party input.
+`test/inputs.sh DIR` makes the gate's four exclaves: Ubuntu 24.04's
+gcc-13 closure, Alpine 3.21's gcc, Fedora 42's gcc, and Ubuntu 24.04's
+clang-18 closure. It also makes what dogfood and the example runs take:
+the tool's own package closure, the packages `test/realsoft.py` builds
+with, CentOS 7's glibc for the sysroot of 9, the arm64 gcc-13 closure,
+Docker's default seccomp profile, and the source tarballs of
+`test/realsoft.py` and `test/bench.py`. Packages come through the
+fetchers of `tools/`, which verify each download against the repository
+index's checksum and cache it under `~/.cache`. Every other third-party
+file is pinned by its BLAKE2b-256 in the script. An item `DIR` already
+has is skipped, and whatever is missing is fetched again. The
+repository holds no third-party input.
 
 **The gate** (`test/gate.sh EXCLAVE...`) is the check run before a
 commit. It runs these steps in parallel, each with its own log under
-`build/gate/`, and prints one line per step:
+`build/gate/`, and prints one line per step, ok, SKIP or FAIL:
 
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py` and the scratch-pool test, each built
@@ -3801,14 +3519,13 @@ commit. It runs these steps in parallel, each with its own log under
   host and once from inside the tool's exclave, and requires the two
   hashes files, tree hash included, to be identical (10.5).
 
-No step touches the network. Every driver runs `build/launcher` on a
-copy of its own, so an exclave given to the gate is never run as it is
-nor written. The suite wraps a copy from the given exclave's tree. The
-other drivers take `tree.fresh_exclave`, a copy relinked with
-`build/launcher`, because an exclave carries the launcher it was wrapped
-with. Each test has a budget of 30 s, against a slowest test of about
-2 s natively, so a test that crawls fails instead of stalling the
-gate. The matrix scales the budget to the VM. The exit status is the
+Every driver runs `build/launcher` on a copy of its own, so an exclave
+given to the gate is never run as it is nor written. The suite wraps a
+copy from the given exclave's tree. The other drivers take
+`tree.fresh_exclave`, a copy relinked with `build/launcher`, because an
+exclave carries the launcher it was wrapped with. Each test has a
+budget of 30 s, against a slowest test of about 2 s natively, so a test
+that crawls fails instead of stalling the gate. The exit status is the
 number of failed steps. On the reference machine the whole gate, on the
 four exclaves with their fixtures and with the Docker profile and
 dogfood, takes 41 s (measured October 2026).
@@ -3821,143 +3538,43 @@ unwrapped tree) makes an exclave under its work directory, compiles
 order. `--budget` sets the per-test limit. `--keep` keeps the work
 directory. The exit status is the number of failures.
 
-The Go regression is built static with cgo off, by the host's `go`. For
-matrix VMs, which have no Go toolchain, the matrix builds it on the host
-for the VM's machine. It runs as a host program, twice: once as `go`
-links it for the machine, and once linked from `0x10000`, as Go's
-aarch64 linker lays an image out (13 item 24). It skips where neither
-build exists.
+The Go regression is built static with cgo off, by the host's `go`, or
+on the reference machine for a matrix VM's machine. It runs as a host
+program, twice: once as `go` links it, and once linked from `0x10000`,
+as Go's aarch64 linker lays an image out (13 item 24). It skips where
+neither build exists.
 
 **The fixture.** The suite runs on the exclave pruned to what the suite
-itself touches. The first run on an exclave sets `EXCLAVE_LOG` for
-every invocation it makes inside the exclave. If that run passes, it
-prunes a copy to those logs with `exclave prune` and keeps it under
-`build/fixtures/`. The copy is kept only if it passes the static check.
-It is keyed by the exclave's hashes file and a hash of `test/run.py`,
-`test/progs/` and the tool's sources in `exclave/`. Every later run with
-the same key uses the fixture. A run with no fixture for its key uses
-the full exclave and makes one. A fixture is made only from a full run
-with no failure, so a partial log never fixes a partial fixture. No test
-asserts a count of the full tree. On the reference machine the
-fixtures of the gcc, clang, Fedora and Alpine exclaves hold 1 070,
-1 062, 1 269 and 548 files, a sixth to a quarter of each exclave's
-files.
-
-A change outside the key, to the launcher or to `test/tree.py`, that
-makes a test touch a file the fixture lacks fails that test until the
-fixture is removed.
+itself touches. The first run on an exclave logs every invocation it
+makes inside it (`EXCLAVE_LOG`). If that run has no failure, it prunes a
+copy to those logs with `exclave prune` and keeps it under
+`build/fixtures/` if the copy passes the static check, so a partial log
+never makes a partial fixture. The fixture is keyed by the exclave's
+hashes file and a hash of `test/run.py`, `test/progs/` and `exclave/`; a
+run with no fixture for its key uses the full exclave and makes one. On
+the reference machine the fixtures of the gcc, clang, Fedora and Alpine
+exclaves hold 1 070, 1 062, 1 269 and 548 files, a sixth to a quarter of
+each exclave's, counting every entry of `tree/` that is not a directory
+or a symlink to one, originals included. A change outside the key, to
+the launcher or to `test/tree.py`, that makes a test touch a file the
+fixture lacks fails that test until the fixture is removed.
 
 **The probe** (`test/progs/probe.c`, `test/oracle_syscalls.py`) puts the
-whole trapped-syscall surface in front of the kernel. The program reads
-cases, each a syscall number and encoded arguments. An argument can be:
-
-- a path, or a descriptor opened on a named path before the call;
-- an integer, or a buffer of a named kind;
-- a string that ends at an unmapped page, a null pointer, or a
-  pointer into an unmapped page;
-- a string vector, or a `struct xattr_args`;
-- an inotify descriptor, a unix socket or a `sockaddr_un`;
-- a `struct open_how`.
-
-The program issues each case through `syscall(2)`, so no libc wrapper
-stands in between. It prints the return value, the errno and what a
-buffer holds afterwards. `execve` runs in a forked child whose exit is
-the answer. A scoped `openat2` walk (`RESOLVE_BENEATH`,
-`RESOLVE_IN_ROOT`) that the kernel answers with `EAGAIN` is retried, as
-openat2(2) tells a caller to do. The kernel gives that answer when a
-rename or a mount anywhere on the system raced the walk
-(`handle_dots`). Measured natively under 170 000 renames a second,
-4 900 of a million such walks answered `EAGAIN`, and every one succeeded
-on its first retry. With no renames, none of a million did.
-`RESOLVE_CACHED`'s `EAGAIN` is not a race and is not retried.
-
-The driver generates the cases from a table of the 61 trapped path
-syscalls and six descriptor-addressed ones (`fchmod`, `fchown`,
-`fsetxattr`, `fremovexattr`, `fstatfs`, and `ioctl` with
-`FS_IOC_SETFLAGS` and `FS_IOC_FSSETXATTR`). It crosses them with every
-flag that changes resolution and with 66 path forms over a random maze:
-
-- inside the exclave: a file, a directory and a symlink of every kind,
-  a wrapper, the shell's link, an identity file, a placeholder,
-  `/proc/self/exe`, and an exclave link to a host file;
-- on the host: files, directories and links of every kind, and
-  relative paths from the host side;
-- spellings: `.`, `..` and `/` as the last component, a trailing slash,
-  `//`, empty, overlong, a 256-byte component, bytes that are not
-  UTF-8, and a newline;
-- the three fault forms, and a socket file in the tree.
-
-Other syscalls get further arguments:
-
-- The `*at` forms add descriptors opened `O_PATH` or `O_RDONLY` on
-  exclave and host directories, files and symlinks, a wrapper,
-  `/dev/null`, `AT_FDCWD`, a closed descriptor and a negative one.
-- The two-path forms take pairs from a shorter list.
-- `openat2` covers every descriptor-relative form with seven flag words
-  and seven `resolve` words, plus its struct's own rules.
-
-Cases that depend on one another run in one group, in order, such as
-the relative forms after a `chdir` into the exclave. The same binary,
-compiled by the exclave's compiler, runs in two worlds:
-
-- under `bwrap`, with the unwrapped tree read-only at `/` and the
-  visibility rule of 8.1 spelt in `bwrap`'s terms;
-- under the launcher, with the exclave.
-
-Each world runs one process per group, with the host area reset before
-each world. The answers are compared line by line.
-
-A difference fails unless a listed predicate names its reason. The
-list is part of the design. Some entries reflect how the oracle is
-built:
-
-- A host entry bound into `bwrap`'s read-only root answers `EROFS`
-  there, because its parent or its own symlink is read-only. The
-  launcher answers with the host's permissions.
-- uid 0 is unmapped in `bwrap`'s user namespace.
-- A new top-level name is the host's by 8.1. The host's `/` answers
-  `EACCES` where `bwrap`'s read-only root says `EROFS`.
-- An identity symlink whose host target is on a tmpfs gives xattr
-  answers that differ from the tree copy's.
-- `RESOLVE_CACHED` answers `EAGAIN` under `bwrap`'s cold cache.
-
-Some are stated limitations:
-
-- `fanotify_mark`'s order of checks (13 item 41).
-- `ETXTBSY` comes before `EROFS` when another gate step runs the
-  exclave's shell while the probe write-opens it (13 item 29).
-
-For the kernel matrix, some name what a kernel lacks or decided
-differently, each with the kernel change:
-
-- `ENOSYS` for a syscall the kernel does not have.
-- `EISDIR` for `O_CREAT|O_EXCL` on `.`, `..` or `/` before the lookup
-  rework of 5.8.
-- `linkat` with `AT_EMPTY_PATH` refused with `ENOENT` until 6.10.
-- `RENAME_WHITEOUT` answered `EPERM` by a capability check in the
-  initial user namespace on older kernels.
-- `O_DIRECTORY|O_CREAT` opened or created before 6.3.
-- RHEL 8's 4.18 backport of `openat2` answering `EXDEV` for a create
-  through a symlink under `RESOLVE_NO_XDEV`.
-- `RESOLVE_CACHED` unknown before 5.12.
-- `utimensat` refusing `AT_EMPTY_PATH`, and checking the nanoseconds
-  before the lookup, until 5.9.
-- An exec of a socket answered `ENXIO` until 5.9.
-- `truncate` checking the mount before the permission until 6.14.
-
-The handler answers as the newest kernel does.
-
-On the reference machine the probe runs 19 093 cases in 68 groups (one
-per syscall, plus the cases run after a `chdir` into the exclave) on
-each of the gate's four exclaves. None differ. Between 362 and 368
-differences are accepted, and all but 65 of them are `RESOLVE_CACHED`'s
-`EAGAIN`, whose count moves by a few between runs. Every row of the
-matrix runs with 0 differ. More differences are accepted on older
-kernels, where more of the kernel entries apply. The case count is for
-x86-64 from the gate's work directory. A syscall missing from the
-machine's table is left out, and so is a host-area socket address
-longer than `sun_path`'s 107 bytes, which no program could write whole.
-A deeper work directory therefore gives fewer cases.
+whole trapped-syscall surface in front of the kernel. It crosses the 61
+trapped path syscalls and six descriptor-addressed ones with every flag
+that changes resolution, 66 path forms over a random maze and the `*at`
+descriptors. One program issues each case through `syscall(2)` under
+`bwrap`, with 8.1's visibility rule spelt in `bwrap`'s terms, and under
+the launcher, and the answers are compared line by line. A difference
+fails unless the list `EXPECTED` names its reason: the oracle's own
+construction, a stated limitation (13 items 29 and 41), or what an
+older kernel lacks or decided differently, such as `truncate` checking
+the mount before the permission on 6.1 and earlier (6.14 checks the
+permission first). The handler answers as the newest kernel does. On
+the reference machine 19 093 cases run on each of the gate's four
+exclaves and none differ; no matrix row has a difference either.
+`test/oracle_syscalls.py`'s module docstring holds the argument kinds,
+the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.
 
 The probe does not cover signals, threads, `vfork`, nesting, the
 border, `getdents` (which is not trapped), or the host's own mount
@@ -3973,35 +3590,48 @@ by side and marks the lines that differ. The kernel's column is the
 expectation, and the marked lines are the work. `HOSTDIR` in the
 arguments becomes a fresh writable host directory. The work lives under
 `build/exercise/`, and the copy there is relinked whenever the build has
-changed. The usual sequence:
-
-1. The exerciser's program becomes a named test in `test/run.py`,
-   asserting the kernel's answers.
-2. The cases of a trapped syscall join the probe.
-
-The regressions for 13 items 22, 25 and 31 (`openat2_xdev`, `fexec`,
-`unix_socket`), and `exec_identity`, `path_length` and `adversarial`,
-were made this way. `openat2_xdev` replays its host-only cases natively
-from the harness, since `bwrap` rebuilds `/dev` and cannot be the oracle
-for the host's own mounts.
+changed. The program then becomes a named test asserting the kernel's
+answers, and a trapped syscall's cases join the probe. For the host's
+own mounts, which `bwrap` rebuilds, a test replays its host-only cases
+natively from the harness, as `openat2_xdev` does.
 
 **The kernel matrix** (`test/matrix.py --exclave EXCLAVE
-[--docker-profile FILE]`) boots each row's distribution cloud image
-under QEMU with KVM. It uses a copy-on-write overlay, one VM at a time
-with 1 GB each, and a cloud-init seed that installs python3, strace and,
-where it exists, bubblewrap. It copies in the exclave, the test tree
-and the launcher, and runs the suite on the full exclave. Where
-`bubblewrap` works it also runs the two oracles, the probe and, when the
-profile is given, the Docker profile run. Two checks run natively: a
-`noexec` mount, and the sysroot output of `test/sysroot.py`, which must
-run on every glibc from 2.17. The results go to `build/matrix-results.md`
-and are tabulated in 12. The x86-64 rows take about ten minutes and are
-run before a launcher change is committed. The matrix, with
-`test/vm_run.py` below, is the exception to the no-network rule: it
-downloads each cloud image once into `~/.cache/exclave-images`, and the
-VMs install their packages through cloud-init. `test/vm_run.py --script SH FILE...` boots the same x86-64
-rows and runs a script beside the files it is given. It is for
-exclaves made to ship, where the suite does not apply.
+[--docker-profile FILE]`) runs one gcc exclave, built on the reference
+machine, in virtual machines, one at a time with 1 GB each. Each VM
+boots its distribution's cloud image under QEMU with KVM behind a
+copy-on-write overlay; cloud-init installs python3, strace and, where
+the distribution has it, bubblewrap. The exclave, the test tree and the
+checkout's launcher are copied in, and the exclave is relinked there.
+Each row runs the suite on the full exclave with a budget scaled to the
+VM. Where `bwrap` works it then runs the two oracles, the probe and,
+given the profile, the Docker profile run, first lifting the AppArmor
+sysctl that denies unprivileged user namespaces on Ubuntu 24.04's
+image. Two checks run outside the suite: a program built by the
+exclave's gcc on a `noexec` tmpfs the VM mounts as root, run by the
+VM's shell, the positional entry and the exclave's shell; and the
+output of `test/sysroot.py` run natively. The results go to
+`build/matrix-results.md` and are tabulated in 12.1. The x86-64 rows
+take about ten minutes and are run before a launcher change is
+committed.
+
+**The emulated arm64 row** (`test/matrix.py --exclave EXCLAVE --only
+noble-arm64 --debs-arm64 DIR [--docker-profile FILE]`) boots Ubuntu
+24.04's arm64 cloud image under `qemu-system-aarch64 -M virt -cpu max`
+with TCG and the AAVMF firmware, since user-mode emulation has no
+seccomp and the reference machine has no KVM for another architecture.
+It carries the aarch64 launchers, which `make` builds when
+`aarch64-linux-gnu-gcc` is installed, and the arm64 packages, and makes
+the gcc exclave inside the VM, since an exclave is wrapped on its own
+architecture. A fresh VM has no fixture, so the suite runs on the full
+exclave with logging, which makes the row long (12.1); it runs when
+asked, not in the gate, and making it shorter is in 18.
+
+`test/vm_run.py --script SH FILE...` boots the same x86-64 rows and
+runs a script beside the files it is given, for exclaves made to ship,
+where the suite does not apply. The two VM drivers are the one
+exception to the rule that only `test/inputs.sh` downloads: they fetch
+each cloud image once into `~/.cache/exclave-images`, and the VMs
+install their packages through cloud-init.
 
 **The example runs** (`test/examples.sh EXCLAVE`) need inputs and time
 the gate cannot afford. Each runs when its input variable is set:
@@ -4016,61 +3646,43 @@ the gate cannot afford. Each runs when its input variable is set:
 - `EXCLAVE_TEST_DEBS_ARM64`: the emulated aarch64 row, with
   `EXCLAVE_TEST_DOCKER` adding the Docker profile run.
 
-These runs stay because runs like them found the unknown unknowns of
-12. Separately, `example.sh DIR` at the repository's root is the
-README's first run as a script, from a clean checkout to a program
-that runs on any glibc since 2.17. It fetches its packages through the
-same fetchers.
+They exist because real builds and other hosts expose behaviour no
+synthetic test anticipates (12.1). `example.sh DIR` at the repository's
+root is the README's first run as a script, from a clean checkout to a
+program that runs on any glibc since 2.17.
 
-**The emulated arm64 row** (`test/matrix.py --exclave EXCLAVE --only
-noble-arm64 --debs-arm64 DIR [--docker-profile FILE]`) runs Ubuntu
-24.04's arm64 cloud image under QEMU's TCG emulation, since user-mode
-emulation has no seccomp. It runs the aarch64 launcher, which `make`
-builds when `aarch64-linux-gnu-gcc` is installed. The VM makes its gcc
-exclave inside from the arm64 packages, since an exclave is wrapped on
-its own architecture. A fresh VM has no fixture, so the suite runs on
-the full exclave with logging. The row takes 81 minutes, 55 of them
-for the suite (12). Making it shorter is in 18. It runs when asked,
-not in the gate.
-
-**The rules that hold the suite together.**
+**The rules that hold the suite together.** 19 indexes these; they are
+stated here.
 
 - *A test asserts what the tree says, never what one distribution
-  says.* `test/tree.py` answers for the suite and the oracles: the
-  compiler by its name in the tree, the shell and the file behind it,
-  where a tool lives, the multiarch directory, and the libc. The
-  suite's `tree_facts` adds the machine, the loader the originals name,
-  and the syscall numbers a trace shows. The C, Rust and Go programs
-  read these facts from the environment. So the same suite passes on a
-  Debian, an Alpine and a Fedora exclave. An exclave kind that cannot
-  answer a test skips it and prints the reason: the hand-made glibc
-  layouts of 10.3, the host-path loader case and gdb's breakpoints in
-  the exclave's libc skip on musl.
-- *Tests are independent and pass in any order.* The fixtures made at
-  setup are the exclave, the compiled programs and the environment.
-  Every test makes what it needs beyond those, and none uses another
-  test's output. After every test, the harness compares the shared
-  exclave's manifest, its hashes file, and the path, size, mode and
-  mtime of every entry of its tree with what setup made. It fails the
-  test that changed them. The gate runs the given order and a random
-  order. `--order reverse` and `-k NAME` are expected to pass too.
-  Several suites run at once in the gate, so a name in a shared
-  namespace (an abstract socket, a file in `/tmp`) carries the pid.
+  says.* `test/tree.py` and the suite's `tree_facts` answer for the
+  tests: the compiler, the shell, where a tool lives, the multiarch
+  directory, the libc, the machine, the loader the originals name and
+  the syscall numbers a trace shows; the C, Rust and Go programs read
+  them from the environment. So one suite passes on Debian, Alpine and
+  Fedora exclaves. An exclave kind that cannot answer a test skips it
+  with the reason, as musl does for 10.3's hand-made glibc layouts.
+- *Tests are independent and pass in any order.* Setup makes the
+  exclave, the compiled programs and the environment; every test makes
+  what it needs beyond those. After every test the harness compares the
+  shared exclave's manifest, hashes file, and every tree entry's path,
+  size, mode and mtime with what setup made, and fails a test that
+  changed them. `--order random`, `--order reverse` and `-k NAME` pass
+  like the given order. Suites run side by side in the gate, so a name
+  in a shared namespace (an abstract socket, a file in `/tmp`) carries
+  the pid.
 - *Nothing downloads during a test.* A test, an oracle and the gate
-  take their inputs as paths. `test/inputs.sh` fetches them beforehand,
-  and the VM drivers' cloud images and packages are the only exception.
-- *The checkout's path has no limit of its own.* The gate passes from
-  a checkout 250 characters deep. The harness binds its socket in the
-  tree through the directory's descriptor. `unix_socket` and
-  `nested_older_launcher` name host sockets relatively from their work
-  directories, and absolute ones in a short directory under `/tmp`.
-  `adversarial` keeps its interpreter chains there too, since a `#!`
-  line holds 255 bytes. The probe leaves out a host-area address that
-  no program could write whole.
+  take their inputs as paths; the VM drivers are the exception above.
+- *The checkout's path has no limit of its own.* The gate passes from a
+  checkout 250 characters deep. Sockets the tests bind are named
+  relatively or under a short directory in `/tmp`, and `adversarial`
+  keeps its interpreter chains there, since a `#!` line holds 255
+  bytes.
+
 ## 18. Roadmap
 
 The format, the launcher and the tool are complete for what section 3
-asks of them. What comes next is use, publication and a few open
+asks of them. What comes next is use, releases and a few open
 questions.
 
 1. **Exclaves of real packaged software.** The exclaves built so far
@@ -4081,10 +3693,10 @@ questions.
    gap closes when a real exclave needs it, as a rule in the synthesis
    table rather than an option. Failed opens in an `EXCLAVE_LOG` show
    where an exclave lacks one.
-2. **Publication.** A release, a version number and continuous
-   integration come with publication. Until then the commit gate (17)
-   and the kernel matrix (12) run on the reference machine, and nothing
-   promises compatibility between commits (2).
+2. **Releases.** There is no release, version number or continuous
+   integration yet. Until there is, the commit gate (17) and the kernel
+   matrix (12.1) run on the reference machine, and nothing promises
+   compatibility between commits (2).
 3. **aarch64 kernels with 16 KB or 64 KB pages.** The loader rounds to
    the kernel's page size and the launcher's own segments are 64 KB
    aligned, but no such kernel has run an exclave (13 item 43). A
@@ -4092,213 +3704,174 @@ questions.
    `linux-image-generic-64k` for one, would turn this into a measured
    fact.
 4. **The emulated arm64 row's speed.** The arm64 row runs under QEMU's
-   TCG emulation at about a tenth of native speed: the suite takes
-   55 minutes and the whole row 81 (12, 17). It runs when asked rather
-   than at every commit. A faster row, on native aarch64 hardware or
-   a lighter fixture, would let it run as often as the x86-64 rows.
+   TCG emulation at about a tenth of native speed (12.1), so it runs
+   when asked rather than at every commit. A faster row, on native
+   aarch64 hardware or a lighter fixture, would let it run as often as
+   the x86-64 rows.
 5. **Hosts the matrix has not covered.** Snap-confined terminals,
    gVisor-based CI, WSL1 and SELinux `execmem` policies are listed as
    untested in the portability envelope (12); each is a matrix row to
    add, or a limitation to state.
 
----
-
 ## 19. Design decisions
 
-These decisions are settled. Each was weighed against alternatives,
-most of them tried or measured (14), and each has a reason that still
-holds. A contributor can take them as the ground the design stands on;
-reopening one wants a strong reason, a measurement, or a case the
-reason does not cover.
+These decisions are settled: each was weighed against alternatives,
+most of them tried or measured (14), and its reason still holds.
+Reopening one wants a measurement or a case the reason does not cover.
+Each line gives the decision, the reason in brief and where it is
+specified.
 
 ### 19.1 Format
 
-- **An exclave is a directory at every stage.** `unpack`, `wrap` and
-  `unwrap` are the steps, and `cp`, `ln` and an editor can intervene
-  between them, so what a maker can do to a directory need not be a
-  feature of the tool.
-- **The launcher reads the manifest and the tree, and nothing
-  generated.** Anything the tree can say is not written down anywhere
-  else: an index beside the tree goes silently wrong when the tree is
-  edited (6.3).
-- **Ownership is the tree's non-empty top-level entries** (8.1). The
-  tree is the only source of the rule; dropping a file into a
-  placeholder makes the directory the exclave's with nothing to
-  refresh. The root directory is the tree's; the exclave's own
-  directory, and the path to it, are the host's, so that a program
-  locating itself from its real path finds its files.
-- **Each program's loader is its own `PT_INTERP`**, and it must be the
-  exclave's own file (7.3, 10.3). Nothing names the loader twice.
-- **One libc per exclave.** Mixed trees are refused; no case needs
-  them, and `dlopen` with computed names would make a mixed tree
-  unverifiable. A second libc enters as a **data directory**, which is
-  enforced at run time: never executed, never a loader. A sysroot is
-  one, and a compile names it twice, `--sysroot` and `-B` (9).
-- **Shortcuts are symlinks**, a convention rather than a record; there
-  are no `entry` or `env` records, since a symlink or a wrapper script
-  does both jobs.
-- **A strict manifest grammar with one canonical spelling** (6.2):
-  delimited strings, comments attached to the following record, one
-  spelling for a path, refused otherwise by both parsers; the output of
-  `exclave format` is the accepted form.
+- **An exclave is a directory at every stage**: `cp`, `ln` and an
+  editor between `unpack` and `wrap` need not be features of the tool
+  (6, 10).
+- **The launcher reads the manifest and the tree, nothing generated**:
+  an index beside the tree goes silently wrong when the tree is edited
+  (6.3).
+- **Ownership is the tree's non-empty top-level entries**: the tree is
+  the rule's only source, with nothing to refresh (8.1).
+- **The exclave's own directory and the path to it are the host's**: a
+  program locating itself by its real path must find its files
+  (8.1 rule 6).
+- **Each program's loader is its own `PT_INTERP`, the exclave's own
+  file**: nothing names the loader twice (7.3, 10.3).
+- **One libc per exclave; a second enters only as a data directory**:
+  `dlopen` with computed names would make a mixed tree unverifiable
+  (9, 13 item 8).
+- **Shortcuts are symlinks; there are no `entry` or `env` records**: a
+  symlink or a wrapper script does both jobs (6.1).
+- **A strict manifest grammar with one canonical spelling**, the output
+  of `exclave format`: both parsers refuse anything else (6.2).
 - **Hashes are BLAKE2b-256, and the hashes file records and never
-  locates** (6.4). A hash verifies; a name locates, and locating belongs
-  to the step before the tool.
-- **No layers, no single-file form, no several roots per CPU level.**
-  Composition is a copy at build time (11); `tar` makes a directory one
-  file (6.6); an exclave per CPU level is two exclaves.
-- **Every exclave carries a `README`** for whoever finds it, the tool's
-  text where the maker wrote none; nothing reads it.
-- **exclave is under the MIT licence, and the launcher carries its
-  text** in a section of its own, `.exclave.license`, since every
-  exclave holds a copy of the launcher and the licence asks to go with
-  every copy.
+  locates**: locating belongs to the step before the tool (6.4).
+- **No layers, no single-file form, no several roots per CPU level**:
+  composition is a copy at build time, `tar` makes one file, and an
+  exclave per CPU level is two exclaves (11, 6.6).
+- **Every exclave carries a `README`**, for whoever finds it; nothing
+  reads it (6.1).
+- **MIT licence, its text in the launcher's `.exclave.license`
+  section**: every exclave holds a copy of the launcher, and the licence
+  goes with every copy (7).
 
 ### 19.2 Launcher
 
-- **One mechanism**: a seccomp filter and a `SIGSYS` handler in the
-  process. No namespaces, no ptrace supervisor, no second backend for
-  hosts that would allow one (4.3, 14).
-- **Freestanding and `ET_DYN`, one source for every architecture**
-  (7.1). What differs by architecture sits in the syscall layer and a
-  few named blocks.
-- **Shadow wrappers for every executable file, always**, with the
-  loader path as the baseline for programs that have none (7.4.5, 7.6).
-  Process identity is the kernel's for every observer, and originals
-  stay byte-identical.
-- **One world inside an exclave.** Every program, wherever its file
-  lives, sees the tree and runs on the exclave's loader; a host world
-  for programs on host paths would break `make check` whenever the two
-  libcs differ.
-- **Read-only by refusal, not by `chmod`**, in the kernel's order of
-  checks, syscall by syscall, with the kernel as the oracle (8.2,
-  17 item 7). Modes are lost by careless copies; refusal depends on
-  nothing.
-- **Symlinks resolve in virtual space**; the identity files' host links
-  are resolved once at startup (8.4), so a host link into `/usr` never
-  reaches the host's `/usr`.
+- **One mechanism, a seccomp filter and a `SIGSYS` handler in the
+  process**: no namespaces, no ptrace supervisor, no second backend
+  (4.3, 14).
+- **Freestanding, `ET_DYN`, one source for every architecture**: the
+  handler runs inside programs whose libc is not its own (7.1).
+- **A wrapper for every executable file, and the loader path for
+  programs without one**: process identity is the kernel's, and
+  originals stay byte-identical (7.4.5, 7.6).
+- **One world inside an exclave**: a host world for programs on host
+  paths would break `make check` whenever the two libcs differ (7.4.5).
+- **Read-only by refusal, in the kernel's order of checks, not by
+  `chmod`**: careless copies lose modes; refusal depends on nothing
+  (8.2).
+- **Symlinks resolve in virtual space; identity files' host links are
+  resolved once at startup**: a host link into `/usr` must never reach
+  the host's `/usr` (8.4).
 - **The environment passes through, minus the loader and libc
-  variables that name host files**, with four constants set at the
-  border and only there: `PATH=/usr/local/bin:/usr/bin:/bin`,
-  `LANG=C.UTF-8`, `TZ=UTC0` and `SHELL=/bin/sh` (6.2). Locale data is
-  bound to its libc and the time zone is not a host fact; an allowlist
-  would stop a user passing `CC` or `MAKEFLAGS`.
-- **No run-time options beyond `EXCLAVE_LOG`.** `EXCLAVE_EXEC`,
+  variables that name host files, with four constants set at the
+  border**: locale data is bound to its libc, the time zone is not a
+  host fact, and an allowlist would stop a user passing `CC` (6.2).
+- **One run-time knob, `EXCLAVE_LOG`**; `EXCLAVE_EXEC`,
   `EXCLAVE_EXECFN` and `EXCLAVE_COMM` are the launcher's own protocol,
-  honoured by a wrapper only under an inherited filter. The launcher
-  run as a program takes the program as its first argument.
-- **What the launcher derives from the tree fails closed and loud**,
-  never open: a tree it cannot read correctly is refused by name.
-- **A fixed syscall page identifies the launcher's own syscalls**
-  (7.4.2), at `0x7fe00000`, above every linker's program images. A bare
-  syscall instruction belongs only in the bootstrap, the filter-version
-  probe and the restorer.
-- **The filter's trap set is versioned** and the version moves whenever
-  the set grows or the page moves (7.4.2). A nested launcher reuses an
-  inherited filter that is equal or newer and installs its own under an
-  older one, so no syscall it needs translated goes untrapped; a trap it
-  does not know it answers `ENOSYS`, never by re-issuing. A syscall the
-  kernel adds is trapped by the filter's ceiling and answered `ENOSYS`
-  until it is classified.
-- **The filter answers by number first**, so the kernel's action cache
-  can allow most syscalls without running it, and it is installed with
-  `SECCOMP_FILTER_FLAG_SPEC_ALLOW`: an exclave is not a security
-  boundary, and its programs did not ask for a speculation mitigation
-  (7.4.2).
-- **`clone3` is refused with `ENOSYS`** (7.5.5). Honouring it with a
-  prepared child frame corrupted the FPU state of every new thread; the
-  refusal costs a few traps per `posix_spawn`.
+  honoured by a wrapper only under an inherited filter (6.2, 7.4.5).
+- **What the launcher derives from the tree fails closed and loud**: a
+  tree it cannot read correctly is refused by name (6.3).
+- **A fixed syscall page at `0x7fe00000` identifies the launcher's own
+  syscalls**: the same in every process, above every linker's program
+  images; a bare syscall instruction appears only in the bootstrap, the
+  version probe and the restorer (7.4.2).
+- **The filter's trap set is versioned; an equal or newer inherited
+  filter is reused, an older one stacked under**: no syscall a launcher
+  needs translated goes untrapped, and a trap it does not know is
+  `ENOSYS`, never re-issued (7.4.2).
+- **The filter answers by number first and is installed with
+  `SECCOMP_FILTER_FLAG_SPEC_ALLOW`**: the kernel's action cache allows
+  most syscalls without running it, and an exclave is not a security
+  boundary (7.4.2).
+- **`clone3` is refused with `ENOSYS`**: honouring it with a prepared
+  child frame corrupted the FPU state of new threads (7.5.5).
 - **A program's `rt_sigaction` install traps; its queries do not**
   (7.5.2).
-- **Handler memory comes from scratch chunks reclaimed by liveness**,
-  never by comparing stack positions across threads (7.5.4). Nothing on
-  the handler path takes a lock, a chunk is released only by moving its
-  sequence with a compare-and-swap, and the handler's stack use is held
-  to a budget read from gcc's call graph, since it runs on whatever
-  alternate stack a program set up.
-- **A path the re-issue could not name is refused, never cut**, and a
-  `rename` or `link` across the border is `EXDEV` before anything else.
-- **gdb is served by facts the launcher exports and a script it
-  carries** (7.6), not by gdb's JIT interface, which cannot relocate a
-  position-independent program's debug information.
-- **Overhead is reduced inside the mechanism, not by adding one** (16):
-  rewriting syscall sites, a supervisor, libc interposition, a cache
-  shared across processes and caching host paths were each considered
-  and left alone.
-- **A launcher recognises another by an ELF note it carries under two
-  names**, `exclave` and the earlier `cont`, so that exclaves wrapped
-  before the rename and after it run each other's programs (13
-  item 45).
+- **Handler memory comes from scratch chunks reclaimed by liveness,
+  with no lock and a stack budget**: the handler runs on whatever
+  alternate stack a program set up (7.5.4).
+- **A path the re-issue could not name is refused, never cut; a
+  `rename` or `link` across the border is `EXDEV` first** (8.2).
+- **gdb is served by exported facts and a carried script**, not the JIT
+  interface, which cannot relocate a position-independent program's
+  debug information (7.6).
+- **Overhead is reduced inside the mechanism, not by adding one**:
+  syscall-site rewriting, a supervisor, libc interposition and shared
+  caches were considered and left alone (16).
 
 ### 19.3 Tool
 
-- **The tool takes files and never fetches.** Acquisition is a
-  different problem with its own trust argument; the fetchers in
-  `tools/` are examples of the step before the tool, not part of it.
-- **Building software is the build system's job.** An exclave of built
-  software is a staging directory plus the runtime packages (10.2);
-  there are no recipes and no `from-source` command.
-- **Maintainer scripts are never run; their effects are synthesised**
-  from one table that every package reader shares (10.1). A tree whose
-  scripts must really run comes from outside, and `wrap` makes an
-  exclave of it. A diversion that renames a file is refused, and the
-  rest are ignored. Synthesised links are relative.
+- **The tool takes files and never fetches**: acquisition has its own
+  trust argument; `tools/` holds examples of that step (10).
+- **Building software is the build system's job**: an exclave of built
+  software is a staging directory plus runtime packages, with no
+  recipes (10.2).
+- **Maintainer scripts are never run; their effects are synthesised
+  from one table every reader shares**: a tree whose scripts must run
+  comes from outside and is wrapped (10.1).
 - **Package readers share one interface and are chosen by the file**
-  (`deb.py`, `apk.py`, `rpm.py`).
-- **The tool is Python and ships as an exclave**, and every exclave it
-  builds from inside its own exclave must reproduce the host-built
-  hashes file (10.5).
-- **`wrap` checks before it touches the tree**, so a refused exclave is
+  (10.1).
+- **The tool is Python and runs as an exclave of itself**: a gcc
+  exclave built from inside it must reproduce the host-built hashes
+  file (10.5).
+- **`wrap` checks before it touches the tree**: a refused exclave is
   left unwrapped (10.1, 10.3).
-- **An exclave is wrapped on a machine of its architecture**, since the
-  static check asks the tree's own loader for its directories.
+- **An exclave is wrapped on a machine of its architecture**: the static
+  check asks the tree's own loader for its directories (10.3).
 - **The tool applies `host` records as the launcher does**, by longest
-  prefix, and a `host` record is not how an exclave targets the host's
-  libraries (10.3).
-- **A foreign ELF object is a warning, not an error**, and a tree stays
-  readable by its owner, since a tree no one can read can be neither
-  hashed nor copied.
-- **The dynamic check and pruning read `EXCLAVE_LOG` files** (10.3,
-  10.4): what a traced run touched is the evidence.
-- **`prune` keeps the packages' licence texts**, whatever a workload
-  read, since a pruned exclave passed on carries the packages' terms
-  with it (10.4, 13 item 47).
-- **No options.** The commands take paths and `format --check` is the
-  one flag; the rule that makes an option unnecessary, or a stated
-  limitation, is preferred to a flag, a mode or a manifest key.
+  prefix (10.3).
+- **A foreign ELF object is a warning, and a tree stays readable by its
+  owner**: a tree no one can read can be neither hashed nor copied
+  (10.1, 10.3).
+- **The dynamic check and pruning read `EXCLAVE_LOG` files**: what a
+  traced run touched is the evidence (10.3, 10.4).
+- **`prune` keeps the packages' licence texts**: a pruned exclave passed
+  on carries the packages' terms (10.4, 13 item 47).
+- **No options**: the commands take paths and `format --check` is the
+  one flag; a rule or a stated limitation is preferred to a flag, a
+  mode or a manifest key (10).
 
 ### 19.4 Tests
 
-- **The kernel is the oracle.** The handler answers what the kernel
-  answers on a read-only bind mount, as the newest kernel does; a
-  difference is accepted only under a named reason (17 items 1, 2
-  and 7).
-- **A test asserts what the tree says**, never what one distribution
-  says, so the suite runs on every exclave kind; an exclave kind that
-  cannot answer a test skips it with its reason.
-- **The suite runs on the exclave pruned to what it touches**, remade
-  when the exclave, the suite or the tool changes.
-- **The commit gate is one script, and `make` only builds.**
-- **Every driver runs the build's launcher on a copy of its own**,
-  relinked, since the launcher an exclave carries is the one it was
-  wrapped with.
-- **Tests take their inputs as paths and never download.** Only
-  `test/inputs.sh` fetches, each third-party input pinned by its hash;
-  the repository holds no third-party file, and the caches it fills are
-  never assumed to persist.
-- **Tests are independent**: any order, any single test by name, and
-  several suites at once.
+- **The kernel is the oracle**: the handler answers what the newest
+  kernel answers on a read-only bind mount, and a difference is
+  accepted only under a named reason (17 items 1, 2 and 7).
+- **A test asserts what the tree says, not what one distribution
+  says**: the suite runs on every exclave kind, and a kind that cannot
+  answer skips with its reason (17 item 4).
+- **The suite runs on its fixture, the exclave pruned to what it
+  touches** (17).
+- **The commit gate is one script, and `make` only builds**; a step
+  that could not run is reported as SKIP (17).
+- **Every driver runs the build's launcher on a relinked copy of its
+  own**: an exclave carries the launcher it was wrapped with (17).
+- **Tests take their inputs as paths**: only `test/inputs.sh` fetches,
+  each third-party input pinned by its hash, and the VM drivers, which
+  download cloud images; the repository holds no third-party file (17).
+- **Tests are independent**: any order, any single test, several suites
+  at once (17).
 - **The emulated arm64 row runs when asked**, not at every commit (18).
 
 ### 19.5 Scope
 
-- **Not a security sandbox.** The translation is bypassable by a
+- **Not a security sandbox**: the translation is bypassable by a
   program that wants to bypass it (3).
 - **Namespaces are not part of the design**; they are the test oracle
   where available (4.3).
-- **Little-endian 64-bit Linux only**, x86-64 and aarch64 today; no
+- **Little-endian 64-bit Linux only**, x86-64 and aarch64; no
   cross-architecture emulation and no 32-bit programs (3, 12).
 - **No host drivers**: GPU and other host-driver software are out of
   scope (13).
-- **`noexec` media are not supported** (12): the kernel allows neither
-  `execve` nor an executable mapping of a file there.
+- **`noexec` media are not supported**: the kernel allows neither
+  `execve` nor an executable mapping of a file there (12).
+
