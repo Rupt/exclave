@@ -26,7 +26,7 @@ static void *trapper(void *arg)
 {
     struct stat st; char b[4096];
     while (!stop) {
-        if (stat("/usr/share/cont-test-marker", &st)) { __sync_fetch_and_add(&fails, 1); continue; }
+        if (stat("/usr/share/exclave-test-marker", &st)) { __sync_fetch_and_add(&fails, 1); continue; }
         long n = readlink("/proc/self/exe", b, sizeof b - 1);
         if (n < 0 || (size_t)n != strlen(exe) || memcmp(b, exe, (size_t)n)) __sync_fetch_and_add(&fails, 1);
     }
@@ -71,7 +71,7 @@ int main(int argc, char **argv)
         struct itimerval it = { { 0, 1000 }, { 0, 1000 } }; setitimer(ITIMER_REAL, &it, 0);
         struct stat st; int bad = 0;
         for (long i = 0; ticks + tick_fails < 200 && i < 20000000; i++)   /* 200 timer traps, about 0.2 s, however slow a trap is */
-            if (stat("/usr/share/cont-test-marker", &st)) bad++;
+            if (stat("/usr/share/exclave-test-marker", &st)) bad++;
         it.it_value.tv_sec = it.it_value.tv_usec = 0; setitimer(ITIMER_REAL, &it, 0);
         _exit(bad || tick_fails ? 1 : ticks ? 0 : 3);
     }

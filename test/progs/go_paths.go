@@ -28,8 +28,8 @@ func main() {
 	fails := 0
 	fail := func(f string, a ...interface{}) { fails++; fmt.Printf("FAIL "+f+"\n", a...) }
 	big[len(big)-1] = 1
-	marker := "/usr/share/cont-test-marker"
-	sh, shExe, truep := env("CONT_SH", "/usr/bin/sh"), env("CONT_SH_EXE", "/usr/bin/dash"), env("CONT_TRUE", "/usr/bin/true")
+	marker := "/usr/share/exclave-test-marker"
+	sh, shExe, truep := env("EXCLAVE_TEST_SH", "/usr/bin/sh"), env("EXCLAVE_TEST_SH_EXE", "/usr/bin/dash"), env("EXCLAVE_TEST_TRUE", "/usr/bin/true")
 
 	// path syscalls from goroutines, concurrently with a blocked read
 	pr, pw, err := os.Pipe()
@@ -81,7 +81,7 @@ func main() {
 	}
 
 	// the can is read-only, the host is not
-	if err := os.WriteFile("/usr/share/cont-new", []byte("y"), 0644); err == nil || !strings.Contains(err.Error(), syscall.EROFS.Error()) {
+	if err := os.WriteFile("/usr/share/exclave-new", []byte("y"), 0644); err == nil || !strings.Contains(err.Error(), syscall.EROFS.Error()) {
 		fail("write to the can: %v", err)
 	}
 	if _, err := os.Open("/usr/share/nonexistent"); !os.IsNotExist(err) {
@@ -112,10 +112,10 @@ func main() {
 		if wd, err := os.Getwd(); err != nil || wd != "/usr/share" {
 			fail("getwd in the can: %q %v", wd, err)
 		}
-		if _, err := os.Stat("cont-test-marker"); err != nil {
+		if _, err := os.Stat("exclave-test-marker"); err != nil {
 			fail("relative stat in the can: %v", err)
 		}
-		if _, err := os.Stat("../share/cont-test-marker"); err != nil {
+		if _, err := os.Stat("../share/exclave-test-marker"); err != nil {
 			fail("relative stat with ..: %v", err)
 		}
 	}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """bench.py — the performance table (PROPOSAL.md 13 item 2, 16). Best of three, native against the can.
 
-    test/bench.py --can CAN [--sqlite PATH] [--work DIR] [--launcher LAUNCHER]
+    test/bench.py --exclave CAN [--sqlite PATH] [--work DIR] [--launcher LAUNCHER]
 
 The can must contain gcc-13; the host's /usr/bin/gcc-13, else its gcc, gives the native column.
 """
@@ -85,7 +85,7 @@ def timed(cmd, cwd, env, executable=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--can", required=True)
+    ap.add_argument("--exclave", required=True)
     ap.add_argument("--sqlite", help="sqlite3.c amalgamation for the compute-bound compile")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "bench-work"))
     ap.add_argument("--launcher", default=os.path.join(REPO, "build", "launcher"), help="the launcher to measure (default: the build)")
@@ -95,9 +95,9 @@ def main():
         shutil.rmtree(work)
     os.makedirs(work)
     import tree
-    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"), launcher=os.path.abspath(a.launcher))   # a copy relinked with the build (17)
-    cgcc, hgcc = os.path.join(can, "tree", "usr", "bin", GCC), shutil.which("gcc-13") or shutil.which("gcc")
-    launcher = os.path.join(can, ".exclave", "launcher")
+    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "can"), launcher=os.path.abspath(a.launcher))   # a copy relinked with the build (17)
+    cgcc, hgcc = os.path.join(ex, "tree", "usr", "bin", GCC), shutil.which("gcc-13") or shutil.which("gcc")
+    launcher = os.path.join(ex, ".exclave", "launcher")
     env = {"PATH": "/usr/bin:/bin"}
     rows = []
 

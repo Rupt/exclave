@@ -396,14 +396,14 @@ def tree_hash(root):
     return "b2:" + hashlib.blake2b(b"".join(entries), digest_size=32).hexdigest()
 
 
-def write_lock(can, pkgs, manifest_hash=None, tree=False, keep_hashes=False):
+def write_lock(ex, pkgs, manifest_hash=None, tree=False, keep_hashes=False):
     """6.4: the lock is a record of inputs and output. pkgs: [(name, version, arch, b2)], or None to keep the
     pkg records of the lock already there. The closing step writes the launcher, manifest and tree hashes;
     keep_hashes keeps the lock's manifest hash and recomputes the launcher and tree hashes (after prune or relink); otherwise they are dropped
     (after unwrap: an open can has no output yet)."""
     import exclave
     R = exclave.Record
-    lock = os.path.join(can, ".exclave", "hashes")
+    lock = os.path.join(ex, ".exclave", "hashes")
     old = exclave.load(lock, "hashes") if os.path.exists(lock) else []
     if pkgs is None:
         pkgs = [tuple(f.decode("utf-8", "surrogateescape") for f in v) for v in exclave.values(old, "pkg")]
@@ -412,13 +412,13 @@ def write_lock(can, pkgs, manifest_hash=None, tree=False, keep_hashes=False):
         manifest_hash, tree = (m[0][0].decode() if m else None), bool(exclave.values(old, "tree"))
     recs = [R("hashes", [("t", b"1")]), R("tool", [("s", TOOL_VERSION.encode())])]
     if manifest_hash or tree:
-        recs.append(R("launcher", [("s", exclave.b2_file(os.path.join(can, ".exclave", "launcher")).encode())]))
+        recs.append(R("launcher", [("s", exclave.b2_file(os.path.join(ex, ".exclave", "launcher")).encode())]))
     for name, ver, arch, h in sorted(pkgs):
         recs.append(R("pkg", [("s", name.encode()), ("s", ver.encode()), ("s", arch.encode()), ("s", h.encode())]))
     if manifest_hash:
         recs.append(R("manifest", [("s", manifest_hash.encode())]))
     if tree:
-        recs.append(R("tree", [("s", tree_hash(os.path.join(can, "tree")).encode())]))
+        recs.append(R("tree", [("s", tree_hash(os.path.join(ex, "tree")).encode())]))
     data = exclave.dump(recs, "hashes")
     exclave.parse(data, "hashes")
     with open(lock, "wb") as f:
@@ -501,13 +501,13 @@ def _resolve_keep(root, vpath, keep, hops=0):
     return cur or "/"
 
 
-def prune(can, logs, own, log=print):
+def prune(ex, logs, own, log=print):
     """Keep what the logged workloads touched, the entries of directories they opened, the symlink chains that
     reach kept files, the libraries kept ELF files need, and the placeholders; drop every other file and symlink.
     Directories are never removed, so ownership and `ls` do not change. Returns (kept, removed, bytes)."""
     import exclave
     import elfcheck
-    root = os.path.join(can, "tree")
+    root = os.path.join(ex, "tree")
     keep, whole, programs = set(), set(), 0
     for what, r, v in log_lines(logs):
         if what == "launcher" or not v.startswith("/") or r < 0:
@@ -576,10 +576,10 @@ def prune(can, logs, own, log=print):
     return kept, removed, freed
 
 
-def unwrap(can, log=print):
+def unwrap(ex, log=print):
     """Undo wrapping: every .real/NAME moves back over its wrapper. Leaves a plain tree."""
     import exclave
-    root = os.path.join(can, "tree")
+    root = os.path.join(ex, "tree")
     n = 0
     for dirpath, dirnames, filenames in os.walk(root, topdown=False):
         if os.path.basename(dirpath) != ".real":

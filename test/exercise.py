@@ -4,10 +4,10 @@ the unwrapped tree read-only at / (the namespace oracle's world, where the kerne
 print the two outputs side by side, marking the lines that differ. This is how a limitation is measured before it is
 fixed: the program prints one line per case, "<case>: <answer>", and the kernel's column is the expectation.
 
-    test/exercise.py --can CAN PROG.c [ARGS...]     HOSTDIR in ARGS is replaced by a fresh writable host directory
+    test/exercise.py --exclave CAN PROG.c [ARGS...]     HOSTDIR in ARGS is replaced by a fresh writable host directory
 
 The work lives under build/exercise/<can>-<lock hash>: a copy of the can relinked with build/launcher, and relinked again whenever the
-build has changed since, the unwrapped tree for bwrap, both with a socket file at /usr/share/cont-test.sock and the
+build has changed since, the unwrapped tree for bwrap, both with a socket file at /usr/share/exclave-test.sock and the
 suite's marker. Needs bwrap and user namespaces; says so and exits 1 when it cannot run. Exit status: the number of
 lines that differ."""
 import argparse
@@ -28,19 +28,19 @@ import exclave  # noqa: E402
 import build  # noqa: E402
 
 
-def setup(can0, work):
+def setup(ex0, work):
     """A closed copy for the launcher and an unwrapped tree for bwrap, made once per can."""
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
-    can = tree.fresh_can(can0, os.path.join(work, "can"))                  # a copy relinked with the build (17)
+    ex = tree.fresh_exclave(ex0, os.path.join(work, "can"))                  # a copy relinked with the build (17)
     root = os.path.join(work, "bare", "tree")
-    shutil.copytree(os.path.join(can, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy)
+    shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy)
     build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
-    for r in (root, os.path.join(can, "tree")):
+    for r in (root, os.path.join(ex, "tree")):
         sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sk.bind(os.path.join(r, "usr", "share", "cont-test.sock"))
+        sk.bind(os.path.join(r, "usr", "share", "exclave-test.sock"))
         sk.close()
-        with open(os.path.join(r, "usr", "share", "cont-test-marker"), "w") as f:
+        with open(os.path.join(r, "usr", "share", "exclave-test-marker"), "w") as f:
             f.write("marker\n")
     for f in oracle_ns.IDENTITY:                                          # as the namespace oracle: the host's link text, its target bound
         p_ = os.path.join(root, f.lstrip("/"))
@@ -56,21 +56,21 @@ def setup(can0, work):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--can", required=True)
+    ap.add_argument("--exclave", required=True)
     ap.add_argument("prog", help="a C source, compiled with the can's compiler")
     ap.add_argument("args", nargs="*", help="arguments; HOSTDIR is replaced by a fresh writable host directory")
     a = ap.parse_args()
     if not shutil.which("bwrap") or subprocess.run(["bwrap", "--ro-bind", "/", "/", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
         sys.exit("bwrap or user namespaces unavailable; the kernel's world cannot be made here")
-    can0 = os.path.abspath(a.can)
-    key = hashlib.blake2b(open(os.path.join(can0, ".exclave", "hashes"), "rb").read(), digest_size=6).hexdigest()
-    work = os.path.join(REPO, "build", "exercise", os.path.basename(can0).replace(".can", "") + "-" + key)
+    ex0 = os.path.abspath(a.exclave)
+    key = hashlib.blake2b(open(os.path.join(ex0, ".exclave", "hashes"), "rb").read(), digest_size=6).hexdigest()
+    work = os.path.join(REPO, "build", "exercise", os.path.basename(ex0).replace(".exclave", "") + "-" + key)
     if not os.path.exists(os.path.join(work, "can", ".exclave", "hashes")):
-        setup(can0, work)
+        setup(ex0, work)
     elif tree.relink_if_stale(os.path.join(work, "can")):
         print("the build changed since this copy was made: relinked")
-    can, root = os.path.join(work, "can"), os.path.join(work, "bare", "tree")
-    r = os.path.join(can, "tree")
+    ex, root = os.path.join(work, "can"), os.path.join(work, "bare", "tree")
+    r = os.path.join(ex, "tree")
     machine = os.uname().machine
     oracle_ns.GCC = tree.compiler(r, machine) or oracle_ns.GCC             # the tree's spellings for both worlds
     oracle_ns.SH, oracle_ns.SHX, oracle_ns.LIBC = tree.vbin(r, "sh"), tree.resolve(r, tree.vbin(r, "sh")), tree.libc(r, machine)
@@ -88,7 +88,7 @@ def main():
     fresh()
     rc_b, out_b, err_b = oracle_ns.run_bwrap(root, work, " ".join([prog] + argv))
     fresh()
-    rc_o, out_o, err_o = oracle_ns.run_launcher(can, work, argv, prog=prog)
+    rc_o, out_o, err_o = oracle_ns.run_launcher(ex, work, argv, prog=prog)
     lb, lo = out_b.splitlines(), out_o.splitlines()
     print("%-45s | %-30s | %-30s" % ("case", "kernel (bwrap)", "launcher"))
     differ = 0

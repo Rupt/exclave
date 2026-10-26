@@ -16,7 +16,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 [ $# -eq 1 ] || { echo "usage: example.sh DIR" >&2; exit 2; }
 mkdir -p "$1" && cd "$1"
 dir=$(pwd)
-rm -rf gcc.can sysroot.can hello.can hello.c hello hello-plain hello-pruned log && mkdir log   # a rerun keeps only the fetched files
+rm -rf gcc.exclave sysroot.exclave hello.exclave hello.c hello hello-plain hello-pruned log && mkdir log   # a rerun keeps only the fetched files
 exclave() { python3 "$here/exclave/exclave.py" "$@"; }
 run() { echo "+ $*" >&2; "$@"; }                                          # every command shown as it runs
 logged() {                                                                # logged NAME CMD...: the command and its long output go to log/NAME.log
@@ -31,36 +31,36 @@ run make -s -C "$here"
 
 echo "== 2. a gcc can from Ubuntu 24.04 packages"
 [ -n "$(ls debs 2>/dev/null)" ] || logged fetch-debs python3 "$here/tools/fetch-debs.py" --out debs gcc-13 libc6-dev
-logged unpack exclave unpack gcc.can debs/*.deb
+logged unpack exclave unpack gcc.exclave debs/*.deb
 
 echo "== 3. CentOS 7's glibc as a sysroot inside it"
 [ -n "$(ls el7 2>/dev/null)" ] || logged fetch-rpms python3 "$here/tools/fetch-rpms.py" --repo https://vault.centos.org/7.9.2009/os/x86_64 --no-base --out el7 glibc glibc-devel glibc-headers kernel-headers libgcc
-logged unpack-el7 exclave unpack sysroot.can el7/*.rpm
-run cp -a sysroot.can/tree gcc.can/tree/opt/sysroot-el7
-printf '%s\n' "+ printf 'exclave 1\\n\\ndata \"/opt/sysroot-el7\"\\n' > gcc.can/.exclave/manifest" >&2
-printf 'exclave 1\n\ndata "/opt/sysroot-el7"\n' > gcc.can/.exclave/manifest
-logged wrap exclave wrap gcc.can
-run ln -s tree/usr/bin/gcc-13 gcc.can/gcc
+logged unpack-el7 exclave unpack sysroot.exclave el7/*.rpm
+run cp -a sysroot.exclave/tree gcc.exclave/tree/opt/sysroot-el7
+printf '%s\n' "+ printf 'exclave 1\\n\\ndata \"/opt/sysroot-el7\"\\n' > gcc.exclave/.exclave/manifest" >&2
+printf 'exclave 1\n\ndata "/opt/sysroot-el7"\n' > gcc.exclave/.exclave/manifest
+logged wrap exclave wrap gcc.exclave
+run ln -s tree/usr/bin/gcc-13 gcc.exclave/gcc
 
 echo "== 4. a program built inside, run on this host and inside the can"
 cat > hello.c <<'HELLO'
 #include <stdio.h>
 int main(void) { printf("hello from a can\n"); return 0; }
 HELLO
-run env EXCLAVE_LOG=log/plain.log gcc.can/gcc -o hello-plain hello.c
-run env EXCLAVE_LOG=log/hello.log gcc.can/gcc $sysroot -o hello hello.c
+run env EXCLAVE_LOG=log/plain.log gcc.exclave/gcc -o hello-plain hello.c
+run env EXCLAVE_LOG=log/hello.log gcc.exclave/gcc $sysroot -o hello hello.c
 echo "  log/hello.log: $(wc -l < log/hello.log) lines, one per trapped syscall; the first:"; head -6 log/hello.log | sed "s/^/    /"
-versions() { gcc.can/tree/usr/bin/objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -u | tr '\n' ' '; }
+versions() { gcc.exclave/tree/usr/bin/objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -u | tr '\n' ' '; }
 echo "  glibc symbol versions bound: hello-plain: $(versions hello-plain) hello: $(versions hello)"
 run ./hello
-run gcc.can/.exclave/launcher "$dir/hello"
+run gcc.exclave/.exclave/launcher "$dir/hello"
 
 echo "== 5. the can pruned to what the compile touched, and the checks on it"
-run cp -a gcc.can hello.can
-run exclave prune hello.can log/hello.log
-run env EXCLAVE_LOG=log/pruned.log hello.can/gcc $sysroot -o hello-pruned hello.c
-run exclave check hello.can log/pruned.log
+run cp -a gcc.exclave hello.exclave
+run exclave prune hello.exclave log/hello.log
+run env EXCLAVE_LOG=log/pruned.log hello.exclave/gcc $sysroot -o hello-pruned hello.c
+run exclave check hello.exclave log/pruned.log
 run ./hello-pruned
 count() { find "$1/tree" -type f -o -type l | wc -l; }
-echo "  files and symlinks under tree/: $(count gcc.can) in gcc.can, $(count hello.can) in hello.can"
+echo "  files and symlinks under tree/: $(count gcc.exclave) in gcc.exclave, $(count hello.exclave) in hello.exclave"
 echo "example: done; everything is under $dir"

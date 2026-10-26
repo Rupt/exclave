@@ -385,20 +385,20 @@ def b2_file(path):
 
 
 # ---------------------------------------------------------------- the can as the launcher sees it
-def manifest_path(can):
-    return os.path.join(can, ".exclave", "manifest")
+def manifest_path(ex):
+    return os.path.join(ex, ".exclave", "manifest")
 
 
-def manifest(can):
+def manifest(ex):
     """The manifest's records; `exclave 1` alone when the file is absent."""
-    p = manifest_path(can)
+    p = manifest_path(ex)
     return load(p, "exclave") if os.path.exists(p) else [Record("exclave", [("t", b"1")])]
 
 
-def owned_top(can):
+def owned_top(ex):
     """8.1 rule 1: every top-level entry of tree/ that is not an empty directory; a directory that cannot be
     listed is not a placeholder (review O4-8)."""
-    root = os.path.join(can, "tree")
+    root = os.path.join(ex, "tree")
     top = []
     for name in sorted(os.listdir(root)):
         p = os.path.join(root, name)
@@ -411,20 +411,20 @@ def owned_top(can):
     return top
 
 
-def owned(can):
+def owned(ex):
     """8.1: the can's ownership as the launcher computes it at startup: the manifest's own records plus the
     tree's top-level entries of rule 1, with the host records that take paths back from them."""
-    m = manifest(can)
+    m = manifest(ex)
     own = set(o[0].decode("utf-8", "surrogateescape") for o in values(m, "own"))
     host = [h[0].decode("utf-8", "surrogateescape") for h in values(m, "host")]
-    return elfcheck.Owned(sorted(own | set(owned_top(can))), host)
+    return elfcheck.Owned(sorted(own | set(owned_top(ex))), host)
 
 
-def check_limits(can):
+def check_limits(ex):
     """The launcher's fixed tables (8.1): refuse what it would refuse, before closing (review O4-9, O4-10); the
     manifest's records are counted by parse, the tree's top-level entries here."""
-    manifest(can)
-    top = len(owned_top(can))                                 # as the launcher counts them: a placeholder takes no slot
+    manifest(ex)
+    top = len(owned_top(ex))                                 # as the launcher counts them: a placeholder takes no slot
     if top > LIMITS["top"]:
         raise build.BuildError("tree/ has %d top-level entries; the launcher holds %d" % (top, LIMITS["top"]))
 
@@ -433,8 +433,8 @@ def in_data(vpath, data):
     return any(vpath == d or vpath.startswith(d.rstrip("/") + "/") for d in data)
 
 
-def data_prefixes(can):
-    return [d[0].decode("utf-8", "surrogateescape") for d in values(manifest(can), "data")]
+def data_prefixes(ex):
+    return [d[0].decode("utf-8", "surrogateescape") for d in values(manifest(ex), "data")]
 
 
 # ---------------------------------------------------------------- tree walk
@@ -456,8 +456,8 @@ def link_or_copy(src, dst):
         shutil.copy2(src, dst)
 
 
-def launcher_ino(can):
-    st = os.stat(os.path.join(can, ".exclave", "launcher"))
+def launcher_ino(ex):
+    st = os.stat(os.path.join(ex, ".exclave", "launcher"))
     return (st.st_dev, st.st_ino, st.st_size)
 
 
@@ -496,17 +496,17 @@ def default_launcher(arch=None):
     return os.path.join(HERE, "..", "build", "launcher")
 
 
-def write_readme(can):
+def write_readme(ex):
     """CAN/README for whoever finds the can (6.1), unless the can has one: the maker's own, or an entry by that name."""
-    p = os.path.join(can, "README")
+    p = os.path.join(ex, "README")
     if not os.path.lexists(p):
         with open(p, "wb") as f:
             f.write(README_TEXT)
 
 
-def install_launcher(can, launcher=None, arch=None):
+def install_launcher(ex, launcher=None, arch=None):
     """Put a launcher at CAN/.exclave/launcher unless one is there already: the one for the packages' architecture."""
-    dst = os.path.join(can, ".exclave", "launcher")
+    dst = os.path.join(ex, ".exclave", "launcher")
     if os.path.exists(dst):
         return
     launcher = launcher or default_launcher(arch)
@@ -559,12 +559,12 @@ def cmd_unpack(out, debs, log=print):
     log("unpacked %d packages into %s" % (len(pkgs), out))
 
 
-def wrapper_problems(can, data=()):
+def wrapper_problems(ex, data=()):
     """6.1 as the tree stands: a wrapper of another launcher (stale), a wrapper without a payload, a payload
     without a wrapper (a stray under the reserved name), an executable its user cannot run. Returns the list
     of problems; cmd_check adds the executables not wrapped, which wrap is about to wrap."""
-    root = os.path.join(can, "tree")
-    oi = launcher_ino(can)
+    root = os.path.join(ex, "tree")
+    oi = launcher_ino(ex)
     problems = []
     for real, v, st in walk_files(root):
         if not stat.S_ISREG(st.st_mode):
@@ -587,12 +587,12 @@ def wrapper_problems(can, data=()):
     return problems
 
 
-def wrap_files(can, data=(), quiet=False):
+def wrap_files(ex, data=(), quiet=False):
     """6.1: every executable file in tree/ outside data prefixes becomes a hard link to the launcher; the
     original moves to .real/. Never over an existing payload (review F4-2)."""
-    root = os.path.join(can, "tree")
-    launcher = os.path.join(can, ".exclave", "launcher")
-    oi = launcher_ino(can)
+    root = os.path.join(ex, "tree")
+    launcher = os.path.join(ex, ".exclave", "launcher")
+    oi = launcher_ino(ex)
     n = 0
     for real, v, st in list(walk_files(root)):
         if not stat.S_ISREG(st.st_mode) or not st.st_mode & 0o111 or in_data(v, data):
@@ -615,16 +615,16 @@ def wrap_files(can, data=(), quiet=False):
     return n
 
 
-def cmd_wrap(can, quiet=False):
+def cmd_wrap(ex, quiet=False):
     """Close a can: launcher, placeholders, manifest, the wrapper and static checks on the tree as it stands,
     then the wrappers, then the lock's launcher, manifest and tree hashes. A refusal happens before anything
     is wrapped, so a refused can is left unwrapped (review F4-8, O4-7)."""
-    root = os.path.join(can, "tree")
+    root = os.path.join(ex, "tree")
     if not os.path.isdir(root):
-        sys.exit("refusing: %s has no tree/ directory" % can)
-    install_launcher(can)
+        sys.exit("refusing: %s has no tree/ directory" % ex)
+    install_launcher(ex)
     build.placeholders(root, strip=False, log=lambda *a: None)   # 8.1: the conventional names and the identity files, if the tree lacks them
-    mp = manifest_path(can)
+    mp = manifest_path(ex)
     if not os.path.exists(mp):
         with open(mp, "wb") as f:
             f.write(b"exclave 1\n")
@@ -633,41 +633,41 @@ def cmd_wrap(can, quiet=False):
     recs = parse(mdata, "exclave")
     if dump(recs, "exclave") != mdata:
         sys.exit("refusing: %s is not canonical; run exclave format on it" % mp)
-    check_limits(can)
-    data = data_prefixes(can)
-    problems = wrapper_problems(can, data)
+    check_limits(ex)
+    data = data_prefixes(ex)
+    problems = wrapper_problems(ex, data)
     for p in problems:
         print("error: " + p)
-    rep = static_report(can, quiet)
+    rep = static_report(ex, quiet)
     if problems or rep.errors:
-        print("refused; %s is not closed and nothing was wrapped" % can)
+        print("refused; %s is not closed and nothing was wrapped" % ex)
         return 1
-    wrap_files(can, data, quiet)
-    write_readme(can)
-    build.write_lock(can, None, "b2:" + hashlib.blake2b(mdata, digest_size=32).hexdigest(), tree=True)
+    wrap_files(ex, data, quiet)
+    write_readme(ex)
+    build.write_lock(ex, None, "b2:" + hashlib.blake2b(mdata, digest_size=32).hexdigest(), tree=True)
     if not quiet:
-        print("closed %s" % can)
+        print("closed %s" % ex)
     return 0
 
 
-def cmd_unwrap(can):
+def cmd_unwrap(ex):
     """Open a can: payloads back over their wrappers; the lock keeps its inputs and loses the hashes of a
     closed can (review F4-6). A payload without a wrapper is refused, since it is not this can's (F4-5)."""
-    strays = [p for p in wrapper_problems(can) if p.startswith("payload without wrapper")]
+    strays = [p for p in wrapper_problems(ex) if p.startswith("payload without wrapper")]
     if strays:
         raise build.BuildError("; ".join(strays))
-    build.unwrap(can)
-    build.write_lock(can, None)
+    build.unwrap(ex)
+    build.write_lock(ex, None)
 
 
-def cmd_relink(can, launcher=None):
+def cmd_relink(ex, launcher=None):
     """Replace a can's launcher and relink every wrapper to it (wrappers are hard links, 6.1). A payload
     without a wrapper is reported, not given one (review F4-5, O4-11); the lock's launcher record follows."""
     launcher = launcher or default_launcher()
     if not os.path.isfile(launcher):
         sys.exit("no launcher at %s" % launcher)
-    root = os.path.join(can, "tree")
-    new = os.path.join(can, ".exclave", "launcher.new")
+    root = os.path.join(ex, "tree")
+    new = os.path.join(ex, ".exclave", "launcher.new")
     shutil.copy2(launcher, new)
     os.chmod(new, 0o755)
     n, strays = 0, []
@@ -686,20 +686,20 @@ def cmd_relink(can, launcher=None):
             except OSError:
                 shutil.copy2(new, w)
             n += 1
-    os.replace(new, os.path.join(can, ".exclave", "launcher"))
-    write_readme(can)
+    os.replace(new, os.path.join(ex, ".exclave", "launcher"))
+    write_readme(ex)
     for s in strays:
         print("payload without wrapper, left alone: " + s)
-    if os.path.exists(os.path.join(can, ".exclave", "hashes")):
-        recs = load(os.path.join(can, ".exclave", "hashes"), "hashes")
+    if os.path.exists(os.path.join(ex, ".exclave", "hashes")):
+        recs = load(os.path.join(ex, ".exclave", "hashes"), "hashes")
         if values(recs, "tree"):
-            build.write_lock(can, None, keep_hashes=True)
+            build.write_lock(ex, None, keep_hashes=True)
     print("relinked %d wrappers to the new launcher" % n)
 
 
-def static_report(can, quiet=False):
+def static_report(ex, quiet=False):
     """10.3 static check; returns the Report."""
-    rep = elfcheck.static_check(can, owned(can), data_prefixes(can))
+    rep = elfcheck.static_check(ex, owned(ex), data_prefixes(ex))
     if not quiet:
         for w in rep.warnings:
             print("warning: " + w)
@@ -709,18 +709,18 @@ def static_report(can, quiet=False):
     return rep
 
 
-def cmd_check(can, logs=()):
+def cmd_check(ex, logs=()):
     """A closed can: every executable outside data prefixes wrapped, no stray or stale wrapper, the static
     check, the tree against the lock's hash (review O4-18), and with logs the dynamic check."""
-    root = os.path.join(can, "tree")
-    data = data_prefixes(can)
-    oi = launcher_ino(can)
-    problems = wrapper_problems(can, data)
+    root = os.path.join(ex, "tree")
+    data = data_prefixes(ex)
+    oi = launcher_ino(ex)
+    problems = wrapper_problems(ex, data)
     for real, v, st in walk_files(root):
         if stat.S_ISREG(st.st_mode) and st.st_mode & 0o111 and not in_data(v, data) and not is_wrapper(real, oi) \
                 and not os.path.exists(os.path.join(os.path.dirname(real), ".real", os.path.basename(real))):
             problems.append("executable not wrapped: " + v)
-    lock = os.path.join(can, ".exclave", "hashes")
+    lock = os.path.join(ex, ".exclave", "hashes")
     if os.path.exists(lock):
         recorded = values(load(lock, "hashes"), "tree")
         if recorded:
@@ -734,10 +734,10 @@ def cmd_check(can, logs=()):
     for p in problems:
         print(p)
     print("%d wrapper problems" % len(problems))
-    rep = static_report(can)
+    rep = static_report(ex)
     rc = 1 if problems or rep.errors else 0
     if logs:
-        drep = elfcheck.dynamic_check(can, logs, owned(can))
+        drep = elfcheck.dynamic_check(ex, logs, owned(ex))
         for w in drep.warnings:
             print("warning: " + w)
         for e in drep.errors:
@@ -747,13 +747,13 @@ def cmd_check(can, logs=()):
     return rc
 
 
-def cmd_prune(can, logs):
-    kept, removed, freed = build.prune(can, logs, owned(can))
-    print("pruned %s: kept %d files, removed %d, %d bytes freed" % (can, kept, removed, freed))
-    lock = os.path.join(can, ".exclave", "hashes")
+def cmd_prune(ex, logs):
+    kept, removed, freed = build.prune(ex, logs, owned(ex))
+    print("pruned %s: kept %d files, removed %d, %d bytes freed" % (ex, kept, removed, freed))
+    lock = os.path.join(ex, ".exclave", "hashes")
     if os.path.exists(lock) and values(load(lock, "hashes"), "tree"):
-        build.write_lock(can, None, keep_hashes=True)         # the lock records the output as it now is (review F4-6)
-    rep = static_report(can)
+        build.write_lock(ex, None, keep_hashes=True)         # the lock records the output as it now is (review F4-6)
+    rep = static_report(ex)
     return 1 if rep.errors else 0
 
 

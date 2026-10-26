@@ -9,7 +9,7 @@ what a buffer holds afterwards must agree case by case; a difference fails unles
 The expectations therefore come from the kernel, not from a test's author. Needs user namespaces and bwrap,
 like oracle_ns; says so and exits 0 when it cannot run.
 
-    test/oracle_syscalls.py --can CAN [--work DIR] [--seed S] [--only NAME] [--keep] [--show N] [--expected]
+    test/oracle_syscalls.py --exclave CAN [--work DIR] [--seed S] [--only NAME] [--keep] [--show N] [--expected]
 """
 import argparse
 import os
@@ -134,7 +134,7 @@ class Forms:
         self.true = tree.vbin(root, "true")
         self.sh = tree.vbin(root, "sh")
         h = host
-        can = [("can_file", self.file), ("can_dir", self.dir), ("maze", "/maze"), ("root", "/"),
+        ex = [("can_file", self.file), ("can_dir", self.dir), ("maze", "/maze"), ("root", "/"),
                ("file_slash", self.file + "/"), ("dir_slash", self.dir + "/"), ("double_slash", "/" + self.file),
                ("dot", os.path.dirname(self.file) + "/./" + os.path.basename(self.file)),
                ("dotdot", self.dir + "/../" + self.dir.split("/")[-1] + "/" + os.path.basename(self.file)),
@@ -148,24 +148,24 @@ class Forms:
                ("overlong", "/maze/" + "a" * 5000), ("long_component", "/maze/" + "b" * 256), ("long_ok", "/maze/" + "c" * 255),
                ("non_utf8", "/maze/\udcff\udcfe"), ("newline", "/maze/a\nb")]
         for kind, l in sorted(by_kind.items()):
-            can.append(("link_" + kind, l))
+            ex.append(("link_" + kind, l))
         hostf = [("host_file", h + "/hfile"), ("host_dir", h + "/hdir"), ("host_to_can", h + "/hlink"), ("host_to_can_dir", h + "/hlnkdir"),
                  ("host_dangling", h + "/hdang"), ("host_loop", h + "/hloop"), ("host_rel_link", h + "/hrel"), ("host_missing", h + "/missing"),
-                 ("host_dotdot", h + "/hdir/../hfile"), ("host_file_slash", h + "/hfile/"), ("host_tmp_new", "/tmp/cont-probe-%d/new" % os.getpid()),
+                 ("host_dotdot", h + "/hdir/../hfile"), ("host_file_slash", h + "/hfile/"), ("host_tmp_new", "/tmp/exclave-probe-%d/new" % os.getpid()),
                  ("host_dot_last", h + "/hdir/."), ("host_dotdot_last", h + "/hdir/.."),
                  ("rel_file", "hfile"), ("rel_dot", "."), ("rel_dotdot", ".."), ("rel_dot_dir", "./hdir"), ("rel_up", "../" + os.path.basename(h) + "/hfile"), ("rel_via_link", "hdir/../hlink"),
                  ("rel_root_by_dotdot", "../" * h.count("/") + "."), ("rel_etc_by_dotdot", "../" * h.count("/") + "etc/passwd")]   # up to the root from the host area, and into the tree
-        self.paths = [(n, S(p)) for n, p in can + hostf]
+        self.paths = [(n, S(p)) for n, p in ex + hostf]
         self.paths += [("fault_end", "e:" + hx(self.file)), ("fault_null", "n:"), ("fault_unmapped", "u:")]
         self.few = [(n, S(p)) for n, p in [("can_file", self.file), ("can_dir", self.dir), ("missing", "/maze/missing"), ("dir_slash", self.dir + "/"), ("file_slash", self.file + "/"),
                                           ("above_root", "/.." + self.file), ("empty", ""), ("wrapper", self.true), ("host_file", h + "/hfile"),
                                           ("host_dir", h + "/hdir"), ("host_missing", h + "/missing"), ("host_to_can", h + "/hlink"),
                                           ("rel_file", "hfile")]] + [("fault_null", "n:")]   # no /tmp here: bwrap's bind makes it another mount, so a link or rename into it is EXDEV there and not natively
         # descriptor-relative forms: (label, dirfd token, path token)
-        rel_can = ["", ".", "..", "../" + os.path.basename(self.file), os.path.basename(self.file), "nonexistent", "../../etc/passwd", "../../../../tmp", self.file]
+        rel_ex = ["", ".", "..", "../" + os.path.basename(self.file), os.path.basename(self.file), "nonexistent", "../../etc/passwd", "../../../../tmp", self.file]
         rel_host = ["", ".", "..", "inner", "../hfile", "../hlink", "nonexistent", self.file]
         self.at = [("cwd/" + n, I(AT_FDCWD), p) for n, p in self.paths]
-        self.at += [("dfd_can/" + r, F(O_PATH | O_DIRECTORY, self.dir), S(r)) for r in rel_can]
+        self.at += [("dfd_can/" + r, F(O_PATH | O_DIRECTORY, self.dir), S(r)) for r in rel_ex]
         self.at += [("dfd_can_rd/" + r, F(O_RDONLY | O_DIRECTORY, self.dir), S(r)) for r in ("", "..", os.path.basename(self.file))]
         self.at += [("dfd_host/" + r, F(O_PATH, h + "/hdir"), S(r)) for r in rel_host]
         self.at += [("ffd_can/" + r, F(O_RDONLY, self.file), S(r)) for r in ("", "x", ".", self.file)]
@@ -174,7 +174,7 @@ class Forms:
         self.at += [("lfd_can/", F(O_PATH | O_NOFOLLOW, by_kind.get("abs", self.file)), S(""))]
         self.at += [("lfd_sh/", F(O_PATH | O_NOFOLLOW, self.sh), S("")), ("lfd_dang/", F(O_PATH | O_NOFOLLOW, h + "/hdang"), S(""))]
         self.at += [("wfd/", F(O_RDONLY, self.true), S("")), ("wfd_path/", F(O_PATH, self.true), S(""))]
-        self.at += [("devnull_fd/", F(O_RDONLY, "/dev/null"), S("")), ("tmpfd/", F(O_PATH | O_DIRECTORY, "/tmp"), S("cont-probe-%d" % os.getpid()))]
+        self.at += [("devnull_fd/", F(O_RDONLY, "/dev/null"), S("")), ("tmpfd/", F(O_PATH | O_DIRECTORY, "/tmp"), S("exclave-probe-%d" % os.getpid()))]
         self.at += [("badfd/" + n, I(-1), p) for n, p in [("rel", S("x")), ("abs", S(self.file)), ("empty", S(""))]]
         self.at += [("closedfd/" + n, I(999), p) for n, p in [("rel", S("x")), ("abs", S(self.file))]]
         self.at_few = [("cwd/" + n, I(AT_FDCWD), p) for n, p in self.few]
@@ -432,14 +432,14 @@ def rmtree(d):
     shutil.rmtree(d)
 
 
-def host_reset(host, root_can, probe):
+def host_reset(host, ex_tree, probe):
     """The host area both worlds see at the same path, identical before every run."""
     os.chmod(probe, 0o755)                                              # a chmod of /proc/self/exe takes the probe's own x bit
     for x in os.listxattr(probe):                                       # and an xattr case leaves an attribute on it
         if x.startswith("user."):                                       # (an SELinux label is not ours to remove)
             os.removexattr(probe, x)
     rmtree(os.path.dirname(host))
-    rmtree("/tmp/cont-probe-%d" % os.getpid())
+    rmtree("/tmp/exclave-probe-%d" % os.getpid())
     if os.path.lexists("/tmp/" + REL_SOCK):                              # a relative bind after a chdir into /tmp
         os.remove("/tmp/" + REL_SOCK)
     os.makedirs(host + "/hdir")
@@ -449,7 +449,7 @@ def host_reset(host, root_can, probe):
         f.write("inner\n")
     for name, target in (("hlink", "/maze/f0"), ("hlnkdir", "/maze/d0"), ("hdang", "missing"), ("hloop", "hloop"), ("hrel", "hdir/inner")):
         os.symlink(target, os.path.join(host, name))
-    os.makedirs("/tmp/cont-probe-%d" % os.getpid())
+    os.makedirs("/tmp/exclave-probe-%d" % os.getpid())
 
 
 def run_bwrap(root, host, bindir, probe, cases):
@@ -480,9 +480,9 @@ def run_bwrap(root, host, bindir, probe, cases):
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
-def run_launcher(can, host, probe, cases):
+def run_launcher(ex, host, probe, cases):
     with open(cases, "rb") as inp:
-        p = subprocess.run([os.path.join(can, ".exclave", "launcher"), probe], cwd=host, stdin=inp, env={"PATH": "/usr/bin:/bin", "HOME": host},
+        p = subprocess.run([os.path.join(ex, ".exclave", "launcher"), probe], cwd=host, stdin=inp, env={"PATH": "/usr/bin:/bin", "HOME": host},
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
@@ -548,7 +548,7 @@ def expected(name, label, b, o):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--can", required=True)
+    ap.add_argument("--exclave", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "syscalls-work"))
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--only", help="only this syscall")
@@ -562,11 +562,11 @@ def main():
     if subprocess.run(["bwrap", "--ro-bind", "/", "/", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
         print("bwrap cannot create namespaces here (user namespaces denied); the syscall probe cannot run")
         return 0
-    given, work = os.path.abspath(a.can), os.path.abspath(a.work)
+    given, work = os.path.abspath(a.exclave), os.path.abspath(a.work)
     rmtree(work)
     os.makedirs(work)
     for d in os.listdir("/tmp"):                                            # an earlier run that died left its area behind; a
-        if d.startswith("cont-probe-"):                                     # running one (the gate runs several) keeps its own
+        if d.startswith("exclave-probe-"):                                     # running one (the gate runs several) keeps its own
             try:
                 os.kill(int(d[11:]), 0)
             except (ValueError, ProcessLookupError):
@@ -578,13 +578,13 @@ def main():
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(os.path.join(given, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy)
     build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
-    can = tree.fresh_can(given, os.path.join(work, "can"))                  # the launcher's world: a copy relinked with the build (17)
+    ex = tree.fresh_exclave(given, os.path.join(work, "can"))                  # the launcher's world: a copy relinked with the build (17)
     dirs, files, links = make_maze(root, rng)
     host = os.path.join(work, "area", "host")                              # ".." from the host area is a directory the reset owns
     os.symlink(host + "/hfile", os.path.join(root, "maze", "lH"))          # a can link to a host file, and to a host directory
     os.symlink(host + "/hdir", os.path.join(root, "maze", "lHD"))
-    shutil.copytree(os.path.join(root, "maze"), os.path.join(can, "tree", "maze"), symlinks=True)
-    for r in (root, os.path.join(can, "tree")):                            # a socket file in the tree, for bind and connect (copytree cannot carry one)
+    shutil.copytree(os.path.join(root, "maze"), os.path.join(ex, "tree", "maze"), symlinks=True)
+    for r in (root, os.path.join(ex, "tree")):                            # a socket file in the tree, for bind and connect (copytree cannot carry one)
         sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sk.bind(os.path.join(r, "maze", "sock"))
         sk.close()
@@ -607,7 +607,7 @@ def main():
     cc = tree.compiler(root, MACHINE)
     if not cc:
         sys.exit("no C compiler in the can")
-    gcc = os.path.join(can, "tree", tree.vbin(root, cc).lstrip("/"))       # the probe compiled through the build's launcher
+    gcc = os.path.join(ex, "tree", tree.vbin(root, cc).lstrip("/"))       # the probe compiled through the build's launcher
     probe = os.path.join(bindir, "probe")
     r = subprocess.run([gcc, "-O1", "-o", probe, os.path.join(HERE, "progs", "probe.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode:
@@ -628,10 +628,10 @@ def main():
         with open(path, "w") as f:
             for i, (label, n, toks, _) in enumerate(mine):
                 f.write("%d %d %s\n" % (i, nr[n], " ".join(toks)))
-        host_reset(host, os.path.join(can, "tree"), probe)
+        host_reset(host, os.path.join(ex, "tree"), probe)
         bw = run_bwrap(root, host, bindir, probe, path)
-        host_reset(host, os.path.join(can, "tree"), probe)
-        op = run_launcher(can, host, probe, path)
+        host_reset(host, os.path.join(ex, "tree"), probe)
+        op = run_launcher(ex, host, probe, path)
         bl, ol = bw[1].splitlines(), op[1].splitlines()
         if len(bl) != len(mine) or len(ol) != len(mine):
             stopped = mine[min(len(bl), len(ol))][0]
@@ -657,7 +657,7 @@ def main():
                 print("DIFF %s %s(%s)\n     kernel: %s\n     launcher: %s" % (n, label, ", ".join(decode(t) for t in toks), b, o))
         print("%-18s %5d cases, %d differ" % (name, len(mine), d))
     print("%d cases over %d syscalls: %d differ, %d differences expected" % (total, len(names), differ, accepted))
-    rmtree("/tmp/cont-probe-%d" % os.getpid())
+    rmtree("/tmp/exclave-probe-%d" % os.getpid())
     if not a.keep and not differ:
         shutil.rmtree(work, ignore_errors=True)
     return 1 if differ else 0

@@ -163,7 +163,7 @@ def main(argv):
     ap.add_argument("--repos", default="main,community")
     ap.add_argument("--arch", default="x86_64")
     ap.add_argument("--mirror", default=DEFAULT_MIRROR)
-    ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "cont-apks"))
+    ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-apks"))
     ap.add_argument("--no-base", action="store_true")
     a = ap.parse_args(argv)
     repo = Repo(a.mirror, a.branch, a.repos.split(","), a.arch, a.cache)

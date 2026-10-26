@@ -1,7 +1,7 @@
 /* unix_socket.c — sockaddr_un paths under the visibility rule (PROPOSAL.md 13 item 31, 17.4): bind, connect and sendto
  * with a path of every class. usage: unix_socket HOSTDIR [CANDIR CANFILE CANSOCK]. Prints one line per case,
  * "<case>: ret=<r> errno=<e>", the same in every world, so that the kernel under bwrap is the oracle for the launcher.
- * CANDIR: a can-owned directory (default /usr/share); CANFILE: a can-owned regular file (default $CONT_TRUE); CANSOCK: a
+ * CANDIR: a can-owned directory (default /usr/share); CANFILE: a can-owned regular file (default $EXCLAVE_TEST_TRUE); CANSOCK: a
  * socket file in the tree, if the maker put one there. Exit 0 always: the driver compares. */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -45,21 +45,21 @@ int main(int argc, char **argv)
     if (argc < 2) { fprintf(stderr, "usage: unix_socket HOSTDIR [CANDIR CANFILE CANSOCK]\n"); return 2; }
     const char *host = argv[1];
     const char *candir = argc > 2 ? argv[2] : "/usr/share";
-    const char *canfile = argc > 3 ? argv[3] : getenv("CONT_TRUE") ? getenv("CONT_TRUE") : "/usr/bin/true";
+    const char *canfile = argc > 3 ? argv[3] : getenv("EXCLAVE_TEST_TRUE") ? getenv("EXCLAVE_TEST_TRUE") : "/usr/bin/true";
     const char *cansock = argc > 4 ? argv[4] : "";
     char p[4096], q[4096];
     /* bind: host paths, can paths, an abstract name, relative paths from two working directories */
     snprintf(p, sizeof p, "%s/sock-host", host); bind_at("bind host dir", p, SOCK_STREAM);
-    snprintf(p, sizeof p, "/tmp/cont-sock-%d", (int)getpid()); bind_at("bind /tmp", p, SOCK_STREAM);
-    snprintf(p, sizeof p, "%s/cont-sock", candir); bind_at("bind can dir", p, SOCK_STREAM);
+    snprintf(p, sizeof p, "/tmp/exclave-sock-%d", (int)getpid()); bind_at("bind /tmp", p, SOCK_STREAM);
+    snprintf(p, sizeof p, "%s/exclave-sock", candir); bind_at("bind can dir", p, SOCK_STREAM);
     bind_at("bind existing can file", canfile, SOCK_STREAM);
     if (cansock[0]) bind_at("bind existing can socket", cansock, SOCK_STREAM);
     bind_at("bind missing can parent", "/usr/nonexistent/sock", SOCK_STREAM);
     snprintf(p, sizeof p, "%s/sock", canfile); bind_at("bind under a can file", p, SOCK_STREAM);
     snprintf(p, sizeof p, "%s/", candir); bind_at("bind can dir itself", p, SOCK_STREAM);
-    bind_at("bind can dir trailing slash name", "/usr/share/cont-sock/", SOCK_STREAM);
+    bind_at("bind can dir trailing slash name", "/usr/share/exclave-sock/", SOCK_STREAM);
     { int s = socket(AF_UNIX, SOCK_STREAM, 0); struct sockaddr_un a; memset(&a, 0, sizeof a); a.sun_family = AF_UNIX;
-      int n = snprintf(a.sun_path + 1, sizeof a.sun_path - 1, "cont-abstract-%d", (int)getpid());        /* one name per process: suites run side by side */
+      int n = snprintf(a.sun_path + 1, sizeof a.sun_path - 1, "exclave-abstract-%d", (int)getpid());        /* one name per process: suites run side by side */
       show("bind abstract", bind(s, (struct sockaddr *)&a, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + n))); close(s); }
     if (chdir(host) == 0) bind_at("bind relative in host cwd", "sock-rel", SOCK_STREAM);
     if (chdir(candir) == 0) bind_at("bind relative in can cwd", "sock-rel", SOCK_STREAM);

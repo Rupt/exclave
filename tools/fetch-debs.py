@@ -221,7 +221,7 @@ def main(argv):
     ap.add_argument("--components", default="main,universe")
     ap.add_argument("--mirror")
     ap.add_argument("--snapshot")
-    ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "cont-debs"))
+    ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-debs"))
     ap.add_argument("--no-essential", action="store_true")
     ap.add_argument("--choose", action="append", default=[], metavar="VIRTUAL=PKG")
     a = ap.parse_args(argv)

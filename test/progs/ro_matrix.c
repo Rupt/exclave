@@ -25,7 +25,7 @@ int main(int argc, char **argv)
 {
     if (argc < 2) { fprintf(stderr, "usage: ro_matrix HOSTDIR [WRAPPER]\n"); return 2; }
     const char *host = argv[1];
-    const char *marker = "/usr/share/cont-test-marker", *missing = "/usr/share/cont-missing", *dir = "/usr/share";
+    const char *marker = "/usr/share/exclave-test-marker", *missing = "/usr/share/exclave-missing", *dir = "/usr/share";
     char hfile[4096], hnew[4096], hdir[4096];
     snprintf(hfile, sizeof hfile, "%s/hfile", host); snprintf(hnew, sizeof hnew, "%s/hnew", host); snprintf(hdir, sizeof hdir, "%s/hdir", host);
     unlink(hnew); rmdir(hdir); int hf = open(hfile, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (hf < 0) { perror("hfile"); return 2; } close(hf);
@@ -62,7 +62,7 @@ int main(int argc, char **argv)
     CHECK(rename(marker, hnew), EXDEV);
     CHECK(rename(hfile, missing), EXDEV);
     CHECK(rename(missing, hnew), EXDEV);
-    CHECK(rename(missing, "/usr/share/cont-missing2"), EROFS);
+    CHECK(rename(missing, "/usr/share/exclave-missing2"), EROFS);
     CHECK(link(missing, hnew), ENOENT);
     /* attributes */
     CHECK(truncate(marker, 0), EROFS);
@@ -93,7 +93,7 @@ int main(int argc, char **argv)
       if (r == 0 && a.st_ino != b.st_ino) { fails++; printf("FAIL fstatat NULL inode\n"); } }
     { /* F3-7 */ CHECK(open(dir, O_RDONLY | O_CREAT, 0644), EISDIR); }
     { /* F3-8: readlinkat(fd, "") of an O_PATH|O_NOFOLLOW descriptor on a symlink */
-      const char *sl = getenv("CONT_SH") ? getenv("CONT_SH") : "/usr/bin/sh", *lt = getenv("CONT_SH_LINK") ? getenv("CONT_SH_LINK") : "dash";
+      const char *sl = getenv("EXCLAVE_TEST_SH") ? getenv("EXCLAVE_TEST_SH") : "/usr/bin/sh", *lt = getenv("EXCLAVE_TEST_SH_LINK") ? getenv("EXCLAVE_TEST_SH_LINK") : "dash";
       int lf = open(sl, O_PATH | O_NOFOLLOW); char lb[64]; errno = 0; long r = readlinkat(lf, "", lb, sizeof lb - 1); if (r > 0) lb[r] = 0;
       if (r <= 0 || strcmp(lb, lt)) { fails++; printf("FAIL readlinkat(fd, \"\"): %ld errno %d\n", r, errno); } close(lf); }
     { /* F3-6: getcwd into a buffer that holds the virtual path */
@@ -104,7 +104,7 @@ int main(int argc, char **argv)
     { struct statvfs v; CHECK(statvfs("/usr", &v), 0); if (!(v.f_flag & ST_RDONLY)) { fails++; printf("FAIL statvfs /usr lacks ST_RDONLY\n"); }
       CHECK(statvfs(host, &v), 0); if (v.f_flag & ST_RDONLY) { fails++; printf("FAIL statvfs host has ST_RDONLY\n"); } }
     /* trailing slash and bad pointers */
-    { struct stat st; CHECK(stat("/usr/share/cont-test-marker/", &st), ENOTDIR); CHECK(stat("/usr/share/", &st), 0); CHECK(lstat("/usr/share/", &st), 0);
+    { struct stat st; CHECK(stat("/usr/share/exclave-test-marker/", &st), ENOTDIR); CHECK(stat("/usr/share/", &st), 0); CHECK(lstat("/usr/share/", &st), 0);
       CHECK(stat((const char *)8, &st), EFAULT); CHECK(open((const char *)8, O_RDONLY), EFAULT); CHECK(access((const char *)8, R_OK), EFAULT); }
     { char b[16]; CHECK(readlink((const char *)8, b, 16), EFAULT); }
     /* the host stays writable */

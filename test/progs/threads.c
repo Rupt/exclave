@@ -15,12 +15,12 @@ static __thread int tl = 5;
 static void *fp(void *a)
 {
     long n = (long)a; double s = 0; struct stat st;
-    for (int i = 1; i <= 1000; i++) { s += sqrt((double)i * n); if (i % 100 == 0 && stat("/usr/share/cont-test-marker", &st)) return (void *)1; }
+    for (int i = 1; i <= 1000; i++) { s += sqrt((double)i * n); if (i % 100 == 0 && stat("/usr/share/exclave-test-marker", &st)) return (void *)1; }
     double want = 0; for (int i = 1; i <= 1000; i++) want += sqrt((double)i * n);
     tl += (int)n;
     return (s == want && tl == 5 + (int)n) ? 0 : (void *)2;
 }
-static void *many(void *a) { struct stat st; for (int i = 0; i < 2000; i++) if (stat(i & 1 ? "/usr/share" : "/usr/share/cont-test-marker", &st)) return (void *)1; return 0; }
+static void *many(void *a) { struct stat st; for (int i = 0; i < 2000; i++) if (stat(i & 1 ? "/usr/share" : "/usr/share/exclave-test-marker", &st)) return (void *)1; return 0; }
 
 int main(void)
 {
@@ -36,7 +36,7 @@ int main(void)
     char cwd[4096], *w = getcwd(cwd, sizeof cwd);
     if (!w || w[0] != '/') { fails++; printf("FAIL getcwd\n"); }
     if (chdir("/usr/share") || !getcwd(cwd, sizeof cwd) || strcmp(cwd, "/usr/share")) { fails++; printf("FAIL chdir /usr/share: cwd=%s\n", cwd); }
-    struct stat st; if (stat("cont-test-marker", &st) || stat("./cont-test-marker", &st) || stat("../share/cont-test-marker", &st)) { fails++; printf("FAIL relative stat after chdir\n"); }
+    struct stat st; if (stat("exclave-test-marker", &st) || stat("./exclave-test-marker", &st) || stat("../share/exclave-test-marker", &st)) { fails++; printf("FAIL relative stat after chdir\n"); }
     if (chdir("..") || !getcwd(cwd, sizeof cwd) || strcmp(cwd, "/usr")) { fails++; printf("FAIL chdir ..: cwd=%s\n", cwd); }
     printf("threads: %d failures\n", fails);
     return fails ? 1 : 0;

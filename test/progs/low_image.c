@@ -13,7 +13,7 @@ int main(void)
     uintptr_t lo = (uintptr_t)big, hi = lo + sizeof big;
     if (lo > 0x3f0000 || hi < 0x3f1000) { printf("FAIL bss %#lx-%#lx does not cover 0x3f0000\n", (unsigned long)lo, (unsigned long)hi); return 1; }
     for (uintptr_t a = 0x3f0000; a < 0x3f1000; a += 64) big[a - lo] = 1;
-    int seen = access("/usr/share/cont-test-marker", R_OK);    /* a path the can owns, through the handler */
+    int seen = access("/usr/share/exclave-test-marker", R_OK);    /* a path the can owns, through the handler */
     printf("text %#lx bss %#lx-%#lx marker %d\n", (unsigned long)(uintptr_t)main, (unsigned long)lo, (unsigned long)hi, seen);
     return seen == 0 ? 0 : 1;
 }

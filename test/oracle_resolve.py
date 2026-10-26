@@ -6,7 +6,7 @@ trailing slashes) is added to a copy of a can under /maze. Every generated path 
 the kernel with openat2(RESOLVE_IN_ROOT) on the tree, which has chroot semantics, and by the launcher
 from inside the can. The resulting paths and errnos must agree.
 
-    test/oracle_resolve.py --can CAN [--work DIR] [--paths N] [--seed S] [--keep]
+    test/oracle_resolve.py --exclave CAN [--work DIR] [--paths N] [--seed S] [--keep]
 """
 import argparse
 import ctypes
@@ -123,7 +123,7 @@ def gen_paths(rng, dirs, files, links, n):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--can", required=True)
+    ap.add_argument("--exclave", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "resolve-work"))
     ap.add_argument("--paths", type=int, default=3000)
     ap.add_argument("--seed", type=int, default=1)
@@ -138,10 +138,10 @@ def main():
     if os.path.exists(work):
         shutil.rmtree(work)
     import tree
-    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy relinked with the build (17)
-    root = os.path.join(can, "tree")
+    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "can"))   # a copy relinked with the build (17)
+    root = os.path.join(ex, "tree")
     dirs, files, links = make_maze(root, rng)
-    with open(os.path.join(can, ".exclave", "manifest"), "w") as f:
+    with open(os.path.join(ex, ".exclave", "manifest"), "w") as f:
         f.write("exclave 1\n")                                       # /maze is a non-empty top-level directory: can-owned by the tree alone (8.1)
     import platform
     import tree
@@ -154,7 +154,7 @@ def main():
     if r.returncode:
         sys.exit("cannot compile resolve.c: " + r.stderr.decode(errors="replace"))
     paths = gen_paths(rng, dirs, files, links, a.paths)
-    p = subprocess.run([os.path.join(can, ".exclave", "launcher"), prog], input="\n".join(paths).encode() + b"\n", cwd=work, env={"PATH": "/usr/bin:/bin"},
+    p = subprocess.run([os.path.join(ex, ".exclave", "launcher"), prog], input="\n".join(paths).encode() + b"\n", cwd=work, env={"PATH": "/usr/bin:/bin"},
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     answers = p.stdout.decode(errors="replace").splitlines()
     if len(answers) != len(paths):

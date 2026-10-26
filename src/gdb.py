@@ -29,7 +29,7 @@ def _quiet(cmd):
             gdb.execute("set confirm on")
 
 
-def _can_root():
+def _exclave_tree():
     exe = gdb.current_progspace().filename
     if not exe:
         return None
@@ -152,7 +152,7 @@ class _Hook(gdb.Breakpoint):
         return False
 
     def _hook(self):
-        state = {"root": _can_root(), "loaded": set(), "brk": None}
+        state = {"root": _exclave_tree(), "loaded": set(), "brk": None}
         _add(state, _path("exclave_original_path"), _var("exclave_original_base"))
         interp = _path("exclave_interp_path")
         if interp:

@@ -3,8 +3,8 @@
 # runs on and the files the examples take. Nothing is kept anywhere but DIR and the fetchers' caches under
 # ~/.cache, and both may be empty at any time: whatever is missing is fetched again, and an item DIR already
 # has is skipped, so a rerun costs nothing. Afterwards:
-#   CONT_CACHE=$HOME/.cache/cont-debs test/gate.sh DIR/gcc13.can DIR/alpine.can DIR/f42.can DIR/clang.can
-#   CONT_SRC=DIR/src CONT_SQLITE=DIR/src/sqlite3.c CONT_RPMS=DIR/el7 CONT_DEBS_ARM64=DIR/debs-arm64 test/examples.sh DIR/realsoft.can
+#   EXCLAVE_TEST_CACHE=$HOME/.cache/exclave-debs test/gate.sh DIR/gcc13.exclave DIR/alpine.exclave DIR/f42.exclave DIR/clang.exclave
+#   EXCLAVE_TEST_SRC=DIR/src EXCLAVE_TEST_SQLITE=DIR/src/sqlite3.c EXCLAVE_TEST_RPMS=DIR/el7 EXCLAVE_TEST_DEBS_ARM64=DIR/debs-arm64 test/examples.sh DIR/realsoft.exclave
 # The package sets are the ones the proposal measures (10.1, 12, 16.3): the noble gcc-13 and clang-18 closures,
 # Alpine 3.21's gcc, Fedora 42's gcc, the noble gcc, g++, make and python3 that test/realsoft.py builds with,
 # CentOS 7's glibc for the sysroot of 9, the noble arm64 gcc-13 closure for the emulated row, and the four
@@ -30,14 +30,14 @@ fetch() {                                   # fetch NAME FETCHER ARGS...: packag
         echo "$name: FAIL, see $dir/log/$name.log"; rm -rf "$dir/$name"; fails=$((fails + 1)); return 1
     fi
 }
-can() {                                     # can NAME PKGDIR: unpack the package files into DIR/NAME.can and close it
+can() {                                     # can NAME PKGDIR: unpack the package files into DIR/NAME.exclave and close it
     name=$1; pkgs=$2
-    if grep -q '^tree ' "$dir/$name.can/.exclave/hashes" 2>/dev/null; then echo "$name.can: present"; return 0; fi
-    rm -rf "$dir/$name.can"
-    if exclave unpack "$dir/$name.can" "$dir/$pkgs"/* > "$dir/log/$name.can.log" 2>&1 && exclave wrap "$dir/$name.can" >> "$dir/log/$name.can.log" 2>&1; then
-        echo "$name.can: $(grep -c '^pkg ' "$dir/$name.can/.exclave/hashes") packages; $(tail -1 "$dir/log/$name.can.log")"
+    if grep -q '^tree ' "$dir/$name.exclave/.exclave/hashes" 2>/dev/null; then echo "$name.exclave: present"; return 0; fi
+    rm -rf "$dir/$name.exclave"
+    if exclave unpack "$dir/$name.exclave" "$dir/$pkgs"/* > "$dir/log/$name.exclave.log" 2>&1 && exclave wrap "$dir/$name.exclave" >> "$dir/log/$name.exclave.log" 2>&1; then
+        echo "$name.exclave: $(grep -c '^pkg ' "$dir/$name.exclave/.exclave/hashes") packages; $(tail -1 "$dir/log/$name.exclave.log")"
     else
-        echo "$name.can: FAIL, see $dir/log/$name.can.log"; rm -rf "$dir/$name.can"; fails=$((fails + 1)); return 1
+        echo "$name.exclave: FAIL, see $dir/log/$name.exclave.log"; rm -rf "$dir/$name.exclave"; fails=$((fails + 1)); return 1
     fi
 }
 file() {                                    # file URL NAME HASH: one file into DIR/src, verified by its BLAKE2b-256

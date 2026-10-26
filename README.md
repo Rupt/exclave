@@ -56,7 +56,7 @@ runtime, no user namespaces: nothing here needs a privilege.
 
 ```bash
 make
-./example.sh ~/cont-example
+./example.sh ~/exclave-example
 ```
 
 `example.sh` runs the whole path under the directory you name and
@@ -68,13 +68,13 @@ and logs are the tutorial and each command is one you can run by hand:
    executable in a can is a hard link to.
 2. `tools/fetch-debs.py` downloads Ubuntu 24.04's `gcc-13` closure, 94
    packages, and `exclave unpack` makes an open can from the files:
-   the tree under `gcc.can/tree/`, the maintainer scripts' effects
-   synthesised, every input recorded by hash in `gcc.can/.exclave/hashes`.
+   the tree under `gcc.exclave/tree/`, the maintainer scripts' effects
+   synthesised, every input recorded by hash in `gcc.exclave/.exclave/hashes`.
 3. `tools/fetch-rpms.py` downloads CentOS 7's glibc, headers and
    `libgcc`; unpacked into a can of their own, the tree is copied into
    the gcc can at `/opt/sysroot-el7`, and a two-line manifest says
    `data "/opt/sysroot-el7"`: nothing there is wrapped, checked or
-   executed. `exclave wrap` closes the can, and a symlink `gcc.can/gcc`
+   executed. `exclave wrap` closes the can, and a symlink `gcc.exclave/gcc`
    names its compiler.
 4. `hello.c` is compiled inside the can twice, plainly and with
    `--sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/`, each
@@ -94,10 +94,10 @@ What it prints on the reference machine, abridged:
 
 ```
 == 3. CentOS 7's glibc as a sysroot inside it
-+ cp -a sysroot.can/tree gcc.can/tree/opt/sysroot-el7
-  closed gcc.can (46 warnings; log/wrap.log)
++ cp -a sysroot.exclave/tree gcc.exclave/tree/opt/sysroot-el7
+  closed gcc.exclave (46 warnings; log/wrap.log)
 == 4. a program built inside, run on this host and inside the can
-+ env EXCLAVE_LOG=log/hello.log gcc.can/gcc --sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/ -o hello hello.c
++ env EXCLAVE_LOG=log/hello.log gcc.exclave/gcc --sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/ -o hello hello.c
   log/hello.log: 1220 lines, one per trapped syscall; the first:
     launcher 0 host path absent, using the can's /etc/pki/tls/certs/ca-bundle.crt
     launcher 0 cwd /home/me/cont/build/example
@@ -108,13 +108,13 @@ What it prints on the reference machine, abridged:
   glibc symbol versions bound: hello-plain: GLIBC_2.2.5 GLIBC_2.34  hello: GLIBC_2.2.5
 + ./hello
 hello from a can
-+ gcc.can/.exclave/launcher /home/me/cont/build/example/hello
++ gcc.exclave/.exclave/launcher /home/me/cont/build/example/hello
 hello from a can
 == 5. the can pruned to what the compile touched, and the checks on it
-+ exclave prune hello.can log/hello.log
-pruned hello.can: kept 136 files, removed 9431, 360514915 bytes freed
++ exclave prune hello.exclave log/hello.log
+pruned hello.exclave: kept 136 files, removed 9431, 360514915 bytes freed
 static check: 24 ELF files, 2 static executables, 0 warnings, 0 errors
-+ exclave check hello.can log/pruned.log
++ exclave check hello.exclave log/pruned.log
 0 wrapper problems
 static check: 24 ELF files, 2 static executables, 0 warnings, 0 errors
 warning: this host's nsswitch.conf names sss; the can has no libnss_sss.so.2
@@ -126,9 +126,9 @@ locale links, which point at translations Ubuntu moves into language
 packs the package does not ship, and one is a man-page link to a page
 no package in the set ships. The warning says the tree has a link to
 nothing, which is true and harmless; an error would have stopped
-`wrap`. Afterwards the directory holds `gcc.can`, a compiler
+`wrap`. Afterwards the directory holds `gcc.exclave`, a compiler
 that touches nothing on the host, 264 MB with the sysroot; `hello`;
-`hello.can`, the pruned copy, 50 MB; the fetched packages, which a
+`hello.exclave`, the pruned copy, 50 MB; the fetched packages, which a
 second run reuses; and `log/`, one file per step. A second run takes
 nine seconds on the reference machine; the first also fetches 121 MB:
 the 94 packages and 23 rpms, and the indexes that resolve them.
@@ -154,25 +154,25 @@ has none, so a maker's own stays.
 tools/fetch-debs.py --out debs gcc-13 libc6-dev make       # Ubuntu or Debian: the closure of the packages named, verified against the index
 tools/fetch-apks.py --out apks gcc musl-dev binutils        # the same for Alpine
 tools/fetch-rpms.py --repo URL --out rpms gcc glibc-devel   # and for Fedora, Rocky, CentOS: any repository with repodata/
-exclave/exclave.py unpack gcc.can debs/*.deb               # package files -> an open can, a directory you may edit; .apk and .rpm files likewise
-exclave/exclave.py wrap gcc.can                            # close it: wrap every executable, static check, hashes into the lock
-ln -s tree/usr/bin/gcc-13 gcc.can/gcc                      # an entry, if you want one
-gcc.can/gcc -O2 hello.c -o hello                           # any executable in tree/ runs by path
-gcc.can/tree/usr/bin/sh -c 'as --version'                  # the can's own shell, with the can's PATH
-gcc.can/.exclave/launcher /path/to/host/program args...           # a program without a wrapper, a host tool or a built output, inside the can
-gdb -iex 'set auto-load safe-path /' --args gcc.can/gcc -c x.c   # gdb: the opener carries the script; break, bt, source lines
-EXCLAVE_LOG=/tmp/can.log gcc.can/gcc -c x.c                    # the one knob: one line per trapped syscall
-exclave/exclave.py check gcc.can /tmp/can.log              # static check of every ELF, dynamic check of the logged run
-exclave/exclave.py prune gcc.can /tmp/can.log              # keep what the logged runs touched
-exclave/exclave.py unwrap gcc.can                          # open a closed can to edit it; wrap closes it again
-exclave/exclave.py relink gcc.can build/launcher             # swap the opener after rebuilding it; the wrappers are relinked
-exclave/exclave.py hash gcc.can                            # the tree hash the lock records
-exclave/exclave.py format gcc.can/.exclave/manifest               # the canonical spelling of a manifest or lock; --check only reports
+exclave/exclave.py unpack gcc.exclave debs/*.deb               # package files -> an open can, a directory you may edit; .apk and .rpm files likewise
+exclave/exclave.py wrap gcc.exclave                            # close it: wrap every executable, static check, hashes into the lock
+ln -s tree/usr/bin/gcc-13 gcc.exclave/gcc                      # an entry, if you want one
+gcc.exclave/gcc -O2 hello.c -o hello                           # any executable in tree/ runs by path
+gcc.exclave/tree/usr/bin/sh -c 'as --version'                  # the can's own shell, with the can's PATH
+gcc.exclave/.exclave/launcher /path/to/host/program args...           # a program without a wrapper, a host tool or a built output, inside the can
+gdb -iex 'set auto-load safe-path /' --args gcc.exclave/gcc -c x.c   # gdb: the opener carries the script; break, bt, source lines
+EXCLAVE_LOG=/tmp/can.log gcc.exclave/gcc -c x.c                    # the one knob: one line per trapped syscall
+exclave/exclave.py check gcc.exclave /tmp/can.log              # static check of every ELF, dynamic check of the logged run
+exclave/exclave.py prune gcc.exclave /tmp/can.log              # keep what the logged runs touched
+exclave/exclave.py unwrap gcc.exclave                          # open a closed can to edit it; wrap closes it again
+exclave/exclave.py relink gcc.exclave build/launcher             # swap the opener after rebuilding it; the wrappers are relinked
+exclave/exclave.py hash gcc.exclave                            # the tree hash the lock records
+exclave/exclave.py format gcc.exclave/.exclave/manifest               # the canonical spelling of a manifest or lock; --check only reports
 ```
 
 Between `unpack` and `wrap` the open can is yours: copy a built prefix
 in, delete what you do not want, add a data prefix, write the
-manifest. The manifest is `gcc.can/.exclave/manifest`, `exclave 1` when nothing
+manifest. The manifest is `gcc.exclave/.exclave/manifest`, `exclave 1` when nothing
 is overridden, and has four other keys, each a string: `cpu` names the
 level the binaries need (`"x86-64-v3"`; x86-64 when absent); `data`
 names a prefix that is never executed or loaded, not wrapped, not
@@ -189,10 +189,10 @@ A can of something you built is the same four lines, with the build
 system's own installer doing the building:
 
 ```
-gcc.can/tree/usr/bin/sh -c './configure --prefix=/usr/local && make && make install DESTDIR=$PWD/stage'
-exclave/exclave.py unpack tool.can runtime/*.deb          # libc6 and whatever else the result links against
-cp -a stage/usr/local tool.can/tree/usr/
-exclave/exclave.py wrap tool.can                          # the static check says whether it all links inside
+gcc.exclave/tree/usr/bin/sh -c './configure --prefix=/usr/local && make && make install DESTDIR=$PWD/stage'
+exclave/exclave.py unpack tool.exclave runtime/*.deb          # libc6 and whatever else the result links against
+cp -a stage/usr/local tool.exclave/tree/usr/
+exclave/exclave.py wrap tool.exclave                          # the static check says whether it all links inside
 ```
 
 No recipe format and no closure copying: the runtime the result needs
@@ -311,13 +311,13 @@ first user meets, with the rule behind each and what to do:
 ## The tests
 
 ```
-test/inputs.sh ~/.cache/cont-inputs   # the development inputs from the network: the four cans of the gate, the examples' inputs; skips what is present
-CONT_CACHE=~/.cache/cont-debs test/gate.sh ~/.cache/cont-inputs/*.can   # the commit gate, about a minute: unit tests, stack budget, the suite on every can in two orders and once under the plain terminal's label, the oracles, the syscall probe, the Docker profile; CONT_CACHE adds dogfood
-test/run.py --can gcc.can                 # the suite alone; --tree DIR for a plain tree (spike/make-tree.sh makes one); -k NAME, --order random
-test/matrix.py --can gcc.can              # the kernel matrix: cloud images under QEMU/KVM, one VM at a time, about ten minutes
-test/exercise.py --can gcc.can test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the opener, side by side
-test/examples.sh gcc.can                  # the example runs, each when its input is set: CONT_SRC (realsoft), CONT_SQLITE (bench), CONT_RPMS (sysroot), CONT_DEBS_ARM64 (the emulated aarch64 row)
-test/sysroot.py --can gcc.can --rpms el7/ --out hello     # the sysroot recipe as a test: symbol versions checked, the output run inside and out, then natively by the matrix
+test/inputs.sh ~/.cache/exclave-inputs   # the development inputs from the network: the four cans of the gate, the examples' inputs; skips what is present
+EXCLAVE_TEST_CACHE=~/.cache/exclave-debs test/gate.sh ~/.cache/exclave-inputs/*.can   # the commit gate, about a minute: unit tests, stack budget, the suite on every can in two orders and once under the plain terminal's label, the oracles, the syscall probe, the Docker profile; EXCLAVE_TEST_CACHE adds dogfood
+test/run.py --exclave gcc.exclave                 # the suite alone; --tree DIR for a plain tree (spike/make-tree.sh makes one); -k NAME, --order random
+test/matrix.py --exclave gcc.exclave              # the kernel matrix: cloud images under QEMU/KVM, one VM at a time, about ten minutes
+test/exercise.py --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the opener, side by side
+test/examples.sh gcc.exclave                  # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_DEBS_ARM64 (the emulated aarch64 row)
+test/sysroot.py --exclave gcc.exclave --rpms el7/ --out hello     # the sysroot recipe as a test: symbol versions checked, the output run inside and out, then natively by the matrix
 test/dogfood.py --cache DIR               # the cannery as a can, and a cross-can build that must reproduce
 ```
 

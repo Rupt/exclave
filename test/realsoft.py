@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """realsoft.py — build real projects inside a can and on the host, compare results and time.
 
-    test/realsoft.py --can CAN --src DIR [--work DIR] [--jobs N] [--only NAME,...]
+    test/realsoft.py --exclave CAN --src DIR [--work DIR] [--jobs N] [--only NAME,...]
 
 DIR holds source tarballs: zlib, lua, sqlite-autoconf, re2c. Each is extracted twice and built with the
 host's toolchain and with the can's (through the can's own sh, so configure scripts run inside the can).
@@ -27,23 +27,23 @@ PROJECTS = {
 }
 
 
-def sh(cmd, cwd, env, can=None):
-    if can:
-        p = subprocess.run([os.path.join(can, "tree", "usr", "bin", "sh"), "-c", cmd], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+def sh(cmd, cwd, env, ex=None):
+    if ex:
+        p = subprocess.run([os.path.join(ex, "tree", "usr", "bin", "sh"), "-c", cmd], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     else:
         p = subprocess.run(["/bin/sh", "-c", cmd], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return p.returncode, p.stdout.decode(errors="replace")
 
 
-def timed(cmd, cwd, env, can):
+def timed(cmd, cwd, env, ex):
     t = time.time()
-    rc, out = sh(cmd, cwd, env, can)
+    rc, out = sh(cmd, cwd, env, ex)
     return time.time() - t, rc, out
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--can", required=True)
+    ap.add_argument("--exclave", required=True)
     ap.add_argument("--src", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "realsoft-work"))
     ap.add_argument("--jobs", type=int, default=4)
@@ -54,7 +54,7 @@ def main():
         shutil.rmtree(work)
     os.makedirs(work)
     import tree
-    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy relinked with the build (17)
+    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "can"))   # a copy relinked with the build (17)
     env = {"PATH": "/usr/bin:/bin", "HOME": work, "J": str(a.jobs), "LANG": "C"}
     rows, failures = [], []
     for name, (prefix, conf, mk, check) in PROJECTS.items():
@@ -72,7 +72,7 @@ def main():
             with tarfile.open(tb) as t:
                 t.extractall(d, filter="data")
             src = os.path.join(d, [e for e in os.listdir(d) if e.startswith(prefix)][0])
-            c = can if world == "can" else None
+            c = ex if world == "can" else None
             ct = 0.0
             if conf:
                 ct, rc, out = timed(conf, src, env, c)

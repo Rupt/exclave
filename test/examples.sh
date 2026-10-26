@@ -1,19 +1,19 @@
 #!/bin/sh
 # test/examples.sh CAN — the example runs (PROPOSAL.md 17): what needs inputs the user supplies and time the gate
 # cannot afford. Each runs when its input is set, and says so when it is not:
-#   CONT_SRC=DIR         test/realsoft.py: zlib, Lua, SQLite and re2c built inside and outside (needs g++, make, python3 in the can)
-#   CONT_SQLITE=FILE     test/bench.py: the performance table (16), best of three
-#   CONT_RPMS=DIR        test/sysroot.py: a CentOS 7 glibc as a data prefix, its output run inside and out
-#   CONT_DEBS_ARM64=DIR  test/matrix.py --only noble-arm64: the emulated aarch64 row (12), about an hour
-# The x86-64 kernel matrix is test/matrix.py --can CAN on its own, about ten minutes.
+#   EXCLAVE_TEST_SRC=DIR         test/realsoft.py: zlib, Lua, SQLite and re2c built inside and outside (needs g++, make, python3 in the can)
+#   EXCLAVE_TEST_SQLITE=FILE     test/bench.py: the performance table (16), best of three
+#   EXCLAVE_TEST_RPMS=DIR        test/sysroot.py: a CentOS 7 glibc as a data prefix, its output run inside and out
+#   EXCLAVE_TEST_DEBS_ARM64=DIR  test/matrix.py --only noble-arm64: the emulated aarch64 row (12), about an hour
+# The x86-64 kernel matrix is test/matrix.py --exclave CAN on its own, about ten minutes.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(dirname "$here")
 [ $# -eq 1 ] || { echo "usage: test/examples.sh CAN" >&2; exit 2; }
 can=$1; fails=0
 run() { echo "== $1"; shift; "$@" || fails=$((fails + 1)); }
-[ -n "${CONT_SRC:-}" ] && run realsoft python3 "$here/realsoft.py" --can "$can" --src "$CONT_SRC" || echo "realsoft: CONT_SRC not set"
-[ -n "${CONT_SQLITE:-}" ] && run bench python3 "$here/bench.py" --can "$can" --sqlite "$CONT_SQLITE" || echo "bench: CONT_SQLITE not set"
-[ -n "${CONT_RPMS:-}" ] && run sysroot python3 "$here/sysroot.py" --can "$can" --rpms "$CONT_RPMS" --out "$repo/build/sysroot-hello" || echo "sysroot: CONT_RPMS not set"
-[ -n "${CONT_DEBS_ARM64:-}" ] && run arm64 python3 "$here/matrix.py" --can "$can" --only noble-arm64 --debs-arm64 "$CONT_DEBS_ARM64" || echo "arm64 row: CONT_DEBS_ARM64 not set"
+[ -n "${EXCLAVE_TEST_SRC:-}" ] && run realsoft python3 "$here/realsoft.py" --exclave "$can" --src "$EXCLAVE_TEST_SRC" || echo "realsoft: EXCLAVE_TEST_SRC not set"
+[ -n "${EXCLAVE_TEST_SQLITE:-}" ] && run bench python3 "$here/bench.py" --exclave "$can" --sqlite "$EXCLAVE_TEST_SQLITE" || echo "bench: EXCLAVE_TEST_SQLITE not set"
+[ -n "${EXCLAVE_TEST_RPMS:-}" ] && run sysroot python3 "$here/sysroot.py" --exclave "$can" --rpms "$EXCLAVE_TEST_RPMS" --out "$repo/build/sysroot-hello" || echo "sysroot: EXCLAVE_TEST_RPMS not set"
+[ -n "${EXCLAVE_TEST_DEBS_ARM64:-}" ] && run arm64 python3 "$here/matrix.py" --exclave "$can" --only noble-arm64 --debs-arm64 "$EXCLAVE_TEST_DEBS_ARM64" || echo "arm64 row: EXCLAVE_TEST_DEBS_ARM64 not set"
 exit $fails

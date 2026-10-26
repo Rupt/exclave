@@ -183,7 +183,7 @@ def main(argv):
     ap.add_argument("packages", nargs="+")
     ap.add_argument("--out", required=True, help="directory to fill with .rpm files")
     ap.add_argument("--repo", action="append", required=True, help="repository root holding repodata/")
-    ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "cont-rpms"))
+    ap.add_argument("--cache", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-rpms"))
     ap.add_argument("--choose", action="append", default=[], metavar="VIRTUAL=PKG")
     ap.add_argument("--no-base", action="store_true")
     a = ap.parse_args(argv)

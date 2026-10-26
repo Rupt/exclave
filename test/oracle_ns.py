@@ -6,7 +6,7 @@ launcher. Exit status, stdout and stderr are compared, and the read-only matrix 
 run under bwrap so that its expectations are checked against the kernel itself rather than against the
 launcher. Needs user namespaces and bwrap; says so and exits 0 when it cannot run.
 
-    test/oracle_ns.py --can CAN [--work DIR] [--keep]
+    test/oracle_ns.py --exclave CAN [--work DIR] [--keep]
 """
 import argparse
 import os
@@ -70,7 +70,7 @@ def run_bwrap(root, work, cmd, extra=()):
     args += ["--bind", work, work, "--chdir", work, "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", work, "--setenv", "W", work,
              "--setenv", "LANG", "C.UTF-8", "--setenv", "TZ", "UTC0", "--setenv", "SHELL", "/bin/sh",    # the boundary constants of 6.2
              "--setenv", "CC", GCC, "--setenv", "SH", SH, "--setenv", "SHX", SHX, "--setenv", "LIBC", LIBC,
-             "--setenv", "CONT_SH", SH, "--setenv", "CONT_SH_LINK", SH_LINK]                   # the tree's spellings (test/tree.py)
+             "--setenv", "EXCLAVE_TEST_SH", SH, "--setenv", "EXCLAVE_TEST_SH_LINK", SH_LINK]                   # the tree's spellings (test/tree.py)
     for f in IDENTITY:
         if os.path.exists(f) and os.path.lexists(os.path.join(root, f.lstrip("/"))):
             if os.path.islink(f):
@@ -84,19 +84,19 @@ def run_bwrap(root, work, cmd, extra=()):
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
-def run_launcher(can, work, cmd, prog=None):
-    env = {"PATH": "/usr/bin:/bin", "HOME": work, "W": work, "CC": GCC, "SH": SH, "SHX": SHX, "LIBC": LIBC, "CONT_SH": SH, "CONT_SH_LINK": SH_LINK,
+def run_launcher(ex, work, cmd, prog=None):
+    env = {"PATH": "/usr/bin:/bin", "HOME": work, "W": work, "CC": GCC, "SH": SH, "SHX": SHX, "LIBC": LIBC, "EXCLAVE_TEST_SH": SH, "EXCLAVE_TEST_SH_LINK": SH_LINK,
            "LANG": "en_GB.UTF-8", "TZ": "Asia/Tokyo"}                                        # the last two replaced at the boundary (6.2)
     if prog:
-        p = subprocess.run([os.path.join(can, ".exclave", "launcher"), prog] + cmd, cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.run([os.path.join(ex, ".exclave", "launcher"), prog] + cmd, cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     else:
-        p = subprocess.run([os.path.join(can, "tree", __import__("tree").vbin(os.path.join(can, "tree"), "sh").lstrip("/")), "-c", cmd], cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.run([os.path.join(ex, "tree", __import__("tree").vbin(os.path.join(ex, "tree"), "sh").lstrip("/")), "-c", cmd], cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--can", required=True)
+    ap.add_argument("--exclave", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "oracle-work"))
     ap.add_argument("--keep", action="store_true")
     a = ap.parse_args()
@@ -111,12 +111,12 @@ def main():
         shutil.rmtree(work)
     os.makedirs(work)
     import tree
-    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # the launcher's world: a copy relinked with the build (17)
+    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "can"))   # the launcher's world: a copy relinked with the build (17)
     # an unwrapped copy of the tree for bwrap: hard links, then the payloads moved back over the wrappers
     root = os.path.join(work, "bare", "tree")
-    shutil.copytree(os.path.join(can, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy)
+    shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy)
     build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
-    with open(os.path.join(root, "usr", "share", "cont-test-marker"), "w") as f:
+    with open(os.path.join(root, "usr", "share", "exclave-test-marker"), "w") as f:
         f.write("marker\n")
     # an identity file that is a host symlink: a bind of the host's file would hide its link text, which the
     # launcher reports (8.4); the copy gets a symlink with the host's text, and run_bwrap binds the target
@@ -135,11 +135,11 @@ def main():
     fails = 0
     # 1. the read-only matrix against the kernel: the same program, the same expectations, a real read-only bind
     global GCC, SH, SHX, LIBC, SH_LINK
-    r = os.path.join(can, "tree")
+    r = os.path.join(ex, "tree")
     GCC = tree.compiler(r, platform.machine()) or GCC
     SH, SHX, LIBC = tree.vbin(r, "sh"), tree.resolve(r, tree.vbin(r, "sh")), tree.libc(r, platform.machine())
     SH_LINK = os.readlink(os.path.join(r, SH.lstrip("/"))) if os.path.islink(os.path.join(r, SH.lstrip("/"))) else ""
-    gcc = os.path.join(can, "tree", tree.vbin(os.path.join(can, "tree"), GCC).lstrip("/"))
+    gcc = os.path.join(ex, "tree", tree.vbin(os.path.join(ex, "tree"), GCC).lstrip("/"))
     prog = os.path.join(work, "ro_matrix")
     r = subprocess.run([gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "ro_matrix.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode:
@@ -166,7 +166,7 @@ def main():
             p = os.path.join(work, f)
             if os.path.lexists(p):
                 os.remove(p)
-        o = run_launcher(can, work, cmd)
+        o = run_launcher(ex, work, cmd)
         bn = (b[0], norm(b[1], work), norm(re.sub(r"^[^:]*/(sh|dash): ", "sh: ", b[2], flags=re.M), work))
         on = (o[0], norm(o[1], work), norm(re.sub(r"^[^:]*/(sh|dash): ", "sh: ", o[2], flags=re.M), work))
         # the launcher names programs by their real path when the host invoked them; bwrap by the virtual one

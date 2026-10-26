@@ -15,7 +15,7 @@ The loop that has served well, in the order it pays:
 
 1. **Measure first.** A limitation or a suspected wrong answer gets an
    exerciser: a small C program in `test/progs/` that prints one line
-   per case. `test/exercise.py --can CAN PROG.c ARGS` runs it under
+   per case. `test/exercise.py --exclave CAN PROG.c ARGS` runs it under
    `bwrap` with the unwrapped tree read-only at `/`, where the kernel
    answers, and under the opener, and marks the lines that differ. The
    kernel's column is the expectation. For a trapped syscall, its cases
@@ -37,7 +37,7 @@ The loop that has served well, in the order it pays:
    where a change is recorded; figures there are measured rather than
    guessed, because the documents are what a reader trusts.
 5. **Gate, matrix, commit.** `test/gate.sh CAN...` on the gcc, Alpine,
-   Fedora and clang cans at zero failures, `test/matrix.py --can CAN`
+   Fedora and clang cans at zero failures, `test/matrix.py --exclave CAN`
    before an opener change is committed, one commit per item.
 
 ## Preferences
@@ -70,7 +70,7 @@ The loop that has served well, in the order it pays:
   aarch64 build leaves `x28` alone (`-ffixed-x28`), where a Go program
   keeps its goroutine while the handler runs (7.5.3). `make`
   builds `build/launcher-aarch64` when `aarch64-linux-gnu-gcc` is
-  installed; it is tested in the arm64 VM (`test/matrix.py --can CAN
+  installed; it is tested in the arm64 VM (`test/matrix.py --exclave CAN
   --only noble-arm64 --debs-arm64 DIR`), since user-mode emulation has no seccomp. A
   syscall the handler re-issues is best one the oldest kernel of the
   matrix has (`renameat`, not `renameat2`, for a plain rename).
@@ -111,14 +111,14 @@ The loop that has served well, in the order it pays:
 - **Claims and measurements.** Figures in the proposal are marked by
   the revision that measured them; a number the current filter has not
   produced is better left out than quoted.
-- **The gate.** `test/gate.sh CAN...` (`CONT_CACHE=<cache>` adds
+- **The gate.** `test/gate.sh CAN...` (`EXCLAVE_TEST_CACHE=<cache>` adds
   dogfood) runs the unit tests, the stack budget, the suite on every
   can in two orders and, for the first can, under the plain terminal's
   AppArmor label, the oracles, the syscall probe and the Docker
   profile, every step in parallel on copies, in about a minute with a
   30 s budget per test. Every driver runs `build/launcher` on a copy of
   its own, the suite a can it wraps from the given can's tree and the
-  others `tree.fresh_can`, a copy reopened with `build/launcher`, since
+  others `tree.fresh_exclave`, a copy reopened with `build/launcher`, since
   the opener a can carries is the one it was closed with; a
   copy kept between runs (`test/exercise.py`) is reopened again when
   the build has changed. A hand-made copy has neither: reopen it.
@@ -164,8 +164,8 @@ Every development input is made by `test/inputs.sh DIR`, which holds
 the exact fetch commands: the gcc, Alpine, Fedora and clang cans of
 the gate, the CentOS 7 rpms for `test/sysroot.py`, the arm64 debs for
 the emulated row, and the sources of `test/realsoft.py` and
-`test/bench.py`. `~/.cache/cont-inputs` is a good `DIR`; the fetchers
-cache under `~/.cache/cont-debs`, `cont-apks` and `cont-rpms`. Nothing
+`test/bench.py`. `~/.cache/exclave-inputs` is a good `DIR`; the fetchers
+cache under `~/.cache/exclave-debs`, `exclave-apks` and `exclave-rpms`. Nothing
 under `~/.cache` or the session scratchpad is assumed to persist: the
 scratchpad lost every can once, so an input is best not kept only
 there, nor put where a script will remove it, and refetching beats
@@ -174,5 +174,5 @@ hunting. The scratchpad suits traces and one-off trees
 `test/`. The arm64 can is made inside the VM, since a can is closed on
 its own architecture; the suite, the oracles and `test/exercise.py`
 make their own copies under `build/` (ignored by git). Cloud images for
-the matrix live in `~/.cache/cont-images`; QEMU with KVM and
+the matrix live in `~/.cache/exclave-images`; QEMU with KVM and
 `cloud-image-utils` are installed, and this user can open `/dev/kvm`.

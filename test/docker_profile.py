@@ -8,7 +8,7 @@ assembled for this kernel, and as Docker installs it before kernel 4.8, where pr
 and the launcher copies program memory through a pipe (13); the workload includes a bad pointer that must be
 EFAULT either way. Needs bwrap and user namespaces; says so and exits 0 when it cannot run.
 
-    test/docker_profile.py --can CAN --profile docker-seccomp.json [--work DIR]
+    test/docker_profile.py --exclave CAN --profile docker-seccomp.json [--work DIR]
 """
 import argparse
 import json
@@ -34,10 +34,10 @@ DEFAULT_CAPS = {"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER", "CA
                 "CAP_SETUID", "CAP_SETFCAP", "CAP_SETPCAP", "CAP_NET_BIND_SERVICE", "CAP_SYS_CHROOT", "CAP_KILL", "CAP_AUDIT_WRITE"}
 
 
-def kernel_table(can=None):
+def kernel_table(ex=None):
     """The machine's syscall table from the can's headers (a gcc can ships linux-libc-dev) or the host's."""
     from syscalls import kernel_table as table
-    return table(roots=([os.path.join(can, "tree")] if can else []) + ["/"])
+    return table(roots=([os.path.join(ex, "tree")] if ex else []) + ["/"])
 
 
 class BPF:
@@ -146,9 +146,9 @@ def build(profile, table, kernel=None):
     return b
 
 
-def assemble(profile_path, can=None, kernel=None):
+def assemble(profile_path, ex=None, kernel=None):
     profile = json.load(open(profile_path))
-    table = kernel_table(can)
+    table = kernel_table(ex)
     b = BPF()
     # the NE case above is awkward; the default profile has no NE rules, so refuse rather than guess
     for entry in profile.get("syscalls", []):
@@ -160,7 +160,7 @@ def assemble(profile_path, can=None, kernel=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--can", required=True)
+    ap.add_argument("--exclave", required=True)
     ap.add_argument("--profile", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "docker-work"))
     a = ap.parse_args()
@@ -172,8 +172,8 @@ def main():
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
-    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy relinked with the build (17)
-    root = os.path.join(can, "tree")
+    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "can"))   # a copy relinked with the build (17)
+    root = os.path.join(ex, "tree")
     cc = tree.compiler(root, MACHINE) or "cc"
     with open(os.path.join(work, "hello.c"), "w") as f:
         f.write('#include <errno.h>\n#include <stdio.h>\n#include <pthread.h>\n#include <spawn.h>\n#include <sys/wait.h>\n#include <unistd.h>\nextern char **environ;\n'
@@ -184,7 +184,7 @@ def main():
     exe = tree.resolve(root, tree.vbin(root, "readlink"))            # what /proc/self/exe reads for the wrapper, or the applet's busybox
     fails = 0
     for label, kernel in (("Docker's default profile", None), ("the profile as Docker installs it before kernel 4.8, process_vm_readv refused", (3, 10))):
-        prog = assemble(a.profile, can, kernel)
+        prog = assemble(a.profile, ex, kernel)
         r, w = os.pipe()
         os.write(w, prog)
         os.close(w)

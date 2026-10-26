@@ -24,7 +24,7 @@ def main():
     ap.add_argument("--script", required=True)
     ap.add_argument("--only")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "vm-run-work"))
-    ap.add_argument("--images", default=os.path.join(os.path.expanduser("~"), ".cache", "cont-images"))
+    ap.add_argument("--images", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-images"))
     ap.add_argument("--memory", type=int, default=2048)
     ap.add_argument("files", nargs="*")
     a = ap.parse_args()
@@ -46,7 +46,7 @@ def main():
         with open(os.path.join(work, name + "-user-data"), "w") as f:
             f.write(matrix.user_data(family, pubkey))
         with open(os.path.join(work, name + "-meta-data"), "w") as f:
-            f.write("instance-id: cont-%s\nlocal-hostname: %s\n" % (name, name))
+            f.write("instance-id: exclave-%s\nlocal-hostname: %s\n" % (name, name))
         subprocess.run(["cloud-localds", os.path.join(work, name + "-seed.iso"), os.path.join(work, name + "-user-data"),
                         os.path.join(work, name + "-meta-data")], check=True)
         matrix.log("booting", name)

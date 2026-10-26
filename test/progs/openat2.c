@@ -1,6 +1,6 @@
 /* openat2.c — the openat2 regression of PROPOSAL.md 17.4: the resolve flags in the can's world (7.4.3).
  * usage: openat2 HOSTDIR   (HOSTDIR: a writable host directory). Prints FAIL lines; exit 1 on any; exit 3 when
- * the kernel has no openat2. Spellings come from the environment: CONT_SH (a symlink in the tree), CONT_TRUE. */
+ * the kernel has no openat2. Spellings come from the environment: EXCLAVE_TEST_SH (a symlink in the tree), EXCLAVE_TEST_TRUE. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -32,8 +32,8 @@ int main(int argc, char **argv)
 {
     if (argc < 2) { fprintf(stderr, "usage: openat2 HOSTDIR\n"); return 2; }
     const char *host = argv[1];
-    const char *sh = getenv("CONT_SH") ? getenv("CONT_SH") : "/usr/bin/sh";
-    const char *truep = getenv("CONT_TRUE") ? getenv("CONT_TRUE") : "/usr/bin/true";
+    const char *sh = getenv("EXCLAVE_TEST_SH") ? getenv("EXCLAVE_TEST_SH") : "/usr/bin/sh";
+    const char *truep = getenv("EXCLAVE_TEST_TRUE") ? getenv("EXCLAVE_TEST_TRUE") : "/usr/bin/true";
     errno = 0;
     long r = o2(AT_FDCWD, "/", O_RDONLY | O_DIRECTORY, 0, 0);
     if (r < 0 && errno == ENOSYS) { printf("no openat2 on this kernel\n"); return 3; }

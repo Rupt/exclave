@@ -78,7 +78,7 @@ def libc(root, machine):
 
 
 # ---------------------------------------------------------------- a can for a driver (17)
-def copy_can(src, dst):
+def copy_exclave(src, dst):
     """A copy of a can for a driver or a test to alter: the tree's files hard-linked, the files under .exclave/ copied, since a
     manifest or lock written through a hard link would change the given can's."""
     import exclave
@@ -95,24 +95,24 @@ def copy_can(src, dst):
     return dst
 
 
-def fresh_can(src, dst, launcher=BUILD_LAUNCHER):
+def fresh_exclave(src, dst, launcher=BUILD_LAUNCHER):
     """copy_can, then every wrapper relinked to build/launcher (exclave relink, about a second for a gcc can): the launcher a
     driver runs is always the checkout's build, never the one a can carries, which is the one it was closed with and
     which a rebuild leaves behind. The copy is made anew on every run, so nothing has to be remembered."""
     import exclave
     if not os.path.isfile(launcher):
         sys.exit("no launcher at %s: run make" % launcher)
-    copy_can(src, dst)
+    copy_exclave(src, dst)
     exclave.cmd_relink(dst, launcher)
     return dst
 
 
-def relink_if_stale(can, launcher=BUILD_LAUNCHER):
+def relink_if_stale(ex, launcher=BUILD_LAUNCHER):
     """A copy kept between runs, relinked again when the build has changed since it was made: the check is a byte
     comparison of two small files, the relink a second, so a rebuild never has to be remembered by hand."""
     import exclave
-    if not filecmp.cmp(launcher, os.path.join(can, ".exclave", "launcher"), shallow=False):
-        exclave.cmd_relink(can, launcher)
+    if not filecmp.cmp(launcher, os.path.join(ex, ".exclave", "launcher"), shallow=False):
+        exclave.cmd_relink(ex, launcher)
         return True
     return False
 

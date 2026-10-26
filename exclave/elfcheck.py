@@ -306,13 +306,13 @@ def _has_musl_loader(tree):
     return bool(r and os.path.isfile(tree.payload(r)))
 
 
-def static_check(can, own, data_prefixes=(), log=print):
+def static_check(ex, own, data_prefixes=(), log=print):
     """Returns a Report. own: the ownership set of 8.1 as the launcher computes it."""
     import platform
-    tree, rep = Tree(os.path.join(can, "tree")), Report()
+    tree, rep = Tree(os.path.join(ex, "tree")), Report()
     native = {v[0]: k for k, v in MACHINES.items()}.get(platform.machine())
     try:
-        set_machine(Elf(os.path.join(can, ".exclave", "launcher")).machine)   # the can's machine is its launcher's
+        set_machine(Elf(os.path.join(ex, ".exclave", "launcher")).machine)   # the can's machine is its launcher's
     except (ValueError, OSError):
         set_machine(native or 62)                                       # no launcher yet: the machine the check runs on
     if native != MACHINE:                                    # 10.1: a can is closed on a machine of its architecture, where its loader can be asked
@@ -366,11 +366,11 @@ def static_check(can, own, data_prefixes=(), log=print):
                     continue
             try:
                 e = Elf(pay)
-            except ForeignElf as ex:                          # Fedora's gcc ships 32-bit crt objects beside the 64-bit ones
-                rep.warnings.append("%s: %s" % (vpath, ex))
+            except ForeignElf as exc:                          # Fedora's gcc ships 32-bit crt objects beside the 64-bit ones
+                rep.warnings.append("%s: %s" % (vpath, exc))
                 continue
-            except ValueError as ex:
-                rep.errors.append("%s: %s" % (vpath, ex))
+            except ValueError as exc:
+                rep.errors.append("%s: %s" % (vpath, exc))
                 continue
             if e.machine != MACHINE:
                 rep.warnings.append("%s: not %s: a foreign object, not checked (13)" % (vpath, MACHINES.get(MACHINE, ("?",))[0]))
@@ -428,8 +428,8 @@ def static_check(can, own, data_prefixes=(), log=print):
                 rep.errors.append("%s needs %s: a libc other than the loader's %s" % (vpath, n, libc_soname))
             try:
                 fe = Elf(tree.payload(found))
-            except (ValueError, OSError) as ex:
-                rep.errors.append("%s: %s" % (found, ex))
+            except (ValueError, OSError) as exc:
+                rep.errors.append("%s: %s" % (found, exc))
                 continue
             check(found, fe, below, chain + [vpath])
     for vpath, e in executables:                                   # executables first, so that RPATH inheritance is seen
@@ -478,7 +478,7 @@ def needed_closure(tree, vpaths, own):
     return out
 
 
-def dynamic_check(can, logs, own, log=print):
+def dynamic_check(ex, logs, own, log=print):
     """Read EXCLAVE_LOG files; report libraries opened outside the can and NSS modules the host names that
     the can lacks."""
     import build
@@ -503,7 +503,7 @@ def dynamic_check(can, logs, own, log=print):
             continue
         else:
             rep.errors.append("library opened on the host: " + lib)
-    tree = Tree(os.path.join(can, "tree"))
+    tree = Tree(os.path.join(ex, "tree"))
     if os.path.exists("/etc/nsswitch.conf"):
         mods = set()
         for line in open("/etc/nsswitch.conf", encoding="utf-8", errors="replace"):

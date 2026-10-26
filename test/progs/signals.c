@@ -21,7 +21,7 @@ static unsigned long sigblk(void)
     while (f && fgets(l, sizeof l, f)) if (!strncmp(l, "SigBlk:", 7)) v = strtoul(l + 7, 0, 16);
     if (f) fclose(f); return v;
 }
-static void h_stat(int s) { struct stat st; if (stat("/usr/share/cont-test-marker", &st) == 0) hits++; }
+static void h_stat(int s) { struct stat st; if (stat("/usr/share/exclave-test-marker", &st) == 0) hits++; }
 static void h_exe(int s) { char b[256]; if (readlink("/proc/self/exe", b, 255) > 0) hits++; }
 
 int main(void)

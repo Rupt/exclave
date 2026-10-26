@@ -8,12 +8,12 @@ use std::process::Command;
 
 fn main() {
     let mut fails = 0;
-    let marker = "/usr/share/cont-test-marker";
+    let marker = "/usr/share/exclave-test-marker";
     let m = fs::metadata(marker).expect("metadata by path");
     let f = fs::File::open(marker).expect("open");
     let m2 = f.metadata().expect("metadata by descriptor");
     if m.ino() != m2.ino() || !m.is_file() || m.len() != 7 { fails += 1; println!("FAIL File::metadata differs from metadata by path"); }
-    let truep = std::env::var("CONT_TRUE").unwrap_or("/usr/bin/true".to_string());
+    let truep = std::env::var("EXCLAVE_TEST_TRUE").unwrap_or("/usr/bin/true".to_string());
     match Command::new(&truep).status() { Ok(s) if s.success() => {}, other => { fails += 1; println!("FAIL Command::status: {:?}", other); } }
     // F-N12 (review round 1): metadata of an identity file, then a loop of spawns by path and one by PATH; the
     // anomaly seen on the spike was a 127 from the loop
@@ -28,7 +28,7 @@ fn main() {
     }
     let n = fs::read_dir("/usr/lib/gcc").expect("read_dir").count();
     if n == 0 { fails += 1; println!("FAIL read_dir /usr/lib/gcc empty"); }
-    match fs::write("/usr/share/cont-new", "y") {
+    match fs::write("/usr/share/exclave-new", "y") {
         Err(e) if e.raw_os_error() == Some(30) => {}
         other => { fails += 1; println!("FAIL write to the can: {:?}", other); }
     }
@@ -41,8 +41,8 @@ fn main() {
     fs::write(&host, "host").expect("write to the host");
     if fs::read_to_string(&host).unwrap() != "host" { fails += 1; println!("FAIL host read back"); }
     fs::remove_file(&host).expect("remove host file");
-    let sh = std::env::var("CONT_SH").unwrap_or("/usr/bin/sh".to_string());
-    let sh_exe = std::env::var("CONT_SH_EXE").unwrap_or("/usr/bin/dash".to_string());
+    let sh = std::env::var("EXCLAVE_TEST_SH").unwrap_or("/usr/bin/sh".to_string());
+    let sh_exe = std::env::var("EXCLAVE_TEST_SH_EXE").unwrap_or("/usr/bin/dash".to_string());
     match fs::canonicalize(&sh) {
         Ok(p) if p == std::path::Path::new(&sh_exe) => {}
         other => { fails += 1; println!("FAIL canonicalize {}: {:?}", sh, other); }
