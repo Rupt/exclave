@@ -172,7 +172,7 @@ def main():
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
-    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy reopened with the build (17)
+    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy relinked with the build (17)
     root = os.path.join(can, "tree")
     cc = tree.compiler(root, MACHINE) or "cc"
     with open(os.path.join(work, "hello.c"), "w") as f:

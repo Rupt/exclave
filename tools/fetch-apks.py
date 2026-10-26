@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fetch-apks.py — an example of the step before the cannery for Alpine: resolve a package closure from an
+"""fetch-apks.py — an example of the step before the tool for Alpine: resolve a package closure from an
 Alpine repository index and download it into a directory of .apk files (PROPOSAL.md 10.1).
 
     tools/fetch-apks.py [--branch v3.21] [--repos main,community] [--arch x86_64] [--mirror URL]
@@ -8,9 +8,9 @@ Alpine repository index and download it into a directory of .apk files (PROPOSAL
 The closure of `D:` dependencies is resolved against APKINDEX, `so:`, `cmd:` and `pc:` names through the
 `p:` provides, a provider by its `k:` priority then by name, and the base set (alpine-baselayout, busybox)
 added unless --no-base. Every package is verified against the index's checksum (the SHA-1 apk-tools
-records); the index signature is not verified, so the mirror is trusted. The cannery itself never
-fetches: `cannery unpack OUT DIR/*.apk` takes what this tool, apk, a mirror or a hand-made directory has
-put on disk. Not part of the cannery can.
+records); the index signature is not verified, so the mirror is trusted. The tool itself never
+fetches: `exclave unpack OUT DIR/*.apk` takes what this tool, apk, a mirror or a hand-made directory has
+put on disk. Not part of the tool's own exclave.
 """
 import argparse
 import base64
@@ -23,7 +23,7 @@ import sys
 import tarfile
 import urllib.request
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cannery"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "exclave"))
 import apk  # noqa: E402
 
 DEFAULT_MIRROR = "https://dl-cdn.alpinelinux.org/alpine"
@@ -51,7 +51,7 @@ class Repo:
             with open(path, "rb") as f:
                 return f.read()
         log("fetch " + url)
-        req = urllib.request.Request(url, headers={"User-Agent": "cont-cannery/0.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "exclave/0.1"})
         with urllib.request.urlopen(req, timeout=120) as r:
             data = r.read()
         with open(path + ".tmp%d" % os.getpid(), "wb") as f:

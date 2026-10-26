@@ -1,6 +1,6 @@
 """tree.py — what a tree says about itself, for the suite and the oracles (PROPOSAL.md 17): a test asserts what the
 tree says, never what one distribution spells. Every function takes the tree's root directory; then the one way a
-driver takes a can: a copy of its own, reopened with the build, so that the launcher under test is always build/launcher
+driver takes a can: a copy of its own, relinked with the build, so that the launcher under test is always build/launcher
 and never the one a can was closed with; and the Go regression's builds, which the matrix makes on the host for VMs
 that have no go."""
 import filecmp
@@ -12,7 +12,7 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_LAUNCHER = os.path.join(REPO, "build", "launcher")
-sys.path.insert(0, os.path.join(REPO, "cannery"))
+sys.path.insert(0, os.path.join(REPO, "exclave"))
 
 
 def vbin(root, name):
@@ -81,8 +81,8 @@ def libc(root, machine):
 def copy_can(src, dst):
     """A copy of a can for a driver or a test to alter: the tree's files hard-linked, the files under .exclave/ copied, since a
     manifest or lock written through a hard link would change the given can's."""
-    import cannery
-    shutil.copytree(src, dst, symlinks=True, copy_function=cannery.link_or_copy)
+    import exclave
+    shutil.copytree(src, dst, symlinks=True, copy_function=exclave.link_or_copy)
     for name in os.listdir(os.path.join(dst, ".exclave")):
         p = os.path.join(dst, ".exclave", name)
         if os.path.isfile(p) and not os.path.islink(p):
@@ -96,23 +96,23 @@ def copy_can(src, dst):
 
 
 def fresh_can(src, dst, launcher=BUILD_LAUNCHER):
-    """copy_can, then every wrapper relinked to build/launcher (cannery reopen, about a second for a gcc can): the launcher a
+    """copy_can, then every wrapper relinked to build/launcher (exclave relink, about a second for a gcc can): the launcher a
     driver runs is always the checkout's build, never the one a can carries, which is the one it was closed with and
     which a rebuild leaves behind. The copy is made anew on every run, so nothing has to be remembered."""
-    import cannery
+    import exclave
     if not os.path.isfile(launcher):
         sys.exit("no launcher at %s: run make" % launcher)
     copy_can(src, dst)
-    cannery.cmd_reopen(dst, launcher)
+    exclave.cmd_relink(dst, launcher)
     return dst
 
 
-def reopen_if_stale(can, launcher=BUILD_LAUNCHER):
-    """A copy kept between runs, reopened again when the build has changed since it was made: the check is a byte
-    comparison of two small files, the reopen a second, so a rebuild never has to be remembered by hand."""
-    import cannery
+def relink_if_stale(can, launcher=BUILD_LAUNCHER):
+    """A copy kept between runs, relinked again when the build has changed since it was made: the check is a byte
+    comparison of two small files, the relink a second, so a rebuild never has to be remembered by hand."""
+    import exclave
     if not filecmp.cmp(launcher, os.path.join(can, ".exclave", "launcher"), shallow=False):
-        cannery.cmd_reopen(can, launcher)
+        exclave.cmd_relink(can, launcher)
         return True
     return False
 

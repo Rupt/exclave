@@ -1,28 +1,30 @@
 #!/usr/bin/env python3
-"""cannery — builds cans from files (PROPOSAL.md sections 6 and 10).
+"""exclave — builds exclaves from files (PROPOSAL.md sections 6 and 10).
 
-A can is a directory at every stage, and every command takes paths; `fmt --check` is the one flag:
+An exclave is a directory at every stage, and every command takes paths; `format --check` is the one flag:
 
-    cannery.py unpack OUT DEB...   Make the open can OUT from package files: extract, synthesise what
-                                   maintainer scripts would have done, add the placeholders, record every
-                                   input in OUT/.exclave/hashes, report dependencies the set does not satisfy.
-    cannery.py wrap CAN            Close a can: check the manifest (written as `exclave 1` if absent), the
-                                   wrappers and every ELF, then wrap every executable and write the
-                                   launcher, manifest and tree hashes to the lock.
-                                   Idempotent; a bare directory holding tree/ becomes a can.
-    cannery.py unwrap CAN          Open a can: move every payload back over its wrapper.
-    cannery.py check CAN [LOG...]  Wrappers, payloads, the tree against the lock's hash and the static
-                                   check; with EXCLAVE_LOG files, the dynamic check of what a workload opened.
-    cannery.py prune CAN LOG...    Drop every file no logged workload touched (10.4).
-    cannery.py fmt FILE...         Parse with the strict grammar and rewrite in canonical form
-                                   (--check: only report).
-    cannery.py hash CAN            The tree hash of 6.4.
-    cannery.py reopen CAN [LAUNCHER] Replace the launcher and relink every wrapper.
+    exclave unpack OUT PKG...       Make the unwrapped exclave OUT from package files: extract, synthesise
+                                    what maintainer scripts would have done, add the placeholders, record
+                                    every input in OUT/.exclave/hashes, report dependencies the set does
+                                    not satisfy.
+    exclave wrap EXCLAVE            Wrap it: check the manifest (written as `exclave 1` if absent), the
+                                    wrappers and every ELF, then wrap every executable and write the
+                                    launcher, manifest and tree hashes to .exclave/hashes. Idempotent; a
+                                    bare directory holding tree/ becomes an exclave.
+    exclave unwrap EXCLAVE          Unwrap it: move every original back over its wrapper.
+    exclave check EXCLAVE [LOG...]  Wrappers, originals, the tree against its recorded hash and the static
+                                    check; with EXCLAVE_LOG files, the dynamic check of what a workload
+                                    opened.
+    exclave prune EXCLAVE LOG...    Drop every file no logged workload touched (10.4).
+    exclave format FILE...          Parse with the strict grammar and rewrite in canonical form
+                                    (--check: only report).
+    exclave hash EXCLAVE            The tree hash of 6.4.
+    exclave relink EXCLAVE [LAUNCHER]  Replace the launcher and relink every wrapper.
 
-Unpack, wrap and reopen also write CAN/README, which tells whoever finds the can what it is and how to
-run it, where the can has none.
+Unpack, wrap and relink also write EXCLAVE/README, which tells whoever finds the exclave what it is and
+how to run it, where the exclave has none.
 
-The cannery never opens a network connection: the files it is given are its inputs, whoever fetched
+The tool never opens a network connection: the files it is given are its inputs, whoever fetched
 them. Standard library only. Python 3.6 or later.
 """
 import argparse
@@ -54,46 +56,49 @@ SCHEMA = {
 ONCE = {"exclave", "cpu", "hashes", "tool", "launcher", "manifest", "tree"}
 # the launcher's tables (8.1): the manifest may carry this many records, the tree this many top-level entries
 LIMITS = {"own": 256, "host": 32, "data": 32, "top": 256}
-# 6.1: the can's README, for whoever finds the directory without knowing cont; written where the can has none
-CAN_README = b"""\
-This directory is a can: Linux software packed with the libraries and
-files it needs, so that its programs run from here, by path, with
-nothing installed. It was made by the cannery, the build tool of a
-project called cont. It runs on Linux 3.10 or later, on the machine
-type it was built for ("file .exclave/launcher" names it), with no root,
-setup step, daemon or container, and running it changes nothing in
-tree/ or .exclave/ and leaves nothing behind. It is not a sandbox: its
-programs run as you, with your files and your network.
+# 6.1: the exclave's README, for whoever finds the directory without knowing the project; written where it has none
+README_TEXT = b"""\
+This directory is an exclave: Linux software packed with the
+libraries and files it needs, so that its programs run from here, by
+path, with nothing installed. It was made by exclave, a tool that
+builds such directories. It runs on Linux 3.10 or later, on the
+machine type it was built for ("file .exclave/launcher" names it),
+with no root, setup step, daemon or container, and running it changes
+nothing in tree/ or .exclave/ and leaves nothing behind. It is not a
+sandbox: its programs run as you, with your files and your network.
 
 What is here
 
-  tree/          the software's own /: usually the packages listed
-                 in .exclave/hashes, unpacked as if installed.
-  .exclave/launcher    a small program that starts the others. Every
-                 program in tree/ is a hard link to it, a "wrapper";
-                 the real one sits in a hidden .real/ directory
-                 beside it, and running tree/usr/bin/NAME runs
-                 tree/usr/bin/.real/NAME inside the can.
+  tree/              the software's own /: usually the packages listed
+                     in .exclave/hashes, unpacked as if installed.
+  .exclave/launcher  a small program that starts the others. Every
+                     program in tree/ is a hard link to it, a
+                     "wrapper"; the original sits in a hidden .real/
+                     directory beside it, and running tree/usr/bin/NAME
+                     runs tree/usr/bin/.real/NAME inside the exclave.
   .exclave/manifest  the maker's settings; "exclave 1" alone means none.
-  .exclave/hashes      one "pkg" line per package that went in: name,
-                 version, architecture and hash of the package file;
-                 then hashes of the launcher, the manifest and, on the
-                 "tree" line, all of tree/. Not where they came from.
-  other names    shortcuts into tree/ that the maker added.
+  .exclave/hashes    one "pkg" line per package that went in: name,
+                     version, architecture and hash of the package
+                     file; then hashes of the launcher, the manifest
+                     and, on the "tree" line, all of tree/. Not where
+                     they came from.
+  other names        shortcuts into tree/ that the maker added.
 
-A lock with no "tree" line marks an open, unfinished can: its
-programs are unwrapped and would use this system's libraries.
+A hashes file with no "tree" line marks an unwrapped, unfinished
+exclave: its programs would use this system's libraries.
 
 Running it
 
-With CAN the path of this directory, run from your own directory:
+With EX the path of this directory, run from your own directory:
 
-  CAN/NAME ARGS...               a shortcut, if the maker made one
-  CAN/root/usr/bin/NAME ARGS...  any program in the can
-  CAN/root/bin/sh                a shell inside the can, if it has one
-  CAN/.exclave/launcher PROG ARGS...   PROG run inside the can: one of your
-                                 own, such as one the can's compiler
-                                 built, or a can path, /usr/bin/NAME
+  EX/NAME ARGS...                    a shortcut, if the maker made one
+  EX/tree/usr/bin/NAME ARGS...       any program in the exclave
+  EX/tree/bin/sh                     a shell inside the exclave, if it
+                                     has one
+  EX/.exclave/launcher PROG ARGS...  PROG run inside the exclave: one of
+                                     your own, such as one the
+                                     exclave's compiler built, or an
+                                     exclave path, /usr/bin/NAME
 
 A symlink to a program in tree/ works too; a copy does not, and a
 program run straight from .real/ is likely to fail.
@@ -103,13 +108,13 @@ Inside, a program sees the top-level directories that tree/ fills,
 fails as on a read-only disk. Everything else is this system's: /home,
 /tmp, /proc, /dev, the working directory, and eight files such as
 /etc/passwd and /etc/resolv.conf that say who you are and how network
-names are looked up. PATH is the can's, so this system's commands are
-not found by name. The locale is C.UTF-8 and the time zone UTC by
+names are looked up. PATH is the exclave's, so this system's commands
+are not found by name. The locale is C.UTF-8 and the time zone UTC by
 default, and sudo, su and other setuid programs do not work inside.
 
-EXCLAVE_LOG=/some/file makes every process append one line per call that
-names a file: the call, its result and the path. Messages that begin
-"launcher:" come from the can, not from the program.
+EXCLAVE_LOG=/some/file makes every process append one line per call
+that names a file: the call, its result and the path. Messages that
+begin "launcher:" come from the exclave, not from the program.
 
 Moving, copying, removing
 
@@ -117,21 +122,22 @@ Nothing outside this directory refers to it: move it, copy it with
 cp -a, pack it with tar, or remove it with rm -r. A copy that splits
 the hard links (cp -r) still runs, larger by the launcher's size per
 program. Do not edit a program in tree/ in place: they are all one
-file. A can does not run from a filesystem mounted noexec.
+file. An exclave does not run from a filesystem mounted noexec.
 
 Checking it
 
-The hashes are BLAKE2b-256, so "b2sum -l 256 .exclave/launcher" prints the
-lock's launcher hash, and a package file fetched again its pkg hash.
-The cannery, cont's build tool, is not part of this can:
+The hashes are BLAKE2b-256, so "b2sum -l 256 .exclave/launcher" prints
+the recorded launcher hash, and a package file fetched again its pkg
+hash. The exclave tool, which builds these directories, is not part
+of this one:
 
-  cannery check DIR   every program wrapped, the libraries each needs
-                      found inside, tree/ against the lock's tree line
-  cannery unwrap DIR  open the can for editing; cannery wrap DIR
-                      closes it again
-  cannery reopen DIR  put in another launcher, relinking every program
+  exclave check DIR   every program wrapped, the libraries each needs
+                      found inside, tree/ against its recorded hash
+  exclave unwrap DIR  unwrap the exclave for editing; exclave wrap DIR
+                      wraps it again
+  exclave relink DIR  put in another launcher, relinking every program
 
-This file is the same in every can; a maker may replace it.
+This file is the same in every exclave; a maker may replace it.
 """
 
 
@@ -475,7 +481,7 @@ MACHINE = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64":
 
 
 def default_launcher(arch=None):
-    """build/launcher beside a checkout, or the launcher shipped next to this file in the cannery can (10.5); for packages
+    """build/launcher beside a checkout, or the launcher shipped next to this file in the tool's own exclave (10.5); for packages
     of another architecture than this machine's, the cross-built build/launcher-<machine> (7.1)."""
     import platform
     machine = MACHINE.get(arch, arch)
@@ -495,7 +501,7 @@ def write_readme(can):
     p = os.path.join(can, "README")
     if not os.path.lexists(p):
         with open(p, "wb") as f:
-            f.write(CAN_README)
+            f.write(README_TEXT)
 
 
 def install_launcher(can, launcher=None, arch=None):
@@ -568,7 +574,7 @@ def wrapper_problems(can, data=()):
         w = is_wrapper(real, oi)
         d_, n_ = os.path.split(real)
         if not w and os.path.exists(os.path.join(d_, ".real", n_)):
-            problems.append("stale wrapper (not this can's launcher): %s; run cannery reopen" % v)
+            problems.append("stale wrapper (not this can's launcher): %s; run exclave relink" % v)
         elif st.st_mode & 0o111 and not w and not os.access(real, os.X_OK):
             problems.append("executable file its user cannot execute: %s (mode %o); a wrapper would run as the launcher's mode" % (v, st.st_mode & 0o7777))
         if w and (not os.path.exists(payload_path(real)) or payload_path(real) == real):
@@ -596,7 +602,7 @@ def wrap_files(can, data=(), quiet=False):
         d, name = os.path.split(real)
         rd = os.path.join(d, ".real")
         if os.path.lexists(os.path.join(rd, name)):
-            raise build.BuildError("%s has a payload in .real/ already: a stale wrapper; run cannery reopen" % v)
+            raise build.BuildError("%s has a payload in .real/ already: a stale wrapper; run exclave relink" % v)
         os.makedirs(rd, exist_ok=True)
         os.rename(real, os.path.join(rd, name))
         try:
@@ -626,7 +632,7 @@ def cmd_wrap(can, quiet=False):
         mdata = f.read()
     recs = parse(mdata, "exclave")
     if dump(recs, "exclave") != mdata:
-        sys.exit("refusing: %s is not canonical; run cannery fmt on it" % mp)
+        sys.exit("refusing: %s is not canonical; run exclave format on it" % mp)
     check_limits(can)
     data = data_prefixes(can)
     problems = wrapper_problems(can, data)
@@ -654,7 +660,7 @@ def cmd_unwrap(can):
     build.write_lock(can, None)
 
 
-def cmd_reopen(can, launcher=None):
+def cmd_relink(can, launcher=None):
     """Replace a can's launcher and relink every wrapper to it (wrappers are hard links, 6.1). A payload
     without a wrapper is reported, not given one (review F4-5, O4-11); the lock's launcher record follows."""
     launcher = launcher or default_launcher()
@@ -722,9 +728,9 @@ def cmd_check(can, logs=()):
             if recorded[0][0].decode() != actual:
                 problems.append("the tree differs from the lock: recorded %s, now %s" % (recorded[0][0].decode(), actual))
         else:
-            problems.append("an open can: the lock has no tree hash; run cannery wrap")
+            problems.append("an open can: the lock has no tree hash; run exclave wrap")
     elif any(is_wrapper(real, oi) for real, v, st in walk_files(root) if stat.S_ISREG(st.st_mode)):
-        problems.append("wrapped but never closed: no lock; run cannery wrap")   # the third state (review F5-3, N4)
+        problems.append("wrapped but never closed: no lock; run exclave wrap")   # the third state (review F5-3, N4)
     for p in problems:
         print(p)
     print("%d wrapper problems" % len(problems))
@@ -751,7 +757,7 @@ def cmd_prune(can, logs):
     return 1 if rep.errors else 0
 
 
-def cmd_fmt(paths, check):
+def cmd_format(paths, check):
     rc = 0
     for p in paths:
         with open(p, "rb") as f:
@@ -781,37 +787,37 @@ def main(argv):
     sub = ap.add_subparsers(dest="cmd")
     sub.required = True                                       # required= is Python 3.7; the matrix runs 3.6
     p = sub.add_parser("unpack"); p.add_argument("out"); p.add_argument("debs", nargs="+")
-    p = sub.add_parser("wrap"); p.add_argument("can")
-    p = sub.add_parser("unwrap"); p.add_argument("can")
-    p = sub.add_parser("check"); p.add_argument("can"); p.add_argument("logs", nargs="*")
-    p = sub.add_parser("prune"); p.add_argument("can"); p.add_argument("logs", nargs="+")
-    p = sub.add_parser("fmt"); p.add_argument("files", nargs="+"); p.add_argument("--check", action="store_true")
-    p = sub.add_parser("hash"); p.add_argument("can")
-    p = sub.add_parser("reopen"); p.add_argument("can"); p.add_argument("launcher", nargs="?")
+    p = sub.add_parser("wrap"); p.add_argument("exclave")
+    p = sub.add_parser("unwrap"); p.add_argument("exclave")
+    p = sub.add_parser("check"); p.add_argument("exclave"); p.add_argument("logs", nargs="*")
+    p = sub.add_parser("prune"); p.add_argument("exclave"); p.add_argument("logs", nargs="+")
+    p = sub.add_parser("format"); p.add_argument("files", nargs="+"); p.add_argument("--check", action="store_true")
+    p = sub.add_parser("hash"); p.add_argument("exclave")
+    p = sub.add_parser("relink"); p.add_argument("exclave"); p.add_argument("launcher", nargs="?")
     a = ap.parse_args(argv)
     try:
         if a.cmd == "unpack":
             cmd_unpack(a.out, a.debs)
         elif a.cmd == "wrap":
-            return cmd_wrap(a.can)
+            return cmd_wrap(a.exclave)
         elif a.cmd == "unwrap":
-            cmd_unwrap(a.can)
+            cmd_unwrap(a.exclave)
         elif a.cmd == "check":
-            return cmd_check(a.can, a.logs)
+            return cmd_check(a.exclave, a.logs)
         elif a.cmd == "prune":
-            return cmd_prune(a.can, a.logs)
-        elif a.cmd == "fmt":
-            return cmd_fmt(a.files, a.check)
+            return cmd_prune(a.exclave, a.logs)
+        elif a.cmd == "format":
+            return cmd_format(a.files, a.check)
         elif a.cmd == "hash":
-            if not os.path.isdir(os.path.join(a.can, "tree")):
-                sys.exit("refusing: %s has no tree/ directory" % a.can)
-            print(build.tree_hash(os.path.join(a.can, "tree")))
-        elif a.cmd == "reopen":
-            cmd_reopen(a.can, a.launcher)
+            if not os.path.isdir(os.path.join(a.exclave, "tree")):
+                sys.exit("refusing: %s has no tree/ directory" % a.exclave)
+            print(build.tree_hash(os.path.join(a.exclave, "tree")))
+        elif a.cmd == "relink":
+            cmd_relink(a.exclave, a.launcher)
     except GrammarError as e:
         sys.exit("grammar: %s" % e)
     except (build.BuildError, deb.DebError, apk.ApkError, rpm.RpmError) as e:
-        sys.exit("cannery: %s" % e)
+        sys.exit("exclave: %s" % e)
     return 0
 
 

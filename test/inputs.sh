@@ -18,7 +18,7 @@ dir=$(mkdir -p "$1" && cd "$1" && pwd) || exit 2
 mkdir -p "$dir/log" "$dir/src" || exit 2
 fails=0
 
-cannery() { python3 "$repo/cannery/cannery.py" "$@"; }
+exclave() { python3 "$repo/exclave/exclave.py" "$@"; }
 
 fetch() {                                   # fetch NAME FETCHER ARGS...: package files into DIR/NAME through the fetcher's cache
     name=$1; tool=$2; shift 2
@@ -34,7 +34,7 @@ can() {                                     # can NAME PKGDIR: unpack the packag
     name=$1; pkgs=$2
     if grep -q '^tree ' "$dir/$name.can/.exclave/hashes" 2>/dev/null; then echo "$name.can: present"; return 0; fi
     rm -rf "$dir/$name.can"
-    if cannery unpack "$dir/$name.can" "$dir/$pkgs"/* > "$dir/log/$name.can.log" 2>&1 && cannery wrap "$dir/$name.can" >> "$dir/log/$name.can.log" 2>&1; then
+    if exclave unpack "$dir/$name.can" "$dir/$pkgs"/* > "$dir/log/$name.can.log" 2>&1 && exclave wrap "$dir/$name.can" >> "$dir/log/$name.can.log" 2>&1; then
         echo "$name.can: $(grep -c '^pkg ' "$dir/$name.can/.exclave/hashes") packages; $(tail -1 "$dir/log/$name.can.log")"
     else
         echo "$name.can: FAIL, see $dir/log/$name.can.log"; rm -rf "$dir/$name.can"; fails=$((fails + 1)); return 1

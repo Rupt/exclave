@@ -23,10 +23,10 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(REPO, "cannery"))
+sys.path.insert(0, os.path.join(REPO, "exclave"))
 sys.path.insert(0, HERE)
 import build  # noqa: E402
-import cannery  # noqa: E402
+import exclave  # noqa: E402
 import tree  # noqa: E402
 from oracle_resolve import make_maze  # noqa: E402
 from syscalls import kernel_table  # noqa: E402
@@ -576,9 +576,9 @@ def main():
     rng = random.Random(a.seed)
     # the kernel's world: an unwrapped copy of the tree; the launcher's: a copy of the can; the same maze in both
     root = os.path.join(work, "bare", "tree")
-    shutil.copytree(os.path.join(given, "tree"), root, symlinks=True, copy_function=cannery.link_or_copy)
+    shutil.copytree(os.path.join(given, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy)
     build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
-    can = tree.fresh_can(given, os.path.join(work, "can"))                  # the launcher's world: a copy reopened with the build (17)
+    can = tree.fresh_can(given, os.path.join(work, "can"))                  # the launcher's world: a copy relinked with the build (17)
     dirs, files, links = make_maze(root, rng)
     host = os.path.join(work, "area", "host")                              # ".." from the host area is a directory the reset owns
     os.symlink(host + "/hfile", os.path.join(root, "maze", "lH"))          # a can link to a host file, and to a host directory

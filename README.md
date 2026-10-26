@@ -67,14 +67,14 @@ and logs are the tutorial and each command is one you can run by hand:
 1. `make` builds `build/launcher`, the freestanding binary every
    executable in a can is a hard link to.
 2. `tools/fetch-debs.py` downloads Ubuntu 24.04's `gcc-13` closure, 94
-   packages, and `cannery unpack` makes an open can from the files:
+   packages, and `exclave unpack` makes an open can from the files:
    the tree under `gcc.can/tree/`, the maintainer scripts' effects
    synthesised, every input recorded by hash in `gcc.can/.exclave/hashes`.
 3. `tools/fetch-rpms.py` downloads CentOS 7's glibc, headers and
    `libgcc`; unpacked into a can of their own, the tree is copied into
    the gcc can at `/opt/sysroot-el7`, and a two-line manifest says
    `data "/opt/sysroot-el7"`: nothing there is wrapped, checked or
-   executed. `cannery wrap` closes the can, and a symlink `gcc.can/gcc`
+   executed. `exclave wrap` closes the can, and a symlink `gcc.can/gcc`
    names its compiler.
 4. `hello.c` is compiled inside the can twice, plainly and with
    `--sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/`, each
@@ -84,9 +84,9 @@ and logs are the tutorial and each command is one you can run by hand:
    from 2.17 on, the oldest the kernel matrix has, which runs this same
    build natively on CentOS 7. It runs on this host and, through `.exclave/launcher`,
    inside the can on the can's loader.
-5. `cannery prune` keeps, in a copy, the 136 files that compile touched
+5. `exclave prune` keeps, in a copy, the 136 files that compile touched
    out of 9 567; the copy compiles the program again, and
-   `cannery check` reads the new log: that copy is the can you would
+   `exclave check` reads the new log: that copy is the can you would
    ship for that workload, and the check is the one you would run on
    it.
 
@@ -111,10 +111,10 @@ hello from a can
 + gcc.can/.exclave/launcher /home/me/cont/build/example/hello
 hello from a can
 == 5. the can pruned to what the compile touched, and the checks on it
-+ cannery prune hello.can log/hello.log
++ exclave prune hello.can log/hello.log
 pruned hello.can: kept 136 files, removed 9431, 360514915 bytes freed
 static check: 24 ELF files, 2 static executables, 0 warnings, 0 errors
-+ cannery check hello.can log/pruned.log
++ exclave check hello.can log/pruned.log
 0 wrapper problems
 static check: 24 ELF files, 2 static executables, 0 warnings, 0 errors
 warning: this host's nsswitch.conf names sss; the can has no libnss_sss.so.2
@@ -154,20 +154,20 @@ has none, so a maker's own stays.
 tools/fetch-debs.py --out debs gcc-13 libc6-dev make       # Ubuntu or Debian: the closure of the packages named, verified against the index
 tools/fetch-apks.py --out apks gcc musl-dev binutils        # the same for Alpine
 tools/fetch-rpms.py --repo URL --out rpms gcc glibc-devel   # and for Fedora, Rocky, CentOS: any repository with repodata/
-cannery/cannery.py unpack gcc.can debs/*.deb               # package files -> an open can, a directory you may edit; .apk and .rpm files likewise
-cannery/cannery.py wrap gcc.can                            # close it: wrap every executable, static check, hashes into the lock
+exclave/exclave.py unpack gcc.can debs/*.deb               # package files -> an open can, a directory you may edit; .apk and .rpm files likewise
+exclave/exclave.py wrap gcc.can                            # close it: wrap every executable, static check, hashes into the lock
 ln -s tree/usr/bin/gcc-13 gcc.can/gcc                      # an entry, if you want one
 gcc.can/gcc -O2 hello.c -o hello                           # any executable in tree/ runs by path
 gcc.can/tree/usr/bin/sh -c 'as --version'                  # the can's own shell, with the can's PATH
 gcc.can/.exclave/launcher /path/to/host/program args...           # a program without a wrapper, a host tool or a built output, inside the can
 gdb -iex 'set auto-load safe-path /' --args gcc.can/gcc -c x.c   # gdb: the opener carries the script; break, bt, source lines
 EXCLAVE_LOG=/tmp/can.log gcc.can/gcc -c x.c                    # the one knob: one line per trapped syscall
-cannery/cannery.py check gcc.can /tmp/can.log              # static check of every ELF, dynamic check of the logged run
-cannery/cannery.py prune gcc.can /tmp/can.log              # keep what the logged runs touched
-cannery/cannery.py unwrap gcc.can                          # open a closed can to edit it; wrap closes it again
-cannery/cannery.py reopen gcc.can build/launcher             # swap the opener after rebuilding it; the wrappers are relinked
-cannery/cannery.py hash gcc.can                            # the tree hash the lock records
-cannery/cannery.py fmt gcc.can/.exclave/manifest               # the canonical spelling of a manifest or lock; --check only reports
+exclave/exclave.py check gcc.can /tmp/can.log              # static check of every ELF, dynamic check of the logged run
+exclave/exclave.py prune gcc.can /tmp/can.log              # keep what the logged runs touched
+exclave/exclave.py unwrap gcc.can                          # open a closed can to edit it; wrap closes it again
+exclave/exclave.py relink gcc.can build/launcher             # swap the opener after rebuilding it; the wrappers are relinked
+exclave/exclave.py hash gcc.can                            # the tree hash the lock records
+exclave/exclave.py format gcc.can/.exclave/manifest               # the canonical spelling of a manifest or lock; --check only reports
 ```
 
 Between `unpack` and `wrap` the open can is yours: copy a built prefix
@@ -190,9 +190,9 @@ system's own installer doing the building:
 
 ```
 gcc.can/tree/usr/bin/sh -c './configure --prefix=/usr/local && make && make install DESTDIR=$PWD/stage'
-cannery/cannery.py unpack tool.can runtime/*.deb          # libc6 and whatever else the result links against
+exclave/exclave.py unpack tool.can runtime/*.deb          # libc6 and whatever else the result links against
 cp -a stage/usr/local tool.can/tree/usr/
-cannery/cannery.py wrap tool.can                          # the static check says whether it all links inside
+exclave/exclave.py wrap tool.can                          # the static check says whether it all links inside
 ```
 
 No recipe format and no closure copying: the runtime the result needs
@@ -213,7 +213,7 @@ from the can's copy. Every process a workload spawns appends to the
 same file, so a `make` writes one log. A newline in a path is written
 `\n` and a backslash `\\`; nothing else is escaped.
 
-`cannery check CAN [LOG...]` first verifies the wrappers and their
+`exclave check CAN [LOG...]` first verifies the wrappers and their
 payloads and compares the tree with the lock's hash, then runs the
 static check on every ELF file outside data
 prefixes: every loader and every `DT_NEEDED` resolves inside the tree
@@ -229,7 +229,7 @@ missing module, which is right for `hosts` and wrong for `passwd` on a
 host whose users come from LDAP or `systemd-homed`, so the warning is
 the one to read before shipping a can to such a host.
 
-`cannery prune CAN LOG...` keeps every path a logged syscall touched,
+`exclave prune CAN LOG...` keeps every path a logged syscall touched,
 the entries of any directory a program listed, the symlink chains that
 reach kept files, the libraries kept programs need, the placeholders
 and the identity files, and removes every other file and symlink;
@@ -355,12 +355,12 @@ src/scratch.c    handler memory: mmap'd chunks with liveness reclamation (7.5.4)
 src/isa.c        the ISA check (7.7): x86-64 psABI levels by cpuid, aarch64 levels by AT_HWCAP
 src/str.c        string helpers, arena, the shebang parser
 src/log.c        EXCLAVE_LOG and fatal messages
-cannery/cannery.py   the command line: grammar, unpack, wrap, unwrap, check, prune, fmt, hash, reopen
-cannery/deb.py       ar, tar, compression, control stanzas, dependency fields, Debian version order
-cannery/apk.py       the Alpine reader with deb.py's interface: gzip streams, .PKGINFO, apk's dependency and version syntax
-cannery/rpm.py       the rpm reader with the same interface: lead and headers, the cpio payload, rpm's flags and version order
-cannery/build.py     extraction rules, synthesis, placeholders, dependency report, pruning, tree hash, lockfile, unwrap
-cannery/elfcheck.py  the static and dynamic checks of 10.3
+exclave/exclave.py   the command line: grammar, unpack, wrap, unwrap, check, prune, format, hash, relink
+exclave/deb.py       ar, tar, compression, control stanzas, dependency fields, Debian version order
+exclave/apk.py       the Alpine reader with deb.py's interface: gzip streams, .PKGINFO, apk's dependency and version syntax
+exclave/rpm.py       the rpm reader with the same interface: lead and headers, the cpio payload, rpm's flags and version order
+exclave/build.py     extraction rules, synthesis, placeholders, dependency report, pruning, tree hash, lockfile, unwrap
+exclave/elfcheck.py  the static and dynamic checks of 10.3
 tools/fetch-debs.py  an example of the step before the cannery: resolve a closure from an archive and download it
 tools/fetch-apks.py  the same for an Alpine repository, verified as apk verifies
 tools/fetch-rpms.py  the same for a yum or dnf repository, verified by the index's SHA-256

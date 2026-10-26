@@ -5,7 +5,7 @@ from another, and an output of that gcc that runs wherever that glibc's version 
     test/sysroot.py --can GCC_CAN --rpms DIR --out FILE [--work DIR] [--prefix /opt/sysroot-el7]
 
 Makes a copy of the gcc can, opens it, unpacks the rpm files (a glibc, its headers, kernel headers, libgcc)
-into a can of their own with the cannery, copies that tree into the copy at the prefix, records the prefix
+into a can of their own with the tool, copies that tree into the copy at the prefix, records the prefix
 as `data` in the manifest and closes the copy: nothing under the prefix is wrapped, checked or executed.
 Then compiles a hello with `--sysroot=PREFIX -B PREFIX/usr/lib64/` inside, checks that it binds no glibc
 symbol version newer than the sysroot's, runs it inside and on the host, and writes it to FILE; the kernel
@@ -21,10 +21,10 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(REPO, "cannery"))
+sys.path.insert(0, os.path.join(REPO, "exclave"))
 sys.path.insert(0, HERE)
 import build  # noqa: E402
-import cannery  # noqa: E402
+import exclave  # noqa: E402
 import tree  # noqa: E402
 
 HELLO = '#include <stdio.h>\n#include <stdlib.h>\nint main(void) { printf("hello from a sysroot build\\n"); return 0; }\n'
@@ -48,20 +48,20 @@ def main():
         shutil.rmtree(work)
     os.makedirs(work)
     can, sysroot_can = os.path.join(work, "gcc.can"), os.path.join(work, "sysroot.can")
-    cannery_py = os.path.join(REPO, "cannery", "cannery.py")
-    tree.fresh_can(a.can, can)                                 # a copy of its own, reopened with the build (17)
-    rc, out, err = run([sys.executable, cannery_py, "unwrap", can])
+    exclave_py = os.path.join(REPO, "exclave", "exclave.py")
+    tree.fresh_can(a.can, can)                                 # a copy of its own, relinked with the build (17)
+    rc, out, err = run([sys.executable, exclave_py, "unwrap", can])
     if rc:
         sys.exit("unwrap: " + out + err)
     rpms = sorted(glob.glob(os.path.join(a.rpms, "*.rpm")))
-    rc, out, err = run([sys.executable, cannery_py, "unpack", sysroot_can] + rpms)
+    rc, out, err = run([sys.executable, exclave_py, "unpack", sysroot_can] + rpms)
     if rc:
         sys.exit("unpack: " + out + err)
     dst = os.path.join(can, "tree", a.prefix.lstrip("/"))
-    shutil.copytree(os.path.join(sysroot_can, "tree"), dst, symlinks=True, copy_function=cannery.link_or_copy)
+    shutil.copytree(os.path.join(sysroot_can, "tree"), dst, symlinks=True, copy_function=exclave.link_or_copy)
     with open(os.path.join(can, ".exclave", "manifest"), "wb") as f:
-        f.write(cannery.dump([cannery.Record("exclave", [("t", b"1")]), cannery.Record("data", [("s", a.prefix.encode())])], "can"))
-    rc, out, err = run([sys.executable, cannery_py, "wrap", can])
+        f.write(exclave.dump([exclave.Record("exclave", [("t", b"1")]), exclave.Record("data", [("s", a.prefix.encode())])], "can"))
+    rc, out, err = run([sys.executable, exclave_py, "wrap", can])
     if rc:
         sys.exit("wrap: " + out + err)
     print([l for l in out.splitlines() if l.startswith("static check")][-1])

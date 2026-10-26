@@ -180,7 +180,7 @@ struct exclave {
     int descfd;                    /* loader mode for a descriptor with no path (13 item 25): the dup to close once the segments are mapped, else -1 */
     int exe_fixed;                 /* exe holds the descriptor's link text, the kernel's identity for such a program; run() leaves it */
     int boundary;                  /* 1: no filter of ours inherited: this process is the can boundary (7.2) */
-    /* the manifest (6.2) and what the tree says (8.1); the limits are stated in 8.1 and enforced by cannery wrap */
+    /* the manifest (6.2) and what the tree says (8.1); the limits are stated in 8.1 and enforced by exclave wrap */
     char cpu[32];
     const char *own[512]; int nown;   /* the manifest's claims (at most 256), then every non-empty top-level entry of the tree (at most 256) */
     struct hostmap host[128]; int nhost;   /* the manifest's host records (at most 32), then the identity files (8.4) */

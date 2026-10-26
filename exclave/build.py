@@ -14,7 +14,7 @@ import apk
 import deb
 import rpm
 
-CANNERY_VERSION = "0.1.0"
+TOOL_VERSION = "0.1.0"
 MERGED_USR = ["bin", "sbin", "lib", "lib32", "lib64", "libx32"]
 # 8.1 / 6.1: volatile directories stripped, conventional host names shipped empty
 PLACEHOLDERS = ["proc", "dev", "sys", "tmp", "run", "var/tmp", "home", "root", "boot", "mnt", "media", "opt", "srv"]
@@ -304,11 +304,11 @@ def synthesise(root, debs, log=print):
                     line, changed = m.group(1) + "/etc/" + m.group(2) + m.group(3) + "\n", True
                 lines.append(line)
             if changed:
-                tmp = _v(root, "/etc/ld.so.conf.cannery")
+                tmp = _v(root, "/etc/ld.so.conf.exclave")
                 with open(tmp, "w", encoding="utf-8") as f:
                     f.writelines(lines)
         try:
-            r = subprocess.run([ld, "-r", root, "-f", "/etc/ld.so.conf.cannery" if tmp else "/etc/ld.so.conf"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            r = subprocess.run([ld, "-r", root, "-f", "/etc/ld.so.conf.exclave" if tmp else "/etc/ld.so.conf"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except OSError as e:                                  # the tree's ldconfig is of another architecture: no cache here (10.1)
             r = None
             log("the tree's ldconfig cannot run on this machine (%s): no ld.so.cache; close the can on a machine of its architecture" % e.strerror)
@@ -399,28 +399,28 @@ def tree_hash(root):
 def write_lock(can, pkgs, manifest_hash=None, tree=False, keep_hashes=False):
     """6.4: the lock is a record of inputs and output. pkgs: [(name, version, arch, b2)], or None to keep the
     pkg records of the lock already there. The closing step writes the launcher, manifest and tree hashes;
-    keep_hashes keeps the lock's manifest hash and recomputes the launcher and tree hashes (after prune or reopen); otherwise they are dropped
+    keep_hashes keeps the lock's manifest hash and recomputes the launcher and tree hashes (after prune or relink); otherwise they are dropped
     (after unwrap: an open can has no output yet)."""
-    import cannery
-    R = cannery.Record
+    import exclave
+    R = exclave.Record
     lock = os.path.join(can, ".exclave", "hashes")
-    old = cannery.load(lock, "hashes") if os.path.exists(lock) else []
+    old = exclave.load(lock, "hashes") if os.path.exists(lock) else []
     if pkgs is None:
-        pkgs = [tuple(f.decode("utf-8", "surrogateescape") for f in v) for v in cannery.values(old, "pkg")]
+        pkgs = [tuple(f.decode("utf-8", "surrogateescape") for f in v) for v in exclave.values(old, "pkg")]
     if keep_hashes:
-        m = cannery.values(old, "manifest")
-        manifest_hash, tree = (m[0][0].decode() if m else None), bool(cannery.values(old, "tree"))
-    recs = [R("hashes", [("t", b"1")]), R("tool", [("s", CANNERY_VERSION.encode())])]
+        m = exclave.values(old, "manifest")
+        manifest_hash, tree = (m[0][0].decode() if m else None), bool(exclave.values(old, "tree"))
+    recs = [R("hashes", [("t", b"1")]), R("tool", [("s", TOOL_VERSION.encode())])]
     if manifest_hash or tree:
-        recs.append(R("launcher", [("s", cannery.b2_file(os.path.join(can, ".exclave", "launcher")).encode())]))
+        recs.append(R("launcher", [("s", exclave.b2_file(os.path.join(can, ".exclave", "launcher")).encode())]))
     for name, ver, arch, h in sorted(pkgs):
         recs.append(R("pkg", [("s", name.encode()), ("s", ver.encode()), ("s", arch.encode()), ("s", h.encode())]))
     if manifest_hash:
         recs.append(R("manifest", [("s", manifest_hash.encode())]))
     if tree:
         recs.append(R("tree", [("s", tree_hash(os.path.join(can, "tree")).encode())]))
-    data = cannery.dump(recs, "hashes")
-    cannery.parse(data, "hashes")
+    data = exclave.dump(recs, "hashes")
+    exclave.parse(data, "hashes")
     with open(lock, "wb") as f:
         f.write(data)
 
@@ -505,7 +505,7 @@ def prune(can, logs, own, log=print):
     """Keep what the logged workloads touched, the entries of directories they opened, the symlink chains that
     reach kept files, the libraries kept ELF files need, and the placeholders; drop every other file and symlink.
     Directories are never removed, so ownership and `ls` do not change. Returns (kept, removed, bytes)."""
-    import cannery
+    import exclave
     import elfcheck
     root = os.path.join(can, "tree")
     keep, whole, programs = set(), set(), 0
@@ -549,7 +549,7 @@ def prune(can, logs, own, log=print):
             keep.add(final)
     # the log names canonical paths, so every alias a program used is a symlink to keep: every symlink in
     # the tree that reaches a kept file, or a directory, stays with its chain; the rest go
-    for real, v, st in cannery.walk_files(root):
+    for real, v, st in exclave.walk_files(root):
         if not stat.S_ISLNK(st.st_mode) or v in keep:
             continue
         chain = set()
@@ -578,7 +578,7 @@ def prune(can, logs, own, log=print):
 
 def unwrap(can, log=print):
     """Undo wrapping: every .real/NAME moves back over its wrapper. Leaves a plain tree."""
-    import cannery
+    import exclave
     root = os.path.join(can, "tree")
     n = 0
     for dirpath, dirnames, filenames in os.walk(root, topdown=False):

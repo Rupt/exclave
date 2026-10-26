@@ -17,9 +17,9 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(REPO, "cannery"))
+sys.path.insert(0, os.path.join(REPO, "exclave"))
 import build  # noqa: E402
-import cannery  # noqa: E402
+import exclave  # noqa: E402
 
 import platform  # noqa: E402
 TRIPLET = "%s-linux-gnu" % platform.machine()                     # the can's multiarch directory: the suite runs on the can's own machine
@@ -111,10 +111,10 @@ def main():
         shutil.rmtree(work)
     os.makedirs(work)
     import tree
-    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # the launcher's world: a copy reopened with the build (17)
+    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # the launcher's world: a copy relinked with the build (17)
     # an unwrapped copy of the tree for bwrap: hard links, then the payloads moved back over the wrappers
     root = os.path.join(work, "bare", "tree")
-    shutil.copytree(os.path.join(can, "tree"), root, symlinks=True, copy_function=cannery.link_or_copy)
+    shutil.copytree(os.path.join(can, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy)
     build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
     with open(os.path.join(root, "usr", "share", "cont-test-marker"), "w") as f:
         f.write("marker\n")

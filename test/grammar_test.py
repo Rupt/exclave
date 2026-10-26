@@ -3,8 +3,8 @@
 
     test/grammar_test.py [--cases N] [--seed S] [--c-parser PATH]
 
-Three statements hold for every byte sequence b: encode is injective, decode(encode(b)) == b, and fmt is
-idempotent. And the two implementations of the grammar, the cannery's Python parser and the launcher's C parser
+Three statements hold for every byte sequence b: encode is injective, decode(encode(b)) == b, and format is
+idempotent. And the two implementations of the grammar, the tool's Python parser and the launcher's C parser
 (built by test/gate.sh's unit step, run with a file argument), accept and reject the same inputs: manifests
 and their malformed variants (MUTATIONS); and both name the line of an error on a known line (POSITIONS).
 """
@@ -16,8 +16,8 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(HERE), "cannery"))
-import cannery  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "exclave"))
+import exclave  # noqa: E402
 
 
 def rand_bytes(rng, path=False):
@@ -36,21 +36,21 @@ def properties(rng, cases):
         b = rand_bytes(rng, path=True).replace(b"/", b"_")     # the encoding's properties; a path's own spelling rules are the mutations' (6.2)
         if b in (b".", b".."):
             b = b"_" + b
-        q = cannery.quote(b)
+        q = exclave.quote(b)
         if seen.setdefault(q, b) != b:
             bad += 1                                              # encode is injective
-        text = ("exclave 1\n\nown %s\n" % cannery.quote(b"/" + b)).encode()
+        text = ("exclave 1\n\nown %s\n" % exclave.quote(b"/" + b)).encode()
         try:
-            recs = cannery.parse(text, "exclave")
-        except cannery.GrammarError as e:
+            recs = exclave.parse(text, "exclave")
+        except exclave.GrammarError as e:
             bad += 1
             print("FAIL parse of encoded %r: %s" % (b, e))
             continue
         if recs[1].fields[0][1] != b"/" + b:                        # decode(encode(b)) == b
             bad += 1
             print("FAIL round trip %r" % b)
-        canon = cannery.dump(recs, "exclave")
-        if canon != text or cannery.dump(cannery.parse(canon, "exclave"), "exclave") != canon:   # fmt is idempotent
+        canon = exclave.dump(recs, "exclave")
+        if canon != text or exclave.dump(exclave.parse(canon, "exclave"), "exclave") != canon:   # format is idempotent
             bad += 1
             print("FAIL canonical form %r" % b)
     return bad
@@ -72,7 +72,7 @@ def near_manifest(rng):
     for _ in range(rng.randint(0, 4)):
         key = rng.choice(["own", "host", "data", "cpu", "cpu", "bogus"])
         val = rand_bytes(rng)
-        recs.append("%s %s" % (key, cannery.quote((b"/" if key in ("own", "host", "data") else b"") + val)))
+        recs.append("%s %s" % (key, exclave.quote((b"/" if key in ("own", "host", "data") else b"") + val)))
     if rng.random() < 0.3:
         recs.insert(rng.randint(0, len(recs)), "# " + rand_bytes(rng).decode("utf-8", "replace"))
     text = ("\n".join(recs) + "\n").encode()
@@ -90,9 +90,9 @@ def compare(rng, cases, c_parser):
             with open(path, "wb") as f:
                 f.write(text)
             try:
-                cannery.parse(text, "exclave")
+                exclave.parse(text, "exclave")
                 py = True
-            except cannery.GrammarError:
+            except exclave.GrammarError:
                 py = False
             c = subprocess.run([c_parser, path], stdout=subprocess.PIPE, stderr=subprocess.PIPE).returncode == 0
             if py != c:
@@ -116,9 +116,9 @@ def positions(c_parser):
             with open(path, "wb") as f:
                 f.write(text)
             try:
-                cannery.parse(text, "exclave")
+                exclave.parse(text, "exclave")
                 py = "accepted"
-            except cannery.GrammarError as e:
+            except exclave.GrammarError as e:
                 py = str(e)
             c = subprocess.run([c_parser, path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stderr.strip()
             for who, msg in (("python", py), ("c", c)):
@@ -136,7 +136,7 @@ def main():
     a = ap.parse_args()
     rng = random.Random(a.seed)
     bad = properties(rng, a.cases)
-    print("%d byte strings: encode injective, decode(encode(b)) == b, fmt idempotent: %d problems" % (a.cases, bad))
+    print("%d byte strings: encode injective, decode(encode(b)) == b, format idempotent: %d problems" % (a.cases, bad))
     div = compare(rng, a.cases // 3, a.c_parser) if os.path.exists(a.c_parser) else -1
     if div < 0:
         print("no C parser at %s: the two-parser comparison did not run" % a.c_parser)

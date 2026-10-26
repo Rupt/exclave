@@ -174,14 +174,14 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
     static unsigned char nb[512]; int gen = 0;               /* another can's launcher from before the page moved, which a handler sends here (7.4.2) */
     for (int i = 0; i < eh.e_phnum; i++) if (ph_main[i].p_type == PT_NOTE && ph_main[i].p_filesz <= 512) { int g = note_gen(fd, &ph_main[i], nb); if (g) gen = g; }
     if (gen && gen < PAGE_GENERATION)
-        die("a can's launcher from before the syscall page moved cannot run here; reopen that can (cannery reopen)", vpath, 0);
+        die("a can's launcher from before the syscall page moved cannot run here; relink that exclave (exclave relink)", vpath, 0);
     payload_base = map_elf(fd, &eh, ph_main, &entry, &phdr_va, &has_interp, interp_v, real);
     if (C.descfd > 2) { sys_close(C.descfd); C.descfd = -1; }   /* a program run from a descriptor with no path (13 item 25): mapped, the dup goes */
     sys_close(fd);
     jump = entry; payload_entry = entry; scpy(payload_path, real, PATH_MAX);
     if (has_interp) {
         /* the program's own PT_INTERP, resolved in the can as the kernel would resolve it in a chroot (7.3);
-         * that every ELF in a can names one loader is the cannery's static check, not a run-time rule */
+         * that every ELF in a can names one loader is the tool's static check, not a run-time rule */
         static char ireal[PATH_MAX]; Ehdr ih; unsigned long ientry, iphdr; int ii; char dummy[PATH_MAX];
         struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0); if (!S) die("out of memory", 0, ENOMEM);
         struct kstat ist;

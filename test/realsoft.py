@@ -54,7 +54,7 @@ def main():
         shutil.rmtree(work)
     os.makedirs(work)
     import tree
-    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy reopened with the build (17)
+    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy relinked with the build (17)
     env = {"PATH": "/usr/bin:/bin", "HOME": work, "J": str(a.jobs), "LANG": "C"}
     rows, failures = [], []
     for name, (prefix, conf, mk, check) in PROJECTS.items():

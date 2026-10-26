@@ -186,7 +186,7 @@ def main():
     if not os.path.exists(key):
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
     pubkey = open(key + ".pub").read().strip()
-    # the payload: the can (hard links preserved by tar) and the repository's test tree, cannery, launcher and, where the
+    # the payload: the can (hard links preserved by tar) and the repository's test tree, exclave, launcher and, where the
     # host has go, the Go regression's programs built for the VM's machine. For the
     # aarch64 VM the payload carries the arm64 package files and the cross-built launchers under the suite's names:
     # the can is unpacked and closed in the VM, on its own architecture (10.1).
@@ -199,7 +199,7 @@ def main():
         if True:                                                  # packed afresh every run: a kept payload once carried a stale test tree
             log("packing the test tree for", arch)
             with tarfile.open(payload, "w:gz", compresslevel=1) as t:
-                for d in ("test", "cannery", "src"):                  # src: the filter model the suite builds in the VM (filter_model)
+                for d in ("test", "exclave", "src"):                  # src: the filter model the suite builds in the VM (filter_model)
                     t.add(os.path.join(REPO, d), arcname="cont/" + d)
                 go = tree.go_toolchain()                          # the Go regression's programs, built here for the VM's machine: the VMs have no go
                 if go:
@@ -255,15 +255,15 @@ def main():
                 results.append((name, uname, "cannot unpack: " + out[-200:], "", notes))
                 continue
             if arch != "x86_64":                                  # the can is made here, on its own architecture (10.1)
-                rc, out = vm.ssh("cd m && python3 cont/cannery/cannery.py unpack can debs/*.deb 2>&1 | tail -3 && python3 cont/cannery/cannery.py wrap can 2>&1 | tail -3", timeout=3600 * slow)
+                rc, out = vm.ssh("cd m && python3 cont/exclave/exclave.py unpack can debs/*.deb 2>&1 | tail -3 && python3 cont/exclave/exclave.py wrap can 2>&1 | tail -3", timeout=3600 * slow)
                 log(name, "can:", " | ".join(l.strip() for l in out.splitlines()[-3:]))
                 if "closed" not in out:
                     results.append((name, uname, "cannot make the can: " + out[-300:].replace("\n", " | "), "", notes))
                     continue
             else:                                                 # the can given carries the launcher that made it: the row tests the checkout's
-                rc, out = vm.ssh("cd m && python3 cont/cannery/cannery.py reopen can cont/build/launcher 2>&1 | tail -1", timeout=600 * slow)
+                rc, out = vm.ssh("cd m && python3 cont/exclave/exclave.py relink can cont/build/launcher 2>&1 | tail -1", timeout=600 * slow)
                 if "relinked" not in out:
-                    results.append((name, uname, "cannot reopen the can: " + out[-200:].replace("\n", " | "), "", notes))
+                    results.append((name, uname, "cannot relink the can: " + out[-200:].replace("\n", " | "), "", notes))
                     continue
             rc, out = vm.ssh("cd m && python3 cont/test/run.py --can $PWD/can --work $PWD/work --budget %d 2>&1" % (60 * slow), timeout=2400 * slow)
             with open(os.path.join(work, name + "-suite.log"), "w") as f:

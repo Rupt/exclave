@@ -19,8 +19,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(REPO, "cannery"))
-import cannery  # noqa: E402
+sys.path.insert(0, os.path.join(REPO, "exclave"))
+import exclave  # noqa: E402
 
 SYS_openat2 = 437
 O_PATH, O_NOFOLLOW = os.O_PATH, os.O_NOFOLLOW                  # this machine's bits: aarch64's O_NOFOLLOW is not x86-64's
@@ -138,7 +138,7 @@ def main():
     if os.path.exists(work):
         shutil.rmtree(work)
     import tree
-    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy reopened with the build (17)
+    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy relinked with the build (17)
     root = os.path.join(can, "tree")
     dirs, files, links = make_maze(root, rng)
     with open(os.path.join(can, ".exclave", "manifest"), "w") as f:

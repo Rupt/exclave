@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fetch-rpms.py — an example of the step before the cannery for rpm distributions: resolve a package closure
+"""fetch-rpms.py — an example of the step before the tool for rpm distributions: resolve a package closure
 from a yum/dnf repository's metadata and download it into a directory of .rpm files (PROPOSAL.md 10.1).
 
     tools/fetch-rpms.py --repo URL [--repo URL]... [--cache DIR] [--choose VIRTUAL=PKG]... [--no-base] --out DIR PACKAGE...
@@ -11,8 +11,8 @@ file dependencies through the files the index lists, rich dependencies and rpmli
 virtual name is satisfied by a --choose, an already selected provider, a provider named like the
 dependency, else the first provider by name. The base set (setup, filesystem, basesystem, bash) is added
 unless --no-base. Every download is verified against the index's SHA-256; the metadata signature is not
-verified, so the mirror is trusted. The cannery itself never fetches: `cannery unpack OUT DIR/*.rpm`
-takes what this tool, dnf, a mirror or a hand-made directory has put on disk. Not part of the cannery can.
+verified, so the mirror is trusted. The tool itself never fetches: `exclave unpack OUT DIR/*.rpm`
+takes what this tool, dnf, a mirror or a hand-made directory has put on disk. Not part of the tool's own exclave.
 """
 import argparse
 import gzip
@@ -26,7 +26,7 @@ import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cannery"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "exclave"))
 import rpm  # noqa: E402
 
 BASE = ["setup", "filesystem", "basesystem", "bash"]
@@ -75,7 +75,7 @@ class Repo:
             with open(path, "rb") as f:
                 return f.read()
         log("fetch " + url)
-        req = urllib.request.Request(url, headers={"User-Agent": "cont-cannery/0.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "exclave/0.1"})
         with urllib.request.urlopen(req, timeout=300) as r:
             data = r.read()
         with open(path + ".tmp%d" % os.getpid(), "wb") as f:

@@ -54,7 +54,7 @@ The loop that has served well, in the order it pays:
   change goes into the proposal rather than a side note, and earlier
   revisions live in git history rather than archive files.
 - **No options.** The opener has one environment knob, `EXCLAVE_LOG`, and
-  the cannery's commands take paths, `fmt --check` the one flag. A flag, a mode or
+  the cannery's commands take paths, `format --check` the one flag. A flag, a mode or
   a manifest key is rarely the answer; the rule that makes the option
   unnecessary, or a stated limitation, usually is. A can is a directory
   at every stage, so what a user can do to it with `cp`, `ln` and an
@@ -128,7 +128,7 @@ The loop that has served well, in the order it pays:
   suite, its programs and the cannery; a change to those makes the next
   run use the whole can and remake it. An opener or `test/tree.py`
   change that makes a test touch a file the fixture lacks fails that
-  test until the fixture is removed. After rebuilding the opener, `cannery.py reopen
+  test until the fixture is removed. After rebuilding the opener, `exclave.py relink
   CAN` refreshes a can; replacing `.exclave/launcher` alone leaves the
   wrappers linked to the old file.
 - **Tests are independent.** A test in `test/run.py` makes what it

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fetch-debs.py — an example of the step before the cannery: resolve a package closure from a Debian-family
+"""fetch-debs.py — an example of the step before the tool: resolve a package closure from a Debian-family
 archive and download it into a directory of .deb files (PROPOSAL.md 10.1).
 
     tools/fetch-debs.py [--distro ubuntu|debian] [--suite S]... [--arch amd64] [--components main,universe]
@@ -10,8 +10,8 @@ The closure of Depends and Pre-Depends is resolved against the archive's Package
 set added unless --no-essential, virtual packages satisfied by the provider of highest priority unless
 --choose says otherwise. Packages files are verified against the suite's Release digests and every
 package against the index's SHA256; the Release signature is not verified, so the mirror is trusted.
-The cannery itself never fetches: `cannery unpack OUT DIR/*.deb` takes what this tool, apt, a mirror or
-a hand-made directory has put on disk. Not part of the cannery can.
+The tool itself never fetches: `exclave unpack OUT DIR/*.deb` takes what this tool, apt, a mirror or
+a hand-made directory has put on disk. Not part of the tool's own exclave.
 """
 import argparse
 import hashlib
@@ -21,7 +21,7 @@ import shutil
 import sys
 import urllib.request
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "cannery"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "exclave"))
 import deb  # noqa: E402
 
 
@@ -55,7 +55,7 @@ class Repo:
             with open(path, "rb") as f:
                 return f.read()
         self.log("fetch " + url)
-        req = urllib.request.Request(url, headers={"User-Agent": "cont-cannery/0.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "exclave/0.1"})
         with urllib.request.urlopen(req, timeout=120) as r:
             data = r.read()
         with open(path + ".tmp%d" % os.getpid(), "wb") as f:

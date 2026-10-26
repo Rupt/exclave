@@ -31,7 +31,7 @@ static int log_ok(void)
 }
 
 /* one line, one write: "<what> <result> <path>\n"; atomic under O_APPEND. A path may hold any byte: a newline is
- * written as \n and a backslash as \\, the two escapes the cannery undoes when it reads a log (review O4-5); the
+ * written as \n and a backslash as \\, the two escapes the tool undoes when it reads a log (review O4-5); the
  * escaped pieces go out as iovecs, no buffer, since this runs on the handler's stack */
 void log_line(const char *what, long result, const char *path)
 {

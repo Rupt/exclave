@@ -6,7 +6,7 @@ fixed: the program prints one line per case, "<case>: <answer>", and the kernel'
 
     test/exercise.py --can CAN PROG.c [ARGS...]     HOSTDIR in ARGS is replaced by a fresh writable host directory
 
-The work lives under build/exercise/<can>-<lock hash>: a copy of the can reopened with build/launcher, and reopened again whenever the
+The work lives under build/exercise/<can>-<lock hash>: a copy of the can relinked with build/launcher, and relinked again whenever the
 build has changed since, the unwrapped tree for bwrap, both with a socket file at /usr/share/cont-test.sock and the
 suite's marker. Needs bwrap and user namespaces; says so and exits 1 when it cannot run. Exit status: the number of
 lines that differ."""
@@ -21,10 +21,10 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-sys.path.insert(0, os.path.join(REPO, "cannery"))
+sys.path.insert(0, os.path.join(REPO, "exclave"))
 import oracle_ns  # noqa: E402
 import tree  # noqa: E402
-import cannery  # noqa: E402
+import exclave  # noqa: E402
 import build  # noqa: E402
 
 
@@ -32,9 +32,9 @@ def setup(can0, work):
     """A closed copy for the launcher and an unwrapped tree for bwrap, made once per can."""
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
-    can = tree.fresh_can(can0, os.path.join(work, "can"))                  # a copy reopened with the build (17)
+    can = tree.fresh_can(can0, os.path.join(work, "can"))                  # a copy relinked with the build (17)
     root = os.path.join(work, "bare", "tree")
-    shutil.copytree(os.path.join(can, "tree"), root, symlinks=True, copy_function=cannery.link_or_copy)
+    shutil.copytree(os.path.join(can, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy)
     build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
     for r in (root, os.path.join(can, "tree")):
         sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -67,8 +67,8 @@ def main():
     work = os.path.join(REPO, "build", "exercise", os.path.basename(can0).replace(".can", "") + "-" + key)
     if not os.path.exists(os.path.join(work, "can", ".exclave", "hashes")):
         setup(can0, work)
-    elif tree.reopen_if_stale(os.path.join(work, "can")):
-        print("the build changed since this copy was made: reopened")
+    elif tree.relink_if_stale(os.path.join(work, "can")):
+        print("the build changed since this copy was made: relinked")
     can, root = os.path.join(work, "can"), os.path.join(work, "bare", "tree")
     r = os.path.join(can, "tree")
     machine = os.uname().machine

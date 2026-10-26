@@ -3,7 +3,7 @@
 An .rpm is a 96-byte lead, a signature header, a header and a compressed cpio payload. The header is an
 index of tagged entries; the reader takes the names, versions, architecture, dependencies and the
 install scripts from it, and the payload's compressor. The payload is cpio in the "newc" form (or "crc"),
-gzip, xz or zstd, and is read in Python, zstd through the tool the cannery can ships. The interface is
+gzip, xz or zstd, and is read in Python, zstd through the tool the tool's own exclave ships. The interface is
 deb.py's, so build.py serves every reader: control(path) -> (fields, scripts) with Debian's field names,
 open_tar(path, "data.tar") -> the payload members with tarfile's shape, parse_deps, satisfies.
 """
