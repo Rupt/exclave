@@ -1660,7 +1660,9 @@ def interp_from_original(ctx):
 @test
 def prune_and_check_with_logs(ctx):
     """10.3 and 10.4 take files: the dynamic check reads EXCLAVE_LOG files a workload wrote; prune keeps what the logs
-    touched plus the libraries kept ELF files need and drops the rest, and the pruned exclave still compiles."""
+    touched plus the libraries kept ELF files need and the packages' licence texts, those the tree has and two planted
+    where Debian and RPM put them, and drops the rest, and the pruned exclave still compiles."""
+    import build
     log = os.path.join(ctx.work, "prune.log")
     if os.path.exists(log):
         os.remove(log)
@@ -1671,12 +1673,20 @@ def prune_and_check_with_logs(ctx):
     expect(rc == 0 and "0 errors" in out and "dynamic check:" in out and "log lines" in out, "check with a log: " + out[-500:] + err)
     ex2 = os.path.join(ctx.work, "pruned.exclave")
     copy_exclave(ctx.exclave, ex2)
+    planted = ["/usr/share/doc/exclave-planted/copyright", "/usr/share/licenses/exclave-planted/COPYING"]
+    for v in planted:
+        os.makedirs(os.path.dirname(os.path.join(ex2, "tree", v.lstrip("/"))), exist_ok=True)
+        with open(os.path.join(ex2, "tree", v.lstrip("/")), "w") as f:
+            f.write("a licence no workload reads\n")
+    licences = set(build.licence_files(os.path.join(ex2, "tree")))
     before = sum(1 for _ in exclave.walk_files(os.path.join(ex2, "tree")))
     rc, out, err = run([sys.executable, os.path.join(REPO, "exclave", "exclave.py"), "prune", ex2, log])
     expect(rc == 0 and "pruned" in out, "prune: " + out + err)
     after = sum(1 for _ in exclave.walk_files(os.path.join(ex2, "tree")))
     expect(after < before // 2, "pruning removed little: %d of %d files remain" % (after, before))
     expect(os.path.isdir(os.path.join(ex2, "tree", "usr", "share")) and os.path.exists(os.path.join(ex2, "tree", "etc", "passwd")), "directories and placeholders stay")
+    lost = sorted(v for v in licences if not os.path.exists(os.path.join(ex2, "tree", v.lstrip("/"))))
+    expect(not lost and set(planted) <= licences, "the licence texts stay: %d of %d lost, %s" % (len(lost), len(licences), lost[:3]))
     gcc2 = os.path.join(ex2, "tree", ctx.vbin(GCC).lstrip("/"))
     rc, out, err = run([gcc2, "-O1", src, "-o", os.path.join(ctx.work, "hello-pruned")], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "the pruned exclave compiles: " + err[-500:])
@@ -1684,7 +1694,7 @@ def prune_and_check_with_logs(ctx):
     expect(rc == 0 and out.startswith("hello "), "the output runs: %r %r" % (out, err))
     rc, out, err = run([sys.executable, os.path.join(REPO, "exclave", "exclave.py"), "check", ex2])
     expect(rc == 0, "the pruned exclave passes the static check: " + out[-600:])
-    return "%d of %d files kept" % (after, before)
+    return "%d of %d files kept, %d licence texts among them" % (after, before, len(licences))
 
 
 @test

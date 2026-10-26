@@ -501,9 +501,25 @@ def _resolve_keep(root, vpath, keep, hops=0):
     return cur or "/"
 
 
+def licence_files(root):
+    """The packages' licence texts in a tree, which prune keeps (10.4), under every usr/share/ in it, a data directory's
+    too: Debian's doc/PKG/copyright and the common-licenses those refer to, and licenses/, where RPM's %license files and
+    Alpine's -doc packages put theirs."""
+    found = []
+    for dirpath, dirnames, _ in os.walk(root):
+        if os.path.basename(dirpath) != "share" or os.path.basename(os.path.dirname(dirpath)) != "usr":
+            continue
+        dirnames[:] = []                                          # below a usr/share/, only its licence texts
+        found += sorted(glob.glob(os.path.join(dirpath, "doc", "*", "copyright")))
+        for top in ("common-licenses", "licenses"):
+            for d, _, filenames in os.walk(os.path.join(dirpath, top)):
+                found += sorted(os.path.join(d, n) for n in filenames)
+    return ["/" + os.path.relpath(f, root) for f in found]
+
+
 def prune(ex, logs, own, log=print):
     """Keep what the logged workloads touched, the entries of directories they opened, the symlink chains that
-    reach kept files, the libraries kept ELF files need, and the placeholders; drop every other file and symlink.
+    reach kept files, the libraries kept ELF files need, the placeholders and the licence texts; drop every other file and symlink.
     Directories are never removed, so ownership and `ls` do not change. Returns (kept, removed, bytes)."""
     import exclave
     import elfcheck
@@ -530,6 +546,10 @@ def prune(ex, logs, own, log=print):
     for f in IDENTITY_FILES + ["/etc/ld.so.cache"]:
         if os.path.lexists(_v(root, f)):
             keep.add(f)
+    for v in licence_files(root):                                 # the packages' licence texts go with every copy (10.4)
+        final = _resolve_keep(root, v, keep)
+        if final:
+            keep.add(final)
     for d in whole:                                               # its own entries: a getdents shows names, nothing below them
         for name in os.listdir(_v(root, d)):
             if not os.path.isdir(os.path.join(_v(root, d), name)) or os.path.islink(os.path.join(_v(root, d), name)):
