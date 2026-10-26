@@ -250,7 +250,7 @@ void start_c(unsigned long *sp)
      * a launcher's syscalls from the old page only and would trap every one of this launcher's, so it is refused by name */
     int have = filter_probe();                                /* a filter inherited: exec'd from inside an exclave, by a handler or a program */
     if (have && have < FILTER_PAGE_SINCE) {
-        static const char old[] = "launcher: a launcher from before the syscall page moved runs this process; relink its exclave with the current tool, converting a can first (README)\n";
+        static const char old[] = "launcher: a launcher from before the syscall page moved runs this process; relink its exclave with the current tool, converting a can first (docs/DESIGN.md 13 item 45)\n";
         raw_fatal(old, sizeof old - 1);
     }
     long argc = (long)sp[0]; char **argv = (char **)(sp + 1); char **envp = argv + argc + 1;

@@ -800,7 +800,7 @@ def require_exclave(ex, cmd):
     a can, an exclave from before the rename, is named as one, since its launcher's own refusal sends its user here."""
     if os.path.isdir(os.path.join(ex, ".can")) and not os.path.isdir(os.path.join(ex, ".exclave")):
         sys.exit("refusing: %s is a can, an exclave from before the rename, with .can/ and root/; convert it first "
-                 "(README, \"Bundles made before the rename\")" % ex)
+                 "(docs/DESIGN.md 13 item 45)" % ex)
     if not os.path.isdir(os.path.join(ex, "tree")):
         sys.exit("refusing: %s has no tree/ directory" % ex)
     if cmd != "wrap" and not os.path.isdir(os.path.join(ex, ".exclave")):

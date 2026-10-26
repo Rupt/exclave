@@ -881,7 +881,7 @@ def inherited_identity_dropped(ctx):
 @test
 def pre_rename_can_refused(ctx):
     """A can, an exclave from before the rename (.can/, root/), is refused by name by every command that takes an
-    exclave, before anything is read or written, rather than ending in a traceback; the README says how to convert it."""
+    exclave, before anything is read or written, rather than ending in a traceback; docs/DESIGN.md 13 item 45 says how to convert it."""
     old = os.path.join(ctx.work, "old-%d.can" % os.getpid())
     os.makedirs(os.path.join(old, ".can"))
     os.makedirs(os.path.join(old, "root", "usr", "bin"))
