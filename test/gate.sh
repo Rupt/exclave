@@ -5,7 +5,7 @@
 # test/inputs.sh filled, the Docker profile run on its src/docker-seccomp.json and dogfood on its package sets. No step
 # touches the network. Every step runs in parallel; every driver
 # runs build/launcher on a copy of its own (the suite wraps one from the exclave's tree, the others take test/tree.py's
-# fresh_exclave), so the exclaves given are never run as they are nor written. One line per step; logs under build/gate/. Exit status: the number of failed steps.
+# fresh_exclave), so the exclaves given are never run as they are nor written. One line per step, SKIP for an oracle that could not run here; logs under build/gate/. Exit status: the number of failed steps.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(dirname "$here")
@@ -55,12 +55,14 @@ else
 fi
 wait
 
-fails=0
+fails=0 skips=0
 for rc in "$out"/*.rc; do
     name=$(basename "$rc" .rc)
     r=$(cat "$rc")
     last=$(grep -v '^$' "$out/$name.log" | tail -1 | cut -c1-110)
-    if [ "$r" = 0 ]; then printf '%-22s ok    %s\n' "$name" "$last"; else printf '%-22s FAIL  %s\n' "$name" "$last"; fails=$((fails + 1)); fi
+    if [ "$r" != 0 ]; then printf '%-22s FAIL  %s\n' "$name" "$last"; fails=$((fails + 1))
+    elif case $name in resolve-*|ns-*|syscalls-*|docker-*) grep -q 'cannot run' "$out/$name.log";; *) false;; esac; then printf '%-22s SKIP  %s\n' "$name" "$last"; skips=$((skips + 1))   # an oracle without bwrap, namespaces or openat2
+    else printf '%-22s ok    %s\n' "$name" "$last"; fi
 done
-echo "gate: $fails failed, $(( $(date +%s) - start )) s"
+echo "gate: $fails failed, $skips skipped, $(( $(date +%s) - start )) s"
 exit $fails
