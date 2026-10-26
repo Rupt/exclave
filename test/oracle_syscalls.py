@@ -7,9 +7,69 @@ resolution, over a random maze, by one program (test/progs/probe.c) under two pr
 the kernel's, a bwrap read-only bind of the unwrapped tree at /, and the launcher's. Return value, errno and
 what a buffer holds afterwards must agree case by case; a difference fails unless EXPECTED names its reason.
 The expectations therefore come from the kernel, not from a test's author. Needs user namespaces and bwrap,
-like oracle_ns; says so and exits 0 when it cannot run.
+like oracle_ns; says so ("cannot run") and exits 0 when it cannot run, and the gate prints that step as SKIP.
 
     test/oracle_syscalls.py --exclave EXCLAVE [--work DIR] [--seed S] [--only NAME] [--keep] [--show N] [--expected]
+
+Arguments. probe.c reads cases, each a syscall number and encoded arguments, and issues each through syscall(2),
+so no libc wrapper stands in between; it prints the return value, the errno and what a buffer holds afterwards.
+An argument is one of: a path (s:), or a descriptor opened on a named path before the call (f:); an integer (i:)
+or a buffer of a named kind; a string that ends at an unmapped page (e:), a null pointer (n:) or a pointer into
+an unmapped page (u:); a string vector or a struct xattr_args; an inotify descriptor, a unix socket (k:) or a
+sockaddr_un (A:); a struct open_how. execve runs in a forked child whose exit status is the answer.
+
+Cases. The table covers the 61 trapped path syscalls and six descriptor-addressed ones (fchmod, fchown,
+fsetxattr, fremovexattr, fstatfs, and ioctl with FS_IOC_SETFLAGS and FS_IOC_FSSETXATTR), crossed with every flag
+that changes resolution and with 66 path forms (class Forms) over a random maze:
+  - inside the exclave: a file, a directory and a symlink of every kind (loop, chained, dangling, absolute,
+    relative), a wrapper, the shell's link, an identity file, a placeholder, /proc/self/exe, and an exclave link
+    to a host file and to a host directory;
+  - on the host: files, directories and links of every kind, and relative paths from the host side, up to the
+    root and back into the tree;
+  - spellings: ., .. and / as the last component, a trailing slash, //, empty, overlong, a 256-byte component,
+    bytes that are not UTF-8, and a newline;
+  - the three fault forms, and a socket file in the tree.
+The *at forms add descriptors opened O_PATH or O_RDONLY on exclave and host directories, files and symlinks, a
+wrapper, /dev/null, AT_FDCWD, a closed descriptor and a negative one. The two-path forms take pairs from a
+shorter list (Forms.few). openat2 covers every descriptor-relative form with seven flag words and seven resolve
+words, plus its struct's own rules. Cases that depend on one another run in one group, in order, such as the
+relative forms after a chdir into the exclave; each world runs one process per group, with the host area reset
+before each world, and the answers are compared line by line.
+
+The two worlds. The same binary, compiled by the exclave's compiler, runs under bwrap, with the unwrapped tree
+read-only at / and the visibility rule of 8.1 spelt in bwrap's terms (the identity files and the host's top-level
+directories bound from the host), and under the launcher, with a copy of the exclave relinked with the build.
+
+openat2 and EAGAIN. A scoped walk (RESOLVE_BENEATH, RESOLVE_IN_ROOT) answers EAGAIN when a rename or a mount
+anywhere on the system raced it (handle_dots in fs/namei.c), and openat2(2) tells the caller to retry; probe.c
+does, so the kernel's answer is the retry's. Measured natively under 170 000 renames a second, 4 900 of a million
+such walks answered EAGAIN and every one succeeded on its first retry; with no renames, none of a million did.
+RESOLVE_CACHED's EAGAIN is not a race and is not retried.
+
+Accepted differences. EXPECTED is part of the design (DESIGN.md 17 item 7): each entry names the rule that makes
+a difference right, and a difference no entry names fails. The entries are of three kinds:
+  - the oracle's own construction: a host entry bound into bwrap's read-only root answers EROFS there; uid 0 is
+    unmapped in bwrap's user namespace; a new top-level name is the host's (8.1), whose / answers EACCES where
+    bwrap's root says EROFS; an identity symlink whose host target is on a tmpfs gives other xattr answers than
+    the tree copy; RESOLVE_CACHED answers EAGAIN under bwrap's cold cache;
+  - stated limitations: fanotify_mark's order of checks (13 item 41); ETXTBSY before EROFS when another gate step
+    runs the exclave copy's shell while the probe write-opens it (13 item 29);
+  - for the kernel matrix (12.1), what an older kernel lacks or decided differently, each with the kernel change,
+    the handler answering as the newest kernel does: ENOSYS for a syscall the kernel lacks; EISDIR for
+    O_CREAT|O_EXCL on ., .. or / before 5.8; linkat with AT_EMPTY_PATH refused with ENOENT before 6.10;
+    RENAME_WHITEOUT's capability check in the initial user namespace; O_DIRECTORY|O_CREAT opening or creating
+    before 6.3; RHEL 8's 4.18 openat2 answering EXDEV for a create through a symlink under RESOLVE_NO_XDEV;
+    RESOLVE_CACHED unknown before 5.12; utimensat refusing AT_EMPTY_PATH and checking the nanoseconds first before
+    5.9; an exec of a socket answered ENXIO before 5.9; truncate checking the mount before the permission on 6.1
+    and earlier (6.14 checks the permission first).
+More differences are accepted on older kernels, where more of the kernel entries apply.
+
+Counts. On the reference machine the probe runs 19 093 cases in 68 groups (one per syscall, plus the cases run
+after a chdir into the exclave) on each of the gate's four exclaves, none differing; between 362 and 368 are
+accepted, all but 65 of them RESOLVE_CACHED's EAGAIN, whose count moves by a few between runs. The count is for
+x86-64 from the gate's work directory: a syscall missing from the machine's table is left out, and so is a
+host-area socket address longer than sun_path's 107 bytes, which no program could write whole, so a deeper work
+directory gives fewer cases.
 """
 import argparse
 import os

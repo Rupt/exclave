@@ -165,7 +165,7 @@ def main():
     ap.add_argument("--work", default=os.path.join(REPO, "build", "docker-work"))
     a = ap.parse_args()
     if not shutil.which("bwrap") or subprocess.run(["bwrap", "--ro-bind", "/", "/", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
-        print("bwrap or user namespaces unavailable; the Docker-profile run cannot happen here")
+        print("bwrap or user namespaces unavailable; the Docker-profile run cannot run here")
         return 0
     import tree                                                  # the exclave's compiler and shell as the tree spells them
     work = os.path.abspath(a.work)
