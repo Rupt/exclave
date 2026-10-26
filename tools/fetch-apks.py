@@ -1,15 +1,17 @@
-"""fetch-apks.py — an example of the step before the tool for Alpine: resolve a package closure from an
-Alpine repository index and download it into a directory of .apk files (DESIGN.md 10.1).
+"""fetch-apks.py — the step before the tool, for an Alpine repository.
+
+An example of the step before the tool for Alpine: resolve a package closure from an Alpine
+repository index and download it into a directory of .apk files (DESIGN.md 10.1).
 
     scripts/fetch-apks [--branch v3.21] [--repos main,community] [--arch x86_64] [--mirror URL]
-                        [--cache DIR] [--no-base] --out DIR PACKAGE...
+                       [--cache DIR] [--no-base] --out DIR PACKAGE...
 
-The closure of `D:` dependencies is resolved against APKINDEX, `so:`, `cmd:` and `pc:` names through the
-`p:` provides, a provider by its `k:` priority then by name, and the base set (alpine-baselayout, busybox)
-added unless --no-base. Every package is verified against the index's checksum (the SHA-1 apk-tools
-records); the index signature is not verified, so the mirror is trusted. The tool itself never
-fetches: `exclave unpack OUT DIR/*.apk` takes what this tool, apk, a mirror or a hand-made directory has
-put on disk. Not part of the tool's own exclave.
+The closure of `D:` dependencies is resolved against APKINDEX, `so:`, `cmd:` and `pc:` names
+through the `p:` provides, a provider by its `k:` priority then by name, and the base set
+(alpine-baselayout, busybox) added unless --no-base. Every package is verified against the index's
+checksum (the SHA-1 apk-tools records); the index signature is not verified, so the mirror is
+trusted. The tool itself never fetches: `exclave unpack OUT DIR/*.apk` takes what this tool, apk, a
+mirror or a hand-made directory has put on disk. Not part of the tool's own exclave.
 """
 
 import argparse
@@ -21,6 +23,7 @@ import re
 import sys
 import tarfile
 import urllib.request
+import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "exclave"))
 import apk
@@ -33,12 +36,16 @@ class RepoError(Exception):
     pass
 
 
-def log(*a) -> None:
+# An APKINDEX entry, field letter to value, with `_repo` added for the repository it came from.
+type Stanza = dict[str, str]
+
+
+def log(*a: object) -> None:
     print(*a, file=sys.stderr)
 
 
 class Repo:
-    def __init__(self, mirror, branch, repos, arch, cache) -> None:
+    def __init__(self, mirror: str, branch: str, repos: list[str], arch: str, cache: str) -> None:
         self.mirror, self.branch, self.repos, self.arch, self.cache = (
             mirror.rstrip("/"),
             branch,
@@ -46,10 +53,11 @@ class Repo:
             arch,
             cache,
         )
-        self.index, self.provides = {}, {}
+        self.index: dict[str, Stanza] = {}
+        self.provides: dict[str, list[tuple[Stanza, str | None]]] = {}
         os.makedirs(cache, exist_ok=True)
 
-    def _get(self, url):
+    def _get(self, url: str) -> bytes:
         key = re.sub(r"[^A-Za-z0-9._-]", "_", url)
         path = os.path.join(self.cache, key)
         if os.path.exists(path):
@@ -59,19 +67,23 @@ class Repo:
         req = urllib.request.Request(url, headers={"User-Agent": "exclave/0.1"})
         with urllib.request.urlopen(req, timeout=120) as r:
             data = r.read()
-        with open(path + ".tmp%d" % os.getpid(), "wb") as f:
+        with open(f"{path}.tmp{os.getpid()}", "wb") as f:
             f.write(data)
-        os.replace(path + ".tmp%d" % os.getpid(), path)  # two fetches may share the cache
+        os.replace(f"{path}.tmp{os.getpid()}", path)  # two fetches may share the cache
         return data
 
     def load_index(self) -> None:
         for repo in self.repos:
             data = self._get(f"{self.mirror}/{self.branch}/{repo}/{self.arch}/APKINDEX.tar.gz")
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as t:
-                text = t.extractfile("APKINDEX").read().decode("utf-8", "replace")
+                member = t.extractfile("APKINDEX")
+                if member is None:
+                    msg = f"{self.branch}/{repo}: APKINDEX in the index archive is not a file"
+                    raise RepoError(msg)
+                text = member.read().decode("utf-8", "replace")
             n = 0
             for block in text.split("\n\n"):
-                st = {}
+                st: Stanza = {}
                 for line in block.split("\n"):
                     if len(line) > 2 and line[1] == ":":
                         st[line[0]] = line[2:]
@@ -85,9 +97,11 @@ class Repo:
                     for name, op, ver in alts:
                         self.provides.setdefault(name, []).append((st, ver if op == "=" else None))
                 n += 1
-            log("index %s/%s: %d packages" % (self.branch, repo, n))
+            log(f"index {self.branch}/{repo}: {n} packages")
 
-    def _pick(self, name, op, ver, selected):
+    def _pick(
+        self, name: str, op: str | None, ver: str | None, selected: dict[str, Stanza]
+    ) -> Stanza | None:
         st = self.index.get(name)
         if st is not None and apk.satisfies(st["V"], op, ver):
             return st
@@ -105,8 +119,8 @@ class Repo:
         providers.sort(key=lambda p: (-int(p[0].get("k", "0") or 0), p[0]["P"]))
         return providers[0][0] if providers else None
 
-    def resolve(self, wanted, base=True):
-        selected = {}
+    def resolve(self, wanted: list[str], *, base: bool = True) -> dict[str, Stanza]:
+        selected: dict[str, Stanza] = {}
         queue = [(n, "requested") for n in wanted] + ([(n, "base") for n in BASE] if base else [])
         while queue:
             name, why = queue.pop(0)
@@ -121,9 +135,8 @@ class Repo:
             selected[st["P"]] = st
             for alts in apk.parse_deps(st.get("D", "")):
                 dep, op, ver = alts[0]
-                if dep in selected or dep.startswith(
-                    "/"
-                ):  # a file dependency: satisfied by whatever ships it
+                # a file dependency: satisfied by whatever ships it
+                if dep in selected or dep.startswith("/"):
                     continue
                 chosen = self._pick(dep, op, ver, selected)
                 if chosen is None:
@@ -133,9 +146,11 @@ class Repo:
                     queue.append((chosen["P"], st["P"]))
         return selected
 
-    def download(self, st):
-        """Fetch one package and verify it the way apk does: the index's checksum is the SHA-1 of the control
-        section, the gzip member holding .PKGINFO, and .PKGINFO's datahash is the SHA-256 of the compressed data member.
+    def download(self, st: Stanza) -> tuple[str, bytes]:
+        """Fetch one package and verify it the way apk does.
+
+        The index's checksum is the SHA-1 of the control section, the gzip member holding .PKGINFO,
+        and .PKGINFO's datahash is the SHA-256 of the compressed data member.
         """
         name = "{}-{}.apk".format(st["P"], st["V"])
         data = self._get(
@@ -154,23 +169,22 @@ class Repo:
             msg = f"{name}: not an apk: no control section before the data"
             raise RepoError(msg)
         raw, plain = members[control[0]]
-        if base64.b64encode(hashlib.sha1(raw).digest()).decode() != want[2:]:
+        sha1 = hashlib.sha1(raw).digest()  # noqa: S324 -- apk's index records SHA-1
+        if base64.b64encode(sha1).decode() != want[2:]:
             msg = f"{name}: checksum does not match the index"
             raise RepoError(msg)
         m = re.search(rb"^datahash = ([0-9a-f]{64})$", plain, re.MULTILINE)
-        if (
-            not m or hashlib.sha256(members[-1][0]).hexdigest() != m.group(1).decode()
-        ):  # over the compressed data member, as abuild computes it
+        # over the compressed data member, as abuild computes it
+        if not m or hashlib.sha256(members[-1][0]).hexdigest() != m.group(1).decode():
             msg = f"{name}: the data section does not match the datahash of its .PKGINFO"
             raise RepoError(msg)
         return name, data
 
 
-def _gzip_members(data):
+def _gzip_members(data: bytes) -> list[tuple[bytes, bytes]]:
     """[(compressed bytes, decompressed bytes)] for each gzip member of a concatenated stream."""
-    import zlib
-
-    out, pos = [], 0
+    out: list[tuple[bytes, bytes]] = []
+    pos = 0
     while pos < len(data):
         d = zlib.decompressobj(31)
         plain = d.decompress(data[pos:])
@@ -180,7 +194,7 @@ def _gzip_members(data):
     return out
 
 
-def main(argv) -> int:
+def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -204,7 +218,7 @@ def main(argv) -> int:
             fname, data = repo.download(selected[name])
             with open(os.path.join(a.out, fname), "wb") as f:
                 f.write(data)
-        log("%d packages in %s" % (len(selected), a.out))
+        log(f"{len(selected)} packages in {a.out}")
     except (RepoError, apk.ApkError, OSError) as e:
         sys.exit(f"fetch-apks: {e}")
     return 0

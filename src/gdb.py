@@ -1,26 +1,33 @@
-# gdb.py: carried by the launcher in its .debug_gdb_scripts section and auto-loaded by gdb when the launcher is
-# the executable (DESIGN.md 7.6, 13.1). gdb sees the launcher; this script tells it about the program the
-# launcher loaded and the libraries its loader mapped, so that no manual command is needed. It needs the exclave
-# in gdb's auto-load safe-path. The launcher exports what the script reads: exclave_original_base, _entry, _path,
-# exclave_interp_base, _path, and exclave_debug_hook, a function called once before the jump into the program.
+# gdb.py: carried by the launcher in its .debug_gdb_scripts section and auto-loaded by gdb when
+# the launcher is the executable (DESIGN.md 7.6, 13.1). gdb sees the launcher; this script tells it
+# about the program the launcher loaded and the libraries its loader mapped, so that no manual
+# command is needed. It needs the exclave in gdb's auto-load safe-path. The launcher exports what
+# the script reads: exclave_original_base, _entry, _path, exclave_interp_base, _path, and
+# exclave_debug_hook, a function called once before the jump into the program.
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING, Any
 
 import gdb
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
-def _u64(addr):
+
+def _u64(addr: int) -> int:
     return int.from_bytes(bytes(gdb.selected_inferior().read_memory(addr, 8)), "little")
 
 
-def _var(name):
+def _var(name: str) -> int:
     return int(gdb.parse_and_eval("*(unsigned long *)&" + name))
 
 
-def _path(name):
+def _path(name: str) -> str:
     return gdb.parse_and_eval("(char *)&" + name).string()
 
 
-def _quiet(cmd):
+def _quiet(cmd: str) -> str:
     old = gdb.parameter("confirm")
     gdb.execute("set confirm off")
     try:
@@ -30,7 +37,7 @@ def _quiet(cmd):
             gdb.execute("set confirm on")
 
 
-def _exclave_tree():
+def _exclave_tree() -> str | None:
     exe = gdb.current_progspace().filename
     if not exe:
         return None
@@ -42,8 +49,11 @@ def _exclave_tree():
     return None
 
 
-def _in_tree(root, v):
-    """A virtual path resolved inside root as a chroot would resolve it (7.4.4); None when a component is missing or the links loop."""
+def _in_tree(root: str, v: str) -> str | None:
+    """A virtual path resolved inside root as a chroot would resolve it (7.4.4).
+
+    None when a component is missing or the links loop.
+    """
     cur, parts, hops = "", [p for p in v.split("/") if p and p != "."], 0
     while parts:
         p = parts.pop(0)
@@ -67,8 +77,11 @@ def _in_tree(root, v):
     return cur
 
 
-def _file_for(root, v):
-    """The file gdb should read for virtual path v: the original of a wrapper in the tree, the tree's file, or the host's."""
+def _file_for(root: str | None, v: str) -> str | None:
+    """The file gdb should read for virtual path v.
+
+    The original of a wrapper in the tree, the tree's file, or the host's.
+    """
     if root:
         cur = _in_tree(root, v)
         if cur:
@@ -79,20 +92,19 @@ def _file_for(root, v):
     return v if os.path.exists(v) else None
 
 
-def _add(state, path, bias) -> None:
+def _add(state: dict[str, Any], path: str | None, bias: int) -> None:
     if bias in state["loaded"] or not path:
         return
     state["loaded"].add(bias)
+    # an exclave may live under a path with a space
     _quiet(
         'add-symbol-file "{}" -o {:#x}'.format(path.replace("\\", "\\\\").replace('"', '\\"'), bias)
-    )  # an exclave may live under a path with a space
+    )
 
 
-def _r_debug():
-    for sym, indirect in (
-        ("_r_debug", False),
-        ("_dl_debug_addr", True),
-    ):  # glibc's struct; musl's pointer to it
+def _r_debug() -> int:
+    # glibc's struct; musl's pointer to it
+    for sym, indirect in (("_r_debug", False), ("_dl_debug_addr", True)):
         try:
             a = int(gdb.parse_and_eval("(unsigned long)&" + sym))
         except gdb.error:
@@ -101,8 +113,11 @@ def _r_debug():
     return 0
 
 
-def _libraries(state) -> None:
-    """Every entry of the loader's link map: l_addr, l_name, l_ld, l_next, l_prev; the first is the program."""
+def _libraries(state: dict[str, Any]) -> None:
+    """Every entry of the loader's link map: l_addr, l_name, l_ld, l_next, l_prev.
+
+    The first is the program.
+    """
     rd = _r_debug()
     if not rd:
         return
@@ -125,9 +140,12 @@ def _libraries(state) -> None:
 
 
 class _Reload(gdb.Breakpoint):
-    """r_brk: the loader calls it after every dlopen and dlclose (RT_CONSISTENT); the map is read again."""
+    """r_brk: the loader calls it after every dlopen and dlclose (RT_CONSISTENT).
 
-    def __init__(self, addr, state) -> None:
+    The map is read again.
+    """
+
+    def __init__(self, addr: int, state: dict[str, Any]) -> None:
         super().__init__(f"*{addr:#x}", internal=True)
         self.state = state
 
@@ -137,9 +155,12 @@ class _Reload(gdb.Breakpoint):
 
 
 class _Entry(gdb.Breakpoint):
-    """The program's entry point: by now the loader has mapped every library and filled its link map."""
+    """The program's entry point.
 
-    def __init__(self, addr, state) -> None:
+    By now the loader has mapped every library and filled its link map.
+    """
+
+    def __init__(self, addr: int, state: dict[str, Any]) -> None:
         super().__init__(f"*{addr:#x}", internal=True, temporary=True)
         self.state = state
 
@@ -148,8 +169,11 @@ class _Entry(gdb.Breakpoint):
         return False
 
 
-def _guarded(fn, *args) -> None:
-    """A failure of this script must never stop the program: gdb stops on an exception in a breakpoint's stop."""
+def _guarded(fn: Callable[..., object], *args: object) -> None:
+    """A failure of this script must never stop the program.
+
+    gdb stops on an exception in a breakpoint's stop.
+    """
     try:
         fn(*args)
     except (gdb.error, gdb.MemoryError, OSError, ValueError) as e:
@@ -157,7 +181,10 @@ def _guarded(fn, *args) -> None:
 
 
 class _Hook(gdb.Breakpoint):
-    """exclave_debug_hook: the launcher has mapped the program and its loader and is about to jump."""
+    """exclave_debug_hook: the launcher is about to jump.
+
+    It has mapped the program and its loader.
+    """
 
     def __init__(self) -> None:
         super().__init__("exclave_debug_hook", internal=True)
@@ -176,20 +203,23 @@ class _Hook(gdb.Breakpoint):
 
 
 def _arm() -> None:
-    """One hook breakpoint per session: the script runs again at every exec of a launcher, and a breakpoint made
-    while gdb is still relocating the new image cannot be inserted yet, so a failed attempt is retried when gdb
-    is next idle.
+    """One hook breakpoint per session.
+
+    The script runs again at every exec of a launcher, and a breakpoint made while gdb is still
+    relocating the new image cannot be inserted yet, so a failed attempt is retried when gdb is next
+    idle.
     """
-    if getattr(gdb, "_exclave_hook", None) is not None and gdb._exclave_hook.is_valid():
+    hook = getattr(gdb, "_exclave_hook", None)
+    if hook is not None and hook.is_valid():
         return
     try:
-        gdb._exclave_hook = _Hook()
+        hook = _Hook()
     except gdb.error:
-        gdb._exclave_hook = None
+        hook = None
         gdb.post_event(_arm)
+    gdb._exclave_hook = hook  # noqa: SLF001 -- gdb's module outlives each run of this script
 
 
-gdb.execute(
-    "handle SIGSYS nostop noprint pass", to_string=True
-)  # every translated syscall is a SIGSYS (7.4.1)
+# every translated syscall is a SIGSYS (7.4.1)
+gdb.execute("handle SIGSYS nostop noprint pass", to_string=True)
 _arm()
