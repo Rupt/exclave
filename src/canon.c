@@ -1,4 +1,4 @@
-/* canon.c — canonicalisation in virtual space (PROPOSAL.md 7.4.4).
+/* canon.c — canonicalisation in virtual space (DESIGN.md 7.4.4).
  *
  * Resolves a path the way the kernel would inside a bind-mounted root:
  * component by component, following symlinks whose targets are virtual
@@ -43,9 +43,9 @@ int is_self_exe(const char *p, pid_t mypid)
     return xstrcmp(p, "/exe") == 0;
 }
 
-/* ---------- the one-step host check (PERFORMANCE.md 4 item 4) ----------
+/* ---------- the one-step host check (DESIGN.md 16.6 item 4) ----------
  * A walk through host directories lstats each, to follow a host symlink in virtual space (a link into /usr reaches the
- * exclave's) and to see the tree's root by another name (F3-13). Where the remaining directories are all plain host by the
+ * exclave's) and to see the tree's root by another name. Where the remaining directories are all plain host by the
  * rule, one openat2 with RESOLVE_NO_SYMLINKS answers the first question for all of them: it succeeds only if each is a
  * directory reached without a link. The second needs no question where the tree's filesystem is mounted once and its
  * device is the tree's own: within one mount a directory has one path, and the rule has already refused the tree's own
@@ -71,7 +71,7 @@ static long mount_prefix(const char *f, const char *fe)
 /* one pass over /proc/self/mountinfo in buf (PATH_MAX): pass 0 finds the mount holding the tree, the longest mount point
  * that is a prefix of its path, the last of equals since a later mount covers an earlier; pass 1 counts the mounts of
  * that device. 1 when answered; 0 when no descriptor was free, to be asked again; -1 when it cannot be answered here: no
- * /proc, an unreadable file, a line longer than the buffer, no mount holding the tree, as in a chroot (review O7-3) */
+ * /proc, an unreadable file, a line longer than the buffer, no mount holding the tree, as in a chroot */
 static long mounts(char *buf, int pass, unsigned long *dev, long *count)
 {
     long fd = sys_open("/proc/self/mountinfo", O_RDONLY | O_CLOEXEC, 0);
@@ -117,7 +117,7 @@ static int tree_mounted_once(char *buf)
 /* at the plain host directory cur, not the last component, with the rest of the path at *rpp: try to stand in for the
  * walk through every directory before the final component. 1 if it did, cur then the last of them and *rpp the final;
  * 0 if the chain does not qualify; -1 if the openat2 was made and could not vouch for it, which the walk remembers
- * until it restarts at a link, so that a failing chain is not tried again at every component (review O7-2) */
+ * until it restarts at a link, so that a failing chain is not tried again at every component */
 static int host_chain(struct scratch *S, char *cur, char **rpp)
 {
     if (no_openat2 || tree_once < 0) return 0;
@@ -147,7 +147,7 @@ static int host_chain(struct scratch *S, char *cur, char **rpp)
     if (fd < 0) return -1;
     /* the kernel's name for what it reached must be the path itself: on a case-insensitive filesystem x.exclave/TREE is the
      * tree's root under another spelling on the same mount, and the tree's root, pinned by the program's own mappings,
-     * keeps its own name (review O7-1); any other difference, an alias nobody foresaw, is the walk's too */
+     * keeps its own name; any other difference, an alias nobody foresaw, is the walk's too */
     char l[32] = "/proc/self/fd/", nb[24]; ltoa_(fd, nb); scat(l, nb, sizeof l);
     long k = sys_readlink(l, S->tmp, PATH_MAX - 1);
     sys_close((int)fd);
@@ -156,7 +156,7 @@ static int host_chain(struct scratch *S, char *cur, char **rpp)
     return 1;
 }
 
-/* a relative walk's starting directory, as the kernel names it (PERFORMANCE.md 4 item 5): the kernel starts a relative
+/* a relative walk's starting directory, as the kernel names it (DESIGN.md 16.6 item 5): the kernel starts a relative
  * lookup at the directory itself and never walks its ancestors again, and getcwd and /proc/self/fd/N name it without a
  * link, so the walk may start there resolved. Not where the name could mislead: a tree directory known by a host name,
  * a host name the rule does not plainly give the host, procfs, or a host directory on a filesystem that could hold the
@@ -191,11 +191,11 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         scpy(rest, path, sizeof S->rest); scpy(cur, base, PATH_MAX);
         if (base[0]) dom = is_exclave_path(base);
         /* a path spelt through the tree's real root, as a program that finds its files from its argv[0] spells them:
-         * the walk would lstat every directory above the tree and then see the tree's root by name (F3-1), and the
-         * launcher resolved that name from /proc/self/exe, so the path starts at the root (PERFORMANCE.md 6) */
+         * the walk would lstat every directory above the tree and then see the tree's root by name, and the
+         * launcher resolved that name from /proc/self/exe, so the path starts at the root (DESIGN.md 16.6 item 7) */
         if (!rf && C.rootlen && xstrncmp(path, C.root, (size_t)C.rootlen) == 0 && (path[C.rootlen] == '/' || !path[C.rootlen])) {
             /* the walk's own answer for the directories above the tree, which the kernel searches: EACCES where one is
-             * not searchable, ENOENT where the exclave was moved while it runs (review O7-5); one question for six lstats */
+             * not searchable, ENOENT where the exclave was moved while it runs; one question for six lstats */
             long e = sys_faccessat(AT_FDCWD, C.dir, X_OK); if (e < 0) return (int)e;
             scpy(rest, path + C.rootlen, sizeof S->rest);
         }
@@ -248,7 +248,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         size_t curl = xstrlen(cur); if (curl + 1 + cl + 1 >= PATH_MAX) return -ENAMETOOLONG;
         cur[curl] = '/'; xmemcpy(cur + curl + 1, comp, cl + 1);
         /* the tree's real root directory is an alias of /: a path spelt through <exclave>/tree/ is the same path in
-         * virtual space, with the same ownership and the same read-only rule (review F3-1) */
+         * virtual space, with the same ownership and the same read-only rule */
         if (C.rootlen && xstrcmp(cur, C.root) == 0) { cur[0] = 0; S->touched_exclave = 1; while (*rp == '/') rp++; continue; }
         while (*rp == '/') rp++;
         int last = (*rp == 0);
@@ -273,7 +273,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         }
         /* classify the component: a directory, a symlink (text in tmp), absent, or something else */
         int kind, err = -ENOENT, idf, leads, chain = 0; const char *hreal;
-        int host = vis_walk_facts(cur, &idf, &leads, &hreal); /* the rule asked once for the candidate (PERFORMANCE.md 4 item 3) */
+        int host = vis_walk_facts(cur, &idf, &leads, &hreal); /* the rule asked once for the candidate (DESIGN.md 16.6 item 3) */
         leads = leads && !last;
         if (idf || leads || !host) S->touched_exclave = 1;         /* anything but a plain host component */
         if (idf) {                                             /* 8.4: resolved on the host at startup; its host symlinks are not ours to follow */
@@ -291,7 +291,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         } else if (!last && !rf && !chain_failed && (chain = host_chain(S, cur, &rp)) > 0) {
             continue;                                          /* cur is the last directory before the final component */
         } else {
-            if (chain < 0) chain_failed = 1;                   /* the walk's, from here to the next link (review O7-2) */
+            if (chain < 0) chain_failed = 1;                   /* the walk's, from here to the next link */
             scpy(real, hreal, PATH_MAX);                       /* to_real_exec's answer for a host path */
             struct kstat st; long r = sys_lstat(real, &st);
             if (r < 0) { kind = CK_NONE; err = (int)r; }
@@ -306,7 +306,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
                     if (xstrncmp(cur, "/proc/", 6) == 0) {
                         if (nomagic && xstrchr(cur + 6, '/')) return -ELOOP;   /* a link below /proc/<pid>/ is a magic link; one at /proc/ is not */
                         /* a procfs magic link to something that has no path (a pipe, a socket, an unlinked
-                         * file) is reachable only through the link itself: the walk ends here (review F3-11) */
+                         * file) is reachable only through the link itself: the walk ends here */
                         if ((tmp[0] != '/' && xstrchr(tmp, ':') && xstrchr(tmp, '[')) || (n > 10 && xstrcmp(tmp + n - 10, " (deleted)") == 0)) {   /* pipe:[n], socket:[n], anon_inode:[x], a deleted file */
                             if (!last) return -ENOTDIR;
                             kind = CK_FILE;
@@ -314,7 +314,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
                     }
                 }
             }
-            /* any spelling of the tree's root directory, through a bind mount or another link, is / (F3-13) */
+            /* any spelling of the tree's root directory, through a bind mount or another link, is / */
             if (kind == CK_DIR && C.root_ino && st.st_dev == C.root_dev && st.st_ino == C.root_ino) { cur[0] = 0; S->touched_exclave = 1; continue; }
         }
         if (kind != CK_LINK) {

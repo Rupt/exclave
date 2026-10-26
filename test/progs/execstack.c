@@ -1,5 +1,5 @@
 /* execstack.c — a nested function whose address is taken puts a trampoline on the stack; the program's
- * PT_GNU_STACK asks for an executable stack, which the loader must honour (review O3-7). */
+ * PT_GNU_STACK asks for an executable stack, which the loader must honour. */
 #include <stdio.h>
 static int apply(int (*f)(int), int x) { return f(x); }
 int main(int argc, char **argv)

@@ -1,4 +1,4 @@
-"""tree.py — what a tree says about itself, for the suite and the oracles (PROPOSAL.md 17): a test asserts what the
+"""tree.py — what a tree says about itself, for the suite and the oracles (DESIGN.md 17): a test asserts what the
 tree says, never what one distribution spells. Every function takes the tree's root directory; then the one way a
 driver takes an exclave: a copy of its own, relinked with the build, so that the launcher under test is always build/launcher
 and never the one an exclave was wrapped with; and the Go regression's builds, which the matrix makes on the host for VMs
@@ -81,7 +81,7 @@ def libc(root, machine):
 # ---------------------------------------------------------------- an exclave for a driver (17)
 def socket_file(path):
     """A socket file at path, bound through its directory's descriptor, so that only the name counts against sun_path's
-    108 bytes and a deep checkout or work directory does not (review O8-2). A stale one is replaced."""
+    108 bytes and a deep checkout or work directory does not. A stale one is replaced."""
     d, name = os.path.split(path)
     if os.path.lexists(path):
         os.remove(path)
@@ -134,7 +134,7 @@ def relink_if_stale(ex, launcher=BUILD_LAUNCHER):
 
 
 # the Go regression's programs (17.4): as go links for the machine, and from 0x10000 as its aarch64 linker does, an image
-# past where the syscall page lay until revision 16 (13 item 24)
+# past where the syscall page lay in early versions (13 item 24)
 GO_BUILDS = (("go_paths", []), ("go_paths_low", ["-ldflags=-T 0x11000"]))
 GOARCH = {"x86_64": "amd64", "aarch64": "arm64"}
 

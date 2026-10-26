@@ -1,11 +1,11 @@
-/* filter_test.c — the seccomp filter against the rule of PROPOSAL.md 7.4.2. Built by test/gate.sh's unit step.
+/* filter_test.c — the seccomp filter against the rule of DESIGN.md 7.4.2. Built by test/gate.sh's unit step.
  *
  * A classic-BPF interpreter runs the program src/filter.c builds for every syscall number up to past the ceiling,
  * from the syscall page and from elsewhere, with the arguments each conditional rule reads set and clear, and the
  * answer is compared with the rule written out here on its own. Then, as the kernel does when it builds its action
  * cache (seccomp_cache_prepare, 5.11), every number is run with only the architecture and the number known: one whose
  * answer needs neither an argument nor the instruction pointer is ALLOW for every call, and the kernel skips the filter
- * for it; every syscall the rule does not single out must be such a number (PERFORMANCE.md 2.4). */
+ * for it; every syscall the rule does not single out must be such a number (DESIGN.md 16.3). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

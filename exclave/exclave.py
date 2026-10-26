@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""exclave — builds exclaves from files (PROPOSAL.md sections 6 and 10).
+"""exclave — builds exclaves from files (DESIGN.md sections 6 and 10).
 
 An exclave is a directory at every stage, and every command takes paths; `format --check` is the one flag:
 
@@ -409,7 +409,7 @@ def manifest(ex):
 
 def owned_top(ex):
     """8.1 rule 1: every top-level entry of tree/ that is not an empty directory; a directory that cannot be
-    listed is not a placeholder (review O4-8)."""
+    listed is not a placeholder."""
     root = os.path.join(ex, "tree")
     top = []
     for name in sorted(os.listdir(root)):
@@ -433,7 +433,7 @@ def owned(ex):
 
 
 def check_limits(ex):
-    """The launcher's fixed tables (8.1): refuse what it would refuse, before wrapping (review O4-9, O4-10); the
+    """The launcher's fixed tables (8.1): refuse what it would refuse, before wrapping; the
     manifest's records are counted by parse, the tree's top-level entries here."""
     manifest(ex)
     top = len(owned_top(ex))                                 # as the launcher counts them: a placeholder takes no slot
@@ -601,7 +601,7 @@ def wrapper_problems(ex, data=()):
 
 def wrap_files(ex, data=(), quiet=False):
     """6.1: every executable file in tree/ outside data directories becomes a hard link to the launcher; the
-    original moves to .real/. Never over an existing original (review F4-2)."""
+    original moves to .real/. Never over an existing original."""
     root = os.path.join(ex, "tree")
     launcher = os.path.join(ex, ".exclave", "launcher")
     oi = launcher_ino(ex)
@@ -630,7 +630,7 @@ def wrap_files(ex, data=(), quiet=False):
 def cmd_wrap(ex, quiet=False):
     """Wrap an exclave: launcher, placeholders, manifest, the wrapper and static checks on the tree as it stands,
     then the wrappers, then the launcher, manifest and tree hashes in the hashes file. A refusal happens before
-    anything is wrapped, so a refused exclave is left unwrapped (review F4-8, O4-7)."""
+    anything is wrapped, so a refused exclave is left unwrapped."""
     root = os.path.join(ex, "tree")
     if not os.path.isdir(root):
         sys.exit("refusing: %s has no tree/ directory" % ex)
@@ -664,8 +664,8 @@ def cmd_wrap(ex, quiet=False):
 
 def cmd_unwrap(ex):
     """Unwrap an exclave: originals back over their wrappers; the hashes file keeps its inputs and loses the
-    hashes of a wrapped exclave (review F4-6). An original without a wrapper is refused, since it is not this
-    exclave's (F4-5)."""
+    hashes of a wrapped exclave. An original without a wrapper is refused, since it is not this
+    exclave's."""
     strays = [p for p in wrapper_problems(ex) if p.startswith("original without wrapper")]
     if strays:
         raise build.BuildError("; ".join(strays))
@@ -675,7 +675,7 @@ def cmd_unwrap(ex):
 
 def cmd_relink(ex, launcher=None):
     """Replace an exclave's launcher and relink every wrapper to it (wrappers are hard links, 6.1). An original
-    without a wrapper is reported, not given one (review F4-5, O4-11); the hashes file's launcher record follows."""
+    without a wrapper is reported, not given one; the hashes file's launcher record follows."""
     launcher = launcher or default_launcher()
     if not os.path.isfile(launcher):
         sys.exit("no launcher at %s" % launcher)
@@ -724,7 +724,7 @@ def static_report(ex, quiet=False):
 
 def cmd_check(ex, logs=()):
     """A wrapped exclave: every executable outside data directories wrapped, no stray or stale wrapper, the
-    static check, the tree against its recorded hash (review O4-18), and with logs the dynamic check."""
+    static check, the tree against its recorded hash, and with logs the dynamic check."""
     root = os.path.join(ex, "tree")
     data = data_prefixes(ex)
     oi = launcher_ino(ex)
@@ -743,7 +743,7 @@ def cmd_check(ex, logs=()):
         else:
             problems.append("an unwrapped exclave: the hashes file has no tree hash; run exclave wrap")
     elif any(is_wrapper(real, oi) for real, v, st in walk_files(root) if stat.S_ISREG(st.st_mode)):
-        problems.append("wrappers but no hashes file: wrap never finished; run exclave wrap")   # the third state (review F5-3, N4)
+        problems.append("wrappers but no hashes file: wrap never finished; run exclave wrap")   # the third state: wrapped, never finished
     for p in problems:
         print(p)
     print("%d wrapper problems" % len(problems))
@@ -765,7 +765,7 @@ def cmd_prune(ex, logs):
     print("pruned %s: kept %d files, removed %d, %d bytes freed" % (ex, kept, removed, freed))
     lock = os.path.join(ex, ".exclave", "hashes")
     if os.path.exists(lock) and values(load(lock, "hashes"), "tree"):
-        build.write_lock(ex, None, keep_hashes=True)         # the hashes file records the output as it now is (review F4-6)
+        build.write_lock(ex, None, keep_hashes=True)         # the hashes file records the output as it now is
     rep = static_report(ex)
     return 1 if rep.errors else 0
 
@@ -776,7 +776,7 @@ def cmd_format(paths, check):
         with open(p, "rb") as f:
             data = f.read()
         first = next((l for l in data.split(b"\n") if l and not l.startswith(b"#")), b"")
-        kind = "hashes" if first.startswith(b"hashes ") else "exclave"        # by the first record, not the file's name (review O4-16)
+        kind = "hashes" if first.startswith(b"hashes ") else "exclave"        # by the first record, not the file's name
         try:
             recs = parse(data, kind)
         except GrammarError as e:
@@ -796,11 +796,11 @@ def cmd_format(paths, check):
 
 
 def require_exclave(ex, cmd):
-    """Refuse, in one line and before reading or writing anything, a directory the command cannot act on (review
-    O8-1): a can from before revision 18 is named as one, since its launcher's own refusal sends its user here."""
+    """Refuse, in one line and before reading or writing anything, a directory the command cannot act on:
+    a can, an exclave from before the rename, is named as one, since its launcher's own refusal sends its user here."""
     if os.path.isdir(os.path.join(ex, ".can")) and not os.path.isdir(os.path.join(ex, ".exclave")):
-        sys.exit("refusing: %s is a can from before revision 18, with .can/ and root/; convert it first "
-                 "(README, \"A can from before revision 18\")" % ex)
+        sys.exit("refusing: %s is a can, an exclave from before the rename, with .can/ and root/; convert it first "
+                 "(README, \"Bundles made before the rename\")" % ex)
     if not os.path.isdir(os.path.join(ex, "tree")):
         sys.exit("refusing: %s has no tree/ directory" % ex)
     if cmd != "wrap" and not os.path.isdir(os.path.join(ex, ".exclave")):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""matrix.py — the kernel matrix (PROPOSAL.md 12, 17 item 5): an exclave built here, run in virtual machines.
+"""matrix.py — the kernel matrix (DESIGN.md 12, 17 item 5): an exclave built here, run in virtual machines.
 
     test/matrix.py --exclave EXCLAVE [--only NAME,...] [--work DIR] [--images DIR] [--memory MB] [--arm64 --debs-arm64 DIR]
                    [--docker-profile FILE]

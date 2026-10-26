@@ -50,14 +50,14 @@ int main(int argc, char **argv)
     if (!strcmp(mode, "showenv")) { printf("A=%s B=%s EXCLAVE_COMMX=%s\n", getenv("A") ? getenv("A") : "-", getenv("B") ? getenv("B") : "-", getenv("EXCLAVE_COMMX") ? getenv("EXCLAVE_COMMX") : "-"); return 0; }
     if (!strcmp(mode, "envedge")) {                          /* a variable in the last bytes before an unmapped page, between others: the handler
                                                               * reads every variable's head in one batch, and one it cannot read whole falls back
-                                                              * to its own read without losing the rest (PERFORMANCE.md 4 item 6) */
+                                                              * to its own read without losing the rest (DESIGN.md 16.6 item 6) */
         char *pg = mmap(0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0); if (pg == MAP_FAILED) { perror("mmap"); return 1; }
         munmap(pg + 4096, 4096);
         char *edge = pg + 4096 - 4; memcpy(edge, "A=1", 4);
         char *ev[] = { "B=2", edge, "EXCLAVE_COMMX=keep", "EXCLAVE_EXEC=/bogus", 0 }, *av[] = { argv[2], "showenv", 0 };
         execve(argv[2], av, ev); perror("execve"); return 1;
     }
-    if (!strcmp(mode, "vectors")) {                          /* O3-11, F3-14: NULL and bad vectors behave as the kernel makes them */
+    if (!strcmp(mode, "vectors")) {                          /* NULL and bad vectors behave as the kernel makes them */
         int fails = 0; extern char **environ;
         for (int t = 2; t < argc; t++) {
             struct { const char *name; char **av; char **ev; int want; } cases[] = {
@@ -72,17 +72,17 @@ int main(int argc, char **argv)
         }
         printf("vectors: %d failures\n", fails); return fails ? 1 : 0;
     }
-    if (!strcmp(mode, "nofollow")) {                         /* F3-20: execveat of a symlink itself is ELOOP */
+    if (!strcmp(mode, "nofollow")) {                         /* execveat of a symlink itself is ELOOP */
         errno = 0; syscall(SYS_execveat, AT_FDCWD, getenv("EXCLAVE_TEST_SH") ? getenv("EXCLAVE_TEST_SH") : "/usr/bin/sh", (char *[]){ "sh", "-c", "echo RAN", 0 }, environ, AT_SYMLINK_NOFOLLOW);
         printf("%d\n", errno); return errno == ELOOP ? 0 : 1;
     }
-    if (!strcmp(mode, "closefds")) {                         /* F3-18: close everything, open a file, trap: the log must not land in it */
+    if (!strcmp(mode, "closefds")) {                         /* close everything, open a file, trap: the log must not land in it */
         for (int fd = 3; fd < 1024; fd++) close(fd);
         int fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644); write(fd, "line one\n", 9);
         struct stat st; stat("/usr/share", &st); stat(getenv("EXCLAVE_TEST_SH") ? getenv("EXCLAVE_TEST_SH") : "/usr/bin/sh", &st);
         write(fd, "line two\n", 9); close(fd); printf("closefds done fd=%d\n", fd); return 0;
     }
-    if (!strcmp(mode, "perm")) {                             /* O3-4: the kernel's permission triads, not "anyone may execute" */
+    if (!strcmp(mode, "perm")) {                             /* the kernel's permission triads, not "anyone may execute" */
         int fails = 0;
         for (int i = 2; i < argc; i++) { errno = 0; execl(argv[i], argv[i], (char *)0); if (errno != EACCES) { fails++; printf("FAIL exec %s: errno %d\n", argv[i], errno); } }
         printf("perm: %d failures\n", fails); return fails ? 1 : 0;

@@ -1,4 +1,4 @@
-/* unix_socket.c — sockaddr_un paths under the visibility rule (PROPOSAL.md 13 item 31, 17.4): bind, connect and sendto
+/* unix_socket.c — sockaddr_un paths under the visibility rule (DESIGN.md 13 item 31, 17.4): bind, connect and sendto
  * with a path of every class. usage: unix_socket HOSTDIR [EXDIR EXFILE EXSOCK [CWDDIR]]. Prints one line per case,
  * "<case>: ret=<r> errno=<e>", the same in every world, so that the kernel under bwrap is the oracle for the launcher.
  * EXDIR: a directory the exclave owns (default /usr/share); EXFILE: a regular file it owns (default $EXCLAVE_TEST_TRUE); EXSOCK: a

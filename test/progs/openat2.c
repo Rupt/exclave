@@ -1,4 +1,4 @@
-/* openat2.c — the openat2 regression of PROPOSAL.md 17.4: the resolve flags in the exclave's world (7.4.3).
+/* openat2.c — the openat2 regression of DESIGN.md 17.4: the resolve flags in the exclave's world (7.4.3).
  * usage: openat2 HOSTDIR   (HOSTDIR: a writable host directory). Prints FAIL lines; exit 1 on any; exit 3 when
  * the kernel has no openat2. Spellings come from the environment: EXCLAVE_TEST_SH (a symlink in the tree), EXCLAVE_TEST_TRUE. */
 #define _GNU_SOURCE

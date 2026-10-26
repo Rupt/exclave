@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""grammar_test.py — the property tests of PROPOSAL.md 6.2 and 17 item 3 (review O4-14).
+"""grammar_test.py — the property tests of DESIGN.md 6.2 and 17 item 3.
 
     test/grammar_test.py [--cases N] [--seed S] [--c-parser PATH]
 

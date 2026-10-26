@@ -1,4 +1,4 @@
-"""rpm.py — reading RPM packages (PROPOSAL.md 10.1): the third reader of `unpack`, chosen by the file.
+"""rpm.py — reading RPM packages (DESIGN.md 10.1): the third reader of `unpack`, chosen by the file.
 
 An .rpm is a 96-byte lead, a signature header, a header and a compressed cpio payload. The header is an
 index of tagged entries; the reader takes the names, versions, architecture, dependencies and the

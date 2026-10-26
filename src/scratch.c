@@ -1,4 +1,4 @@
-/* scratch.c — handler scratch memory (PROPOSAL.md 7.5.4).
+/* scratch.c — handler scratch memory (DESIGN.md 7.5.4).
  *
  * The handler may use only 3 KB of the program's stack (7.5.4), so its path
  * buffers live in chunks obtained with mmap on demand. A chunk records its
@@ -91,7 +91,7 @@ void scratch_put(struct scratch *s)
 
 /* Nesting depth of this thread: the chunks it still holds, plus one. A chunk whose frame is at or below the
  * current frame cannot belong to a live ancestor on this stack: it was left by a longjmp out of a handler and
- * is released here, so a leak never counts as depth (review O3-6, F3-15). Frames on another stack are
+ * is released here, so a leak never counts as depth. Frames on another stack are
  * above or below only by accident; the rare handler that switches stacks between traps is accepted (13). */
 int nest_enter(pid_t pid, pid_t tid, unsigned long frame)
 {

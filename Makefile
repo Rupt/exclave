@@ -1,7 +1,7 @@
 # exclave — build the launcher, run the checks.
 #
 # The launcher is a freestanding ET_DYN object with no PT_INTERP: it runs as a
-# program (a wrapper, PROPOSAL.md 6.1) and loads programs itself (7.3).
+# program (a wrapper, DESIGN.md 6.1) and loads programs itself (7.3).
 
 CC      ?= gcc
 SRC     := src/launcher.c src/manifest.c src/loader.c src/scratch.c src/vis.c src/canon.c src/cache.c \

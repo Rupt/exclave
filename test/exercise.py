@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""exercise.py — one program, two worlds (PROPOSAL.md 17): compile PROG.c with the exclave's compiler, run it under bwrap with
+"""exercise.py — one program, two worlds (DESIGN.md 17): compile PROG.c with the exclave's compiler, run it under bwrap with
 the unwrapped tree read-only at / (the namespace oracle's world, where the kernel answers) and under the launcher, and
 print the two outputs side by side, marking the lines that differ. This is how a limitation is measured before it is
 fixed: the program prints one line per case, "<case>: <answer>", and the kernel's column is the expectation.

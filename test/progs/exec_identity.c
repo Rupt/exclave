@@ -1,4 +1,4 @@
-/* exec_identity.c — the identity a program exec'd from inside gets (PROPOSAL.md 7.4.5, 7.6, 17.4): comm, AT_EXECFN and a
+/* exec_identity.c — the identity a program exec'd from inside gets (DESIGN.md 7.4.5, 7.6, 17.4): comm, AT_EXECFN and a
  * script's $0 as the kernel spells them, for a host ELF exec'd by an absolute and by a relative path with argv[0] renamed,
  * a host script exec'd relative to a descriptor and through a descriptor alone (/dev/fd/N/name and /dev/fd/N), a host ELF
  * through a descriptor, and execve's own answers for a close-on-exec script descriptor, a header the loader cannot load

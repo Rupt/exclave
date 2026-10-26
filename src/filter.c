@@ -1,4 +1,4 @@
-/* filter.c — the seccomp filter (PROPOSAL.md 7.4.2).
+/* filter.c — the seccomp filter (DESIGN.md 7.4.2).
  *
  * One classic-BPF program, installed at the border, or over an older version's, and inherited
  * by every descendant. The launcher's own syscalls are recognised by their
@@ -171,7 +171,7 @@ static void build(void)
     emit(LD_ABS, 0, 0, OFF_IP); emit(AND_K, 0, 0, ~0xfffu); emit(JEQ_K, 0, 1, (uint32_t)SC_PAGE);
     ret(SECCOMP_RET_ALLOW);
     /* the refusals; everything else that reaches here traps, and a syscall newer than this filter knows is answered
-     * ENOSYS by the handler (7.4.2, review O3-5): a future path-taking syscall must not reach the host untranslated */
+     * ENOSYS by the handler (7.4.2): a future path-taking syscall must not reach the host untranslated */
     emit(LD_ABS, 0, 0, OFF_NR);
     on_nr(NR_seccomp, SECCOMP_RET_ERRNO | ENOSYS);
     on_nr(NR_prctl, SECCOMP_RET_ERRNO | ENOSYS);
@@ -196,7 +196,7 @@ void filter_install(void)
     /* SPEC_ALLOW: a filter installed without it switches the process and its descendants to Speculative Store Bypass
      * Disable, forced, wherever the kernel's default is spec_store_bypass_disable=seccomp (4.17 to 5.15 and the
      * backports before), which slows compute-bound code by up to several times; an exclave is not a security boundary and
-     * its programs did not ask for it (PERFORMANCE.md 3). A kernel without the flag answers EINVAL. */
+     * its programs did not ask for it (DESIGN.md 16.5). A kernel without the flag answers EINVAL. */
     long r = SC3(NR_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_SPEC_ALLOW, &fp);
     if (r == -EINVAL) r = SC3(NR_seccomp, SECCOMP_SET_MODE_FILTER, 0, &fp);
     if (r == -ENOSYS) r = sys_prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, (unsigned long)&fp, 0, 0);   /* kernels before 3.17 */

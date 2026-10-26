@@ -1,4 +1,4 @@
-/* manifest.c — strict parser for the manifest (PROPOSAL.md 6.2).
+/* manifest.c — strict parser for the manifest (DESIGN.md 6.2).
  *
  * No syscalls: takes a buffer, fills struct exclave, reports "line L col C: why".
  * Compiled into the launcher and, with HOST_TEST, into test/manifest_test.c.

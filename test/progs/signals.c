@@ -1,4 +1,4 @@
-/* signals.c — the signal regressions of PROPOSAL.md 7.5: SIGSYS is never blocked, handlers with full masks trap, the
+/* signals.c — the signal regressions of DESIGN.md 7.5: SIGSYS is never blocked, handlers with full masks trap, the
  * program's mask is otherwise honoured. Prints FAIL lines; exit 1 on any. */
 #define _GNU_SOURCE
 #include <errno.h>

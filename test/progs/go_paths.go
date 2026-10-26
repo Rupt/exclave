@@ -1,4 +1,4 @@
-// go_paths.go — the Go regression of PROPOSAL.md 17.4: a static Go program doing path syscalls from goroutines.
+// go_paths.go — the Go regression of DESIGN.md 17.4: a static Go program doing path syscalls from goroutines.
 // Go issues its syscalls raw, creates threads with clone, installs its own handler for every signal, SIGSYS
 // included (7.5.2), and runs goroutines on small stacks with a signal stack per thread. Built by the host's
 // go with cgo off, run inside an exclave as a host program.

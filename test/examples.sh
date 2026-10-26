@@ -1,5 +1,5 @@
 #!/bin/sh
-# test/examples.sh EXCLAVE — the example runs (PROPOSAL.md 17): what needs inputs the user supplies and time the gate
+# test/examples.sh EXCLAVE — the example runs (DESIGN.md 17): what needs inputs the user supplies and time the gate
 # cannot afford. Each runs when its input is set, and says so when it is not:
 #   EXCLAVE_TEST_SRC=DIR         test/realsoft.py: zlib, Lua, SQLite and re2c built inside and outside (needs g++, make, python3 in the exclave)
 #   EXCLAVE_TEST_SQLITE=FILE     test/bench.py: the performance table (16), best of three

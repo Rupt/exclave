@@ -1,5 +1,5 @@
 /* ljmp.c — the textbook timeout: a blocking open on a FIFO, an interval timer, siglongjmp out of the handler,
- * many times over (review O3-6). usage: ljmp FIFO ROUNDS */
+ * many times over. usage: ljmp FIFO ROUNDS */
 #define _GNU_SOURCE
 #include <fcntl.h>
 #include <setjmp.h>

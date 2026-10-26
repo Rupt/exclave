@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""oracle_syscalls.py — the differential syscall probe (PROPOSAL.md 17, item 7).
+"""oracle_syscalls.py — the differential syscall probe (DESIGN.md 17, item 7).
 
 Every trapped path and descriptor syscall of src/filter.c, and the two chattr ioctls, is issued with every path
 form of 7.4.4, and every flag that changes

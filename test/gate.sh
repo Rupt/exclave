@@ -1,5 +1,5 @@
 #!/bin/sh
-# test/gate.sh EXCLAVE... — the commit gate (PROPOSAL.md 17): the unit tests, the stack budget, and for every exclave
+# test/gate.sh EXCLAVE... — the commit gate (DESIGN.md 17): the unit tests, the stack budget, and for every exclave
 # given the suite in the given and a random order (and, for the first exclave, under the plain terminal's AppArmor label), the
 # resolution oracle, the namespace oracle and the syscall probe; when EXCLAVE_TEST_INPUTS names the directory
 # test/inputs.sh filled, the Docker profile run on its src/docker-seccomp.json and dogfood on its package sets. No step

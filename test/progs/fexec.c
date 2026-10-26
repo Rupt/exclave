@@ -1,4 +1,4 @@
-/* fexec.c — exec of a descriptor that has no path (PROPOSAL.md 13 item 25, 17.4): a memfd holding an ELF, an unlinked
+/* fexec.c — exec of a descriptor that has no path (DESIGN.md 13 item 25, 17.4): a memfd holding an ELF, an unlinked
  * file, a script in a memfd, with and without close-on-exec. usage: fexec HOSTDIR, or "fexec child" as the program it
  * re-executes. Prints one line per case, "<case>: ret=<r> errno=<e> status=<s> out=<first line>", the same in every
  * world, so the kernel under bwrap is the oracle. Exit 0 always. */

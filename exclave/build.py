@@ -1,5 +1,5 @@
 """build.py — extraction, synthesis, placeholders, the dependency report, pruning and the hashes file
-(PROPOSAL.md 10.1, 10.4, 6.4).
+(DESIGN.md 10.1, 10.4, 6.4).
 """
 import glob
 import hashlib
@@ -39,7 +39,7 @@ _ALIAS = re.compile(r"^(bin|sbin|lib|lib32|lib64|libx32)(/|$)")
 
 
 def _inside(root_real, dst):
-    """The parent of dst, once the kernel has resolved every symlink, must be the tree (review O3-8)."""
+    """The parent of dst, once the kernel has resolved every symlink, must be the tree."""
     parent = os.path.realpath(os.path.dirname(dst))
     if parent != root_real and not parent.startswith(root_real + os.sep):
         raise BuildError("%s escapes the tree through a symlink (resolves under %s)" % (dst, parent))
@@ -107,7 +107,7 @@ def extract(root, debs, log=print):
                 if not rel:
                     continue
                 dst = os.path.join(root, rel)
-                key = _ALIAS.sub(r"usr/\1\2", rel)                    # /lib/x and /usr/lib/x are one file (O3-9)
+                key = _ALIAS.sub(r"usr/\1\2", rel)                    # /lib/x and /usr/lib/x are one file
                 _inside(root_real, dst)
                 if m.isdir():
                     if os.path.islink(dst) and os.path.isdir(dst):
@@ -164,8 +164,7 @@ def _v(root, vpath):
 
 def _link(root, link, target, log, replace=False):
     """A link at a virtual path. With replace, as alternatives --install does, a file or link standing there gives
-    way (Fedora's binutils ships gold at /usr/bin/ld and removes it in %post before installing the alternative,
-    review F5-5); a directory never does."""
+    way (Fedora's binutils ships gold at /usr/bin/ld and removes it in %post before installing the alternative); a directory never does."""
     p = _v(root, link)
     if os.path.lexists(p):
         if not replace or (os.path.isdir(p) and not os.path.islink(p)):
@@ -252,7 +251,7 @@ def synthesise(root, debs, log=print):
         log("synthesised /etc/ssl/certs/ca-certificates.crt from %d certificates" % len(certs))
     # ca-certificates (Fedora, RHEL): the consumers' paths are links to /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem,
     # which update-ca-trust extracts in %post from the p11-kit trust source; the CA anchors trusted there are
-    # concatenated the same way (review F5-6). The bundle is an identity file (8.4): the host's where it has one.
+    # concatenated the same way. The bundle is an identity file (8.4): the host's where it has one.
     extracted = _v(root, "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem")
     sources = sorted(glob.glob(_v(root, "/usr/share/pki/ca-trust-source/*.p11-kit")) + glob.glob(_v(root, "/etc/pki/ca-trust/source/anchors/*")))
     if sources and not os.path.lexists(extracted):
@@ -367,8 +366,7 @@ def _payload(real):
 
 def tree_hash(root):
     """BLAKE2b-256 of the serialised listing of 6.4: originals in place of wrappers, .real/ excluded, except
-    that an original without a wrapper is hashed under its own name so that nothing is ever invisible
-    (review F4-5, O4-11)."""
+    that an original without a wrapper is hashed under its own name so that nothing is ever invisible."""
     entries = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d != ".real")
@@ -541,7 +539,7 @@ def prune(ex, logs, own, log=print):
             keep.add(final)
             if what in ("exec", "load"):
                 programs += 1
-    if not programs:                                          # an empty, foreign or failed log would empty the exclave (review O4-4, F4-11)
+    if not programs:                                          # an empty, foreign or failed log would empty the exclave
         raise BuildError("the logs name no program in this exclave; nothing to prune to")
     for f in IDENTITY_FILES + ["/etc/ld.so.cache"]:
         if os.path.lexists(_v(root, f)):
@@ -589,7 +587,7 @@ def prune(ex, logs, own, log=print):
                 continue
             st = os.lstat(real)
             is_wrap = not in_real and os.path.exists(os.path.join(dirpath, ".real", name))
-            if stat.S_ISREG(st.st_mode) and not is_wrap:      # originals and plain files; a wrapper is a link to the launcher (review O4-15)
+            if stat.S_ISREG(st.st_mode) and not is_wrap:      # originals and plain files; a wrapper is a link to the launcher
                 freed += st.st_size
             os.remove(real)
             removed += 1

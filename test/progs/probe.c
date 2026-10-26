@@ -1,4 +1,4 @@
-/* probe.c — the interpreter of the differential syscall probe (PROPOSAL.md 17, item 7).
+/* probe.c — the interpreter of the differential syscall probe (DESIGN.md 17, item 7).
  *
  * Reads cases from stdin, one per line: an id, a syscall number, then up to six encoded arguments. Each case
  * is issued through syscall(2), so that no libc wrapper stands between the case and the kernel (or the

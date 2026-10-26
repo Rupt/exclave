@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""oracle_ns.py — the namespace oracle (PROPOSAL.md 17, item 1).
+"""oracle_ns.py — the namespace oracle (DESIGN.md 17, item 1).
 
 The same tree runs twice: under `bwrap` with the unwrapped tree bound read-only at `/`, and under the
 launcher. Exit status, stdout and stderr are compared, and the read-only matrix program of test/progs is

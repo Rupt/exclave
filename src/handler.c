@@ -1,4 +1,4 @@
-/* handler.c — the SIGSYS handler (PROPOSAL.md 7.4.3, 7.5, 8.2).
+/* handler.c — the SIGSYS handler (DESIGN.md 7.4.3, 7.5, 8.2).
  *
  * Runs in the program's thread on every trapped syscall. It canonicalises
  * the path in virtual space, decides host or exclave, applies the read-only rule
@@ -75,7 +75,7 @@ static long copy_str_in(pid_t pid, char *dst, const char *src)
     return more == PATH_MAX - 256 ? -ENAMETOOLONG : -EFAULT;
 }
 static long copy_exact(pid_t pid, void *dst, const void *src, size_t n) { long g = copy_in(pid, dst, src, n); return g == (long)n ? 0 : -EFAULT; }
-/* the mirror of copy_in: the only writes into program memory the kernel has not just validated (review O3-1) */
+/* the mirror of copy_in: the only writes into program memory the kernel has not just validated */
 static long copy_out(pid_t pid, void *dst, const void *src, size_t n)
 {
     unsigned long p = (unsigned long)dst;
@@ -109,7 +109,7 @@ static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int 
         r = sys_faccessat(dfd, ".", X_OK); if (r < 0) return r;
     }
     r = canon(S, S->b1, dfd, follow, S->v);
-    if (r < 0) scpy(S->v, S->b1, PATH_MAX);                    /* the log names what was asked for, as given (review O4-6) */
+    if (r < 0) scpy(S->v, S->b1, PATH_MAX);                    /* the log names what was asked for, as given */
     return r;
 }
 static int exists_exclave(struct scratch *S, const char *v, struct kstat *st)
@@ -298,8 +298,8 @@ static long open_header(const char *real)
     return fd;
 }
 
-/* A pointer vector of n entries: a scratch region when it fits, an anonymous mapping otherwise (F3-2:
- * vectors are sized from their counts). A mapping made by a vfork child stays in the parent, unused. */
+/* A pointer vector of n entries: a scratch region when it fits, an anonymous mapping otherwise:
+ * vectors are sized from their counts. A mapping made by a vfork child stays in the parent, unused. */
 static char **vector(void *region, size_t region_size, long n, void **big)
 {
     *big = 0;
@@ -310,7 +310,7 @@ static char **vector(void *region, size_t region_size, long n, void **big)
 }
 static void vector_free(void *big, long n) { if (big) SC2(NR_munmap, big, ((size_t)n * sizeof(char *) + 0xfff) & ~(size_t)0xfff); }
 
-/* The program's argv or envp, read through copy_in as the paths are (review O3-11, F3-14): a NULL vector is
+/* The program's argv or envp, read through copy_in as the paths are: a NULL vector is
  * empty, a bad pointer is EFAULT, an unterminated one is E2BIG. Returns the count; *out has count + extra + 1
  * slots, the entries first, then a NULL. S->tmp is the probe buffer. */
 #define VEC_MAX (1L << 20)
@@ -340,8 +340,8 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
     void *big; char **env; long envc = vec_read(S, S->extra, sizeof S->extra, envp, 3, &env, &big);
     if (envc < 0) return envc;
     /* the head of every variable, 16 bytes, room for EXCLAVE_EXECFN=, read in one process_vm_readv for up to 256 at a time rather than one call
-     * each (PERFORMANCE.md 2.5); a variable the batch could not read whole, near the end of a mapping, is read on its own
-     * as before, and the batch resumes after it (review O7). tmp holds the heads, rest the iovecs: both free until the end */
+     * each (DESIGN.md 16.4); a variable the batch could not read whole, near the end of a mapping, is read on its own
+     * as before, and the batch resumes after it. tmp holds the heads, rest the iovecs: both free until the end */
     long n = 0; char head[16], *heads = S->tmp; struct iovec *riov = (struct iovec *)S->rest;
     for (long i = 0; i < envc;) {
         long k = envc - i, done = 0; if (k > 256) k = 256;
@@ -388,7 +388,7 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
     if (n < 0) r = n;
     else {
         line[n < 0 ? 0 : n] = 0;
-        scpy(vcopy, given, PATH_MAX);                        /* the script's path as the caller spelt it, as the kernel passes it (7.4.5, review F5-8) */
+        scpy(vcopy, given, PATH_MAX);                        /* the script's path as the caller spelt it, as the kernel passes it (7.4.5) */
         long k = shebang_argv(line, vcopy, av, argc, nargv, argc + 4);
         if (k == -1) r = -ENOEXEC; else if (k == -2) r = -E2BIG;
         else if ((r = canon(S, nargv[0], AT_FDCWD, 1, S->v)) >= 0) r = exec_target(S, S->v, nargv[0], nargv, envp, depth + 1, 0, Sp);
@@ -403,12 +403,12 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
 static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth, int cloexec, struct scratch **Sp)
 {
     if (depth > 5) return -ELOOP;                            /* binfmt_script: five interpreters may nest, the sixth is ELOOP (measured) */
-    if (vis_in_data(v)) return -EACCES;                          /* 6.2: a data directory is never executed (review O4-3) */
+    if (vis_in_data(v)) return -EACCES;                          /* 6.2: a data directory is never executed */
     to_real_exec(v, S->real);
     struct kstat *st = (struct kstat *)S->b2; long e;           /* in the scratch, not the frame: six of these frames may nest (7.5.4) */
     if ((e = sys_stat(S->real, st)) < 0) return e;           /* ENOENT, ENOTDIR for a trailing slash, the name's own error */
     if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
-    long ok = sys_faccessat(AT_FDCWD, S->real, X_OK);           /* the kernel's answer for this process, triads and search included (O3-4) */
+    long ok = sys_faccessat(AT_FDCWD, S->real, X_OK);           /* the kernel's answer for this process, triads and search included */
     if (ok < 0) return ok;
     int wrapper = (is_exclave_path(v) ? cache_classify(v, S->real, S->tmp) == CK_WRAPPER : is_wrapper_real(S->real, S->tmp))   /* remembered by the walk (7.4.4) */
                   && payload_of(S->real, S->tmp);
@@ -506,7 +506,7 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
         if (r < 0) return r;
         scpy(S->comm, base_name(S->v), sizeof S->comm);     /* through a descriptor, comm is the file's own name (fs/exec.c since 6.12) */
     } else {
-        if (flags & AT_SYMLINK_NOFOLLOW) {                    /* the kernel refuses to run a symlink itself (F3-20) */
+        if (flags & AT_SYMLINK_NOFOLLOW) {                    /* the kernel refuses to run a symlink itself */
             struct kstat st; to_real_exec(S->v, S->real);
             if (sys_lstat(S->real, &st) == 0 && (st.st_mode & S_IFMT) == S_IFLNK) return -ELOOP;
         }
@@ -521,7 +521,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
     if (bufsiz <= 0) return -EINVAL;                          /* do_readlinkat: before the path is read at all */
     long r = resolve(S, a, pi, di, 0, di >= 0); if (r < 0) return r;
     char *ans = 0;
-    if (r == 1) {                                             /* readlinkat(fd, ""): the kernel reads the descriptor's own link (F3-8) */
+    if (r == 1) {                                             /* readlinkat(fd, ""): the kernel reads the descriptor's own link */
         r = RE5(NR_readlinkat, a[di], "", S->tmp, PATH_MAX - 1, 0);
         if (r < 0) return r;
         S->tmp[r] = 0; if (starts_dir(S->tmp, C.root)) from_real(S->tmp); ans = S->tmp;
@@ -540,7 +540,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         if (xstrncmp(S->v, "/proc/", 6) == 0 || starts_dir(S->tmp, C.root)) from_real(S->tmp);
         ans = S->tmp;
         /* another process's exe link that names a wrapped script: that process runs the script's interpreter,
-         * which is what the kernel would report natively (F3-22) */
+         * which is what the kernel would report natively */
         if (xstrncmp(S->v, "/proc/", 6) == 0 && xstrlen(S->v) > 4 && xstrcmp(S->v + xstrlen(S->v) - 4, "/exe") == 0 && is_exclave_path(ans)) {
             scpy(S->v2, ans, PATH_MAX);
             to_real_exec(S->v2, S->real);
@@ -643,7 +643,7 @@ static long fd_exclave(struct scratch *S, int fd)
 }
 
 /* the real path for a stat: with no-follow, an identity file is the host's own symlink, so that lstat and
- * readlink agree about it (F3-9); otherwise the resolved file, wrapper redirect included */
+ * readlink agree about it; otherwise the resolved file, wrapper redirect included */
 static void real_nofollow(struct scratch *S, int nofollow)
 {
     if (nofollow && vis_readlink_identity(S->v, S->tmp) == 1) { scpy(S->real, S->v, PATH_MAX); return; }

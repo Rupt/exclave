@@ -1,4 +1,4 @@
-/* spawn_threads.c — the handler under concurrency (PROPOSAL.md 7.5.4, 17.4): threads trapping while another thread
+/* spawn_threads.c — the handler under concurrency (DESIGN.md 7.5.4, 17.4): threads trapping while another thread
  * posix_spawns, so a vfork child's handler runs beside the parent's and the copies from program memory must stay each
  * thread's own; and a forked child whose traps nest, a timer's handler trapping inside a trapped stat, while every
  * chunk the pool had is held by threads blocked in the parent, so that the child's pool must grow under nesting.

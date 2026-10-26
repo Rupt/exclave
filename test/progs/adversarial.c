@@ -1,4 +1,4 @@
-/* adversarial.c — what a hostile program or a fuzzer would try (PROPOSAL.md 17.4): arguments with their upper 32 bits
+/* adversarial.c — what a hostile program or a fuzzer would try (DESIGN.md 17.4): arguments with their upper 32 bits
  * set where the kernel takes an int, with the program's buffer checked past the count; the launcher's own variables set
  * before an exec; a working directory deleted under the program; an exec with no descriptor left; mounts and roots
  * from inside; SIGSYS ignored, handled or fed to a signalfd; magic links under /proc/1; interpreter loops and chains;

@@ -1,6 +1,6 @@
 #!/bin/sh
 # example.sh DIR — from a clean checkout to a program that runs on any glibc since 2.17, in one script
-# (README; PROPOSAL.md 9, 10). Everything it makes goes under DIR; the fetchers keep their caches under
+# (README; DESIGN.md 9, 10). Everything it makes goes under DIR; the fetchers keep their caches under
 # ~/.cache, so a second run fetches nothing. The steps, each a command you can run by hand:
 #   1. make builds the launcher.
 #   2. tools/fetch-debs.py downloads Ubuntu 24.04's gcc-13 closure; exclave unpack makes an unwrapped exclave from the files.

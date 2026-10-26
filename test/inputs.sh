@@ -1,15 +1,15 @@
 #!/bin/sh
-# test/inputs.sh DIR — the development inputs, remade from the network (PROPOSAL.md 17): the exclaves the gate
+# test/inputs.sh DIR — the development inputs, remade from the network (DESIGN.md 17): the exclaves the gate
 # runs on and the files the examples take. Nothing is kept anywhere but DIR and the fetchers' caches under
 # ~/.cache, and both may be empty at any time: whatever is missing is fetched again, and an item DIR already
 # has is skipped, so a rerun costs nothing. Afterwards:
 #   EXCLAVE_TEST_INPUTS=DIR test/gate.sh DIR/gcc13.exclave DIR/alpine.exclave DIR/f42.exclave DIR/clang.exclave
 #   EXCLAVE_TEST_SRC=DIR/src EXCLAVE_TEST_SQLITE=DIR/src/sqlite3.c EXCLAVE_TEST_RPMS=DIR/el7 EXCLAVE_TEST_DEBS_ARM64=DIR/debs-arm64 test/examples.sh DIR/realsoft.exclave
-# The package sets are the ones the proposal measures (10.1, 12, 16.3): the noble gcc-13 and clang-18 closures,
+# The package sets are the ones DESIGN.md measures (10.1, 12, 16.8): the noble gcc-13 and clang-18 closures,
 # Alpine 3.21's gcc, Fedora 42's gcc, the noble gcc, g++, make and python3 that test/realsoft.py builds with,
 # CentOS 7's glibc for the sysroot of 9, the noble arm64 gcc-13 closure for the emulated row, and the four
 # projects of test/realsoft.py with the SQLite amalgamation of test/bench.py, and Docker's default seccomp profile
-# (moby/profiles, Apache-2.0), the version PRIOR-ART.md 4 checked, for test/docker_profile.py; and the python3,
+# (moby/profiles, Apache-2.0), the version DESIGN.md 15.7 checked, for test/docker_profile.py; and the python3,
 # zstd and xz-utils closure test/dogfood.py makes the tool's own exclave from. The tests themselves touch no network.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)

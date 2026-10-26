@@ -1,8 +1,8 @@
-/* scratch_test.c — the scratch pool's sweep under the interleaving that handed one chunk to two handlers (PROPOSAL.md
+/* scratch_test.c — the scratch pool's sweep under the interleaving that handed one chunk to two handlers (DESIGN.md
  * 7.5.4, 13 item 44). Built on the host with src/scratch.c and -DSCRATCH_TEST, which calls scratch_test_between between a
  * sweep's judgement that a chunk's owner is dead and its release. A chunk is left by a process that has exited, as a
  * vfork child that exec'd leaves one; sweep A judges it dead, and before A releases it, sweep B reclaims it and C claims
- * it; A must then leave C's chunk alone. Before revision 18's sequence A released it and claimed it, so A and C held one
+ * it; A must then leave C's chunk alone. Without the sequence A released it and claimed it, so A and C held one
  * chunk. The launcher's syscalls go through its page, which this program maps as the launcher's startup does. x86-64 and
  * aarch64; prints one line, exit 0 when it holds. */
 #define _GNU_SOURCE

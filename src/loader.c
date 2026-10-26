@@ -1,4 +1,4 @@
-/* loader.c — userland ELF loader (PROPOSAL.md 7.3) and the debugger hooks (7.6).
+/* loader.c — userland ELF loader (DESIGN.md 7.3) and the debugger hooks (7.6).
  *
  * Maps the original and the loader its header names the way the kernel would, builds
  * the initial stack from the launcher's own auxiliary vector, and jumps. Used
@@ -77,7 +77,7 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
         if (flen) {
             long m = sys_mmap((void *)mstart, flen, prot, MAP_PRIVATE | fixed, fd, (long)(ph[i].p_offset - off));
             if (m < 0 && m > -4096) die("cannot map segment", name, m);
-            /* a kernel without MAP_FIXED_NOREPLACE treats the address as a hint and may map elsewhere (F3-21) */
+            /* a kernel without MAP_FIXED_NOREPLACE treats the address as a hint and may map elsewhere */
             if ((unsigned long)m != mstart) die("segment address already in use", name, EEXIST);
         }
         if (mlen > flen) {
@@ -142,7 +142,7 @@ int elf_probe(const char *real, char *interp, int *is_launcher, void *buf)
 
 /* The kernel makes the initial stack executable when the program's PT_GNU_STACK asks for it (nested
  * functions, old assembly); the loader must do the same or the program dies on its first trampoline
- * (review O3-7, F3-12). The stack is found in /proc/self/maps. */
+ *. The stack is found in /proc/self/maps. */
 #define PT_GNU_STACK 0x6474e551u
 static int wants_exec_stack(const Phdr *ph, int n)
 {
@@ -174,7 +174,7 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
     static unsigned char nb[512]; int gen = 0;               /* another exclave's launcher from before the page moved, which a handler sends here (7.4.2) */
     for (int i = 0; i < eh.e_phnum; i++) if (ph_main[i].p_type == PT_NOTE && ph_main[i].p_filesz <= 512) { int g = note_gen(fd, &ph_main[i], nb); if (g) gen = g; }
     if (gen && gen < PAGE_GENERATION)
-        die("a launcher from before the syscall page moved cannot run here; relink its exclave with the current tool, converting a can from before revision 18 first (README)", vpath, 0);
+        die("a launcher from before the syscall page moved cannot run here; relink its exclave with the current tool, converting a can first (README)", vpath, 0);
     payload_base = map_elf(fd, &eh, ph_main, &entry, &phdr_va, &has_interp, interp_v, real);
     if (C.descfd > 2) { sys_close(C.descfd); C.descfd = -1; }   /* a program run from a descriptor with no path (13 item 25): mapped, the dup goes */
     sys_close(fd);
@@ -188,7 +188,7 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
         if (canon(S, interp_v, AT_FDCWD, 1, S->v) < 0 || sys_stat(to_real(S->v, ireal, S->tmp), &ist) < 0)   /* through the wrapper redirect: ld.so is wrapped */
             die("program wants a loader this exclave does not have", interp_v, 0);
         /* one world (7.4.5): the loader must be the exclave's own file, not one the visibility rule found on the
-         * host (a Nix or --dynamic-linker binary, review F4-1, O4-2) and not one parked in a data directory (O4-3) */
+         * host (a Nix or --dynamic-linker binary) and not one parked in a data directory */
         if (!is_exclave_path(S->v) || vis_in_data(S->v)) die("program wants a loader this exclave does not have", interp_v, 0);
         scratch_put(S);
         int ifd = open_elf(ireal, &ih, ph_interp, 64);

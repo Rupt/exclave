@@ -1,4 +1,4 @@
-/* vis.c — the visibility rule (PROPOSAL.md section 8) and wrapper redirect (7.4.4).
+/* vis.c — the visibility rule (DESIGN.md section 8) and wrapper redirect (7.4.4).
  *
  * Decides, for a virtual path, whether it is the host's or the exclave's, and
  * turns it into a real path. The table is built once at startup from the
@@ -18,7 +18,7 @@ struct dirent64 { unsigned long d_ino; long d_off; unsigned short d_reclen; unsi
 #define DT_LNK 10
 
 /* one getdents64: does the directory hold anything but . and ..? A directory that cannot be listed is not a
- * placeholder: it counts as the exclave's (review O4-8, F4-4), and a failure that is not the directory's own, no
+ * placeholder: it counts as the exclave's, and a failure that is not the directory's own, no
  * descriptor left or an I/O error, is fatal rather than a silent answer of "the host's" */
 static int dir_nonempty(const char *real)
 {
@@ -67,7 +67,7 @@ static void own_from_tree(void)
 }
 
 /* 8.1 rule 5: the identity files join the host table unless an own record names one; the table has
- * room for them after the manifest's 32 by construction (review O4-10) */
+ * room for them after the manifest's 32 by construction */
 static void identity_defaults(void)
 {
     for (int i = 0; identity_files[i]; i++) {
@@ -144,7 +144,7 @@ void vis_init(void)
     claim_cwd();
 }
 
-/* The rule compiled (PERFORMANCE.md 2.2, 4 item 3). Every string the rule matches a path against, an owned path, a host
+/* The rule compiled (DESIGN.md 16.2, 16.6 item 3). Every string the rule matches a path against, an owned path, a host
  * record, an identity file, a volatile directory, and every proper ancestor of an identity file, is an entry of one
  * table built at startup, with what it is. starts_dir(v, p) holds exactly when p is v cut at a '/' or at its end, so
  * the prefixes of v the rule can match are found by one pass over v, hashing as it goes and looking each cut up: a
@@ -174,7 +174,7 @@ static void rule_add(const char *v, unsigned len, unsigned flags, int host)
     struct rule *r = rule_find(v, len, h);
     if (!r) {
         unsigned i = (unsigned)h & (RULE_SLOTS - 1); while (rules[i].s) i = (i + 1) & (RULE_SLOTS - 1);
-        if (++nrules > RULE_SLOTS / 2) die("visibility table full", v, 0);   /* slack left, so that a probe always meets an empty slot (review O7-6) */
+        if (++nrules > RULE_SLOTS / 2) die("visibility table full", v, 0);   /* slack left, so that a probe always meets an empty slot */
         r = &rules[i]; r->s = v; r->len = len; r->host = -1;
     }
     if ((flags & R_HOSTFILE) && !(r->flags & R_HOSTFILE)) r->host = host;   /* a file named twice: the first record, as the scans found it */
@@ -236,7 +236,7 @@ static struct rule *rule_exact(const char *v)
 }
 
 /* 8.1 without the two subtrees given to the host: identity file > volatile > host records > own > default host; longest prefix wins.
- * The root directory itself is the tree's, so ls / lists the tree and its placeholders (8.3, review O4-17). */
+ * The root directory itself is the tree's, so ls / lists the tree and its placeholders (8.3). */
 static int base_is_host_facts(const char *v, const struct facts *f, const char **real)
 {
     if (v[0] == '/' && v[1] == 0) return 0;
@@ -269,7 +269,7 @@ static int leads_facts(const char *v, const struct facts *f)
     if (!v[0] || (v[0] == '/' && !v[1])) return (root_flags & R_LEADS) != 0;   /* starts_dir(file, "") and (file, "/") */
     return f->exact && (f->exact->flags & R_LEADS);
 }
-/* the one-step host check's question (PERFORMANCE.md 4 item 4): is every '/'-boundary prefix of p at least from long
+/* the one-step host check's question (DESIGN.md 16.6 item 4): is every '/'-boundary prefix of p at least from long
  * plain host, the host's by the full rule, not an identity file, not on the way to one and not the tree's root by its
  * name, so that a walk through them would do nothing but lstat each and find a directory? One pass, as rule_facts. */
 int vis_plain_host_chain(const char *p, unsigned from)
@@ -326,7 +326,7 @@ int is_wrapper_real(const char *real, char *tmp)
         if (st.st_size != C.launcher_size) return 0;
     }
     return payload_of(real, tmp) && sys_lstat(tmp, &st) == 0;   /* the launcher's inode or a copy: a wrapper only where its original exists;
-                                                                    .exclave/launcher itself is not one (review F5-2) */
+                                                                    .exclave/launcher itself is not one */
 }
 int payload_of(const char *real, char *out)
 {

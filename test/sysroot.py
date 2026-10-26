@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sysroot.py — a sysroot as a data directory (PROPOSAL.md 9, 6.2): a glibc from one distribution inside a gcc exclave
+"""sysroot.py — a sysroot as a data directory (DESIGN.md 9, 6.2): a glibc from one distribution inside a gcc exclave
 from another, and an output of that gcc that runs wherever that glibc's version is old enough.
 
     test/sysroot.py --exclave GCC_EXCLAVE --rpms DIR --out FILE [--work DIR] [--prefix /opt/sysroot-el7]
@@ -77,7 +77,7 @@ def main():
     rc, out, err = run([os.path.join(ex, "tree", "usr", "bin", "objdump"), "-T", prog], cwd=work, env=env)
     versions = sorted(set(re.findall(r"GLIBC_([0-9.]+)", out)), key=lambda v: [int(x) for x in v.split(".")])
     import elfcheck
-    gv = elfcheck.glibc_version(elfcheck.Tree(os.path.join(sysroot_ex, "tree")))   # the banner in libc.so.6, any glibc (review O5-7)
+    gv = elfcheck.glibc_version(elfcheck.Tree(os.path.join(sysroot_ex, "tree")))   # the banner in libc.so.6, any glibc
     if gv is None:
         sys.exit("cannot read the sysroot's glibc version from its libc.so.6")
     have = "%d.%d" % gv

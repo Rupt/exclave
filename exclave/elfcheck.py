@@ -1,4 +1,4 @@
-"""elfcheck.py — the static and dynamic checks (PROPOSAL.md 10.3).
+"""elfcheck.py — the static and dynamic checks (DESIGN.md 10.3).
 
 Static: every ELF under tree/ outside data directories, originals in place of wrappers, must name one
 interpreter between them (through the tree's symlinks), every DT_NEEDED must resolve under tree/ by the
@@ -19,7 +19,7 @@ ET_DYN = 3
 # the machines the launcher is built for (7.1): ELF e_machine, uname -m, Debian's multiarch triplet
 MACHINES = {62: ("x86_64", "x86_64-linux-gnu"), 183: ("aarch64", "aarch64-linux-gnu")}
 MACHINE = 62                                                 # the exclave's, set from its launcher by static_check
-DEFAULT_DIRS = ["/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu", "/lib64", "/usr/lib64", "/lib", "/usr/lib"]   # Debian's and Fedora's glibc; the tree's loader is asked when it can answer (review F4-13)
+DEFAULT_DIRS = ["/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu", "/lib64", "/usr/lib64", "/lib", "/usr/lib"]   # Debian's and Fedora's glibc; the tree's loader is asked when it can answer
 MUSL_DIRS = ["/lib", "/usr/local/lib", "/usr/lib"]
 HWCAPS = ["glibc-hwcaps/x86-64-v4", "glibc-hwcaps/x86-64-v3", "glibc-hwcaps/x86-64-v2"]
 LIBC_SONAME = {"glibc": "libc.so.6", "musl": "libc.musl-x86_64.so.1"}
@@ -51,7 +51,7 @@ def glibc_version(tree):
 
 def loader_dirs(tree, interp):
     """The default search directories of the loader in the tree: glibc prints them with --list-diagnostics
-    (2.33 and later); musl's are fixed; older loaders get Debian's list (review F4-13)."""
+    (2.33 and later); musl's are fixed; older loaders get Debian's list."""
     if interp is None:
         return list(DEFAULT_DIRS)
     if "musl" in os.path.basename(interp):
@@ -266,8 +266,8 @@ def find_library(tree, name, elf, vpath, rpaths, cache, own=(), host_hits=None, 
     """The virtual path ld.so would load for DT_NEEDED name from the object at vpath, or None.
     rpaths: the DT_RPATH of every object on the chain that led here (inherited when the object has no RUNPATH).
     A search directory the exclave does not own is the host's at run time: such a directory is recorded in
-    host_hits, since the loader would take the host's library from it (review F3-17), default directories
-    included (F4-9). The loader satisfies its own soname without a search (F4-13)."""
+    host_hits, since the loader would take the host's library from it, default directories
+    included. The loader satisfies its own soname without a search."""
     if interp and name == os.path.basename(interp) and tree.resolve(interp):
         return tree.resolve(interp)
     if "/" in name:
@@ -320,7 +320,7 @@ def static_check(ex, own, data_prefixes=(), log=print):
                           % (MACHINES.get(MACHINE, ("?",))[0], platform.machine()))
         return rep
     cache = read_cache(tree)
-    if host_owned("/etc", own):                                # the loader would read the host's cache and preload list (review F4-9)
+    if host_owned("/etc", own):                                # the loader would read the host's cache and preload list
         rep.errors.append("/etc is the host's: the loader would read the host's /etc/ld.so.cache and /etc/ld.so.preload; the tree must own /etc")
     elif cache is None:
         if not _has_musl_loader(tree):                           # musl has no cache; glibc without one searches its defaults only
@@ -487,7 +487,7 @@ def dynamic_check(ex, logs, own, log=print):
     for what, r, path in build.log_lines(logs):
         rep.lines += 1
         if what == "launcher" and path.startswith("cwd given to the host "):      # 8.1 rule 4 as the launcher applied it; the plain
-            c = path[len("cwd given to the host "):]                              # "cwd" line is a diagnostic and gives nothing (review O5-4)
+            c = path[len("cwd given to the host "):]                              # "cwd" line is a diagnostic and gives nothing
             if c != "/":
                 cwds.add(c)
         if what == "launcher" and path.startswith("cwd ") and not path.startswith("cwd given"):
@@ -497,7 +497,7 @@ def dynamic_check(ex, logs, own, log=print):
         if what == "open" and r >= 0 and re.search(r"\.so(\.\d+)*$", path):
             libs.add(path)
     for lib in sorted(libs):
-        if any(lib.startswith(c.rstrip("/") + "/") for c in cwds):   # the workload's own build directory (review F4-10): the
+        if any(lib.startswith(c.rstrip("/") + "/") for c in cwds):   # the workload's own build directory: the
             rep.warnings.append("library opened under the workload's working directory, its own output presumably: " + lib)   # host's by 8.1 rule 4, whatever prefix it lies under
         elif not host_owned(lib, own):
             continue

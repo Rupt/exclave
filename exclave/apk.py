@@ -1,4 +1,4 @@
-"""apk.py — reading Alpine packages (PROPOSAL.md 10.1): the second reader of `unpack`, chosen by the file.
+"""apk.py — reading Alpine packages (DESIGN.md 10.1): the second reader of `unpack`, chosen by the file.
 
 An .apk is three gzip members back to back, each a tar stream: the signature, the control files
 (.PKGINFO and the install scripts, dot-files at the top), and the data. Python's gzip reads the members

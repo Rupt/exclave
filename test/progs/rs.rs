@@ -1,5 +1,5 @@
-// rs.rs — the Rust regressions of PROPOSAL.md 17.4: File::metadata (statx with AT_EMPTY_PATH),
-// Command::spawn (clone3 refused, then clone), the F-N12 spawn loop, std::fs on exclave and host paths, canonicalize.
+// rs.rs — the Rust regressions of DESIGN.md 17.4: File::metadata (statx with AT_EMPTY_PATH),
+// Command::spawn (clone3 refused, then clone), a spawn loop, std::fs on exclave and host paths, canonicalize.
 // Built by the host's rustc against the host's glibc, run inside an exclave in loader mode.
 use std::fs;
 use std::io::ErrorKind;
@@ -15,13 +15,13 @@ fn main() {
     if m.ino() != m2.ino() || !m.is_file() || m.len() != 7 { fails += 1; println!("FAIL File::metadata differs from metadata by path"); }
     let truep = std::env::var("EXCLAVE_TEST_TRUE").unwrap_or("/usr/bin/true".to_string());
     match Command::new(&truep).status() { Ok(s) if s.success() => {}, other => { fails += 1; println!("FAIL Command::status: {:?}", other); } }
-    // F-N12 (review round 1): metadata of an identity file, then a loop of spawns by path and one by PATH; the
-    // anomaly seen on the spike was a 127 from the loop
+    // metadata of an identity file, then a loop of spawns by path and one by PATH; an early prototype once saw a
+    // 127 from the loop
     fs::metadata("/etc/passwd").expect("metadata of an identity file");
     for i in 0..20 {
-        match Command::new(&truep).status() { Ok(s) if s.success() => {}, other => { fails += 1; println!("FAIL F-N12 spawn {}: {:?}", i, other); break; } }
+        match Command::new(&truep).status() { Ok(s) if s.success() => {}, other => { fails += 1; println!("FAIL spawn {}: {:?}", i, other); break; } }
     }
-    match Command::new("true").status() { Ok(s) if s.success() => {}, other => { fails += 1; println!("FAIL F-N12 spawn by PATH: {:?}", other); } }
+    match Command::new("true").status() { Ok(s) if s.success() => {}, other => { fails += 1; println!("FAIL spawn by PATH: {:?}", other); } }
     match Command::new("sh").arg("-c").arg("echo spawned $0").output() {
         Ok(o) if o.stdout == b"spawned sh\n" => {}
         other => { fails += 1; println!("FAIL Command::output: {:?}", other.map(|o| String::from_utf8_lossy(&o.stdout).into_owned())); }

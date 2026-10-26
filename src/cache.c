@@ -1,4 +1,4 @@
-/* cache.c — the canonicalisation cache (PROPOSAL.md 7.4.4).
+/* cache.c — the canonicalisation cache (DESIGN.md 7.4.4).
  *
  * Exclave paths are never modified by anything inside an exclave, so what a
  * component is (a directory, a symlink and its text, absent, a plain file,
@@ -55,7 +55,7 @@ void cache_put(const char *v, int kind, const char *link)
         if (!table[i].hash) break;
         if (table[i].hash == h && xstrcmp(strings + table[i].off, v) == 0) { __sync_lock_release(&lock); return; }
     }
-    /* stop with slack left: a probe must always meet an empty slot, or a miss would scan the whole table (review O3-2) */
+    /* stop with slack left: a probe must always meet an empty slot, or a miss would scan the whole table */
     if (table[i].hash || ++filled > SLOTS - SLOTS / 8 || used + vl + ll > STRINGS) { full = 1; __sync_lock_release(&lock); return; }
     unsigned off = used;
     xmemcpy(strings + off, v, vl);

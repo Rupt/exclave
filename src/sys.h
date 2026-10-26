@@ -16,7 +16,7 @@ typedef unsigned int gid_t;
 typedef unsigned int mode_t;
 
 /* ---------- architecture: syscall instruction + numbers ---------- */
-/* The syscall page (PROPOSAL.md 7.4.2): one page at a fixed address holding the syscall instruction and a return.
+/* The syscall page (DESIGN.md 7.4.2): one page at a fixed address holding the syscall instruction and a return.
  * Every syscall the launcher makes goes through it, and the filter allows a syscall by that instruction address
  * alone. The address is the same in every process, so one filter serves the whole tree. The page is mapped by
  * page_init() before anything else runs; only the bootstrap, the filter probe (7.4.2) and the signal restorer use a raw instruction. It

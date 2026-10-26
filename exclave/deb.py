@@ -1,4 +1,4 @@
-"""deb.py — reading Debian binary packages and indexes (PROPOSAL.md 10.1).
+"""deb.py — reading Debian binary packages and indexes (DESIGN.md 10.1).
 
 `ar` and `tar` are read in Python; xz, gzip and bzip2 through the standard
 library; zstd through the `zstd` tool, which the tool's own exclave ships.

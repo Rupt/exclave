@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""dogfood.py — the tool as an exclave, and an exclave built from inside it (PROPOSAL.md 10.5).
+"""dogfood.py — the tool as an exclave, and an exclave built from inside it (DESIGN.md 10.5).
 
     test/dogfood.py --inputs DIR [--work DIR] [--keep]
 

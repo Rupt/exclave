@@ -1,4 +1,4 @@
-/* isa.c — the CPU feature check (PROPOSAL.md 7.7): x86-64 psABI levels by cpuid; aarch64 levels by AT_HWCAP. */
+/* isa.c — the CPU feature check (DESIGN.md 7.7): x86-64 psABI levels by cpuid; aarch64 levels by AT_HWCAP. */
 #include "common.h"
 
 #if defined(__aarch64__)

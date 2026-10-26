@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """fetch-rpms.py — an example of the step before the tool for rpm distributions: resolve a package closure
-from a yum/dnf repository's metadata and download it into a directory of .rpm files (PROPOSAL.md 10.1).
+from a yum/dnf repository's metadata and download it into a directory of .rpm files (DESIGN.md 10.1).
 
     tools/fetch-rpms.py --repo URL [--repo URL]... [--cache DIR] [--choose VIRTUAL=PKG]... [--no-base] --out DIR PACKAGE...
 

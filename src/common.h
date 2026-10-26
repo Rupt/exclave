@@ -2,7 +2,7 @@
  *
  * The launcher is freestanding: no libc, raw syscalls only (sys.h). Every
  * module includes this header. Section numbers in comments refer to
- * docs/PROPOSAL.md.
+ * docs/DESIGN.md.
  */
 #pragma once
 #include "sys.h"
@@ -127,8 +127,7 @@
 #define AT_MINSIGSTKSZ 51
 
 /* ---------- the signal frame (rt_sigframe), by architecture ----------
- * x86-64: uc_mcontext.gregs at +40 from the ucontext, uc_sigmask at +296; verified against a real frame by both
- * first-round reviews. The names index the argument registers of the syscall convention and the result register.
+ * x86-64: uc_mcontext.gregs at +40 from the ucontext, uc_sigmask at +296; verified against a real frame. The names index the argument registers of the syscall convention and the result register.
  * aarch64: the ucontext is uc_flags, uc_link, uc_stack (24), uc_sigmask (8) at +40, 120 unused bytes, then
  * struct sigcontext at +176: fault_address, regs[31] from +184, sp, pc, pstate. The arguments are x0 to x5, the
  * number x8, the result x0, which is also the first argument: the handler copies the arguments before it writes. */
@@ -173,7 +172,7 @@ struct exclave {
     char launcher[PATH_MAX];         /* dir/.exclave/launcher */
     unsigned long launcher_dev, launcher_ino; long launcher_size;
     char program[PATH_MAX];        /* virtual path of the program this process runs */
-    char exe[PATH_MAX];            /* what /proc/self/exe answers: the program, or a wrapped script's interpreter (F3-22) */
+    char exe[PATH_MAX];            /* what /proc/self/exe answers: the program, or a wrapped script's interpreter */
     char execfn[PATH_MAX];         /* the path the program was exec'd by, as the kernel spells it: AT_EXECFN, a script's $0 (7.6) */
     char comm[NAME_MAX + 1];       /* the name the kernel would set as comm: the exec'd path's last component, a descriptor's file (7.6) */
     int loader_mode;               /* 1: re-exec'd with EXCLAVE_EXEC; program is not a wrapper */
@@ -191,7 +190,7 @@ struct exclave {
     /* diagnostics */
     int logfd;
     unsigned long text_lo, text_hi;   /* the launcher's own text range, for the nesting rule (7.5.3) */
-    unsigned long root_dev, root_ino; /* the tree's root directory, so that any spelling of it is recognised (F3-13) */
+    unsigned long root_dev, root_ino; /* the tree's root directory, so that any spelling of it is recognised */
     unsigned long pagesz;              /* the kernel's page size, AT_PAGESZ: 4 KB, or 16 KB or 64 KB on some aarch64 kernels (7.3) */
 };
 extern struct exclave C;

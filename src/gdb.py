@@ -1,5 +1,5 @@
 # gdb.py: carried by the launcher in its .debug_gdb_scripts section and auto-loaded by gdb when the launcher is
-# the executable (PROPOSAL.md 7.6, 13.1). gdb sees the launcher; this script tells it about the program the
+# the executable (DESIGN.md 7.6, 13.1). gdb sees the launcher; this script tells it about the program the
 # launcher loaded and the libraries its loader mapped, so that no manual command is needed. It needs the exclave
 # in gdb's auto-load safe-path. The launcher exports what the script reads: exclave_original_base, _entry, _path,
 # exclave_interp_base, _path, and exclave_debug_hook, a function called once before the jump into the program.

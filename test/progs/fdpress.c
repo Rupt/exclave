@@ -1,4 +1,4 @@
-/* fdpress.c — spawn a program with the descriptor table nearly full (review O4-8).
+/* fdpress.c — spawn a program with the descriptor table nearly full.
  *
  *   fdpress SPARE PROG ARGS...   RLIMIT_NOFILE is set to 64, /dev/null is opened until it fails, SPARE
  *                                descriptors are closed again, then PROG is posix_spawn'ed with the table

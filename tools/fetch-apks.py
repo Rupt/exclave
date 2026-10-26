@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """fetch-apks.py — an example of the step before the tool for Alpine: resolve a package closure from an
-Alpine repository index and download it into a directory of .apk files (PROPOSAL.md 10.1).
+Alpine repository index and download it into a directory of .apk files (DESIGN.md 10.1).
 
     tools/fetch-apks.py [--branch v3.21] [--repos main,community] [--arch x86_64] [--mirror URL]
                         [--cache DIR] [--no-base] --out DIR PACKAGE...

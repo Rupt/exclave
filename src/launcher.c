@@ -1,4 +1,4 @@
-/* launcher.c — entry point (PROPOSAL.md 7.2, 7.6, 9).
+/* launcher.c — entry point (DESIGN.md 7.2, 7.6, 9).
  *
  * The launcher is an ET_DYN object with no interpreter: it relocates itself,
  * finds its exclave from its own path, reads the manifest, decides whether it is at the
@@ -19,7 +19,7 @@ __asm__(".text\n.globl _start\n.type _start,%function\n_start:\n"
         " mov x0, sp\n bl start_c\n brk #0\n");
 #endif
 /* 7, 7.4.5: the notes by which a launcher recognises another in a file; their word is PAGE_GENERATION (7.4.2). The second,
- * named cont, is the one an opener of revision 17 or earlier looks for, so that each runs the other as another launcher */
+ * named cont, is the one a launcher from before the rename, an "opener", looks for, so that each runs the other as another launcher */
 #define NOTE_WORD_(g) #g
 #define NOTE_WORD(g) NOTE_WORD_(g)
 __asm__(".section .note.exclave,\"a\"\n .balign 4\n"
@@ -111,7 +111,7 @@ static char **env_prepare(char **envp, int boundary)
         if (boundary ? env_denied(envp[i]) : internal_var(envp[i])) continue;
         out[k++] = envp[i];
     }
-    if (boundary) for (int i = 0; fixed[i]; i++) out[k++] = (char *)arena_str(fixed[i], xstrlen(fixed[i]));   /* writable: bash writes into its environment strings (F3-23) */
+    if (boundary) for (int i = 0; fixed[i]; i++) out[k++] = (char *)arena_str(fixed[i], xstrlen(fixed[i]));   /* writable: bash writes into its environment strings */
     out[k] = 0;
     return out;
 }
@@ -186,9 +186,9 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
 }
 
 /* 7.4.5 for a target that arrived by EXCLAVE_EXEC, the positional entry's or a handler's: the checks exec_target makes before
- * loading anything, in its order, so that the entry refuses what an exec inside refuses (review O5-1, F5-1): the target is
+ * loading anything, in its order, so that the entry refuses what an exec inside refuses: the target is
  * resolved as an exec resolves it, a data directory is EACCES, a directory or a special file EACCES, the kernel's own answer
- * to X_OK is final, and a wrapper is exec'd as itself so that the kernel gives the program its identity (F5-9). The exit
+ * to X_OK is final, and a wrapper is exec'd as itself so that the kernel gives the program its identity. The exit
  * status is a shell's: 126 for a file that exists and cannot run, 127 for one that does not. */
 static void loader_mode_check(char **argv, char **env2)
 {
@@ -230,7 +230,7 @@ static __attribute__((noreturn)) void run(const char *v, const char *given, long
     long cap = argc + 4;
     long m = sys_mmap(0, ((size_t)cap * sizeof(char *) + 0xfff) & ~(size_t)0xfff, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m < 0 && m > -4096) die("out of memory", 0, ENOMEM);
-    char **nargv = (char **)m; char *script = arena_alloc(PATH_MAX);       /* sized from argc, never from a fixed pool (F3-2) */
+    char **nargv = (char **)m; char *script = arena_alloc(PATH_MAX);       /* sized from argc, never from a fixed pool */
     scpy(script, given, PATH_MAX);                            /* the script's path as it was spelt, as the kernel passes it (7.4.5) */
     long k = shebang_argv(line, script, argv, argc, nargv, cap);
     if (k == -1) die_status(126, "not an executable", v, ENOEXEC);
@@ -250,7 +250,7 @@ void start_c(unsigned long *sp)
      * a launcher's syscalls from the old page only and would trap every one of this launcher's, so it is refused by name */
     int have = filter_probe();                                /* a filter inherited: exec'd from inside an exclave, by a handler or a program */
     if (have && have < FILTER_PAGE_SINCE) {
-        static const char old[] = "launcher: a launcher from before the syscall page moved runs this process; relink its exclave with the current tool, converting a can from before revision 18 first (README)\n";
+        static const char old[] = "launcher: a launcher from before the syscall page moved runs this process; relink its exclave with the current tool, converting a can first (README)\n";
         raw_fatal(old, sizeof old - 1);
     }
     long argc = (long)sp[0]; char **argv = (char **)(sp + 1); char **envp = argv + argc + 1;
@@ -279,7 +279,7 @@ void start_c(unsigned long *sp)
 
     const char *target, *fn, *cm;
     if (starts_dir(exe, C.root)) {                            /* a wrapper: the kernel ran the launcher under the program's name. Decided first,
-                                                              * so that EXCLAVE_EXEC in anyone's environment is inert for the whole tree (review O5-3, F5-4) */
+                                                              * so that EXCLAVE_EXEC in anyone's environment is inert for the whole tree */
         scpy(C.program, exe, PATH_MAX); from_real(C.program);
         /* the identity the kernel would have given the program (7.6): the name a handler exec'd this wrapper by, as the kernel spells it,
          * carried in EXCLAVE_EXECFN and EXCLAVE_COMM by that handler, which only a launcher sets; from the host, the kernel's own AT_EXECFN, a

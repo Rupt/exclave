@@ -1,4 +1,4 @@
-/* ro_matrix.c — the read-only matrix of PROPOSAL.md 8.2 plus path-argument fidelity.
+/* ro_matrix.c — the read-only matrix of DESIGN.md 8.2 plus path-argument fidelity.
  * usage: ro_matrix HOSTDIR [WRAPPER]   (HOSTDIR: a writable host directory; WRAPPER: a wrapper whose redirect is checked). Prints FAIL lines; exit 1 on any. */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -86,17 +86,17 @@ int main(int argc, char **argv)
     { int fl = 0; CHECK(ioctl(fd, FS_IOC_SETFLAGS, &fl), EROFS); }
     { struct fsxattr x; memset(&x, 0, sizeof x); CHECK(ioctl(fd, FS_IOC_FSSETXATTR, &x), EROFS); }   /* the filter had the wrong number until version 5 */
     { struct stat a, b; CHECK(fstatat(fd, "", &a, AT_EMPTY_PATH), 0); stat(marker, &b); if (a.st_ino != b.st_ino) { fails++; printf("FAIL fstatat AT_EMPTY_PATH inode\n"); }
-      /* F3-5: NULL with AT_EMPTY_PATH is the kernel's own fast form since 6.11 */
+      /* NULL with AT_EMPTY_PATH is the kernel's own fast form since 6.11 */
       struct utsname u; uname(&u); int maj = 0, min = 0; sscanf(u.release, "%d.%d", &maj, &min); int newform = maj > 6 || (maj == 6 && min >= 11);
       errno = 0; long r = syscall(SYS_newfstatat, fd, (char *)0, &a, AT_EMPTY_PATH);
       if (newform ? r != 0 : !(r == 0 || errno == EFAULT || errno == EINVAL)) { fails++; printf("FAIL fstatat(fd, NULL, AT_EMPTY_PATH): %ld errno %d on %s\n", r, errno, u.release); }
       if (r == 0 && a.st_ino != b.st_ino) { fails++; printf("FAIL fstatat NULL inode\n"); } }
-    { /* F3-7 */ CHECK(open(dir, O_RDONLY | O_CREAT, 0644), EISDIR); }
-    { /* F3-8: readlinkat(fd, "") of an O_PATH|O_NOFOLLOW descriptor on a symlink */
+    { CHECK(open(dir, O_RDONLY | O_CREAT, 0644), EISDIR); }
+    { /* readlinkat(fd, "") of an O_PATH|O_NOFOLLOW descriptor on a symlink */
       const char *sl = getenv("EXCLAVE_TEST_SH") ? getenv("EXCLAVE_TEST_SH") : "/usr/bin/sh", *lt = getenv("EXCLAVE_TEST_SH_LINK") ? getenv("EXCLAVE_TEST_SH_LINK") : "dash";
       int lf = open(sl, O_PATH | O_NOFOLLOW); char lb[64]; errno = 0; long r = readlinkat(lf, "", lb, sizeof lb - 1); if (r > 0) lb[r] = 0;
       if (r <= 0 || strcmp(lb, lt)) { fails++; printf("FAIL readlinkat(fd, \"\"): %ld errno %d\n", r, errno); } close(lf); }
-    { /* F3-6: getcwd into a buffer that holds the virtual path */
+    { /* getcwd into a buffer that holds the virtual path */
       char cb[12]; if (chdir("/usr/share") || !getcwd(cb, sizeof cb) || strcmp(cb, "/usr/share")) { fails++; printf("FAIL getcwd with a small buffer: %s\n", strerror(errno)); }
       char one[2]; errno = 0; if (getcwd(one, sizeof one) || errno != ERANGE) { fails++; printf("FAIL getcwd ERANGE\n"); } }
     { struct statvfs v; CHECK(fstatvfs(fd, &v), 0); if (!(v.f_flag & ST_RDONLY)) { fails++; printf("FAIL fstatvfs lacks ST_RDONLY\n"); } }

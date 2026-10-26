@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """fetch-debs.py — an example of the step before the tool: resolve a package closure from a Debian-family
-archive and download it into a directory of .deb files (PROPOSAL.md 10.1).
+archive and download it into a directory of .deb files (DESIGN.md 10.1).
 
     tools/fetch-debs.py [--distro ubuntu|debian] [--suite S]... [--arch amd64] [--components main,universe]
                         [--mirror URL | --snapshot DATE] [--cache DIR] [--no-essential] [--choose VIRTUAL=PKG]...
