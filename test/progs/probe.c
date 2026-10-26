@@ -2,8 +2,8 @@
  *
  * Reads cases from stdin, one per line: an id, a syscall number, then up to six encoded arguments. Each case
  * is issued through syscall(2), so that no libc wrapper stands between the case and the kernel (or the
- * opener), and answered on stdout as "<id> ret=<r> errno=<e>[ open=<errno>][ data=<...>]". The same binary
- * runs under bwrap and under the opener; the driver (test/oracle_syscalls.py) compares the two answers.
+ * launcher), and answered on stdout as "<id> ret=<r> errno=<e>[ open=<errno>][ data=<...>]". The same binary
+ * runs under bwrap and under the launcher; the driver (test/oracle_syscalls.py) compares the two answers.
  *
  *   i:<decimal>          an integer, passed as a long
  *   s:<hex>              a NUL-terminated string in a fresh buffer

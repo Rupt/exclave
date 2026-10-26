@@ -1,9 +1,9 @@
 /* manifest.c — strict parser for the manifest (PROPOSAL.md 6.2).
  *
- * No syscalls: takes a buffer, fills struct can, reports "line L col C: why".
- * Compiled into the opener and, with HOST_TEST, into test/manifest_test.c.
- * The opener enforces the lexical and typing rules, not the canonical order.
- * The manifest is the one file the opener reads: an ISA declaration and the
+ * No syscalls: takes a buffer, fills struct exclave, reports "line L col C: why".
+ * Compiled into the launcher and, with HOST_TEST, into test/manifest_test.c.
+ * The launcher enforces the lexical and typing rules, not the canonical order.
+ * The manifest is the one file the launcher reads: an ISA declaration and the
  * visibility overrides; everything else it needs it observes in the tree.
  */
 #include "common.h"
@@ -120,7 +120,7 @@ static int valid_abs_path(const char *s, size_t n)
     return 1;
 }
 
-int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t errn)
+int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, size_t errn)
 {
     struct cur cu = { (const unsigned char *)buf, (const unsigned char *)buf + len, 1, 1 };
     struct cur *K = &cu;
@@ -181,7 +181,7 @@ int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t
             return fail(err, errn, K, "first record must be exclave");
         } else if (xstrcmp(key, "cpu") == 0) {
             WANT(1, F_STR); if (seen_isa++) return fail(err, errn, K, "duplicate cpu");
-            scpy(c->isa, f[0].s, sizeof c->isa);
+            scpy(c->cpu, f[0].s, sizeof c->cpu);
         } else if (xstrcmp(key, "own") == 0) {
             WANT(1, F_STR); if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "own must be a normalised absolute path");
             if (c->nown >= MANIFEST_MAX_OWN) return fail(err, errn, K, "more than 256 own records");
@@ -202,6 +202,6 @@ int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t
     }
     if (pending_comment) return fail(err, errn, K, "comment after the last record");
     if (!seen_can) return fail(err, errn, K, "empty manifest");
-    if (!seen_isa) scpy(c->isa, ARCH_ISA_DEFAULT, sizeof c->isa);      /* the baseline: a can that says nothing runs anywhere */
+    if (!seen_isa) scpy(c->cpu, ARCH_ISA_DEFAULT, sizeof c->cpu);      /* the baseline: a can that says nothing runs anywhere */
     return 0;
 }

@@ -5,7 +5,7 @@ interpreter between them (through the tree's symlinks), every DT_NEEDED must res
 loader's own algorithm, every library reached must depend on that loader's libc and nothing else. Anything that would resolve on the host, and anything that would mix
 libcs, is reported and the can is refused. Static executables are reported.
 
-Dynamic: given CAN_LOG files a workload wrote, every library opened must be can-owned, and NSS modules
+Dynamic: given EXCLAVE_LOG files a workload wrote, every library opened must be can-owned, and NSS modules
 named by the host's nsswitch.conf but absent from the can are reported.
 """
 import os
@@ -16,9 +16,9 @@ import struct
 PT_LOAD, PT_DYNAMIC, PT_INTERP = 1, 2, 3
 DT_NULL, DT_NEEDED, DT_STRTAB, DT_STRSZ, DT_SONAME, DT_RPATH, DT_RUNPATH = 0, 1, 5, 10, 14, 15, 29
 ET_DYN = 3
-# the machines the opener is built for (7.1): ELF e_machine, uname -m, Debian's multiarch triplet
+# the machines the launcher is built for (7.1): ELF e_machine, uname -m, Debian's multiarch triplet
 MACHINES = {62: ("x86_64", "x86_64-linux-gnu"), 183: ("aarch64", "aarch64-linux-gnu")}
-MACHINE = 62                                                 # the can's, set from its opener by static_check
+MACHINE = 62                                                 # the can's, set from its launcher by static_check
 DEFAULT_DIRS = ["/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu", "/lib64", "/usr/lib64", "/lib", "/usr/lib"]   # Debian's and Fedora's glibc; the tree's loader is asked when it can answer (review F4-13)
 MUSL_DIRS = ["/lib", "/usr/local/lib", "/usr/lib"]
 HWCAPS = ["glibc-hwcaps/x86-64-v4", "glibc-hwcaps/x86-64-v3", "glibc-hwcaps/x86-64-v2"]
@@ -241,7 +241,7 @@ VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
 
 
 class Owned(list):
-    """8.1's ownership as the opener computes it: the own prefixes, the list itself, and the manifest's host
+    """8.1's ownership as the launcher computes it: the own prefixes, the list itself, and the manifest's host
     records, .host, which take a path back from an own prefix no longer than theirs."""
     def __init__(self, own=(), host=()):
         list.__init__(self, own)
@@ -253,7 +253,7 @@ def _under(v, p):
 
 
 def host_owned(vdir, own):
-    """The opener's base rule for a path (8.1, vis.c base_is_host): volatile, or its longest host record at least
+    """The launcher's base rule for a path (8.1, vis.c base_is_host): volatile, or its longest host record at least
     as long as its longest own prefix, which a path under neither is."""
     if any(_under(vdir, v) for v in VOLATILE):
         return True
@@ -307,16 +307,16 @@ def _has_musl_loader(tree):
 
 
 def static_check(can, own, data_prefixes=(), log=print):
-    """Returns a Report. own: the ownership set of 8.1 as the opener computes it."""
+    """Returns a Report. own: the ownership set of 8.1 as the launcher computes it."""
     import platform
     tree, rep = Tree(os.path.join(can, "tree")), Report()
     native = {v[0]: k for k, v in MACHINES.items()}.get(platform.machine())
     try:
-        set_machine(Elf(os.path.join(can, ".exclave", "launcher")).machine)   # the can's machine is its opener's
+        set_machine(Elf(os.path.join(can, ".exclave", "launcher")).machine)   # the can's machine is its launcher's
     except (ValueError, OSError):
-        set_machine(native or 62)                                       # no opener yet: the machine the check runs on
+        set_machine(native or 62)                                       # no launcher yet: the machine the check runs on
     if native != MACHINE:                                    # 10.1: a can is closed on a machine of its architecture, where its loader can be asked
-        rep.errors.append("the can's opener is for %s and this machine is %s: close the can on a machine of its architecture (10.1)"
+        rep.errors.append("the can's launcher is for %s and this machine is %s: close the can on a machine of its architecture (10.1)"
                           % (MACHINES.get(MACHINE, ("?",))[0], platform.machine()))
         return rep
     cache = read_cache(tree)
@@ -326,7 +326,7 @@ def static_check(can, own, data_prefixes=(), log=print):
         if not _has_musl_loader(tree):                           # musl has no cache; glibc without one searches its defaults only
             rep.warnings.append("no /etc/ld.so.cache: only the loader's default directories are searched at run time")
     else:
-        for soname, paths in cache.items():                       # no cache entry may name the opener (10.3)
+        for soname, paths in cache.items():                       # no cache entry may name the launcher (10.3)
             for p in paths:
                 r = tree.resolve(p)
                 if r and os.path.isfile(tree.payload(r)):
@@ -335,7 +335,7 @@ def static_check(can, own, data_prefixes=(), log=print):
                     except (ValueError, OSError):
                         continue
                     if e.soname is None and e.type == ET_DYN and not e.needed:
-                        rep.errors.append("ld.so.cache entry %s names %s, which is not a shared library (the opener?)" % (soname, p))
+                        rep.errors.append("ld.so.cache entry %s names %s, which is not a shared library (the launcher?)" % (soname, p))
     seen = rep.seen
     executables, libraries, interps = [], [], {}
     for dirpath, dirnames, filenames in os.walk(tree.root):
@@ -386,7 +386,7 @@ def static_check(can, own, data_prefixes=(), log=print):
                 elif any(r == p or r.startswith(p.rstrip("/") + "/") for p in data_prefixes):
                     rep.errors.append("%s wants interpreter %s, which resolves into the data prefix %s: never executed or loaded (6.2)" % (vpath, e.interp, r))
                 elif own and host_owned(r, own):
-                    rep.errors.append("%s wants interpreter %s, which resolves to %s, a path the can does not own: the opener refuses a host loader (7.4.5)" % (vpath, e.interp, r))
+                    rep.errors.append("%s wants interpreter %s, which resolves to %s, a path the can does not own: the launcher refuses a host loader (7.4.5)" % (vpath, e.interp, r))
                 else:
                     interps.setdefault(r, (e.interp, vpath))
             (executables if e.interp is not None or e.type != ET_DYN else libraries).append((vpath, e))
@@ -458,7 +458,7 @@ def needed_closure(tree, vpaths, own):
             return
         seen.add(key)
         if e.interp:
-            out.add(e.interp)                                  # the loader is loaded by the opener, never through a logged syscall
+            out.add(e.interp)                                  # the loader is loaded by the launcher, never through a logged syscall
         below = rpaths if e.runpath else ([e.rpath] if e.rpath else []) + rpaths
         for n in e.needed:
             found = find_library(tree, n, e, vpath, rpaths, cache, own, None, default_dirs, interp)
@@ -479,18 +479,18 @@ def needed_closure(tree, vpaths, own):
 
 
 def dynamic_check(can, logs, own, log=print):
-    """Read CAN_LOG files; report libraries opened outside the can and NSS modules the host names that
+    """Read EXCLAVE_LOG files; report libraries opened outside the can and NSS modules the host names that
     the can lacks."""
     import build
     rep = Report()
     libs, cwds = set(), set()
     for what, r, path in build.log_lines(logs):
         rep.lines += 1
-        if what == "opener" and path.startswith("cwd claimed for the host "):   # 8.1 rule 4 as the opener applied it; the plain
+        if what == "launcher" and path.startswith("cwd claimed for the host "):   # 8.1 rule 4 as the launcher applied it; the plain
             c = path[len("cwd claimed for the host "):]                           # "cwd" line is a diagnostic and claims nothing (review O5-4)
             if c != "/":
                 cwds.add(c)
-        if what == "opener" and path.startswith("cwd ") and not path.startswith("cwd claimed"):
+        if what == "launcher" and path.startswith("cwd ") and not path.startswith("cwd claimed"):
             c = path[len("cwd "):]                                                # a working directory under a volatile prefix is the
             if any(c == v or c.startswith(v + "/") for v in VOLATILE):            # host's by 8.1 rule 3, with nothing to claim: the
                 cwds.add(c)                                                       # build's own directory all the same; never /

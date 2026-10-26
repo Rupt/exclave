@@ -4,7 +4,7 @@
 Every trapped path and descriptor syscall of src/filter.c, and the two chattr ioctls, is issued with every path
 form of 7.4.4, and every flag that changes
 resolution, over a random maze, by one program (test/progs/probe.c) under two projections of the same tree:
-the kernel's, a bwrap read-only bind of the unwrapped tree at /, and the opener's. Return value, errno and
+the kernel's, a bwrap read-only bind of the unwrapped tree at /, and the launcher's. Return value, errno and
 what a buffer holds afterwards must agree case by case; a difference fails unless EXPECTED names its reason.
 The expectations therefore come from the kernel, not from a test's author. Needs user namespaces and bwrap,
 like oracle_ns; says so and exits 0 when it cannot run.
@@ -203,7 +203,7 @@ def generate(forms, nr, uid, gid):
     for n, p in forms.paths:
         for fn, fl in open_flags:
             if n == "proc_exe" and fl & O_TRUNC:
-                continue                                          # would truncate the running probe: the kernel says ETXTBSY, the opener does not (13)
+                continue                                          # would truncate the running probe: the kernel says ETXTBSY, the launcher does not (13)
             add("open", "%s/%s" % (n, fn), p, I(fl), I(0o644))
         if n != "proc_exe":
             add("creat", n, p, I(0o644))
@@ -480,7 +480,7 @@ def run_bwrap(root, host, bindir, probe, cases):
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
-def run_opener(can, host, probe, cases):
+def run_launcher(can, host, probe, cases):
     with open(cases, "rb") as inp:
         p = subprocess.run([os.path.join(can, ".exclave", "launcher"), probe], cwd=host, stdin=inp, env={"PATH": "/usr/bin:/bin", "HOME": host},
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -495,7 +495,7 @@ def errnos(b, o):
     return int(b.split("errno=")[1].split()[0]), int(o.split("errno=")[1].split()[0])
 
 
-# differences with a reason: (syscall name or None, predicate on (label, bwrap answer, opener answer), reason).
+# differences with a reason: (syscall name or None, predicate on (label, bwrap answer, launcher answer), reason).
 # The list is part of the design (17): each entry names the rule that makes the difference right.
 BOUND = {"passwd", "resolv", "tmp", "home", "opt", "dev_null", "rel_etc_by_dotdot"}   # bound from the host into the read-only root under bwrap
 EXPECTED = [
@@ -519,13 +519,13 @@ EXPECTED = [
     (None, lambda l, b, o: "resolv" in forms_in(l) and errnos(b, o) == (61, 95),
      "the host's identity symlink resolves to a file on another filesystem (a tmpfs under /run) whose xattr answers differ from the tree copy's symlink"),
     (None, lambda l, b, o: forms_in(l) & BOUND and errnos(b, o)[0] == 30 and errnos(b, o)[1] in (1, 13),
-     "a host entry bound into bwrap's read-only root: its parent directory, or the identity symlink itself, is read-only there (EROFS); the opener answers with the host's permissions (8.1, 8.4)"),
+     "a host entry bound into bwrap's read-only root: its parent directory, or the identity symlink itself, is read-only there (EROFS); the launcher answers with the host's permissions (8.1, 8.4)"),
     (None, lambda l, b, o: "to_root" in forms_in(l) and errnos(b, o) == (22, 1),
-     "uid 0 is not mapped in bwrap's user namespace (EINVAL); the opener runs in none (EPERM)"),
+     "uid 0 is not mapped in bwrap's user namespace (EINVAL); the launcher runs in none (EPERM)"),
     ("bind", lambda l, b, o: l.startswith(("root/", "root_dotdot/", "rel_root_by_dotdot/")) and "after_chdir_rel" in l and errnos(b, o) == (30, 13),
      "a new top-level name is the host's (8.1 rule 2): the host's / answers EACCES for a create there, where the read-only root under bwrap says EROFS"),
     ("fanotify_mark", lambda l, b, o: errnos(b, o)[0] == 22,
-     "fanotify_mark checks its flags and descriptor before its path; the opener resolves the path first, and fanotify needs CAP_SYS_ADMIN, which no can process has (13)"),
+     "fanotify_mark checks its flags and descriptor before its path; the launcher resolves the path first, and fanotify needs CAP_SYS_ADMIN, which no can process has (13)"),
     (None, lambda l, b, o: KERNEL < (6, 14) and "ro_file" in forms_in(l) and errnos(b, o) == (30, 13),
      "a truncate of a file its owner cannot write on a read-only mount: this kernel wants the mount before the permission (EROFS); vfs_truncate checks the permission first by 6.14 (it did not at 6.1), and the handler answers as it does"),
     ("utimensat", lambda l, b, o: KERNEL < (5, 9) and ("empty" in l or "bad_nsec" in l) and errnos(b, o)[0] == 22,
@@ -535,7 +535,7 @@ EXPECTED = [
     ("execveat", lambda l, b, o: KERNEL < (5, 9) and "sock" in forms_in(l) and b.startswith("ret=27136") and o.startswith("ret=28928"),
      "an exec of a socket: ENXIO from its open before 5.9, EACCES from may_open since (fs/namei.c); the handler answers as the newer kernels do"),
     (None, lambda l, b, o: errnos(b, o) == (26, 30),
-     "a write-open of an executable another process is running: the kernel says ETXTBSY before EROFS, the opener EROFS (13); seen when the gate runs the same can copy's shell beside the probe"),
+     "a write-open of an executable another process is running: the kernel says ETXTBSY before EROFS, the launcher EROFS (13); seen when the gate runs the same can copy's shell beside the probe"),
 ]
 
 
@@ -574,11 +574,11 @@ def main():
             except PermissionError:
                 pass
     rng = random.Random(a.seed)
-    # the kernel's world: an unwrapped copy of the tree; the opener's: a copy of the can; the same maze in both
+    # the kernel's world: an unwrapped copy of the tree; the launcher's: a copy of the can; the same maze in both
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(os.path.join(given, "tree"), root, symlinks=True, copy_function=cannery.link_or_copy)
     build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
-    can = tree.fresh_can(given, os.path.join(work, "can"))                  # the opener's world: a copy reopened with the build (17)
+    can = tree.fresh_can(given, os.path.join(work, "can"))                  # the launcher's world: a copy reopened with the build (17)
     dirs, files, links = make_maze(root, rng)
     host = os.path.join(work, "area", "host")                              # ".." from the host area is a directory the reset owns
     os.symlink(host + "/hfile", os.path.join(root, "maze", "lH"))          # a can link to a host file, and to a host directory
@@ -607,7 +607,7 @@ def main():
     cc = tree.compiler(root, MACHINE)
     if not cc:
         sys.exit("no C compiler in the can")
-    gcc = os.path.join(can, "tree", tree.vbin(root, cc).lstrip("/"))       # the probe compiled through the build's opener
+    gcc = os.path.join(can, "tree", tree.vbin(root, cc).lstrip("/"))       # the probe compiled through the build's launcher
     probe = os.path.join(bindir, "probe")
     r = subprocess.run([gcc, "-O1", "-o", probe, os.path.join(HERE, "progs", "probe.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode:
@@ -631,11 +631,11 @@ def main():
         host_reset(host, os.path.join(can, "tree"), probe)
         bw = run_bwrap(root, host, bindir, probe, path)
         host_reset(host, os.path.join(can, "tree"), probe)
-        op = run_opener(can, host, probe, path)
+        op = run_launcher(can, host, probe, path)
         bl, ol = bw[1].splitlines(), op[1].splitlines()
         if len(bl) != len(mine) or len(ol) != len(mine):
             stopped = mine[min(len(bl), len(ol))][0]
-            print("FAIL %s: %d cases, bwrap answered %d (rc %d: %s), the opener %d (rc %d: %s); the first unanswered case is %s" % (name, len(mine), len(bl), bw[0], bw[2].strip()[-200:], len(ol), op[0], op[2].strip()[-200:], stopped))
+            print("FAIL %s: %d cases, bwrap answered %d (rc %d: %s), the launcher %d (rc %d: %s); the first unanswered case is %s" % (name, len(mine), len(bl), bw[0], bw[2].strip()[-200:], len(ol), op[0], op[2].strip()[-200:], stopped))
             differ += 1
             continue
         d = 0
@@ -648,13 +648,13 @@ def main():
             if why:
                 accepted += 1
                 if a.expected:
-                    print("EXPECTED %s %s(%s): %s\n     kernel: %s\n     opener: %s" % (n, label, ", ".join(decode(t) for t in toks), why, b, o))
+                    print("EXPECTED %s %s(%s): %s\n     kernel: %s\n     launcher: %s" % (n, label, ", ".join(decode(t) for t in toks), why, b, o))
                 continue
             differ += 1
             d += 1
             if shown < a.show:
                 shown += 1
-                print("DIFF %s %s(%s)\n     kernel: %s\n     opener: %s" % (n, label, ", ".join(decode(t) for t in toks), b, o))
+                print("DIFF %s %s(%s)\n     kernel: %s\n     launcher: %s" % (n, label, ", ".join(decode(t) for t in toks), b, o))
         print("%-18s %5d cases, %d differ" % (name, len(mine), d))
     print("%d cases over %d syscalls: %d differ, %d differences expected" % (total, len(names), differ, accepted))
     rmtree("/tmp/cont-probe-%d" % os.getpid())

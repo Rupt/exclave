@@ -2,14 +2,14 @@
 # test/gate.sh CAN... — the commit gate (PROPOSAL.md 17): the unit tests, the stack budget, and for every can
 # given the suite in the given and a random order (and, for the first can, under the plain terminal's AppArmor label), the
 # resolution oracle, the namespace oracle, the syscall probe and the Docker profile; dogfood when CONT_CACHE names a package cache. Every step runs in parallel; every driver
-# runs build/opener on a copy of its own (the suite wraps one from the can's tree, the others take test/tree.py's
+# runs build/launcher on a copy of its own (the suite wraps one from the can's tree, the others take test/tree.py's
 # fresh_can), so the cans given are never run as they are nor written. One line per step; logs under build/gate/. Exit status: the number of failed steps.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(dirname "$here")
 out=$repo/build/gate
 [ $# -ge 1 ] || { echo "usage: test/gate.sh CAN..." >&2; exit 2; }
-[ -x "$repo/build/opener" ] || { echo "build/opener missing: run make" >&2; exit 2; }
+[ -x "$repo/build/launcher" ] || { echo "build/launcher missing: run make" >&2; exit 2; }
 rm -rf "$out" && mkdir -p "$out" || exit 2
 start=$(date +%s)
 
@@ -24,8 +24,8 @@ unit() {
         && "$out/filter_test" && python3 "$here/syscalls.py"   # the parser and the filter just built, not stale builds
 }
 stack() {
-    python3 "$here/stackcheck.py" "$repo"/build/opener.debug-*.ci || return 1
-    if ls "$repo"/build/opener-aarch64.debug-*.ci > /dev/null 2>&1; then python3 "$here/stackcheck.py" "$repo"/build/opener-aarch64.debug-*.ci; fi
+    python3 "$here/stackcheck.py" "$repo"/build/launcher.debug-*.ci || return 1
+    if ls "$repo"/build/launcher-aarch64.debug-*.ci > /dev/null 2>&1; then python3 "$here/stackcheck.py" "$repo"/build/launcher-aarch64.debug-*.ci; fi
 }
 
 step unit unit

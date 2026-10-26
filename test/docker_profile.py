@@ -3,9 +3,9 @@
 
 Docker's default profile (a JSON allow-list with a default errno) is assembled here into a classic BPF
 program and installed by bwrap around a can workload, with the host's tree visible read-only, the way a
-CI container would run it. The opener then stacks its own filter on top. The profile runs twice: as
+CI container would run it. The launcher then stacks its own filter on top. The profile runs twice: as
 assembled for this kernel, and as Docker installs it before kernel 4.8, where process_vm_readv is refused
-and the opener copies program memory through a pipe (13); the workload includes a bad pointer that must be
+and the launcher copies program memory through a pipe (13); the workload includes a bad pointer that must be
 EFAULT either way. Needs bwrap and user namespaces; says so and exits 0 when it cannot run.
 
     test/docker_profile.py --can CAN --profile docker-seccomp.json [--work DIR]

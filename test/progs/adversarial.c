@@ -1,5 +1,5 @@
 /* adversarial.c — what a hostile program or a fuzzer would try (PROPOSAL.md 17.4): arguments with their upper 32 bits
- * set where the kernel takes an int, with the program's buffer checked past the count; the opener's own variables set
+ * set where the kernel takes an int, with the program's buffer checked past the count; the launcher's own variables set
  * before an exec; a working directory deleted under the program; an exec with no descriptor left; mounts and roots
  * from inside; SIGSYS ignored, handled or fed to a signalfd; magic links under /proc/1; interpreter loops and chains;
  * an empty executable, a loader that is a directory. A second batch (sections 9 to 15): an exec with 0, 1 and 2 closed;
@@ -9,8 +9,8 @@
  * stack; io_uring and clone3 refused; a saturated cache, a huge environment, bad pointers; execute-only files and
  * interpreters spelt oddly. usage: adversarial HOSTDIR, or "adversarial HOSTDIR --child".
  * Prints one line per case, "<case>: <answer>", the same in every world where the kernel is the oracle, so the
- * exerciser shows what differs; the named regression asserts the kernel's answers, and for the cases the opener
- * decides for itself (its variables stripped, mounts refused) the opener's. Exit 0 always. */
+ * exerciser shows what differs; the named regression asserts the kernel's answers, and for the cases the launcher
+ * decides for itself (its variables stripped, mounts refused) the launcher's. Exit 0 always. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -132,7 +132,7 @@ static void on_sys(int s) { (void)s; program_handler_ran = 1; }
 int main(int argc, char **argv)
 {
     if (argc >= 3 && strcmp(argv[2], "--child") == 0) {
-        printf("child sees CAN_EXEC=%s CAN_EXECFN=%s CAN_COMM=%s\n", getenv("CAN_EXEC") ? "set" : "unset", getenv("CAN_EXECFN") ? "set" : "unset", getenv("CAN_COMM") ? "set" : "unset");
+        printf("child sees EXCLAVE_EXEC=%s EXCLAVE_EXECFN=%s EXCLAVE_COMM=%s\n", getenv("EXCLAVE_EXEC") ? "set" : "unset", getenv("EXCLAVE_EXECFN") ? "set" : "unset", getenv("EXCLAVE_COMM") ? "set" : "unset");
         return 0;
     }
     if (argc < 2) { fprintf(stderr, "usage: adversarial HOSTDIR\n"); return 2; }
@@ -183,13 +183,13 @@ int main(int argc, char **argv)
     }
     P("openat2 size with upper bits", syscall(SYS_openat2, AT_FDCWD, "/usr/share", (unsigned long long[]){ O_RDONLY | O_DIRECTORY, 0, 0 }, HI | 24));
 
-    /* 2. the opener's own variables set by a program: never seen by the next program, never obeyed */
-    setenv("CAN_EXEC", "/nonexistent/evil", 1); setenv("CAN_EXECFN", "/evil", 1); setenv("CAN_COMM", "evil", 1);
+    /* 2. the launcher's own variables set by a program: never seen by the next program, never obeyed */
+    setenv("EXCLAVE_EXEC", "/nonexistent/evil", 1); setenv("EXCLAVE_EXECFN", "/evil", 1); setenv("EXCLAVE_COMM", "evil", 1);
     snprintf(p, sizeof p, "%s/self", hd); copy_self(p);
-    { char *const av[] = { (char *)p, (char *)hd, "--child", 0 }; struct ex x = { p, av, 0 }; printf("exec of a host ELF with CAN_* set: %s\n", exec_answer(&x)); }
-    { char *const av[] = { "sh", "-c", "read c < /proc/self/comm; echo \"wrapper with CAN_* set: comm=$c CAN_EXEC=${CAN_EXEC:-unset} CAN_EXECFN=${CAN_EXECFN:-unset} CAN_COMM=${CAN_COMM:-unset}\"", 0 };
-      struct ex x = { sh, av, 0 }; const char *ans = exec_answer(&x); if (strncmp(ans, "ran, exit 0", 11)) printf("wrapper with CAN_* set: %s\n", ans); }
-    unsetenv("CAN_EXEC"); unsetenv("CAN_EXECFN"); unsetenv("CAN_COMM");
+    { char *const av[] = { (char *)p, (char *)hd, "--child", 0 }; struct ex x = { p, av, 0 }; printf("exec of a host ELF with EXCLAVE_* set: %s\n", exec_answer(&x)); }
+    { char *const av[] = { "sh", "-c", "read c < /proc/self/comm; echo \"wrapper with EXCLAVE_* set: comm=$c EXCLAVE_EXEC=${EXCLAVE_EXEC:-unset} EXCLAVE_EXECFN=${EXCLAVE_EXECFN:-unset} EXCLAVE_COMM=${EXCLAVE_COMM:-unset}\"", 0 };
+      struct ex x = { sh, av, 0 }; const char *ans = exec_answer(&x); if (strncmp(ans, "ran, exit 0", 11)) printf("wrapper with EXCLAVE_* set: %s\n", ans); }
+    unsetenv("EXCLAVE_EXEC"); unsetenv("EXCLAVE_EXECFN"); unsetenv("EXCLAVE_COMM");
 
     /* 3. the working directory deleted under the program */
     snprintf(p, sizeof p, "%s/gone", hd); mkdir(p, 0755);
@@ -274,7 +274,7 @@ int main(int argc, char **argv)
     if (interp_to_dir(p, "/usr/bin") == 0) { char *const av[] = { "dirinterp", 0 }; struct ex x = { p, av, 0 }; printf("exec of an ELF whose loader is a directory: %s\n", exec_answer(&x)); }
     else printf("exec of an ELF whose loader is a directory: static (no PT_INTERP)\n");
 
-    /* 9. an exec with the standard descriptors closed, and traps with them closed: the opener owns none of 0, 1, 2 */
+    /* 9. an exec with the standard descriptors closed, and traps with them closed: the launcher owns none of 0, 1, 2 */
     {
         char tp[4096]; snprintf(tp, sizeof tp, "%s", sh); *strrchr(tp, '/') = 0; strcat(tp, "/true");
         char *const av[] = { "true", 0 };
@@ -365,7 +365,7 @@ int main(int argc, char **argv)
     snprintf(p, sizeof p, "%s/twoopts.sh", hd); snprintf(q, sizeof q, "#!%s -e -x\nexit 0\n", sh); script(p, q);
     { char *const av[] = { "t.sh", 0 }; struct ex x = { p, av, 0, 0, 0 }; const char *a = exec_answer(&x);   /* the kernel passes "-e -x" as one argument; the shell rejects it (the exit code varies) */
       printf("exec of a script whose #! has two options: %s\n", strstr(a, "ran, exit 0") ? "ran (the argument was split)" : "one argument, the shell rejected it"); }
-    { char *const av[] = { "sh", "-c", "exit 0", 0 }; static char *none[] = { 0 };      /* the opener sets and strips its own variables even from an empty environment */
+    { char *const av[] = { "sh", "-c", "exit 0", 0 }; static char *none[] = { 0 };      /* the launcher sets and strips its own variables even from an empty environment */
       struct ex x = { sh, av, 0, 0, none }; printf("exec of a wrapper with an empty environment: %s\n", exec_answer(&x)); }
     close(hfd);
     return 0;

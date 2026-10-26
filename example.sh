@@ -2,12 +2,12 @@
 # example.sh DIR — from a clean checkout to a program that runs on any glibc since 2.17, in one script
 # (README; PROPOSAL.md 9, 10). Everything it makes goes under DIR; the fetchers keep their caches under
 # ~/.cache, so a second run fetches nothing. The steps, each a command you can run by hand:
-#   1. make builds the opener.
+#   1. make builds the launcher.
 #   2. tools/fetch-debs.py downloads Ubuntu 24.04's gcc-13 closure; cannery unpack makes an open can from the files.
 #   3. tools/fetch-rpms.py downloads CentOS 7's glibc; unpacked into a can of its own, its tree is copied into the
 #      gcc can at /opt/sysroot-el7, and the manifest says `data "/opt/sysroot-el7"`: nothing there is wrapped,
 #      checked or executed. cannery wrap closes the can, and an entry symlink names its gcc.
-#   4. hello.c is compiled inside the can twice, plainly and against the sysroot, with CAN_LOG on; objdump shows
+#   4. hello.c is compiled inside the can twice, plainly and against the sysroot, with EXCLAVE_LOG on; objdump shows
 #      which glibc symbol versions each output binds; the sysroot one runs on this host and inside the can.
 #   5. cannery prune keeps, in a copy of the can, what the compile touched; that copy compiles the program
 #      again, and cannery check reads the new log: the can you would ship, and the check you would run on it.
@@ -26,7 +26,7 @@ logged() {                                                                # logg
 }
 sysroot="--sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/"       # headers from the sysroot; -B for its start files and libc
 
-echo "== 1. the opener"
+echo "== 1. the launcher"
 run make -s -C "$here"
 
 echo "== 2. a gcc can from Ubuntu 24.04 packages"
@@ -47,8 +47,8 @@ cat > hello.c <<'HELLO'
 #include <stdio.h>
 int main(void) { printf("hello from a can\n"); return 0; }
 HELLO
-run env CAN_LOG=log/plain.log gcc.can/gcc -o hello-plain hello.c
-run env CAN_LOG=log/hello.log gcc.can/gcc $sysroot -o hello hello.c
+run env EXCLAVE_LOG=log/plain.log gcc.can/gcc -o hello-plain hello.c
+run env EXCLAVE_LOG=log/hello.log gcc.can/gcc $sysroot -o hello hello.c
 echo "  log/hello.log: $(wc -l < log/hello.log) lines, one per trapped syscall; the first:"; head -6 log/hello.log | sed "s/^/    /"
 versions() { gcc.can/tree/usr/bin/objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -u | tr '\n' ' '; }
 echo "  glibc symbol versions bound: hello-plain: $(versions hello-plain) hello: $(versions hello)"
@@ -58,7 +58,7 @@ run gcc.can/.exclave/launcher "$dir/hello"
 echo "== 5. the can pruned to what the compile touched, and the checks on it"
 run cp -a gcc.can hello.can
 run cannery prune hello.can log/hello.log
-run env CAN_LOG=log/pruned.log hello.can/gcc $sysroot -o hello-pruned hello.c
+run env EXCLAVE_LOG=log/pruned.log hello.can/gcc $sysroot -o hello-pruned hello.c
 run cannery check hello.can log/pruned.log
 run ./hello-pruned
 count() { find "$1/tree" -type f -o -type l | wc -l; }

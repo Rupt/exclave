@@ -1,6 +1,6 @@
 """tree.py — what a tree says about itself, for the suite and the oracles (PROPOSAL.md 17): a test asserts what the
 tree says, never what one distribution spells. Every function takes the tree's root directory; then the one way a
-driver takes a can: a copy of its own, reopened with the build, so that the opener under test is always build/opener
+driver takes a can: a copy of its own, reopened with the build, so that the launcher under test is always build/launcher
 and never the one a can was closed with; and the Go regression's builds, which the matrix makes on the host for VMs
 that have no go."""
 import filecmp
@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BUILD_OPENER = os.path.join(REPO, "build", "opener")
+BUILD_LAUNCHER = os.path.join(REPO, "build", "launcher")
 sys.path.insert(0, os.path.join(REPO, "cannery"))
 
 
@@ -95,24 +95,24 @@ def copy_can(src, dst):
     return dst
 
 
-def fresh_can(src, dst, opener=BUILD_OPENER):
-    """copy_can, then every wrapper relinked to build/opener (cannery reopen, about a second for a gcc can): the opener a
+def fresh_can(src, dst, launcher=BUILD_LAUNCHER):
+    """copy_can, then every wrapper relinked to build/launcher (cannery reopen, about a second for a gcc can): the launcher a
     driver runs is always the checkout's build, never the one a can carries, which is the one it was closed with and
     which a rebuild leaves behind. The copy is made anew on every run, so nothing has to be remembered."""
     import cannery
-    if not os.path.isfile(opener):
-        sys.exit("no opener at %s: run make" % opener)
+    if not os.path.isfile(launcher):
+        sys.exit("no launcher at %s: run make" % launcher)
     copy_can(src, dst)
-    cannery.cmd_reopen(dst, opener)
+    cannery.cmd_reopen(dst, launcher)
     return dst
 
 
-def reopen_if_stale(can, opener=BUILD_OPENER):
+def reopen_if_stale(can, launcher=BUILD_LAUNCHER):
     """A copy kept between runs, reopened again when the build has changed since it was made: the check is a byte
     comparison of two small files, the reopen a second, so a rebuild never has to be remembered by hand."""
     import cannery
-    if not filecmp.cmp(opener, os.path.join(can, ".exclave", "launcher"), shallow=False):
-        cannery.cmd_reopen(can, opener)
+    if not filecmp.cmp(launcher, os.path.join(can, ".exclave", "launcher"), shallow=False):
+        cannery.cmd_reopen(can, launcher)
         return True
     return False
 

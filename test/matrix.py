@@ -5,7 +5,7 @@
 
 Each row of VMS names a distribution cloud image. The image is downloaded once, booted under QEMU with
 KVM behind a copy-on-write overlay and a cloud-init seed that installs python3 and strace (and bubblewrap
-where it exists), the can and this repository's test tree and opener are copied in over SSH, and the
+where it exists), the can and this repository's test tree and launcher are copied in over SSH, and the
 regression suite runs there; the oracles, the syscall probe and the Docker-profile run follow where bubblewrap works.
 One VM at a time, 1 GB each, 2 GB for the emulated row. Results go to build/matrix-results.md.
 """
@@ -38,7 +38,7 @@ VMS = [
                                  "https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2"], "dnf", "SELinux enforcing", "x86_64"),
     ("alpine", "6.x", "alpine", ["https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.3-x86_64-bios-cloudinit-r0.qcow2",
                                  "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/cloud/nocloud_alpine-3.20.3-x86_64-bios-cloudinit-r0.qcow2"], "apk", "musl host, busybox", "x86_64"),
-    # aarch64 under TCG (12): the same suite and oracles, the arm64 opener and can, ten to twenty times slower
+    # aarch64 under TCG (12): the same suite and oracles, the arm64 launcher and can, ten to twenty times slower
     ("noble-arm64", "6.8", "ubuntu", ["https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img"], "apt", "aarch64, TCG emulation", "aarch64"),]
 
 PACKAGES = {"apt": ["python3", "strace", "bubblewrap"], "dnf": ["python3", "strace", "bubblewrap"], "apk": ["python3", "strace", "bubblewrap", "bash"],
@@ -186,9 +186,9 @@ def main():
     if not os.path.exists(key):
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
     pubkey = open(key + ".pub").read().strip()
-    # the payload: the can (hard links preserved by tar) and the repository's test tree, cannery, opener and, where the
+    # the payload: the can (hard links preserved by tar) and the repository's test tree, cannery, launcher and, where the
     # host has go, the Go regression's programs built for the VM's machine. For the
-    # aarch64 VM the payload carries the arm64 package files and the cross-built openers under the suite's names:
+    # aarch64 VM the payload carries the arm64 package files and the cross-built launchers under the suite's names:
     # the can is unpacked and closed in the VM, on its own architecture (10.1).
     payloads = {}
 
@@ -207,18 +207,18 @@ def main():
                         t.add(p, arcname="cont/build/go/%s/%s" % (arch, n))
                 if arch == "x86_64":
                     t.add(can, arcname="can")
-                    t.add(os.path.join(REPO, "build", "opener"), arcname="cont/build/opener")
-                    if os.path.exists(os.path.join(REPO, "build", "opener-old")):
-                        t.add(os.path.join(REPO, "build", "opener-old"), arcname="cont/build/opener-old")
+                    t.add(os.path.join(REPO, "build", "launcher"), arcname="cont/build/launcher")
+                    if os.path.exists(os.path.join(REPO, "build", "launcher-old")):
+                        t.add(os.path.join(REPO, "build", "launcher-old"), arcname="cont/build/launcher-old")
                     if os.path.exists(os.path.join(REPO, "build", "sysroot-hello")):          # test/sysroot.py's output: runs natively on every glibc
                         t.add(os.path.join(REPO, "build", "sysroot-hello"), arcname="cont/build/sysroot-hello")
                 else:
                     if not a.debs_arm64:
                         sys.exit("the aarch64 VM needs --debs-arm64 DIR, a directory of arm64 .deb files for the gcc can")
                     t.add(a.debs_arm64, arcname="debs")
-                    t.add(os.path.join(REPO, "build", "opener-aarch64"), arcname="cont/build/opener")
-                    if os.path.exists(os.path.join(REPO, "build", "opener-old-aarch64")):
-                        t.add(os.path.join(REPO, "build", "opener-old-aarch64"), arcname="cont/build/opener-old")
+                    t.add(os.path.join(REPO, "build", "launcher-aarch64"), arcname="cont/build/launcher")
+                    if os.path.exists(os.path.join(REPO, "build", "launcher-old-aarch64")):
+                        t.add(os.path.join(REPO, "build", "launcher-old-aarch64"), arcname="cont/build/launcher-old")
         payloads[arch] = payload
         return payload
     results = []
@@ -260,8 +260,8 @@ def main():
                 if "closed" not in out:
                     results.append((name, uname, "cannot make the can: " + out[-300:].replace("\n", " | "), "", notes))
                     continue
-            else:                                                 # the can given carries the opener that made it: the row tests the checkout's
-                rc, out = vm.ssh("cd m && python3 cont/cannery/cannery.py reopen can cont/build/opener 2>&1 | tail -1", timeout=600 * slow)
+            else:                                                 # the can given carries the launcher that made it: the row tests the checkout's
+                rc, out = vm.ssh("cd m && python3 cont/cannery/cannery.py reopen can cont/build/launcher 2>&1 | tail -1", timeout=600 * slow)
                 if "relinked" not in out:
                     results.append((name, uname, "cannot reopen the can: " + out[-200:].replace("\n", " | "), "", notes))
                     continue
@@ -274,13 +274,13 @@ def main():
             log(name, suite)
             for f in fails:
                 log(name, f[:200])
-            # 12, 17.4: a noexec mount, made as root. Natively the shell answers EACCES; the opener's loader cannot map
+            # 12, 17.4: a noexec mount, made as root. Natively the shell answers EACCES; the launcher's loader cannot map
             # a program there and says so; a can's shell answers EACCES as the kernel would (7.4.5).
             rc, out = vm.ssh("S=sudo; command -v sudo >/dev/null 2>&1 || S=doas; echo 'int main(void){return 0;}' > nx.c && "
                              "m/can/tree/usr/bin/$(uname -m)-linux-gnu-gcc-13 -o nxprog nx.c && $S mkdir -p /mnt/nx && $S mount -t tmpfs -o noexec tmpfs /mnt/nx && "
                              "$S cp nxprog /mnt/nx/prog && $S chmod 755 /mnt/nx/prog && mount | grep -q '/mnt/nx .*noexec' || { echo noexec setup failed; exit 0; }; "
                              "/mnt/nx/prog >/dev/null 2>&1; a=$?; m/can/.exclave/launcher /mnt/nx/prog >/dev/null 2>&1; b=$?; "
-                             "m/can/tree/usr/bin/sh -c /mnt/nx/prog >/dev/null 2>&1; c=$?; $S umount /mnt/nx; echo noexec native=$a opener=$b inside=$c", timeout=120)
+                             "m/can/tree/usr/bin/sh -c /mnt/nx/prog >/dev/null 2>&1; c=$?; $S umount /mnt/nx; echo noexec native=$a launcher=$b inside=$c", timeout=120)
             noexec = [l for l in out.splitlines() if l.startswith("noexec ")]
             noexec = noexec[-1] if noexec else "noexec: " + out[-120:].replace("\n", " | ")
             log(name, noexec)

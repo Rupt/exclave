@@ -11,7 +11,7 @@
 #include <string.h>
 #include "../src/common.h"
 
-struct can C;
+struct exclave C;
 void die(const char *what, const char *detail, long err) { fprintf(stderr, "die: %s %s %ld\n", what, detail ? detail : "", err); exit(99); }
 const void *filter_for_test(int *n);
 const int *filter_list_for_test(int which, int *n);

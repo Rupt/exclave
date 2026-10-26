@@ -1,16 +1,16 @@
 /* loader.c — userland ELF loader (PROPOSAL.md 7.3) and the debugger hooks (7.6).
  *
  * Maps the payload and the loader its header names the way the kernel would, builds
- * the initial stack from the opener's own auxiliary vector, and jumps. Used
- * for every program: wrappers after the kernel has exec'd the opener under the
- * program's name, and loader-path programs re-exec'd with CAN_EXEC.
+ * the initial stack from the launcher's own auxiliary vector, and jumps. Used
+ * for every program: wrappers after the kernel has exec'd the launcher under the
+ * program's name, and loader-path programs re-exec'd with EXCLAVE_EXEC.
  */
 #include "common.h"
 #include "elf.h"
 
 static Phdr ph_main[128], ph_interp[64];
 
-/* 7.6: what a debugger needs, exported for the script the opener carries in .debug_gdb_scripts (src/gdb.py):
+/* 7.6: what a debugger needs, exported for the script the launcher carries in .debug_gdb_scripts (src/gdb.py):
  * where the program and its loader were mapped and which files they are, and a function gdb breakpoints to
  * learn them. The script adds the program's symbols at its base, walks the loader's link map for the
  * libraries and finds their payloads through .real/, so gdb needs no manual command. The exported names are
@@ -18,15 +18,15 @@ static Phdr ph_main[128], ph_interp[64];
 static unsigned long payload_base, payload_entry, interp_base;
 static char payload_path[PATH_MAX], interp_path[PATH_MAX];
 static __attribute__((noinline, used)) void debug_hook(void) { __asm__ volatile ("" ::: "memory"); }
-extern unsigned long cont_payload_base __attribute__((alias("payload_base"), visibility("default")));
-extern unsigned long cont_payload_entry __attribute__((alias("payload_entry"), visibility("default")));
-extern unsigned long cont_interp_base __attribute__((alias("interp_base"), visibility("default")));
-extern char cont_payload_path[PATH_MAX] __attribute__((alias("payload_path"), visibility("default")));
-extern char cont_interp_path[PATH_MAX] __attribute__((alias("interp_path"), visibility("default")));
-extern void cont_debug_hook(void) __attribute__((alias("debug_hook"), visibility("default")));
+extern unsigned long exclave_original_base __attribute__((alias("payload_base"), visibility("default")));
+extern unsigned long exclave_original_entry __attribute__((alias("payload_entry"), visibility("default")));
+extern unsigned long exclave_interp_base __attribute__((alias("interp_base"), visibility("default")));
+extern char exclave_original_path[PATH_MAX] __attribute__((alias("payload_path"), visibility("default")));
+extern char exclave_interp_path[PATH_MAX] __attribute__((alias("interp_path"), visibility("default")));
+extern void exclave_debug_hook(void) __attribute__((alias("debug_hook"), visibility("default")));
 __asm__(".pushsection .debug_gdb_scripts,\"MS\",@progbits,1\n"
         " .byte 4\n"                                       /* SECTION_SCRIPT_ID_PYTHON_TEXT: the script's name, a newline, the text */
-        " .ascii \"cont-opener.py\\n\"\n"
+        " .ascii \"exclave-launcher.py\\n\"\n"
         " .incbin \"src/gdb.py\"\n"
         " .byte 0\n"
         ".popsection\n");
@@ -98,24 +98,25 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
     return bias;
 }
 
-/* 1: dynamic (interp filled), 0: static, <0: error. is_opener: the page generation .note.cont carries, 0 without one. */
-/* a PT_NOTE segment's .note.cont, read from fd into nb (512 bytes): its page generation, 1 for a note without one
- * (an opener from before the word was added), 0 for no note of ours; the last such note counts */
+/* 1: dynamic (interp filled), 0: static, <0: error. is_launcher: the page generation a launcher's note carries, 0 without one. */
+/* a PT_NOTE segment's launcher note, exclave or the earlier cont, read from fd into nb (512 bytes): its page generation, 1 for a note without one
+ * (a launcher from before the word was added), 0 for no note of ours; the last such note counts */
 static int note_gen(int fd, const Phdr *p, unsigned char *nb)
 {
     long n = sys_pread(fd, nb, p->p_filesz, (long)p->p_offset), o = 0; int g = 0;
     while (n >= 12 && o + 12 <= n) {
         uint32_t nsz = *(uint32_t *)(nb + o), dsz = *(uint32_t *)(nb + o + 4);
-        if (nsz == 5 && o + 17 <= n && xmemcmp(nb + o + 12, "cont", 5) == 0)
-            g = dsz >= 4 && o + 24 <= n && *(uint32_t *)(nb + o + 20) ? (int)*(uint32_t *)(nb + o + 20) : 1;
+        long w = o + 12 + (long)((nsz + 3) & ~3u);            /* the word after the name, padded to 4 */
+        if ((nsz == 8 && o + 20 <= n && xmemcmp(nb + o + 12, "exclave", 8) == 0) || (nsz == 5 && o + 17 <= n && xmemcmp(nb + o + 12, "cont", 5) == 0))
+            g = dsz >= 4 && w + 4 <= n && *(uint32_t *)(nb + w) ? (int)*(uint32_t *)(nb + w) : 1;
         o += 12 + ((nsz + 3) & ~3u) + ((dsz + 3) & ~3u);
     }
     return g;
 }
 
-int elf_probe(const char *real, char *interp, int *is_opener, void *buf)
+int elf_probe(const char *real, char *interp, int *is_launcher, void *buf)
 {
-    *is_opener = 0; interp[0] = 0;
+    *is_launcher = 0; interp[0] = 0;
     long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
     if (fd == -EMFILE) {                                     /* a program at its descriptor limit: borrow one for the read (7.4.5) */
         unsigned long lim[2], one[2];
@@ -131,7 +132,7 @@ int elf_probe(const char *real, char *interp, int *is_opener, void *buf)
             if (ph[i].p_type == PT_INTERP && ph[i].p_filesz < PATH_MAX) {
                 if (sys_pread((int)fd, interp, ph[i].p_filesz, (long)ph[i].p_offset) == (long)ph[i].p_filesz) { interp[ph[i].p_filesz] = 0; ret = 1; }
             } else if (ph[i].p_type == PT_NOTE && ph[i].p_filesz <= 512) {
-                int g = note_gen((int)fd, &ph[i], nb); if (g) *is_opener = g;
+                int g = note_gen((int)fd, &ph[i], nb); if (g) *is_launcher = g;
             }
         }
     }
@@ -170,10 +171,10 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
 {
     Ehdr eh; unsigned long entry, phdr_va, base = 0, jump; int has_interp; char interp_v[PATH_MAX];
     int fd = open_elf(real, &eh, ph_main, 128);
-    static unsigned char nb[512]; int gen = 0;               /* another can's opener from before the page moved, which a handler sends here (7.4.2) */
+    static unsigned char nb[512]; int gen = 0;               /* another can's launcher from before the page moved, which a handler sends here (7.4.2) */
     for (int i = 0; i < eh.e_phnum; i++) if (ph_main[i].p_type == PT_NOTE && ph_main[i].p_filesz <= 512) { int g = note_gen(fd, &ph_main[i], nb); if (g) gen = g; }
     if (gen && gen < PAGE_GENERATION)
-        die("a can's opener from before the syscall page moved cannot run here; reopen that can (cannery reopen)", vpath, 0);
+        die("a can's launcher from before the syscall page moved cannot run here; reopen that can (cannery reopen)", vpath, 0);
     payload_base = map_elf(fd, &eh, ph_main, &entry, &phdr_va, &has_interp, interp_v, real);
     if (C.descfd > 2) { sys_close(C.descfd); C.descfd = -1; }   /* a program run from a descriptor with no path (13 item 25): mapped, the dup goes */
     sys_close(fd);
@@ -185,10 +186,10 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
         struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0); if (!S) die("out of memory", 0, ENOMEM);
         struct kstat ist;
         if (canon(S, interp_v, AT_FDCWD, 1, S->v) < 0 || sys_stat(to_real(S->v, ireal, S->tmp), &ist) < 0)   /* through the wrapper redirect: ld.so is wrapped */
-            die("program wants a loader this can does not have", interp_v, 0);
+            die("program wants a loader this exclave does not have", interp_v, 0);
         /* one world (7.4.5): the loader must be the can's own file, not one the visibility rule found on the
          * host (a Nix or --dynamic-linker binary, review F4-1, O4-2) and not one parked in a data prefix (O4-3) */
-        if (!is_can_owned(S->v) || vis_in_data(S->v)) die("program wants a loader this can does not have", interp_v, 0);
+        if (!is_exclave_path(S->v) || vis_in_data(S->v)) die("program wants a loader this exclave does not have", interp_v, 0);
         scratch_put(S);
         int ifd = open_elf(ireal, &ih, ph_interp, 64);
         base = map_elf(ifd, &ih, ph_interp, &ientry, &iphdr, &ii, dummy, ireal);

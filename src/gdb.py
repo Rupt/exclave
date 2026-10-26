@@ -1,8 +1,8 @@
-# gdb.py: carried by the opener in its .debug_gdb_scripts section and auto-loaded by gdb when the opener is
-# the executable (PROPOSAL.md 7.6, 13.1). gdb sees the opener; this script tells it about the program the
-# opener loaded and the libraries its loader mapped, so that no manual command is needed. It needs the can
-# in gdb's auto-load safe-path. The opener exports what the script reads: cont_payload_base, _entry, _path,
-# cont_interp_base, _path, and cont_debug_hook, a function called once before the jump into the program.
+# gdb.py: carried by the launcher in its .debug_gdb_scripts section and auto-loaded by gdb when the launcher is
+# the executable (PROPOSAL.md 7.6, 13.1). gdb sees the launcher; this script tells it about the program the
+# launcher loaded and the libraries its loader mapped, so that no manual command is needed. It needs the can
+# in gdb's auto-load safe-path. The launcher exports what the script reads: exclave_original_base, _entry, _path,
+# exclave_interp_base, _path, and exclave_debug_hook, a function called once before the jump into the program.
 import os
 import gdb
 
@@ -139,13 +139,13 @@ def _guarded(fn, *args):
     try:
         fn(*args)
     except (gdb.error, gdb.MemoryError, OSError, ValueError) as e:
-        gdb.write("cont-opener.py: %s\n" % e, gdb.STDERR)
+        gdb.write("exclave-launcher.py: %s\n" % e, gdb.STDERR)
 
 
 class _Hook(gdb.Breakpoint):
-    """cont_debug_hook: the opener has mapped the program and its loader and is about to jump."""
+    """exclave_debug_hook: the launcher has mapped the program and its loader and is about to jump."""
     def __init__(self):
-        super().__init__("cont_debug_hook", internal=True)
+        super().__init__("exclave_debug_hook", internal=True)
 
     def stop(self):
         _guarded(self._hook)
@@ -153,23 +153,23 @@ class _Hook(gdb.Breakpoint):
 
     def _hook(self):
         state = {"root": _can_root(), "loaded": set(), "brk": None}
-        _add(state, _path("cont_payload_path"), _var("cont_payload_base"))
-        interp = _path("cont_interp_path")
+        _add(state, _path("exclave_original_path"), _var("exclave_original_base"))
+        interp = _path("exclave_interp_path")
         if interp:
-            _add(state, interp, _var("cont_interp_base"))
-        _Entry(_var("cont_payload_entry"), state)
+            _add(state, interp, _var("exclave_interp_base"))
+        _Entry(_var("exclave_original_entry"), state)
 
 
 def _arm():
-    """One hook breakpoint per session: the script runs again at every exec of an opener, and a breakpoint made
+    """One hook breakpoint per session: the script runs again at every exec of a launcher, and a breakpoint made
     while gdb is still relocating the new image cannot be inserted yet, so a failed attempt is retried when gdb
     is next idle."""
-    if getattr(gdb, "_cont_hook", None) is not None and gdb._cont_hook.is_valid():
+    if getattr(gdb, "_exclave_hook", None) is not None and gdb._exclave_hook.is_valid():
         return
     try:
-        gdb._cont_hook = _Hook()
+        gdb._exclave_hook = _Hook()
     except gdb.error:
-        gdb._cont_hook = None
+        gdb._exclave_hook = None
         gdb.post_event(_arm)
 
 

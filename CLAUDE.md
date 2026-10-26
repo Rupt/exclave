@@ -53,7 +53,7 @@ The loop that has served well, in the order it pays:
   should read without the conversation that produced it, so a design
   change goes into the proposal rather than a side note, and earlier
   revisions live in git history rather than archive files.
-- **No options.** The opener has one environment knob, `CAN_LOG`, and
+- **No options.** The opener has one environment knob, `EXCLAVE_LOG`, and
   the cannery's commands take paths, `fmt --check` the one flag. A flag, a mode or
   a manifest key is rarely the answer; the rule that makes the option
   unnecessary, or a stated limitation, usually is. A can is a directory
@@ -69,7 +69,7 @@ The loop that has served well, in the order it pays:
   `src/sys.h`, `src/common.h` and `#if` blocks named for it; the
   aarch64 build leaves `x28` alone (`-ffixed-x28`), where a Go program
   keeps its goroutine while the handler runs (7.5.3). `make`
-  builds `build/opener-aarch64` when `aarch64-linux-gnu-gcc` is
+  builds `build/launcher-aarch64` when `aarch64-linux-gnu-gcc` is
   installed; it is tested in the arm64 VM (`test/matrix.py --can CAN
   --only noble-arm64 --debs-arm64 DIR`), since user-mode emulation has no seccomp. A
   syscall the handler re-issues is best one the oldest kernel of the
@@ -85,7 +85,7 @@ The loop that has served well, in the order it pays:
   `copy_out`, paths and vectors alike. Environment strings the opener
   hands a program should be writable.
 - **The filter's trap set is versioned.** `make` also builds
-  `build/opener-old`, an older filter version without syscalls a later
+  `build/launcher-old`, an older filter version without syscalls a later
   one added (version 3, without version 4's `bind` and `connect`), for
   the nesting regression; the version moves whenever the trap set
   grows or the syscall page moves (6: to `0x7fe00000`, above program
@@ -116,9 +116,9 @@ The loop that has served well, in the order it pays:
   can in two orders and, for the first can, under the plain terminal's
   AppArmor label, the oracles, the syscall probe and the Docker
   profile, every step in parallel on copies, in about a minute with a
-  30 s budget per test. Every driver runs `build/opener` on a copy of
+  30 s budget per test. Every driver runs `build/launcher` on a copy of
   its own, the suite a can it wraps from the given can's tree and the
-  others `tree.fresh_can`, a copy reopened with `build/opener`, since
+  others `tree.fresh_can`, a copy reopened with `build/launcher`, since
   the opener a can carries is the one it was closed with; a
   copy kept between runs (`test/exercise.py`) is reopened again when
   the build has changed. A hand-made copy has neither: reopen it.

@@ -4,13 +4,13 @@
 #include <string.h>
 #include "../src/common.h"
 
-struct can C;
+struct exclave C;
 void die(const char *what, const char *detail, long err) { fprintf(stderr, "die: %s %s %ld\n", what, detail ? detail : "", err); exit(99); }
 
 static int fails, runs;
 static void expect(const char *name, const char *text, int want_ok, const char *want_err)
 {
-    char err[256] = ""; struct can c; memset(&c, 0, sizeof c);
+    char err[256] = ""; struct exclave c; memset(&c, 0, sizeof c);
     int r = manifest_parse(text, strlen(text), &c, err, sizeof err);
     runs++;
     int ok = (r == 0) == (want_ok != 0) && (!want_err || strstr(err, want_err));
@@ -24,7 +24,7 @@ static int parse_file(const char *path)
 {
     static char buf[1 << 20]; FILE *f = fopen(path, "rb"); if (!f) return 2;
     size_t n = fread(buf, 1, sizeof buf, f); fclose(f);
-    char err[256] = ""; struct can c; memset(&c, 0, sizeof c);
+    char err[256] = ""; struct exclave c; memset(&c, 0, sizeof c);
     int r = manifest_parse(buf, n, &c, err, sizeof err);
     if (r) fprintf(stderr, "%s\n", err);
     return r ? 1 : 0;
@@ -81,12 +81,12 @@ int main(int argc, char **argv)
     BAD("bare quote field", "exclave 1\nown \"/a\" x\n", "field count");
     /* decoded values, and the ISA default */
     {
-        struct can c; memset(&c, 0, sizeof c); char err[256];
+        struct exclave c; memset(&c, 0, sizeof c); char err[256];
         const char *text = "exclave 1\n\nhost \"/srv/h\"\n\nown \"/a\\\\b\\\"c\\n\\t\\x01\"\nown \"/etc/hosts\"\n";
         runs++;
         if (manifest_parse(text, strlen(text), &c, err, sizeof err) != 0 || c.nown != 2 || strcmp(c.own[0], "/a\\b\"c\n\t\x01") != 0
-            || strcmp(c.own[1], "/etc/hosts") != 0 || c.nhost != 1 || strcmp(c.host[0].v, "/srv/h") != 0 || strcmp(c.isa, "x86-64") != 0)
-            { fails++; printf("FAIL decode: %s nown=%d nhost=%d isa=%s\n", err, c.nown, c.nhost, c.isa); }
+            || strcmp(c.own[1], "/etc/hosts") != 0 || c.nhost != 1 || strcmp(c.host[0].v, "/srv/h") != 0 || strcmp(c.cpu, "x86-64") != 0)
+            { fails++; printf("FAIL decode: %s nown=%d nhost=%d isa=%s\n", err, c.nown, c.nhost, c.cpu); }
     }
     printf("%d tests, %d failures\n", runs, fails);
     return fails ? 1 : 0;

@@ -1,7 +1,7 @@
-/* log.c — CAN_LOG (6.2) and fatal messages. */
+/* log.c — EXCLAVE_LOG (6.2) and fatal messages. */
 #include "common.h"
 
-struct can C;
+struct exclave C;
 
 static unsigned long log_dev, log_ino;
 
@@ -9,8 +9,8 @@ void log_open(char **envp)
 {
     C.logfd = -1;
     for (char **e = envp; *e; e++)
-        if (xstarts(*e, "CAN_LOG=") && (*e)[8]) {
-            long fd = sys_open(*e + 8, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+        if (xstarts(*e, "EXCLAVE_LOG=") && (*e)[12]) {
+            long fd = sys_open(*e + 12, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
             if (fd < 0) return;
             long hi = sys_fcntl((int)fd, 1030 /* F_DUPFD_CLOEXEC */, 900);   /* out of the way of the program's own descriptors */
             if (hi >= 0) { sys_close((int)fd); fd = hi; }
@@ -56,13 +56,13 @@ void log_line(const char *what, long result, const char *path)
 void log_msg(const char *a, const char *b)
 {
     if (!log_ok()) return;
-    struct iovec io[5] = { { "opener 0 ", 9 }, { (void *)a, xstrlen(a) }, { " ", b ? 1 : 0 }, { (void *)(b ? b : ""), b ? xstrlen(b) : 0 }, { "\n", 1 } };
+    struct iovec io[5] = { { "launcher 0 ", 11 }, { (void *)a, xstrlen(a) }, { " ", b ? 1 : 0 }, { (void *)(b ? b : ""), b ? xstrlen(b) : 0 }, { "\n", 1 } };
     SC3(NR_writev, C.logfd, io, 5);                          /* one write, no buffer: this runs on the handler's stack too */
 }
 
 void die_status(int status, const char *what, const char *detail, long err)
 {
-    outs(2, "opener: "); outs(2, what);
+    outs(2, "launcher: "); outs(2, what);
     if (detail) { outs(2, ": "); outs(2, detail); }
     if (err) { outs(2, ": "); outs(2, strerr(err)); }
     outs(2, "\n");

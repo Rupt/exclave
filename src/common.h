@@ -1,18 +1,18 @@
-/* common.h — shared definitions for the opener.
+/* common.h — shared definitions for the launcher.
  *
- * The opener is freestanding: no libc, raw syscalls only (sys.h). Every
+ * The launcher is freestanding: no libc, raw syscalls only (sys.h). Every
  * module includes this header. Section numbers in comments refer to
  * docs/PROPOSAL.md.
  */
 #pragma once
 #include "sys.h"
 
-#define OPENER_VERSION "0.1"
+#define LAUNCHER_VERSION "0.1"
 #ifndef FILTER_VERSION
 #define FILTER_VERSION 6                 /* 7.4.2: versioned reuse; bumped whenever the trap set grows or the page moves (2: the *xattrat and file_*attr syscalls; 3: openat2; 4: bind and connect; 5: FS_IOC_FSSETXATTR's right number; 6: the syscall page moved) */
 #endif
-#define FILTER_PAGE_SINCE 6              /* an inherited filter older than this allows another page's syscalls and traps this opener's */
-#define PAGE_GENERATION 2                /* the word of .note.cont (opener.c): 1 in openers whose page was at 0x3f0000 */
+#define FILTER_PAGE_SINCE 6              /* an inherited filter older than this allows another page's syscalls and traps this launcher's */
+#define PAGE_GENERATION 2                /* the word of the launcher's notes (launcher.c): 1 in launchers whose page was at 0x3f0000 */
 #define PATH_MAX 4096
 #define NAME_MAX 255
 
@@ -166,35 +166,35 @@ enum { REG_R8 = 0, REG_R9, REG_R10, REG_R11, REG_R12, REG_R13, REG_R14, REG_R15,
 /* ---------- the can's run-time state (7.2), filled at startup ---------- */
 struct hostmap { const char *v; const char *r; int is_file; };   /* virtual path -> host real path */
 
-struct can {
+struct exclave {
     char dir[PATH_MAX];            /* directory holding .exclave/ */
     char root[PATH_MAX];           /* dir/tree */
     long rootlen;
-    char opener[PATH_MAX];         /* dir/.exclave/launcher */
-    unsigned long opener_dev, opener_ino; long opener_size;
+    char launcher[PATH_MAX];         /* dir/.exclave/launcher */
+    unsigned long launcher_dev, launcher_ino; long launcher_size;
     char program[PATH_MAX];        /* virtual path of the program this process runs */
     char exe[PATH_MAX];            /* what /proc/self/exe answers: the program, or a wrapped script's interpreter (F3-22) */
     char execfn[PATH_MAX];         /* the path the program was exec'd by, as the kernel spells it: AT_EXECFN, a script's $0 (7.6) */
     char comm[NAME_MAX + 1];       /* the name the kernel would set as comm: the exec'd path's last component, a descriptor's file (7.6) */
-    int loader_mode;               /* 1: re-exec'd with CAN_EXEC; program is not a wrapper */
+    int loader_mode;               /* 1: re-exec'd with EXCLAVE_EXEC; program is not a wrapper */
     int descfd;                    /* loader mode for a descriptor with no path (13 item 25): the dup to close once the segments are mapped, else -1 */
     int exe_fixed;                 /* exe holds the descriptor's link text, the kernel's identity for such a program; run() leaves it */
     int boundary;                  /* 1: no filter of ours inherited: this process is the can boundary (7.2) */
     /* the manifest (6.2) and what the tree says (8.1); the limits are stated in 8.1 and enforced by cannery wrap */
-    char isa[32];
+    char cpu[32];
     const char *own[512]; int nown;   /* the manifest's claims (at most 256), then every non-empty top-level entry of the tree (at most 256) */
     struct hostmap host[128]; int nhost;   /* the manifest's host records (at most 32), then the identity files (8.4) */
     const char *data[32]; int ndata;  /* data prefixes: never executed, never a loader (6.2) */
     /* cwd rule (8.1.4) */
     char cwdclaim[PATH_MAX]; long cwdclaim_len;   /* subtree claimed for the host; empty if none */
-    unsigned long rlim[2]; int borrowed;   /* RLIMIT_NOFILE as the program had it, raised for the opener's own opens (7.4.5) */
+    unsigned long rlim[2]; int borrowed;   /* RLIMIT_NOFILE as the program had it, raised for the launcher's own opens (7.4.5) */
     /* diagnostics */
     int logfd;
-    unsigned long text_lo, text_hi;   /* the opener's own text range, for the nesting rule (7.5.3) */
+    unsigned long text_lo, text_hi;   /* the launcher's own text range, for the nesting rule (7.5.3) */
     unsigned long root_dev, root_ino; /* the tree's root directory, so that any spelling of it is recognised (F3-13) */
     unsigned long pagesz;              /* the kernel's page size, AT_PAGESZ: 4 KB, or 16 KB or 64 KB on some aarch64 kernels (7.3) */
 };
-extern struct can C;
+extern struct exclave C;
 
 /* ---------- string helpers (str.c) ---------- */
 char *scpy(char *d, const char *s, size_t n);
@@ -215,7 +215,7 @@ __attribute__((noreturn)) void die(const char *what, const char *detail, long er
 __attribute__((noreturn)) void die_status(int status, const char *what, const char *detail, long err);   /* 126 where a shell says so: found but not executable */
 
 /* ---------- manifest (manifest.c) ---------- */
-int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t errn);
+int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, size_t errn);
 
 /* ---------- scratch (scratch.c) ---------- */
 struct scratch {
@@ -228,7 +228,7 @@ struct scratch {
     char extra[8192];              /* argv and envp vectors, ELF headers, an extended open_how, a sockaddr */
     pid_t pid, tid;                /* the owner, looked up once per trap */
     unsigned resolve;              /* openat2's resolve flags for the walk (7.4.3); 0 for every other syscall */
-    int touched_can;               /* set by canon: the walk started at, passed through or ended in the can's domain, or rewrote a magic link */
+    int touched_exclave;               /* set by canon: the walk started at, passed through or ended in the can's domain, or rewrote a magic link */
     unsigned long how0[3];         /* openat2's struct open_how as given, for a walk that never touched the can (7.4.3) */
 };
 struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame);
@@ -241,7 +241,7 @@ int  vis_is_host(const char *v, const char **real);   /* 1 if host-owned; *real 
 char *to_real(const char *v, char *out, char *tmp);   /* v -> real, with wrapper redirect; tmp PATH_MAX */
 char *to_real_exec(const char *v, char *out);         /* v -> real, no wrapper redirect */
 void from_real(char *r);                              /* in place, no buffer */
-int  is_can_owned(const char *v);
+int  is_exclave_path(const char *v);
 int  vis_leads_to_host_file(const char *v);   /* v is a proper ancestor of a host-resolved file */
 int  vis_walk_facts(const char *v, int *identity, int *leads, const char **real);   /* the three in one pass: 1 if the host's */
 int  vis_plain_host_chain(const char *p, unsigned from);   /* every prefix from that long the host's plainly: the one-step check may stand in */
@@ -265,7 +265,7 @@ int is_self_exe(const char *p, pid_t pid);   /* /proc/self/exe in any spelling, 
 
 /* ---------- loader (loader.c) ---------- */
 __attribute__((noreturn)) void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp, unsigned long *auxv);
-int elf_probe(const char *real, char *interp, int *is_opener, void *buf);   /* 1 has interp, 0 none, <0 error; buf >= 7680 bytes; is_opener: the note's page generation, 0 for no opener */
+int elf_probe(const char *real, char *interp, int *is_launcher, void *buf);   /* 1 has interp, 0 none, <0 error; buf >= 7680 bytes; is_launcher: the note's page generation, 0 for no launcher */
 
 /* ---------- filter (filter.c) ---------- */
 int  filter_probe(void);      /* 0: no filter of ours inherited; otherwise the newest inherited filter's version (7.4.2) */

@@ -13,7 +13,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(dirname "$here")
 [ $# -eq 1 ] || { echo "usage: test/inputs.sh DIR" >&2; exit 2; }
-[ -x "$repo/build/opener" ] || { echo "build/opener missing: run make" >&2; exit 2; }
+[ -x "$repo/build/launcher" ] || { echo "build/launcher missing: run make" >&2; exit 2; }
 dir=$(mkdir -p "$1" && cd "$1" && pwd) || exit 2
 mkdir -p "$dir/log" "$dir/src" || exit 2
 fails=0

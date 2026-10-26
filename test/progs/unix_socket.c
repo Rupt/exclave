@@ -1,6 +1,6 @@
 /* unix_socket.c — sockaddr_un paths under the visibility rule (PROPOSAL.md 13 item 31, 17.4): bind, connect and sendto
  * with a path of every class. usage: unix_socket HOSTDIR [CANDIR CANFILE CANSOCK]. Prints one line per case,
- * "<case>: ret=<r> errno=<e>", the same in every world, so that the kernel under bwrap is the oracle for the opener.
+ * "<case>: ret=<r> errno=<e>", the same in every world, so that the kernel under bwrap is the oracle for the launcher.
  * CANDIR: a can-owned directory (default /usr/share); CANFILE: a can-owned regular file (default $CONT_TRUE); CANSOCK: a
  * socket file in the tree, if the maker put one there. Exit 0 always: the driver compares. */
 #define _GNU_SOURCE

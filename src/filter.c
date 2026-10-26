@@ -1,11 +1,11 @@
 /* filter.c — the seccomp filter (PROPOSAL.md 7.4.2).
  *
  * One classic-BPF program, installed at the can boundary, or over an older version's, and inherited
- * by every descendant. The opener's own syscalls are recognised by their
+ * by every descendant. The launcher's own syscalls are recognised by their
  * instruction address: all of them are issued from the syscall page, which
- * every opener maps at the same fixed address, so the filter stays valid
+ * every launcher maps at the same fixed address, so the filter stays valid
  * across execve and under any filter a program stacks on top. A register
- * marker would leak into any signal handler that interrupts an opener
+ * marker would leak into any signal handler that interrupts a launcher
  * syscall; an address cannot.
  */
 #include "common.h"
@@ -48,8 +48,8 @@ const int path_syscalls[] = {
     NR_fchmodat, NR_faccessat, NR_utimensat, NR_renameat2, NR_execveat, NR_statx, NR_faccessat2, NR_fchmodat2,
     NR_fanotify_mark, NR_setxattrat, NR_getxattrat, NR_listxattrat, NR_removexattrat, NR_file_getattr, NR_file_setattr,
     NR_openat2,
-#ifndef CONT_TEST_OLD
-    NR_bind, NR_connect,                                  /* version 4's addition: absent from build/opener-old's filter and handler alike */
+#ifndef EXCLAVE_TEST_OLD
+    NR_bind, NR_connect,                                  /* version 4's addition: absent from build/launcher-old's filter and handler alike */
 #endif
 };
 const int n_path_syscalls = sizeof path_syscalls / sizeof path_syscalls[0];
@@ -165,7 +165,7 @@ static void build(void)
     emit(LD_ABS, 0, 0, OFF_ARG(0) + 4); emit(JEQ_K, 0, 1, (uint32_t)(MAGIC >> 32));
     ret(SECCOMP_RET_ERRNO | PROBE_ERRNO(FILTER_VERSION));
     ret(SECCOMP_RET_ALLOW);
-    /* the opener's own syscalls: issued from the syscall page */
+    /* the launcher's own syscalls: issued from the syscall page */
     for (int i = 0; i < npage; i++) prog[page[i]].k = (uint32_t)(np - page[i] - 1);
     emit(LD_ABS, 0, 0, OFF_IP + 4); emit(JEQ_K, 0, 4, (uint32_t)(SC_PAGE >> 32));
     emit(LD_ABS, 0, 0, OFF_IP); emit(AND_K, 0, 0, ~0xfffu); emit(JEQ_K, 0, 1, (uint32_t)SC_PAGE);

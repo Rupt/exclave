@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """exercise.py — one program, two worlds (PROPOSAL.md 17): compile PROG.c with the can's compiler, run it under bwrap with
-the unwrapped tree read-only at / (the namespace oracle's world, where the kernel answers) and under the opener, and
+the unwrapped tree read-only at / (the namespace oracle's world, where the kernel answers) and under the launcher, and
 print the two outputs side by side, marking the lines that differ. This is how a limitation is measured before it is
 fixed: the program prints one line per case, "<case>: <answer>", and the kernel's column is the expectation.
 
     test/exercise.py --can CAN PROG.c [ARGS...]     HOSTDIR in ARGS is replaced by a fresh writable host directory
 
-The work lives under build/exercise/<can>-<lock hash>: a copy of the can reopened with build/opener, and reopened again whenever the
+The work lives under build/exercise/<can>-<lock hash>: a copy of the can reopened with build/launcher, and reopened again whenever the
 build has changed since, the unwrapped tree for bwrap, both with a socket file at /usr/share/cont-test.sock and the
 suite's marker. Needs bwrap and user namespaces; says so and exits 1 when it cannot run. Exit status: the number of
 lines that differ."""
@@ -29,7 +29,7 @@ import build  # noqa: E402
 
 
 def setup(can0, work):
-    """A closed copy for the opener and an unwrapped tree for bwrap, made once per can."""
+    """A closed copy for the launcher and an unwrapped tree for bwrap, made once per can."""
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
     can = tree.fresh_can(can0, os.path.join(work, "can"))                  # a copy reopened with the build (17)
@@ -88,9 +88,9 @@ def main():
     fresh()
     rc_b, out_b, err_b = oracle_ns.run_bwrap(root, work, " ".join([prog] + argv))
     fresh()
-    rc_o, out_o, err_o = oracle_ns.run_opener(can, work, argv, prog=prog)
+    rc_o, out_o, err_o = oracle_ns.run_launcher(can, work, argv, prog=prog)
     lb, lo = out_b.splitlines(), out_o.splitlines()
-    print("%-45s | %-30s | %-30s" % ("case", "kernel (bwrap)", "opener"))
+    print("%-45s | %-30s | %-30s" % ("case", "kernel (bwrap)", "launcher"))
     differ = 0
     for i in range(max(len(lb), len(lo))):
         b = lb[i] if i < len(lb) else "(missing)"
@@ -100,7 +100,7 @@ def main():
         same = cb == co and rb == ro
         differ += not same
         print("%-45s | %-30s | %-30s%s" % (cb[:45], rb, ro if co == cb else o, "" if same else "   <-- differs"))
-    print("rc: bwrap=%d opener=%d; %d differ%s%s" % (rc_b, rc_o, differ, "; bwrap stderr: %r" % err_b[:200] if err_b else "", "; opener stderr: %r" % err_o[:200] if err_o else ""))
+    print("rc: bwrap=%d launcher=%d; %d differ%s%s" % (rc_b, rc_o, differ, "; bwrap stderr: %r" % err_b[:200] if err_b else "", "; launcher stderr: %r" % err_o[:200] if err_o else ""))
     return differ
 
 

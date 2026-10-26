@@ -263,7 +263,7 @@ static int is_host_facts(const char *v, const struct facts *fp, const char **rea
     return base_is_host_facts(v, &f, real);
 }
 int vis_is_host(const char *v, const char **real) { struct facts f; rule_facts(v, &f); return is_host_facts(v, &f, real); }
-int is_can_owned(const char *v) { const char *r; return !vis_is_host(v, &r); }
+int is_exclave_path(const char *v) { const char *r; return !vis_is_host(v, &r); }
 static int leads_facts(const char *v, const struct facts *f)
 {
     if (!v[0] || (v[0] == '/' && !v[1])) return (root_flags & R_LEADS) != 0;   /* starts_dir(file, "") and (file, "/") */
@@ -322,10 +322,10 @@ int is_wrapper_real(const char *real, char *tmp)
 {
     struct kstat st;
     if (sys_lstat(real, &st) < 0 || (st.st_mode & S_IFMT) != S_IFREG) return 0;
-    if (st.st_dev != C.opener_dev || st.st_ino != C.opener_ino) {
-        if (st.st_size != C.opener_size) return 0;
+    if (st.st_dev != C.launcher_dev || st.st_ino != C.launcher_ino) {
+        if (st.st_size != C.launcher_size) return 0;
     }
-    return payload_of(real, tmp) && sys_lstat(tmp, &st) == 0;   /* the opener's inode or a copy: a wrapper only where its payload exists;
+    return payload_of(real, tmp) && sys_lstat(tmp, &st) == 0;   /* the launcher's inode or a copy: a wrapper only where its payload exists;
                                                                     .exclave/launcher itself is not one (review F5-2) */
 }
 int payload_of(const char *real, char *out)

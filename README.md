@@ -64,7 +64,7 @@ prints each command as it runs, or for the long ones a line of summary
 with the command and its output in a log under `log/`, so its output
 and logs are the tutorial and each command is one you can run by hand:
 
-1. `make` builds `build/opener`, the freestanding binary every
+1. `make` builds `build/launcher`, the freestanding binary every
    executable in a can is a hard link to.
 2. `tools/fetch-debs.py` downloads Ubuntu 24.04's `gcc-13` closure, 94
    packages, and `cannery unpack` makes an open can from the files:
@@ -78,7 +78,7 @@ and logs are the tutorial and each command is one you can run by hand:
    names its compiler.
 4. `hello.c` is compiled inside the can twice, plainly and with
    `--sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/`, each
-   with `CAN_LOG` on. `objdump` shows what each output binds: the plain
+   with `EXCLAVE_LOG` on. `objdump` shows what each output binds: the plain
    one `GLIBC_2.34`, so it needs a glibc at least that new wherever it
    runs; the sysroot one `GLIBC_2.2.5` alone, so it runs on any glibc
    from 2.17 on, the oldest the kernel matrix has, which runs this same
@@ -97,11 +97,11 @@ What it prints on the reference machine, abridged:
 + cp -a sysroot.can/tree gcc.can/tree/opt/sysroot-el7
   closed gcc.can (46 warnings; log/wrap.log)
 == 4. a program built inside, run on this host and inside the can
-+ env CAN_LOG=log/hello.log gcc.can/gcc --sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/ -o hello hello.c
++ env EXCLAVE_LOG=log/hello.log gcc.can/gcc --sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/ -o hello hello.c
   log/hello.log: 1220 lines, one per trapped syscall; the first:
-    opener 0 host path absent, using the can's /etc/pki/tls/certs/ca-bundle.crt
-    opener 0 cwd /home/me/cont/build/example
-    opener 0 boundary /usr/bin/x86_64-linux-gnu-gcc-13
+    launcher 0 host path absent, using the can's /etc/pki/tls/certs/ca-bundle.crt
+    launcher 0 cwd /home/me/cont/build/example
+    launcher 0 boundary /usr/bin/x86_64-linux-gnu-gcc-13
     load 0 /usr/bin/x86_64-linux-gnu-gcc-13
     access -2 /etc/ld.so.preload
     open 3 /etc/ld.so.cache
@@ -161,11 +161,11 @@ gcc.can/gcc -O2 hello.c -o hello                           # any executable in t
 gcc.can/tree/usr/bin/sh -c 'as --version'                  # the can's own shell, with the can's PATH
 gcc.can/.exclave/launcher /path/to/host/program args...           # a program without a wrapper, a host tool or a built output, inside the can
 gdb -iex 'set auto-load safe-path /' --args gcc.can/gcc -c x.c   # gdb: the opener carries the script; break, bt, source lines
-CAN_LOG=/tmp/can.log gcc.can/gcc -c x.c                    # the one knob: one line per trapped syscall
+EXCLAVE_LOG=/tmp/can.log gcc.can/gcc -c x.c                    # the one knob: one line per trapped syscall
 cannery/cannery.py check gcc.can /tmp/can.log              # static check of every ELF, dynamic check of the logged run
 cannery/cannery.py prune gcc.can /tmp/can.log              # keep what the logged runs touched
 cannery/cannery.py unwrap gcc.can                          # open a closed can to edit it; wrap closes it again
-cannery/cannery.py reopen gcc.can build/opener             # swap the opener after rebuilding it; the wrappers are relinked
+cannery/cannery.py reopen gcc.can build/launcher             # swap the opener after rebuilding it; the wrappers are relinked
 cannery/cannery.py hash gcc.can                            # the tree hash the lock records
 cannery/cannery.py fmt gcc.can/.exclave/manifest               # the canonical spelling of a manifest or lock; --check only reports
 ```
@@ -201,11 +201,11 @@ library resolves inside the can.
 
 ## The log and the checks
 
-`CAN_LOG=<file>` is the opener's one knob. It appends one line per
+`EXCLAVE_LOG=<file>` is the opener's one knob. It appends one line per
 trapped syscall, `<syscall> <result> <virtual path>`, the result being
 the return value or the negative errno: `open 3 /etc/ld.so.cache` is
 descriptor 3, `access -2 /etc/ld.so.preload` is `ENOENT`, which is what
-a search looks like and is not a fault. Lines that begin `opener` are
+a search looks like and is not a fault. Lines that begin `launcher` are
 the opener's own decisions: the working directory it started in and,
 when that lies under a can-owned path, the subtree it claimed for the
 host; the boundary program; an identity file the host lacks, answered
@@ -342,7 +342,7 @@ test/dogfood.py --cache DIR               # the cannery as a can, and a cross-ca
 example.sh       the first run: from make to a program built inside a can that runs on any glibc since 2.17, every command shown
 src/sys.h        syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
 src/common.h     constants, the run-time state (struct can), every module's interface
-src/opener.c     entry: syscall page, self-relocation, find the can, manifest, boundary, env, load
+src/launcher.c   entry: syscall page, self-relocation, find the can, manifest, boundary, env, load
 src/manifest.c   the strict grammar parser (6.2); also built for the host by the gate's unit step
 src/loader.c     userland ELF loader and the .note.cont probe (7.3); the facts exported for gdb (7.6)
 src/gdb.py       the script the opener carries in .debug_gdb_scripts and gdb auto-loads (7.6, 13.1)
@@ -354,7 +354,7 @@ src/vis.c        the visibility rule, ownership read from the tree, identity fil
 src/scratch.c    handler memory: mmap'd chunks with liveness reclamation (7.5.4)
 src/isa.c        the ISA check (7.7): x86-64 psABI levels by cpuid, aarch64 levels by AT_HWCAP
 src/str.c        string helpers, arena, the shebang parser
-src/log.c        CAN_LOG and fatal messages
+src/log.c        EXCLAVE_LOG and fatal messages
 cannery/cannery.py   the command line: grammar, unpack, wrap, unwrap, check, prune, fmt, hash, reopen
 cannery/deb.py       ar, tar, compression, control stanzas, dependency fields, Debian version order
 cannery/apk.py       the Alpine reader with deb.py's interface: gzip streams, .PKGINFO, apk's dependency and version syntax
@@ -385,8 +385,8 @@ spike/           frozen prototypes and their tests
 
 `cont` is the codename and repository. `can` is the format and the
 directory suffix. `opener` is the launcher. `cannery` is the build tool.
-The environment knob is `CAN_LOG`, the only one. `CAN_EXEC`, `CAN_EXECFN`
-and `CAN_COMM` are the opener's own protocol: set by an opener when it
+The environment knob is `EXCLAVE_LOG`, the only one. `EXCLAVE_EXEC`, `EXCLAVE_EXECFN`
+and `EXCLAVE_COMM` are the opener's own protocol: set by an opener when it
 execs a wrapper or re-execs itself for a program on the loader path,
 the target and the identity the kernel would give it, removed before
 any program runs, never an interface; `.exclave/launcher PROGRAM ARGS...` is

@@ -287,7 +287,7 @@ def synthesise(root, debs, log=print):
         if "base-passwd" in names and os.path.exists(src) and not os.path.lexists(dst):
             shutil.copyfile(src, dst)
             log("synthesised /etc/%s from base-passwd" % name_)
-    # ldconfig: the can's own, static, before wrapping so the cache never indexes the opener
+    # ldconfig: the can's own, static, before wrapping so the cache never indexes the launcher
     ld = None
     for cand in ("/usr/sbin/ldconfig.real", "/sbin/ldconfig.real", "/usr/sbin/ldconfig", "/sbin/ldconfig", "/usr/bin/ldconfig"):   # Fedora 42 merged sbin into bin
         p = _v(root, cand)
@@ -398,8 +398,8 @@ def tree_hash(root):
 
 def write_lock(can, pkgs, manifest_hash=None, tree=False, keep_hashes=False):
     """6.4: the lock is a record of inputs and output. pkgs: [(name, version, arch, b2)], or None to keep the
-    pkg records of the lock already there. The closing step writes the opener, manifest and tree hashes;
-    keep_hashes keeps the lock's manifest hash and recomputes the opener and tree hashes (after prune or reopen); otherwise they are dropped
+    pkg records of the lock already there. The closing step writes the launcher, manifest and tree hashes;
+    keep_hashes keeps the lock's manifest hash and recomputes the launcher and tree hashes (after prune or reopen); otherwise they are dropped
     (after unwrap: an open can has no output yet)."""
     import cannery
     R = cannery.Record
@@ -456,9 +456,9 @@ def dependency_report(pkgs, root=None):
     return out
 
 
-# ---------------------------------------------------------------- CAN_LOG as an input (10.3, 10.4)
+# ---------------------------------------------------------------- EXCLAVE_LOG as an input (10.3, 10.4)
 def log_lines(logs):
-    """Yield (what, result, path) from CAN_LOG files; the path's \\n and \\\\ escapes undone left to right (6.2),
+    """Yield (what, result, path) from EXCLAVE_LOG files; the path's \\n and \\\\ escapes undone left to right (6.2),
     so that a backslash before an n stays a backslash."""
     for lp in logs:
         for line in open(lp, encoding="utf-8", errors="surrogateescape"):
@@ -510,7 +510,7 @@ def prune(can, logs, own, log=print):
     root = os.path.join(can, "tree")
     keep, whole, programs = set(), set(), 0
     for what, r, v in log_lines(logs):
-        if what == "opener" or not v.startswith("/") or r < 0:
+        if what == "launcher" or not v.startswith("/") or r < 0:
             continue
         if elfcheck.host_owned(v, own):
             continue
@@ -569,7 +569,7 @@ def prune(can, logs, own, log=print):
                 continue
             st = os.lstat(real)
             is_wrap = not in_real and os.path.exists(os.path.join(dirpath, ".real", name))
-            if stat.S_ISREG(st.st_mode) and not is_wrap:      # payloads and plain files; a wrapper is a link to the opener (review O4-15)
+            if stat.S_ISREG(st.st_mode) and not is_wrap:      # payloads and plain files; a wrapper is a link to the launcher (review O4-15)
                 freed += st.st_size
             os.remove(real)
             removed += 1

@@ -2,9 +2,9 @@
 """oracle_ns.py — the namespace oracle (PROPOSAL.md 17, item 1).
 
 The same tree runs twice: under `bwrap` with the unwrapped tree bound read-only at `/`, and under the
-opener. Exit status, stdout and stderr are compared, and the read-only matrix program of test/progs is
+launcher. Exit status, stdout and stderr are compared, and the read-only matrix program of test/progs is
 run under bwrap so that its expectations are checked against the kernel itself rather than against the
-opener. Needs user namespaces and bwrap; says so and exits 0 when it cannot run.
+launcher. Needs user namespaces and bwrap; says so and exits 0 when it cannot run.
 
     test/oracle_ns.py --can CAN [--work DIR] [--keep]
 """
@@ -75,7 +75,7 @@ def run_bwrap(root, work, cmd, extra=()):
         if os.path.exists(f) and os.path.lexists(os.path.join(root, f.lstrip("/"))):
             if os.path.islink(f):
                 # the copy carries the host's link text (8.4) and the target is bound at its own path: readlink
-                # and the content then agree with the opener, which answers the text and opens the host file
+                # and the content then agree with the launcher, which answers the text and opens the host file
                 t = os.path.realpath(f)
                 args += ["--ro-bind", t, t]
             else:
@@ -84,7 +84,7 @@ def run_bwrap(root, work, cmd, extra=()):
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
-def run_opener(can, work, cmd, prog=None):
+def run_launcher(can, work, cmd, prog=None):
     env = {"PATH": "/usr/bin:/bin", "HOME": work, "W": work, "CC": GCC, "SH": SH, "SHX": SHX, "LIBC": LIBC, "CONT_SH": SH, "CONT_SH_LINK": SH_LINK,
            "LANG": "en_GB.UTF-8", "TZ": "Asia/Tokyo"}                                        # the last two replaced at the boundary (6.2)
     if prog:
@@ -111,7 +111,7 @@ def main():
         shutil.rmtree(work)
     os.makedirs(work)
     import tree
-    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # the opener's world: a copy reopened with the build (17)
+    can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # the launcher's world: a copy reopened with the build (17)
     # an unwrapped copy of the tree for bwrap: hard links, then the payloads moved back over the wrappers
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(os.path.join(can, "tree"), root, symlinks=True, copy_function=cannery.link_or_copy)
@@ -119,7 +119,7 @@ def main():
     with open(os.path.join(root, "usr", "share", "cont-test-marker"), "w") as f:
         f.write("marker\n")
     # an identity file that is a host symlink: a bind of the host's file would hide its link text, which the
-    # opener reports (8.4); the copy gets a symlink with the host's text, and run_bwrap binds the target
+    # launcher reports (8.4); the copy gets a symlink with the host's text, and run_bwrap binds the target
     for f in IDENTITY:
         p_ = os.path.join(root, f.lstrip("/"))
         if os.path.islink(f) and os.path.lexists(p_):
@@ -166,15 +166,15 @@ def main():
             p = os.path.join(work, f)
             if os.path.lexists(p):
                 os.remove(p)
-        o = run_opener(can, work, cmd)
+        o = run_launcher(can, work, cmd)
         bn = (b[0], norm(b[1], work), norm(re.sub(r"^[^:]*/(sh|dash): ", "sh: ", b[2], flags=re.M), work))
         on = (o[0], norm(o[1], work), norm(re.sub(r"^[^:]*/(sh|dash): ", "sh: ", o[2], flags=re.M), work))
-        # the opener names programs by their real path when the host invoked them; bwrap by the virtual one
+        # the launcher names programs by their real path when the host invoked them; bwrap by the virtual one
         if bn == on:
             print("PASS %s" % shown[:70])
         else:
             fails += 1
-            print("FAIL %s\n     bwrap : rc=%d out=%r err=%r\n     opener: rc=%d out=%r err=%r" % (shown[:70], bn[0], bn[1][:300], bn[2][:200], on[0], on[1][:300], on[2][:200]))
+            print("FAIL %s\n     bwrap : rc=%d out=%r err=%r\n     launcher: rc=%d out=%r err=%r" % (shown[:70], bn[0], bn[1][:300], bn[2][:200], on[0], on[1][:300], on[2][:200]))
     print("%d workloads, %d failures" % (len(WORKLOADS) + 1, fails))
     if not a.keep and not fails:
         shutil.rmtree(work, ignore_errors=True)

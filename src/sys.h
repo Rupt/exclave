@@ -1,6 +1,6 @@
-/* sys.h — freestanding Linux syscall layer for the opener.
+/* sys.h — freestanding Linux syscall layer for the launcher.
  *
- * The opener is built with -nostdlib -ffreestanding: it links against
+ * The launcher is built with -nostdlib -ffreestanding: it links against
  * nothing at all, so it can be dropped into any can and run on any
  * Linux of the same architecture regardless of what libc the host has.
  * Everything it needs from the OS is a raw syscall defined here.
@@ -17,7 +17,7 @@ typedef unsigned int mode_t;
 
 /* ---------- architecture: syscall instruction + numbers ---------- */
 /* The syscall page (PROPOSAL.md 7.4.2): one page at a fixed address holding the syscall instruction and a return.
- * Every syscall the opener makes goes through it, and the filter allows a syscall by that instruction address
+ * Every syscall the launcher makes goes through it, and the filter allows a syscall by that instruction address
  * alone. The address is the same in every process, so one filter serves the whole tree. The page is mapped by
  * page_init() before anything else runs; only the bootstrap, the filter probe (7.4.2) and the signal restorer use a raw instruction. It
  * lies high in the low 2 GB, above program images, which every linker starts low and grows upward (Go's on aarch64 from
@@ -170,7 +170,7 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
 #define O_DIRECTORY 040000
 #define O_NOFOLLOW  0100000
 #else
-#error "the opener is built for x86-64 or aarch64"
+#error "the launcher is built for x86-64 or aarch64"
 #endif
 
 /* MAGIC marks the filter probe (uname with MAGIC as its argument, 7.4.2); nothing else. */

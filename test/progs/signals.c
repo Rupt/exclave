@@ -65,7 +65,7 @@ int main(void)
     memset(&sa, 0, sizeof sa); sa.sa_handler = h_stat;
     struct sigaction old;
     if (sigaction(SIGSYS, &sa, &old) != 0) { fails++; printf("FAIL sigaction(SIGSYS)\n"); }
-    if (old.sa_handler == h_stat || old.sa_handler == SIG_DFL) { fails++; printf("FAIL old SIGSYS action should be the opener's handler\n"); }
+    if (old.sa_handler == h_stat || old.sa_handler == SIG_DFL) { fails++; printf("FAIL old SIGSYS action should be the launcher's handler\n"); }
     if (sigaction(SIGSYS, 0, &old) != 0 || old.sa_handler == h_stat) { fails++; printf("FAIL SIGSYS query after ignored install\n"); }
     if (stat("/usr/share", &st)) { fails++; printf("FAIL stat after sigaction(SIGSYS)\n"); }
     printf("signals: %d failures\n", fails);

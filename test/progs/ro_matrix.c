@@ -120,7 +120,7 @@ int main(int argc, char **argv)
       if (f < 0 || read(f, h, 4) != 4 || memcmp(h, "\177ELF", 4) || fstat(f, &a) || stat(p, &c) || a.st_ino != c.st_ino || a.st_size != c.st_size)
           { fails++; printf("FAIL wrapper redirect for %s\n", w); }
       if (f >= 0) close(f);
-      if (stat(w, &a) || a.st_ino != c.st_ino) { fails++; printf("FAIL stat of wrapper reports the opener\n"); } }
+      if (stat(w, &a) || a.st_ino != c.st_ino) { fails++; printf("FAIL stat of wrapper reports the launcher\n"); } }
     printf("ro_matrix: %d failures\n", fails);
     return fails ? 1 : 0;
 }

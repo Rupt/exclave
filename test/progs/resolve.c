@@ -1,4 +1,4 @@
-/* resolve.c — the opener's side of the canonicalisation oracle: for each path on stdin, open it with
+/* resolve.c — the launcher's side of the canonicalisation oracle: for each path on stdin, open it with
  * O_PATH (following the final symlink unless the line starts with "nofollow ") and print the virtual
  * path the descriptor names, or the errno. */
 #define _GNU_SOURCE

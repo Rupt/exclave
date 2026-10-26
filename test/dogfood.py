@@ -4,7 +4,7 @@
     test/dogfood.py --cache DIR [--work DIR] [--mirror URL] [--keep]
 
 Fetches two package sets with tools/fetch-debs.py (the one step that touches the network, and not the
-cannery's), makes the cannery can from python3, zstd and xz-utils plus this checkout's cannery and opener,
+cannery's), makes the cannery can from python3, zstd and xz-utils plus this checkout's cannery and launcher,
 then makes the same gcc can twice from the same files: once with the checkout's cannery on the host, once
 with the cannery can's own entry from inside its can. The two lockfiles must be identical, tree hash
 included. Exit status 0 on success.
@@ -50,9 +50,9 @@ def main():
     print("building the cannery can")
     ccan = os.path.join(work, "cannery.can")
     run([sys.executable, cannery, "unpack", ccan] + debs(os.path.join(work, "debs-cannery")), work)
-    lib = os.path.join(ccan, "tree", "usr", "lib", "cont")                # the cannery's own source and the opener, by hand: the can is a directory
+    lib = os.path.join(ccan, "tree", "usr", "lib", "cont")                # the cannery's own source and the launcher, by hand: the can is a directory
     shutil.copytree(os.path.join(REPO, "cannery"), lib, ignore=shutil.ignore_patterns("__pycache__"))
-    shutil.copy2(os.path.join(REPO, "build", "opener"), os.path.join(lib, "opener"))
+    shutil.copy2(os.path.join(REPO, "build", "launcher"), os.path.join(lib, "launcher"))
     entry = os.path.join(ccan, "tree", "usr", "bin", "cannery")
     with open(entry, "w") as f:
         f.write('#!/bin/sh\nexec python3 /usr/lib/cont/cannery.py "$@"\n')

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Stack budget check (PROPOSAL.md 7.5.4): reads the gcc -fcallgraph-info=su output of the current build.
 
-    test/stackcheck.py build/opener.debug-*.ci
+    test/stackcheck.py build/launcher.debug-*.ci
 
 The handler path is every function the call graph reaches from on_sigsys, each with the frame gcc wrote beside
 it, so a function is on the path because it is called there, not because a list names it. Fails if one of them
 has a frame above 512 bytes or an unbounded dynamic frame, if the graph has a cycle other than exec_target's
 own (a #! chain of host scripts, exec_script inlined into it, six frames as binfmt_script allows five
 interpreters), if on_sigsys or exec_target is not in the graph (a rename must be loud, review O3-12), or if the
-deepest chain exceeds 3072 bytes. gcc writes no edge for a call through a pointer, and the opener makes none.
+deepest chain exceeds 3072 bytes. gcc writes no edge for a call through a pointer, and the launcher makes none.
 """
 import re
 import sys

@@ -8,16 +8,16 @@ A can is a directory at every stage, and every command takes paths; `fmt --check
                                    input in OUT/.exclave/hashes, report dependencies the set does not satisfy.
     cannery.py wrap CAN            Close a can: check the manifest (written as `exclave 1` if absent), the
                                    wrappers and every ELF, then wrap every executable and write the
-                                   opener, manifest and tree hashes to the lock.
+                                   launcher, manifest and tree hashes to the lock.
                                    Idempotent; a bare directory holding tree/ becomes a can.
     cannery.py unwrap CAN          Open a can: move every payload back over its wrapper.
     cannery.py check CAN [LOG...]  Wrappers, payloads, the tree against the lock's hash and the static
-                                   check; with CAN_LOG files, the dynamic check of what a workload opened.
+                                   check; with EXCLAVE_LOG files, the dynamic check of what a workload opened.
     cannery.py prune CAN LOG...    Drop every file no logged workload touched (10.4).
     cannery.py fmt FILE...         Parse with the strict grammar and rewrite in canonical form
                                    (--check: only report).
     cannery.py hash CAN            The tree hash of 6.4.
-    cannery.py reopen CAN [OPENER] Replace the opener and relink every wrapper.
+    cannery.py reopen CAN [LAUNCHER] Replace the launcher and relink every wrapper.
 
 Unpack, wrap and reopen also write CAN/README, which tells whoever finds the can what it is and how to
 run it, where the can has none.
@@ -52,7 +52,7 @@ SCHEMA = {
     "hashes": (1, 1, "t"), "tool": (1, 1, "s"), "launcher": (1, 1, "s"), "pkg": (4, 4, "ssss"), "manifest": (1, 1, "s"), "tree": (1, 1, "s"),
 }
 ONCE = {"exclave", "cpu", "hashes", "tool", "launcher", "manifest", "tree"}
-# the opener's tables (8.1): the manifest may carry this many records, the tree this many top-level entries
+# the launcher's tables (8.1): the manifest may carry this many records, the tree this many top-level entries
 LIMITS = {"own": 256, "host": 32, "data": 32, "top": 256}
 # 6.1: the can's README, for whoever finds the directory without knowing cont; written where the can has none
 CAN_README = b"""\
@@ -77,7 +77,7 @@ What is here
   .exclave/manifest  the maker's settings; "exclave 1" alone means none.
   .exclave/hashes      one "pkg" line per package that went in: name,
                  version, architecture and hash of the package file;
-                 then hashes of the opener, the manifest and, on the
+                 then hashes of the launcher, the manifest and, on the
                  "tree" line, all of tree/. Not where they came from.
   other names    shortcuts into tree/ that the maker added.
 
@@ -107,29 +107,29 @@ names are looked up. PATH is the can's, so this system's commands are
 not found by name. The locale is C.UTF-8 and the time zone UTC by
 default, and sudo, su and other setuid programs do not work inside.
 
-CAN_LOG=/some/file makes every process append one line per call that
+EXCLAVE_LOG=/some/file makes every process append one line per call that
 names a file: the call, its result and the path. Messages that begin
-"opener:" come from the can, not from the program.
+"launcher:" come from the can, not from the program.
 
 Moving, copying, removing
 
 Nothing outside this directory refers to it: move it, copy it with
 cp -a, pack it with tar, or remove it with rm -r. A copy that splits
-the hard links (cp -r) still runs, larger by the opener's size per
+the hard links (cp -r) still runs, larger by the launcher's size per
 program. Do not edit a program in tree/ in place: they are all one
 file. A can does not run from a filesystem mounted noexec.
 
 Checking it
 
 The hashes are BLAKE2b-256, so "b2sum -l 256 .exclave/launcher" prints the
-lock's opener hash, and a package file fetched again its pkg hash.
+lock's launcher hash, and a package file fetched again its pkg hash.
 The cannery, cont's build tool, is not part of this can:
 
   cannery check DIR   every program wrapped, the libraries each needs
                       found inside, tree/ against the lock's tree line
   cannery unwrap DIR  open the can for editing; cannery wrap DIR
                       closes it again
-  cannery reopen DIR  put in another opener, relinking every program
+  cannery reopen DIR  put in another launcher, relinking every program
 
 This file is the same in every can; a maker may replace it.
 """
@@ -230,7 +230,7 @@ def parse(data, kind="exclave"):
         rec = Record(key, fields, comments, line)
         comments = []
         _check_record(rec, kind)
-        if kind == "exclave" and key in LIMITS:                           # the opener's tables (8.1), refused where the opener refuses
+        if kind == "exclave" and key in LIMITS:                           # the launcher's tables (8.1), refused where the launcher refuses
             counts[key] = counts.get(key, 0) + 1
             if counts[key] > LIMITS[key]:
                 _fail(line, 1, "more than %d %s records" % (LIMITS[key], key))
@@ -378,7 +378,7 @@ def b2_file(path):
     return "b2:" + h.hexdigest()
 
 
-# ---------------------------------------------------------------- the can as the opener sees it
+# ---------------------------------------------------------------- the can as the launcher sees it
 def manifest_path(can):
     return os.path.join(can, ".exclave", "manifest")
 
@@ -406,7 +406,7 @@ def owned_top(can):
 
 
 def owned(can):
-    """8.1: the can's ownership as the opener computes it at startup: the manifest's own records plus the
+    """8.1: the can's ownership as the launcher computes it at startup: the manifest's own records plus the
     tree's top-level entries of rule 1, with the host records that take paths back from them."""
     m = manifest(can)
     own = set(o[0].decode("utf-8", "surrogateescape") for o in values(m, "own"))
@@ -415,12 +415,12 @@ def owned(can):
 
 
 def check_limits(can):
-    """The opener's fixed tables (8.1): refuse what it would refuse, before closing (review O4-9, O4-10); the
+    """The launcher's fixed tables (8.1): refuse what it would refuse, before closing (review O4-9, O4-10); the
     manifest's records are counted by parse, the tree's top-level entries here."""
     manifest(can)
-    top = len(owned_top(can))                                 # as the opener counts them: a placeholder takes no slot
+    top = len(owned_top(can))                                 # as the launcher counts them: a placeholder takes no slot
     if top > LIMITS["top"]:
-        raise build.BuildError("tree/ has %d top-level entries; the opener holds %d" % (top, LIMITS["top"]))
+        raise build.BuildError("tree/ has %d top-level entries; the launcher holds %d" % (top, LIMITS["top"]))
 
 
 def in_data(vpath, data):
@@ -450,7 +450,7 @@ def link_or_copy(src, dst):
         shutil.copy2(src, dst)
 
 
-def opener_ino(can):
+def launcher_ino(can):
     st = os.stat(os.path.join(can, ".exclave", "launcher"))
     return (st.st_dev, st.st_ino, st.st_size)
 
@@ -474,20 +474,20 @@ def payload_path(real):
 MACHINE = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64", "all": None, "noarch": None}   # package spellings -> uname -m
 
 
-def default_opener(arch=None):
-    """build/opener beside a checkout, or the opener shipped next to this file in the cannery can (10.5); for packages
-    of another architecture than this machine's, the cross-built build/opener-<machine> (7.1)."""
+def default_launcher(arch=None):
+    """build/launcher beside a checkout, or the launcher shipped next to this file in the cannery can (10.5); for packages
+    of another architecture than this machine's, the cross-built build/launcher-<machine> (7.1)."""
     import platform
     machine = MACHINE.get(arch, arch)
     if machine and machine != platform.machine():
-        p = os.path.join(HERE, "..", "build", "opener-" + machine)
+        p = os.path.join(HERE, "..", "build", "launcher-" + machine)
         if not os.path.isfile(p):
-            sys.exit("no opener for %s here: %s is not built (make with the cross compiler), and this machine is %s" % (machine, p, platform.machine()))
+            sys.exit("no launcher for %s here: %s is not built (make with the cross compiler), and this machine is %s" % (machine, p, platform.machine()))
         return p
-    for p in (os.path.join(HERE, "..", "build", "opener"), os.path.join(HERE, "opener")):
+    for p in (os.path.join(HERE, "..", "build", "launcher"), os.path.join(HERE, "launcher")):
         if os.path.isfile(p):
             return p
-    return os.path.join(HERE, "..", "build", "opener")
+    return os.path.join(HERE, "..", "build", "launcher")
 
 
 def write_readme(can):
@@ -498,22 +498,22 @@ def write_readme(can):
             f.write(CAN_README)
 
 
-def install_opener(can, opener=None, arch=None):
-    """Put an opener at CAN/.exclave/launcher unless one is there already: the one for the packages' architecture."""
+def install_launcher(can, launcher=None, arch=None):
+    """Put a launcher at CAN/.exclave/launcher unless one is there already: the one for the packages' architecture."""
     dst = os.path.join(can, ".exclave", "launcher")
     if os.path.exists(dst):
         return
-    opener = opener or default_opener(arch)
-    if not os.path.isfile(opener):
-        sys.exit("no opener at %s (run make)" % opener)
+    launcher = launcher or default_launcher(arch)
+    if not os.path.isfile(launcher):
+        sys.exit("no launcher at %s (run make)" % launcher)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
-    shutil.copy2(opener, dst)
+    shutil.copy2(launcher, dst)
     os.chmod(dst, 0o755)
 
 
 # ---------------------------------------------------------------- commands
 def cmd_unpack(out, debs, log=print):
-    """10.1: package files into an open can: extract, synthesise, placeholders, opener, lock inputs, dependency report."""
+    """10.1: package files into an open can: extract, synthesise, placeholders, launcher, lock inputs, dependency report."""
     if os.path.exists(out):
         sys.exit("refusing: %s exists" % out)
     if not debs:
@@ -547,18 +547,18 @@ def cmd_unpack(out, debs, log=print):
         raise
     for line in build.dependency_report([(n, f) for n, _, f, _, _ in pkgs], root):   # after synthesis: a file dependency asks the tree
         log("depends: " + line)
-    install_opener(out, arch=next(iter(arches), None))
+    install_launcher(out, arch=next(iter(arches), None))
     build.write_lock(out, [(n, v, a, b2_file(p)) for n, p, _, v, a in pkgs])
     write_readme(out)
     log("unpacked %d packages into %s" % (len(pkgs), out))
 
 
 def wrapper_problems(can, data=()):
-    """6.1 as the tree stands: a wrapper of another opener (stale), a wrapper without a payload, a payload
+    """6.1 as the tree stands: a wrapper of another launcher (stale), a wrapper without a payload, a payload
     without a wrapper (a stray under the reserved name), an executable its user cannot run. Returns the list
     of problems; cmd_check adds the executables not wrapped, which wrap is about to wrap."""
     root = os.path.join(can, "tree")
-    oi = opener_ino(can)
+    oi = launcher_ino(can)
     problems = []
     for real, v, st in walk_files(root):
         if not stat.S_ISREG(st.st_mode):
@@ -568,9 +568,9 @@ def wrapper_problems(can, data=()):
         w = is_wrapper(real, oi)
         d_, n_ = os.path.split(real)
         if not w and os.path.exists(os.path.join(d_, ".real", n_)):
-            problems.append("stale wrapper (not this can's opener): %s; run cannery reopen" % v)
+            problems.append("stale wrapper (not this can's launcher): %s; run cannery reopen" % v)
         elif st.st_mode & 0o111 and not w and not os.access(real, os.X_OK):
-            problems.append("executable file its user cannot execute: %s (mode %o); a wrapper would run as the opener's mode" % (v, st.st_mode & 0o7777))
+            problems.append("executable file its user cannot execute: %s (mode %o); a wrapper would run as the launcher's mode" % (v, st.st_mode & 0o7777))
         if w and (not os.path.exists(payload_path(real)) or payload_path(real) == real):
             problems.append("wrapper without payload: " + v)
     for dirpath, dirnames, filenames in os.walk(root):
@@ -582,11 +582,11 @@ def wrapper_problems(can, data=()):
 
 
 def wrap_files(can, data=(), quiet=False):
-    """6.1: every executable file in tree/ outside data prefixes becomes a hard link to the opener; the
+    """6.1: every executable file in tree/ outside data prefixes becomes a hard link to the launcher; the
     original moves to .real/. Never over an existing payload (review F4-2)."""
     root = os.path.join(can, "tree")
-    opener = os.path.join(can, ".exclave", "launcher")
-    oi = opener_ino(can)
+    launcher = os.path.join(can, ".exclave", "launcher")
+    oi = launcher_ino(can)
     n = 0
     for real, v, st in list(walk_files(root)):
         if not stat.S_ISREG(st.st_mode) or not st.st_mode & 0o111 or in_data(v, data):
@@ -600,9 +600,9 @@ def wrap_files(can, data=(), quiet=False):
         os.makedirs(rd, exist_ok=True)
         os.rename(real, os.path.join(rd, name))
         try:
-            os.link(opener, real)
+            os.link(launcher, real)
         except OSError:
-            shutil.copy2(opener, real)
+            shutil.copy2(launcher, real)
         n += 1
     if not quiet:
         print("wrapped %d executables" % n)
@@ -610,13 +610,13 @@ def wrap_files(can, data=(), quiet=False):
 
 
 def cmd_wrap(can, quiet=False):
-    """Close a can: opener, placeholders, manifest, the wrapper and static checks on the tree as it stands,
-    then the wrappers, then the lock's opener, manifest and tree hashes. A refusal happens before anything
+    """Close a can: launcher, placeholders, manifest, the wrapper and static checks on the tree as it stands,
+    then the wrappers, then the lock's launcher, manifest and tree hashes. A refusal happens before anything
     is wrapped, so a refused can is left unwrapped (review F4-8, O4-7)."""
     root = os.path.join(can, "tree")
     if not os.path.isdir(root):
         sys.exit("refusing: %s has no tree/ directory" % can)
-    install_opener(can)
+    install_launcher(can)
     build.placeholders(root, strip=False, log=lambda *a: None)   # 8.1: the conventional names and the identity files, if the tree lacks them
     mp = manifest_path(can)
     if not os.path.exists(mp):
@@ -654,15 +654,15 @@ def cmd_unwrap(can):
     build.write_lock(can, None)
 
 
-def cmd_reopen(can, opener=None):
-    """Replace a can's opener and relink every wrapper to it (wrappers are hard links, 6.1). A payload
-    without a wrapper is reported, not given one (review F4-5, O4-11); the lock's opener record follows."""
-    opener = opener or default_opener()
-    if not os.path.isfile(opener):
-        sys.exit("no opener at %s" % opener)
+def cmd_reopen(can, launcher=None):
+    """Replace a can's launcher and relink every wrapper to it (wrappers are hard links, 6.1). A payload
+    without a wrapper is reported, not given one (review F4-5, O4-11); the lock's launcher record follows."""
+    launcher = launcher or default_launcher()
+    if not os.path.isfile(launcher):
+        sys.exit("no launcher at %s" % launcher)
     root = os.path.join(can, "tree")
     new = os.path.join(can, ".exclave", "launcher.new")
-    shutil.copy2(opener, new)
+    shutil.copy2(launcher, new)
     os.chmod(new, 0o755)
     n, strays = 0, []
     for dirpath, dirnames, filenames in os.walk(root):
@@ -688,7 +688,7 @@ def cmd_reopen(can, opener=None):
         recs = load(os.path.join(can, ".exclave", "hashes"), "hashes")
         if values(recs, "tree"):
             build.write_lock(can, None, keep_hashes=True)
-    print("relinked %d wrappers to the new opener" % n)
+    print("relinked %d wrappers to the new launcher" % n)
 
 
 def static_report(can, quiet=False):
@@ -708,7 +708,7 @@ def cmd_check(can, logs=()):
     check, the tree against the lock's hash (review O4-18), and with logs the dynamic check."""
     root = os.path.join(can, "tree")
     data = data_prefixes(can)
-    oi = opener_ino(can)
+    oi = launcher_ino(can)
     problems = wrapper_problems(can, data)
     for real, v, st in walk_files(root):
         if stat.S_ISREG(st.st_mode) and st.st_mode & 0o111 and not in_data(v, data) and not is_wrapper(real, oi) \
@@ -787,7 +787,7 @@ def main(argv):
     p = sub.add_parser("prune"); p.add_argument("can"); p.add_argument("logs", nargs="+")
     p = sub.add_parser("fmt"); p.add_argument("files", nargs="+"); p.add_argument("--check", action="store_true")
     p = sub.add_parser("hash"); p.add_argument("can")
-    p = sub.add_parser("reopen"); p.add_argument("can"); p.add_argument("opener", nargs="?")
+    p = sub.add_parser("reopen"); p.add_argument("can"); p.add_argument("launcher", nargs="?")
     a = ap.parse_args(argv)
     try:
         if a.cmd == "unpack":
@@ -807,7 +807,7 @@ def main(argv):
                 sys.exit("refusing: %s has no tree/ directory" % a.can)
             print(build.tree_hash(os.path.join(a.can, "tree")))
         elif a.cmd == "reopen":
-            cmd_reopen(a.can, a.opener)
+            cmd_reopen(a.can, a.launcher)
     except GrammarError as e:
         sys.exit("grammar: %s" % e)
     except (build.BuildError, deb.DebError, apk.ApkError, rpm.RpmError) as e:

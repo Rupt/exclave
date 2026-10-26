@@ -1,11 +1,11 @@
-/* opener.c — entry point (PROPOSAL.md 7.2, 7.6, 9).
+/* launcher.c — entry point (PROPOSAL.md 7.2, 7.6, 9).
  *
- * The opener is an ET_DYN object with no interpreter: it relocates itself,
+ * The launcher is an ET_DYN object with no interpreter: it relocates itself,
  * finds its can from its own path, reads the manifest, decides whether it is the
  * can boundary (no filter inherited) and prepares the environment
  * accordingly, installs the handler and, unless one of this version or newer is inherited, the filter, then
  * loads the program it stands for: the payload of the wrapper it was run as,
- * or the CAN_EXEC target when re-exec'd in loader mode, by a handler or by its own positional entry.
+ * or the EXCLAVE_EXEC target when re-exec'd in loader mode, by a handler or by its own positional entry.
  */
 #include "common.h"
 
@@ -18,10 +18,13 @@ __asm__(".text\n.globl _start\n.type _start,@function\n_start:\n"
 __asm__(".text\n.globl _start\n.type _start,%function\n_start:\n"
         " mov x0, sp\n bl start_c\n brk #0\n");
 #endif
-/* 7, 7.4.5: the note by which the opener recognises itself in a file; its word is PAGE_GENERATION (7.4.2) */
+/* 7, 7.4.5: the notes by which a launcher recognises another in a file; their word is PAGE_GENERATION (7.4.2). The second,
+ * named cont, is the one an opener of revision 17 or earlier looks for, so that each runs the other as another launcher */
 #define NOTE_WORD_(g) #g
 #define NOTE_WORD(g) NOTE_WORD_(g)
-__asm__(".section .note.cont,\"a\"\n .balign 4\n .long 5\n .long 4\n .long 1\n .asciz \"cont\"\n .balign 4\n .long " NOTE_WORD(PAGE_GENERATION) "\n .text\n");
+__asm__(".section .note.exclave,\"a\"\n .balign 4\n"
+        " .long 8\n .long 4\n .long 1\n .asciz \"exclave\"\n .balign 4\n .long " NOTE_WORD(PAGE_GENERATION) "\n"
+        " .long 5\n .long 4\n .long 1\n .asciz \"cont\"\n .balign 4\n .long " NOTE_WORD(PAGE_GENERATION) "\n .text\n");
 
 /* before the page and the version check: a message and an exit, raw, as nothing else is allowed yet */
 static void raw_fatal(const char *msg, long len)
@@ -36,8 +39,8 @@ static void page_init(void)
     long m = __sc6_raw(NR_mmap, (long)SC_PAGE, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (m != (long)SC_PAGE) {
         if (m >= 0) __sc6_raw(NR_munmap, m, 4096, 0, 0, 0, 0);
-        static const char msg[] = "opener: cannot map the syscall page\n";
-        static const char busy[] = "opener: another opener is already resident in this process\n";
+        static const char msg[] = "launcher: cannot map the syscall page\n";
+        static const char busy[] = "launcher: another launcher is already resident in this process\n";
         if (m == -EEXIST) raw_fatal(busy, sizeof busy - 1);
         raw_fatal(msg, sizeof msg - 1);
     }
@@ -62,7 +65,7 @@ static void reloc_self(void)
     }
     if (!rela) return;
     for (unsigned long i = 0; i < relasz / relaent; i++) {
-        if ((rela[i].r_info & 0xffffffff) != R_NATIVE_RELATIVE) die("unexpected relocation in the opener", 0, 0);   /* R_*_RELATIVE only */
+        if ((rela[i].r_info & 0xffffffff) != R_NATIVE_RELATIVE) die("unexpected relocation in the launcher", 0, 0);   /* R_*_RELATIVE only */
         *(unsigned long *)(base + rela[i].r_offset) = base + (unsigned long)rela[i].r_addend;
     }
 }
@@ -83,9 +86,9 @@ static const char *denied[] = { "GLIBC_TUNABLES", "GCONV_PATH", "LOCPATH", "NLSP
                                 "TZDIR", "GCC_EXEC_PREFIX", "COMPILER_PATH", "LIBRARY_PATH",
                                 "PATH", "LANG", "LANGUAGE", "TZ", "SHELL", 0 };
 static const char *fixed[] = { "PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "TZ=UTC0", "SHELL=/bin/sh", 0 };
-/* the opener's protocol with itself (7.4.5): CAN_EXEC names a loader-path target, CAN_EXECFN and CAN_COMM the identity the
- * kernel would give the program; set by a handler or the positional entry, read by the opener they exec, never seen by a program */
-static int internal_var(const char *e) { return xstarts(e, "CAN_EXEC=") || xstarts(e, "CAN_EXECFN=") || xstarts(e, "CAN_COMM="); }
+/* the launcher's protocol with itself (7.4.5): EXCLAVE_EXEC names a loader-path target, EXCLAVE_EXECFN and EXCLAVE_COMM the identity the
+ * kernel would give the program; set by a handler or the positional entry, read by the launcher they exec, never seen by a program */
+static int internal_var(const char *e) { return xstarts(e, "EXCLAVE_EXEC=") || xstarts(e, "EXCLAVE_EXECFN=") || xstarts(e, "EXCLAVE_COMM="); }
 static int env_denied(const char *e)
 {
     if (xstarts(e, "LD_") || xstarts(e, "LC_") || internal_var(e)) return 1;
@@ -105,14 +108,14 @@ static char **env_prepare(char **envp, int boundary)
     return out;
 }
 
-/* the descriptor room borrowed at startup (7.4.5), given back before the opener execs another opener, which borrows for itself */
+/* the descriptor room borrowed at startup (7.4.5), given back before the launcher execs another launcher, which borrows for itself */
 static void unborrow(void) { if (C.borrowed) { SC4(NR_prlimit64, 0, RLIMIT_NOFILE, C.rlim, 0); C.borrowed = 0; } }
 
-static void find_can(const char *exe)
+static void find_exclave(const char *exe)
 {
     char d[PATH_MAX]; scpy(d, exe, PATH_MAX);
     for (;;) {
-        char *s = xstrrchr(d, '/'); if (!s || s == d) die("not inside a can: a can's opener runs from the can's .exclave/ or as a program in its tree/, and no directory above this one has .exclave/manifest", exe, 0);
+        char *s = xstrrchr(d, '/'); if (!s || s == d) die("not inside an exclave: a launcher runs from its exclave's .exclave/ or as a program in its tree/, and no directory above this one has .exclave/manifest", exe, 0);
         *s = 0;
         char p[PATH_MAX]; scpy(p, d, PATH_MAX); scat(p, "/.exclave/manifest", PATH_MAX);
         struct kstat st;
@@ -120,11 +123,11 @@ static void find_can(const char *exe)
     }
     scpy(C.dir, d, PATH_MAX);
     scpy(C.root, d, PATH_MAX); scat(C.root, "/tree", PATH_MAX); C.rootlen = (long)xstrlen(C.root);
-    scpy(C.opener, d, PATH_MAX); scat(C.opener, "/.exclave/launcher", PATH_MAX);
+    scpy(C.launcher, d, PATH_MAX); scat(C.launcher, "/.exclave/launcher", PATH_MAX);
     struct kstat st;
-    if (sys_stat(C.opener, &st) < 0) die("can has no opener", C.opener, 0);
-    C.opener_dev = st.st_dev; C.opener_ino = st.st_ino; C.opener_size = st.st_size;
-    if (sys_stat(C.root, &st) < 0 || (st.st_mode & S_IFMT) != S_IFDIR) die("can has no tree/", C.root, 0);
+    if (sys_stat(C.launcher, &st) < 0) die("exclave has no launcher", C.launcher, 0);
+    C.launcher_dev = st.st_dev; C.launcher_ino = st.st_ino; C.launcher_size = st.st_size;
+    if (sys_stat(C.root, &st) < 0 || (st.st_mode & S_IFMT) != S_IFDIR) die("exclave has no tree/", C.root, 0);
     C.root_dev = st.st_dev; C.root_ino = st.st_ino;
 }
 
@@ -140,19 +143,19 @@ static void read_manifest(unsigned long *auxv)
     char err[256];
     if (manifest_parse((const char *)m, (size_t)st.st_size, &C, err, sizeof err) < 0) die("bad manifest", err, 0);
     SC2(NR_munmap, m, st.st_size);
-    int ok = isa_supported(C.isa, auxv);
-    if (ok < 0) die("can names an ISA level this opener does not know", C.isa, 0);
-    if (ok == 0) die("this CPU lacks the can's ISA level", C.isa, 0);
+    int ok = isa_supported(C.cpu, auxv);
+    if (ok < 0) die("the exclave names a CPU level this launcher does not know", C.cpu, 0);
+    if (ok == 0) die("this CPU lacks the exclave's CPU level", C.cpu, 0);
 }
 
-/* 7.2: the opener run as a program rather than as a wrapper, `.exclave/launcher PROGRAM ARGS...`, takes the program
+/* 7.2: the launcher run as a program rather than as a wrapper, `.exclave/launcher PROGRAM ARGS...`, takes the program
  * as its first argument and re-execs itself once the way a handler does for a program on the loader path
- * (7.4.5): the target carried in CAN_EXEC, which is the opener's own protocol and never reaches a program, and
+ * (7.4.5): the target carried in EXCLAVE_EXEC, which is the launcher's own protocol and never reaches a program, and
  * argv shifted, so that the program's argv, cmdline and comm are its own. A relative program path is taken
  * from the working directory as execve would take it. */
 static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **envp)
 {
-    if (argc < 2) die("this is a can's opener, behind every program in tree/: run one of those by path, or .exclave/launcher PROGRAM [ARGS...] to run another inside the can; the can's README says more", 0, 0);
+    if (argc < 2) die("this is an exclave's launcher, behind every program in tree/: run one of those by path, or .exclave/launcher PROGRAM [ARGS...] to run another inside the exclave; the exclave's README says more", 0, 0);
     if (xstrlen(argv[1]) >= PATH_MAX) die("program path too long", 0, ENAMETOOLONG);
     char *t = arena_alloc(PATH_MAX);
     if (argv[1][0] == '/') scpy(t, argv[1], PATH_MAX);
@@ -162,19 +165,19 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
         if (xstrcmp(t, "/") != 0) scat(t, "/", PATH_MAX);
         scat(t, argv[1], PATH_MAX);
     }
-    char *var = arena_alloc(PATH_MAX + 9); scpy(var, "CAN_EXEC=", PATH_MAX + 9); scat(var, t, PATH_MAX + 9);
-    char *fn = arena_alloc(PATH_MAX + 11); scpy(fn, "CAN_EXECFN=", PATH_MAX + 11); scat(fn, argv[1], PATH_MAX + 11);   /* the name as given: AT_EXECFN, comm, a script's $0 (7.6) */
+    char *var = arena_alloc(PATH_MAX + 13); scpy(var, "EXCLAVE_EXEC=", PATH_MAX + 13); scat(var, t, PATH_MAX + 13);
+    char *fn = arena_alloc(PATH_MAX + 15); scpy(fn, "EXCLAVE_EXECFN=", PATH_MAX + 15); scat(fn, argv[1], PATH_MAX + 15);   /* the name as given: AT_EXECFN, comm, a script's $0 (7.6) */
     long n = 0; while (envp[n]) n++;
     char **env = arena_alloc((size_t)(n + 3) * sizeof(char *)); long k = 0;
     env[k++] = var; env[k++] = fn;
     for (long i = 0; i < n; i++) if (!internal_var(envp[i])) env[k++] = envp[i];
     env[k] = 0;
     unborrow();
-    long r = sys_execve(C.opener, argv + 1, env);
-    die("cannot re-exec the opener", C.opener, r);
+    long r = sys_execve(C.launcher, argv + 1, env);
+    die("cannot re-exec the launcher", C.launcher, r);
 }
 
-/* 7.4.5 for a target that arrived by CAN_EXEC, the positional entry's or a handler's: the checks exec_target makes before
+/* 7.4.5 for a target that arrived by EXCLAVE_EXEC, the positional entry's or a handler's: the checks exec_target makes before
  * loading anything, in its order, so that the entry refuses what an exec inside refuses (review O5-1, F5-1): the target is
  * resolved as an exec resolves it, a data prefix is EACCES, a directory or a special file EACCES, the kernel's own answer
  * to X_OK is final, and a wrapper is exec'd as itself so that the kernel gives the program its identity (F5-9). The exit
@@ -191,7 +194,7 @@ static void loader_mode_check(char **argv, char **env2)
     if (sys_stat(S->real, &st) < 0) die_status(127, "cannot execute", C.program, ENOENT);
     if ((st.st_mode & S_IFMT) != S_IFREG) die_status(126, "cannot execute", C.program, EACCES);
     long ok = sys_faccessat(AT_FDCWD, S->real, X_OK); if (ok < 0) die_status(126, "cannot execute", C.program, ok);
-    if (is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp)) {   /* a wrapper: the kernel runs the opener under the program's name,
+    if (is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp)) {   /* a wrapper: the kernel runs the launcher under the program's name,
                                                                               * exec'd by the name the caller spelt, /bin/sh, so that comm is the
                                                                               * kernel's answer for that name; the kernel follows the last link */
         if (canon(S, S->b1, AT_FDCWD, 0, S->v2) < 0) scpy(S->v2, C.program, PATH_MAX);
@@ -236,10 +239,10 @@ void start_c(unsigned long *sp)
     page_init();
     reloc_self();
     /* 7.4.2: the probe comes before any syscall an inherited filter could trap. A filter from before the page moved allows
-     * an opener's syscalls from the old page only and would trap every one of this opener's, so it is refused by name */
+     * a launcher's syscalls from the old page only and would trap every one of this launcher's, so it is refused by name */
     int have = filter_probe();                                /* a filter inherited: exec'd from inside a can, by a handler or a program */
     if (have && have < FILTER_PAGE_SINCE) {
-        static const char old[] = "opener: an opener from before the syscall page moved runs this process; reopen its can (cannery reopen)\n";
+        static const char old[] = "launcher: a launcher from before the syscall page moved runs this process; reopen its can (cannery reopen)\n";
         raw_fatal(old, sizeof old - 1);
     }
     long argc = (long)sp[0]; char **argv = (char **)(sp + 1); char **envp = argv + argc + 1;
@@ -251,7 +254,7 @@ void start_c(unsigned long *sp)
 
     unsigned long m = 1UL << (SIGSYS - 1);                    /* 7.5.2: SIGSYS must never be blocked */
     sys_rt_sigprocmask(SIG_UNBLOCK, &m, 0, 8);
-    /* a program at its descriptor limit may still exec, since the kernel's exec needs no descriptor (7.4.5): the opener's
+    /* a program at its descriptor limit may still exec, since the kernel's exec needs no descriptor (7.4.5): the launcher's
      * own opens, the manifest, the tree's top level, the program and its loader, borrow two under the hard limit, given
      * back in loader_run before the program runs */
     if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, C.rlim) == 0 && C.rlim[0] < 16 && C.rlim[0] < C.rlim[1]) {
@@ -263,27 +266,27 @@ void start_c(unsigned long *sp)
     static char exe[PATH_MAX];
     long n = sys_readlink("/proc/self/exe", exe, PATH_MAX - 1); if (n < 0) die("cannot read /proc/self/exe", 0, n);
     exe[n] = 0;
-    find_can(exe);
+    find_exclave(exe);
     read_manifest(auxv);
 
     const char *target, *fn, *cm;
-    if (starts_dir(exe, C.root)) {                            /* a wrapper: the kernel ran the opener under the program's name. Decided first,
-                                                              * so that CAN_EXEC in anyone's environment is inert for the whole tree (review O5-3, F5-4) */
+    if (starts_dir(exe, C.root)) {                            /* a wrapper: the kernel ran the launcher under the program's name. Decided first,
+                                                              * so that EXCLAVE_EXEC in anyone's environment is inert for the whole tree (review O5-3, F5-4) */
         scpy(C.program, exe, PATH_MAX); from_real(C.program);
         /* the identity the kernel would have given the program (7.6): the name a handler exec'd this wrapper by, as the kernel spells it,
-         * carried in CAN_EXECFN and CAN_COMM by that handler, which only an opener sets; from the host, the kernel's own AT_EXECFN, a
+         * carried in EXCLAVE_EXECFN and EXCLAVE_COMM by that handler, which only a launcher sets; from the host, the kernel's own AT_EXECFN, a
          * real path, and its last component */
-        fn = have ? find_env(envp, "CAN_EXECFN") : 0; cm = have ? find_env(envp, "CAN_COMM") : 0;
+        fn = have ? find_env(envp, "EXCLAVE_EXECFN") : 0; cm = have ? find_env(envp, "EXCLAVE_COMM") : 0;
         if (fn) scpy(C.execfn, fn, PATH_MAX);
         else {
             for (long i = 0; auxv[i * 2] != AT_NULL; i++) if (auxv[i * 2] == AT_EXECFN) fn = (const char *)auxv[i * 2 + 1];
             scpy(C.execfn, fn ? fn : C.program, PATH_MAX); if (fn) from_real(C.execfn);
         }
         scpy(C.comm, cm ? cm : base_name(C.execfn), sizeof C.comm);
-    } else if ((target = find_env(envp, "CAN_EXEC"))) {       /* the internal protocol of 7.4.5: re-exec'd by a handler, or by entry_exec below */
-        if (target[0] != '/') die("CAN_EXEC must be an absolute path", target, 0);
+    } else if ((target = find_env(envp, "EXCLAVE_EXEC"))) {       /* the internal protocol of 7.4.5: re-exec'd by a handler, or by entry_exec below */
+        if (target[0] != '/') die("EXCLAVE_EXEC must be an absolute path", target, 0);
         C.loader_mode = 1; scpy(C.program, target, PATH_MAX);
-        fn = find_env(envp, "CAN_EXECFN"); cm = find_env(envp, "CAN_COMM");   /* the name the program was exec'd by, and its comm, as the kernel spells them (7.6) */
+        fn = find_env(envp, "EXCLAVE_EXECFN"); cm = find_env(envp, "EXCLAVE_COMM");   /* the name the program was exec'd by, and its comm, as the kernel spells them (7.6) */
         scpy(C.execfn, fn ? fn : target, PATH_MAX);
         scpy(C.comm, cm ? cm : base_name(C.execfn), sizeof C.comm);
         C.descfd = -1;
@@ -294,7 +297,7 @@ void start_c(unsigned long *sp)
             C.descfd = (int)m;
         }
     } else {
-        entry_exec(argc, argv, envp);                          /* the opener run by hand: .exclave/launcher PROGRAM ARGS... */
+        entry_exec(argc, argv, envp);                          /* the launcher run by hand: .exclave/launcher PROGRAM ARGS... */
     }
 
     C.boundary = have == 0;

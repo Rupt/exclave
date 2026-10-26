@@ -115,7 +115,7 @@ static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int 
 static int exists_can(struct scratch *S, const char *v, struct kstat *st)
 {
     to_real_exec(v, S->real);
-    if (is_can_owned(v)) {                                     /* 7.4.4: the answer is stable for a can-owned path */
+    if (is_exclave_path(v)) {                                     /* 7.4.4: the answer is stable for a can-owned path */
         int k = cache_classify(v, S->real, S->tmp);
         if (k == CK_NONE) return 0;
         if (k) { st->st_mode = k == CK_DIR ? S_IFDIR : k == CK_LINK ? S_IFLNK : S_IFREG; return 1; }
@@ -150,7 +150,7 @@ static int last_special(const char *p)                       /* 0: a name; 1: ".
  * is looked up at all. */
 static long ro_create(struct scratch *S, const char *v, int is_dir)
 {
-    if (!is_can_owned(v)) { to_real_exec(v, S->real); return 0; }
+    if (!is_exclave_path(v)) { to_real_exec(v, S->real); return 0; }
     scpy(S->cur, v, PATH_MAX);
     size_t l = xstrlen(S->cur); int slash = l > 1 && S->cur[l - 1] == '/';
     if (slash) S->cur[l - 1] = 0;                            /* the lookup is of the name; the slash only says "a directory" */
@@ -160,7 +160,7 @@ static long ro_create(struct scratch *S, const char *v, int is_dir)
     return slash && !is_dir ? -ENOENT : -EROFS;
 }
 static long ro_attr(struct scratch *S, const char *v)
-{ struct kstat st; int ex = exists_can(S, v, &st); if (!is_can_owned(v)) return 0; return ex ? -EROFS : absent_errno(S); }
+{ struct kstat st; int ex = exists_can(S, v, &st); if (!is_exclave_path(v)) return 0; return ex ? -EROFS : absent_errno(S); }
 /* an overlong last component of a delete: do_unlinkat and do_rmdir take the write lock on the parent before they look the
  * name up, so a can-owned parent answers EROFS first, where an overlong earlier component fails in the walk (oracle 17.7) */
 static long delete_overlong(struct scratch *S, int dfd)
@@ -175,11 +175,11 @@ static long delete_overlong(struct scratch *S, int dfd)
     char c = p[s]; p[s] = 0;                                  /* the parent: what precedes the component, or the directory itself */
     long r = canon(S, s ? p : ".", dfd, 1, S->v);
     p[s] = c;
-    r = r < 0 ? -ENAMETOOLONG : is_can_owned(S->v) ? -EROFS : -ENAMETOOLONG;
+    r = r < 0 ? -ENAMETOOLONG : is_exclave_path(S->v) ? -EROFS : -ENAMETOOLONG;
     scpy(S->v, S->b1, PATH_MAX);                              /* the log names what was asked for */
     return r;
 }
-static long ro_delete(struct scratch *S, const char *v) { to_real_exec(v, S->real); return is_can_owned(v) ? -EROFS : 0; }
+static long ro_delete(struct scratch *S, const char *v) { to_real_exec(v, S->real); return is_exclave_path(v) ? -EROFS : 0; }
 static void real_nofollow(struct scratch *S, int nofollow);
 static int dfd_virtual(int fd, char *out);
 
@@ -188,7 +188,7 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
 {
     int follow = !(flags & O_NOFOLLOW) && !((flags & O_CREAT) && (flags & O_EXCL));
     long r = resolve(S, a, pi, di, follow, 0);
-    if (nr == NR_openat2 && r <= 0 && !S->touched_can) {     /* a walk that never touched the can is the kernel's own to make, with every
+    if (nr == NR_openat2 && r <= 0 && !S->touched_exclave) {     /* a walk that never touched the can is the kernel's own to make, with every
                                                               * resolve flag, on the host's own mounts (13 item 22); RESOLVE_CACHED dropped */
         S->how0[2] &= ~(unsigned long)RESOLVE_CACHED;
         return RE5(NR_openat2, a[0], a[1], S->how0, 24, 0);
@@ -200,9 +200,9 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     if (flags & O_PATH) wr = creat = 0;
     size_t vl = xstrlen(S->v);
     if (creat && vl > 1 && S->v[vl - 1] == '/') return -EISDIR;   /* open_last_lookups: O_CREAT with a trailing slash, before any lookup */
-    if (wr && (flags & O_TMPFILE) != O_TMPFILE && C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;   /* the kernel protects a running program; the opener protects the one it loaded (13) */
+    if (wr && (flags & O_TMPFILE) != O_TMPFILE && C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;   /* the kernel protects a running program; the launcher protects the one it loaded (13) */
     if ((flags & O_NOFOLLOW) && !(flags & O_PATH) && vis_readlink_identity(S->v, S->tmp) == 1) return -ELOOP;   /* an identity file that is a host symlink (8.4) */
-    if (is_can_owned(S->v)) {
+    if (is_exclave_path(S->v)) {
         struct kstat st; int ex = exists_can(S, S->v, &st);
         long ae = ex ? 0 : absent_errno(S);                  /* the lookup's own error comes before the read-only answers */
         int dir = ex && (st.st_mode & S_IFMT) == S_IFDIR;
@@ -273,7 +273,7 @@ static long do_openat2(struct scratch *S, long *a)
         if ((r = dfd_virtual(dfd, S->v2)) < 0) return r;
     }
     S->resolve = (unsigned)rf;
-    S->how0[0] = flags; S->how0[1] = mode; S->how0[2] = rf; S->touched_can = 1;   /* as given, for a host-only walk; canon decides */
+    S->how0[0] = flags; S->how0[1] = mode; S->how0[2] = rf; S->touched_exclave = 1;   /* as given, for a host-only walk; canon decides */
     r = do_open(S, a, 1, 0, (long)flags, (long)mode, NR_openat2);
     S->resolve = 0;
     return r;
@@ -330,10 +330,10 @@ static long vec_read(struct scratch *S, void *region, size_t region_size, char *
     v[n] = 0; *out = v; return n;
 }
 
-/* The exec of a wrapper, or of the opener for a program on the loader path, with the identity the kernel would give
- * the program carried in the opener's own variables (7.4.5, 7.6): CAN_EXEC names the loader-path target, CAN_EXECFN
- * the path the program is exec'd by as the kernel spells it, CAN_COMM the name the kernel would set as comm. S->v2
- * and S->comm hold the last two from do_execve; an inherited copy of any of the three is dropped, and every opener
+/* The exec of a wrapper, or of the launcher for a program on the loader path, with the identity the kernel would give
+ * the program carried in the launcher's own variables (7.4.5, 7.6): EXCLAVE_EXEC names the loader-path target, EXCLAVE_EXECFN
+ * the path the program is exec'd by as the kernel spells it, EXCLAVE_COMM the name the kernel would set as comm. S->v2
+ * and S->comm hold the last two from do_execve; an inherited copy of any of the three is dropped, and every launcher
  * strips them before a program runs. The strings are the kernel's to validate. */
 static long exec_env(struct scratch *S, const char *path, char **argv, char **envp, const char *v, int loader)
 {
@@ -342,7 +342,7 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
     /* the head of every variable, 12 bytes, read in one process_vm_readv for up to 256 at a time rather than one call
      * each (PERFORMANCE.md 2.5); a variable the batch could not read whole, near the end of a mapping, is read on its own
      * as before, and the batch resumes after it (review O7). tmp holds the heads, rest the iovecs: both free until the end */
-    long n = 0; char head[12], *heads = S->tmp; struct iovec *riov = (struct iovec *)S->rest;
+    long n = 0; char head[16], *heads = S->tmp; struct iovec *riov = (struct iovec *)S->rest;
     for (long i = 0; i < envc;) {
         long k = envc - i, done = 0; if (k > 256) k = 256;
         if (!no_readv) {
@@ -355,15 +355,15 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
         for (long j = 0; j < (done < 0 ? 1 : done); j++, i++) {
             const char *h = heads + j * (long)sizeof head; long got = sizeof head;
             if (done < 0) { got = copy_in(S->pid, head, env[i], sizeof head); h = head; }
-            if (got >= 9 && (xmemcmp(h, "CAN_EXEC=", 9) == 0 || xmemcmp(h, "CAN_COMM=", 9) == 0 || (got >= 11 && xmemcmp(h, "CAN_EXECFN=", 11) == 0))) continue;
+            if (got >= 13 && (xmemcmp(h, "EXCLAVE_EXEC=", 13) == 0 || xmemcmp(h, "EXCLAVE_COMM=", 13) == 0 || (got >= 15 && xmemcmp(h, "EXCLAVE_EXECFN=", 15) == 0))) continue;
             env[n++] = env[i];
         }
     }
     int k = loader ? 3 : 2;
     for (long i = n; i > 0; i--) env[i + k - 1] = env[i - 1];
-    scpy(S->cur, "CAN_EXECFN=", PATH_MAX); scat(S->cur, S->v2, PATH_MAX);
-    scpy(S->rest, "CAN_COMM=", PATH_MAX); scat(S->rest, S->comm, PATH_MAX);
-    if (loader) { scpy(S->b1, "CAN_EXEC=", PATH_MAX); scat(S->b1, v, PATH_MAX); env[0] = S->b1; }
+    scpy(S->cur, "EXCLAVE_EXECFN=", PATH_MAX); scat(S->cur, S->v2, PATH_MAX);
+    scpy(S->rest, "EXCLAVE_COMM=", PATH_MAX); scat(S->rest, S->comm, PATH_MAX);
+    if (loader) { scpy(S->b1, "EXCLAVE_EXEC=", PATH_MAX); scat(S->b1, v, PATH_MAX); env[0] = S->b1; }
     env[k - 2] = S->cur; env[k - 1] = S->rest; env[n + k] = 0;
     log_line("exec", 0, v);
     long r = RE5(NR_execve, path, argv, env, 0, 0);
@@ -410,7 +410,7 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
     long ok = sys_faccessat(AT_FDCWD, S->real, X_OK);           /* the kernel's answer for this process, triads and search included (O3-4) */
     if (ok < 0) return ok;
-    int wrapper = (is_can_owned(v) ? cache_classify(v, S->real, S->tmp) == CK_WRAPPER : is_wrapper_real(S->real, S->tmp))   /* remembered by the walk (7.4.4) */
+    int wrapper = (is_exclave_path(v) ? cache_classify(v, S->real, S->tmp) == CK_WRAPPER : is_wrapper_real(S->real, S->tmp))   /* remembered by the walk (7.4.4) */
                   && payload_of(S->real, S->tmp);
     long fd = open_header(wrapper ? S->tmp : S->real); if (fd < 0) return fd;
     unsigned char h[4]; long n = sys_read((int)fd, h, 4); sys_close((int)fd);
@@ -418,32 +418,32 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     if (script && cloexec) return -ENOENT;
     if (wrapper) {
         if (!script && !elf) return -ENOEXEC;
-        return exec_env(S, S->real, argv, envp, v, 0);      /* the kernel runs the opener under the program's name */
+        return exec_env(S, S->real, argv, envp, v, 0);      /* the kernel runs the launcher under the program's name */
     }
     /* not a wrapper: a host program, or an unwrapped can file */
     if (script) return exec_script(S, v, given, argv, envp, depth, Sp);
     if (!elf) return -ENOEXEC;
-    int another;                                             /* 7.4.5: a file carrying .note.cont is another opener: exec it as it is */
+    int another;                                             /* 7.4.5: a file carrying a launcher's note is another launcher: exec it as it is */
     int pr = elf_probe(S->real, S->tmp, &another, S->extra);
     if (pr < 0) return -ENOEXEC;                             /* a class, machine or header the loader (7.3) cannot load: the kernel's answer for a foreign file */
     if (another >= PAGE_GENERATION) { log_line("exec", 0, v); return RE5(NR_execve, S->real, argv, envp, 0, 0); }
-    if (another) return exec_env(S, C.opener, argv, envp, v, 1);   /* an opener whose page this filter traps: the child refuses it by name */
+    if (another) return exec_env(S, C.launcher, argv, envp, v, 1);   /* a launcher whose page this filter traps: the child refuses it by name */
     if (pr == 1) {                                           /* the loader the header names, resolved as loader_run resolves it (7.3): one that is not there
                                                               * is ENOENT here, as the kernel's open_exec answers; one that exists but is not the can's own
-                                                              * file, a host path or a data prefix, is left to the child opener, which refuses it by name */
+                                                              * file, a host path or a data prefix, is left to the child launcher, which refuses it by name */
         scpy(S->b1, S->tmp, PATH_MAX);
         if ((e = canon(S, S->b1, AT_FDCWD, 1, S->tmp)) < 0) return e;
-        if (is_can_owned(S->tmp) && !vis_in_data(S->tmp)) {
+        if (is_exclave_path(S->tmp) && !vis_in_data(S->tmp)) {
             if ((e = sys_stat(to_real(S->tmp, S->real, S->b2), st)) < 0) return e;   /* to_real is done with b2 before the stat fills it */
             if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;  /* do_open_execat: a loader that is not a regular file */
         }
     }
-    return exec_env(S, C.opener, argv, envp, v, 1);
+    return exec_env(S, C.launcher, argv, envp, v, 1);
 }
 
 /* a descriptor with no path (13 item 25): a memfd, or a file unlinked since it was opened. The kernel runs the file
- * behind the descriptor; the opener runs it on the loader path named through /proc/self/fd, by a dup without
- * close-on-exec that the child opener closes once the segments are mapped, and the child answers the link's text for
+ * behind the descriptor; the launcher runs it on the loader path named through /proc/self/fd, by a dup without
+ * close-on-exec that the child launcher closes once the segments are mapped, and the child answers the link's text for
  * /proc/self/exe as the kernel does. A script goes to its interpreter as /dev/fd/N, the kernel's spelling, and a
  * close-on-exec script is ENOENT, since the interpreter could not open it (execveat(2)) */
 #ifndef F_DUPFD
@@ -471,9 +471,9 @@ static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp,
         return exec_script(S, S->v, S->v, argv, envp, 0, Sp);
     }
     if (!(k == 4 && head[0] == 0x7f && head[1] == 'E' && head[2] == 'L' && head[3] == 'F')) return -ENOEXEC;
-    long m = sys_fcntl(fd, F_DUPFD, 3); if (m < 0) return m;   /* inherited by the child opener, which closes it after the mapping */
+    long m = sys_fcntl(fd, F_DUPFD, 3); if (m < 0) return m;   /* inherited by the child launcher, which closes it after the mapping */
     ltoa_(m, n); scpy(S->v, "/proc/self/fd/", PATH_MAX); scat(S->v, n, PATH_MAX);
-    long r = exec_env(S, C.opener, argv, envp, S->v, 1);
+    long r = exec_env(S, C.launcher, argv, envp, S->v, 1);
     sys_close((int)m);                                       /* only reached when the exec failed */
     return r;
 }
@@ -541,7 +541,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         ans = S->tmp;
         /* another process's exe link that names a wrapped script: that process runs the script's interpreter,
          * which is what the kernel would report natively (F3-22) */
-        if (xstrncmp(S->v, "/proc/", 6) == 0 && xstrlen(S->v) > 4 && xstrcmp(S->v + xstrlen(S->v) - 4, "/exe") == 0 && is_can_owned(ans)) {
+        if (xstrncmp(S->v, "/proc/", 6) == 0 && xstrlen(S->v) > 4 && xstrcmp(S->v + xstrlen(S->v) - 4, "/exe") == 0 && is_exclave_path(ans)) {
             scpy(S->v2, ans, PATH_MAX);
             to_real_exec(S->v2, S->real);
             if (is_wrapper_real(S->real, S->b2) && payload_of(S->real, S->b2)) {
@@ -639,7 +639,7 @@ static long fd_can(struct scratch *S, int fd)
 {
     long r = dfd_virtual(fd, S->v);
     if (r < 0) return 0;                                     /* pipes, sockets, deleted: the kernel decides */
-    return S->v[0] == '/' && is_can_owned(S->v);
+    return S->v[0] == '/' && is_exclave_path(S->v);
 }
 
 /* the real path for a stat: with no-follow, an identity file is the host's own symlink, so that lstat and
@@ -674,7 +674,7 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
     xmemcpy(S->b1, S->extra + 2, n); S->b1[n] = 0;
     if (S->b1[0] != '/') { r = sys_faccessat(AT_FDCWD, ".", X_OK); if (r < 0) return r; }
     if ((r = canon(S, S->b1, AT_FDCWD, nr == NR_connect, S->v)) < 0) { scpy(S->v, S->b1, PATH_MAX); return r; }
-    if (!is_can_owned(S->v)) {                                /* a host path: the kernel gets the resolved real path, as for every
+    if (!is_exclave_path(S->v)) {                                /* a host path: the kernel gets the resolved real path, as for every
                                                               * other syscall, since a can symlink may have led here (oracle 17.7) */
         to_real(S->v, S->real, S->tmp);
         size_t rl = xstrlen(S->real), gl = xstrlen(S->b1);
@@ -696,7 +696,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_open:   return do_open(S, a, 0, -1, a[1], a[2], NR_openat);
     case NR_openat: return do_open(S, a, 1, 0, a[2], a[3], NR_openat);
     case NR_openat2: return do_openat2(S, a);
-#ifndef CONT_TEST_OLD                                        /* build/opener-old: the previous version, which does not know them (17.4) */
+#ifndef EXCLAVE_TEST_OLD                                        /* build/launcher-old: the previous version, which does not know them (17.4) */
     case NR_bind: case NR_connect: return do_sockaddr(S, a, nr);
 #endif
     case NR_creat:  return do_open(S, a, 0, -1, O_CREAT | O_WRONLY | O_TRUNC, a[1], NR_openat);
@@ -721,7 +721,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         r = nr == NR_faccessat2 ? RE5(nr, AT_FDCWD, S->real, mode, fl | AT_SYMLINK_NOFOLLOW, 0) : RE5(NR_faccessat, AT_FDCWD, S->real, mode, 0, 0);
         /* do_faccessat: the lookup's and the permission's own answers come first; then a write the permission allows on a
          * regular file, a directory or a symlink under a read-only mount is EROFS, and a special file never is */
-        if (r < 0 || !(mode & W_OK) || !is_can_owned(S->v)) return r;
+        if (r < 0 || !(mode & W_OK) || !is_exclave_path(S->v)) return r;
         struct kstat st; if (sys_lstat(S->real, &st) < 0) return r;
         int m = st.st_mode & S_IFMT;
         return m == S_IFREG || m == S_IFDIR || m == S_IFLNK ? -EROFS : r;
@@ -745,7 +745,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_truncate:
         if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
         if (C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;
-        if (is_can_owned(S->v)) {                            /* vfs_truncate: EISDIR and EINVAL for what cannot be truncated, then EROFS */
+        if (is_exclave_path(S->v)) {                            /* vfs_truncate: EISDIR and EINVAL for what cannot be truncated, then EROFS */
             struct kstat *st = (struct kstat *)S->b2; int ex = exists_can(S, S->v, st);
             if (!ex) return absent_errno(S);
             if ((st->st_mode & S_IFMT) == S_IFDIR) return -EISDIR;
@@ -793,7 +793,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         int nsp = last_special(S->b1);
         /* the kernel's order (do_renameat2, oracles 17.1 and 17.7): different mounts first, then a last component
          * that is "." or "..", then the write check, then the lookups */
-        int oc = is_can_owned(S->v2), nc = is_can_owned(S->v);
+        int oc = is_exclave_path(S->v2), nc = is_exclave_path(S->v);
         if (oc != nc) return -EXDEV;
         if (osp) return -EBUSY;
         if (nsp) return (fl & RENAME_NOREPLACE) ? -EEXIST : -EBUSY;
@@ -817,7 +817,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         { size_t l = xstrlen(S->cur); if (l > 1 && S->cur[l - 1] == '/') S->cur[l - 1] = 0; }
         if (exists_can(S, S->cur, &st)) return -EEXIST;
         if ((r = ro_create(S, S->v, 0))) return r;
-        if (is_can_owned(S->v2)) return -EXDEV;
+        if (is_exclave_path(S->v2)) return -EXDEV;
         to_real_exec(S->v2, S->b1); to_real_exec(S->v, S->real);
         return RE5(NR_linkat, AT_FDCWD, S->b1, AT_FDCWD, S->real, fl & ~AT_SYMLINK_FOLLOW & ~AT_EMPTY_PATH);
     }
@@ -865,7 +865,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
             if (!fd_can(S, (int)a[0])) return RE5(nr, a[0], a[1], a[2], a[3], 0);
             return badns ? -EINVAL : -EROFS;
         }
-        if (is_can_owned(S->v)) {                            /* the name's own error, then the times, then the write */
+        if (is_exclave_path(S->v)) {                            /* the name's own error, then the times, then the write */
             struct kstat st; if (!exists_can(S, S->v, &st)) return absent_errno(S);
             return badns ? -EINVAL : -EROFS;
         }
@@ -905,7 +905,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
         to_real(S->v, S->real, S->tmp);
         r = RE5(NR_statfs, S->real, a[1], 0, 0, 0);
-        return r == 0 && is_can_owned(S->v) ? ro_flag(S, (char *)a[1] + STATFS_FLAGS_OFF) : r;
+        return r == 0 && is_exclave_path(S->v) ? ro_flag(S, (char *)a[1] + STATFS_FLAGS_OFF) : r;
     case NR_fstatfs:
         r = RE5(NR_fstatfs, a[0], a[1], 0, 0, 0);
         return r == 0 && fd_can(S, (int)a[0]) ? ro_flag(S, (char *)a[1] + STATFS_FLAGS_OFF) : r;
@@ -940,7 +940,7 @@ static const char *sysname(int nr)
 {
     switch (nr) {
     case NR_open: case NR_openat: case NR_creat: case NR_openat2: return "open";
-#ifndef CONT_TEST_OLD
+#ifndef EXCLAVE_TEST_OLD
     case NR_bind: return "bind";
     case NR_connect: return "connect";
 #endif
@@ -985,7 +985,7 @@ static void on_sigsys(int sig, void *info, void *uc)
     pid_t pid = (pid_t)sys_getpid(), tid = (pid_t)sys_gettid();
     unsigned long frame = (unsigned long)__builtin_frame_address(0);
     int depth = nest_enter(pid, tid, frame);
-    if (depth > 1 && ip >= C.text_lo && ip < C.text_hi) die("the opener trapped its own syscall", 0, nr);
+    if (depth > 1 && ip >= C.text_lo && ip < C.text_hi) die("the launcher trapped its own syscall", 0, nr);
     if (depth > 64) die("signal handlers nested too deep (or left behind by longjmp on another stack)", 0, 0);
     long a[6] = { g[REG_ARG0], g[REG_ARG1], g[REG_ARG2], g[REG_ARG3], g[REG_ARG4], g[REG_ARG5] };
     struct scratch *S = scratch_get(pid, tid, frame);

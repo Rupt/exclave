@@ -4,7 +4,7 @@
 Every syscall in the kernel's table for this machine is classified here: x86-64's unistd_64.h, or the
 generic table aarch64 uses. One at or below the filter's ceiling that this file does not know fails the test;
 one above it, which the running kernel is probed for, is a note, since the filter traps it and the handler
-answers ENOSYS until it is classified here and the ceiling moves (7.4.2). The opener's trap list (src/filter.c) must equal
+answers ENOSYS until it is classified here and the ceiling moves (7.4.2). The launcher's trap list (src/filter.c) must equal
 TRAP, and its refusals must cover DENIED; the numbers in src/sys.h's block for this machine must be the
 kernel's.
 
@@ -115,7 +115,7 @@ def kernel_probe(lo, hi):
     return present
 
 
-def opener_lists():
+def launcher_lists():
     """The trap list and the refusal lists of src/filter.c, by name."""
     src = open(os.path.join(REPO, "src", "filter.c")).read()
     sysh = open(os.path.join(REPO, "src", "sys.h")).read()
@@ -166,20 +166,20 @@ def main():
         if nr <= HIGHEST_KNOWN and name not in known:
             print("FAIL unclassified syscall %d %s below the filter's ceiling" % (nr, name))
             fails += 1
-    trap, denied, numbers = opener_lists()
+    trap, denied, numbers = launcher_lists()
     trap_fixed = {"newfstatat" if n == "fstatat" else n for n in trap}
     for n in sorted(TRAP - trap_fixed):
-        print("FAIL path syscall %s is not in the opener's trap list" % n)
+        print("FAIL path syscall %s is not in the launcher's trap list" % n)
         fails += 1
     for n in sorted(trap_fixed - TRAP):
-        print("FAIL the opener traps %s, which this table does not call path-taking" % n)
+        print("FAIL the launcher traps %s, which this table does not call path-taking" % n)
         fails += 1
     for n in sorted(DENIED - denied):
         print("FAIL %s should be refused by the filter" % n)
         fails += 1
     for n in sorted(TRAP | DENIED):
         if n in table and n in numbers and numbers[n] != table[n]:
-            print("FAIL %s: opener number %d, kernel %d" % (n, numbers[n], table[n]))
+            print("FAIL %s: launcher number %d, kernel %d" % (n, numbers[n], table[n]))
             fails += 1
     print("%d syscalls in the table: %d trapped, %d refused, %d with paths in structs, %d without paths; %d failures"
           % (len(table), len(TRAP & set(table)), len(DENIED & set(table)), len(STRUCT_PATH & set(table)), len(NONPATH & set(table)), fails))

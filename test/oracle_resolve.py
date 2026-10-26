@@ -3,7 +3,7 @@
 
 A random maze of directories, files and symlinks (relative, absolute, dangling, looping, with `..` and
 trailing slashes) is added to a copy of a can under /maze. Every generated path is resolved twice: by
-the kernel with openat2(RESOLVE_IN_ROOT) on the tree, which has chroot semantics, and by the opener
+the kernel with openat2(RESOLVE_IN_ROOT) on the tree, which has chroot semantics, and by the launcher
 from inside the can. The resulting paths and errnos must agree.
 
     test/oracle_resolve.py --can CAN [--work DIR] [--paths N] [--seed S] [--keep]
@@ -158,7 +158,7 @@ def main():
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     answers = p.stdout.decode(errors="replace").splitlines()
     if len(answers) != len(paths):
-        sys.exit("the opener answered %d of %d paths: %s" % (len(answers), len(paths), p.stderr.decode(errors="replace")[-500:]))
+        sys.exit("the launcher answered %d of %d paths: %s" % (len(answers), len(paths), p.stderr.decode(errors="replace")[-500:]))
     rootfd = os.open(root, os.O_PATH)
     fails, agree = 0, 0
     for path, ans in zip(paths, answers):
@@ -174,7 +174,7 @@ def main():
         else:
             fails += 1
             if fails <= 25:
-                print("DIFF %-60s kernel=%s opener=%s" % (path[:60], k, ans))
+                print("DIFF %-60s kernel=%s launcher=%s" % (path[:60], k, ans))
     print("%d paths: %d agree, %d differ" % (len(paths), agree, fails))
     if not a.keep and not fails:
         shutil.rmtree(work, ignore_errors=True)
