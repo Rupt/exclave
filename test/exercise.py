@@ -1,14 +1,20 @@
-"""exercise.py — one program, two worlds (DESIGN.md 17): compile PROG.c with the exclave's compiler, run it under bwrap with
-the unwrapped tree read-only at / (the namespace oracle's world, where the kernel answers) and under the launcher, and
-print the two outputs side by side, marking the lines that differ. This is how a limitation is measured before it is
-fixed: the program prints one line per case, "<case>: <answer>", and the kernel's column is the expectation.
+"""exercise.py — one program, two worlds (DESIGN.md 17).
 
-    scripts/exercise --exclave EXCLAVE PROG.c [ARGS...]     HOSTDIR in ARGS is replaced by a fresh writable host directory
+Compile PROG.c with the exclave's compiler, run it under bwrap with the unwrapped tree read-only
+at / (the namespace oracle's world, where the kernel answers) and under the launcher, and print the
+two outputs side by side, marking the lines that differ. This is how a limitation is measured
+before it is fixed: the program prints one line per case, "<case>: <answer>", and the kernel's
+column is the expectation.
 
-The work lives under build/exercise/<exclave>-<hashes file's hash>: a copy of the exclave relinked with build/launcher, and relinked again whenever the
-build has changed since, the unwrapped tree for bwrap, both with a socket file at /usr/share/exclave-test.sock and the
-suite's marker. Needs bwrap and user namespaces; says so and exits 1 when it cannot run. Exit status: the number of
-lines that differ.
+    scripts/exercise --exclave EXCLAVE PROG.c [ARGS...]
+
+HOSTDIR in ARGS is replaced by a fresh writable host directory.
+
+The work lives under build/exercise/<exclave>-<hashes file's hash>: a copy of the exclave relinked
+with build/launcher, and relinked again whenever the build has changed since, the unwrapped tree
+for bwrap, both with a socket file at /usr/share/exclave-test.sock and the suite's marker. Needs
+bwrap and user namespaces; says so and exits 1 when it cannot run. Exit status: the number of lines
+that differ.
 """
 
 import argparse
@@ -29,23 +35,23 @@ import build  # noqa: E402
 import exclave  # noqa: E402
 
 
-def setup(ex0, work) -> None:
+def setup(ex0: str, work: str) -> None:
     """A wrapped copy for the launcher and an unwrapped tree for bwrap, made once per exclave."""
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
-    ex = tree.fresh_exclave(
-        ex0, os.path.join(work, "exclave")
-    )  # a copy relinked with the build (17)
+    # a copy relinked with the build (17)
+    ex = tree.fresh_exclave(ex0, os.path.join(work, "exclave"))
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(
         os.path.join(ex, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy
     )
-    build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
+    build.unwrap(os.path.join(work, "bare"), log=lambda *_: None)
     for r in (root, os.path.join(ex, "tree")):
         tree.socket_file(os.path.join(r, "usr", "share", "exclave-test.sock"))
         with open(os.path.join(r, "usr", "share", "exclave-test-marker"), "w") as f:
             f.write("marker\n")
-    for f in oracle_ns.IDENTITY:  # as the namespace oracle: the host's link text, its target bound
+    # as the namespace oracle: the host's link text, its target bound
+    for f in oracle_ns.IDENTITY:
         p_ = os.path.join(root, f.lstrip("/"))
         if os.path.islink(f) and os.path.lexists(p_):
             os.remove(p_)
@@ -54,10 +60,11 @@ def setup(ex0, work) -> None:
             tp = os.path.join(root, t.lstrip("/"))
             if not os.path.lexists(tp) and not t.startswith(("/run/", "/tmp/", "/dev/", "/proc/")):
                 os.makedirs(os.path.dirname(tp), exist_ok=True)
-                open(tp, "wb").close()
+                with open(tp, "wb"):
+                    pass
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -73,13 +80,13 @@ def main():
             ["bwrap", "--ro-bind", "/", "/", "true"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            check=False,
         ).returncode
     ):
         sys.exit("bwrap or user namespaces unavailable; the kernel's world cannot be made here")
     ex0 = os.path.abspath(a.exclave)
-    key = hashlib.blake2b(
-        open(os.path.join(ex0, ".exclave", "hashes"), "rb").read(), digest_size=6
-    ).hexdigest()
+    with open(os.path.join(ex0, ".exclave", "hashes"), "rb") as f:
+        key = hashlib.blake2b(f.read(), digest_size=6).hexdigest()
     work = os.path.join(
         REPO, "build", "exercise", os.path.basename(ex0).replace(".exclave", "") + "-" + key
     )
@@ -90,9 +97,8 @@ def main():
     ex, root = os.path.join(work, "exclave"), os.path.join(work, "bare", "tree")
     r = os.path.join(ex, "tree")
     machine = os.uname().machine
-    oracle_ns.GCC = (
-        tree.compiler(r, machine) or oracle_ns.GCC
-    )  # the tree's spellings for both worlds
+    # the tree's spellings for both worlds
+    oracle_ns.GCC = tree.compiler(r, machine) or oracle_ns.GCC
     oracle_ns.SH, oracle_ns.SHX, oracle_ns.LIBC = (
         tree.vbin(r, "sh"),
         tree.resolve(r, tree.vbin(r, "sh")),
@@ -106,6 +112,7 @@ def main():
         env={"PATH": "/usr/bin:/bin"},
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        check=False,
     )
     if p.returncode:
         sys.exit("compile: " + p.stdout.decode(errors="replace"))
@@ -121,7 +128,7 @@ def main():
     fresh()
     rc_o, out_o, err_o = oracle_ns.run_launcher(ex, work, argv, prog=prog)
     lb, lo = out_b.splitlines(), out_o.splitlines()
-    print("%-45s | %-30s | %-30s" % ("case", "kernel (bwrap)", "launcher"))
+    print(f"{'case':<45} | {'kernel (bwrap)':<30} | {'launcher':<30}")
     differ = 0
     for i in range(max(len(lb), len(lo))):
         b = lb[i] if i < len(lb) else "(missing)"
@@ -130,20 +137,12 @@ def main():
         co, _, ro = o.partition(": ")
         same = cb == co and rb == ro
         differ += not same
-        print(
-            "%-45s | %-30s | %-30s%s"
-            % (cb[:45], rb, ro if co == cb else o, "" if same else "   <-- differs")
-        )
-    print(
-        "rc: bwrap=%d launcher=%d; %d differ%s%s"
-        % (
-            rc_b,
-            rc_o,
-            differ,
-            f"; bwrap stderr: {err_b[:200]!r}" if err_b else "",
-            f"; launcher stderr: {err_o[:200]!r}" if err_o else "",
-        )
-    )
+        shown = ro if co == cb else o
+        mark = "" if same else "   <-- differs"
+        print(f"{cb[:45]:<45} | {rb:<30} | {shown:<30}{mark}")
+    eb = f"; bwrap stderr: {err_b[:200]!r}" if err_b else ""
+    eo = f"; launcher stderr: {err_o[:200]!r}" if err_o else ""
+    print(f"rc: bwrap={rc_b:d} launcher={rc_o:d}; {differ:d} differ{eb}{eo}")
     return differ
 
 

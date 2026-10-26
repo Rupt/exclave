@@ -1,17 +1,21 @@
-"""matrix.py — the kernel matrix (DESIGN.md 12, 17 item 5): an exclave built here, run in virtual machines.
+"""matrix.py — the kernel matrix (DESIGN.md 12, 17 item 5).
 
-    scripts/matrix --exclave EXCLAVE [--only NAME,...] [--work DIR] [--images DIR] [--memory MB] [--arm64 --debs-arm64 DIR]
-                   [--docker-profile FILE]
+An exclave built here, run in virtual machines.
 
-Each row of VMS names a distribution cloud image. The image is downloaded once, booted under QEMU with
-KVM behind a copy-on-write overlay and a cloud-init seed that installs strace (and bubblewrap
-where it exists), the exclave, the pinned Python built for the VM's machine and libc, and this repository's
-test tree and launcher are copied in over SSH, and the
-regression suite runs there; the oracles, the syscall probe and, given the profile, the Docker-profile run follow where bubblewrap works.
-One VM at a time, 1 GB each, 2 GB for the emulated row. Results go to build/matrix-results.md.
+    scripts/matrix --exclave EXCLAVE [--only NAME,...] [--work DIR] [--images DIR] [--memory MB]
+                   [--arm64 --debs-arm64 DIR] [--docker-profile FILE]
+
+Each row of VMS names a distribution cloud image. The image is downloaded once, booted under QEMU
+with KVM behind a copy-on-write overlay and a cloud-init seed that installs strace (and bubblewrap
+where it exists), the exclave, the pinned Python built for the VM's machine and libc, and this
+repository's test tree and launcher are copied in over SSH, and the regression suite runs there;
+the oracles, the syscall probe and, given the profile, the Docker-profile run follow where
+bubblewrap works. One VM at a time, 1 GB each, 2 GB for the emulated row. Results go to
+build/matrix-results.md.
 """
 
 import argparse
+import contextlib
 import os
 import shutil
 import socket
@@ -27,8 +31,9 @@ UV = os.path.join(REPO, ".uv", "bin", "uv")
 sys.path.insert(0, HERE)
 import tree  # noqa: E402
 
-# name, expected kernel, ssh user, image URL candidates (first that downloads wins), package family, notes, arch
-VMS = [
+# name, expected kernel, ssh user, image URL candidates (first that downloads wins), package family,
+# notes, arch
+VMS: list[tuple[str, str, str, list[str], str, str, str]] = [
     (
         "centos-7",
         "3.10",
@@ -119,7 +124,8 @@ VMS = [
         "musl host, busybox",
         "x86_64",
     ),
-    # aarch64 under TCG (12): the same suite and oracles, the arm64 launcher and exclave, ten to twenty times slower
+    # aarch64 under TCG (12): the same suite and oracles, the arm64 launcher and exclave, ten to
+    # twenty times slower
     (
         "noble-arm64",
         "6.8",
@@ -131,8 +137,9 @@ VMS = [
     ),
 ]
 
-# what a VM installs for the oracles; Python is not among them: the payload carries the pinned one (pinned_python)
-PACKAGES = {
+# what a VM installs for the oracles; Python is not among them: the pinned one, which
+# pinned_python makes, is in the payload
+PACKAGES: dict[str, list[str]] = {
     "apt": ["strace", "bubblewrap"],
     "dnf": ["strace", "bubblewrap"],
     "apk": ["strace", "bubblewrap", "bash"],
@@ -140,24 +147,27 @@ PACKAGES = {
 }
 
 
-def log(*a) -> None:
+def log(*a: object) -> None:
     print(time.strftime("%H:%M:%S"), *a, flush=True)
 
 
-def fetch(url, dst, tries=4) -> bool:
-    """Download with resume and a length check: a connection that closes early must not leave a short image."""
+def fetch(url: str, dst: str, tries: int = 4) -> bool:
+    """Download with resume and a length check.
+
+    A connection that closes early must not leave a short image.
+    """
     if os.path.exists(dst):
         return True
     tmp = dst + ".tmp"
     for attempt in range(tries):
         have = os.path.getsize(tmp) if os.path.exists(tmp) else 0
-        log("downloading", url, "from byte %d" % have if have else "")
+        log("downloading", url, f"from byte {have:d}" if have else "")
         try:
             headers = {"User-Agent": "exclave-matrix/0.1"}
             if have:
-                headers["Range"] = "bytes=%d-" % have
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=120) as r:
+                headers["Range"] = f"bytes={have:d}-"
+            req = urllib.request.Request(url, headers=headers)  # noqa: S310 -- VMS's https URLs
+            with urllib.request.urlopen(req, timeout=120) as r:  # noqa: S310 -- VMS's https URLs
                 if have and r.status != 206:
                     have = 0  # no resume support: start over
                 total = r.headers.get("Content-Range", "").split("/")[-1] or r.headers.get(
@@ -170,10 +180,10 @@ def fetch(url, dst, tries=4) -> bool:
                     shutil.copyfileobj(r, f, 1 << 20)
             size = os.path.getsize(tmp)
             if total is not None and size != total:
-                log("short download: %d of %d bytes, retrying" % (size, total))
+                log(f"short download: {size:d} of {total:d} bytes, retrying")
                 continue
             os.replace(tmp, dst)
-            return True
+            return True  # noqa: TRY300 -- a failed rename is logged and retried like a download
         except Exception as e:  # noqa: BLE001
             log("failed:", e)
             if attempt == tries - 1 and os.path.exists(tmp) and os.path.getsize(tmp) == 0:
@@ -181,7 +191,7 @@ def fetch(url, dst, tries=4) -> bool:
     return False
 
 
-def free_port():
+def free_port() -> int:
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     p = s.getsockname()[1]
@@ -189,18 +199,15 @@ def free_port():
     return p
 
 
-def pinned_python(arch, libc):
-    """The tree of the pinned Python, the version running this, built for a VM's machine and libc: installed by the
-    repository's uv into its own Python directory (scripts/lib.sh), so a VM runs the suite on the same Python as the
-    reference machine whatever python3 its distribution has, or none. glibc builds need only glibc 2.17.
+def pinned_python(arch: str, libc: str) -> str:
+    """The tree of the pinned Python, the version running this, built for a VM's machine and libc.
+
+    Installed by the repository's uv into its own Python directory (scripts/lib.sh), so a VM runs
+    the suite on the same Python as the reference machine whatever python3 its distribution has, or
+    none. glibc builds need only glibc 2.17.
     """
-    name = "cpython-%d.%d.%d-linux-%s-%s" % (
-        sys.version_info[0],
-        sys.version_info[1],
-        sys.version_info[2],
-        arch,
-        libc,
-    )
+    v = sys.version_info
+    name = f"cpython-{v[0]:d}.{v[1]:d}.{v[2]:d}-linux-{arch}-{libc}"
     subprocess.run([UV, "python", "install", "--no-bin", "--quiet", name], check=True)
     tree_ = os.path.join(
         os.environ.get("UV_PYTHON_INSTALL_DIR", os.path.join(REPO, ".uv", "python")), name
@@ -210,7 +217,7 @@ def pinned_python(arch, libc):
     return tree_
 
 
-def without_tk(info):
+def without_tk(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
     """Tarfile filter: Tcl/Tk, which nothing here imports, stays out of the payload."""
     base = os.path.basename(info.name)
     return (
@@ -221,7 +228,7 @@ def without_tk(info):
     )
 
 
-def user_data(family, pubkey):
+def user_data(family: str, pubkey: str) -> str:
     pk = PACKAGES[family]
     if family == "centos7":
         return "\n".join(
@@ -230,18 +237,23 @@ def user_data(family, pubkey):
                 "ssh_authorized_keys:",
                 "  - " + pubkey,
                 "runcmd:",
-                "  - sed -i 's/^mirrorlist=/#mirrorlist=/; s|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|' /etc/yum.repos.d/CentOS-*.repo",
+                (
+                    "  - sed -i 's/^mirrorlist=/#mirrorlist=/; "
+                    "s|^#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|' "
+                    "/etc/yum.repos.d/CentOS-*.repo"
+                ),
                 "  - yum install -y " + " ".join(pk),
                 "  - touch /var/tmp/exclave-ready",
                 "",
             ]
         )
-    # apt installs the list in one transaction, so one package the mirror has dropped fails them all: Debian 11's security
-    # suite, winding down after its LTS, still lists a bubblewrap whose file is gone. Each package again on its own, then
-    # from the release's main suite
+    # apt installs the list in one transaction, so one package the mirror has dropped fails them
+    # all: Debian 11's security suite, winding down after its LTS, still lists a bubblewrap whose
+    # file is gone. Each package again on its own, then from the release's main suite
     retry = (
         [
-            "  - for p in {}; do dpkg -s $p >/dev/null 2>&1 || apt-get install -y $p || apt-get install -y $p=$(apt-cache madison $p | "
+            "  - for p in {}; do dpkg -s $p >/dev/null 2>&1 || apt-get install -y $p || "
+            "apt-get install -y $p=$(apt-cache madison $p | "
             "awk '!/security/ {{print $3; exit}}'); done".format(" ".join(pk))
         ]
         if family == "apt"
@@ -266,16 +278,17 @@ AAVMF = "/usr/share/AAVMF"
 
 
 class VM:
-    def __init__(self, name, image, work, user, port, memory, arch="x86_64") -> None:
+    def __init__(
+        self, name: str, image: str, work: str, user: str, port: int, *, memory: int, arch: str
+    ) -> None:
         self.name, self.user, self.port, self.work, self.arch = name, user, port, work, arch
         self.overlay = os.path.join(work, name + ".qcow2")
         subprocess.run(
             ["qemu-img", "create", "-q", "-f", "qcow2", "-b", image, "-F", "qcow2", self.overlay],
             check=True,
         )
-        subprocess.run(
-            ["qemu-img", "resize", "-q", self.overlay, "+8G"], check=True
-        )  # cloud-init grows the root; some images ship 2 GB
+        # cloud-init grows the root; some images ship 2 GB
+        subprocess.run(["qemu-img", "resize", "-q", self.overlay, "+8G"], check=True)
         self.seed = os.path.join(work, name + "-seed.iso")
         self.key = os.path.join(work, "id_ed25519")
         common = [
@@ -288,13 +301,12 @@ class VM:
             "-drive",
             f"file={self.seed},if=virtio,format=raw",
             "-netdev",
-            "user,id=n0,hostfwd=tcp:127.0.0.1:%d-:22" % port,
+            f"user,id=n0,hostfwd=tcp:127.0.0.1:{port:d}-:22",
             "-device",
             "virtio-net-pci,netdev=n0",
         ]
-        if (
-            arch == "aarch64"
-        ):  # no KVM for another architecture: TCG, and UEFI firmware, which arm64 images boot from
+        # no KVM for another architecture: TCG, and UEFI firmware, which arm64 images boot from
+        if arch == "aarch64":
             varstore = os.path.join(work, name + "-vars.fd")
             shutil.copyfile(os.path.join(AAVMF, "AAVMF_VARS.fd"), varstore)
             cmd = [
@@ -329,7 +341,7 @@ class VM:
             ]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def ssh(self, cmd, timeout=1800, quiet=False):
+    def ssh(self, cmd: str, timeout: float = 1800) -> tuple[int, str]:
         p = subprocess.run(
             [
                 "ssh",
@@ -351,10 +363,11 @@ class VM:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=timeout,
+            check=False,
         )
         return p.returncode, p.stdout.decode(errors="replace")
 
-    def scp(self, src, dst) -> None:
+    def scp(self, src: str, dst: str) -> None:
         subprocess.run(
             [
                 "scp",
@@ -375,7 +388,7 @@ class VM:
             check=True,
         )
 
-    def wait(self, deadline=600) -> bool:
+    def wait(self, deadline: float = 600) -> bool:
         t = time.time()
         while time.time() - t < deadline:
             if self.proc.poll() is not None:
@@ -390,10 +403,8 @@ class VM:
         return False
 
     def stop(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.ssh("sudo poweroff || doas poweroff || poweroff", timeout=20)
-        except Exception:  # noqa: BLE001
-            pass
         try:
             self.proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
@@ -422,7 +433,8 @@ def main() -> int:
     )
     ap.add_argument(
         "--docker-profile",
-        help="Docker's default seccomp profile (scripts/inputs fetches it); without it the Docker-profile run is left out",
+        help="Docker's default seccomp profile (scripts/inputs fetches it); "
+        "without it the Docker-profile run is left out",
     )
     a = ap.parse_args()
     if not shutil.which("qemu-system-x86_64") or not shutil.which("cloud-localds"):
@@ -433,33 +445,32 @@ def main() -> int:
     key = os.path.join(work, "id_ed25519")
     if not os.path.exists(key):
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
-    pubkey = open(key + ".pub").read().strip()
-    # the payload: the exclave (hard links preserved by tar) and the repository's test tree, exclave, launcher and, where the
-    # host has go, the Go regression's programs built for the VM's machine. For the
-    # aarch64 VM the payload carries the arm64 package files and the cross-built launchers under the suite's names:
-    # the exclave is unpacked and wrapped in the VM, on its own architecture (10.1).
-    payloads = {}
+    with open(key + ".pub") as f:
+        pubkey = f.read().strip()
+    # the payload: the exclave (hard links preserved by tar) and the repository's test tree,
+    # exclave, launcher and, where the host has go, the Go regression's programs built for the VM's
+    # machine. For the aarch64 VM the payload carries the arm64 package files and the cross-built
+    # launchers under the suite's names: the exclave is unpacked and wrapped in the VM, on its own
+    # architecture (10.1).
+    payloads: dict[tuple[str, str], str] = {}
 
-    def payload_for(arch, libc):
+    def payload_for(arch: str, libc: str) -> str:
         if (arch, libc) in payloads:
             return payloads[arch, libc]
         payload = os.path.join(work, f"payload-{arch}-{libc}.tar.gz")
         if True:  # packed afresh every run: a kept payload once carried a stale test tree
             log("packing the test tree for", arch)
             with tarfile.open(payload, "w:gz", compresslevel=1) as t:
-                for d in (
-                    "test",
-                    "exclave",
-                    "src",
-                ):  # src: the filter model the suite builds in the VM (filter_model)
+                # src: the filter model the suite builds in the VM (filter_model)
+                for d in ("test", "exclave", "src"):
                     t.add(os.path.join(REPO, d), arcname="repo/" + d)
-                t.add(
-                    os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE"
-                )  # the text the launcher carries, which exclave_readme compares
+                # the text the launcher carries, which exclave_readme compares
+                t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")
                 t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
                 if a.docker_profile:
                     t.add(a.docker_profile, arcname="docker-seccomp.json")
-                go = tree.go_toolchain()  # the Go regression's programs, built here for the VM's machine: the VMs have no go
+                # the Go regression's programs, built here for the VM's machine: the VMs have no go
+                go = tree.go_toolchain()
                 if go:
                     for n, p in tree.go_build(go, os.path.join(work, "go-" + arch), arch, work):
                         t.add(p, arcname=f"repo/build/go/{arch}/{n}")
@@ -471,9 +482,8 @@ def main() -> int:
                             os.path.join(REPO, "build", "launcher-old"),
                             arcname="repo/build/launcher-old",
                         )
-                    if os.path.exists(
-                        os.path.join(REPO, "build", "sysroot-hello")
-                    ):  # test/sysroot.py's output: runs natively on every glibc
+                    # test/sysroot.py's output: runs natively on every glibc
+                    if os.path.exists(os.path.join(REPO, "build", "sysroot-hello")):
                         t.add(
                             os.path.join(REPO, "build", "sysroot-hello"),
                             arcname="repo/build/sysroot-hello",
@@ -481,7 +491,8 @@ def main() -> int:
                 else:
                     if not a.debs_arm64:
                         sys.exit(
-                            "the aarch64 VM needs --debs-arm64 DIR, a directory of arm64 .deb files for the gcc exclave"
+                            "the aarch64 VM needs --debs-arm64 DIR, "
+                            "a directory of arm64 .deb files for the gcc exclave"
                         )
                     t.add(a.debs_arm64, arcname="debs")
                     t.add(
@@ -496,8 +507,9 @@ def main() -> int:
         payloads[arch, libc] = payload
         return payload
 
-    results = []
-    for name, kernel, user, urls, family, notes, arch in VMS:
+    results: list[tuple[str, str, str, str, str]] = []
+    for name, kernel, user, urls, family, row_notes, arch in VMS:
+        notes = row_notes
         if a.only and name not in a.only.split(","):
             continue
         if arch != "x86_64" and not a.arm64 and not (a.only and name in a.only.split(",")):
@@ -524,18 +536,18 @@ def main() -> int:
         )
         port = free_port()
         log("booting", name)
-        vm = VM(name, image, work, user, port, a.memory, arch)
+        vm = VM(name, image, work, user, port, memory=a.memory, arch=arch)
         try:
             if not vm.wait(deadline=600 * slow):
                 results.append(
                     (name, kernel, f"did not come up (see {name}-console.log)", "", notes)
                 )
                 continue
-            rc, uname = vm.ssh("uname -r")
+            _rc, uname = vm.ssh("uname -r")
             uname = uname.strip()
             log(name, "kernel", uname)
             vm.scp(payload, "payload.tar.gz")
-            rc, out = vm.ssh(
+            _rc, out = vm.ssh(
                 "mkdir -p m && cd m && tar xzf ../payload.tar.gz && echo unpacked",
                 timeout=600 * slow,
             )
@@ -543,11 +555,13 @@ def main() -> int:
                 results.append((name, uname, "cannot unpack: " + out[-200:], "", notes))
                 continue
             if arch != "x86_64":  # the exclave is made here, on its own architecture (10.1)
-                rc, out = vm.ssh(
-                    "cd m && $PWD/python/bin/python3 repo/exclave/exclave.py unpack ex debs/*.deb 2>&1 | tail -3 && $PWD/python/bin/python3 repo/exclave/exclave.py wrap ex 2>&1 | tail -3",
+                _rc, out = vm.ssh(
+                    "cd m && $PWD/python/bin/python3 repo/exclave/exclave.py unpack ex debs/*.deb "
+                    "2>&1 | tail -3 && "
+                    "$PWD/python/bin/python3 repo/exclave/exclave.py wrap ex 2>&1 | tail -3",
                     timeout=3600 * slow,
                 )
-                log(name, "exclave:", " | ".join(l.strip() for l in out.splitlines()[-3:]))
+                log(name, "exclave:", " | ".join(x.strip() for x in out.splitlines()[-3:]))
                 if "ex is wrapped" not in out:
                     results.append(
                         (
@@ -559,9 +573,11 @@ def main() -> int:
                         )
                     )
                     continue
-            else:  # the exclave given carries the launcher that made it: the row tests the checkout's
-                rc, out = vm.ssh(
-                    "cd m && $PWD/python/bin/python3 repo/exclave/exclave.py relink ex repo/build/launcher 2>&1 | tail -1",
+            else:
+                # the exclave given carries the launcher that made it: the row tests the checkout's
+                _rc, out = vm.ssh(
+                    "cd m && $PWD/python/bin/python3 repo/exclave/exclave.py "
+                    "relink ex repo/build/launcher 2>&1 | tail -1",
                     timeout=600 * slow,
                 )
                 if "relinked" not in out:
@@ -575,65 +591,81 @@ def main() -> int:
                         )
                     )
                     continue
-            rc, out = vm.ssh(
-                "cd m && $PWD/python/bin/python3 repo/test/run.py --exclave $PWD/ex --work $PWD/work --budget %d 2>&1"
-                % (60 * slow),
+            _rc, out = vm.ssh(
+                "cd m && $PWD/python/bin/python3 repo/test/run.py --exclave $PWD/ex "
+                f"--work $PWD/work --budget {60 * slow:d} 2>&1",
                 timeout=2400 * slow,
             )
             with open(os.path.join(work, name + "-suite.log"), "w") as f:
                 f.write(out)
-            suite = [l for l in out.splitlines() if "tests," in l]
+            suites = [x for x in out.splitlines() if "tests," in x]
             suite = (
-                suite[-1] if suite else "suite did not finish: " + out[-300:].replace("\n", " | ")
+                suites[-1] if suites else "suite did not finish: " + out[-300:].replace("\n", " | ")
             )
-            fails = [l for l in out.splitlines() if l.startswith("FAIL")]
+            fails = [x for x in out.splitlines() if x.startswith("FAIL")]
             log(name, suite)
             for f in fails:
                 log(name, f[:200])
-            # 12, 17.4: a noexec mount, made as root. Natively the shell answers EACCES; the launcher's loader cannot map
-            # a program there and says so; an exclave's shell answers EACCES as the kernel would (7.4.5).
-            rc, out = vm.ssh(
-                "S=sudo; command -v sudo >/dev/null 2>&1 || S=doas; echo 'int main(void){return 0;}' > nx.c && "
-                "m/ex/tree/usr/bin/$(uname -m)-linux-gnu-gcc-13 -o nxprog nx.c && $S mkdir -p /mnt/nx && $S mount -t tmpfs -o noexec tmpfs /mnt/nx && "
-                "$S cp nxprog /mnt/nx/prog && $S chmod 755 /mnt/nx/prog && mount | grep -q '/mnt/nx .*noexec' || { echo noexec setup failed; exit 0; }; "
-                "/mnt/nx/prog >/dev/null 2>&1; a=$?; m/ex/.exclave/launcher /mnt/nx/prog >/dev/null 2>&1; b=$?; "
-                "m/ex/tree/usr/bin/sh -c /mnt/nx/prog >/dev/null 2>&1; c=$?; $S umount /mnt/nx; echo noexec native=$a launcher=$b inside=$c",
+            # 12, 17.4: a noexec mount, made as root. Natively the shell answers EACCES; the
+            # launcher's loader cannot map a program there and says so; an exclave's shell answers
+            # EACCES as the kernel would (7.4.5).
+            _rc, out = vm.ssh(
+                "S=sudo; command -v sudo >/dev/null 2>&1 || S=doas; "
+                "echo 'int main(void){return 0;}' > nx.c && "
+                "m/ex/tree/usr/bin/$(uname -m)-linux-gnu-gcc-13 -o nxprog nx.c && "
+                "$S mkdir -p /mnt/nx && $S mount -t tmpfs -o noexec tmpfs /mnt/nx && "
+                "$S cp nxprog /mnt/nx/prog && $S chmod 755 /mnt/nx/prog && "
+                "mount | grep -q '/mnt/nx .*noexec' || { echo noexec setup failed; exit 0; }; "
+                "/mnt/nx/prog >/dev/null 2>&1; a=$?; "
+                "m/ex/.exclave/launcher /mnt/nx/prog >/dev/null 2>&1; b=$?; "
+                "m/ex/tree/usr/bin/sh -c /mnt/nx/prog >/dev/null 2>&1; c=$?; $S umount /mnt/nx; "
+                "echo noexec native=$a launcher=$b inside=$c",
                 timeout=120,
             )
-            noexec = [l for l in out.splitlines() if l.startswith("noexec ")]
-            noexec = noexec[-1] if noexec else "noexec: " + out[-120:].replace("\n", " | ")
+            noexecs = [x for x in out.splitlines() if x.startswith("noexec ")]
+            noexec = noexecs[-1] if noexecs else "noexec: " + out[-120:].replace("\n", " | ")
             log(name, noexec)
             notes = (notes + "; " if notes else "") + noexec
-            # 9: an output built inside the gcc exclave against an older glibc's sysroot (test/sysroot.py) runs natively here
-            rc, out = vm.ssh(
-                'if test -x m/repo/build/sysroot-hello; then o=$(m/repo/build/sysroot-hello 2>&1); r=$?; echo "sysroot-rc=$r $o"; else echo no-sysroot-hello; fi; '
+            # 9: an output built inside the gcc exclave against an older glibc's sysroot
+            # (test/sysroot.py) runs natively here
+            _rc, out = vm.ssh(
+                "if test -x m/repo/build/sysroot-hello; then "
+                "o=$(m/repo/build/sysroot-hello 2>&1); r=$?; "
+                'echo "sysroot-rc=$r $o"; else echo no-sysroot-hello; fi; '
                 "ldd --version 2>&1 | head -1",
                 timeout=60,
             )
-            sysroot = " ".join(l.strip() for l in out.splitlines() if l.strip())
+            sysroot = " ".join(x.strip() for x in out.splitlines() if x.strip())
+            # a glibc program has no loader on a musl host (9)
             ok = (
                 "sysroot-rc=0 hello from a sysroot build" in sysroot
                 or "no-sysroot-hello" in sysroot
                 or "musl libc" in sysroot
-            )  # a glibc program has no loader on a musl host (9)
+            )
             log(name, "sysroot output:", sysroot, "" if ok else "FAIL")
             notes += "; sysroot: " + sysroot + ("" if ok else " FAIL")
             if not ok:
                 fails.append("FAIL sysroot output did not run natively: " + sysroot)
             oracle = ""
-            # Ubuntu 24.04 images deny unprivileged user namespaces through AppArmor (kernel.apparmor_restrict_unprivileged_userns);
-            # the VM is the matrix's own, so it lifts the sysctl where it exists, as the reference machine's permitted session does
-            rc, out = vm.ssh(
-                "S=sudo; command -v sudo >/dev/null 2>&1 || S=doas; $S sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null; "
+            # Ubuntu 24.04 images deny unprivileged user namespaces through AppArmor
+            # (kernel.apparmor_restrict_unprivileged_userns); the VM is the matrix's own, so it
+            # lifts the sysctl where it exists, as the reference machine's permitted session does
+            _rc, out = vm.ssh(
+                "S=sudo; command -v sudo >/dev/null 2>&1 || S=doas; "
+                "$S sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null; "
                 "cd m && bwrap --ro-bind / / true 2>&1 && echo bwrap-ok"
             )
             if "bwrap-ok" in out:
                 _rc, out = vm.ssh(
-                    "cd m && $PWD/python/bin/python3 repo/test/oracle_resolve.py --exclave $PWD/ex --work $PWD/rw 2>&1 | tail -30; echo ====; "
-                    "$PWD/python/bin/python3 repo/test/oracle_ns.py --exclave $PWD/ex --work $PWD/nw 2>&1 | tail -40; echo ====; "
-                    "$PWD/python/bin/python3 repo/test/oracle_syscalls.py --exclave $PWD/ex --work $PWD/sw --show 5000 2>&1 | tail -20000; echo ====; "
+                    "cd m && $PWD/python/bin/python3 repo/test/oracle_resolve.py "
+                    "--exclave $PWD/ex --work $PWD/rw 2>&1 | tail -30; echo ====; "
+                    "$PWD/python/bin/python3 repo/test/oracle_ns.py "
+                    "--exclave $PWD/ex --work $PWD/nw 2>&1 | tail -40; echo ====; "
+                    "$PWD/python/bin/python3 repo/test/oracle_syscalls.py "
+                    "--exclave $PWD/ex --work $PWD/sw --show 5000 2>&1 | tail -20000; echo ====; "
                     + (
-                        "$PWD/python/bin/python3 repo/test/docker_profile.py --exclave $PWD/ex --profile $PWD/docker-seccomp.json --work $PWD/dw 2>&1 | tail -20"
+                        "$PWD/python/bin/python3 repo/test/docker_profile.py --exclave $PWD/ex "
+                        "--profile $PWD/docker-seccomp.json --work $PWD/dw 2>&1 | tail -20"
                         if a.docker_profile
                         else "echo 'docker profile: not given'"
                     ),
@@ -642,15 +674,15 @@ def main() -> int:
                 with open(os.path.join(work, name + "-oracles.log"), "w") as f:
                     f.write(out)
                 keep = [
-                    l.strip()
-                    for l in out.splitlines()
+                    x.strip()
+                    for x in out.splitlines()
                     if (
-                        "paths:" in l
-                        or "workloads," in l
-                        or "cases over" in l
-                        or l.startswith(("PASS exclave", "FAIL exclave"))
-                        or "cannot run" in l
-                        or "docker profile:" in l
+                        "paths:" in x
+                        or "workloads," in x
+                        or "cases over" in x
+                        or x.startswith(("PASS exclave", "FAIL exclave"))
+                        or "cannot run" in x
+                        or "docker profile:" in x
                     )
                 ]
                 oracle = " / ".join(keep) or out[-300:].replace("\n", " | ")
@@ -670,10 +702,10 @@ def main() -> int:
             results.append((name, kernel, f"error: {e}", "", notes))
         finally:
             vm.stop()
-    out = ["| VM | kernel | suite | oracles | notes |", "|---|---|---|---|---|"] + [
+    table = ["| VM | kernel | suite | oracles | notes |", "|---|---|---|---|---|"] + [
         "| {} | {} | {} | {} | {} |".format(*r) for r in results
     ]
-    text = "\n".join(out) + "\n"
+    text = "\n".join(table) + "\n"
     print(text)
     with open(os.path.join(REPO, "build", "matrix-results.md"), "w") as f:
         f.write(text)

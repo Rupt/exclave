@@ -1,11 +1,11 @@
 """syscalls.py — the path-syscall table test (DESIGN.md 17, item 5).
 
-Every syscall in the kernel's table for this machine is classified here: x86-64's unistd_64.h, or the
-generic table aarch64 uses. One at or below the filter's ceiling that this file does not know fails the test;
-one above it, which the running kernel is probed for, is a note, since the filter traps it and the handler
-answers ENOSYS until it is classified here and the ceiling moves (7.4.2). The launcher's trap list (src/filter.c) must equal
-TRAP, and its refusals must cover DENIED; the numbers in src/sys.h's block for this machine must be the
-kernel's.
+Every syscall in the kernel's table for this machine is classified here: x86-64's unistd_64.h, or
+the generic table aarch64 uses. One at or below the filter's ceiling that this file does not know
+fails the test; one above it, which the running kernel is probed for, is a note, since the filter
+traps it and the handler answers ENOSYS until it is classified here and the ceiling moves (7.4.2).
+The launcher's trap list (src/filter.c) must equal TRAP, and its refusals must cover DENIED; the
+numbers in src/sys.h's block for this machine must be the kernel's.
 
     test/syscalls.py [unistd.h]     default: the host's table for this machine
 """
@@ -14,6 +14,7 @@ import os
 import platform
 import re
 import sys
+lazy from collections.abc import Sequence
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -103,10 +104,10 @@ DENIED = {
     "umount2",
     "uselib",
 }
-# a path inside a struct or a name that is not a filesystem path: not translated; a datagram destination's
-# sockaddr_un (sendto, sendmsg, sendmmsg) reaches the kernel untranslated, which the visibility rule makes
-# harmless for /tmp, /run and /var/run and which 13 item 31 lists for exclave paths; bind and connect
-# translate theirs (TRAP)
+# a path inside a struct or a name that is not a filesystem path: not translated; a datagram
+# destination's sockaddr_un (sendto, sendmsg, sendmmsg) reaches the kernel untranslated, which the
+# visibility rule makes harmless for /tmp, /run and /var/run and which 13 item 31 lists for exclave
+# paths; bind and connect translate theirs (TRAP)
 STRUCT_PATH = {
     "accept",
     "accept4",
@@ -431,7 +432,8 @@ EXTRA = {
     469: "file_setattr",
     470: "listns",
 }
-# the highest number src/filter.c classifies; anything above is trapped and answered ENOSYS by rule 7.4.2
+# the highest number src/filter.c classifies; anything above is trapped and answered ENOSYS by
+# rule 7.4.2
 HIGHEST_KNOWN = 470
 
 
@@ -442,12 +444,15 @@ HEADERS = (
 )
 
 
-def selected_lines(text):
-    """The header's lines as a 64-bit, non-compat build sees them. Only __BITS_PER_LONG and __SYSCALL_COMPAT
-    are decided; an #ifdef on an architecture's choice (__ARCH_WANT_...) keeps both branches, so a form the
-    machine does not select can appear (sync_file_range2) and is classified rather than pruned.
+def selected_lines(text: str) -> str:
+    """The header's lines as a 64-bit, non-compat build sees them.
+
+    Only __BITS_PER_LONG and __SYSCALL_COMPAT are decided; an #ifdef on an architecture's choice
+    (__ARCH_WANT_...) keeps both branches, so a form the machine does not select can appear
+    (sync_file_range2) and is classified rather than pruned.
     """
-    stack, out = [], []
+    stack: list[bool | None] = []
+    out: list[str] = []
     for line in text.split("\n"):
         d = line.strip()
         if d.startswith("#if"):
@@ -472,9 +477,11 @@ def selected_lines(text):
     return "\n".join(out)
 
 
-def parse_table(text):
-    """Name to number from an x86-64 unistd_64.h, or from the generic table with its __NR3264_ indirections
-    and 32-bit-only blocks. __NR_syscalls is the count and arch_specific_syscall a reserved slot.
+def parse_table(text: str) -> dict[str, int]:
+    """Name to number from an x86-64 unistd_64.h, or from the generic table.
+
+    The generic table with its __NR3264_ indirections and 32-bit-only blocks. __NR_syscalls is the
+    count and arch_specific_syscall a reserved slot.
     """
     text = selected_lines(text)
     base = {n: int(v) for n, v in re.findall(r"#define __NR3264_([a-z0-9_]+)\s+(\d+)", text)}
@@ -487,9 +494,10 @@ def parse_table(text):
     return table
 
 
-def kernel_table(path=None, roots=("/",)):
-    """The machine's table from a given header, else from the first root that has one (a gcc exclave ships
-    linux-libc-dev, so an exclave's root can be tried before the host's).
+def kernel_table(path: str | None = None, roots: Sequence[str] = ("/",)) -> dict[str, int]:
+    """The machine's table from a given header, else from the first root that has one.
+
+    A gcc exclave ships linux-libc-dev, so an exclave's root can be tried before the host's.
     """
     if path is None:
         for r in roots:
@@ -503,15 +511,18 @@ def kernel_table(path=None, roots=("/",)):
             raise SystemExit(
                 "no syscall table on the host" + (" or in the exclave" if len(roots) > 1 else "")
             )
-    table = parse_table(open(path).read())
+    with open(path) as f:
+        table = parse_table(f.read())
     for nr, name in EXTRA.items():
         table.setdefault(name, nr)
     return table
 
 
-def kernel_probe(lo, hi):
-    """The numbers in [lo, hi] the running kernel implements: anything but ENOSYS. A userspace header lags
-    the kernel by years, so the table must be checked against the kernel itself.
+def kernel_probe(lo: int, hi: int) -> list[int]:
+    """The numbers in [lo, hi] the running kernel implements: anything but ENOSYS.
+
+    A userspace header lags the kernel by years, so the table must be checked against the kernel
+    itself.
     """
     import ctypes
     import errno
@@ -526,16 +537,19 @@ def kernel_probe(lo, hi):
     return present
 
 
-def launcher_lists():
+def launcher_lists() -> tuple[set[str], set[str], dict[str, int]]:
     """The trap list and the refusal lists of src/filter.c, by name."""
-    src = open(os.path.join(REPO, "src", "filter.c")).read()
-    sysh = open(os.path.join(REPO, "src", "sys.h")).read()
+    with open(os.path.join(REPO, "src", "filter.c")) as f:
+        src = f.read()
+    with open(os.path.join(REPO, "src", "sys.h")) as f:
+        sysh = f.read()
     x86, a64 = sysh.split("#if defined(__x86_64__)", 1)[1].split("#elif defined(__aarch64__)", 1)
     block = x86 if MACHINE == "x86_64" else a64.split("#else", 1)[0]
     numbers = {n: int(v) for n, v in re.findall(r"NR_([a-z0-9_]+) = (\d+)", block)}
 
-    def block(name):
+    def block(name: str) -> set[str]:
         m = re.search(name + r"\[\] = \{(.*?)\};", src, re.DOTALL)
+        assert m, f"no {name} in src/filter.c"
         out = set()
         for tok in re.findall(r"NR_([a-z0-9_]+)|(\d+) /\* (\w+) \*/", m.group(1)):
             if tok[0]:
@@ -549,8 +563,8 @@ def launcher_lists():
     m = re.search(r"#define HIGHEST_KNOWN_SYSCALL (\d+)", src)
     if m and int(m.group(1)) != HIGHEST_KNOWN:
         print(
-            "FAIL src/filter.c's HIGHEST_KNOWN_SYSCALL is %s, this table's is %d"
-            % (m.group(1), HIGHEST_KNOWN)
+            f"FAIL src/filter.c's HIGHEST_KNOWN_SYSCALL is {m.group(1)}, "
+            f"this table's is {HIGHEST_KNOWN:d}"
         )
     return trap, denied, numbers
 
@@ -559,36 +573,36 @@ def main() -> int:
     table = kernel_table(sys.argv[1] if len(sys.argv) > 1 else None)
     fails = 0
     known = TRAP | DENIED | STRUCT_PATH | NONPATH
-    for name in sorted(table, key=table.get):
+    for name in sorted(table, key=lambda n: table[n]):
         if name not in known:
-            print("FAIL unclassified syscall %d %s: is it path-taking?" % (table[name], name))
+            print(f"FAIL unclassified syscall {table[name]:d} {name}: is it path-taking?")
             fails += 1
     absent = sorted(known - set(table))
     if absent:
         print(
-            "note: %d names classified here are not in this kernel's table (forms the other architecture has): %s"
-            % (len(absent), " ".join(absent))
+            f"note: {len(absent):d} names classified here are not in this kernel's table "
+            f"(forms the other architecture has): {' '.join(absent)}"
         )
     by_nr = {v: k for k, v in table.items()}
     top = max(table.values())
     for nr in kernel_probe(top + 1, top + 64):
-        name = by_nr.get(nr, "unknown-%d" % nr)
+        name = by_nr.get(nr, f"unknown-{nr:d}")
         if name in known:
             continue
         if nr > HIGHEST_KNOWN:
             print(
-                "note: the kernel implements syscall %d (%s), above the filter's table: trapped, answered ENOSYS"
-                % (nr, name)
+                f"note: the kernel implements syscall {nr:d} ({name}), above the filter's table: "
+                "trapped, answered ENOSYS"
             )
         else:
             print(
-                "FAIL the kernel implements syscall %d (%s), which this table does not classify"
-                % (nr, name)
+                f"FAIL the kernel implements syscall {nr:d} ({name}), "
+                "which this table does not classify"
             )
             fails += 1
     for name, nr in table.items():
         if nr <= HIGHEST_KNOWN and name not in known:
-            print("FAIL unclassified syscall %d %s below the filter's ceiling" % (nr, name))
+            print(f"FAIL unclassified syscall {nr:d} {name} below the filter's ceiling")
             fails += 1
     trap, denied, numbers = launcher_lists()
     trap_fixed = {"newfstatat" if n == "fstatat" else n for n in trap}
@@ -603,18 +617,13 @@ def main() -> int:
         fails += 1
     for n in sorted(TRAP | DENIED):
         if n in table and n in numbers and numbers[n] != table[n]:
-            print("FAIL %s: launcher number %d, kernel %d" % (n, numbers[n], table[n]))
+            print(f"FAIL {n}: launcher number {numbers[n]:d}, kernel {table[n]:d}")
             fails += 1
+    names = set(table)
     print(
-        "%d syscalls in the table: %d trapped, %d refused, %d with paths in structs, %d without paths; %d failures"
-        % (
-            len(table),
-            len(TRAP & set(table)),
-            len(DENIED & set(table)),
-            len(STRUCT_PATH & set(table)),
-            len(NONPATH & set(table)),
-            fails,
-        )
+        f"{len(table):d} syscalls in the table: {len(TRAP & names):d} trapped, "
+        f"{len(DENIED & names):d} refused, {len(STRUCT_PATH & names):d} with paths in structs, "
+        f"{len(NONPATH & names):d} without paths; {fails:d} failures"
     )
     return 1 if fails else 0
 

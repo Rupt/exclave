@@ -1,11 +1,11 @@
-"""vm_run.py — run a script beside some files in each virtual machine of the kernel matrix (DESIGN.md 12).
+"""vm_run.py — run a script beside some files in each VM of the kernel matrix (DESIGN.md 12).
 
     test/vm_run.py --script SH [--only NAME,...] [--work DIR] [--images DIR] [--memory MB] FILE...
 
-For exclaves made to ship, where the matrix's suite does not apply: each x86-64 row of test/matrix.py boots as
-there, the files are copied into the home directory beside the script, `sh SCRIPT` runs from there, and
-its exit status and last lines are the row. The whole output of each row goes to WORK/NAME.log. Exit
-status 0 when every row booted and the script exited 0.
+For exclaves made to ship, where the matrix's suite does not apply: each x86-64 row of
+test/matrix.py boots as there, the files are copied into the home directory beside the script,
+`sh SCRIPT` runs from there, and its exit status and last lines are the row. The whole output of
+each row goes to WORK/NAME.log. Exit status 0 when every row booted and the script exited 0.
 """
 
 import argparse
@@ -37,8 +37,10 @@ def main() -> int:
     key = os.path.join(work, "id_ed25519")
     if not os.path.exists(key):
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
-    pubkey = open(key + ".pub").read().strip()
-    rows, fails = [], 0
+    with open(key + ".pub") as f:
+        pubkey = f.read().strip()
+    rows: list[tuple[str, str]] = []
+    fails = 0
     for name, _kernel, user, urls, family, _notes, arch in matrix.VMS:
         if arch != "x86_64" or (a.only and name not in a.only.split(",")):
             continue
@@ -61,7 +63,7 @@ def main() -> int:
             check=True,
         )
         matrix.log("booting", name)
-        vm = matrix.VM(name, image, work, user, matrix.free_port(), a.memory, arch)
+        vm = matrix.VM(name, image, work, user, matrix.free_port(), memory=a.memory, arch=arch)
         try:
             if not vm.wait(deadline=600):
                 rows.append((name, f"did not come up (see {name}-console.log)"))
@@ -73,14 +75,14 @@ def main() -> int:
             rc, out = vm.ssh(f"sh {os.path.basename(a.script)} 2>&1", timeout=3600)
             with open(os.path.join(work, name + ".log"), "w") as f:
                 f.write(out)
-            tail = " | ".join(l.strip() for l in out.strip().splitlines()[-3:])
-            matrix.log(name, uname, "rc=%d" % rc, tail)
-            rows.append((name, "%s rc=%d %s" % (uname, rc, tail)))
+            tail = " | ".join(line.strip() for line in out.strip().splitlines()[-3:])
+            matrix.log(name, uname, f"rc={rc:d}", tail)
+            rows.append((name, f"{uname} rc={rc:d} {tail}"))
             fails += 1 if rc else 0
         finally:
             vm.stop()
     for name, what in rows:
-        print("%-14s %s" % (name, what))
+        print(f"{name:<14} {what}")
     return 1 if fails else 0
 
 

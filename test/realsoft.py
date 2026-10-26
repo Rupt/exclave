@@ -2,9 +2,10 @@
 
     test/realsoft.py --exclave EXCLAVE --src DIR [--work DIR] [--jobs N] [--only NAME,...]
 
-DIR holds source tarballs: zlib, lua, sqlite-autoconf, re2c. Each is extracted twice and built with the
-host's toolchain and with the exclave's (through the exclave's own sh, so configure scripts run inside it).
-The built program is run in both worlds. Times are wall-clock for configure and for make.
+DIR holds source tarballs: zlib, lua, sqlite-autoconf, re2c. Each is extracted twice and built with
+the host's toolchain and with the exclave's (through the exclave's own sh, so configure scripts run
+inside it). The built program is run in both worlds. Times are wall-clock for configure and for
+make.
 """
 
 import argparse
@@ -18,7 +19,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
-PROJECTS = {
+PROJECTS: dict[str, tuple[str, str | None, str, str]] = {
     # name: (tarball prefix, configure command or None, make command, check command)
     "zlib": ("zlib-", "./configure", "make -j$J", "make test 2>&1 | tail -1"),
     "lua": ("lua-", None, "make -j$J linux", "src/lua -e 'print(_VERSION, 2^10)'"),
@@ -37,7 +38,7 @@ PROJECTS = {
 }
 
 
-def sh(cmd, cwd, env, ex=None):
+def sh(cmd: str, cwd: str, env: dict[str, str], ex: str | None = None) -> tuple[int, str]:
     if ex:
         p = subprocess.run(
             [os.path.join(ex, "tree", "usr", "bin", "sh"), "-c", cmd],
@@ -45,6 +46,7 @@ def sh(cmd, cwd, env, ex=None):
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            check=False,
         )
     else:
         p = subprocess.run(
@@ -53,11 +55,12 @@ def sh(cmd, cwd, env, ex=None):
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            check=False,
         )
     return p.returncode, p.stdout.decode(errors="replace")
 
 
-def timed(cmd, cwd, env, ex):
+def timed(cmd: str, cwd: str, env: dict[str, str], ex: str | None) -> tuple[float, int, str]:
     t = time.time()
     rc, out = sh(cmd, cwd, env, ex)
     return time.time() - t, rc, out
@@ -79,11 +82,11 @@ def main() -> int:
     os.makedirs(work)
     import tree
 
-    ex = tree.fresh_exclave(
-        os.path.abspath(a.exclave), os.path.join(work, "exclave")
-    )  # a copy relinked with the build (17)
+    # a copy relinked with the build (17)
+    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "exclave"))
     env = {"PATH": "/usr/bin:/bin", "HOME": work, "J": str(a.jobs), "LANG": "C"}
-    rows, failures = [], []
+    rows: list[tuple[str, str, str, str, str]] = []
+    failures: list[str] = []
     for name, (prefix, conf, mk, check) in PROJECTS.items():
         if a.only and name not in a.only.split(","):
             continue
@@ -92,7 +95,7 @@ def main() -> int:
             rows.append((name, "no tarball", "", "", ""))
             continue
         tb = os.path.join(a.src, max(tarballs))
-        results = {}
+        results: dict[str, tuple[float, float | None, str]] = {}
         for world in ("host", "exclave"):
             d = os.path.join(work, world)
             os.makedirs(d, exist_ok=True)
@@ -113,7 +116,7 @@ def main() -> int:
                 results[world] = (ct, mt, "make failed")
                 continue
             rc, out = sh(check, src, env, c)
-            results[world] = (ct, mt, out.strip().splitlines()[-1] if out.strip() else "rc=%d" % rc)
+            results[world] = (ct, mt, out.strip().splitlines()[-1] if out.strip() else f"rc={rc:d}")
         h, k = results.get("host", (0, None, "-")), results.get("exclave", (0, None, "-"))
         rows.append(
             (
@@ -128,8 +131,9 @@ def main() -> int:
             )
         )
     print(
-        "| Project | configure host / exclave (s) | make -j%d host / exclave (s) | result on the host | result in the exclave |"
-        % a.jobs
+        "| Project | configure host / exclave (s) "
+        f"| make -j{a.jobs:d} host / exclave (s) "
+        "| result on the host | result in the exclave |"
     )
     print("|---|---|---|---|---|")
     for r in rows:

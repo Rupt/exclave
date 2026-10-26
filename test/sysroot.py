@@ -1,14 +1,18 @@
-"""sysroot.py — a sysroot as a data directory (DESIGN.md 9, 6.2): a glibc from one distribution inside a gcc exclave
-from another, and an output of that gcc that runs wherever that glibc's version is old enough.
+"""sysroot.py — a sysroot as a data directory (DESIGN.md 9, 6.2).
 
-    scripts/sysroot --exclave GCC_EXCLAVE --rpms DIR --out FILE [--work DIR] [--prefix /opt/sysroot-el7]
+A glibc from one distribution inside a gcc exclave from another, and an output of that gcc that runs
+wherever that glibc's version is old enough.
 
-Makes a copy of the gcc exclave, unwraps it, unpacks the rpm files (a glibc, its headers, kernel headers, libgcc)
-into an exclave of their own with the tool, copies that tree into the copy at the prefix, records the prefix
-as `data` in the manifest and wraps the copy: nothing under the prefix is wrapped, checked or executed.
-Then compiles a hello with `--sysroot=PREFIX -B PREFIX/usr/lib64/` inside, checks that it binds no glibc
-symbol version newer than the sysroot's, runs it inside and on the host, and writes it to FILE; the kernel
-matrix packs that file and runs it natively in every VM, CentOS 7 at glibc 2.17 included.
+    scripts/sysroot --exclave GCC_EXCLAVE --rpms DIR --out FILE [--work DIR]
+                    [--prefix /opt/sysroot-el7]
+
+Makes a copy of the gcc exclave, unwraps it, unpacks the rpm files (a glibc, its headers, kernel
+headers, libgcc) into an exclave of their own with the tool, copies that tree into the copy at the
+prefix, records the prefix as `data` in the manifest and wraps the copy: nothing under the prefix is
+wrapped, checked or executed. Then compiles a hello with `--sysroot=PREFIX -B PREFIX/usr/lib64/`
+inside, checks that it binds no glibc symbol version newer than the sysroot's, runs it inside and on
+the host, and writes it to FILE; the kernel matrix packs that file and runs it natively in every VM,
+CentOS 7 at glibc 2.17 included.
 """
 
 import argparse
@@ -27,11 +31,16 @@ import tree  # noqa: E402
 
 import exclave  # noqa: E402
 
-HELLO = '#include <stdio.h>\n#include <stdlib.h>\nint main(void) { printf("hello from a sysroot build\\n"); return 0; }\n'
+HELLO = (
+    "#include <stdio.h>\n#include <stdlib.h>\n"
+    'int main(void) { printf("hello from a sysroot build\\n"); return 0; }\n'
+)
 
 
-def run(cmd, cwd=None, env=None):
-    p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True)
+def run(
+    cmd: list[str], cwd: str | None = None, env: dict[str, str] | None = None
+) -> tuple[int, str, str]:
+    p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, check=False)
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
@@ -80,7 +89,7 @@ def main() -> int:
     rc, out, err = run([sys.executable, exclave_py, "wrap", ex])
     if rc:
         sys.exit("wrap: " + out + err)
-    print([l for l in out.splitlines() if l.startswith("static check")][-1])
+    print([line for line in out.splitlines() if line.startswith("static check")][-1])
     gcc = next(
         n
         for n in ("x86_64-linux-gnu-gcc-13", "gcc")
@@ -113,12 +122,11 @@ def main() -> int:
     )
     import elfcheck
 
-    gv = elfcheck.glibc_version(
-        elfcheck.Tree(os.path.join(sysroot_ex, "tree"))
-    )  # the banner in libc.so.6, any glibc
+    # the banner in libc.so.6, any glibc
+    gv = elfcheck.glibc_version(elfcheck.Tree(os.path.join(sysroot_ex, "tree")))
     if gv is None:
         sys.exit("cannot read the sysroot's glibc version from its libc.so.6")
-    have = "%d.%d" % gv
+    have = f"{gv[0]:d}.{gv[1]:d}"
     print("symbol versions bound: {}; the sysroot's glibc: {}".format(" ".join(versions), have))
     if not versions or [int(x) for x in versions[-1].split(".")] > [
         int(x) for x in have.split(".")

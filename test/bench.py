@@ -1,4 +1,6 @@
-"""bench.py — the performance table (DESIGN.md 13 item 2, 16). Best of three, native against the exclave.
+"""bench.py — the performance table (DESIGN.md 13 item 2, 16).
+
+Best of three, native against the exclave.
 
     test/bench.py --exclave EXCLAVE [--sqlite PATH] [--work DIR] [--launcher LAUNCHER]
 
@@ -11,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+lazy from collections.abc import Callable
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -20,8 +23,11 @@ STAT_C = r"""
 #include <sys/stat.h>
 #include <stdio.h>
 #include <time.h>
-int main(int c, char **v) { struct stat st; struct timespec a, b; const char *p = v[1]; int n = 200000;
-  clock_gettime(CLOCK_MONOTONIC, &a); for (int i = 0; i < n; i++) stat(p, &st); clock_gettime(CLOCK_MONOTONIC, &b);
+int main(int c, char **v) {
+  struct stat st; struct timespec a, b; const char *p = v[1]; int n = 200000;
+  clock_gettime(CLOCK_MONOTONIC, &a);
+  for (int i = 0; i < n; i++) stat(p, &st);
+  clock_gettime(CLOCK_MONOTONIC, &b);
   printf("%.0f\n", ((b.tv_sec - a.tv_sec) * 1e9 + (b.tv_nsec - a.tv_nsec)) / n); return 0; }
 """
 CALLS_C = r"""
@@ -32,7 +38,8 @@ CALLS_C = r"""
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
-static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e9 + t.tv_nsec; }
+static double now(void) {
+  struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e9 + t.tv_nsec; }
 int main(int c, char **v) { int n = 200000; char buf[PATH_MAX]; double a = now();
   if (v[1][0] == 'g') for (int i = 0; i < 20 * n; i++) syscall(SYS_getppid);
   else for (int i = 0; i < n; i++) if (!realpath(v[2], buf)) return 1;
@@ -46,8 +53,11 @@ SPAWN_C = r"""
 extern char **environ;
 int main(void) { struct timespec a, b; int n = 300; char *av[] = { "true", 0 };
   clock_gettime(CLOCK_MONOTONIC, &a);
-  for (int i = 0; i < n; i++) { pid_t p; if (posix_spawn(&p, "/usr/bin/true", 0, 0, av, environ)) return 1; int st; waitpid(p, &st, 0); }
-  clock_gettime(CLOCK_MONOTONIC, &b); printf("%.0f\n", ((b.tv_sec - a.tv_sec) * 1e6 + (b.tv_nsec - a.tv_nsec) / 1e3) / n); return 0; }
+  for (int i = 0; i < n; i++) {
+    pid_t p; if (posix_spawn(&p, "/usr/bin/true", 0, 0, av, environ)) return 1;
+    int st; waitpid(p, &st, 0); }
+  clock_gettime(CLOCK_MONOTONIC, &b);
+  printf("%.0f\n", ((b.tv_sec - a.tv_sec) * 1e6 + (b.tv_nsec - a.tv_nsec) / 1e3) / n); return 0; }
 """
 
 SPAWN100K_C = r"""
@@ -58,24 +68,36 @@ SPAWN100K_C = r"""
 #include <sys/wait.h>
 #include <time.h>
 extern char **environ;
-static long rss(void) { FILE *f = fopen("/proc/self/status", "r"); char l[256]; long v = -1; while (f && fgets(l, 256, f)) if (!strncmp(l, "VmRSS:", 6)) v = atol(l + 6); if (f) fclose(f); return v; }
+static long rss(void) {
+  FILE *f = fopen("/proc/self/status", "r"); char l[256]; long v = -1;
+  while (f && fgets(l, 256, f)) if (!strncmp(l, "VmRSS:", 6)) v = atol(l + 6);
+  if (f) fclose(f); return v; }
 int main(void) { struct timespec a, b; int n = 100000; char *av[] = { "true", 0 };
   long r0 = rss(); clock_gettime(CLOCK_MONOTONIC, &a);
-  for (int i = 0; i < n; i++) { pid_t p; if (posix_spawn(&p, "/usr/bin/true", 0, 0, av, environ)) return 1; int st; waitpid(p, &st, 0); }
+  for (int i = 0; i < n; i++) {
+    pid_t p; if (posix_spawn(&p, "/usr/bin/true", 0, 0, av, environ)) return 1;
+    int st; waitpid(p, &st, 0); }
   clock_gettime(CLOCK_MONOTONIC, &b); long r1 = rss();
-  printf("%.1f s, RSS %+ld kB\n", (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) / 1e9, r1 - r0); return 0; }
+  printf("%.1f s, RSS %+ld kB\n", (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) / 1e9, r1 - r0);
+  return 0; }
 """
 
 
-def run(cmd, cwd, env=None, executable=None):
-    return subprocess.run(cmd, cwd=cwd, env=env, executable=executable, capture_output=True)
+def run(
+    cmd: list[str], cwd: str, env: dict[str, str] | None = None, executable: str | None = None
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        cmd, cwd=cwd, env=env, executable=executable, capture_output=True, check=False
+    )
 
 
-def best(fn, n=3):
+def best[T: float](fn: Callable[[], T], n: int = 3) -> T:
     return min(fn() for _ in range(n))
 
 
-def timed(cmd, cwd, env, executable=None):
+def timed(
+    cmd: list[str], cwd: str, env: dict[str, str] | None, executable: str | None = None
+) -> float:
     t = time.time()
     p = run(cmd, cwd, env, executable)
     if p.returncode:
@@ -101,23 +123,24 @@ def main() -> None:
     os.makedirs(work)
     import tree
 
+    # a copy relinked with the build (17)
     ex = tree.fresh_exclave(
         os.path.abspath(a.exclave),
         os.path.join(work, "exclave"),
         launcher=os.path.abspath(a.launcher),
-    )  # a copy relinked with the build (17)
+    )
     cgcc, hgcc = (
         os.path.join(ex, "tree", "usr", "bin", GCC),
         shutil.which("gcc-13") or shutil.which("gcc"),
     )
     launcher = os.path.join(ex, ".exclave", "launcher")
     env = {"PATH": "/usr/bin:/bin"}
-    rows = []
+    rows: list[tuple[str, float | str | None, float | str | None]] = []
 
-    def native(prog, *args):
+    def native(prog: str, *args: str) -> str:
         return run([prog, *list(args)], work, env).stdout.decode().strip()
 
-    def inside(prog, *args):
+    def inside(prog: str, *args: str) -> str:
         return run([launcher, prog, *list(args)], work, env).stdout.decode().strip()
 
     for name, src in (
@@ -153,15 +176,17 @@ def main() -> None:
     hostfile = os.path.join(work, "statb.c")
     rows.append(
         (
-            "stat(), %d-component host path, ns per call" % hostfile.count("/"),
+            f"stat(), {hostfile.count('/'):d}-component host path, ns per call",
             best(lambda: int(native(statb, hostfile))),
             best(lambda: int(inside(statb, hostfile))),
         )
     )
     rows.append(
         (
-            "stat(), relative name in the working directory, %d components deep on the host, ns per call"
-            % work.count("/"),
+            (
+                "stat(), relative name in the working directory, "
+                f"{work.count('/'):d} components deep on the host, ns per call"
+            ),
             best(lambda: int(native(statb, "statb.c"))),
             best(lambda: int(inside(statb, "statb.c"))),
         )
@@ -188,9 +213,8 @@ def main() -> None:
             best(lambda: int(inside(spawnb))),
         )
     )
-    spawn100k = os.path.join(
-        work, "spawn100k"
-    )  # 17.4: 100 000 spawns from one process, RSS before and after, one run
+    # 17.4: 100 000 spawns from one process, RSS before and after, one run
+    spawn100k = os.path.join(work, "spawn100k")
     rows.append(
         (
             "100 000 posix_spawns of /usr/bin/true from one process",
@@ -201,24 +225,16 @@ def main() -> None:
     with open(os.path.join(work, "hello.c"), "w") as f:
         f.write('#include <stdio.h>\nint main(void) { printf("hello\\n"); return 0; }\n')
 
-    def thirty(gcc) -> None:
+    def thirty(gcc: str) -> None:
         for i in range(30):
-            p = run([gcc, "-O0", "hello.c", "-o", "h%d" % i], work, env)
+            p = run([gcc, "-O0", "hello.c", "-o", f"h{i:d}"], work, env)
             if p.returncode:
                 raise SystemExit(p.stderr.decode())
 
     rows.append(
         (
             "thirty gcc -O0 hello.c, s",
-            best(
-                lambda: (
-                    (lambda t: time.time() - t)(time.time())
-                    if False
-                    else _time(lambda: thirty(hgcc))
-                )
-            )
-            if hgcc
-            else None,
+            best(lambda: _time(lambda: thirty(hgcc))) if hgcc else None,
             best(lambda: _time(lambda: thirty(cgcc))),
         )
     )
@@ -226,23 +242,23 @@ def main() -> None:
     proj = os.path.join(work, "proj")
     os.makedirs(proj)
     for i in range(60):
-        with open(os.path.join(proj, "f%d.c" % i), "w") as f:
+        with open(os.path.join(proj, f"f{i:d}.c"), "w") as f:
             f.write(
-                "int f%d(int x) { int s = 0; for (int i = 0; i < x; i++) s += i * %d; return s; }\n"
-                % (i, i + 1)
+                f"int f{i:d}(int x) "
+                f"{{ int s = 0; for (int i = 0; i < x; i++) s += i * {i + 1:d}; return s; }}\n"
             )
     with open(os.path.join(proj, "main.c"), "w") as f:
         f.write(
-            "".join("int f%d(int);\n" % i for i in range(60))
+            "".join(f"int f{i:d}(int);\n" for i in range(60))
             + "int main(void) { int s = 0;\n"
-            + "".join(" s += f%d(10);\n" % i for i in range(60))
+            + "".join(f" s += f{i:d}(10);\n" for i in range(60))
             + " return s & 1; }\n"
         )
 
-    def project(gcc) -> None:
+    def project(gcc: str) -> None:
         objs = []
         for i in range(61):
-            src = "f%d.c" % i if i < 60 else "main.c"
+            src = f"f{i:d}.c" if i < 60 else "main.c"
             p = run([gcc, "-O1", "-c", src, "-o", src[:-2] + ".o"], proj, env)
             if p.returncode:
                 raise SystemExit(p.stderr.decode())
@@ -266,24 +282,25 @@ def main() -> None:
                 best(lambda: timed([cgcc, "-O2", "-c", a.sqlite, "-o", "sq_exclave.o"], work, env)),
             )
         )
-        same = (
-            open(os.path.join(work, "sq_host.o"), "rb").read()
-            == open(os.path.join(work, "sq_exclave.o"), "rb").read()
-        )
+        with (
+            open(os.path.join(work, "sq_host.o"), "rb") as fh,
+            open(os.path.join(work, "sq_exclave.o"), "rb") as fc,
+        ):
+            same = fh.read() == fc.read()
         rows.append(("sqlite3.o identical", "yes" if same else "no", ""))
     if shutil.which("strace"):
 
-        def count(gcc):
+        def count(gcc: str) -> int:
             subprocess.run(
                 ["strace", "-f", "-c", "-o", "sc.txt", gcc, "-O0", "hello.c", "-o", "h_sc"],
                 cwd=work,
                 env=env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                check=False,
             )
-            return int(
-                open(os.path.join(work, "sc.txt")).read().strip().splitlines()[-1].split()[3]
-            )
+            with open(os.path.join(work, "sc.txt")) as f:
+                return int(f.read().strip().splitlines()[-1].split()[3])
 
         rows.append(
             (
@@ -296,14 +313,14 @@ def main() -> None:
     print("|---|---|---|")
     for name, n, c in rows:
 
-        def fmt(x):
+        def fmt(x: float | str | None) -> str:
             return (f"{x:.2f}" if isinstance(x, float) else str(x)) if x is not None else ""
 
         print(f"| {name} | {fmt(n)} | {fmt(c)} |")
     shutil.rmtree(work, ignore_errors=True)
 
 
-def _time(fn):
+def _time(fn: Callable[[], object]) -> float:
     t = time.time()
     fn()
     return time.time() - t

@@ -2,10 +2,11 @@
 
     test/grammar_test.py [--cases N] [--seed S] [--c-parser PATH]
 
-Three statements hold for every byte sequence b: encode is injective, decode(encode(b)) == b, and format is
-idempotent. And the two implementations of the grammar, the tool's Python parser and the launcher's C parser
-(built by scripts/gate's unit step, run with a file argument), accept and reject the same inputs: manifests
-and their malformed variants (MUTATIONS); and both name the line of an error on a known line (POSITIONS).
+Three statements hold for every byte sequence b: encode is injective, decode(encode(b)) == b, and
+format is idempotent. And the two implementations of the grammar, the tool's Python parser and the
+launcher's C parser (built by scripts/gate's unit step, run with a file argument), accept and reject
+the same inputs: manifests and their malformed variants (MUTATIONS); and both name the line of an
+error on a known line (POSITIONS).
 """
 
 import argparse
@@ -14,13 +15,14 @@ import random
 import subprocess
 import sys
 import tempfile
+lazy from collections.abc import Callable
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "exclave"))
 import exclave  # noqa: E402
 
 
-def rand_bytes(rng, path=False):
+def rand_bytes(rng: random.Random, *, path: bool = False) -> bytes:
     """A random byte string; with path, one a Linux path could hold (any byte but NUL)."""
     n = rng.randint(0, 24)
     pick = [
@@ -35,13 +37,12 @@ def rand_bytes(rng, path=False):
     return b.replace(b"\0", b"\1") if path else b
 
 
-def properties(rng, cases):
+def properties(rng: random.Random, cases: int) -> int:
     bad = 0
-    seen = {}
+    seen: dict[str, bytes] = {}
     for _ in range(cases):
-        b = rand_bytes(rng, path=True).replace(
-            b"/", b"_"
-        )  # the encoding's properties; a path's own spelling rules are the mutations' (6.2)
+        # the encoding's properties; a path's own spelling rules are the mutations' (6.2)
+        b = rand_bytes(rng, path=True).replace(b"/", b"_")
         if b in (b".", b".."):
             b = b"_" + b
         q = exclave.quote(b)
@@ -58,39 +59,38 @@ def properties(rng, cases):
             bad += 1
             print(f"FAIL round trip {b!r}")
         canon = exclave.dump(recs, "exclave")
-        if (
-            canon != text or exclave.dump(exclave.parse(canon, "exclave"), "exclave") != canon
-        ):  # format is idempotent
+        # format is idempotent
+        if canon != text or exclave.dump(exclave.parse(canon, "exclave"), "exclave") != canon:
             bad += 1
             print(f"FAIL canonical form {b!r}")
     return bad
 
 
-MUTATIONS = [
-    lambda t, rng: t.replace(b"\n", b"\r\n", 1),
-    lambda t, rng: t[:-1],
-    lambda t, rng: b"\xef\xbb\xbf" + t,
-    lambda t, rng: t.replace(b" ", b"  ", 1),
-    lambda t, rng: t.replace(b" ", b"\t", 1),
-    lambda t, rng: t.replace(b'"', b"", 1),
-    lambda t, rng: t.replace(b"own", b"Own", 1),
-    lambda t, rng: t + b"# trailing\n",
-    lambda t, rng: t.replace(b"exclave 1", b"exclave 2", 1),
-    lambda t, rng: t.replace(b'own "/', b'own "//', 1),
-    lambda t, rng: t.replace(b'own "/', b'own "/./', 1),
-    lambda t, rng: t.replace(b'own "/', b'own "/../', 1),
-    lambda t, rng: t.replace(b'"/', b'"', 1),
-    lambda t, rng: t.replace(b"\\x", b"\\X", 1),
-    lambda t, rng: t.replace(b"own", b"env", 1),
+MUTATIONS: list[Callable[[bytes, random.Random], bytes]] = [
+    lambda t, _: t.replace(b"\n", b"\r\n", 1),
+    lambda t, _: t[:-1],
+    lambda t, _: b"\xef\xbb\xbf" + t,
+    lambda t, _: t.replace(b" ", b"  ", 1),
+    lambda t, _: t.replace(b" ", b"\t", 1),
+    lambda t, _: t.replace(b'"', b"", 1),
+    lambda t, _: t.replace(b"own", b"Own", 1),
+    lambda t, _: t + b"# trailing\n",
+    lambda t, _: t.replace(b"exclave 1", b"exclave 2", 1),
+    lambda t, _: t.replace(b'own "/', b'own "//', 1),
+    lambda t, _: t.replace(b'own "/', b'own "/./', 1),
+    lambda t, _: t.replace(b'own "/', b'own "/../', 1),
+    lambda t, _: t.replace(b'"/', b'"', 1),
+    lambda t, _: t.replace(b"\\x", b"\\X", 1),
+    lambda t, _: t.replace(b"own", b"env", 1),
     lambda t, rng: (
         t[: rng.randint(0, len(t))] + bytes([rng.randint(0, 31)]) + t[rng.randint(0, len(t)) :]
     ),
-    lambda t, rng: t.replace(b'"\n', b'" \n', 1),
-    lambda t, rng: t.replace(b"own", b'own "/x" own', 1),
+    lambda t, _: t.replace(b'"\n', b'" \n', 1),
+    lambda t, _: t.replace(b"own", b'own "/x" own', 1),
 ]
 
 
-def near_manifest(rng):
+def near_manifest(rng: random.Random) -> bytes:
     recs = ["exclave 1"]
     for _ in range(rng.randint(0, 4)):
         key = rng.choice(["own", "host", "data", "cpu", "cpu", "bogus"])
@@ -108,7 +108,7 @@ def near_manifest(rng):
     return text
 
 
-def compare(rng, cases, c_parser):
+def compare(rng: random.Random, cases: int, c_parser: str) -> int:
     diverge = 0
     with tempfile.TemporaryDirectory(prefix="grammar-") as d:
         path = os.path.join(d, "manifest")
@@ -121,7 +121,7 @@ def compare(rng, cases, c_parser):
                 py = True
             except exclave.GrammarError:
                 py = False
-            c = subprocess.run([c_parser, path], capture_output=True).returncode == 0
+            c = subprocess.run([c_parser, path], capture_output=True, check=False).returncode == 0
             if py != c:
                 diverge += 1
                 print(f"DIVERGE python={py} c={c} on {text!r}")
@@ -139,7 +139,7 @@ POSITIONS = [  # an error on a known line, which both parsers must name (6.2)
 ]
 
 
-def positions(c_parser):
+def positions(c_parser: str) -> int:
     bad = 0
     with tempfile.TemporaryDirectory(prefix="grammar-") as d:
         path = os.path.join(d, "manifest")
@@ -151,13 +151,15 @@ def positions(c_parser):
                 py = "accepted"
             except exclave.GrammarError as e:
                 py = str(e)
-            c = subprocess.run([c_parser, path], capture_output=True, text=True).stderr.strip()
+            c = subprocess.run(
+                [c_parser, path], capture_output=True, text=True, check=False
+            ).stderr.strip()
             for who, msg in (("python", py), ("c", c)):
-                if not msg.startswith("line %d col " % want):
+                if not msg.startswith(f"line {want:d} col "):
                     bad += 1
                     print(
-                        "FAIL the %s parser says %r of an error on line %d of %r"
-                        % (who, msg, want, text[:50])
+                        f"FAIL the {who} parser says {msg!r} of an error on line {want:d} "
+                        f"of {text[:50]!r}"
                     )
     return bad
 
@@ -175,16 +177,16 @@ def main() -> int:
     rng = random.Random(a.seed)
     bad = properties(rng, a.cases)
     print(
-        "%d byte strings: encode injective, decode(encode(b)) == b, format idempotent: %d problems"
-        % (a.cases, bad)
+        f"{a.cases:d} byte strings: encode injective, decode(encode(b)) == b, "
+        f"format idempotent: {bad:d} problems"
     )
     div = compare(rng, a.cases // 3, a.c_parser) if os.path.exists(a.c_parser) else -1
     if div < 0:
         print(f"no C parser at {a.c_parser}: the two-parser comparison did not run")
     else:
-        print("%d near-manifests through both parsers: %d divergences" % (a.cases // 3, div))
+        print(f"{a.cases // 3:d} near-manifests through both parsers: {div:d} divergences")
         bad += positions(a.c_parser)
-        print("%d errors on known lines: both parsers name the line" % len(POSITIONS))
+        print(f"{len(POSITIONS):d} errors on known lines: both parsers name the line")
     return 1 if bad or div > 0 else 0
 
 

@@ -2,11 +2,11 @@
 
     scripts/dogfood --inputs DIR [--work DIR] [--keep]
 
-Takes two package sets scripts/inputs fetched into DIR, debs-base and debs-gcc13, and touches no network.
-It makes the tool's own exclave from Ubuntu's base system, the pinned Python running this script (copied in as
-/opt/python) and this checkout's exclave and launcher,
-then makes the same gcc exclave twice from the same files: once with the checkout's exclave on the host, once
-with the tool's own exclave's shortcut from inside it. The two hashes files must be identical, tree hash
+Takes two package sets scripts/inputs fetched into DIR, debs-base and debs-gcc13, and touches no
+network. It makes the tool's own exclave from Ubuntu's base system, the pinned Python running this
+script (copied in as /opt/python) and this checkout's exclave and launcher, then makes the same gcc
+exclave twice from the same files: once with the checkout's exclave on the host, once with the
+tool's own exclave's shortcut from inside it. The two hashes files must be identical, tree hash
 included. Exit status 0 on success.
 """
 
@@ -20,15 +20,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
 
-def run(cmd, cwd, check=True):
-    p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+def run(cmd: list[str], cwd: str, *, check: bool = True) -> str:
+    p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
     out = p.stdout.decode(errors="replace")
     if check and p.returncode:
         sys.exit("FAIL {}\n{}".format(" ".join(cmd), out[-2000:]))
     return out
 
 
-def debs(d):
+def debs(d: str) -> list[str]:
     return sorted(os.path.join(d, f) for f in os.listdir(d) if f.endswith(".deb"))
 
 
@@ -52,9 +52,10 @@ def main() -> int:
     print("building the tool's own exclave")
     tool_ex = os.path.join(work, "tool.exclave")
     run([sys.executable, exclave, "unpack", tool_ex, *debs(tool_debs)], work)
-    # the pinned Python, the one running this, as a tree of its own: the base system's packages give it a libc.
-    # Without Tcl/Tk, which the tool never imports and whose libraries search a build directory the exclave does
-    # not own (/tools/deps/lib), so the static check would rightly refuse them
+    # the pinned Python, the one running this, as a tree of its own: the base system's packages
+    # give it a libc. Without Tcl/Tk, which the tool never imports and whose libraries search a
+    # build directory the exclave does not own (/tools/deps/lib), so the static check would
+    # rightly refuse them
     tk = shutil.ignore_patterns(
         "libtcl*",
         "libtk*",
@@ -68,9 +69,8 @@ def main() -> int:
     shutil.copytree(
         sys.base_prefix, os.path.join(tool_ex, "tree", "opt", "python"), symlinks=True, ignore=tk
     )
-    lib = os.path.join(
-        tool_ex, "tree", "usr", "lib", "exclave"
-    )  # the tool's own source and the launcher, by hand: the exclave is a directory
+    # the tool's own source and the launcher, by hand: the exclave is a directory
+    lib = os.path.join(tool_ex, "tree", "usr", "lib", "exclave")
     shutil.copytree(
         os.path.join(REPO, "exclave"), lib, ignore=shutil.ignore_patterns("__pycache__")
     )
@@ -90,10 +90,11 @@ def main() -> int:
         ],
         work,
     )
-    gcc_debs = debs(gcc_debs)
+    gcc_files = debs(gcc_debs)
     print("building the gcc exclave on the host")
     run(
-        [sys.executable, exclave, "unpack", os.path.join(work, "gcc-host.exclave"), *gcc_debs], work
+        [sys.executable, exclave, "unpack", os.path.join(work, "gcc-host.exclave"), *gcc_files],
+        work,
     )
     run([sys.executable, exclave, "wrap", os.path.join(work, "gcc-host.exclave")], work)
     print("building the gcc exclave inside the tool's own exclave")
@@ -102,14 +103,16 @@ def main() -> int:
             os.path.join(tool_ex, "exclave"),
             "unpack",
             os.path.join(work, "gcc-inside.exclave"),
-            *gcc_debs,
+            *gcc_files,
         ],
         work,
     )
     run([os.path.join(tool_ex, "exclave"), "wrap", os.path.join(work, "gcc-inside.exclave")], work)
-    a_lock = open(os.path.join(work, "gcc-host.exclave", ".exclave", "hashes"), "rb").read()
-    b_lock = open(os.path.join(work, "gcc-inside.exclave", ".exclave", "hashes"), "rb").read()
-    tree = [l for l in a_lock.decode().splitlines() if l.startswith("tree")]
+    with open(os.path.join(work, "gcc-host.exclave", ".exclave", "hashes"), "rb") as f:
+        a_lock = f.read()
+    with open(os.path.join(work, "gcc-inside.exclave", ".exclave", "hashes"), "rb") as f:
+        b_lock = f.read()
+    tree = [line for line in a_lock.decode().splitlines() if line.startswith("tree")]
     if a_lock == b_lock:
         print(f"PASS hashes files identical; {tree[0]}")
         out = run(

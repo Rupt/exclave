@@ -1,8 +1,10 @@
-"""tree.py — what a tree says about itself, for the suite and the oracles (DESIGN.md 17): a test asserts what the
-tree says, never what one distribution spells. Every function takes the tree's root directory; then the one way a
-driver takes an exclave: a copy of its own, relinked with the build, so that the launcher under test is always build/launcher
-and never the one an exclave was wrapped with; and the Go regression's builds, which the matrix makes on the host for VMs
-that have no go.
+"""tree.py — what a tree says about itself, for the suite and the oracles (DESIGN.md 17).
+
+A test asserts what the tree says, never what one distribution spells. Every function takes the
+tree's root directory; then the one way a driver takes an exclave: a copy of its own, relinked with
+the build, so that the launcher under test is always build/launcher and never the one an exclave
+was wrapped with; and the Go regression's builds, which the matrix makes on the host for VMs that
+have no go.
 """
 
 import filecmp
@@ -18,16 +20,22 @@ BUILD_LAUNCHER = os.path.join(REPO, "build", "launcher")
 sys.path.insert(0, os.path.join(REPO, "exclave"))
 
 
-def vbin(root, name):
-    """A tool's virtual path as the tree spells it: /usr/bin, or /bin where the tree is not merged."""
+def vbin(root: str, name: str) -> str:
+    """A tool's virtual path as the tree spells it.
+
+    /usr/bin, or /bin where the tree is not merged.
+    """
     for d in ("usr/bin", "bin"):
         if os.path.lexists(os.path.join(root, d, name)):
             return "/" + d + "/" + name
     return "/usr/bin/" + name
 
 
-def compiler(root, machine):
-    """The tree's C compiler by name: Debian's gcc-13 spellings, gcc, cc, clang, or a versioned clang; None if none."""
+def compiler(root: str, machine: str) -> str | None:
+    """The tree's C compiler by name.
+
+    Debian's gcc-13 spellings, gcc, cc, clang, or a versioned clang; None if none.
+    """
     clangs = sorted(
         n
         for d in ("usr/bin", "bin")
@@ -49,8 +57,11 @@ def compiler(root, machine):
     return None
 
 
-def triplet(root, machine):
-    """Debian's multiarch directory under /usr/lib where libc lives, or the machine's conventional name."""
+def triplet(root: str, machine: str) -> str:
+    """Debian's multiarch directory under /usr/lib where libc lives.
+
+    Or the machine's conventional name.
+    """
     d = os.path.join(root, "usr", "lib")
     for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
         if n.endswith("-linux-gnu") and os.path.exists(os.path.join(d, n, "libc.so.6")):
@@ -58,9 +69,10 @@ def triplet(root, machine):
     return f"{machine}-linux-gnu"
 
 
-def resolve(root, vpath):
-    """A virtual path with the tree's symlinks followed, as a chroot would resolve it; the path itself if a
-    component is missing.
+def resolve(root: str, vpath: str) -> str:
+    """A virtual path with the tree's symlinks followed, as a chroot would resolve it.
+
+    The path itself if a component is missing.
     """
     cur, rest, hops = "", [p for p in vpath.split("/") if p], 0
     while rest:
@@ -87,7 +99,7 @@ def resolve(root, vpath):
     return cur or "/"
 
 
-def libc(root, machine):
+def libc(root: str, machine: str) -> str:
     """libc.so.6 as the loader names it, or musl's loader, which is its libc."""
     for v in (
         f"/lib/{triplet(root, machine)}/libc.so.6",
@@ -102,9 +114,11 @@ def libc(root, machine):
 
 
 # ---------------------------------------------------------------- an exclave for a driver (17)
-def socket_file(path) -> None:
-    """A socket file at path, bound through its directory's descriptor, so that only the name counts against sun_path's
-    108 bytes and a deep checkout or work directory does not. A stale one is replaced.
+def socket_file(path: str) -> None:
+    """A socket file at path, bound through its directory's descriptor.
+
+    Only the name counts against sun_path's 108 bytes, so a deep checkout or work directory does
+    not. A stale one is replaced.
     """
     d, name = os.path.split(path)
     if os.path.lexists(path):
@@ -112,15 +126,17 @@ def socket_file(path) -> None:
     fd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
     sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        sk.bind("/proc/self/fd/%d/%s" % (fd, name))
+        sk.bind(f"/proc/self/fd/{fd}/{name}")
     finally:
         sk.close()
         os.close(fd)
 
 
-def copy_exclave(src, dst):
-    """A copy of an exclave for a driver or a test to alter: the tree's files hard-linked, the files under .exclave/ copied, since a
-    manifest or hashes file written through a hard link would change the given exclave's.
+def copy_exclave(src: str, dst: str) -> str:
+    """A copy of an exclave for a driver or a test to alter.
+
+    The tree's files hard-linked, the files under .exclave/ copied, since a manifest or hashes file
+    written through a hard link would change the given exclave's.
     """
     import exclave
 
@@ -128,7 +144,8 @@ def copy_exclave(src, dst):
     for name in os.listdir(os.path.join(dst, ".exclave")):
         p = os.path.join(dst, ".exclave", name)
         if os.path.isfile(p) and not os.path.islink(p):
-            data = open(p, "rb").read()
+            with open(p, "rb") as f:
+                data = f.read()
             mode = os.stat(p).st_mode
             os.remove(p)
             with open(p, "wb") as f:
@@ -137,10 +154,13 @@ def copy_exclave(src, dst):
     return dst
 
 
-def fresh_exclave(src, dst, launcher=BUILD_LAUNCHER):
-    """copy_exclave, then every wrapper relinked to build/launcher (exclave relink, about a second for a gcc exclave): the
-    launcher a driver runs is always the checkout's build, never the one an exclave carries, which is the one it was wrapped with and
-    which a rebuild leaves behind. The copy is made anew on every run, so nothing has to be remembered.
+def fresh_exclave(src: str, dst: str, launcher: str = BUILD_LAUNCHER) -> str:
+    """copy_exclave, then every wrapper relinked to build/launcher.
+
+    exclave relink takes about a second for a gcc exclave. The launcher a driver runs is always the
+    checkout's build, never the one an exclave carries, which is the one it was wrapped with and
+    which a rebuild leaves behind. The copy is made anew on every run, so nothing has to be
+    remembered.
     """
     import exclave
 
@@ -151,9 +171,11 @@ def fresh_exclave(src, dst, launcher=BUILD_LAUNCHER):
     return dst
 
 
-def relink_if_stale(ex, launcher=BUILD_LAUNCHER) -> bool:
-    """A copy kept between runs, relinked again when the build has changed since it was made: the check is a byte
-    comparison of two small files, the relink a second, so a rebuild never has to be remembered by hand.
+def relink_if_stale(ex: str, launcher: str = BUILD_LAUNCHER) -> bool:
+    """A copy kept between runs, relinked again when the build has changed since it was made.
+
+    The check is a byte comparison of two small files, the relink a second, so a rebuild never has
+    to be remembered by hand.
     """
     import exclave
 
@@ -163,21 +185,26 @@ def relink_if_stale(ex, launcher=BUILD_LAUNCHER) -> bool:
     return False
 
 
-# the Go regression's programs (17.4): as go links for the machine, and from 0x10000 as its aarch64 linker does, an image
-# past where the syscall page lay in early versions (13 item 24)
-GO_BUILDS = (("go_paths", []), ("go_paths_low", ["-ldflags=-T 0x11000"]))
+# the Go regression's programs (17.4): as go links for the machine, and from 0x10000 as its
+# aarch64 linker does, an image past where the syscall page lay in early versions (13 item 24)
+GO_BUILDS: tuple[tuple[str, list[str]], ...] = (
+    ("go_paths", []),
+    ("go_paths_low", ["-ldflags=-T 0x11000"]),
+)
 GOARCH = {"x86_64": "amd64", "aarch64": "arm64"}
 
 
-def go_toolchain():
+def go_toolchain() -> str | None:
     return shutil.which("go") or next(
         (g for g in ("/usr/lib/go/bin/go", "/usr/local/go/bin/go") if os.path.exists(g)), None
     )
 
 
-def go_build(go, out_dir, machine, work):
-    """GO_BUILDS of test/progs/go_paths.go into out_dir, static with cgo off, for machine; [(name, path)], or a
-    RuntimeError with go's message. work holds GOPATH; the build cache is build/gocache.
+def go_build(go: str, out_dir: str, machine: str, work: str) -> list[tuple[str, str]]:
+    """GO_BUILDS of test/progs/go_paths.go into out_dir, static with cgo off, for machine.
+
+    [(name, path)], or a RuntimeError with go's message. work holds GOPATH; the build cache is
+    build/gocache.
     """
     env = dict(
         os.environ,
@@ -201,6 +228,7 @@ def go_build(go, out_dir, machine, work):
             env=env,
             capture_output=True,
             timeout=600,
+            check=False,
         )
         if p.returncode:
             msg = "go build {} for {}: {}".format(
@@ -211,7 +239,7 @@ def go_build(go, out_dir, machine, work):
     return out
 
 
-def load_span(path):
+def load_span(path: str) -> tuple[int, int]:
     """The lowest and highest addresses an ELF64 file's PT_LOAD segments cover, bss included."""
     import struct
 
@@ -224,6 +252,6 @@ def load_span(path):
         )
         f.seek(phoff)
         ph = f.read(phentsize * phnum)
-    loads = [struct.unpack_from("<IIQQQQQQ", ph, i * phentsize) for i in range(phnum)]
-    loads = [(l[3], l[3] + l[6]) for l in loads if l[0] == 1]
-    return min(a for a, b in loads), max(b for a, b in loads)
+    headers = [struct.unpack_from("<IIQQQQQQ", ph, i * phentsize) for i in range(phnum)]
+    loads = [(h[3], h[3] + h[6]) for h in headers if h[0] == 1]
+    return min(a for a, _ in loads), max(b for _, b in loads)
