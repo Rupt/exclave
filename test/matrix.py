@@ -3,18 +3,19 @@
 An exclave built here, run in virtual machines.
 
     scripts/matrix --exclave EXCLAVE [--only NAME,...] [--work DIR] [--images DIR] [--memory MB]
-                   [--arm64 --debs-arm64 DIR] [--docker-profile FILE]
+                   [--jobs N] [--arm64 --debs-arm64 DIR] [--docker-profile FILE]
 
 Each row of VMS names a distribution cloud image. The image is downloaded once, booted under QEMU
 with KVM behind a copy-on-write overlay and a cloud-init seed that installs strace (and bubblewrap
 where it exists), the exclave, the pinned Python built for the VM's machine and libc, and this
 repository's test tree and launcher are copied in over SSH, and the regression suite runs there;
 the oracles, the syscall probe and, given the profile, the Docker-profile run follow where
-bubblewrap works. One VM at a time, 1 GB each, 2 GB for the emulated row. Results go to
+bubblewrap works. Three VMs at a time (--jobs), 1 GB each, 2 GB for the emulated row. Results go to
 build/matrix-results.md.
 """
 
 import argparse
+import concurrent.futures
 import contextlib
 import io
 import os
@@ -23,6 +24,7 @@ import socket
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import urllib.request
 
@@ -35,7 +37,8 @@ PYDIR = f"python{sys.version_info[0]}.{sys.version_info[1]}"
 
 # name, expected kernel, ssh user, image URL candidates (first that downloads wins), package family,
 # notes, arch
-VMS: list[tuple[str, str, str, list[str], str, str, str]] = [
+type VmRow = tuple[str, str, str, list[str], str, str, str]
+VMS: list[VmRow] = [
     (
         "centos-7",
         "3.10",
@@ -147,6 +150,10 @@ PACKAGES: dict[str, list[str]] = {
     "apk": ["strace", "bubblewrap", "bash"],
     "centos7": ["strace"],
 }
+
+
+# a row of the results table: VM, kernel, suite, oracles, notes
+type Row = tuple[str, str, str, str, str]
 
 
 def log(*a: object) -> None:
@@ -425,6 +432,9 @@ def main() -> int:
     )
     ap.add_argument("--memory", type=int, default=1024)
     ap.add_argument(
+        "--jobs", type=int, default=3, help="VMs at a time (default 3: 1 GB each, 2 GB emulated)"
+    )
+    ap.add_argument(
         "--arm64",
         action="store_true",
         help="include the emulated aarch64 VM (slow); --only names it too",
@@ -515,19 +525,17 @@ def main() -> int:
         payloads[arch, libc] = payload
         return payload
 
-    results: list[tuple[str, str, str, str, str]] = []
-    for name, kernel, user, urls, family, row_notes, arch in VMS:
+    start_lock = threading.Lock()
+
+    def run_row(row: VmRow) -> Row:
+        """One VM's row: boot, copy in, run the suite and the oracles, stop."""
+        name, kernel, user, urls, family, row_notes, arch = row
         notes = row_notes
-        if a.only and name not in a.only.split(","):
-            continue
-        if arch != "x86_64" and not a.arm64 and not (a.only and name in a.only.split(",")):
-            continue  # the emulated rows run only when asked: ten to twenty times slower
         slow = 10 if arch != "x86_64" else 1
         payload = payload_for(arch, "musl" if family == "apk" else "gnu")
         image = os.path.join(a.images, name + ".qcow2")
         if not any(fetch(u, image) for u in urls):
-            results.append((name, kernel, "image not available", "", notes))
-            continue
+            return (name, kernel, "image not available", "", notes)
         seed = os.path.join(work, name + "-seed.iso")
         with open(os.path.join(work, name + "-user-data"), "w") as f:
             f.write(user_data(family, pubkey))
@@ -542,15 +550,13 @@ def main() -> int:
             ],
             check=True,
         )
-        port = free_port()
-        log("booting", name)
-        vm = VM(name, image, work, user, port, memory=a.memory, arch=arch)
+        with start_lock:
+            port = free_port()
+            log("booting", name)
+            vm = VM(name, image, work, user, port, memory=a.memory, arch=arch)
         try:
             if not vm.wait(deadline=600 * slow):
-                results.append(
-                    (name, kernel, f"did not come up (see {name}-console.log)", "", notes)
-                )
-                continue
+                return (name, kernel, f"did not come up (see {name}-console.log)", "", notes)
             _rc, uname = vm.ssh("uname -r")
             uname = uname.strip()
             log(name, "kernel", uname)
@@ -560,8 +566,7 @@ def main() -> int:
                 timeout=600 * slow,
             )
             if "unpacked" not in out:
-                results.append((name, uname, "cannot unpack: " + out[-200:], "", notes))
-                continue
+                return (name, uname, "cannot unpack: " + out[-200:], "", notes)
             if arch != "x86_64":  # the exclave is made here, on its own architecture (10.1)
                 _rc, out = vm.ssh(
                     "cd m && $PWD/python/bin/python3 -m exclave unpack ex debs/*.deb "
@@ -571,16 +576,13 @@ def main() -> int:
                 )
                 log(name, "exclave:", " | ".join(x.strip() for x in out.splitlines()[-3:]))
                 if "ex is wrapped" not in out:
-                    results.append(
-                        (
-                            name,
-                            uname,
-                            "cannot make the exclave: " + out[-300:].replace("\n", " | "),
-                            "",
-                            notes,
-                        )
+                    return (
+                        name,
+                        uname,
+                        "cannot make the exclave: " + out[-300:].replace("\n", " | "),
+                        "",
+                        notes,
                     )
-                    continue
             else:
                 # the exclave given carries the launcher that made it: the row tests the checkout's
                 _rc, out = vm.ssh(
@@ -589,16 +591,13 @@ def main() -> int:
                     timeout=600 * slow,
                 )
                 if "relinked" not in out:
-                    results.append(
-                        (
-                            name,
-                            uname,
-                            "cannot relink the exclave: " + out[-200:].replace("\n", " | "),
-                            "",
-                            notes,
-                        )
+                    return (
+                        name,
+                        uname,
+                        "cannot relink the exclave: " + out[-200:].replace("\n", " | "),
+                        "",
+                        notes,
                     )
-                    continue
             _rc, out = vm.ssh(
                 "cd m && $PWD/python/bin/python3 repo/test/run.py --exclave $PWD/ex "
                 f"--work $PWD/work --budget {60 * slow:d} 2>&1",
@@ -697,19 +696,32 @@ def main() -> int:
                 log(name, oracle)
             else:
                 oracle = "no user namespaces"
-            results.append(
-                (
-                    name,
-                    uname,
-                    suite + ("; " + "; ".join(f[:80] for f in fails[:4]) if fails else ""),
-                    oracle,
-                    notes,
-                )
+            return (
+                name,
+                uname,
+                suite + ("; " + "; ".join(f[:80] for f in fails[:4]) if fails else ""),
+                oracle,
+                notes,
             )
         except Exception as e:  # noqa: BLE001
-            results.append((name, kernel, f"error: {e}", "", notes))
+            return (name, kernel, f"error: {e}", "", notes)
         finally:
             vm.stop()
+
+    rows = [
+        r
+        for r in VMS
+        if (not a.only or r[0] in a.only.split(","))
+        # the emulated rows run only when asked: ten to twenty times slower
+        and (r[6] == "x86_64" or a.arm64 or (a.only and r[0] in a.only.split(",")))
+    ]
+    for arch, libc in {(r[6], "musl" if r[4] == "apk" else "gnu") for r in rows}:
+        payload_for(
+            arch, libc
+        )  # packed before the VMs start, once each, so no two rows pack at once
+    # several VMs at a time, each with its own overlay, seed and port; the table keeps VMS's order
+    with concurrent.futures.ThreadPoolExecutor(max_workers=a.jobs) as pool:
+        results = list(pool.map(run_row, rows))
     table = ["| VM | kernel | suite | oracles | notes |", "|---|---|---|---|---|"] + [
         "| {} | {} | {} | {} | {} |".format(*r) for r in results
     ]
