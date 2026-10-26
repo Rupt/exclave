@@ -137,6 +137,18 @@ of this one:
                       wraps it again
   exclave relink DIR  put in another launcher, relinking every program
 
+Licences
+
+The software in tree/ keeps its packages' licences, and passing this
+directory on passes their terms on with it. Their texts are in
+tree/usr/share/doc/*/copyright and tree/usr/share/common-licenses/
+(Debian, Ubuntu) or tree/usr/share/licenses/ (Fedora and others);
+exclave prune keeps them. An Alpine package's licence text comes in
+its -doc package, so an Alpine exclave has it only if that went in.
+The launcher is part of exclave, Copyright (c) 2026 Rupert Tombs,
+under the MIT licence, whose text it carries: "readelf -p
+.exclave.license .exclave/launcher" prints it.
+
 This file is the same in every exclave; a maker may replace it.
 """
 

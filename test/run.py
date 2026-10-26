@@ -1239,7 +1239,8 @@ def apk_unpack(ctx):
 def exclave_readme(ctx):
     """6.1: every exclave explains itself to whoever finds it. Unpack, wrap and relink write README at the top
     where the exclave has none and leave the maker's own, or a shortcut by that name, alone; the files it names are
-    there; the launcher run bare names it, and a launcher outside any exclave says so."""
+    there; the launcher run bare names it, and a launcher outside any exclave says so. The launcher carries the licence's
+    text, and the README names its copyright line."""
     exclave_py = os.path.join(REPO, "exclave", "exclave.py")
     d = os.path.join(ctx.work, "readme-apks")
     os.makedirs(d, exist_ok=True)
@@ -1263,6 +1264,12 @@ def exclave_readme(ctx):
     here = exclave.README_TEXT.split(b"\nWhat is here\n")[1].split(b"\nRunning it\n")[0].decode()
     for name in re.findall(r"^  (\S+/\S*)", here, re.M):
         expect(os.path.lexists(os.path.join(bare, name)), "the README names %s, which a wrapped exclave lacks" % name)
+    with open(os.path.join(REPO, "LICENSE"), "rb") as f:
+        licence = f.read()
+    with open(os.path.join(bare, ".exclave", "launcher"), "rb") as f:
+        expect(licence in f.read(), "the launcher does not carry LICENSE's text")
+    copyright = [l for l in licence.decode().splitlines() if l.startswith("Copyright")][0]
+    expect(copyright.encode() in exclave.README_TEXT.replace(b"\n", b" "), "the README does not name %r" % copyright)
     rc, out_, err = run([os.path.join(bare, ".exclave", "launcher")], cwd=ctx.work)
     expect(rc == 127 and "exclave's launcher" in err and "README" in err, "the launcher run bare: rc=%d %r" % (rc, err))
     lone = os.path.join(ctx.work, "readme-lone-%d" % os.getpid())

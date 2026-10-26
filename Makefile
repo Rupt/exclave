@@ -6,7 +6,7 @@
 CC      ?= gcc
 SRC     := src/launcher.c src/manifest.c src/loader.c src/scratch.c src/vis.c src/canon.c src/cache.c \
            src/filter.c src/handler.c src/isa.c src/str.c src/log.c
-HDR     := src/sys.h src/common.h src/elf.h src/gdb.py
+HDR     := src/sys.h src/common.h src/elf.h src/gdb.py LICENSE
 OUT     := build/launcher
 OLD     := build/launcher-old
 
@@ -34,16 +34,18 @@ endef
 all: $(OUT) $(OLD) $(if $(AARCH64_CC),build/launcher-aarch64 build/launcher-old-aarch64)
 
 # build/launcher is stripped for shipping (every wrapper is a link to it); build/launcher.debug keeps the symbols.
-# The strip keeps .debug_gdb_scripts, the script gdb auto-loads (7.6), and .dynsym, the six names it reads.
+# The strip keeps .debug_gdb_scripts, the script gdb auto-loads (7.6), .dynsym, the six names it reads, and
+# .exclave.license, the licence's text, which goes with every copy of the launcher.
 $(OUT): $(SRC) $(HDR) Makefile
 	@mkdir -p build
 	@rm -f build/*.su build/launcher.debug-*.ci
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@.debug $(SRC)
 	@mv -f *.ci build/ 2>/dev/null || true
 	$(call linkcheck,)
-	objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
+	objcopy --strip-all --keep-section=.debug_gdb_scripts --keep-section=.exclave.license $@.debug $@
 	@readelf -n $@ | grep -Eq '^ +exclave +0x' && readelf -n $@ | grep -Eq '^ +cont +0x' || (echo "a note was stripped: the launcher carries exclave and cont (7.4.5)" && false)
 	@readelf -S -W $@ | grep -q debug_gdb_scripts || (echo "the gdb script was stripped" && false)
+	@readelf -p .exclave.license $@ | grep -q 'MIT License' || (echo "the licence was stripped" && false)
 	@readelf --dyn-syms $@ | grep -q exclave_debug_hook || (echo "the gdb hook is not exported" && false)
 	@readelf -h $@ | grep -q 'DYN' && echo "built $@ ($$(stat -c %s $@) bytes stripped, ET_DYN; symbols in $@.debug)"
 
@@ -54,7 +56,7 @@ $(OLD): $(SRC) $(HDR) Makefile
 	@mkdir -p build
 	$(CC) $(filter-out -fcallgraph-info=su,$(CFLAGS)) -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD $(LDFLAGS) -o $@.debug $(SRC)
 	$(call linkcheck,)
-	objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
+	objcopy --strip-all --keep-section=.debug_gdb_scripts --keep-section=.exclave.license $@.debug $@
 
 build/launcher-aarch64: $(SRC) $(HDR) Makefile
 	@mkdir -p build
@@ -62,14 +64,14 @@ build/launcher-aarch64: $(SRC) $(HDR) Makefile
 	$(AARCH64_CC) $(CFLAGS_AARCH64) $(LDFLAGS) -o $@.debug $(SRC)
 	@mv -f *.ci build/ 2>/dev/null || true
 	$(call linkcheck,aarch64-linux-gnu-)
-	aarch64-linux-gnu-objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
+	aarch64-linux-gnu-objcopy --strip-all --keep-section=.debug_gdb_scripts --keep-section=.exclave.license $@.debug $@
 	@aarch64-linux-gnu-readelf -h $@ | grep -q 'AArch64' && echo "built $@ ($$(stat -c %s $@) bytes stripped, ET_DYN aarch64)"
 
 build/launcher-old-aarch64: $(SRC) $(HDR) Makefile
 	@mkdir -p build
 	$(AARCH64_CC) $(filter-out -fcallgraph-info=su,$(CFLAGS_AARCH64)) -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD $(LDFLAGS) -o $@.debug $(SRC)
 	$(call linkcheck,aarch64-linux-gnu-)
-	aarch64-linux-gnu-objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
+	aarch64-linux-gnu-objcopy --strip-all --keep-section=.debug_gdb_scripts --keep-section=.exclave.license $@.debug $@
 
 # the tests are test/gate.sh EXCLAVE... (the commit gate) and test/examples.sh EXCLAVE (the example runs); see README.md
 

@@ -26,6 +26,13 @@ __asm__(".section .note.exclave,\"a\"\n .balign 4\n"
         " .long 8\n .long 4\n .long 1\n .asciz \"exclave\"\n .balign 4\n .long " NOTE_WORD(PAGE_GENERATION) "\n"
         " .long 5\n .long 4\n .long 1\n .asciz \"cont\"\n .balign 4\n .long " NOTE_WORD(PAGE_GENERATION) "\n .text\n");
 
+/* the launcher is the part of exclave every exclave holds, so it carries the licence's text, which the MIT licence asks to go
+ * with every copy; not loaded, and kept by the strip (Makefile). readelf -p .exclave.license shows it */
+__asm__(".pushsection .exclave.license,\"\",@progbits\n"
+        " .incbin \"LICENSE\"\n"
+        " .byte 0\n"
+        ".popsection\n");
+
 /* before the page and the version check: a message and an exit, raw, as nothing else is allowed yet */
 static void raw_fatal(const char *msg, long len)
 {
