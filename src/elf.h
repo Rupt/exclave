@@ -3,11 +3,17 @@
 #include <stdint.h>
 
 typedef struct {
-    unsigned char e_ident[16]; uint16_t e_type, e_machine; uint32_t e_version;
-    uint64_t e_entry, e_phoff, e_shoff; uint32_t e_flags;
+    unsigned char e_ident[16];
+    uint16_t e_type, e_machine;
+    uint32_t e_version;
+    uint64_t e_entry, e_phoff, e_shoff;
+    uint32_t e_flags;
     uint16_t e_ehsize, e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx;
 } Ehdr;
-typedef struct { uint32_t p_type, p_flags; uint64_t p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_align; } Phdr;
+typedef struct {
+    uint32_t p_type, p_flags;
+    uint64_t p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_align;
+} Phdr;
 
 #define ET_EXEC 2
 #define ET_DYN 3

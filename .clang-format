@@ -1,0 +1,19 @@
+# clang-format for the launcher, the unit tests and the test programs; scripts/check holds the C to it.
+#
+# One statement to a line, with a short if, loop or function body kept on its line. Comments are
+# left as written: a trailing comment where its author put it, a long one unwrapped.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 120
+BreakBeforeBraces: Linux
+IndentCaseLabels: false
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLoopsOnASingleLine: true
+AllowShortBlocksOnASingleLine: Always
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortEnumsOnASingleLine: true
+AlignTrailingComments:
+  Kind: Leave
+ReflowComments: false
+SortIncludes: Never

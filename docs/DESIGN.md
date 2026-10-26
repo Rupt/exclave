@@ -3538,7 +3538,7 @@ about a minute. The steps run in parallel, each with its own log under
 
 - the code checks, `scripts/check`: ruff, ty, shellcheck, shfmt and
   taplo over the Python, the shell scripts and the TOML; over the C,
-  gcc's strict warnings as errors (`make warnings`: both launchers,
+  clang-format (`.clang-format`), gcc's strict warnings as errors (`make warnings`: both launchers,
   `build/launcher-old` and the unit tests) and clang-tidy with its
   static analyser on the launcher for each architecture and on the
   unit tests (`.clang-tidy`);
@@ -3574,7 +3574,7 @@ budget of 30 s, against a slowest test of about 2 s natively, so a test
 that crawls fails instead of stalling the gate. The exit status is the
 number of failed steps. On the reference machine the whole gate, on the
 four exclaves with their fixtures and with the Docker profile and
-dogfood, takes 43 s (measured October 2026).
+dogfood, takes 47 s (measured October 2026).
 
 **The suite** (`scripts/test --exclave EXCLAVE`, or `--tree DIR` for an
 unwrapped tree) makes an exclave under its work directory, compiles
@@ -3893,8 +3893,9 @@ specified.
 - **The Python is ruff- and ty-clean**: `scripts/check` runs ruff, ty,
   shellcheck, shfmt and taplo from `uv.lock`, and an ignored rule or a
   suppression carries its reason (17).
-- **The C is clean under gcc's strict warnings and clang-tidy**, the
-  launcher for both architectures; clang-tidy comes from `uv.lock`, gcc
+- **The C is clang-formatted and clean under gcc's strict warnings and
+  clang-tidy**, the launcher for both architectures; clang-format and
+  clang-tidy come from `uv.lock`, gcc
   is the one that builds the launcher, and the build itself does not
   stop on a warning, since a newer gcc may find something new. A check
   `.clang-tidy` turns off carries its reason (17).

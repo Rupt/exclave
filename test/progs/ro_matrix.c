@@ -17,18 +17,38 @@
 #include <linux/fs.h>
 
 static int fails;
-#define CHECK(expr, want) do { errno = 0; long r_ = (long)(expr); int e_ = errno; \
-    if ((want) == 0 ? r_ < 0 : !(r_ < 0 && e_ == (want))) { fails++; printf("FAIL %s: got %ld errno %d (%s), wanted %s\n", #expr, r_, e_, strerror(e_), (want) == 0 ? "success" : strerror(want)); } \
-    else if (r_ >= 0 && strncmp(#expr, "open", 4) == 0) close((int)r_); } while (0)
+#define CHECK(expr, want)                                                                                              \
+    do {                                                                                                               \
+        errno = 0;                                                                                                     \
+        long r_ = (long)(expr);                                                                                        \
+        int e_ = errno;                                                                                                \
+        if ((want) == 0 ? r_ < 0 : !(r_ < 0 && e_ == (want))) {                                                        \
+            fails++;                                                                                                   \
+            printf("FAIL %s: got %ld errno %d (%s), wanted %s\n", #expr, r_, e_, strerror(e_),                         \
+                   (want) == 0 ? "success" : strerror(want));                                                          \
+        } else if (r_ >= 0 && strncmp(#expr, "open", 4) == 0) close((int)r_);                                          \
+    } while (0)
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) { fprintf(stderr, "usage: ro_matrix HOSTDIR [WRAPPER]\n"); return 2; }
+    if (argc < 2) {
+        fprintf(stderr, "usage: ro_matrix HOSTDIR [WRAPPER]\n");
+        return 2;
+    }
     const char *host = argv[1];
     const char *marker = "/usr/share/exclave-test-marker", *missing = "/usr/share/exclave-missing", *dir = "/usr/share";
     char hfile[4096], hnew[4096], hdir[4096];
-    snprintf(hfile, sizeof hfile, "%s/hfile", host); snprintf(hnew, sizeof hnew, "%s/hnew", host); snprintf(hdir, sizeof hdir, "%s/hdir", host);
-    unlink(hnew); rmdir(hdir); int hf = open(hfile, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (hf < 0) { perror("hfile"); return 2; } close(hf);
+    snprintf(hfile, sizeof hfile, "%s/hfile", host);
+    snprintf(hnew, sizeof hnew, "%s/hnew", host);
+    snprintf(hdir, sizeof hdir, "%s/hdir", host);
+    unlink(hnew);
+    rmdir(hdir);
+    int hf = open(hfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (hf < 0) {
+        perror("hfile");
+        return 2;
+    }
+    close(hf);
 
     /* opens */
     CHECK(open(marker, O_RDONLY), 0);
@@ -78,35 +98,116 @@ int main(int argc, char **argv)
     CHECK(access(marker, R_OK), 0);
     CHECK(access(missing, W_OK), ENOENT);
     /* descriptors that name exclave files */
-    int fd = open(marker, O_RDONLY); if (fd < 0) { printf("FAIL open marker: %s\n", strerror(errno)); return 1; }
+    int fd = open(marker, O_RDONLY);
+    if (fd < 0) {
+        printf("FAIL open marker: %s\n", strerror(errno));
+        return 1;
+    }
     CHECK(fchmod(fd, 0644), EROFS);
     CHECK(fchown(fd, getuid(), getgid()), EROFS);
     CHECK(futimens(fd, 0), EROFS);
     CHECK(fsetxattr(fd, "user.x", "y", 1, 0), EROFS);
-    { int fl = 0; CHECK(ioctl(fd, FS_IOC_SETFLAGS, &fl), EROFS); }
-    { struct fsxattr x; memset(&x, 0, sizeof x); CHECK(ioctl(fd, FS_IOC_FSSETXATTR, &x), EROFS); }   /* the filter had the wrong number until version 5 */
-    { struct stat a, b; CHECK(fstatat(fd, "", &a, AT_EMPTY_PATH), 0); stat(marker, &b); if (a.st_ino != b.st_ino) { fails++; printf("FAIL fstatat AT_EMPTY_PATH inode\n"); }
-      /* NULL with AT_EMPTY_PATH is the kernel's own fast form since 6.11 */
-      struct utsname u; uname(&u); int maj = 0, min = 0; sscanf(u.release, "%d.%d", &maj, &min); int newform = maj > 6 || (maj == 6 && min >= 11);
-      errno = 0; long r = syscall(SYS_newfstatat, fd, (char *)0, &a, AT_EMPTY_PATH);
-      if (newform ? r != 0 : !(r == 0 || errno == EFAULT || errno == EINVAL)) { fails++; printf("FAIL fstatat(fd, NULL, AT_EMPTY_PATH): %ld errno %d on %s\n", r, errno, u.release); }
-      if (r == 0 && a.st_ino != b.st_ino) { fails++; printf("FAIL fstatat NULL inode\n"); } }
-    { CHECK(open(dir, O_RDONLY | O_CREAT, 0644), EISDIR); }
+    {
+        int fl = 0;
+        CHECK(ioctl(fd, FS_IOC_SETFLAGS, &fl), EROFS);
+    }
+    /* the filter had the wrong number until version 5 */
+    {
+        struct fsxattr x;
+        memset(&x, 0, sizeof x);
+        CHECK(ioctl(fd, FS_IOC_FSSETXATTR, &x), EROFS);
+    }
+    {
+        struct stat a, b;
+        CHECK(fstatat(fd, "", &a, AT_EMPTY_PATH), 0);
+        stat(marker, &b);
+        if (a.st_ino != b.st_ino) {
+            fails++;
+            printf("FAIL fstatat AT_EMPTY_PATH inode\n");
+        }
+        /* NULL with AT_EMPTY_PATH is the kernel's own fast form since 6.11 */
+        struct utsname u;
+        uname(&u);
+        int maj = 0, min = 0;
+        sscanf(u.release, "%d.%d", &maj, &min);
+        int newform = maj > 6 || (maj == 6 && min >= 11);
+        errno = 0;
+        long r = syscall(SYS_newfstatat, fd, (char *)0, &a, AT_EMPTY_PATH);
+        if (newform ? r != 0 : !(r == 0 || errno == EFAULT || errno == EINVAL)) {
+            fails++;
+            printf("FAIL fstatat(fd, NULL, AT_EMPTY_PATH): %ld errno %d on %s\n", r, errno, u.release);
+        }
+        if (r == 0 && a.st_ino != b.st_ino) {
+            fails++;
+            printf("FAIL fstatat NULL inode\n");
+        }
+    }
+    {
+        CHECK(open(dir, O_RDONLY | O_CREAT, 0644), EISDIR);
+    }
     { /* readlinkat(fd, "") of an O_PATH|O_NOFOLLOW descriptor on a symlink */
-      const char *sl = getenv("EXCLAVE_TEST_SH") ? getenv("EXCLAVE_TEST_SH") : "/usr/bin/sh", *lt = getenv("EXCLAVE_TEST_SH_LINK") ? getenv("EXCLAVE_TEST_SH_LINK") : "dash";
-      int lf = open(sl, O_PATH | O_NOFOLLOW); char lb[64]; errno = 0; long r = readlinkat(lf, "", lb, sizeof lb - 1); if (r > 0) lb[r] = 0;
-      if (r <= 0 || strcmp(lb, lt)) { fails++; printf("FAIL readlinkat(fd, \"\"): %ld errno %d\n", r, errno); } close(lf); }
+        const char *sl = getenv("EXCLAVE_TEST_SH") ? getenv("EXCLAVE_TEST_SH") : "/usr/bin/sh",
+                   *lt = getenv("EXCLAVE_TEST_SH_LINK") ? getenv("EXCLAVE_TEST_SH_LINK") : "dash";
+        int lf = open(sl, O_PATH | O_NOFOLLOW);
+        char lb[64];
+        errno = 0;
+        long r = readlinkat(lf, "", lb, sizeof lb - 1);
+        if (r > 0) lb[r] = 0;
+        if (r <= 0 || strcmp(lb, lt)) {
+            fails++;
+            printf("FAIL readlinkat(fd, \"\"): %ld errno %d\n", r, errno);
+        }
+        close(lf);
+    }
     { /* getcwd into a buffer that holds the virtual path */
-      char cb[12]; if (chdir("/usr/share") || !getcwd(cb, sizeof cb) || strcmp(cb, "/usr/share")) { fails++; printf("FAIL getcwd with a small buffer: %s\n", strerror(errno)); }
-      char one[2]; errno = 0; if (getcwd(one, sizeof one) || errno != ERANGE) { fails++; printf("FAIL getcwd ERANGE\n"); } }
-    { struct statvfs v; CHECK(fstatvfs(fd, &v), 0); if (!(v.f_flag & ST_RDONLY)) { fails++; printf("FAIL fstatvfs lacks ST_RDONLY\n"); } }
+        char cb[12];
+        if (chdir("/usr/share") || !getcwd(cb, sizeof cb) || strcmp(cb, "/usr/share")) {
+            fails++;
+            printf("FAIL getcwd with a small buffer: %s\n", strerror(errno));
+        }
+        char one[2];
+        errno = 0;
+        if (getcwd(one, sizeof one) || errno != ERANGE) {
+            fails++;
+            printf("FAIL getcwd ERANGE\n");
+        }
+    }
+    {
+        struct statvfs v;
+        CHECK(fstatvfs(fd, &v), 0);
+        if (!(v.f_flag & ST_RDONLY)) {
+            fails++;
+            printf("FAIL fstatvfs lacks ST_RDONLY\n");
+        }
+    }
     close(fd);
-    { struct statvfs v; CHECK(statvfs("/usr", &v), 0); if (!(v.f_flag & ST_RDONLY)) { fails++; printf("FAIL statvfs /usr lacks ST_RDONLY\n"); }
-      CHECK(statvfs(host, &v), 0); if (v.f_flag & ST_RDONLY) { fails++; printf("FAIL statvfs host has ST_RDONLY\n"); } }
+    {
+        struct statvfs v;
+        CHECK(statvfs("/usr", &v), 0);
+        if (!(v.f_flag & ST_RDONLY)) {
+            fails++;
+            printf("FAIL statvfs /usr lacks ST_RDONLY\n");
+        }
+        CHECK(statvfs(host, &v), 0);
+        if (v.f_flag & ST_RDONLY) {
+            fails++;
+            printf("FAIL statvfs host has ST_RDONLY\n");
+        }
+    }
     /* trailing slash and bad pointers */
-    { struct stat st; CHECK(stat("/usr/share/exclave-test-marker/", &st), ENOTDIR); CHECK(stat("/usr/share/", &st), 0); CHECK(lstat("/usr/share/", &st), 0);
-      CHECK(stat((const char *)8, &st), EFAULT); CHECK(open((const char *)8, O_RDONLY), EFAULT); CHECK(access((const char *)8, R_OK), EFAULT); }
-    { char b[16]; CHECK(readlink((const char *)8, b, 16), EFAULT); }
+    {
+        struct stat st;
+        CHECK(stat("/usr/share/exclave-test-marker/", &st), ENOTDIR);
+        CHECK(stat("/usr/share/", &st), 0);
+        CHECK(lstat("/usr/share/", &st), 0);
+        CHECK(stat((const char *)8, &st), EFAULT);
+        CHECK(open((const char *)8, O_RDONLY), EFAULT);
+        CHECK(access((const char *)8, R_OK), EFAULT);
+    }
+    {
+        char b[16];
+        CHECK(readlink((const char *)8, b, 16), EFAULT);
+    }
     /* the host stays writable */
     CHECK(open(hnew, O_WRONLY | O_CREAT | O_EXCL, 0644), 0);
     CHECK(mkdir(hdir, 0755), 0);
@@ -114,13 +215,25 @@ int main(int argc, char **argv)
     CHECK(unlink(hfile), 0);
     CHECK(rmdir(hdir), 0);
     /* wrapper redirect: opening a wrapper reads the original */
-    { const char *w = argv[2] ? argv[2] : "/usr/bin/x86_64-linux-gnu-gcc-13"; char p[4096]; const char *b = strrchr(w, '/');
-      snprintf(p, sizeof p, "%.*s/.real%s", (int)(b - w), w, b);
-      struct stat a, c; int f = open(w, O_RDONLY); unsigned char h[4] = {0};
-      if (f < 0 || read(f, h, 4) != 4 || memcmp(h, "\177ELF", 4) || fstat(f, &a) || stat(p, &c) || a.st_ino != c.st_ino || a.st_size != c.st_size)
-          { fails++; printf("FAIL wrapper redirect for %s\n", w); }
-      if (f >= 0) close(f);
-      if (stat(w, &a) || a.st_ino != c.st_ino) { fails++; printf("FAIL stat of wrapper reports the launcher\n"); } }
+    {
+        const char *w = argv[2] ? argv[2] : "/usr/bin/x86_64-linux-gnu-gcc-13";
+        char p[4096];
+        const char *b = strrchr(w, '/');
+        snprintf(p, sizeof p, "%.*s/.real%s", (int)(b - w), w, b);
+        struct stat a, c;
+        int f = open(w, O_RDONLY);
+        unsigned char h[4] = {0};
+        if (f < 0 || read(f, h, 4) != 4 || memcmp(h, "\177ELF", 4) || fstat(f, &a) || stat(p, &c) ||
+            a.st_ino != c.st_ino || a.st_size != c.st_size) {
+            fails++;
+            printf("FAIL wrapper redirect for %s\n", w);
+        }
+        if (f >= 0) close(f);
+        if (stat(w, &a) || a.st_ino != c.st_ino) {
+            fails++;
+            printf("FAIL stat of wrapper reports the launcher\n");
+        }
+    }
     printf("ro_matrix: %d failures\n", fails);
     return fails ? 1 : 0;
 }

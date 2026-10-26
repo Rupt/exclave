@@ -38,18 +38,20 @@ if $fix; then
     run "$UV" run --quiet ruff check --fix .
     run "$UV" run --quiet ruff format .
     run "$UV" run --quiet shfmt --indent 4 --posix --simplify --write "$@"
+    run "$UV" run --quiet clang-format -i src/*.[ch] test/*.c test/progs/*.c
     run env RUST_LOG=warn "$UV" run --quiet taplo fmt pyproject.toml
 else
     run "$UV" run --quiet ruff format --check --quiet .
     run "$UV" run --quiet ruff check --quiet .
     run "$UV" run --quiet shfmt --indent 4 --posix --simplify --diff "$@"
+    run "$UV" run --quiet clang-format --dry-run --Werror src/*.[ch] test/*.c test/progs/*.c
     run env RUST_LOG=warn "$UV" run --quiet taplo fmt --check --diff pyproject.toml
 fi
 run "$UV" run --quiet shellcheck --severity=style --shell=sh \
     --external-sources --source-path=SCRIPTDIR "$@"
 run "$UV" run --quiet ty check --quiet
 
-# The C: gcc's warnings as errors (make warnings), then clang-tidy (.clang-tidy)
+# The C, formatted above (.clang-format): gcc's warnings as errors (make warnings), then clang-tidy (.clang-tidy)
 # on the launcher for each architecture and on the unit tests for the host, a
 # process to a file. A file's output is shown only for a finding, since clang
 # counts aloud the warnings it suppressed.

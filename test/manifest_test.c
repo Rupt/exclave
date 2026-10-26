@@ -5,16 +5,26 @@
 #include "../src/common.h"
 
 struct exclave C;
-void die(const char *what, const char *detail, long err) { fprintf(stderr, "die: %s %s %ld\n", what, detail ? detail : "", err); exit(99); }
+void die(const char *what, const char *detail, long err)
+{
+    fprintf(stderr, "die: %s %s %ld\n", what, detail ? detail : "", err);
+    exit(99);
+}
 
 static int fails, runs;
 static void expect(const char *name, const char *text, int want_ok, const char *want_err)
 {
-    char err[256] = ""; struct exclave c; memset(&c, 0, sizeof c);
+    char err[256] = "";
+    struct exclave c;
+    memset(&c, 0, sizeof c);
     int r = manifest_parse(text, strlen(text), &c, err, sizeof err);
     runs++;
     int ok = (r == 0) == (want_ok != 0) && (!want_err || strstr(err, want_err));
-    if (!ok) { fails++; printf("FAIL %s: r=%d err=\"%s\" (wanted %s%s%s)\n", name, r, err, want_ok ? "ok" : "error", want_err ? " containing " : "", want_err ? want_err : ""); }
+    if (!ok) {
+        fails++;
+        printf("FAIL %s: r=%d err=\"%s\" (wanted %s%s%s)\n", name, r, err, want_ok ? "ok" : "error",
+               want_err ? " containing " : "", want_err ? want_err : "");
+    }
 }
 #define OK(name, text) expect(name, text, 1, 0)
 #define BAD(name, text, why) expect(name, text, 0, why)
@@ -22,9 +32,14 @@ static void expect(const char *name, const char *text, int want_ok, const char *
 /* with a file argument: parse it and exit 0 or 1, for test/grammar_test.py's comparison with the Python parser */
 static int parse_file(const char *path)
 {
-    static char buf[1 << 20]; FILE *f = fopen(path, "rb"); if (!f) return 2;
-    size_t n = fread(buf, 1, sizeof buf, f); fclose(f);
-    char err[256] = ""; struct exclave c; memset(&c, 0, sizeof c);
+    static char buf[1 << 20];
+    FILE *f = fopen(path, "rb");
+    if (!f) return 2;
+    size_t n = fread(buf, 1, sizeof buf, f);
+    fclose(f);
+    char err[256] = "";
+    struct exclave c;
+    memset(&c, 0, sizeof c);
     int r = manifest_parse(buf, n, &c, err, sizeof err);
     if (r) fprintf(stderr, "%s\n", err);
     return r ? 1 : 0;
@@ -34,13 +49,18 @@ int main(int argc, char **argv)
 {
     if (argc == 2) return parse_file(argv[1]);
     OK("minimal", "exclave 1\n");
-    OK("full", "# an exclave\nexclave 1\n\ncpu \"x86-64-v2\"\n\ndata \"/opt/musl-sysroot\"\n\nhost \"/usr/local/share/fonts\"\n\nown \"/etc/hosts\"\nown \"/usr\"\n");
+    OK("full", "# an exclave\nexclave 1\n\ncpu \"x86-64-v2\"\n\ndata \"/opt/musl-sysroot\"\n\nhost "
+               "\"/usr/local/share/fonts\"\n\nown \"/etc/hosts\"\nown \"/usr\"\n");
     OK("escapes", "exclave 1\nown \"/a\\\\b\\\"c\\n\\t\\x01\\xff\"\n");
-    OK("utf8", "exclave 1\nown \"/caf\xc3\xa9/\xe2\x82\xac/\xf0\x9f\x98\x80\"\n# comment with \xc3\xa9 and\ttab\nhost \"/x\"\n");
+    OK("utf8", "exclave 1\nown \"/caf\xc3\xa9/\xe2\x82\xac/\xf0\x9f\x98\x80\"\n# comment with \xc3\xa9 and\ttab\nhost "
+               "\"/x\"\n");
     OK("comment between", "exclave 1\n# about the own record\nown \"/opt\"\n");
     OK("non-canonical spelling accepted", "exclave 1\nown \"/\\x41\"\n");
     BAD("no final lf", "exclave 1\nown \"/a\"", "end with LF");
-    BAD("bom", "\xef\xbb\xbf" "exclave 1\n", "byte order mark");
+    BAD("bom",
+        "\xef\xbb\xbf"
+        "exclave 1\n",
+        "byte order mark");
     BAD("cr", "exclave 1\r\n", "CR");
     BAD("tab", "exclave 1\nown\t\"/a\"\n", "tab");
     BAD("trailing space", "exclave 1\nown \"/a\" \n", "trailing space");
@@ -81,12 +101,17 @@ int main(int argc, char **argv)
     BAD("bare quote field", "exclave 1\nown \"/a\" x\n", "field count");
     /* decoded values, and the CPU level default */
     {
-        struct exclave c; memset(&c, 0, sizeof c); char err[256];
+        struct exclave c;
+        memset(&c, 0, sizeof c);
+        char err[256];
         const char *text = "exclave 1\n\nhost \"/srv/h\"\n\nown \"/a\\\\b\\\"c\\n\\t\\x01\"\nown \"/etc/hosts\"\n";
         runs++;
-        if (manifest_parse(text, strlen(text), &c, err, sizeof err) != 0 || c.nown != 2 || strcmp(c.own[0], "/a\\b\"c\n\t\x01") != 0
-            || strcmp(c.own[1], "/etc/hosts") != 0 || c.nhost != 1 || strcmp(c.host[0].v, "/srv/h") != 0 || strcmp(c.cpu, "x86-64") != 0)
-            { fails++; printf("FAIL decode: %s nown=%d nhost=%d cpu=%s\n", err, c.nown, c.nhost, c.cpu); }
+        if (manifest_parse(text, strlen(text), &c, err, sizeof err) != 0 || c.nown != 2 ||
+            strcmp(c.own[0], "/a\\b\"c\n\t\x01") != 0 || strcmp(c.own[1], "/etc/hosts") != 0 || c.nhost != 1 ||
+            strcmp(c.host[0].v, "/srv/h") != 0 || strcmp(c.cpu, "x86-64") != 0) {
+            fails++;
+            printf("FAIL decode: %s nown=%d nhost=%d cpu=%s\n", err, c.nown, c.nhost, c.cpu);
+        }
     }
     printf("%d tests, %d failures\n", runs, fails);
     return fails ? 1 : 0;

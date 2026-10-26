@@ -9,12 +9,17 @@
 #include "../src/common.h"
 
 struct exclave C;
-void die(const char *what, const char *detail, long err) { fprintf(stderr, "die: %s %s %ld\n", what, detail ? detail : "", err); exit(99); }
+void die(const char *what, const char *detail, long err)
+{
+    fprintf(stderr, "die: %s %s %ld\n", what, detail ? detail : "", err);
+    exit(99);
+}
 
 #if defined(__x86_64__)
 #define BIT(n) (1U << (n))
 /* every feature bit of v2, v3 and v4, in the words isa.c reads */
-static const unsigned C1 = BIT(13) | BIT(23) | BIT(0) | BIT(19) | BIT(20) | BIT(9) | BIT(28) | BIT(29) | BIT(12) | BIT(22) | BIT(27);
+static const unsigned C1 =
+    BIT(13) | BIT(23) | BIT(0) | BIT(19) | BIT(20) | BIT(9) | BIT(28) | BIT(29) | BIT(12) | BIT(22) | BIT(27);
 static const unsigned B7 = BIT(5) | BIT(3) | BIT(8) | BIT(16) | BIT(30) | BIT(28) | BIT(17) | BIT(31);
 static const unsigned CX = BIT(0) | BIT(5);
 
@@ -23,7 +28,10 @@ static void expect(int level, unsigned c1, unsigned b7, unsigned cx, unsigned lo
 {
     cases++;
     int got = isa_x86_level_ok(level, c1, b7, cx, xcr0);
-    if (got != want) { printf("FAIL v%d %s: got %d, want %d\n", level, what, got, want); fails++; }
+    if (got != want) {
+        printf("FAIL v%d %s: got %d, want %d\n", level, what, got, want);
+        fails++;
+    }
 }
 
 int main(void)
@@ -39,17 +47,28 @@ int main(void)
     expect(4, C1, B7, CX, 0x67, 0, "Hi16_ZMM state disabled");
     expect(4, C1, B7 & ~BIT(16), CX, 0xe7, 0, "no AVX512F");
     __builtin_cpu_init();
-    int real[3] = {__builtin_cpu_supports("x86-64-v2") ? 1 : 0, __builtin_cpu_supports("x86-64-v3") ? 1 : 0, __builtin_cpu_supports("x86-64-v4") ? 1 : 0};
+    int real[3] = {__builtin_cpu_supports("x86-64-v2") ? 1 : 0, __builtin_cpu_supports("x86-64-v3") ? 1 : 0,
+                   __builtin_cpu_supports("x86-64-v4") ? 1 : 0};
     static const char *const name[3] = {"x86-64-v2", "x86-64-v3", "x86-64-v4"};
     for (int i = 0; i < 3; i++) {
         cases++;
         int got = isa_supported(name[i], 0);
-        if (got != (real[i] != 0)) { printf("FAIL this machine's %s: the launcher says %d, gcc says %d\n", name[i], got, real[i] != 0); fails++; }
+        if (got != (real[i] != 0)) {
+            printf("FAIL this machine's %s: the launcher says %d, gcc says %d\n", name[i], got, real[i] != 0);
+            fails++;
+        }
     }
     printf("%s cpu levels: %d cases, %d failures; this machine is v%d\n", fails ? "FAIL" : "PASS", cases, fails,
-           real[2] ? 4 : real[1] ? 3 : real[0] ? 2 : 1);
+           real[2]   ? 4
+           : real[1] ? 3
+           : real[0] ? 2
+                     : 1);
     return fails != 0;
 }
 #else
-int main(void) { printf("PASS cpu levels: x86-64 only, nothing to check here\n"); return 0; }
+int main(void)
+{
+    printf("PASS cpu levels: x86-64 only, nothing to check here\n");
+    return 0;
+}
 #endif

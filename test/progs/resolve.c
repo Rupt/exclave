@@ -16,12 +16,23 @@ int main(void)
         if (n && line[n - 1] == '\n') line[--n] = 0;
         int flags = O_PATH;
         char *p = line;
-        if (!strncmp(p, "nofollow ", 9)) { flags |= O_NOFOLLOW; p += 9; }
+        if (!strncmp(p, "nofollow ", 9)) {
+            flags |= O_NOFOLLOW;
+            p += 9;
+        }
         int fd = open(p, flags);
-        if (fd < 0) { printf("ERR %d\n", errno); continue; }
-        char l[64]; snprintf(l, sizeof l, "/proc/self/fd/%d", fd);
+        if (fd < 0) {
+            printf("ERR %d\n", errno);
+            continue;
+        }
+        char l[64];
+        snprintf(l, sizeof l, "/proc/self/fd/%d", fd);
         ssize_t r = readlink(l, buf, sizeof buf - 1);
-        if (r < 0) printf("ERR readlink %d\n", errno); else { buf[r] = 0; printf("OK %s\n", buf); }
+        if (r < 0) printf("ERR readlink %d\n", errno);
+        else {
+            buf[r] = 0;
+            printf("OK %s\n", buf);
+        }
         close(fd);
     }
     return 0;

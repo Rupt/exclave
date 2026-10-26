@@ -13,7 +13,11 @@
 #define SLOTS 16384
 #define STRINGS (1024UL * 1024)
 
-struct slot { volatile unsigned long hash; unsigned int off; unsigned char kind; };
+struct slot {
+    volatile unsigned long hash;
+    unsigned int off;
+    unsigned char kind;
+};
 static struct slot table[SLOTS];
 static char strings[STRINGS];
 static volatile unsigned int used;
@@ -24,7 +28,10 @@ static volatile int full;
 static unsigned long hash_str(const char *s)
 {
     unsigned long h = 1469598103934665603UL;
-    for (; *s; s++) { h ^= (unsigned char)*s; h *= 1099511628211UL; }
+    for (; *s; s++) {
+        h ^= (unsigned char)*s;
+        h *= 1099511628211UL;
+    }
     return h ? h : 1;
 }
 
@@ -47,22 +54,32 @@ int cache_get(const char *v, char *link_out)
 
 void cache_put(const char *v, int kind, const char *link)
 {
-    if (full || __sync_lock_test_and_set(&lock, 1)) return;            /* held: someone else is inserting, or we are nested */
+    /* held: someone else is inserting, or we are nested */
+    if (full || __sync_lock_test_and_set(&lock, 1)) return;
     size_t vl = xstrlen(v) + 1, ll = (kind == CK_LINK && link) ? xstrlen(link) + 1 : 0;
     unsigned long h = hash_str(v);
     unsigned i = h & (SLOTS - 1), n = 0;
     for (; n < SLOTS; i = (i + 1) & (SLOTS - 1), n++) {
         if (!table[i].hash) break;
-        if (table[i].hash == h && xstrcmp(strings + table[i].off, v) == 0) { __sync_lock_release(&lock); return; }
+        if (table[i].hash == h && xstrcmp(strings + table[i].off, v) == 0) {
+            __sync_lock_release(&lock);
+            return;
+        }
     }
     /* stop with slack left: a probe must always meet an empty slot, or a miss would scan the whole table */
-    if (table[i].hash || ++filled > SLOTS - SLOTS / 8 || used + vl + ll > STRINGS) { full = 1; __sync_lock_release(&lock); return; }
+    if (table[i].hash || ++filled > SLOTS - SLOTS / 8 || used + vl + ll > STRINGS) {
+        full = 1;
+        __sync_lock_release(&lock);
+        return;
+    }
     unsigned off = used;
     xmemcpy(strings + off, v, vl);
     if (ll) xmemcpy(strings + off + vl, link, ll);
     used += (unsigned)(vl + ll);
-    table[i].off = off; table[i].kind = (unsigned char)kind;
-    __sync_synchronize();                                             /* strings and kind before the hash that publishes them */
+    table[i].off = off;
+    table[i].kind = (unsigned char)kind;
+    /* strings and kind before the hash that publishes them */
+    __sync_synchronize();
     table[i].hash = h;
     __sync_lock_release(&lock);
 }
@@ -79,7 +96,8 @@ int cache_classify(const char *v, const char *real, char *tmp)
     else if ((st.st_mode & S_IFMT) == S_IFLNK) {
         long n = sys_readlink(real, tmp, PATH_MAX - 1);
         if (n < 0) return 0;                                          /* raced or unreadable: not cached */
-        tmp[n] = 0; k = CK_LINK;
+        tmp[n] = 0;
+        k = CK_LINK;
     } else if ((st.st_mode & S_IFMT) == S_IFREG && is_wrapper_real(real, tmp)) k = CK_WRAPPER;
     else k = CK_FILE;
     cache_put(v, k, k == CK_LINK ? tmp : 0);

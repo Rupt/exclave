@@ -21,30 +21,46 @@
 extern char **environ;
 static volatile int stop, fails;
 static char exe[4096];
-static char seen[8][160];                                    /* the first wrong answers, named: the call, its result and errno or text */
+/* the first wrong answers, named: the call, its result and errno or text */
+static char seen[8][160];
 
 static void wrong(const char *what, long r, int e, const char *text, long n)
 {
     int i = __sync_fetch_and_add(&fails, 1);
-    if (i < 8) snprintf(seen[i], sizeof seen[i], "%s: ret=%ld errno=%d%s%.*s", what, r, r < 0 ? e : 0, text ? " text=" : "", text ? (int)(n > 100 ? 100 : n) : 0, text ? text : "");
+    if (i < 8)
+        snprintf(seen[i], sizeof seen[i], "%s: ret=%ld errno=%d%s%.*s", what, r, r < 0 ? e : 0, text ? " text=" : "",
+                 text ? (int)(n > 100 ? 100 : n) : 0, text ? text : "");
 }
 
 static void *trapper(void *arg)
 {
-    struct stat st; char b[4096];
+    struct stat st;
+    char b[4096];
     while (!stop) {
         long r = stat("/usr/share/exclave-test-marker", &st);
-        if (r) { wrong("stat", r, errno, 0, 0); continue; }
+        if (r) {
+            wrong("stat", r, errno, 0, 0);
+            continue;
+        }
         long n = readlink("/proc/self/exe", b, sizeof b - 1);
-        if (n < 0 || (size_t)n != strlen(exe) || memcmp(b, exe, (size_t)n)) wrong("readlink /proc/self/exe", n, errno, n > 0 ? b : 0, n);
+        if (n < 0 || (size_t)n != strlen(exe) || memcmp(b, exe, (size_t)n))
+            wrong("readlink /proc/self/exe", n, errno, n > 0 ? b : 0, n);
     }
     return arg;
 }
 
 static volatile long ticks, tick_fails;
-static void on_alarm(int sig) { struct stat st; (void)sig; if (stat("/usr/share", &st) == 0) ticks++; else tick_fails++; }   /* a trap inside whatever trap the timer interrupted */
+/* a trap inside whatever trap the timer interrupted */
+static void on_alarm(int sig)
+{
+    struct stat st;
+    (void)sig;
+    if (stat("/usr/share", &st) == 0) ticks++;
+    else tick_fails++;
+}
 
-static void *blocker(void *arg)                                /* holds a chunk: blocked inside the handler's re-issued open of a FIFO */
+/* holds a chunk: blocked inside the handler's re-issued open of a FIFO */
+static void *blocker(void *arg)
 {
     int fd = open((const char *)arg, O_RDONLY);
     if (fd >= 0) close(fd);
@@ -53,43 +69,73 @@ static void *blocker(void *arg)                                /* holds a chunk:
 
 int main(int argc, char **argv)
 {
-    if (argc < 3) { fprintf(stderr, "usage: spawn_threads HOSTDIR PROGRAM\n"); return 2; }
+    if (argc < 3) {
+        fprintf(stderr, "usage: spawn_threads HOSTDIR PROGRAM\n");
+        return 2;
+    }
     const char *host = argv[1], *prog = argv[2];
-    long n = readlink("/proc/self/exe", exe, sizeof exe - 1); exe[n > 0 ? n : 0] = 0;
+    long n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+    exe[n > 0 ? n : 0] = 0;
     /* part 1: four threads trapping throughout 200 spawns from the main thread */
     pthread_t t[4];
     for (int i = 0; i < 4; i++) pthread_create(&t[i], 0, trapper, 0);
     int spawned = 0;
     for (int i = 0; i < 200; i++) {
-        pid_t pid; char *av[] = { (char *)prog, 0 };
-        if (posix_spawn(&pid, prog, 0, 0, av, environ) == 0) { int st; waitpid(pid, &st, 0); spawned++; }
+        pid_t pid;
+        char *av[] = {(char *)prog, 0};
+        if (posix_spawn(&pid, prog, 0, 0, av, environ) == 0) {
+            int st;
+            waitpid(pid, &st, 0);
+            spawned++;
+        }
     }
     stop = 1;
     for (int i = 0; i < 4; i++) pthread_join(t[i], 0);
     printf("spawns beside trapping threads: %d spawned, %d failures\n", spawned, fails);
     for (int i = 0; i < fails && i < 8; i++) printf("  wrong answer: %s\n", seen[i]);
     /* part 2: eight threads hold chunks in a FIFO open; a forked child traps with a 1 ms timer whose handler traps too */
-    char fifo[4096]; snprintf(fifo, sizeof fifo, "%s/fifo", host); unlink(fifo);
-    if (mkfifo(fifo, 0600)) { perror("mkfifo"); return 1; }
+    char fifo[4096];
+    snprintf(fifo, sizeof fifo, "%s/fifo", host);
+    unlink(fifo);
+    if (mkfifo(fifo, 0600)) {
+        perror("mkfifo");
+        return 1;
+    }
     pthread_t b[8];
     for (int i = 0; i < 8; i++) pthread_create(&b[i], 0, blocker, fifo);
     usleep(100000);                                            /* the blockers are inside their traps */
     pid_t c = fork();
     if (c == 0) {
         signal(SIGALRM, on_alarm);
-        struct itimerval it = { { 0, 1000 }, { 0, 1000 } }; setitimer(ITIMER_REAL, &it, 0);
-        struct stat st; int bad = 0;
-        for (long i = 0; ticks + tick_fails < 200 && i < 20000000; i++)   /* 200 timer traps, about 0.2 s, however slow a trap is */
+        struct itimerval it = {{0, 1000}, {0, 1000}};
+        setitimer(ITIMER_REAL, &it, 0);
+        struct stat st;
+        int bad = 0;
+        /* 200 timer traps, about 0.2 s, however slow a trap is */
+        for (long i = 0; ticks + tick_fails < 200 && i < 20000000; i++)
             if (stat("/usr/share/exclave-test-marker", &st)) bad++;
-        it.it_value.tv_sec = it.it_value.tv_usec = 0; setitimer(ITIMER_REAL, &it, 0);
+        it.it_value.tv_sec = it.it_value.tv_usec = 0;
+        setitimer(ITIMER_REAL, &it, 0);
         _exit(bad || tick_fails ? 1 : ticks ? 0 : 3);
     }
     int st = -1;
-    for (int i = 0; i < 300; i++) { if (waitpid(c, &st, WNOHANG) == c) break; usleep(100000); }   /* 30 s: a hang is a failure, not a stall */
-    if (!WIFEXITED(st)) { kill(c, SIGKILL); waitpid(c, 0, 0); }
-    int w = open(fifo, O_WRONLY | O_NONBLOCK); if (w >= 0) close(w);   /* releases the blockers */
+    /* 30 s: a hang is a failure, not a stall */
+    for (int i = 0; i < 300; i++) {
+        if (waitpid(c, &st, WNOHANG) == c) break;
+        usleep(100000);
+    }
+    if (!WIFEXITED(st)) {
+        kill(c, SIGKILL);
+        waitpid(c, 0, 0);
+    }
+    int w = open(fifo, O_WRONLY | O_NONBLOCK);
+    if (w >= 0) close(w);   /* releases the blockers */
     for (int i = 0; i < 8; i++) pthread_join(b[i], 0);
     unlink(fifo);
-    printf("nested traps in a forked child while the pool is held: %s\n", WIFEXITED(st) && WEXITSTATUS(st) == 0 ? "ok" : WIFEXITED(st) && WEXITSTATUS(st) == 3 ? "no timer trap landed" : WIFEXITED(st) ? "a stat failed" : "hung");
+    printf("nested traps in a forked child while the pool is held: %s\n", WIFEXITED(st) && WEXITSTATUS(st) == 0 ? "ok"
+                                                                          : WIFEXITED(st) && WEXITSTATUS(st) == 3
+                                                                              ? "no timer trap landed"
+                                                                          : WIFEXITED(st) ? "a stat failed"
+                                                                                          : "hung");
     return fails == 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0 ? 0 : 1;
 }

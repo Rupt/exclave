@@ -133,8 +133,11 @@ The loop that has served well, in the order it pays:
   modern types, a rule ignored in `pyproject.toml` only with its reason
   beside it, and a `# noqa` or `# ty: ignore[rule]` only where fixing
   would be wrong, with its reason on the line.
-- **The C is clean under the Makefile's `WARNINGS` and clang-tidy**,
-  also in `scripts/check` (`make warnings`, `.clang-tidy`): a check is
+- **The C is clang-formatted and clean under the Makefile's `WARNINGS`
+  and clang-tidy**, also in `scripts/check` (`.clang-format`, `make
+  warnings`, `.clang-tidy`); `scripts/check --fix` formats. A trailing
+  comment that does not fit in 120 columns goes above its statement,
+  and a table stays one between `clang-format off` and `on`. A check is
   turned off in `.clang-tidy` with its reason, and a `NOLINT(check)`
   carries its reason on the line. The unit tests run under ASan and
   UBSan (`make unit`), and the gate runs the suite once on

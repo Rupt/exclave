@@ -27,17 +27,27 @@ void scratch_test_between(void *chunk)                    /* src/scratch.c calls
 {
     (void)chunk;
     if (inside_hook++) return;                                /* B's own sweep, nested here, runs straight through */
-    c_chunk = scratch_get(getpid(), (int)syscall(SYS_gettid), 1);   /* B reclaims the dead owner's chunk and C claims it */
+    /* B reclaims the dead owner's chunk and C claims it */
+    c_chunk = scratch_get(getpid(), (int)syscall(SYS_gettid), 1);
 }
 
 int main(void)
 {
-    void *m = mmap((void *)SC_PAGE, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-    if (m != (void *)SC_PAGE) { perror("mmap the syscall page"); return 1; }
+    void *m =
+        mmap((void *)SC_PAGE, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (m != (void *)SC_PAGE) {
+        perror("mmap the syscall page");
+        return 1;
+    }
 #if defined(__x86_64__)
-    unsigned char *p = m; p[0] = 0x0f; p[1] = 0x05; p[2] = 0xc3;   /* syscall; ret */
+    unsigned char *p = m;
+    p[0] = 0x0f;
+    p[1] = 0x05;
+    p[2] = 0xc3;   /* syscall; ret */
 #elif defined(__aarch64__)
-    uint32_t *w = m; w[0] = 0xd4000001U; w[1] = 0xd65f03c0U;       /* svc #0; ret */
+    uint32_t *w = m;
+    w[0] = 0xd4000001U;
+    w[1] = 0xd65f03c0U;       /* svc #0; ret */
     __builtin___clear_cache((char *)m, (char *)m + 8);
 #endif
     mprotect(m, 4096, PROT_READ | PROT_EXEC);
@@ -45,10 +55,17 @@ int main(void)
     if (dead == 0) _exit(0);
     waitpid(dead, 0, 0);
     struct scratch *left = scratch_get(dead, dead, 0);        /* the chunk the exited process left busy */
-    if (!left) { printf("FAIL no first chunk\n"); return 1; }
-    struct scratch *a = scratch_get(getpid(), (int)syscall(SYS_gettid), 2);   /* sweep A, with B and C between its judgement and release */
+    if (!left) {
+        printf("FAIL no first chunk\n");
+        return 1;
+    }
+    /* sweep A, with B and C between its judgement and release */
+    struct scratch *a = scratch_get(getpid(), (int)syscall(SYS_gettid), 2);
     int ok = c_chunk == left && a && a != c_chunk;
     printf("%s sweep: the dead owner's chunk went to C %s, and A got %s\n", ok ? "PASS" : "FAIL",
-           c_chunk == left ? "once" : "not at all", !a ? "nothing" : a == c_chunk ? "C's chunk too" : "a chunk of its own");
+           c_chunk == left ? "once" : "not at all",
+           !a             ? "nothing"
+           : a == c_chunk ? "C's chunk too"
+                          : "a chunk of its own");
     return ok ? 0 : 1;
 }
