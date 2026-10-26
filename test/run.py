@@ -19,6 +19,7 @@ in any order, and `--order reverse` and `--order random` check that.
 """
 
 import argparse
+import contextlib
 import os
 import platform
 import re
@@ -352,9 +353,17 @@ def make_exclave(ctx: Ctx) -> None:
                     os.chmod(p, m & 0o777)
     if ctx.from_exclave:
         build.unwrap(ex, log=lambda *_: None)
-    # test additions to the tree
-    with open(os.path.join(root, "usr", "share", "exclave-test-marker"), "w") as f:
-        f.write("marker\n")
+
+    # test additions to the tree, each a new file: the copy's files are hard links to the given
+    # tree's, which a fixture shares with every run made from it, and a fixture has these already
+    def add(path: str, body: str, mode: int = 0o644) -> None:
+        if os.path.lexists(path):
+            os.remove(path)
+        with open(path, "w") as f:
+            f.write(body)
+        os.chmod(path, mode)
+
+    add(os.path.join(root, "usr", "share", "exclave-test-marker"), "marker\n")
     # a socket file in the tree (13 item 31); a fixture carries one already
     tree.socket_file(os.path.join(root, "usr", "share", "exclave-test.sock"))
     for name, body in (
@@ -363,10 +372,7 @@ def make_exclave(ctx: Ctx) -> None:
         ("exclave-test-script2", "#!/usr/bin/exclave-test-script\n"),
         ("exclave-test-exe", "#!/bin/sh\nreadlink /proc/$$/exe\n"),
     ):
-        p = os.path.join(root, "usr", "bin", name)
-        with open(p, "w") as f:
-            f.write(body)
-        os.chmod(p, 0o755)
+        add(os.path.join(root, "usr", "bin", name), body, 0o755)
     top = "/" + ctx.work.split("/")[1]
     recs = [grammar.Record("exclave", [("t", b"1")])]
     ctx.cwd_given = top not in VOLATILE
@@ -4536,7 +4542,7 @@ def main() -> int:
     if keys:
         name = os.path.basename(os.path.abspath(args.exclave)).replace(".exclave", "")
         fixture, sources = os.path.join(REPO, "build", "fixtures", f"{name}-{keys[0]}"), keys[1]
-    if fixture and os.path.isdir(fixture):
+    if fixture and os.path.isdir(os.path.join(fixture, "tree")):
         tree_ = os.path.join(fixture, "tree")
         try:
             stale = read_text(os.path.join(fixture, STAMP)).strip() != sources
@@ -4573,8 +4579,9 @@ def main() -> int:
         shutil.rmtree(fixture, ignore_errors=True)
         if not args.keep and not failed:
             shutil.rmtree(whole.work, ignore_errors=True)
-    elif stale and not args.k and fixture:
-        with open(os.path.join(fixture, STAMP), "w") as f:  # still enough for these sources
+    elif stale and not args.k and fixture and os.path.isdir(os.path.join(fixture, "tree")):
+        # still enough for these sources, unless another run has found otherwise and removed it
+        with contextlib.suppress(FileNotFoundError), open(os.path.join(fixture, STAMP), "w") as f:
             f.write(sources + "\n")
     print(f"{len(order)} tests, {len(failed)} failures")
     if logging and fixture and not failed and not args.k:
