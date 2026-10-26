@@ -65,6 +65,10 @@ build/launcher-aarch64: $(SRC) $(HDR) Makefile
 	@mv -f *.ci build/ 2>/dev/null || true
 	$(call linkcheck,aarch64-linux-gnu-)
 	aarch64-linux-gnu-objcopy --strip-all --keep-section=.debug_gdb_scripts --keep-section=.exclave.license $@.debug $@
+	@aarch64-linux-gnu-readelf -n $@ | grep -Eq '^ +exclave +0x' && aarch64-linux-gnu-readelf -n $@ | grep -Eq '^ +cont +0x' || (echo "a note was stripped: the launcher carries exclave and cont (7.4.5)" && false)
+	@aarch64-linux-gnu-readelf -S -W $@ | grep -q debug_gdb_scripts || (echo "the gdb script was stripped" && false)
+	@aarch64-linux-gnu-readelf -p .exclave.license $@ | grep -q 'MIT License' || (echo "the licence was stripped" && false)
+	@aarch64-linux-gnu-readelf --dyn-syms $@ | grep -q exclave_debug_hook || (echo "the gdb hook is not exported" && false)
 	@aarch64-linux-gnu-readelf -h $@ | grep -q 'AArch64' && echo "built $@ ($$(stat -c %s $@) bytes stripped, ET_DYN aarch64)"
 
 build/launcher-old-aarch64: $(SRC) $(HDR) Makefile
