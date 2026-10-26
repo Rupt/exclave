@@ -11,28 +11,40 @@ set -u
 here=$ROOT/test
 repo=$ROOT
 out=$repo/build/gate
-[ $# -ge 1 ] || { echo "usage: scripts/gate EXCLAVE..." >&2; exit 2; }
-[ -x "$repo/build/launcher" ] || { echo "build/launcher missing: run make" >&2; exit 2; }
+[ $# -ge 1 ] || {
+    echo "usage: scripts/gate EXCLAVE..." >&2
+    exit 2
+}
+[ -x "$repo/build/launcher" ] || {
+    echo "build/launcher missing: run make" >&2
+    exit 2
+}
 rm -rf "$out" && mkdir -p "$out" || exit 2
 start=$(date +%s)
 
-step() {                                                    # step NAME CMD...: in the background, its status and log kept
-    name=$1; shift
-    ( "$@" > "$out/$name.log" 2>&1; echo $? > "$out/$name.rc" ) &
+step() { # step NAME CMD...: in the background, its status and log kept
+    name=$1
+    shift
+    (
+        "$@" >"$out/$name.log" 2>&1
+        echo $? >"$out/$name.rc"
+    ) &
 }
+# shellcheck disable=SC2329  # run through step, by name
 unit() {
-    cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/manifest_test" "$here/manifest_test.c" "$repo/src/manifest.c" "$repo/src/str.c" \
-        && "$out/manifest_test" && py "$here/grammar_test.py" --c-parser "$out/manifest_test" \
-        && cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/filter_test" "$here/filter_test.c" "$repo/src/filter.c" "$repo/src/str.c" \
-        && "$out/filter_test" && py "$here/syscalls.py" \
-        && cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DSCRATCH_TEST -o "$out/scratch_test" "$here/scratch_test.c" "$repo/src/scratch.c" \
-        && "$out/scratch_test" \
-        && cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/isa_test" "$here/isa_test.c" "$repo/src/isa.c" "$repo/src/str.c" \
-        && "$out/isa_test"   # the parser, the filter, the scratch pool and the CPU check just built, not stale builds
+    cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/manifest_test" "$here/manifest_test.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
+        "$out/manifest_test" && py "$here/grammar_test.py" --c-parser "$out/manifest_test" &&
+        cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/filter_test" "$here/filter_test.c" "$repo/src/filter.c" "$repo/src/str.c" &&
+        "$out/filter_test" && py "$here/syscalls.py" &&
+        cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DSCRATCH_TEST -o "$out/scratch_test" "$here/scratch_test.c" "$repo/src/scratch.c" &&
+        "$out/scratch_test" &&
+        cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/isa_test" "$here/isa_test.c" "$repo/src/isa.c" "$repo/src/str.c" &&
+        "$out/isa_test" # the parser, the filter, the scratch pool and the CPU check just built, not stale builds
 }
+# shellcheck disable=SC2329  # run through step, by name
 stack() {
     py "$here/stackcheck.py" "$repo"/build/launcher.debug-*.ci || return 1
-    if ls "$repo"/build/launcher-aarch64.debug-*.ci > /dev/null 2>&1; then py "$here/stackcheck.py" "$repo"/build/launcher-aarch64.debug-*.ci; fi
+    if ls "$repo"/build/launcher-aarch64.debug-*.ci >/dev/null 2>&1; then py "$here/stackcheck.py" "$repo"/build/launcher-aarch64.debug-*.ci; fi
 }
 
 step unit unit
@@ -41,8 +53,8 @@ for ex in "$@"; do
     n=$(basename "$ex" .exclave)
     step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"
     step "suite-$n-random" py "$here/run.py" --exclave "$ex" --work "$out/w-$n-random" --order random
-    if [ "$ex" = "$1" ] && command -v aa-exec > /dev/null 2>&1 && aa-exec -p unconfined true 2> /dev/null; then   # the plain terminal's
-        step "suite-$n-plain" aa-exec -p unconfined "$UV" run --quiet --project "$ROOT" python "$here/run.py" --exclave "$ex" --work "$out/w-$n-plain"   # AppArmor label (12), once
+    if [ "$ex" = "$1" ] && command -v aa-exec >/dev/null 2>&1 && aa-exec -p unconfined true 2>/dev/null; then                                          # the plain terminal's
+        step "suite-$n-plain" aa-exec -p unconfined "$UV" run --quiet --project "$ROOT" python "$here/run.py" --exclave "$ex" --work "$out/w-$n-plain" # AppArmor label (12), once
     fi
     step "resolve-$n" py "$here/oracle_resolve.py" --exclave "$ex" --work "$out/r-$n"
     step "ns-$n" py "$here/oracle_ns.py" --exclave "$ex" --work "$out/n-$n"
@@ -63,9 +75,13 @@ for rc in "$out"/*.rc; do
     name=$(basename "$rc" .rc)
     r=$(cat "$rc")
     last=$(grep -v '^$' "$out/$name.log" | tail -1 | cut -c1-110)
-    if [ "$r" != 0 ]; then printf '%-22s FAIL  %s\n' "$name" "$last"; fails=$((fails + 1))
-    elif case $name in resolve-*|ns-*|syscalls-*|docker-*) grep -q 'cannot run' "$out/$name.log";; *) false;; esac; then printf '%-22s SKIP  %s\n' "$name" "$last"; skips=$((skips + 1))   # an oracle without bwrap, namespaces or openat2
+    if [ "$r" != 0 ]; then
+        printf '%-22s FAIL  %s\n' "$name" "$last"
+        fails=$((fails + 1))
+    elif case $name in resolve-* | ns-* | syscalls-* | docker-*) grep -q 'cannot run' "$out/$name.log" ;; *) false ;; esac then
+        printf '%-22s SKIP  %s\n' "$name" "$last"
+        skips=$((skips + 1)) # an oracle without bwrap, namespaces or openat2
     else printf '%-22s ok    %s\n' "$name" "$last"; fi
 done
-echo "gate: $fails failed, $skips skipped, $(( $(date +%s) - start )) s"
+echo "gate: $fails failed, $skips skipped, $(($(date +%s) - start)) s"
 exit $fails

@@ -14,18 +14,28 @@
 set -eu
 . "$(dirname -- "$0")/lib.sh"
 here=$ROOT
-[ $# -eq 1 ] || { echo "usage: scripts/example DIR" >&2; exit 2; }
+[ $# -eq 1 ] || {
+    echo "usage: scripts/example DIR" >&2
+    exit 2
+}
 mkdir -p "$1" && cd "$1"
 dir=$(pwd)
-rm -rf gcc.exclave sysroot.exclave hello.exclave hello.c hello hello-plain hello-pruned log && mkdir log   # a rerun keeps only the fetched files
+rm -rf gcc.exclave sysroot.exclave hello.exclave hello.c hello hello-plain hello-pruned log && mkdir log # a rerun keeps only the fetched files
 exclave() { py "$here/exclave/exclave.py" "$@"; }
-run() { echo "+ $*" >&2; "$@"; }                                          # every command shown as it runs
-logged() {                                                                # logged NAME CMD...: the command and its long output go to log/NAME.log
-    name=$1; shift
-    run "$@" > "log/$name.log" 2>&1 || { echo "$name failed: see $dir/log/$name.log" >&2; exit 1; }
+run() {
+    echo "+ $*" >&2
+    "$@"
+}          # every command shown as it runs
+logged() { # logged NAME CMD...: the command and its long output go to log/NAME.log
+    name=$1
+    shift
+    run "$@" >"log/$name.log" 2>&1 || {
+        echo "$name failed: see $dir/log/$name.log" >&2
+        exit 1
+    }
     echo "  $(tail -1 "log/$name.log") ($(grep -c '^warning' "log/$name.log") warnings; log/$name.log)"
 }
-sysroot="--sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/"       # headers from the sysroot; -B for its start files and libc
+sysroot=--sysroot=/opt/sysroot-el7 sysroot_b=-B/opt/sysroot-el7/usr/lib64/ # headers from the sysroot; -B for its start files and libc
 
 echo "== 1. the launcher"
 run make -s -C "$here"
@@ -39,18 +49,19 @@ echo "== 3. CentOS 7's glibc as a sysroot inside it"
 logged unpack-el7 exclave unpack sysroot.exclave el7/*.rpm
 run cp -a sysroot.exclave/tree gcc.exclave/tree/opt/sysroot-el7
 printf '%s\n' "+ printf 'exclave 1\\n\\ndata \"/opt/sysroot-el7\"\\n' > gcc.exclave/.exclave/manifest" >&2
-printf 'exclave 1\n\ndata "/opt/sysroot-el7"\n' > gcc.exclave/.exclave/manifest
+printf 'exclave 1\n\ndata "/opt/sysroot-el7"\n' >gcc.exclave/.exclave/manifest
 logged wrap exclave wrap gcc.exclave
 run ln -s tree/usr/bin/gcc-13 gcc.exclave/gcc
 
 echo "== 4. a program built inside, run on this host and inside the exclave"
-cat > hello.c <<'HELLO'
+cat >hello.c <<'HELLO'
 #include <stdio.h>
 int main(void) { printf("hello from an exclave\n"); return 0; }
 HELLO
 run env EXCLAVE_LOG=log/plain.log gcc.exclave/gcc -o hello-plain hello.c
-run env EXCLAVE_LOG=log/hello.log gcc.exclave/gcc $sysroot -o hello hello.c
-echo "  log/hello.log: $(wc -l < log/hello.log) lines, one per trapped syscall; the first:"; head -6 log/hello.log | sed "s/^/    /"
+run env EXCLAVE_LOG=log/hello.log gcc.exclave/gcc "$sysroot" "$sysroot_b" -o hello hello.c
+echo "  log/hello.log: $(wc -l <log/hello.log) lines, one per trapped syscall; the first:"
+head -6 log/hello.log | sed "s/^/    /"
 versions() { gcc.exclave/tree/usr/bin/objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -u | tr '\n' ' '; }
 echo "  glibc symbol versions bound: hello-plain: $(versions hello-plain) hello: $(versions hello)"
 run ./hello
@@ -59,7 +70,7 @@ run gcc.exclave/.exclave/launcher "$dir/hello"
 echo "== 5. the exclave pruned to what the compile touched, and the checks on it"
 run cp -a gcc.exclave hello.exclave
 run exclave prune hello.exclave log/hello.log
-run env EXCLAVE_LOG=log/pruned.log hello.exclave/gcc $sysroot -o hello-pruned hello.c
+run env EXCLAVE_LOG=log/pruned.log hello.exclave/gcc "$sysroot" "$sysroot_b" -o hello-pruned hello.c
 run exclave check hello.exclave log/pruned.log
 run ./hello-pruned
 count() { find "$1/tree" -type f -o -type l | wc -l; }

@@ -11,9 +11,17 @@ set -u
 . "$(dirname -- "$0")/lib.sh"
 here=$ROOT/test
 repo=$ROOT
-[ $# -eq 1 ] || { echo "usage: scripts/examples EXCLAVE" >&2; exit 2; }
-ex=$1; fails=0
-run() { echo "== $1"; shift; "$@" || fails=$((fails + 1)); }
+[ $# -eq 1 ] || {
+    echo "usage: scripts/examples EXCLAVE" >&2
+    exit 2
+}
+ex=$1
+fails=0
+run() {
+    echo "== $1"
+    shift
+    "$@" || fails=$((fails + 1))
+}
 [ -n "${EXCLAVE_TEST_SRC:-}" ] && run realsoft py "$here/realsoft.py" --exclave "$ex" --src "$EXCLAVE_TEST_SRC" || echo "realsoft: EXCLAVE_TEST_SRC not set"
 [ -n "${EXCLAVE_TEST_SQLITE:-}" ] && run bench py "$here/bench.py" --exclave "$ex" --sqlite "$EXCLAVE_TEST_SQLITE" || echo "bench: EXCLAVE_TEST_SQLITE not set"
 [ -n "${EXCLAVE_TEST_RPMS:-}" ] && run sysroot py "$here/sysroot.py" --exclave "$ex" --rpms "$EXCLAVE_TEST_RPMS" --out "$repo/build/sysroot-hello" || echo "sysroot: EXCLAVE_TEST_RPMS not set"

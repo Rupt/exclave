@@ -1,0 +1,44 @@
+#!/bin/sh
+# The code checks: format, lint and type checks for the Python, the shell
+# scripts and the TOML, every tool from uv.lock (pyproject.toml's dev group),
+# none from the machine. scripts/gate runs this as a step.
+#
+#   scripts/check          report; exit non-zero on any finding
+#   scripts/check --fix    let the formatters and ruff write their corrections
+#
+# A pass says nothing: each tool is asked for its quietest form.
+set -eu
+
+. "$(dirname -- "$0")/lib.sh"
+cd "$ROOT"
+
+fix=false
+[ "${1-}" = --fix ] && fix=true
+
+# Bring .venv up to date once; every run below then uses it as it is.
+"$UV" sync --quiet
+export UV_NO_SYNC=1
+
+# The shell scripts, in the positional parameters: every file under scripts/
+# that starts as a POSIX shell script, and lib.sh, which is sourced.
+set -- scripts/lib.sh
+for path in scripts/*; do
+    case "$(head -n 1 "$path")" in
+    '#!/bin/sh'*) set -- "$@" "$path" ;;
+    esac
+done
+
+if $fix; then
+    "$UV" run --quiet ruff format .
+    "$UV" run --quiet ruff check --fix .
+    "$UV" run --quiet shfmt --indent 4 --posix --simplify --write "$@"
+    RUST_LOG=warn "$UV" run --quiet taplo fmt pyproject.toml
+else
+    "$UV" run --quiet ruff format --check --quiet .
+    "$UV" run --quiet ruff check --quiet .
+    "$UV" run --quiet shfmt --indent 4 --posix --simplify --diff "$@"
+    RUST_LOG=warn "$UV" run --quiet taplo fmt --check --diff pyproject.toml
+fi
+"$UV" run --quiet shellcheck --severity=style --shell=sh \
+    --external-sources --source-path=SCRIPTDIR "$@"
+"$UV" run --quiet ty check --quiet
