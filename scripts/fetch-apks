@@ -2,4 +2,4 @@
 # scripts/fetch-apks: an Alpine package closure, downloaded (docs/DESIGN.md 10.1), run by the pinned Python (scripts/lib.sh).
 set -eu
 . "$(dirname -- "$0")/lib.sh"
-exec "$UV" run --quiet --project "$ROOT" python "$ROOT/tools/fetch-apks.py" "$@"
+exec "$UV" run --quiet --project "$ROOT" python "$ROOT/fetch/apks.py" "$@"

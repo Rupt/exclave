@@ -106,8 +106,8 @@ The loop that has served well, in the order it pays:
   until it is classified in `test/syscalls.py` and, if it takes a path,
   handled in `src/handler.c` and listed in `src/filter.c`.
 - **The tool is Python**, shipped as an exclave, takes files and does not
-  open a network connection; `tools/fetch-debs.py`,
-  `tools/fetch-apks.py` and `tools/fetch-rpms.py` are the step before
+  open a network connection; `fetch/debs.py`,
+  `fetch/apks.py` and `fetch/rpms.py` are the step before
   it. `curl` has not been needed. A package reader (`deb.py`, `apk.py`,
   `rpm.py`) has one interface and is chosen by the file. A change to
   the tool's output is checked by `test/dogfood.py`. `src/gdb.py` is

@@ -109,7 +109,7 @@ ignore = [
     # without it.
     "PLC0415",
 ]
-"tools/**" = [
+"fetch/**" = [
     # Fetching from the repository the caller names is the whole program.
     "S310",
     # Repository metadata from that repository, read without entities or
@@ -134,7 +134,7 @@ python-version = "3.15"
 root = [".", "test"]
 
 [tool.ty.src]
-include = ["exclave", "test", "tools"]
+include = ["exclave", "test", "fetch"]
 
 [tool.ty.analysis]
 # A `type: ignore` suppresses nothing: only `ty: ignore[<rule>]` does, so every

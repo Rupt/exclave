@@ -88,7 +88,7 @@ for path in $changed; do
     test/dogfood.py) dogfood=true ;;
     test/matrix.py | test/vm_run.py) matrix=true ;;
     # scripts/check's alone: documents, settings, the fetchers, the other scripts and drivers
-    *.md | docs/* | scripts/* | tools/* | test/*.py | pyproject.toml | uv.lock | taplo.toml | .gitignore) ;;
+    *.md | docs/* | scripts/* | fetch/* | test/*.py | pyproject.toml | uv.lock | taplo.toml | .gitignore) ;;
     *) full=true ;;
     esac
 done

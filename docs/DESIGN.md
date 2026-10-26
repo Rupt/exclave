@@ -112,7 +112,7 @@ What is built and tested:
   source (7).
 - **The `exclave` command**, reading Debian and Ubuntu `.deb`, Alpine
   `.apk` and `.rpm` packages through one reader interface (10.1); the
-  fetchers in `tools/` are examples of the step before it.
+  fetchers in `fetch/` are examples of the step before it.
 - **Four exclave kinds**, made from distribution packages: a gcc
   exclave from Ubuntu 24.04, which builds zlib, Lua, SQLite and re2c
   from source with their own configure scripts; an Alpine exclave on
@@ -1709,7 +1709,7 @@ before a user does.
   the gate's four exclaves (17).
 - **An Alpine exclave**: `gcc musl-dev binutils make linux-headers`
   and the base, 20 packages from Alpine 3.21 fetched with
-  `tools/fetch-apks.py`, unpacked and wrapped: 87 ELF files, no error
+  `fetch/apks.py`, unpacked and wrapped: 87 ELF files, no error
   from the static check, and a tree hash that reproduces from the same
   files. Its gcc 14.2 compiles and runs C inside, dynamically linked
   on musl 1.2.5 and statically linked. The static output runs on a
@@ -1717,7 +1717,7 @@ before a user does.
   loader. A compile touches no host path, and it is one of the gate's
   four exclaves (17).
 - **A Fedora exclave**: `gcc glibc-devel binutils make` and the base,
-  87 packages from Fedora 42 fetched with `tools/fetch-rpms.py`, with
+  87 packages from Fedora 42 fetched with `fetch/rpms.py`, with
   `glibc-minimal-langpack` chosen for the langpack, unpacked and
   wrapped: 351 ELF files, no error from the static check, and a tree
   hash that reproduces from the same files. Its gcc 15 compiles and
@@ -1803,7 +1803,7 @@ set that mixes formats is refused. From `.deb` files, in five steps:
    report, not a refusal, because the set is its maker's choice; the
    static check (10.3) is the gate on correctness, and a missing data
    file shows up as a failed open in `EXCLAVE_LOG`. The Essential set, which every package assumes and none
-   declares, is the fetcher's concern; `tools/fetch-debs.py` adds it
+   declares, is the fetcher's concern; `fetch/debs.py` adds it
    unless given `--no-essential`.
 2. **Extract** each `data.tar.*` into `tree/`, after creating the
    distribution's merged-`/usr` symlinks (`bin`, `sbin`, `lib`, `lib32`,
@@ -1917,26 +1917,26 @@ into `bin` and Fedora's p11-kit CA bundle. The module docstrings of
 `exclave/apk.py` and `exclave/rpm.py` list each format's differences.
 
 **The step before the tool** belongs to whoever makes the exclave.
-Three fetchers in `tools/`, one for each format, are worked examples;
+Three fetchers in `fetch/`, one for each format, are worked examples;
 they are not part of the tool's exclave. Each resolves a closure from a
 repository's index, chooses providers of virtual names by priority,
 verifies every download against the index's checksum, and fills a
 directory. They know about mirrors and snapshot services because those
 are locators; the tool does not, because a hash is not a locator.
 
-- `tools/fetch-debs.py` resolves `Depends` and `Pre-Depends` from an
+- `fetch/debs.py` resolves `Depends` and `Pre-Depends` from an
   archive's `Packages` index, adds the Essential set, and checks the
   index against the suite's `Release` digests.
-- `tools/fetch-apks.py` resolves `D:` dependencies through the index's
+- `fetch/apks.py` resolves `D:` dependencies through the index's
   `p:` provides and checks each package's checksums as apk does: the
   index's checksum against the control section, and `.PKGINFO`'s
   `datahash` against the data section.
-- `tools/fetch-rpms.py` reads a yum or dnf repository's `repomd.xml` and
+- `fetch/rpms.py` reads a yum or dnf repository's `repomd.xml` and
   `primary.xml` and resolves `Requires` through `Provides` and the files
   the index lists.
 
 None verifies a signature, the `Release` file's, the apk index's or the
-rpm metadata's, so the mirror is trusted (13 item 32). `fetch-debs.py`'s
+rpm metadata's, so the mirror is trusted (13 item 32). `fetch/debs.py`'s
 default mirrors are plain `http://`, so with them the network path is
 trusted too; an `https` mirror or `--snapshot` leaves only the mirror.
 
@@ -2112,7 +2112,7 @@ A tool's exclave can build the next one. That is a cross-exclave
 invocation, with each exclave holding a launcher of its own, and
 `test/dogfood.py` tests it as one. `scripts/dogfood --inputs DIR` takes
 two package sets that `scripts/inputs DIR` fetched with
-`tools/fetch-debs.py`, the tool's (`debs-base`) and the gcc 13 closure
+`fetch/debs.py`, the tool's (`debs-base`) and the gcc 13 closure
 (`debs-gcc13`), and touches no network. It builds the tool's exclave,
 then builds the same gcc exclave twice from the same files: once with
 the checkout's tool on the host, and once with the tool's exclave from
@@ -2410,12 +2410,12 @@ and stay fixed.
 
 32. **The tool trusts its input files, and the fetchers trust the
     mirror.** The tool records its inputs' hashes and checks nothing
-    about their origin, which it cannot know. `tools/fetch-debs.py`,
-    `tools/fetch-apks.py` and `tools/fetch-rpms.py` verify every
+    about their origin, which it cannot know. `fetch/debs.py`,
+    `fetch/apks.py` and `fetch/rpms.py` verify every
     download against its index's digest, but none verifies a signature:
     not a Debian or Ubuntu `Release` file's, not the apk index's, not an
     rpm repository's metadata's. The mirror is therefore trusted, and
-    with `fetch-debs.py`'s default mirrors, which are plain `http://`,
+    with `fetch/debs.py`'s default mirrors, which are plain `http://`,
     so is the network path; an `https` mirror or `--snapshot` leaves
     only the mirror. The tool also runs two of the packages' binaries
     on the host, outside any exclave: the tree's static `ldconfig`
@@ -2729,7 +2729,7 @@ every file at its base, originals included.
 |---|---|
 | A generated index beside the manifest | Every record the launcher uses is readable from the tree in microseconds, and a tree edited without re-indexing would be silently wrong (6.3). |
 | Layers at run time | A second root in the translator, a libc rule, a record naming another exclave's location and an unanswered listing question, to save disk. Composition is a copy at build time (11). |
-| The tool fetching from archives | Acquisition has its own trust argument and failure surface; it is the step before the tool, `tools/fetch-debs.py` and its siblings (10). |
+| The tool fetching from archives | Acquisition has its own trust argument and failure surface; it is the step before the tool, `fetch/debs.py` and its siblings (10). |
 | `from-source` with build recipes | The beginning of a distribution. A build script builds inside an exclave, and an exclave is made of the staging directory plus the runtime packages (10.2). |
 | `env` and `entry` records | Both duplicate a file: a symlink in `/usr/local/bin`, a wrapper script, a symlink at the top of the exclave (6.2). |
 | Several roots per CPU level, `chroot` re-rooting, maintainer scripts run in a scratch exclave | Two exclaves are two exclaves; a writable root would be a second world; a tree that needs its scripts run comes from outside (7.7, 7.8, 10.1). |
@@ -3513,7 +3513,7 @@ the base system the tool's own exclave is built on, the packages `test/realsoft.
 with, CentOS 7's glibc for the sysroot of 9, the arm64 gcc-13 closure,
 Docker's default seccomp profile, and the source tarballs of
 `test/realsoft.py` and `test/bench.py`. Packages come through the
-fetchers of `tools/`, which verify each download against the repository
+fetchers of `fetch/`, which verify each download against the repository
 index's checksum and cache it under `~/.cache`. Every other third-party
 file is pinned by its BLAKE2b-256 in the script. An item `DIR` already
 has is skipped, and whatever is missing is fetched again. The
@@ -3861,7 +3861,7 @@ specified.
 ### 19.3 Tool
 
 - **The tool takes files and never fetches**: acquisition has its own
-  trust argument; `tools/` holds examples of that step (10).
+  trust argument; `fetch/` holds examples of that step (10).
 - **Building software is the build system's job**: an exclave of built
   software is a staging directory plus runtime packages, with no
   recipes (10.2).

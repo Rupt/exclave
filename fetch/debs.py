@@ -1,4 +1,4 @@
-"""fetch-debs.py — the step before the tool, for a Debian-family archive.
+"""fetch/debs.py — the step before the tool, for a Debian-family archive.
 
 An example of the step before the tool: resolve a package closure from a Debian-family archive and
 download it into a directory of .deb files (DESIGN.md 10.1).
@@ -299,7 +299,7 @@ class _VersionKey:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        prog="fetch-debs", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("packages", nargs="+")
     ap.add_argument("--out", required=True, help="directory to fill with .deb files")

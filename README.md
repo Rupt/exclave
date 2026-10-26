@@ -27,7 +27,7 @@ any filesystem tree.
 - **Packages in, a directory out.** The `exclave` command builds
   exclaves from Debian and Ubuntu `.deb`, Alpine `.apk` and Fedora,
   Rocky or CentOS `.rpm` files, or from any filesystem tree. It takes
-  files and never fetches; three small fetchers in `tools/` are the
+  files and never fetches; three small fetchers in `fetch/` are the
   step before it.
 - **Compilers first.** A gcc exclave builds zlib, Lua, SQLite and re2c
   from source with their configure scripts: the builds within a fifth
@@ -75,12 +75,12 @@ and logs are the tutorial and each command is one you can run by hand:
 
 1. `make` builds `build/launcher`, the freestanding binary every
    executable in an exclave is a hard link to.
-2. `tools/fetch-debs.py` downloads Ubuntu 24.04's `gcc-13` closure, 94
+2. `fetch/debs.py` downloads Ubuntu 24.04's `gcc-13` closure, 94
    packages, and `exclave unpack` makes an unwrapped exclave from the
    files: the tree under `gcc.exclave/tree/`, the maintainer scripts'
    effects synthesised, every input recorded by hash in
    `gcc.exclave/.exclave/hashes`.
-3. `tools/fetch-rpms.py` downloads CentOS 7's glibc, headers and
+3. `fetch/rpms.py` downloads CentOS 7's glibc, headers and
    `libgcc`; unpacked into an exclave of their own, the tree is copied
    into the gcc exclave at `/opt/sysroot-el7`, and a two-line manifest
    says `data "/opt/sysroot-el7"`: nothing there is wrapped, checked or
@@ -390,9 +390,9 @@ exclave/apk.py       the Alpine reader with deb.py's interface: gzip streams, .P
 exclave/rpm.py       the rpm reader with the same interface: lead and headers, the cpio payload, rpm's flags and version order
 exclave/build.py     extraction rules, synthesis, placeholders, dependency report, pruning, tree hash, hashes file, unwrap
 exclave/elfcheck.py  the static and dynamic checks of 10.3
-tools/fetch-debs.py  resolve a closure from a Debian archive and download it, checked against the index; the Release signature is not verified, so prefer an https mirror
-tools/fetch-apks.py  the same for an Alpine repository: each package's checksums as apk checks them; the index's signature is not verified
-tools/fetch-rpms.py  the same for a yum or dnf repository, verified by the index's SHA-256
+fetch/debs.py        resolve a closure from a Debian archive and download it, checked against the index; the Release signature is not verified, so prefer an https mirror
+fetch/apks.py        the same for an Alpine repository: each package's checksums as apk checks them; the index's signature is not verified
+fetch/rpms.py        the same for a yum or dnf repository, verified by the index's SHA-256
 test/run.py          the regression suite; test/progs/ its C, Rust and Go programs
 test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
 test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the openat2 oracle

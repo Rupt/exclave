@@ -1,4 +1,4 @@
-"""fetch-rpms.py — the step before the tool, for a yum/dnf repository.
+"""fetch/rpms.py — the step before the tool, for a yum/dnf repository.
 
 An example of the step before the tool for rpm distributions: resolve a package closure from a
 yum/dnf repository's metadata and download it into a directory of .rpm files (DESIGN.md 10.1).
@@ -265,7 +265,7 @@ class Repo:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        prog="fetch-rpms", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("packages", nargs="+")
     ap.add_argument("--out", required=True, help="directory to fill with .rpm files")

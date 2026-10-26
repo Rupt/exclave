@@ -1,4 +1,4 @@
-"""fetch-apks.py — the step before the tool, for an Alpine repository.
+"""fetch/apks.py — the step before the tool, for an Alpine repository.
 
 An example of the step before the tool for Alpine: resolve a package closure from an Alpine
 repository index and download it into a directory of .apk files (DESIGN.md 10.1).
@@ -195,7 +195,7 @@ def _gzip_members(data: bytes) -> list[tuple[bytes, bytes]]:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        prog="fetch-apks", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("packages", nargs="+")
     ap.add_argument("--out", required=True, help="directory to fill with .apk files")

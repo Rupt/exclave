@@ -37,7 +37,7 @@ fetch() { # fetch NAME FETCHER ARGS...: package files into DIR/NAME through the 
         return 0
     fi
     rm -rf "${dir:?}/$name"
-    if py "$repo/tools/$tool" --out "$dir/$name" "$@" >"$dir/log/$name.log" 2>&1; then
+    if py "$repo/fetch/$tool" --out "$dir/$name" "$@" >"$dir/log/$name.log" 2>&1; then
         echo "$name: $(find "$dir/$name" -type f | wc -l) files"
     else
         echo "$name: FAIL, see $dir/log/$name.log"
@@ -85,14 +85,14 @@ file() { # file URL NAME HASH: one file into DIR/src, verified by its BLAKE2b-25
 
 fedora=https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/42/Everything/x86_64/os
 centos=https://vault.centos.org/7.9.2009/os/x86_64
-fetch debs-gcc13 fetch-debs.py gcc-13 libc6-dev && make_exclave gcc13 debs-gcc13
-fetch debs-base fetch-debs.py libc6 libgcc-s1
-fetch apks fetch-apks.py gcc musl-dev binutils make linux-headers && make_exclave alpine apks
-fetch rpms-f42 fetch-rpms.py --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make && make_exclave f42 rpms-f42
-fetch debs-clang fetch-debs.py clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils && make_exclave clang debs-clang
-fetch debs-realsoft fetch-debs.py gcc g++ make libc6-dev python3 && make_exclave realsoft debs-realsoft
-fetch el7 fetch-rpms.py --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
-fetch debs-arm64 fetch-debs.py --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev
+fetch debs-gcc13 debs.py gcc-13 libc6-dev && make_exclave gcc13 debs-gcc13
+fetch debs-base debs.py libc6 libgcc-s1
+fetch apks apks.py gcc musl-dev binutils make linux-headers && make_exclave alpine apks
+fetch rpms-f42 rpms.py --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make && make_exclave f42 rpms-f42
+fetch debs-clang debs.py clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils && make_exclave clang debs-clang
+fetch debs-realsoft debs.py gcc g++ make libc6-dev python3 && make_exclave realsoft debs-realsoft
+fetch el7 rpms.py --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
+fetch debs-arm64 debs.py --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev
 file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json 3d005310d39ca085839ee4d23373c37c5eaeee073951d1fed335c2553559b846
 file https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz ac034b9c7bbd9f8cc38953efaac07145ce0c8993107a1594d5cedd08fdf2a2bc
 file https://www.lua.org/ftp/lua-5.4.7.tar.gz lua-5.4.7.tar.gz 7a37bca67359c6917fd330eee4e5d9f50852c27a2f5bce4e40b2b3b02ce18830
