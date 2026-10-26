@@ -199,7 +199,8 @@ class Report:
 
 
 def _expand(s, origin):
-    """The loader's substitutions in an RPATH or RUNPATH, for the exclave's machine (glibc's dl-load.c)."""
+    """The loader's substitutions in an RPATH, a RUNPATH or a DT_NEEDED that is a path, for the exclave's machine
+    (glibc's dl-load.c)."""
     return s.replace("$ORIGIN", origin).replace("${ORIGIN}", origin).replace("$LIB", LIB_DIR).replace("${LIB}", LIB_DIR).replace("$PLATFORM", PLATFORM).replace("${PLATFORM}", PLATFORM)
 
 
@@ -270,7 +271,9 @@ def find_library(tree, name, elf, vpath, rpaths, cache, own=(), host_hits=None, 
     included. The loader satisfies its own soname without a search."""
     if interp and name == os.path.basename(interp) and tree.resolve(interp):
         return tree.resolve(interp)
-    if "/" in name:
+    if "/" in name:                                            # a path, loaded as named: glibc expands $ORIGIN and the
+        if interp and "musl" not in os.path.basename(interp):  # other tokens in it first (dl-load.c), musl does not
+            name = os.path.normpath(_expand(name, os.path.dirname(vpath)))
         return tree.resolve(name) if name.startswith("/") else None
     origin = os.path.dirname(vpath)
     search = []

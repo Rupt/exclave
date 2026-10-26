@@ -1707,7 +1707,8 @@ def static_check_loader_model(ctx):
     """10.3: DT_RPATH is inherited down the chain, ld.so.cache is read, a search
     directory the exclave does not own is refused; a hand-made glibc layout is wrapped, a truncated ELF is an error
     by name, a host record is applied as the launcher applies it, a library a workload built in its own directory
-    is a note; a separate debug file, whose segments carry no bytes, is not a program."""
+    is a note; a separate debug file, whose segments carry no bytes, is not a program; a DT_NEEDED that is a path
+    through $ORIGIN resolves where glibc's loader expands it, and not under musl's, which does not."""
     import elfcheck
     x = os.path.join(ctx.root, "usr", "local", "x")
     base = os.path.join(x, "lib")
@@ -1721,6 +1722,8 @@ def static_check_loader_model(ctx):
         f.write("int bar(void); int foo(void) { return bar(); }\n")
     with open(os.path.join(src, "prog.c"), "w") as f:
         f.write("int foo(void); int main(void) { return foo(); }\n")
+    with open(os.path.join(src, "dst.c"), "w") as f:
+        f.write("int bar(void); int main(void) { return bar(); }\n")
     gcc = wrapper(ctx, GCC)
     built = os.path.join(src, "out")                          # built on the host side, then placed in the tree by hand:
     os.makedirs(built, exist_ok=True)                         # from inside the exclave the tree's real path is the read-only exclave
@@ -1728,14 +1731,18 @@ def static_check_loader_model(ctx):
         for cmd in (["-shared", "-fPIC", "-Wl,-soname,libbar.so.1", "-o", os.path.join(built, "libbar.so.1"), "bar.c"],
                     ["-shared", "-fPIC", "-Wl,-soname,libfoo.so.1", "-o", os.path.join(built, "libfoo.so.1"), "foo.c", "-L" + built, "-l:libbar.so.1"],
                     ["-o", os.path.join(built, "prog"), "prog.c", "-L" + built, "-l:libfoo.so.1", "-Wl,-rpath-link," + built, "-Wl,--disable-new-dtags", "-Wl,-rpath,/usr/local/x/lib"],
-                    ["-o", os.path.join(built, "hostprog"), "prog.c", "-L" + built, "-l:libfoo.so.1", "-Wl,-rpath-link," + built, "-Wl,-rpath,/tmp/exclave-hostlib"]):
+                    ["-o", os.path.join(built, "hostprog"), "prog.c", "-L" + built, "-l:libfoo.so.1", "-Wl,-rpath-link," + built, "-Wl,-rpath,/tmp/exclave-hostlib"],
+                    ["-shared", "-fPIC", "-Wl,-soname,$ORIGIN/../lib/libdst.so", "-o", os.path.join(built, "libdst.so"), "bar.c"],
+                    ["-o", os.path.join(built, "dstprog"), "dst.c", "-L" + built, "-l:libdst.so"]):
             rc, out, err = run([gcc] + cmd, cwd=src, env=ctx.env)
             expect(rc == 0, err)
         rc, out, err = run([wrapper(ctx, "objcopy"), "--only-keep-debug", os.path.join(built, "prog"), os.path.join(built, "prog.debug")], cwd=src, env=ctx.env)
         expect(rc == 0, "objcopy: " + err)
         shutil.copy2(os.path.join(built, "prog.debug"), os.path.join(x, "prog.debug"))   # as /usr/lib/debug holds them: an empty PT_INTERP
-        for f in ("libbar.so.1", "libfoo.so.1"):
+        for f in ("libbar.so.1", "libfoo.so.1", "libdst.so"):
             shutil.copy2(os.path.join(built, f), os.path.join(base, f))
+        os.makedirs(os.path.join(x, "bin"), exist_ok=True)     # $ORIGIN/../lib from /usr/local/x/bin is /usr/local/x/lib
+        shutil.copy2(os.path.join(built, "dstprog"), os.path.join(x, "bin", "dstprog"))
         for f in ("prog", "hostprog"):
             shutil.copy2(os.path.join(built, f), os.path.join(x, f))
         rep = elfcheck.static_check(ctx.exclave, exclave.owned(ctx.exclave), exclave.data_prefixes(ctx.exclave))
@@ -1744,6 +1751,8 @@ def static_check_loader_model(ctx):
         debug = [e for e in rep.errors if "prog.debug" in e]
         expect(not debug, "a separate debug file is not a program: %r" % debug)
         expect(any("hostprog" in e and "does not own" in e for e in rep.errors), "a host RPATH must be refused: %r" % rep.errors[:3])
+        dst = [e for e in rep.errors if "libdst" in e]
+        expect(bool(dst) == ctx.musl, "a DT_NEEDED through $ORIGIN (%s): %r" % ("unexpanded by musl" if ctx.musl else "expanded by glibc", dst))
         cache = elfcheck.read_cache(elfcheck.Tree(ctx.root))
         if ctx.ldso_cache:
             expect(cache and "libc.so.6" in cache and cache["libc.so.6"][0].endswith("/libc.so.6"), "ld.so.cache parsed: %r" % (list(cache.items())[:2] if cache else cache))
