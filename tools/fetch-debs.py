@@ -22,7 +22,7 @@ import sys
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "exclave"))
-import deb  # noqa: E402
+import deb
 
 
 class RepoError(Exception):
@@ -42,7 +42,7 @@ SNAPSHOT_BASE = {
 class Repo:
     def __init__(
         self, distro, suites, arch, components, cache, mirror=None, snapshot=None, log=print
-    ):
+    ) -> None:
         self.distro, self.suites, self.arch, self.components, self.cache, self.log = (
             distro,
             suites,
@@ -79,7 +79,7 @@ class Repo:
         return data
 
     def _release_digests(self, suite):
-        text = self._get("%s/dists/%s/Release" % (self.mirror, suite)).decode("utf-8", "replace")
+        text = self._get(f"{self.mirror}/dists/{suite}/Release").decode("utf-8", "replace")
         digests, in_sha = {}, False
         for line in text.split("\n"):
             if line.startswith("SHA256:"):
@@ -93,22 +93,21 @@ class Repo:
                 in_sha = False
         return digests
 
-    def load_index(self):
+    def load_index(self) -> None:
         for suite in self.suites:
             digests = self._release_digests(suite)
             for comp in self.components:
-                rel = "%s/binary-%s/Packages.xz" % (comp, self.arch)
+                rel = f"{comp}/binary-{self.arch}/Packages.xz"
                 if rel not in digests:
-                    rel = "%s/binary-%s/Packages.gz" % (comp, self.arch)
+                    rel = f"{comp}/binary-{self.arch}/Packages.gz"
                 if rel not in digests:
-                    self.log("no Packages index for %s/%s, skipping" % (suite, comp))
+                    self.log(f"no Packages index for {suite}/{comp}, skipping")
                     continue
-                data = self._get("%s/dists/%s/%s" % (self.mirror, suite, rel))
+                data = self._get(f"{self.mirror}/dists/{suite}/{rel}")
                 want, size = digests[rel]
                 if len(data) != size or hashlib.sha256(data).hexdigest() != want:
-                    raise RepoError(
-                        "%s/%s: Packages index does not match the Release digest" % (suite, rel)
-                    )
+                    msg = f"{suite}/{rel}: Packages index does not match the Release digest"
+                    raise RepoError(msg)
                 text = deb.decompress(rel, data).decode("utf-8", "replace")
                 n = 0
                 for st in deb.parse_stanzas(text):
@@ -140,7 +139,8 @@ class Repo:
     def resolve(self, wanted, essential=True, choose=None):
         """Closure of Depends and Pre-Depends: {name: stanza}. Alternatives by one already selected, else the first
         satisfiable; virtual packages by a selected provider, else the highest Priority; unless `choose` maps a
-        virtual or alternative name to a package."""
+        virtual or alternative name to a package.
+        """
         choose = choose or {}
         selected, notes = {}, []
         queue = [(n, "requested") for n in wanted]
@@ -152,7 +152,8 @@ class Repo:
                 continue
             st = self._pick(name, None, None, selected, choose, why)
             if st is None:
-                raise RepoError("no package provides %s (needed by %s)" % (name, why))
+                msg = f"no package provides {name} (needed by {why})"
+                raise RepoError(msg)
             if st["Package"] in selected:
                 continue
             selected[st["Package"]] = st
@@ -175,19 +176,19 @@ class Repo:
                                 pick = (cand, op, ver)
                                 break
                     if pick is None:
-                        raise RepoError(
-                            "cannot satisfy %s of %s: %s"
-                            % (field, st["Package"], " | ".join(a[0] for a in alts))
+                        msg = "cannot satisfy {} of {}: {}".format(
+                            field, st["Package"], " | ".join(a[0] for a in alts)
                         )
+                        raise RepoError(msg)
                     cand, op, ver = pick
                     if cand not in selected:
                         chosen = self._pick(cand, op, ver, selected, choose, st["Package"])
                         queue.append((chosen["Package"], st["Package"]))
                     elif op and not deb.satisfies(selected[cand]["Version"], op, ver):
-                        raise RepoError(
-                            "%s needs %s %s %s but %s is selected"
-                            % (st["Package"], cand, op, ver, selected[cand]["Version"])
+                        msg = "{} needs {} {} {} but {} is selected".format(
+                            st["Package"], cand, op, ver, selected[cand]["Version"]
                         )
+                        raise RepoError(msg)
         return selected, notes
 
     def _pick(self, name, op, ver, selected, choose, why):
@@ -198,10 +199,8 @@ class Repo:
             return st
         if name in self.index and op:
             avail = ", ".join(s["Version"] for s in self.index[name])
-            raise RepoError(
-                "%s needs %s %s %s; the index has %s (versions are pinned to the index)"
-                % (why, name, op, ver, avail)
-            )
+            msg = f"{why} needs {name} {op} {ver}; the index has {avail} (versions are pinned to the index)"
+            raise RepoError(msg)
         providers = self.provides.get(name, [])
         for st, pver in providers:  # a provider already selected wins
             if st["Package"] in selected and (
@@ -219,17 +218,21 @@ class Repo:
     # ------------------------------------------------------------ packages
     def download(self, st):
         """Fetch one package, verify it against the index, return its path in the cache."""
-        url = "%s/%s" % (self.mirror, st["Filename"])
+        url = "{}/{}".format(self.mirror, st["Filename"])
         if "SHA256" not in st:
-            raise RepoError(
-                "%s: the index carries no SHA256 for it; refusing an unverifiable download"
-                % st["Filename"]
+            msg = (
+                "{}: the index carries no SHA256 for it; refusing an unverifiable download".format(
+                    st["Filename"]
+                )
             )
+            raise RepoError(msg)
         data = self._get(url)
         if hashlib.sha256(data).hexdigest() != st["SHA256"]:
-            raise RepoError("%s: SHA256 does not match the index" % st["Filename"])
+            msg = "{}: SHA256 does not match the index".format(st["Filename"])
+            raise RepoError(msg)
         if "Size" in st and len(data) != int(st["Size"]):
-            raise RepoError("%s: size does not match the index" % st["Filename"])
+            msg = "{}: size does not match the index".format(st["Filename"])
+            raise RepoError(msg)
         key = re.sub(r"[^A-Za-z0-9._-]", "_", url)
         return os.path.join(self.cache, key)
 
@@ -240,7 +243,7 @@ _PRIORITY = {"required": 0, "important": 1, "standard": 2, "optional": 3, "extra
 class _VersionKey:
     __slots__ = ("v",)
 
-    def __init__(self, v):
+    def __init__(self, v) -> None:
         self.v = v
 
     def __lt__(self, o):
@@ -250,7 +253,7 @@ class _VersionKey:
         return deb.vercmp(self.v, o.v) == 0
 
 
-def main(argv):
+def main(argv) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -274,7 +277,7 @@ def main(argv):
     }[a.distro]
     r = Repo(a.distro, suites, a.arch, a.components.split(","), a.cache, a.mirror, a.snapshot)
     r.load_index()
-    selected, notes = r.resolve(
+    selected, _notes = r.resolve(
         a.packages, essential=not a.no_essential, choose=dict(x.split("=", 1) for x in a.choose)
     )
     os.makedirs(a.out, exist_ok=True)
@@ -295,4 +298,4 @@ if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv[1:]))
     except (RepoError, deb.DebError) as e:
-        sys.exit("fetch-debs: %s" % e)
+        sys.exit(f"fetch-debs: {e}")

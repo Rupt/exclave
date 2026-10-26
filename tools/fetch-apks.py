@@ -18,13 +18,12 @@ import hashlib
 import io
 import os
 import re
-import shutil
 import sys
 import tarfile
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "exclave"))
-import apk  # noqa: E402
+import apk
 
 DEFAULT_MIRROR = "https://dl-cdn.alpinelinux.org/alpine"
 BASE = ["alpine-baselayout", "busybox"]
@@ -34,12 +33,12 @@ class RepoError(Exception):
     pass
 
 
-def log(*a):
+def log(*a) -> None:
     print(*a, file=sys.stderr)
 
 
 class Repo:
-    def __init__(self, mirror, branch, repos, arch, cache):
+    def __init__(self, mirror, branch, repos, arch, cache) -> None:
         self.mirror, self.branch, self.repos, self.arch, self.cache = (
             mirror.rstrip("/"),
             branch,
@@ -65,11 +64,9 @@ class Repo:
         os.replace(path + ".tmp%d" % os.getpid(), path)  # two fetches may share the cache
         return data
 
-    def load_index(self):
+    def load_index(self) -> None:
         for repo in self.repos:
-            data = self._get(
-                "%s/%s/%s/%s/APKINDEX.tar.gz" % (self.mirror, self.branch, repo, self.arch)
-            )
+            data = self._get(f"{self.mirror}/{self.branch}/{repo}/{self.arch}/APKINDEX.tar.gz")
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as t:
                 text = t.extractfile("APKINDEX").read().decode("utf-8", "replace")
             n = 0
@@ -95,13 +92,14 @@ class Repo:
         if st is not None and apk.satisfies(st["V"], op, ver):
             return st
         if st is not None and op:
-            raise RepoError("%s %s %s wanted; the index has %s" % (name, op, ver, st["V"]))
+            msg = "{} {} {} wanted; the index has {}".format(name, op, ver, st["V"])
+            raise RepoError(msg)
         providers = [
             (s, pv)
             for s, pv in self.provides.get(name, [])
             if op is None or (pv and apk.satisfies(pv, op, ver))
         ]
-        for s, pv in providers:
+        for s, _pv in providers:
             if s["P"] in selected:
                 return s
         providers.sort(key=lambda p: (-int(p[0].get("k", "0") or 0), p[0]["P"]))
@@ -116,7 +114,8 @@ class Repo:
                 continue
             st = self._pick(name, None, None, selected)
             if st is None:
-                raise RepoError("no package provides %s (needed by %s)" % (name, why))
+                msg = f"no package provides {name} (needed by {why})"
+                raise RepoError(msg)
             if st["P"] in selected:
                 continue
             selected[st["P"]] = st
@@ -128,39 +127,42 @@ class Repo:
                     continue
                 chosen = self._pick(dep, op, ver, selected)
                 if chosen is None:
-                    raise RepoError("cannot satisfy %s of %s" % (dep, st["P"]))
+                    msg = "cannot satisfy {} of {}".format(dep, st["P"])
+                    raise RepoError(msg)
                 if chosen["P"] not in selected:
                     queue.append((chosen["P"], st["P"]))
         return selected
 
     def download(self, st):
         """Fetch one package and verify it the way apk does: the index's checksum is the SHA-1 of the control
-        section, the gzip member holding .PKGINFO, and .PKGINFO's datahash is the SHA-256 of the compressed data member."""
-        name = "%s-%s.apk" % (st["P"], st["V"])
+        section, the gzip member holding .PKGINFO, and .PKGINFO's datahash is the SHA-256 of the compressed data member.
+        """
+        name = "{}-{}.apk".format(st["P"], st["V"])
         data = self._get(
-            "%s/%s/%s/%s/%s" % (self.mirror, self.branch, st["_repo"], self.arch, name)
+            "{}/{}/{}/{}/{}".format(self.mirror, self.branch, st["_repo"], self.arch, name)
         )
         want = st.get("C", "")
         if not want.startswith("Q1"):
-            raise RepoError(
-                "%s: the index carries no checksum for it; refusing an unverifiable download" % name
-            )
+            msg = f"{name}: the index carries no checksum for it; refusing an unverifiable download"
+            raise RepoError(msg)
         if "S" in st and len(data) != int(st["S"]):
-            raise RepoError("%s: size does not match the index" % name)
+            msg = f"{name}: size does not match the index"
+            raise RepoError(msg)
         members = _gzip_members(data)
         control = [i for i, (raw, plain) in enumerate(members) if b".PKGINFO" in plain[:4096]]
         if control != [len(members) - 2]:
-            raise RepoError("%s: not an apk: no control section before the data" % name)
+            msg = f"{name}: not an apk: no control section before the data"
+            raise RepoError(msg)
         raw, plain = members[control[0]]
         if base64.b64encode(hashlib.sha1(raw).digest()).decode() != want[2:]:
-            raise RepoError("%s: checksum does not match the index" % name)
-        m = re.search(rb"^datahash = ([0-9a-f]{64})$", plain, re.M)
+            msg = f"{name}: checksum does not match the index"
+            raise RepoError(msg)
+        m = re.search(rb"^datahash = ([0-9a-f]{64})$", plain, re.MULTILINE)
         if (
             not m or hashlib.sha256(members[-1][0]).hexdigest() != m.group(1).decode()
         ):  # over the compressed data member, as abuild computes it
-            raise RepoError(
-                "%s: the data section does not match the datahash of its .PKGINFO" % name
-            )
+            msg = f"{name}: the data section does not match the datahash of its .PKGINFO"
+            raise RepoError(msg)
         return name, data
 
 
@@ -178,7 +180,7 @@ def _gzip_members(data):
     return out
 
 
-def main(argv):
+def main(argv) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -204,7 +206,7 @@ def main(argv):
                 f.write(data)
         log("%d packages in %s" % (len(selected), a.out))
     except (RepoError, apk.ApkError, OSError) as e:
-        sys.exit("fetch-apks: %s" % e)
+        sys.exit(f"fetch-apks: {e}")
     return 0
 
 

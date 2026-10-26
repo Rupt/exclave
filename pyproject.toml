@@ -70,6 +70,39 @@ ignore = [
     # bwrap, QEMU. Every argument vector is built from paths, never a shell string.
     "S603",
     "S607",
+    # Paths here are strings in two namespaces, the exclave's virtual paths and
+    # the host's real ones, joined and compared as the kernel would; a Path would
+    # invite treating a virtual path as a file on this machine.
+    "PTH",
+    # The tool's commands and the suite's tests are long, linear sequences of
+    # checks in the order of the design's rules; splitting one to satisfy a
+    # count would scatter the rule it follows.
+    "C901",
+    "PLR0911",
+    "PLR0912",
+    "PLR0915",
+    # Scripts in directories, not packages.
+    "INP001",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"test/**" = [
+    # Tests make files in /tmp and give them odd modes on purpose: the kernel's
+    # answers about exactly those are what they check.
+    "S103",
+    "S108",
+    # Random trees and mazes for the oracles, not secrets.
+    "S311",
+    # A module imported inside the one test that needs it, so the suite starts
+    # without it.
+    "PLC0415",
+]
+"tools/**" = [
+    # Fetching from the repository the caller names is the whole program.
+    "S310",
+    # Repository metadata from that repository, read without entities or
+    # external references.
+    "S314",
 ]
 
 [tool.ruff.lint.flake8-tidy-imports]

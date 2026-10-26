@@ -37,8 +37,9 @@ roots = [t for t in frames if base(t) == ROOT]
 fails = []
 if len(roots) != 1 or not any(base(t) == NESTED for t in frames):
     sys.exit(
-        "FAIL %s or %s is not in the call graph of %s (renamed, or no .ci files)"
-        % (ROOT, NESTED, " ".join(sys.argv[1:]) or "nothing")
+        "FAIL {} or {} is not in the call graph of {} (renamed, or no .ci files)".format(
+            ROOT, NESTED, " ".join(sys.argv[1:]) or "nothing"
+        )
     )
 
 memo, stack, reached = {}, [], set()
@@ -59,8 +60,9 @@ def deepest(t, nested):
         if c in stack and not (base(c) == NESTED and nested < NEST_MAX):
             if base(c) != NESTED:
                 fails.append(
-                    "recursion through %s: the stack it takes is unbounded"
-                    % " -> ".join(base(s) for s in stack[stack.index(c) :] + [c])
+                    "recursion through {}: the stack it takes is unbounded".format(
+                        " -> ".join(base(s) for s in [*stack[stack.index(c) :], c])
+                    )
                 )
             continue
         if c not in frames:
@@ -78,7 +80,7 @@ for t in sorted(reached):
     if frames[t] > LIMIT_FRAME:
         fails.append("%s: frame %d over %d" % (base(t), frames[t], LIMIT_FRAME))
     if kinds[t] not in ("static", "dynamic,bounded"):
-        fails.append("%s: unbounded dynamic frame (%s)" % (base(t), kinds[t]))
+        fails.append(f"{base(t)}: unbounded dynamic frame ({kinds[t]})")
 print(
     "handler path worst case: %d bytes over %d functions reached from %s: %s"
     % (worst, len({base(t) for t in reached}), ROOT, " > ".join(chain))

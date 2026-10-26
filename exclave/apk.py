@@ -21,7 +21,6 @@ What unpack does differently for an Alpine set, here and in build.py:
 - Licence texts come only with a package's `-doc` package (DESIGN.md 10.4).
 """
 
-import io
 import re
 import tarfile
 
@@ -52,7 +51,7 @@ def _norm(name):
 class _Members:
     """The data members of an .apk as a tarfile would present them: the top-level dot-files are control."""
 
-    def __init__(self, tar):
+    def __init__(self, tar) -> None:
         self.tar = tar
 
     def __enter__(self):
@@ -72,7 +71,8 @@ def _open(path):
     try:
         return tarfile.open(path, mode="r:gz")
     except (tarfile.TarError, OSError, EOFError) as e:
-        raise ApkError("%s: not an apk: %s" % (path, e))
+        msg = f"{path}: not an apk: {e}"
+        raise ApkError(msg)
 
 
 def open_tar(path, member):
@@ -98,7 +98,8 @@ def control(path):
             elif n in SCRIPTS:
                 scripts[n] = data.decode("utf-8", "replace")
     if "pkgname" not in raw or "pkgver" not in raw:
-        raise ApkError("%s: no pkgname or pkgver in .PKGINFO" % path)
+        msg = f"{path}: no pkgname or pkgver in .PKGINFO"
+        raise ApkError(msg)
     fields["Package"] = raw["pkgname"][0]
     fields["Version"] = raw["pkgver"][0]
     fields["Architecture"] = raw.get("arch", ["noarch"])[0]
@@ -124,12 +125,14 @@ _TOKEN = re.compile(
 def parse_deps(field):
     """'so:libc.musl-x86_64.so.1 zlib>=1.2 !conflict /bin/sh' -> [[(name, op, version)]]: one alternative each,
     since apk has none; a '!' item is a conflict and is not a dependency; a path item, /bin/sh, names a file
-    some package must ship, which the fetcher skips and the report asks of the extracted tree."""
+    some package must ship, which the fetcher skips and the report asks of the extracted tree.
+    """
     out = []
     for tok in (field or "").split():
         m = _TOKEN.match(tok)
         if not m:
-            raise ApkError("cannot parse dependency %r" % tok)
+            msg = f"cannot parse dependency {tok!r}"
+            raise ApkError(msg)
         if m.group(1):
             continue
         out.append([(m.group(2), m.group(3), m.group(4))])
@@ -166,9 +169,9 @@ def _key(v):
     return (nums, m.group(2) or "", sufs, int(m.group(4) or 0), "")
 
 
-def vercmp(a, b):
+def vercmp(a, b) -> int:
     ka, kb = _key(a), _key(b)
-    for x, y in zip(ka[0], kb[0]):
+    for x, y in zip(ka[0], kb[0], strict=False):
         if x != y:
             return -1 if x < y else 1
     if len(ka[0]) != len(kb[0]):
@@ -176,7 +179,7 @@ def vercmp(a, b):
     if ka[1] != kb[1]:
         return -1 if ka[1] < kb[1] else 1
     sa, sb = ka[2] or [(0, 0)], kb[2] or [(0, 0)]
-    for x, y in zip(sa, sb):
+    for x, y in zip(sa, sb, strict=False):
         if x != y:
             return -1 if x < y else 1
     if len(sa) != len(sb):
@@ -190,7 +193,7 @@ def satisfies(version, op, want):
     if op is None:
         return True
     if op == "~":
-        return version == want or version.startswith(want + ".") or version.startswith(want + "-")
+        return version == want or version.startswith((want + ".", want + "-"))
     c = vercmp(version, want)
     return {"=": c == 0, "<": c < 0, ">": c > 0, "<=": c <= 0, ">=": c >= 0, "><": True}.get(
         op, True

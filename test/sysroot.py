@@ -23,19 +23,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO, "exclave"))
 sys.path.insert(0, HERE)
-import build  # noqa: E402
-import exclave  # noqa: E402
 import tree  # noqa: E402
+
+import exclave  # noqa: E402
 
 HELLO = '#include <stdio.h>\n#include <stdlib.h>\nint main(void) { printf("hello from a sysroot build\\n"); return 0; }\n'
 
 
 def run(cmd, cwd=None, env=None):
-    p = subprocess.run(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True)
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -60,7 +60,7 @@ def main():
     if rc:
         sys.exit("unwrap: " + out + err)
     rpms = sorted(glob.glob(os.path.join(a.rpms, "*.rpm")))
-    rc, out, err = run([sys.executable, exclave_py, "unpack", sysroot_ex] + rpms)
+    rc, out, err = run([sys.executable, exclave_py, "unpack", sysroot_ex, *rpms])
     if rc:
         sys.exit("unpack: " + out + err)
     dst = os.path.join(ex, "tree", a.prefix.lstrip("/"))
@@ -119,7 +119,7 @@ def main():
     if gv is None:
         sys.exit("cannot read the sysroot's glibc version from its libc.so.6")
     have = "%d.%d" % gv
-    print("symbol versions bound: %s; the sysroot's glibc: %s" % (" ".join(versions), have))
+    print("symbol versions bound: {}; the sysroot's glibc: {}".format(" ".join(versions), have))
     if not versions or [int(x) for x in versions[-1].split(".")] > [
         int(x) for x in have.split(".")
     ]:
@@ -128,7 +128,7 @@ def main():
         [os.path.join(ex, "tree", "usr", "bin", "sh"), "-c", prog], cwd=work, env=env
     )
     rc2, native, err2 = run([prog], cwd=work, env=env)
-    print("inside the exclave: %r; on this host: %r" % (inside.strip(), native.strip()))
+    print(f"inside the exclave: {inside.strip()!r}; on this host: {native.strip()!r}")
     if rc or rc2 or inside != native:
         sys.exit("the output does not run the same inside and outside: " + err + err2)
     shutil.copy2(prog, a.out)

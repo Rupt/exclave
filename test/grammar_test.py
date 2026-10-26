@@ -47,22 +47,22 @@ def properties(rng, cases):
         q = exclave.quote(b)
         if seen.setdefault(q, b) != b:
             bad += 1  # encode is injective
-        text = ("exclave 1\n\nown %s\n" % exclave.quote(b"/" + b)).encode()
+        text = ("exclave 1\n\nown {}\n".format(exclave.quote(b"/" + b))).encode()
         try:
             recs = exclave.parse(text, "exclave")
         except exclave.GrammarError as e:
             bad += 1
-            print("FAIL parse of encoded %r: %s" % (b, e))
+            print(f"FAIL parse of encoded {b!r}: {e}")
             continue
         if recs[1].fields[0][1] != b"/" + b:  # decode(encode(b)) == b
             bad += 1
-            print("FAIL round trip %r" % b)
+            print(f"FAIL round trip {b!r}")
         canon = exclave.dump(recs, "exclave")
         if (
             canon != text or exclave.dump(exclave.parse(canon, "exclave"), "exclave") != canon
         ):  # format is idempotent
             bad += 1
-            print("FAIL canonical form %r" % b)
+            print(f"FAIL canonical form {b!r}")
     return bad
 
 
@@ -96,7 +96,9 @@ def near_manifest(rng):
         key = rng.choice(["own", "host", "data", "cpu", "cpu", "bogus"])
         val = rand_bytes(rng)
         recs.append(
-            "%s %s" % (key, exclave.quote((b"/" if key in ("own", "host", "data") else b"") + val))
+            "{} {}".format(
+                key, exclave.quote((b"/" if key in ("own", "host", "data") else b"") + val)
+            )
         )
     if rng.random() < 0.3:
         recs.insert(rng.randint(0, len(recs)), "# " + rand_bytes(rng).decode("utf-8", "replace"))
@@ -110,7 +112,7 @@ def compare(rng, cases, c_parser):
     diverge = 0
     with tempfile.TemporaryDirectory(prefix="grammar-") as d:
         path = os.path.join(d, "manifest")
-        for i in range(cases):
+        for _i in range(cases):
             text = near_manifest(rng)
             with open(path, "wb") as f:
                 f.write(text)
@@ -119,15 +121,10 @@ def compare(rng, cases, c_parser):
                 py = True
             except exclave.GrammarError:
                 py = False
-            c = (
-                subprocess.run(
-                    [c_parser, path], stdout=subprocess.PIPE, stderr=subprocess.PIPE
-                ).returncode
-                == 0
-            )
+            c = subprocess.run([c_parser, path], capture_output=True).returncode == 0
             if py != c:
                 diverge += 1
-                print("DIVERGE python=%s c=%s on %r" % (py, c, text))
+                print(f"DIVERGE python={py} c={c} on {text!r}")
     return diverge
 
 
@@ -154,9 +151,7 @@ def positions(c_parser):
                 py = "accepted"
             except exclave.GrammarError as e:
                 py = str(e)
-            c = subprocess.run(
-                [c_parser, path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-            ).stderr.strip()
+            c = subprocess.run([c_parser, path], capture_output=True, text=True).stderr.strip()
             for who, msg in (("python", py), ("c", c)):
                 if not msg.startswith("line %d col " % want):
                     bad += 1
@@ -167,7 +162,7 @@ def positions(c_parser):
     return bad
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -185,7 +180,7 @@ def main():
     )
     div = compare(rng, a.cases // 3, a.c_parser) if os.path.exists(a.c_parser) else -1
     if div < 0:
-        print("no C parser at %s: the two-parser comparison did not run" % a.c_parser)
+        print(f"no C parser at {a.c_parser}: the two-parser comparison did not run")
     else:
         print("%d near-manifests through both parsers: %d divergences" % (a.cases // 3, div))
         bad += positions(a.c_parser)

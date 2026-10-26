@@ -2,7 +2,8 @@
 tree says, never what one distribution spells. Every function takes the tree's root directory; then the one way a
 driver takes an exclave: a copy of its own, relinked with the build, so that the launcher under test is always build/launcher
 and never the one an exclave was wrapped with; and the Go regression's builds, which the matrix makes on the host for VMs
-that have no go."""
+that have no go.
+"""
 
 import filecmp
 import os
@@ -35,13 +36,14 @@ def compiler(root, machine):
         if re.match(r"clang-\d+$", n)
     )
     for name in [
-        "%s-linux-gnu-gcc-13" % machine,
+        f"{machine}-linux-gnu-gcc-13",
         "x86_64-linux-gnu-gcc-13",
         "gcc-13",
         "gcc",
         "cc",
         "clang",
-    ] + clangs:
+        *clangs,
+    ]:
         if os.path.lexists(os.path.join(root, vbin(root, name).lstrip("/"))):
             return name
     return None
@@ -53,12 +55,13 @@ def triplet(root, machine):
     for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
         if n.endswith("-linux-gnu") and os.path.exists(os.path.join(d, n, "libc.so.6")):
             return n
-    return "%s-linux-gnu" % machine
+    return f"{machine}-linux-gnu"
 
 
 def resolve(root, vpath):
     """A virtual path with the tree's symlinks followed, as a chroot would resolve it; the path itself if a
-    component is missing."""
+    component is missing.
+    """
     cur, rest, hops = "", [p for p in vpath.split("/") if p], 0
     while rest:
         comp = rest.pop(0)
@@ -87,11 +90,11 @@ def resolve(root, vpath):
 def libc(root, machine):
     """libc.so.6 as the loader names it, or musl's loader, which is its libc."""
     for v in (
-        "/lib/%s/libc.so.6" % triplet(root, machine),
+        f"/lib/{triplet(root, machine)}/libc.so.6",
         "/lib64/libc.so.6",
         "/lib/libc.so.6",
         "/usr/lib/libc.so.6",
-        "/lib/ld-musl-%s.so.1" % machine,
+        f"/lib/ld-musl-{machine}.so.1",
     ):
         if os.path.lexists(os.path.join(root, v.lstrip("/"))):
             return v
@@ -99,9 +102,10 @@ def libc(root, machine):
 
 
 # ---------------------------------------------------------------- an exclave for a driver (17)
-def socket_file(path):
+def socket_file(path) -> None:
     """A socket file at path, bound through its directory's descriptor, so that only the name counts against sun_path's
-    108 bytes and a deep checkout or work directory does not. A stale one is replaced."""
+    108 bytes and a deep checkout or work directory does not. A stale one is replaced.
+    """
     d, name = os.path.split(path)
     if os.path.lexists(path):
         os.remove(path)
@@ -116,7 +120,8 @@ def socket_file(path):
 
 def copy_exclave(src, dst):
     """A copy of an exclave for a driver or a test to alter: the tree's files hard-linked, the files under .exclave/ copied, since a
-    manifest or hashes file written through a hard link would change the given exclave's."""
+    manifest or hashes file written through a hard link would change the given exclave's.
+    """
     import exclave
 
     shutil.copytree(src, dst, symlinks=True, copy_function=exclave.link_or_copy)
@@ -135,19 +140,21 @@ def copy_exclave(src, dst):
 def fresh_exclave(src, dst, launcher=BUILD_LAUNCHER):
     """copy_exclave, then every wrapper relinked to build/launcher (exclave relink, about a second for a gcc exclave): the
     launcher a driver runs is always the checkout's build, never the one an exclave carries, which is the one it was wrapped with and
-    which a rebuild leaves behind. The copy is made anew on every run, so nothing has to be remembered."""
+    which a rebuild leaves behind. The copy is made anew on every run, so nothing has to be remembered.
+    """
     import exclave
 
     if not os.path.isfile(launcher):
-        sys.exit("no launcher at %s: run make" % launcher)
+        sys.exit(f"no launcher at {launcher}: run make")
     copy_exclave(src, dst)
     exclave.cmd_relink(dst, launcher)
     return dst
 
 
-def relink_if_stale(ex, launcher=BUILD_LAUNCHER):
+def relink_if_stale(ex, launcher=BUILD_LAUNCHER) -> bool:
     """A copy kept between runs, relinked again when the build has changed since it was made: the check is a byte
-    comparison of two small files, the relink a second, so a rebuild never has to be remembered by hand."""
+    comparison of two small files, the relink a second, so a rebuild never has to be remembered by hand.
+    """
     import exclave
 
     if not filecmp.cmp(launcher, os.path.join(ex, ".exclave", "launcher"), shallow=False):
@@ -170,7 +177,8 @@ def go_toolchain():
 
 def go_build(go, out_dir, machine, work):
     """GO_BUILDS of test/progs/go_paths.go into out_dir, static with cgo off, for machine; [(name, path)], or a
-    RuntimeError with go's message. work holds GOPATH; the build cache is build/gocache."""
+    RuntimeError with go's message. work holds GOPATH; the build cache is build/gocache.
+    """
     env = dict(
         os.environ,
         GOCACHE=os.path.join(REPO, "build", "gocache"),
@@ -188,19 +196,17 @@ def go_build(go, out_dir, machine, work):
     for name, flags in GO_BUILDS:
         path = os.path.join(out_dir, name)
         p = subprocess.run(
-            [go, "build"]
-            + flags
-            + ["-o", path, os.path.join(REPO, "test", "progs", "go_paths.go")],
+            [go, "build", *flags, "-o", path, os.path.join(REPO, "test", "progs", "go_paths.go")],
             cwd=work,
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             timeout=600,
         )
         if p.returncode:
-            raise RuntimeError(
-                "go build %s for %s: %s" % (name, machine, p.stderr.decode(errors="replace")[-600:])
+            msg = "go build {} for {}: {}".format(
+                name, machine, p.stderr.decode(errors="replace")[-600:]
             )
+            raise RuntimeError(msg)
         out.append((name, path))
     return out
 

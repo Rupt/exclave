@@ -18,14 +18,12 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO, "exclave"))
+import platform  # noqa: E402
+
 import build  # noqa: E402
 import exclave  # noqa: E402
 
-import platform  # noqa: E402
-
-TRIPLET = (
-    "%s-linux-gnu" % platform.machine()
-)  # the exclave's multiarch directory: the suite runs on the exclave's own machine
+TRIPLET = f"{platform.machine()}-linux-gnu"  # the exclave's multiarch directory: the suite runs on the exclave's own machine
 GCC = TRIPLET + "-gcc-13"  # replaced by what the tree says once the exclave is known (test/tree.py)
 SH, SHX, LIBC, SH_LINK = (
     "/usr/bin/sh",
@@ -149,10 +147,7 @@ def run_bwrap(root, work, cmd, extra=()):
             else:
                 args += ["--ro-bind", f, f]
     p = subprocess.run(
-        args + EXTRA_BINDS + list(extra) + ["/bin/sh", "-c", cmd],
-        env={},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        args + EXTRA_BINDS + list(extra) + ["/bin/sh", "-c", cmd], env={}, capture_output=True
     )  # no "--": bwrap 0.2 rejects it; the setenv values are the whole environment
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
@@ -173,11 +168,10 @@ def run_launcher(ex, work, cmd, prog=None):
     }  # the last two replaced at the border (6.2)
     if prog:
         p = subprocess.run(
-            [os.path.join(ex, ".exclave", "launcher"), prog] + cmd,
+            [os.path.join(ex, ".exclave", "launcher"), prog, *cmd],
             cwd=work,
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
     else:
         p = subprocess.run(
@@ -190,8 +184,7 @@ def run_launcher(ex, work, cmd, prog=None):
             ],
             cwd=work,
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
@@ -270,8 +263,7 @@ def main():
         [gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "ro_matrix.c")],
         cwd=work,
         env={"PATH": "/usr/bin:/bin"},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if r.returncode:
         sys.exit(
@@ -279,7 +271,7 @@ def main():
         )
     hostdir = os.path.join(work, "hostdir")
     os.makedirs(hostdir, exist_ok=True)
-    rc, out, err = run_bwrap(root, work, "%s %s /usr/bin/dash" % (prog, hostdir))
+    _rc, out, err = run_bwrap(root, work, f"{prog} {hostdir} /usr/bin/dash")
     # under bwrap there is no wrapper, so the redirect line of the program is not meaningful there
     bad = [l for l in out.splitlines() if l.startswith("FAIL") and "wrapper" not in l]
     if bad or "ro_matrix:" not in out:
@@ -290,8 +282,7 @@ def main():
         )
     else:
         print(
-            "PASS read-only matrix: the kernel agrees with every expectation of 8.2 (%s)"
-            % out.strip().splitlines()[-1]
+            f"PASS read-only matrix: the kernel agrees with every expectation of 8.2 ({out.strip().splitlines()[-1]})"
         )
     # 2. workloads twice
     for cmd in WORKLOADS:
@@ -309,16 +300,16 @@ def main():
         bn = (
             b[0],
             norm(b[1], work),
-            norm(re.sub(r"^[^:]*/(sh|dash): ", "sh: ", b[2], flags=re.M), work),
+            norm(re.sub(r"^[^:]*/(sh|dash): ", "sh: ", b[2], flags=re.MULTILINE), work),
         )
         on = (
             o[0],
             norm(o[1], work),
-            norm(re.sub(r"^[^:]*/(sh|dash): ", "sh: ", o[2], flags=re.M), work),
+            norm(re.sub(r"^[^:]*/(sh|dash): ", "sh: ", o[2], flags=re.MULTILINE), work),
         )
         # the launcher names programs by their real path when the host invoked them; bwrap by the virtual one
         if bn == on:
-            print("PASS %s" % shown[:70])
+            print(f"PASS {shown[:70]}")
         else:
             fails += 1
             print(

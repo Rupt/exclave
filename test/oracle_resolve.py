@@ -20,7 +20,6 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO, "exclave"))
-import exclave  # noqa: E402
 
 SYS_openat2 = 437
 O_PATH, O_NOFOLLOW = (
@@ -135,7 +134,7 @@ def gen_paths(rng, dirs, files, links, n):
     return out
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -170,6 +169,7 @@ def main():
             "exclave 1\n"
         )  # /maze is a non-empty top-level directory: the exclave's by the tree alone (8.1)
     import platform
+
     import tree
 
     cc = tree.compiler(root, platform.machine())
@@ -181,8 +181,7 @@ def main():
         [gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "resolve.c")],
         cwd=work,
         env={"PATH": "/usr/bin:/bin"},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if r.returncode:
         sys.exit("cannot compile resolve.c: " + r.stderr.decode(errors="replace"))
@@ -192,8 +191,7 @@ def main():
         input="\n".join(paths).encode() + b"\n",
         cwd=work,
         env={"PATH": "/usr/bin:/bin"},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     answers = p.stdout.decode(errors="replace").splitlines()
     if len(answers) != len(paths):
@@ -203,14 +201,11 @@ def main():
         )
     rootfd = os.open(root, os.O_PATH)
     fails, agree = 0, 0
-    for path, ans in zip(paths, answers):
+    for path, ans in zip(paths, answers, strict=False):
         follow = not path.startswith("nofollow ")
         bare = path[9:] if not follow else path
         want, err = kernel_resolve(rootfd, root, bare, follow)
-        if err is not None:
-            k = "ERR %d" % err
-        else:
-            k = "OK " + want
+        k = "ERR %d" % err if err is not None else "OK " + want
         if k == ans:
             agree += 1
         else:

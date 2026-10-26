@@ -84,11 +84,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO, "exclave"))
 sys.path.insert(0, HERE)
-import build  # noqa: E402
-import exclave  # noqa: E402
 import tree  # noqa: E402
 from oracle_resolve import make_maze  # noqa: E402
 from syscalls import kernel_table  # noqa: E402
+
+import build  # noqa: E402
+import exclave  # noqa: E402
 
 MACHINE = platform.machine()
 KERNEL = tuple(
@@ -141,7 +142,7 @@ def hx(s):
 SOCK_STREAM, SOCK_DGRAM = 1, 2
 
 
-def K(type_):  # a unix socket descriptor of this type
+def K(type_) -> str:  # a unix socket descriptor of this type
     return "k:%d" % type_
 
 
@@ -185,15 +186,15 @@ def S(path):  # a string argument
     return "s:" + hx(path)
 
 
-def I(n):  # an integer argument
+def I(n) -> str:  # an integer argument
     return "i:%d" % n
 
 
-def F(flags, path):  # a descriptor opened on path before the call
+def F(flags, path) -> str:  # a descriptor opened on path before the call
     return "f:%d:%s" % (flags, hx(path))
 
 
-def B(kind, size):  # a buffer
+def B(kind, size) -> str:  # a buffer
     return "b:%s:%d" % (kind, size)
 
 
@@ -201,11 +202,11 @@ def V(*strings):  # a string vector
     return "v:" + ",".join(hx(s) for s in strings)
 
 
-def X(value, flags=0):  # struct xattr_args
+def X(value, flags=0) -> str:  # struct xattr_args
     return "x:%s:%d" % (hx(value), flags)
 
 
-def H(flags, mode=0, resolve=0, size=24, tail=None):  # struct open_how
+def H(flags, mode=0, resolve=0, size=24, tail=None) -> str:  # struct open_how
     return "h:%d:%d:%d:%d%s" % (
         flags,
         mode,
@@ -222,12 +223,12 @@ def decode(tok):
         return repr(bytes.fromhex(p).decode("utf-8", "replace"))
     if k == "f":
         fl, _, h = p.partition(":")
-        return "fd(%s,%r)" % (fl, bytes.fromhex(h).decode("utf-8", "replace"))
+        return "fd({},{!r})".format(fl, bytes.fromhex(h).decode("utf-8", "replace"))
     if k == "e":
-        return "unterminated(%r)" % bytes.fromhex(p).decode("utf-8", "replace")
+        return "unterminated({!r})".format(bytes.fromhex(p).decode("utf-8", "replace"))
     if k == "v":
-        return "[%s]" % ",".join(
-            repr(bytes.fromhex(h).decode("utf-8", "replace")) for h in p.split(",") if h
+        return "[{}]".format(
+            ",".join(repr(bytes.fromhex(h).decode("utf-8", "replace")) for h in p.split(",") if h)
         )
     return tok
 
@@ -235,7 +236,7 @@ def decode(tok):
 class Forms:
     """The path forms of 7.4.4 over this maze, this tree and the host area."""
 
-    def __init__(self, root, host, links, dirs, files):
+    def __init__(self, root, host, links, dirs, files) -> None:
         self.host = host
         by_kind = {}
         for l in links:
@@ -253,7 +254,7 @@ class Forms:
             by_kind.setdefault(kind, l)
         self.link = by_kind
         # a file in a subdirectory, and a directory that has a file child
-        self.file = sorted(files, key=lambda f: -f.count("/"))[0]
+        self.file = min(files, key=lambda f: -f.count("/"))
         self.dir = os.path.dirname(self.file)
         self.true = tree.vbin(root, "true")
         self.sh = tree.vbin(root, "sh")
@@ -433,7 +434,7 @@ def generate(forms, nr, uid, gid):
     out = []
     group = [None]  # cases that depend on one another run in one group, in order
 
-    def add(name, label, *toks):
+    def add(name, label, *toks) -> None:
         if name in nr:
             out.append((label, name, list(toks), group[0] or name))
 
@@ -462,13 +463,13 @@ def generate(forms, nr, uid, gid):
         for fn, fl in open_flags:
             if n == "proc_exe" and fl & O_TRUNC:
                 continue  # would truncate the running probe: the kernel says ETXTBSY, the launcher does not (13)
-            add("open", "%s/%s" % (n, fn), p, I(fl), I(0o644))
+            add("open", f"{n}/{fn}", p, I(fl), I(0o644))
         if n != "proc_exe":
             add("creat", n, p, I(0o644))
         add("stat", n, p, B("stat", 256))
         add("lstat", n, p, B("stat", 256))
         for mn, m in (("F_OK", 0), ("R_OK", 4), ("W_OK", 2), ("X_OK", 1)):
-            add("access", "%s/%s" % (n, mn), p, I(m))
+            add("access", f"{n}/{mn}", p, I(m))
         add("readlink", n, p, B("link", 4096), I(4096))
         add("readlink", n + "/short", p, B("link", 4), I(4))
         add("readlink", n + "/zero", p, B("link", 4), I(0))
@@ -553,15 +554,15 @@ def generate(forms, nr, uid, gid):
     add("execve", "rel_true", S("hlink"), V("x"), V())
     for n, d, p in forms.at:
         for fn, fl in open_flags:
-            add("openat", "%s/%s" % (n, fn), d, p, I(fl), I(0o644))
+            add("openat", f"{n}/{fn}", d, p, I(fl), I(0o644))
         add("mkdirat", n, d, p, I(0o755))
         add("mknodat", n, d, p, I(0o10644), I(0))
         for fn, fl in (("follow", 0), ("nofollow", AT_SYMLINK_NOFOLLOW), ("empty", AT_EMPTY_PATH)):
-            add("fchownat", "%s/%s" % (n, fn), d, p, I(uid), I(gid), I(fl))
+            add("fchownat", f"{n}/{fn}", d, p, I(uid), I(gid), I(fl))
         add("futimesat", n, d, p, "T:1000,0,2000,0")
         for fn, fl in stat_flags:
-            add("newfstatat", "%s/%s" % (n, fn), d, p, B("stat", 256), I(fl))
-            add("statx", "%s/%s" % (n, fn), d, p, I(fl), I(STATX_BASIC_STATS), B("statx", 256))
+            add("newfstatat", f"{n}/{fn}", d, p, B("stat", 256), I(fl))
+            add("statx", f"{n}/{fn}", d, p, I(fl), I(STATX_BASIC_STATS), B("statx", 256))
         add("unlinkat", n, d, p, I(0))
         add("unlinkat", n + "/rmdir", d, p, I(AT_REMOVEDIR))
         add("symlinkat", n, S("/maze/f0"), d, p)
@@ -627,7 +628,7 @@ def generate(forms, nr, uid, gid):
             for rn, rs in resolves:
                 add(
                     "openat2",
-                    "%s/%s/%s" % (n, fn, rn),
+                    f"{n}/{fn}/{rn}",
                     d,
                     p,
                     H(fl, 0o644 if fl & O_CREAT else 0, rs),
@@ -689,7 +690,7 @@ def generate(forms, nr, uid, gid):
         ("cwd", I(AT_FDCWD)),
     ):
         for pn, p in (("empty", S("")), ("null", "n:")):
-            lab = "%s_%s/empty" % (fn, pn)
+            lab = f"{fn}_{pn}/empty"
             add("setxattrat", lab, d, p, I(AT_EMPTY_PATH), S("user.probe"), X("v"), I(16))
             add("getxattrat", lab, d, p, I(AT_EMPTY_PATH), S("user.probe"), X("\0" * 64), I(16))
             add("listxattrat", lab, d, p, I(AT_EMPTY_PATH), B("xattr", 512), I(512))
@@ -711,7 +712,7 @@ def generate(forms, nr, uid, gid):
     two = forms.few
     for n1, p1 in two:
         for n2, p2 in two:
-            lab = "%s->%s" % (n1, n2)
+            lab = f"{n1}->{n2}"
             add("rename", lab, p1, p2)
             add("link", lab, p1, p2)
             add("renameat", lab, I(AT_FDCWD), p1, I(AT_FDCWD), p2)
@@ -721,9 +722,9 @@ def generate(forms, nr, uid, gid):
                 ("exchange", RENAME_EXCHANGE),
                 ("whiteout", RENAME_WHITEOUT),
             ):
-                add("renameat2", "%s/%s" % (lab, fn), I(AT_FDCWD), p1, I(AT_FDCWD), p2, I(fl))
+                add("renameat2", f"{lab}/{fn}", I(AT_FDCWD), p1, I(AT_FDCWD), p2, I(fl))
             for fn, fl in (("plain", 0), ("follow", AT_SYMLINK_FOLLOW), ("empty", AT_EMPTY_PATH)):
-                add("linkat", "%s/%s" % (lab, fn), I(AT_FDCWD), p1, I(AT_FDCWD), p2, I(fl))
+                add("linkat", f"{lab}/{fn}", I(AT_FDCWD), p1, I(AT_FDCWD), p2, I(fl))
     # a last component that is ".", ".." or the root, either side: do_renameat2 answers EBUSY before the write check
     dots = [
         ("dot_last", S(forms.dir + "/.")),
@@ -736,17 +737,17 @@ def generate(forms, nr, uid, gid):
         for n2, p2 in [
             (n, p) for n, p in two if n in ("exclave_file", "host_file", "host_missing")
         ]:
-            for lab, x, y in (("%s->%s" % (n1, n2), p1, p2), ("%s->%s" % (n2, n1), p2, p1)):
+            for lab, x, y in ((f"{n1}->{n2}", p1, p2), (f"{n2}->{n1}", p2, p1)):
                 add("rename", lab, x, y)
                 for fn, fl in (
                     ("plain", 0),
                     ("noreplace", RENAME_NOREPLACE),
                     ("exchange", RENAME_EXCHANGE),
                 ):
-                    add("renameat2", "%s/%s" % (lab, fn), I(AT_FDCWD), x, I(AT_FDCWD), y, I(fl))
+                    add("renameat2", f"{lab}/{fn}", I(AT_FDCWD), x, I(AT_FDCWD), y, I(fl))
     for n1, d1, p1 in forms.at_few:
         for n2, d2, p2 in forms.at_few:
-            lab = "%s->%s" % (n1, n2)
+            lab = f"{n1}->{n2}"
             add("renameat", lab, d1, p1, d2, p2)
             add("linkat", lab, d1, p1, d2, p2, I(0))
     add(
@@ -822,19 +823,19 @@ def generate(forms, nr, uid, gid):
     return out
 
 
-def rmtree(d):
-    """rmtree after a chmod case may have taken the directories' permissions away."""
+def rmtree(d) -> None:
+    """Rmtree after a chmod case may have taken the directories' permissions away."""
     if not os.path.isdir(d):
         return
     os.chmod(d, 0o755)
-    for top, dirs, files in os.walk(d):
+    for top, dirs, _files in os.walk(d):
         for x in dirs:
             if not os.path.islink(os.path.join(top, x)):
                 os.chmod(os.path.join(top, x), 0o755)
     shutil.rmtree(d)
 
 
-def host_reset(host, ex_tree, probe):
+def host_reset(host, ex_tree, probe) -> None:
     """The host area both worlds see at the same path, identical before every run."""
     # a chmod of /proc/self/exe takes the probe's own x bit, and an xattr case leaves an attribute on it: the probe
     # written again as a new file has neither, on any Python (a musl build has no os.listxattr), and the default label
@@ -867,7 +868,8 @@ def host_reset(host, ex_tree, probe):
 def run_bwrap(root, host, bindir, probe, cases):
     """The kernel's projection of the tree: the unwrapped tree read-only at /, and the visibility rule of 8.1
     spelt in bwrap's terms: every placeholder of the tree is the host's directory, the kernel's volatile
-    directories are the host's, and the identity files are the host's files with the host's permissions."""
+    directories are the host's, and the identity files are the host's files with the host's permissions.
+    """
     args = ["bwrap", "--ro-bind", root, "/", "--proc", "/proc", "--dev-bind", "/dev", "/dev"]
     for top in sorted(os.listdir(root)):
         p = "/" + top
@@ -913,9 +915,7 @@ def run_bwrap(root, host, bindir, probe, cases):
         "/bin/sh",
     ]
     with open(cases, "rb") as inp:
-        p = subprocess.run(
-            args + [probe], env={}, stdin=inp, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
+        p = subprocess.run([*args, probe], env={}, stdin=inp, capture_output=True)
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
@@ -926,8 +926,7 @@ def run_launcher(ex, host, probe, cases):
             cwd=host,
             stdin=inp,
             env={"PATH": "/usr/bin:/bin", "HOME": host},
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
@@ -1073,7 +1072,7 @@ def expected(name, label, b, o):
     return None
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -1164,8 +1163,7 @@ def main():
         [gcc, "-O1", "-o", probe, os.path.join(HERE, "progs", "probe.c")],
         cwd=work,
         env={"PATH": "/usr/bin:/bin"},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if r.returncode:
         sys.exit(
@@ -1186,8 +1184,10 @@ def main():
         mine = [c for c in cases if c[3] == name]
         path = os.path.join(bindir, "cases-" + name)
         with open(path, "w") as f:
-            for i, (label, n, toks, _) in enumerate(mine):
-                f.write("%d %d %s\n" % (i, nr[n], " ".join(toks)))
+            f.writelines(
+                "%d %d %s\n" % (i, nr[n], " ".join(toks))
+                for i, (label, n, toks, _) in enumerate(mine)
+            )
         host_reset(host, os.path.join(ex, "tree"), probe)
         bw = run_bwrap(root, host, bindir, probe, path)
         host_reset(host, os.path.join(ex, "tree"), probe)
@@ -1212,7 +1212,7 @@ def main():
             differ += 1
             continue
         d = 0
-        for (label, n, toks, _), b, o in zip(mine, bl, ol):
+        for (label, n, toks, _), b, o in zip(mine, bl, ol, strict=False):
             total += 1
             b, o = b.split(" ", 1)[1], o.split(" ", 1)[1]
             if b == o:
@@ -1222,8 +1222,9 @@ def main():
                 accepted += 1
                 if a.expected:
                     print(
-                        "EXPECTED %s %s(%s): %s\n     kernel: %s\n     launcher: %s"
-                        % (n, label, ", ".join(decode(t) for t in toks), why, b, o)
+                        "EXPECTED {} {}({}): {}\n     kernel: {}\n     launcher: {}".format(
+                            n, label, ", ".join(decode(t) for t in toks), why, b, o
+                        )
                     )
                 continue
             differ += 1
@@ -1231,8 +1232,9 @@ def main():
             if shown < a.show:
                 shown += 1
                 print(
-                    "DIFF %s %s(%s)\n     kernel: %s\n     launcher: %s"
-                    % (n, label, ", ".join(decode(t) for t in toks), b, o)
+                    "DIFF {} {}({})\n     kernel: {}\n     launcher: {}".format(
+                        n, label, ", ".join(decode(t) for t in toks), b, o
+                    )
                 )
         print("%-18s %5d cases, %d differ" % (name, len(mine), d))
     print(

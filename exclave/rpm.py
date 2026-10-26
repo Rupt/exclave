@@ -47,10 +47,7 @@ import gzip
 import io
 import lzma
 import re
-import shutil
 import struct
-import subprocess
-import tarfile
 from compression import zstd
 
 
@@ -90,7 +87,8 @@ def _header(f):
     """One header section: {tag: value} where a value is bytes, int, str or a list of them."""
     magic = f.read(8)
     if magic[:4] != HEADER_MAGIC:
-        raise RpmError("bad header magic")
+        msg = "bad header magic"
+        raise RpmError(msg)
     nindex, hsize = struct.unpack(">II", f.read(8))
     index = f.read(16 * nindex)
     data = f.read(hsize)
@@ -114,9 +112,7 @@ def _header(f):
                 vals.append(data[p:e].decode("utf-8", "replace"))
                 p = e + 1
             out[tag] = vals
-        elif typ == 7:  # binary
-            out[tag] = data[off : off + count]
-        elif typ == 1:  # char
+        elif typ in {7, 1}:  # binary
             out[tag] = data[off : off + count]
     return out
 
@@ -126,7 +122,8 @@ def _sections(path):
     with open(path, "rb") as f:
         lead = f.read(LEAD)
         if len(lead) < LEAD or lead[:4] != b"\xed\xab\xee\xdb":
-            raise RpmError("%s: not an rpm" % path)
+            msg = f"{path}: not an rpm"
+            raise RpmError(msg)
         _header(f)  # the signature header, then padding to 8 bytes
         pos = f.tell()
         f.seek((pos + 7) & ~7)
@@ -147,8 +144,10 @@ def _decompress(comp, data):
         try:
             return zstd.decompress(data)
         except zstd.ZstdError as e:
-            raise RpmError("zstd failed: %s" % e)
-    raise RpmError("unknown payload compressor %r" % comp)
+            msg = f"zstd failed: {e}"
+            raise RpmError(msg)
+    msg = f"unknown payload compressor {comp!r}"
+    raise RpmError(msg)
 
 
 def _cpio_members(data):
@@ -162,15 +161,15 @@ def _cpio_members(data):
         (
             ino,
             mode,
-            uid,
-            gid,
+            _uid,
+            _gid,
             nlink,
             mtime,
             size,
             devmaj,
             devmin,
-            rdevmaj,
-            rdevmin,
+            _rdevmaj,
+            _rdevmin,
             namesize,
             _chk,
         ) = fields
@@ -187,7 +186,7 @@ def _cpio_members(data):
 class _Member:
     """The part of tarfile.TarInfo that build.extract reads."""
 
-    def __init__(self, name, mode, mtime, kind, linkname, content):
+    def __init__(self, name, mode, mtime, kind, linkname, content) -> None:
         self.name, self.mode, self.mtime, self.kind, self.linkname, self.content = (
             name,
             mode & 0o7777,
@@ -211,7 +210,7 @@ class _Member:
 
 
 class _Payload:
-    def __init__(self, members):
+    def __init__(self, members) -> None:
         self.members = members
 
     def __enter__(self):
@@ -229,8 +228,9 @@ class _Payload:
 
 def open_tar(path, member):
     """The payload's members. Hard links in cpio are entries of one inode with the content on the last of
-    them; the reader gives the content to the first and makes the rest links to it, as tar would."""
-    h, payload, comp = _sections(path)
+    them; the reader gives the content to the first and makes the rest links to it, as tar would.
+    """
+    _h, payload, comp = _sections(path)
     with open(path, "rb") as f:
         f.seek(payload)
         data = _decompress(comp, f.read())
@@ -238,7 +238,7 @@ def open_tar(path, member):
     first = {}
     members = []
     for name, mode, mtime, content, nlink, ident in raw:
-        name = name[2:] if name.startswith("./") else name
+        name = name.removeprefix("./")
         fmt = mode & 0o170000
         if fmt == 0o040000:
             members.append(_Member(name, mode, mtime, "dir", "", b""))
@@ -272,8 +272,8 @@ def _deps(h, names, versions, flags):
     for i, n in enumerate(ns):
         v = vs[i] if i < len(vs) else ""
         fl = fs[i] if i < len(fs) else 0
-        if (
-            fl & SENSE_RPMLIB or n.startswith("rpmlib(") or n.startswith("(")
+        if fl & SENSE_RPMLIB or n.startswith(
+            ("rpmlib(", "(")
         ):  # rpm's own features; rich dependencies
             continue
         op = "".join(s for bit, s in sorted(SENSE.items()) if fl & bit) if v else ""
@@ -286,16 +286,17 @@ def control(path):
     h, _, _ = _sections(path)
     fields = {
         "Package": h.get(T["NAME"], ""),
-        "Version": "%s-%s" % (h.get(T["VERSION"], ""), h.get(T["RELEASE"], "")),
+        "Version": "{}-{}".format(h.get(T["VERSION"], ""), h.get(T["RELEASE"], "")),
         "Architecture": h.get(T["ARCH"], ""),
         "_format": "rpm",
     }
     if fields["Architecture"] == "noarch":
         fields["Architecture"] = "all"
     if T["EPOCH"] in h:
-        fields["Version"] = "%s:%s" % (h[T["EPOCH"]], fields["Version"])
+        fields["Version"] = "{}:{}".format(h[T["EPOCH"]], fields["Version"])
     if not fields["Package"]:
-        raise RpmError("%s: no NAME in its header" % path)
+        msg = f"{path}: no NAME in its header"
+        raise RpmError(msg)
     fields["Depends"] = " ".join(_deps(h, T["REQUIRENAME"], T["REQUIREVERSION"], T["REQUIREFLAGS"]))
     fields["Provides"] = " ".join(
         _deps(h, T["PROVIDENAME"], T["PROVIDEVERSION"], T["PROVIDEFLAGS"])
@@ -309,7 +310,7 @@ def control(path):
         ("preinst", T["PREIN"]),
         ("posttrans", T["POSTTRANS"]),
     ):
-        if tag in h and h[tag]:
+        if h.get(tag):
             scripts[key] = h[tag] if isinstance(h[tag], str) else "\n".join(h[tag])
     return fields, scripts
 
@@ -319,12 +320,14 @@ _TOKEN = re.compile(r"^([^\s<>=]+)(?:(<=|>=|<|>|=)([^\s<>=]+))?$")
 
 def parse_deps(field):
     """'glibc>=2.17 libc.so.6(GLIBC_2.2.5)(64bit) /bin/sh' -> [[(name, op, version)]]: one alternative each. A
-    version is 'epoch:version-release' as rpm spells it; a file item names a file some package must ship."""
+    version is 'epoch:version-release' as rpm spells it; a file item names a file some package must ship.
+    """
     out = []
     for tok in (field or "").split():
         m = _TOKEN.match(tok)
         if not m:
-            raise RpmError("cannot parse dependency %r" % tok)
+            msg = f"cannot parse dependency {tok!r}"
+            raise RpmError(msg)
         out.append([(m.group(1), m.group(2), m.group(3))])
     return out
 
@@ -335,7 +338,7 @@ def _rpmvercmp(a, b):
     if a == b:
         return 0
     ta, tb = re.findall(r"[0-9]+|[a-zA-Z]+|~|\^", a), re.findall(r"[0-9]+|[a-zA-Z]+|~|\^", b)
-    for x, y in zip(ta, tb):
+    for x, y in zip(ta, tb, strict=False):
         if x == "~" or y == "~":
             if x != y:
                 return -1 if x == "~" else 1

@@ -63,7 +63,7 @@ def timed(cmd, cwd, env, ex):
     return time.time() - t, rc, out
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -91,25 +91,25 @@ def main():
         if not tarballs:
             rows.append((name, "no tarball", "", "", ""))
             continue
-        tb = os.path.join(a.src, sorted(tarballs)[-1])
+        tb = os.path.join(a.src, max(tarballs))
         results = {}
         for world in ("host", "exclave"):
             d = os.path.join(work, world)
             os.makedirs(d, exist_ok=True)
             with tarfile.open(tb) as t:
                 t.extractall(d, filter="data")
-            src = os.path.join(d, [e for e in os.listdir(d) if e.startswith(prefix)][0])
+            src = os.path.join(d, next(e for e in os.listdir(d) if e.startswith(prefix)))
             c = ex if world == "exclave" else None
             ct = 0.0
             if conf:
                 ct, rc, out = timed(conf, src, env, c)
                 if rc:
-                    failures.append("%s %s configure: %s" % (name, world, out[-800:]))
+                    failures.append(f"{name} {world} configure: {out[-800:]}")
                     results[world] = (ct, None, "configure failed")
                     continue
             mt, rc, out = timed(mk, src, env, c)
             if rc:
-                failures.append("%s %s make: %s" % (name, world, out[-1200:]))
+                failures.append(f"{name} {world} make: {out[-1200:]}")
                 results[world] = (ct, mt, "make failed")
                 continue
             rc, out = sh(check, src, env, c)
@@ -118,11 +118,10 @@ def main():
         rows.append(
             (
                 name,
-                "%.1f / %.1f" % (h[0], k[0]) if conf else "-",
-                "%s / %s"
-                % (
-                    "%.1f" % h[1] if h[1] is not None else "fail",
-                    "%.1f" % k[1] if k[1] is not None else "fail",
+                f"{h[0]:.1f} / {k[0]:.1f}" if conf else "-",
+                "{} / {}".format(
+                    f"{h[1]:.1f}" if h[1] is not None else "fail",
+                    f"{k[1]:.1f}" if k[1] is not None else "fail",
                 ),
                 h[2],
                 k[2],
@@ -134,7 +133,7 @@ def main():
     )
     print("|---|---|---|---|---|")
     for r in rows:
-        print("| %s | %s | %s | %s | %s |" % r)
+        print("| {} | {} | {} | {} | {} |".format(*r))
     for f in failures:
         print("\nFAIL " + f)
     return 1 if failures else 0

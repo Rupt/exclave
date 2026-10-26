@@ -9,8 +9,6 @@ import gzip
 import io
 import lzma
 import re
-import shutil
-import subprocess
 import tarfile
 from compression import zstd
 
@@ -25,7 +23,8 @@ def ar_members(path):
     out = []
     with open(path, "rb") as f:
         if f.read(8) != b"!<arch>\n":
-            raise DebError("%s: not an ar archive" % path)
+            msg = f"{path}: not an ar archive"
+            raise DebError(msg)
         while True:
             h = f.read(60)
             if len(h) < 60:
@@ -33,7 +32,8 @@ def ar_members(path):
             name = h[:16].decode("ascii", "replace").strip().rstrip("/")
             size = int(h[48:58].decode("ascii").strip() or "0")
             if h[58:60] != b"`\n":
-                raise DebError("%s: bad ar header" % path)
+                msg = f"{path}: bad ar header"
+                raise DebError(msg)
             out.append((name, f.tell(), size))
             f.seek(size + (size & 1), 1)
     return out
@@ -45,11 +45,12 @@ def ar_read(path, member):
             with open(path, "rb") as f:
                 f.seek(off)
                 return name, f.read(size)
-    raise DebError("%s: no member %s" % (path, member))
+    msg = f"{path}: no member {member}"
+    raise DebError(msg)
 
 
 def decompress(name, data):
-    if name.endswith(".xz") or name.endswith(".lzma"):
+    if name.endswith((".xz", ".lzma")):
         return lzma.decompress(data)
     if name.endswith(".gz"):
         return gzip.decompress(data)
@@ -59,7 +60,8 @@ def decompress(name, data):
         try:
             return zstd.decompress(data)
         except zstd.ZstdError as e:
-            raise DebError("zstd failed on %s: %s" % (name, e))
+            msg = f"zstd failed on {name}: {e}"
+            raise DebError(msg)
     if name.endswith(".tar"):
         return data
     raise DebError("unknown compression: " + name)
@@ -127,7 +129,8 @@ def parse_deps(field):
         for alt in group.split("|"):
             m = _DEP.match(alt)
             if not m:
-                raise DebError("cannot parse dependency %r" % alt)
+                msg = f"cannot parse dependency {alt!r}"
+                raise DebError(msg)
             op = {"<": "<<", ">": ">>"}.get(m.group(3), m.group(3))
             alts.append((m.group(1), op, m.group(4)))
         out.append(alts)

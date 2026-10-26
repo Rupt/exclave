@@ -24,7 +24,7 @@ def run(cmd, cwd, check=True):
     p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out = p.stdout.decode(errors="replace")
     if check and p.returncode:
-        sys.exit("FAIL %s\n%s" % (" ".join(cmd), out[-2000:]))
+        sys.exit("FAIL {}\n{}".format(" ".join(cmd), out[-2000:]))
     return out
 
 
@@ -32,7 +32,7 @@ def debs(d):
     return sorted(os.path.join(d, f) for f in os.listdir(d) if f.endswith(".deb"))
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -43,7 +43,7 @@ def main():
     tool_debs, gcc_debs = (os.path.join(a.inputs, d) for d in ("debs-base", "debs-gcc13"))
     for d in (tool_debs, gcc_debs):
         if not os.path.isdir(d) or not debs(d):
-            sys.exit("FAIL %s has no .deb files: run scripts/inputs %s" % (d, a.inputs))
+            sys.exit(f"FAIL {d} has no .deb files: run scripts/inputs {a.inputs}")
     work = os.path.abspath(a.work)
     if os.path.exists(work):
         shutil.rmtree(work)
@@ -51,7 +51,7 @@ def main():
     exclave = os.path.join(REPO, "exclave", "exclave.py")
     print("building the tool's own exclave")
     tool_ex = os.path.join(work, "tool.exclave")
-    run([sys.executable, exclave, "unpack", tool_ex] + debs(tool_debs), work)
+    run([sys.executable, exclave, "unpack", tool_ex, *debs(tool_debs)], work)
     # the pinned Python, the one running this, as a tree of its own: the base system's packages give it a libc.
     # Without Tcl/Tk, which the tool never imports and whose libraries search a build directory the exclave does
     # not own (/tools/deps/lib), so the static check would rightly refuse them
@@ -93,13 +93,17 @@ def main():
     gcc_debs = debs(gcc_debs)
     print("building the gcc exclave on the host")
     run(
-        [sys.executable, exclave, "unpack", os.path.join(work, "gcc-host.exclave")] + gcc_debs, work
+        [sys.executable, exclave, "unpack", os.path.join(work, "gcc-host.exclave"), *gcc_debs], work
     )
     run([sys.executable, exclave, "wrap", os.path.join(work, "gcc-host.exclave")], work)
     print("building the gcc exclave inside the tool's own exclave")
     run(
-        [os.path.join(tool_ex, "exclave"), "unpack", os.path.join(work, "gcc-inside.exclave")]
-        + gcc_debs,
+        [
+            os.path.join(tool_ex, "exclave"),
+            "unpack",
+            os.path.join(work, "gcc-inside.exclave"),
+            *gcc_debs,
+        ],
         work,
     )
     run([os.path.join(tool_ex, "exclave"), "wrap", os.path.join(work, "gcc-inside.exclave")], work)
@@ -107,7 +111,7 @@ def main():
     b_lock = open(os.path.join(work, "gcc-inside.exclave", ".exclave", "hashes"), "rb").read()
     tree = [l for l in a_lock.decode().splitlines() if l.startswith("tree")]
     if a_lock == b_lock:
-        print("PASS hashes files identical; %s" % tree[0])
+        print(f"PASS hashes files identical; {tree[0]}")
         out = run(
             [os.path.join(work, "gcc-inside.exclave", "tree", "usr", "bin", "gcc-13"), "--version"],
             work,
@@ -117,9 +121,9 @@ def main():
             shutil.rmtree(work, ignore_errors=True)
         return 0
     print("FAIL the two hashes files differ:")
-    for x, y in zip(a_lock.decode().splitlines(), b_lock.decode().splitlines()):
+    for x, y in zip(a_lock.decode().splitlines(), b_lock.decode().splitlines(), strict=False):
         if x != y:
-            print("     host:    %s\n     exclave: %s" % (x, y))
+            print(f"     host:    {x}\n     exclave: {y}")
     return 1
 
 

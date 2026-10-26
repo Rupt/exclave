@@ -20,15 +20,13 @@ import hashlib
 import lzma
 import os
 import re
-import shutil
-import subprocess
 import sys
 import urllib.request
 import xml.etree.ElementTree as ET
 from compression import zstd
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "exclave"))
-import rpm  # noqa: E402
+import rpm
 
 BASE = ["setup", "filesystem", "basesystem", "bash"]
 NS = {
@@ -43,7 +41,7 @@ class RepoError(Exception):
     pass
 
 
-def log(*a):
+def log(*a) -> None:
     print(*a, file=sys.stderr)
 
 
@@ -67,7 +65,7 @@ def _evr(e):
 
 
 class Repo:
-    def __init__(self, urls, cache):
+    def __init__(self, urls, cache) -> None:
         self.urls, self.cache = [u.rstrip("/") for u in urls], cache
         self.index, self.provides, self.files = {}, {}, {}
         os.makedirs(cache, exist_ok=True)
@@ -87,7 +85,7 @@ class Repo:
         os.replace(path + ".tmp%d" % os.getpid(), path)  # two fetches may share the cache
         return data
 
-    def load_index(self):
+    def load_index(self) -> None:
         for url in self.urls:
             md = ET.fromstring(self._get(url + "/repodata/repomd.xml"))
             loc = None
@@ -95,7 +93,8 @@ class Repo:
                 if d.get("type") == "primary":
                     loc = d.find("m:location", NS).get("href")
             if not loc:
-                raise RepoError("%s: no primary index in repomd.xml" % url)
+                msg = f"{url}: no primary index in repomd.xml"
+                raise RepoError(msg)
             text = _decompress(loc, self._get(url + "/" + loc))
             n = 0
             for pkg in ET.fromstring(text).findall("c:package", NS):
@@ -152,10 +151,10 @@ class Repo:
         ]
         if not cands and name.startswith("/"):
             cands = [(s, None) for s in self.files.get(name, [])]
-        for s, pv in cands:
+        for s, _pv in cands:
             if s["name"] in selected:
                 return s
-        for s, pv in cands:
+        for s, _pv in cands:
             if s["name"] == name:
                 return s
         cands.sort(key=lambda c: c[0]["name"])
@@ -171,12 +170,13 @@ class Repo:
                 continue
             st = self._pick(name, None, None, selected, choose)
             if st is None:
-                raise RepoError("no package provides %s (needed by %s)" % (name, why))
+                msg = f"no package provides {name} (needed by {why})"
+                raise RepoError(msg)
             if st["name"] in selected:
                 continue
             selected[st["name"]] = st
             for dep, op, ver in st["requires"]:
-                if dep.startswith("rpmlib(") or dep.startswith("("):
+                if dep.startswith(("rpmlib(", "(")):
                     continue
                 if dep in selected and (
                     op is None or rpm.satisfies(selected[dep]["version"], op, ver)
@@ -186,10 +186,11 @@ class Repo:
                 if chosen is None:
                     if dep.startswith("/"):
                         notes.append(
-                            "%s needs %s, which no indexed package provides" % (st["name"], dep)
+                            "{} needs {}, which no indexed package provides".format(st["name"], dep)
                         )
                         continue
-                    raise RepoError("cannot satisfy %s of %s" % (dep, st["name"]))
+                    msg = "cannot satisfy {} of {}".format(dep, st["name"])
+                    raise RepoError(msg)
                 if chosen["name"] not in selected:
                     queue.append((chosen["name"], st["name"]))
         return selected, notes
@@ -198,17 +199,18 @@ class Repo:
         name = os.path.basename(st["href"])
         data = self._get(st["_repo"] + "/" + st["href"])
         if not st["sha256"]:
-            raise RepoError(
-                "%s: the index carries no SHA-256 for it; refusing an unverifiable download" % name
-            )
+            msg = f"{name}: the index carries no SHA-256 for it; refusing an unverifiable download"
+            raise RepoError(msg)
         if hashlib.sha256(data).hexdigest() != st["sha256"]:
-            raise RepoError("%s: SHA-256 does not match the index" % name)
+            msg = f"{name}: SHA-256 does not match the index"
+            raise RepoError(msg)
         if len(data) != st["size"]:
-            raise RepoError("%s: size does not match the index" % name)
+            msg = f"{name}: size does not match the index"
+            raise RepoError(msg)
         return name, data
 
 
-def main(argv):
+def main(argv) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -237,7 +239,7 @@ def main(argv):
                 f.write(data)
         log("%d packages in %s" % (len(selected), a.out))
     except (RepoError, rpm.RpmError, OSError, ET.ParseError) as e:
-        sys.exit("fetch-rpms: %s" % e)
+        sys.exit(f"fetch-rpms: {e}")
     return 0
 
 

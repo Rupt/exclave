@@ -68,9 +68,7 @@ int main(void) { struct timespec a, b; int n = 100000; char *av[] = { "true", 0 
 
 
 def run(cmd, cwd, env=None, executable=None):
-    return subprocess.run(
-        cmd, cwd=cwd, env=env, executable=executable, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
+    return subprocess.run(cmd, cwd=cwd, env=env, executable=executable, capture_output=True)
 
 
 def best(fn, n=3):
@@ -81,11 +79,12 @@ def timed(cmd, cwd, env, executable=None):
     t = time.time()
     p = run(cmd, cwd, env, executable)
     if p.returncode:
-        raise SystemExit("failed: %s\n%s" % (cmd, p.stderr.decode(errors="replace")[-400:]))
+        msg = "failed: {}\n{}".format(cmd, p.stderr.decode(errors="replace")[-400:])
+        raise SystemExit(msg)
     return time.time() - t
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--exclave", required=True)
     ap.add_argument("--sqlite", help="sqlite3.c amalgamation for the compute-bound compile")
@@ -116,10 +115,10 @@ def main():
     rows = []
 
     def native(prog, *args):
-        return run([prog] + list(args), work, env).stdout.decode().strip()
+        return run([prog, *list(args)], work, env).stdout.decode().strip()
 
     def inside(prog, *args):
-        return run([launcher, prog] + list(args), work, env).stdout.decode().strip()
+        return run([launcher, prog, *list(args)], work, env).stdout.decode().strip()
 
     for name, src in (
         ("statb", STAT_C),
@@ -202,7 +201,7 @@ def main():
     with open(os.path.join(work, "hello.c"), "w") as f:
         f.write('#include <stdio.h>\nint main(void) { printf("hello\\n"); return 0; }\n')
 
-    def thirty(gcc):
+    def thirty(gcc) -> None:
         for i in range(30):
             p = run([gcc, "-O0", "hello.c", "-o", "h%d" % i], work, env)
             if p.returncode:
@@ -240,7 +239,7 @@ def main():
             + " return s & 1; }\n"
         )
 
-    def project(gcc):
+    def project(gcc) -> None:
         objs = []
         for i in range(61):
             src = "f%d.c" % i if i < 60 else "main.c"
@@ -248,7 +247,7 @@ def main():
             if p.returncode:
                 raise SystemExit(p.stderr.decode())
             objs.append(src[:-2] + ".o")
-        p = run([gcc, "-o", "prog"] + objs, proj, env)
+        p = run([gcc, "-o", "prog", *objs], proj, env)
         if p.returncode:
             raise SystemExit(p.stderr.decode())
 
@@ -275,7 +274,7 @@ def main():
     if shutil.which("strace"):
 
         def count(gcc):
-            p = subprocess.run(
+            subprocess.run(
                 ["strace", "-f", "-c", "-o", "sc.txt", gcc, "-O0", "hello.c", "-o", "h_sc"],
                 cwd=work,
                 env=env,
@@ -296,8 +295,11 @@ def main():
     print("| Workload | native | exclave |")
     print("|---|---|---|")
     for name, n, c in rows:
-        fmt = lambda x: ("%.2f" % x if isinstance(x, float) else str(x)) if x is not None else ""
-        print("| %s | %s | %s |" % (name, fmt(n), fmt(c)))
+
+        def fmt(x):
+            return (f"{x:.2f}" if isinstance(x, float) else str(x)) if x is not None else ""
+
+        print(f"| {name} | {fmt(n)} | {fmt(c)} |")
     shutil.rmtree(work, ignore_errors=True)
 
 

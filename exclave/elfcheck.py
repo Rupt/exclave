@@ -9,6 +9,7 @@ Dynamic: given EXCLAVE_LOG files a workload wrote, every library opened must be 
 modules named by the host's nsswitch.conf but absent from the exclave are reported.
 """
 
+import contextlib
 import os
 import re
 import stat
@@ -37,7 +38,7 @@ LIB_DIR, PLATFORM = (
 )  # what the loader substitutes for $LIB and $PLATFORM; set by set_machine
 
 
-def set_machine(machine):
+def set_machine(machine) -> None:
     """The exclave's machine decides the multiarch directory, the hwcaps subdirectories and musl's soname."""
     global MACHINE, DEFAULT_DIRS, HWCAPS, LIBC_SONAME, LIB_DIR, PLATFORM
     MACHINE = machine
@@ -56,12 +57,12 @@ def set_machine(machine):
         if machine == 62
         else []
     )
-    LIBC_SONAME = {"glibc": "libc.so.6", "musl": "libc.musl-%s.so.1" % uname}
+    LIBC_SONAME = {"glibc": "libc.so.6", "musl": f"libc.musl-{uname}.so.1"}
 
 
 def glibc_version(tree):
     """(major, minor) of the tree's glibc, from libc.so.6's banner, or None."""
-    for d in DEFAULT_DIRS + ["/lib64", "/usr/lib64"]:
+    for d in [*DEFAULT_DIRS, "/lib64", "/usr/lib64"]:
         r = tree.resolve(d + "/libc.so.6")
         if r and os.path.isfile(tree.payload(r)):
             with open(tree.payload(r), "rb") as f:
@@ -75,7 +76,8 @@ def glibc_version(tree):
 
 def loader_dirs(tree, interp):
     """The default search directories of the loader in the tree: glibc prints them with --list-diagnostics
-    (2.33 and later); musl's are fixed; older loaders get Debian's list."""
+    (2.33 and later); musl's are fixed; older loaders get Debian's list.
+    """
     if interp is None:
         return list(DEFAULT_DIRS)
     if "musl" in os.path.basename(interp):
@@ -89,7 +91,7 @@ def loader_dirs(tree, interp):
             stderr=subprocess.DEVNULL,
             timeout=20,
         ).stdout.decode(errors="replace")
-        dirs = re.findall(r'^path\.system_dirs\[0x[0-9a-f]+\]="([^"]+)"', out, re.M)
+        dirs = re.findall(r'^path\.system_dirs\[0x[0-9a-f]+\]="([^"]+)"', out, re.MULTILINE)
         if dirs:
             return [d.rstrip("/") for d in dirs]
     except OSError, subprocess.SubprocessError:
@@ -104,22 +106,26 @@ class ForeignElf(ValueError):
 class Elf:
     """The parts of an ELF64 file the checks need."""
 
-    def __init__(self, path):
+    def __init__(self, path) -> None:
         self.path = path
         with open(path, "rb") as f:
             h = f.read(64)
             if len(h) < 16 or h[:4] != b"\x7fELF":
-                raise ValueError("not ELF64 LE")
+                msg = "not ELF64 LE"
+                raise ValueError(msg)
             if h[4] != 2 or h[5] != 1:
-                raise ForeignElf("ELF32 or big-endian: a foreign object, not checked (13)")
+                msg = "ELF32 or big-endian: a foreign object, not checked (13)"
+                raise ForeignElf(msg)
             if len(h) < 64:
-                raise ValueError("truncated ELF header")
+                msg = "truncated ELF header"
+                raise ValueError(msg)
             try:
                 self._parse(f, h)
             except struct.error as e:
-                raise ValueError("truncated or malformed ELF: %s" % e)
+                msg_0 = f"truncated or malformed ELF: {e}"
+                raise ValueError(msg_0)
 
-    def _parse(self, f, h):
+    def _parse(self, f, h) -> None:
         self.type = struct.unpack_from("<H", h, 16)[0]
         self.machine = struct.unpack_from("<H", h, 18)[0]
         phoff, phentsize, phnum = (
@@ -132,7 +138,7 @@ class Elf:
         self.loads, self.interp, dyn = [], None, None
         self.debug_only = False
         for i in range(phnum):
-            p_type, _, p_offset, p_vaddr, _, p_filesz, p_memsz, _ = struct.unpack_from(
+            p_type, _, p_offset, p_vaddr, _, p_filesz, _p_memsz, _ = struct.unpack_from(
                 "<IIQQQQQQ", ph, i * phentsize
             )
             if p_type == PT_LOAD:
@@ -181,13 +187,14 @@ class Elf:
         for va, off, sz in self.loads:
             if va <= vaddr < va + sz:
                 return off + vaddr - va
-        raise ValueError("address not in a loaded segment")
+        msg = "address not in a loaded segment"
+        raise ValueError(msg)
 
 
 class Tree:
     """Virtual-path resolution inside tree/, wrappers redirected to originals."""
 
-    def __init__(self, root):
+    def __init__(self, root) -> None:
         self.root = root
 
     def real(self, vpath):
@@ -229,16 +236,17 @@ class Tree:
 class Report:
     lines = 0
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.errors, self.warnings, self.static, self.seen = [], [], [], {}
 
-    def ok(self):
+    def ok(self) -> bool:
         return not self.errors
 
 
 def _expand(s, origin):
     """The loader's substitutions in an RPATH, a RUNPATH or a DT_NEEDED that is a path, for the exclave's machine
-    (glibc's dl-load.c)."""
+    (glibc's dl-load.c).
+    """
     return (
         s.replace("$ORIGIN", origin)
         .replace("${ORIGIN}", origin)
@@ -258,7 +266,7 @@ def read_cache(tree):
     off = data.find(b"glibc-ld.so.cache1.1")
     if off < 0:
         return {}
-    nlibs, len_strings = struct.unpack_from("<II", data, off + 20)
+    nlibs, _len_strings = struct.unpack_from("<II", data, off + 20)
     entries = off + 48
     table = {}
     for base in (
@@ -268,7 +276,7 @@ def read_cache(tree):
         table = {}
         ok = True
         for i in range(nlibs):
-            flags, key, value = struct.unpack_from("<iII", data, entries + 24 * i)
+            _flags, key, value = struct.unpack_from("<iII", data, entries + 24 * i)
             hwcap = struct.unpack_from("<Q", data, entries + 24 * i + 16)[0]
             try:
                 k = data[base + key : data.index(b"\0", base + key)].decode()
@@ -291,9 +299,10 @@ VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
 
 class Owned(list):
     """8.1's ownership as the launcher computes it: the own prefixes, the list itself, and the manifest's host
-    records, .host, which take a path back from an own prefix no longer than theirs."""
+    records, .host, which take a path back from an own prefix no longer than theirs.
+    """
 
-    def __init__(self, own=(), host=()):
+    def __init__(self, own=(), host=()) -> None:
         list.__init__(self, own)
         self.host = list(host)
 
@@ -304,7 +313,8 @@ def _under(v, p):
 
 def host_owned(vdir, own):
     """The launcher's base rule for a path (8.1, vis.c base_is_host): volatile, or its longest host record at least
-    as long as its longest own prefix, which a path under neither is."""
+    as long as its longest own prefix, which a path under neither is.
+    """
     if any(_under(vdir, v) for v in VOLATILE):
         return True
 
@@ -321,7 +331,8 @@ def find_library(
     rpaths: the DT_RPATH of every object on the chain that led here (inherited when the object has no RUNPATH).
     A search directory the exclave does not own is the host's at run time: such a directory is recorded in
     host_hits, since the loader would take the host's library from it, default directories
-    included. The loader satisfies its own soname without a search."""
+    included. The loader satisfies its own soname without a search.
+    """
     if interp and name == os.path.basename(interp) and tree.resolve(interp):
         return tree.resolve(interp)
     if "/" in name:  # a path, loaded as named: glibc expands $ORIGIN and the
@@ -340,7 +351,7 @@ def find_library(
     for d in search:
         if own and host_owned(os.path.normpath(d), own) and host_hits is not None:
             host_hits.append(d)
-        for sub in HWCAPS + [""]:
+        for sub in [*HWCAPS, ""]:
             cand = tree.resolve(os.path.join(d, sub, name) if sub else os.path.join(d, name))
             if cand and os.path.isfile(tree.payload(cand)):
                 return cand
@@ -351,7 +362,7 @@ def find_library(
     for d in default_dirs or DEFAULT_DIRS:
         if own and host_owned(os.path.normpath(d), own) and host_hits is not None:
             host_hits.append(d)
-        for sub in HWCAPS + [""]:
+        for sub in [*HWCAPS, ""]:
             cand = tree.resolve(os.path.join(d, sub, name) if sub else os.path.join(d, name))
             if cand and os.path.isfile(tree.payload(cand)):
                 return cand
@@ -360,7 +371,7 @@ def find_library(
 
 def _has_musl_loader(tree):
     """Whether the tree has musl's loader for the exclave's machine (set_machine), which reads no ld.so.cache."""
-    r = tree.resolve("/lib/ld-musl-%s.so.1" % PLATFORM)
+    r = tree.resolve(f"/lib/ld-musl-{PLATFORM}.so.1")
     return bool(r and os.path.isfile(tree.payload(r)))
 
 
@@ -380,8 +391,9 @@ def static_check(ex, own, data_prefixes=(), log=print):
         native != MACHINE
     ):  # 10.1: an exclave is wrapped on a machine of its architecture, where its loader can be asked
         rep.errors.append(
-            "the exclave's launcher is for %s and this machine is %s: wrap the exclave on a machine of its architecture (10.1)"
-            % (MACHINES.get(MACHINE, ("?",))[0], platform.machine())
+            "the exclave's launcher is for {} and this machine is {}: wrap the exclave on a machine of its architecture (10.1)".format(
+                MACHINES.get(MACHINE, ("?",))[0], platform.machine()
+            )
         )
         return rep
     cache = read_cache(tree)
@@ -407,8 +419,7 @@ def static_check(ex, own, data_prefixes=(), log=print):
                         continue
                     if e.soname is None and e.type == ET_DYN and not e.needed:
                         rep.errors.append(
-                            "ld.so.cache entry %s names %s, which is not a shared library (the launcher?)"
-                            % (soname, p)
+                            f"ld.so.cache entry {soname} names {p}, which is not a shared library (the launcher?)"
                         )
     seen = rep.seen
     executables, libraries, interps = [], [], {}
@@ -425,7 +436,7 @@ def static_check(ex, own, data_prefixes=(), log=print):
             st = os.lstat(real)
             if stat.S_ISLNK(st.st_mode):
                 if tree.resolve(vpath) is None:
-                    rep.warnings.append("dangling symlink %s -> %s" % (vpath, os.readlink(real)))
+                    rep.warnings.append(f"dangling symlink {vpath} -> {os.readlink(real)}")
                 continue
             if not stat.S_ISREG(st.st_mode):
                 continue
@@ -434,11 +445,10 @@ def static_check(ex, own, data_prefixes=(), log=print):
                 head = open(pay, "rb").read(4)
             except PermissionError:
                 rep.errors.append(
-                    "unreadable file %s: chmod u+r it; no copy of the exclave can carry it and the tree hash needs it (10.3)"
-                    % vpath
+                    f"unreadable file {vpath}: chmod u+r it; no copy of the exclave can carry it and the tree hash needs it (10.3)"
                 )
                 continue
-            with open(pay, "rb") as f:
+            with open(pay, "rb"):
                 if head != b"\x7fELF":
                     continue
             try:
@@ -446,15 +456,16 @@ def static_check(ex, own, data_prefixes=(), log=print):
             except (
                 ForeignElf
             ) as exc:  # Fedora's gcc ships 32-bit crt objects beside the 64-bit ones
-                rep.warnings.append("%s: %s" % (vpath, exc))
+                rep.warnings.append(f"{vpath}: {exc}")
                 continue
             except ValueError as exc:
-                rep.errors.append("%s: %s" % (vpath, exc))
+                rep.errors.append(f"{vpath}: {exc}")
                 continue
             if e.machine != MACHINE:
                 rep.warnings.append(
-                    "%s: not %s: a foreign object, not checked (13)"
-                    % (vpath, MACHINES.get(MACHINE, ("?",))[0])
+                    "{}: not {}: a foreign object, not checked (13)".format(
+                        vpath, MACHINES.get(MACHINE, ("?",))[0]
+                    )
                 )
                 continue
             if e.debug_only:  # debug information, which nothing loads or runs
@@ -465,18 +476,15 @@ def static_check(ex, own, data_prefixes=(), log=print):
                 r = tree.resolve(e.interp)
                 if r is None:
                     rep.errors.append(
-                        "%s wants interpreter %s, which does not resolve in the tree"
-                        % (vpath, e.interp)
+                        f"{vpath} wants interpreter {e.interp}, which does not resolve in the tree"
                     )
                 elif any(r == p or r.startswith(p.rstrip("/") + "/") for p in data_prefixes):
                     rep.errors.append(
-                        "%s wants interpreter %s, which resolves into the data directory %s: never executed or loaded (6.2)"
-                        % (vpath, e.interp, r)
+                        f"{vpath} wants interpreter {e.interp}, which resolves into the data directory {r}: never executed or loaded (6.2)"
                     )
                 elif own and host_owned(r, own):
                     rep.errors.append(
-                        "%s wants interpreter %s, which resolves to %s, a path the exclave does not own: the launcher refuses a host loader (7.4.5)"
-                        % (vpath, e.interp, r)
+                        f"{vpath} wants interpreter {e.interp}, which resolves to {r}, a path the exclave does not own: the launcher refuses a host loader (7.4.5)"
                     )
                 else:
                     interps.setdefault(r, (e.interp, vpath))
@@ -486,8 +494,9 @@ def static_check(ex, own, data_prefixes=(), log=print):
     # one loader, and so one libc, per exclave (7.3): read from the ELF files, not declared anywhere
     if len(interps) > 1:
         rep.errors.append(
-            "the tree mixes loaders %s (one world inside an exclave, 7.3)"
-            % ", ".join("%s (%s)" % (i, v) for r, (i, v) in sorted(interps.items()))
+            "the tree mixes loaders {} (one world inside an exclave, 7.3)".format(
+                ", ".join(f"{i} ({v})" for r, (i, v) in sorted(interps.items()))
+            )
         )
     interp = next(iter(interps.values()))[0] if interps else None
     libc_soname = (
@@ -515,7 +524,7 @@ def static_check(ex, own, data_prefixes=(), log=print):
 
     reached = set()
 
-    def check(vpath, e, rpaths, chain):
+    def check(vpath, e, rpaths, chain) -> None:
         key = (vpath, tuple(rpaths))
         if key in seen:
             return
@@ -530,31 +539,30 @@ def static_check(ex, own, data_prefixes=(), log=print):
             )
             for d in host_hits:
                 rep.errors.append(
-                    "%s searches %s for %s, a directory the exclave does not own: the host's library would load"
-                    % (vpath, d, n)
+                    f"{vpath} searches {d} for {n}, a directory the exclave does not own: the host's library would load"
                 )
             if not found:
                 rep.errors.append(
-                    "%s needs %s, which does not resolve in the tree (chain %s)"
-                    % (vpath, n, " > ".join(chain + [vpath]))
+                    "{} needs {}, which does not resolve in the tree (chain {})".format(
+                        vpath, n, " > ".join([*chain, vpath])
+                    )
                 )
                 continue
             if any(found == p or found.startswith(p.rstrip("/") + "/") for p in data_prefixes):
                 rep.errors.append(
-                    "%s needs %s, which resolves into the data directory %s: never loaded (6.2)"
-                    % (vpath, n, found)
+                    f"{vpath} needs {n}, which resolves into the data directory {found}: never loaded (6.2)"
                 )
                 continue
             if n.startswith("libc.") and n != libc_soname:
                 rep.errors.append(
-                    "%s needs %s: a libc other than the loader's %s" % (vpath, n, libc_soname)
+                    f"{vpath} needs {n}: a libc other than the loader's {libc_soname}"
                 )
             try:
                 fe = Elf(tree.payload(found))
             except (ValueError, OSError) as exc:
-                rep.errors.append("%s: %s" % (found, exc))
+                rep.errors.append(f"{found}: {exc}")
                 continue
-            check(found, fe, below, chain + [vpath])
+            check(found, fe, below, [*chain, vpath])
 
     for vpath, e in executables:  # executables first, so that RPATH inheritance is seen
         check(vpath, e, [], [])
@@ -566,17 +574,16 @@ def static_check(ex, own, data_prefixes=(), log=print):
 
 def needed_closure(tree, vpaths, own):
     """The virtual paths of every library the given ELF files reach through DT_NEEDED, by the loader's
-    search with RPATH inherited down the chain; for pruning (10.4)."""
+    search with RPATH inherited down the chain; for pruning (10.4).
+    """
     out, seen, cache = set(), set(), read_cache(tree)
     interp = None
     for v in vpaths:
-        try:
+        with contextlib.suppress(ValueError, OSError):
             interp = interp or Elf(tree.payload(v)).interp
-        except ValueError, OSError:
-            pass
     default_dirs = loader_dirs(tree, interp)
 
-    def visit(vpath, e, rpaths):
+    def visit(vpath, e, rpaths) -> None:
         key = (vpath, tuple(rpaths))
         if key in seen:
             return
@@ -607,7 +614,8 @@ def needed_closure(tree, vpaths, own):
 
 def dynamic_check(ex, logs, own, log=print):
     """Read EXCLAVE_LOG files; report libraries opened outside the exclave and NSS modules the host names
-    that the exclave lacks."""
+    that the exclave lacks.
+    """
     import build
 
     rep = Report()
@@ -654,8 +662,8 @@ def dynamic_check(ex, logs, own, log=print):
                     if re.fullmatch(r"[A-Za-z0-9_]+", w) and w not in ("files", "dns"):
                         mods.add(w)
         for m in sorted(mods):
-            if not any(tree.resolve(os.path.join(d, "libnss_%s.so.2" % m)) for d in DEFAULT_DIRS):
+            if not any(tree.resolve(os.path.join(d, f"libnss_{m}.so.2")) for d in DEFAULT_DIRS):
                 rep.warnings.append(
-                    "this host's nsswitch.conf names %s; the exclave has no libnss_%s.so.2" % (m, m)
+                    f"this host's nsswitch.conf names {m}; the exclave has no libnss_{m}.so.2"
                 )
     return rep

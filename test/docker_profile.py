@@ -13,12 +13,10 @@ EFAULT either way. Needs bwrap and user namespaces; says so and exits 0 when it 
 import argparse
 import json
 import os
-import re
 import shutil
 import struct
 import subprocess
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -70,7 +68,7 @@ class BPF:
         0x54,
     )
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.insns, self.fixups = [], []
 
     def emit(self, code, jt, jf, k):
@@ -80,14 +78,15 @@ class BPF:
     def label(self):
         return len(self.insns)
 
-    def jump_to(self, i, field, target):
+    def jump_to(self, i, field, target) -> None:
         self.fixups.append((i, field, target))
 
     def pack(self):
         for i, field, target in self.fixups:
             off = target() - (i + 1)
             if off < 0 or off > 255:
-                raise ValueError("jump out of range")
+                msg = "jump out of range"
+                raise ValueError(msg)
             self.insns[i][field] = off
         return b"".join(struct.pack("<HBBI", c, jt, jf, k) for c, jt, jf, k in self.insns)
 
@@ -160,7 +159,7 @@ def build(profile, table, kernel=None):
                 if op == "SCMP_CMP_EQ":
                     skip += [(j1, 2), (j2, 2)]
                 else:  # NE: equal means the rule does not apply
-                    b.jump_to(j1, 2, lambda: b.label())  # hi differs: applies
+                    b.jump_to(j1, 2, b.label)  # hi differs: applies
                     b.jump_to(
                         j2, 1, lambda b=b, j2=j2: j2 + 1
                     )  # unreachable: assemble() refuses SCMP_CMP_NE before building
@@ -197,18 +196,17 @@ def build(profile, table, kernel=None):
 def assemble(profile_path, ex=None, kernel=None):
     profile = json.load(open(profile_path))
     table = kernel_table(ex)
-    b = BPF()
+    BPF()
     # the NE case above is awkward; the default profile has no NE rules, so refuse rather than guess
     for entry in profile.get("syscalls", []):
         for cond in entry.get("args") or []:
             if cond["op"] == "SCMP_CMP_NE":
-                raise SystemExit(
-                    "profile uses SCMP_CMP_NE, which this assembler does not implement"
-                )
+                msg = "profile uses SCMP_CMP_NE, which this assembler does not implement"
+                raise SystemExit(msg)
     return build(profile, table, kernel).pack()
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -283,10 +281,9 @@ def main():
             work,
             os.path.join(root, tree.vbin(root, "sh").lstrip("/")),
             "-c",
-            "%s -O1 -pthread hello.c -o hello && ./hello && ls /usr/lib >/dev/null && cat /etc/passwd | head -1 && touch /usr/x 2>&1; readlink /proc/self/exe"
-            % cc,
+            f"{cc} -O1 -pthread hello.c -o hello && ./hello && ls /usr/lib >/dev/null && cat /etc/passwd | head -1 && touch /usr/x 2>&1; readlink /proc/self/exe",
         ]
-        p = subprocess.run(cmd, pass_fds=[r], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.run(cmd, pass_fds=[r], capture_output=True)
         os.close(r)
         out, err = p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
         ok = (

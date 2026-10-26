@@ -4,6 +4,7 @@
 # in gdb's auto-load safe-path. The launcher exports what the script reads: exclave_original_base, _entry, _path,
 # exclave_interp_base, _path, and exclave_debug_hook, a function called once before the jump into the program.
 import os
+
 import gdb
 
 
@@ -78,12 +79,12 @@ def _file_for(root, v):
     return v if os.path.exists(v) else None
 
 
-def _add(state, path, bias):
+def _add(state, path, bias) -> None:
     if bias in state["loaded"] or not path:
         return
     state["loaded"].add(bias)
     _quiet(
-        'add-symbol-file "%s" -o %#x' % (path.replace("\\", "\\\\").replace('"', '\\"'), bias)
+        'add-symbol-file "{}" -o {:#x}'.format(path.replace("\\", "\\\\").replace('"', '\\"'), bias)
     )  # an exclave may live under a path with a space
 
 
@@ -100,7 +101,7 @@ def _r_debug():
     return 0
 
 
-def _libraries(state):
+def _libraries(state) -> None:
     """Every entry of the loader's link map: l_addr, l_name, l_ld, l_next, l_prev; the first is the program."""
     rd = _r_debug()
     if not rd:
@@ -126,11 +127,11 @@ def _libraries(state):
 class _Reload(gdb.Breakpoint):
     """r_brk: the loader calls it after every dlopen and dlclose (RT_CONSISTENT); the map is read again."""
 
-    def __init__(self, addr, state):
-        super().__init__("*%#x" % addr, internal=True)
+    def __init__(self, addr, state) -> None:
+        super().__init__(f"*{addr:#x}", internal=True)
         self.state = state
 
-    def stop(self):
+    def stop(self) -> bool:
         _guarded(_libraries, self.state)
         return False
 
@@ -138,34 +139,34 @@ class _Reload(gdb.Breakpoint):
 class _Entry(gdb.Breakpoint):
     """The program's entry point: by now the loader has mapped every library and filled its link map."""
 
-    def __init__(self, addr, state):
-        super().__init__("*%#x" % addr, internal=True, temporary=True)
+    def __init__(self, addr, state) -> None:
+        super().__init__(f"*{addr:#x}", internal=True, temporary=True)
         self.state = state
 
-    def stop(self):
+    def stop(self) -> bool:
         _guarded(_libraries, self.state)
         return False
 
 
-def _guarded(fn, *args):
+def _guarded(fn, *args) -> None:
     """A failure of this script must never stop the program: gdb stops on an exception in a breakpoint's stop."""
     try:
         fn(*args)
     except (gdb.error, gdb.MemoryError, OSError, ValueError) as e:
-        gdb.write("exclave-launcher.py: %s\n" % e, gdb.STDERR)
+        gdb.write(f"exclave-launcher.py: {e}\n", gdb.STDERR)
 
 
 class _Hook(gdb.Breakpoint):
     """exclave_debug_hook: the launcher has mapped the program and its loader and is about to jump."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("exclave_debug_hook", internal=True)
 
-    def stop(self):
+    def stop(self) -> bool:
         _guarded(self._hook)
         return False
 
-    def _hook(self):
+    def _hook(self) -> None:
         state = {"root": _exclave_tree(), "loaded": set(), "brk": None}
         _add(state, _path("exclave_original_path"), _var("exclave_original_base"))
         interp = _path("exclave_interp_path")
@@ -174,10 +175,11 @@ class _Hook(gdb.Breakpoint):
         _Entry(_var("exclave_original_entry"), state)
 
 
-def _arm():
+def _arm() -> None:
     """One hook breakpoint per session: the script runs again at every exec of a launcher, and a breakpoint made
     while gdb is still relocating the new image cannot be inserted yet, so a failed attempt is retried when gdb
-    is next idle."""
+    is next idle.
+    """
     if getattr(gdb, "_exclave_hook", None) is not None and gdb._exclave_hook.is_valid():
         return
     try:

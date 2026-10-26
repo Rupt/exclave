@@ -8,7 +8,8 @@ fixed: the program prints one line per case, "<case>: <answer>", and the kernel'
 The work lives under build/exercise/<exclave>-<hashes file's hash>: a copy of the exclave relinked with build/launcher, and relinked again whenever the
 build has changed since, the unwrapped tree for bwrap, both with a socket file at /usr/share/exclave-test.sock and the
 suite's marker. Needs bwrap and user namespaces; says so and exits 1 when it cannot run. Exit status: the number of
-lines that differ."""
+lines that differ.
+"""
 
 import argparse
 import hashlib
@@ -23,11 +24,12 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(REPO, "exclave"))
 import oracle_ns  # noqa: E402
 import tree  # noqa: E402
-import exclave  # noqa: E402
+
 import build  # noqa: E402
+import exclave  # noqa: E402
 
 
-def setup(ex0, work):
+def setup(ex0, work) -> None:
     """A wrapped copy for the launcher and an unwrapped tree for bwrap, made once per exclave."""
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
@@ -109,13 +111,13 @@ def main():
         sys.exit("compile: " + p.stdout.decode(errors="replace"))
     hostdir = os.path.join(work, "hostdir")
 
-    def fresh():
+    def fresh() -> None:
         shutil.rmtree(hostdir, ignore_errors=True)
         os.makedirs(hostdir)
 
     argv = [x.replace("HOSTDIR", hostdir) for x in a.args]
     fresh()
-    rc_b, out_b, err_b = oracle_ns.run_bwrap(root, work, " ".join([prog] + argv))
+    rc_b, out_b, err_b = oracle_ns.run_bwrap(root, work, " ".join([prog, *argv]))
     fresh()
     rc_o, out_o, err_o = oracle_ns.run_launcher(ex, work, argv, prog=prog)
     lb, lo = out_b.splitlines(), out_o.splitlines()
@@ -138,8 +140,8 @@ def main():
             rc_b,
             rc_o,
             differ,
-            "; bwrap stderr: %r" % err_b[:200] if err_b else "",
-            "; launcher stderr: %r" % err_o[:200] if err_o else "",
+            f"; bwrap stderr: {err_b[:200]!r}" if err_b else "",
+            f"; launcher stderr: {err_o[:200]!r}" if err_o else "",
         )
     )
     return differ

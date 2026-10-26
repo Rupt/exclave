@@ -19,7 +19,7 @@ sys.path.insert(0, HERE)
 import matrix  # noqa: E402
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -39,7 +39,7 @@ def main():
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
     pubkey = open(key + ".pub").read().strip()
     rows, fails = [], 0
-    for name, kernel, user, urls, family, notes, arch in matrix.VMS:
+    for name, _kernel, user, urls, family, _notes, arch in matrix.VMS:
         if arch != "x86_64" or (a.only and name not in a.only.split(",")):
             continue
         image = os.path.join(a.images, name + ".qcow2")
@@ -50,7 +50,7 @@ def main():
         with open(os.path.join(work, name + "-user-data"), "w") as f:
             f.write(matrix.user_data(family, pubkey))
         with open(os.path.join(work, name + "-meta-data"), "w") as f:
-            f.write("instance-id: exclave-%s\nlocal-hostname: %s\n" % (name, name))
+            f.write(f"instance-id: exclave-{name}\nlocal-hostname: {name}\n")
         subprocess.run(
             [
                 "cloud-localds",
@@ -64,13 +64,13 @@ def main():
         vm = matrix.VM(name, image, work, user, matrix.free_port(), a.memory, arch)
         try:
             if not vm.wait(deadline=600):
-                rows.append((name, "did not come up (see %s-console.log)" % name))
+                rows.append((name, f"did not come up (see {name}-console.log)"))
                 fails += 1
                 continue
             uname = vm.ssh("uname -r")[1].strip()
-            for p in a.files + [a.script]:
+            for p in [*a.files, a.script]:
                 vm.scp(p, os.path.basename(p))
-            rc, out = vm.ssh("sh %s 2>&1" % os.path.basename(a.script), timeout=3600)
+            rc, out = vm.ssh(f"sh {os.path.basename(a.script)} 2>&1", timeout=3600)
             with open(os.path.join(work, name + ".log"), "w") as f:
                 f.write(out)
             tail = " | ".join(l.strip() for l in out.strip().splitlines()[-3:])

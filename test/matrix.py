@@ -140,11 +140,11 @@ PACKAGES = {
 }
 
 
-def log(*a):
+def log(*a) -> None:
     print(time.strftime("%H:%M:%S"), *a, flush=True)
 
 
-def fetch(url, dst, tries=4):
+def fetch(url, dst, tries=4) -> bool:
     """Download with resume and a length check: a connection that closes early must not leave a short image."""
     if os.path.exists(dst):
         return True
@@ -192,7 +192,8 @@ def free_port():
 def pinned_python(arch, libc):
     """The tree of the pinned Python, the version running this, built for a VM's machine and libc: installed by the
     repository's uv into its own Python directory (scripts/lib.sh), so a VM runs the suite on the same Python as the
-    reference machine whatever python3 its distribution has, or none. glibc builds need only glibc 2.17."""
+    reference machine whatever python3 its distribution has, or none. glibc builds need only glibc 2.17.
+    """
     name = "cpython-%d.%d.%d-linux-%s-%s" % (
         sys.version_info[0],
         sys.version_info[1],
@@ -205,12 +206,12 @@ def pinned_python(arch, libc):
         os.environ.get("UV_PYTHON_INSTALL_DIR", os.path.join(REPO, ".uv", "python")), name
     )
     if not os.path.isdir(tree_):
-        sys.exit("uv installed %s but it is not at %s" % (name, tree_))
+        sys.exit(f"uv installed {name} but it is not at {tree_}")
     return tree_
 
 
 def without_tk(info):
-    """tarfile filter: Tcl/Tk, which nothing here imports, stays out of the payload."""
+    """Tarfile filter: Tcl/Tk, which nothing here imports, stays out of the payload."""
     base = os.path.basename(info.name)
     return (
         None
@@ -240,8 +241,8 @@ def user_data(family, pubkey):
     # from the release's main suite
     retry = (
         [
-            "  - for p in %s; do dpkg -s $p >/dev/null 2>&1 || apt-get install -y $p || apt-get install -y $p=$(apt-cache madison $p | "
-            "awk '!/security/ {print $3; exit}'); done" % " ".join(pk)
+            "  - for p in {}; do dpkg -s $p >/dev/null 2>&1 || apt-get install -y $p || apt-get install -y $p=$(apt-cache madison $p | "
+            "awk '!/security/ {{print $3; exit}}'); done".format(" ".join(pk))
         ]
         if family == "apt"
         else []
@@ -265,7 +266,7 @@ AAVMF = "/usr/share/AAVMF"
 
 
 class VM:
-    def __init__(self, name, image, work, user, port, memory, arch="x86_64"):
+    def __init__(self, name, image, work, user, port, memory, arch="x86_64") -> None:
         self.name, self.user, self.port, self.work, self.arch = name, user, port, work, arch
         self.overlay = os.path.join(work, name + ".qcow2")
         subprocess.run(
@@ -283,9 +284,9 @@ class VM:
             "-serial",
             "file:" + os.path.join(work, name + "-console.log"),
             "-drive",
-            "file=%s,if=virtio,format=qcow2" % self.overlay,
+            f"file={self.overlay},if=virtio,format=qcow2",
             "-drive",
-            "file=%s,if=virtio,format=raw" % self.seed,
+            f"file={self.seed},if=virtio,format=raw",
             "-netdev",
             "user,id=n0,hostfwd=tcp:127.0.0.1:%d-:22" % port,
             "-device",
@@ -312,7 +313,8 @@ class VM:
                 "if=pflash,format=raw,readonly=on,file=" + os.path.join(AAVMF, "AAVMF_CODE.fd"),
                 "-drive",
                 "if=pflash,format=raw,file=" + varstore,
-            ] + common
+                *common,
+            ]
         else:
             cmd = [
                 "qemu-system-x86_64",
@@ -323,7 +325,8 @@ class VM:
                 str(memory),
                 "-smp",
                 "2",
-            ] + common
+                *common,
+            ]
         self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def ssh(self, cmd, timeout=1800, quiet=False):
@@ -342,7 +345,7 @@ class VM:
                 "LogLevel=ERROR",
                 "-o",
                 "ConnectTimeout=10",
-                "%s@127.0.0.1" % self.user,
+                f"{self.user}@127.0.0.1",
                 cmd,
             ],
             stdout=subprocess.PIPE,
@@ -351,7 +354,7 @@ class VM:
         )
         return p.returncode, p.stdout.decode(errors="replace")
 
-    def scp(self, src, dst):
+    def scp(self, src, dst) -> None:
         subprocess.run(
             [
                 "scp",
@@ -367,18 +370,18 @@ class VM:
                 "-o",
                 "LogLevel=ERROR",
                 src,
-                "%s@127.0.0.1:%s" % (self.user, dst),
+                f"{self.user}@127.0.0.1:{dst}",
             ],
             check=True,
         )
 
-    def wait(self, deadline=600):
+    def wait(self, deadline=600) -> bool:
         t = time.time()
         while time.time() - t < deadline:
             if self.proc.poll() is not None:
                 return False
             try:
-                rc, out = self.ssh("test -e /var/tmp/exclave-ready && echo ready", timeout=20)
+                _rc, out = self.ssh("test -e /var/tmp/exclave-ready && echo ready", timeout=20)
                 if "ready" in out:
                     return True
             except subprocess.TimeoutExpired:
@@ -386,7 +389,7 @@ class VM:
             time.sleep(5)
         return False
 
-    def stop(self):
+    def stop(self) -> None:
         try:
             self.ssh("sudo poweroff || doas poweroff || poweroff", timeout=20)
         except Exception:  # noqa: BLE001
@@ -397,7 +400,7 @@ class VM:
             self.proc.kill()
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -440,7 +443,7 @@ def main():
     def payload_for(arch, libc):
         if (arch, libc) in payloads:
             return payloads[arch, libc]
-        payload = os.path.join(work, "payload-%s-%s.tar.gz" % (arch, libc))
+        payload = os.path.join(work, f"payload-{arch}-{libc}.tar.gz")
         if True:  # packed afresh every run: a kept payload once carried a stale test tree
             log("packing the test tree for", arch)
             with tarfile.open(payload, "w:gz", compresslevel=1) as t:
@@ -459,7 +462,7 @@ def main():
                 go = tree.go_toolchain()  # the Go regression's programs, built here for the VM's machine: the VMs have no go
                 if go:
                     for n, p in tree.go_build(go, os.path.join(work, "go-" + arch), arch, work):
-                        t.add(p, arcname="repo/build/go/%s/%s" % (arch, n))
+                        t.add(p, arcname=f"repo/build/go/{arch}/{n}")
                 if arch == "x86_64":
                     t.add(ex, arcname="ex")
                     t.add(os.path.join(REPO, "build", "launcher"), arcname="repo/build/launcher")
@@ -509,7 +512,7 @@ def main():
         with open(os.path.join(work, name + "-user-data"), "w") as f:
             f.write(user_data(family, pubkey))
         with open(os.path.join(work, name + "-meta-data"), "w") as f:
-            f.write("instance-id: exclave-%s\nlocal-hostname: %s\n" % (name, name))
+            f.write(f"instance-id: exclave-{name}\nlocal-hostname: {name}\n")
         subprocess.run(
             [
                 "cloud-localds",
@@ -525,7 +528,7 @@ def main():
         try:
             if not vm.wait(deadline=600 * slow):
                 results.append(
-                    (name, kernel, "did not come up (see %s-console.log)" % name, "", notes)
+                    (name, kernel, f"did not come up (see {name}-console.log)", "", notes)
                 )
                 continue
             rc, uname = vm.ssh("uname -r")
@@ -625,7 +628,7 @@ def main():
                 "cd m && bwrap --ro-bind / / true 2>&1 && echo bwrap-ok"
             )
             if "bwrap-ok" in out:
-                rc, out = vm.ssh(
+                _rc, out = vm.ssh(
                     "cd m && $PWD/python/bin/python3 repo/test/oracle_resolve.py --exclave $PWD/ex --work $PWD/rw 2>&1 | tail -30; echo ====; "
                     "$PWD/python/bin/python3 repo/test/oracle_ns.py --exclave $PWD/ex --work $PWD/nw 2>&1 | tail -40; echo ====; "
                     "$PWD/python/bin/python3 repo/test/oracle_syscalls.py --exclave $PWD/ex --work $PWD/sw --show 5000 2>&1 | tail -20000; echo ====; "
@@ -645,8 +648,7 @@ def main():
                         "paths:" in l
                         or "workloads," in l
                         or "cases over" in l
-                        or l.startswith("PASS exclave")
-                        or l.startswith("FAIL exclave")
+                        or l.startswith(("PASS exclave", "FAIL exclave"))
                         or "cannot run" in l
                         or "docker profile:" in l
                     )
@@ -665,11 +667,11 @@ def main():
                 )
             )
         except Exception as e:  # noqa: BLE001
-            results.append((name, kernel, "error: %s" % e, "", notes))
+            results.append((name, kernel, f"error: {e}", "", notes))
         finally:
             vm.stop()
     out = ["| VM | kernel | suite | oracles | notes |", "|---|---|---|---|---|"] + [
-        "| %s | %s | %s | %s | %s |" % r for r in results
+        "| {} | {} | {} | {} | {} |".format(*r) for r in results
     ]
     text = "\n".join(out) + "\n"
     print(text)
