@@ -12,13 +12,15 @@ import re
 import tarfile
 from compression import zstd
 
+type Dep = tuple[str, str | None, str | None]
+
 
 class DebError(Exception):
     pass
 
 
 # ---------------------------------------------------------------- ar
-def ar_members(path):
+def ar_members(path: str) -> list[tuple[str, int, int]]:
     """[(name, offset, size)] of a GNU ar archive."""
     out = []
     with open(path, "rb") as f:
@@ -39,7 +41,7 @@ def ar_members(path):
     return out
 
 
-def ar_read(path, member):
+def ar_read(path: str, member: str) -> tuple[str, bytes]:
     for name, off, size in ar_members(path):
         if name == member or name.startswith(member + "."):
             with open(path, "rb") as f:
@@ -49,7 +51,7 @@ def ar_read(path, member):
     raise DebError(msg)
 
 
-def decompress(name, data):
+def decompress(name: str, data: bytes) -> bytes:
     if name.endswith((".xz", ".lzma")):
         return lzma.decompress(data)
     if name.endswith(".gz"):
@@ -61,27 +63,32 @@ def decompress(name, data):
             return zstd.decompress(data)
         except zstd.ZstdError as e:
             msg = f"zstd failed on {name}: {e}"
-            raise DebError(msg)
+            raise DebError(msg) from e
     if name.endswith(".tar"):
         return data
     raise DebError("unknown compression: " + name)
 
 
-def open_tar(path, member):
+def open_tar(path: str, member: str) -> tarfile.TarFile:
     """A tarfile for control.tar.* or data.tar.* of a .deb, fully in memory."""
     name, data = ar_read(path, member)
     return tarfile.open(fileobj=io.BytesIO(decompress(name, data)), mode="r:")
 
 
-def control(path):
-    """The control fields and the maintainer scripts of a .deb: (fields dict, {script name: text})."""
+def control(path: str) -> tuple[dict[str, str], dict[str, str]]:
+    """The control fields and the maintainer scripts of a .deb.
+
+    Returns (fields dict, {script name: text}).
+    """
     with open_tar(path, "control.tar") as t:
         fields, scripts = {}, {}
         for m in t.getmembers():
             n = m.name.lstrip("./")
             if not m.isfile():
                 continue
-            data = t.extractfile(m).read()
+            f = t.extractfile(m)
+            assert f is not None  # a regular file always has its content
+            data = f.read()
             if n == "control":
                 fields = parse_stanzas(data.decode("utf-8", "replace"))[0]
             elif n in ("preinst", "postinst", "prerm", "postrm", "config"):
@@ -90,9 +97,14 @@ def control(path):
 
 
 # ---------------------------------------------------------------- indexes
-def parse_stanzas(text):
-    """RFC822-style stanzas of a Packages or control file: [dict]. Continuation lines are joined with LF."""
-    out, cur, key = [], {}, None
+def parse_stanzas(text: str) -> list[dict[str, str]]:
+    """RFC822-style stanzas of a Packages or control file: [dict].
+
+    Continuation lines are joined with LF.
+    """
+    out: list[dict[str, str]] = []
+    cur: dict[str, str] = {}
+    key: str | None = None
     for line in text.split("\n"):
         if not line.strip():
             if cur:
@@ -113,19 +125,24 @@ def parse_stanzas(text):
 
 
 _DEP = re.compile(
-    r"^\s*([A-Za-z0-9][A-Za-z0-9+.\-]*)(?::([A-Za-z0-9\-]+))?\s*(?:\(\s*(<<|<=|=|>=|>>|<|>)\s*([^)]+?)\s*\))?\s*(?:\[[^\]]*\])?\s*(?:<[^>]*>\s*)*$"
+    r"^\s*([A-Za-z0-9][A-Za-z0-9+.\-]*)(?::([A-Za-z0-9\-]+))?"
+    r"\s*(?:\(\s*(<<|<=|=|>=|>>|<|>)\s*([^)]+?)\s*\))?"
+    r"\s*(?:\[[^\]]*\])?\s*(?:<[^>]*>\s*)*$"
 )
 
 
-def parse_deps(field):
-    """'a (>= 1) | b, c:any' -> [[(name, op, version)], [(name, op, version)]]; op and version may be None."""
-    out = []
+def parse_deps(field: str | None) -> list[list[Dep]]:
+    """'a (>= 1) | b, c:any' -> [[(name, op, version)], [(name, op, version)]].
+
+    op and version may be None.
+    """
+    out: list[list[Dep]] = []
     if not field:
         return out
     for group in field.replace("\n", " ").split(","):
         if not group.strip():
             continue
-        alts = []
+        alts: list[Dep] = []
         for alt in group.split("|"):
             m = _DEP.match(alt)
             if not m:
@@ -138,7 +155,7 @@ def parse_deps(field):
 
 
 # ---------------------------------------------------------------- versions (Debian policy 5.6.12)
-def _order(c):
+def _order(c: str) -> int:
     if c == "~":
         return -1
     if c.isdigit():
@@ -148,7 +165,7 @@ def _order(c):
     return ord(c) + 256
 
 
-def _verrevcmp(a, b):
+def _verrevcmp(a: str, b: str) -> int:
     i = j = 0
     while i < len(a) or j < len(b):
         first_diff = 0
@@ -177,13 +194,13 @@ def _verrevcmp(a, b):
     return 0
 
 
-def _split(v):
+def _split(v: str) -> tuple[int, str, str]:
     epoch, rest = v.split(":", 1) if ":" in v else ("0", v)
     up, _, rev = rest.rpartition("-") if "-" in rest else (rest, "", "")
     return int(epoch), up, rev
 
 
-def vercmp(a, b):
+def vercmp(a: str, b: str) -> int:
     """<0, 0, >0 as dpkg --compare-versions."""
     ea, ua, ra = _split(a)
     eb, ub, rb = _split(b)
@@ -195,8 +212,9 @@ def vercmp(a, b):
     return _verrevcmp(ra, rb)
 
 
-def satisfies(version, op, want):
+def satisfies(version: str, op: str | None, want: str | None) -> bool:
     if op is None:
         return True
+    assert want is not None  # an operator always comes with its version
     c = vercmp(version, want)
     return {"<<": c < 0, "<=": c <= 0, "=": c == 0, ">=": c >= 0, ">>": c > 0}[op]
