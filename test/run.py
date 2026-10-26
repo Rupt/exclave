@@ -727,6 +727,17 @@ def cwd_rules(ctx):
     expect(out == "42\n", "built output run inside: %r %r" % (out, err))
     if not ctx.cwd_given:
         return "work dir under a volatile prefix; the cwd given to the host is not exercised"
+    # the launcher's line for rule 4 and the dynamic check's reading of it, both spellings at once (review O8): a library the
+    # workload opened under that directory is its own output, a warning, where without the line it would pass unseen
+    import elfcheck
+    log = os.path.join(ctx.work, "cwd-given-%d.log" % os.getpid())
+    rc, out, err = run([wrapper(ctx, "true")], cwd=ctx.work, env=dict(ctx.env, EXCLAVE_LOG=log))
+    expect(rc == 0 and "launcher 0 cwd given to the host %s\n" % ctx.work in open(log).read(), "the rule-4 log line: %r" % open(log).read()[:400])
+    with open(log, "a") as f:
+        f.write("open 3 %s/sub/libown.so.1\n" % ctx.work)
+    rep = elfcheck.dynamic_check(ctx.exclave, [log], exclave.owned(ctx.exclave), log=lambda *x: None)
+    expect(any("working directory" in w and "libown.so.1" in w for w in rep.warnings) and not rep.errors,
+           "the dynamic check's reading of the rule-4 line: %r %r" % (rep.warnings, rep.errors))
 
 
 @test
@@ -834,6 +845,38 @@ def earlier_note_name(ctx):
     exclave.cmd_relink(ex3, only)
     rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s/tree%s; echo rc=$?" % (ex3, ctx.vbin("true"))], cwd=ctx.work, env=ctx.env)
     expect(out == "rc=0\n", "a launcher known by the cont note alone, from inside: %r %r" % (out, err))
+    # and the mirror, which a launcher of a later revision without the earlier name would be (review O8, mutant m1)
+    only = os.path.join(ctx.work, "launcher-exclave-only")
+    with open(only, "wb") as f:
+        f.write(blob.replace(b"cont\0\0\0\0" + gen, b"conx\0\0\0\0" + gen) + b"\0\0")   # two bytes more: its own size
+    os.chmod(only, 0o755)
+    can4 = os.path.join(ctx.work, "exclave-note-can")
+    copy_exclave(ctx.exclave, can4)
+    exclave.cmd_relink(can4, only)
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s/tree%s; echo rc=$?" % (can4, ctx.vbin("true"))], cwd=ctx.work, env=ctx.env)
+    expect(out == "rc=0\n", "a launcher known by the exclave note alone, from inside: %r %r" % (out, err))
+
+
+@test
+def inherited_identity_dropped(ctx):
+    """7.4.5, review O8: an exec from inside drops every inherited copy of the launcher's own variables before it adds its
+    own, so the program's environment as the kernel holds it (/proc/PID/environ, 13 item 46) has one EXCLAVE_EXECFN and
+    one EXCLAVE_COMM, the handler's, and EXCLAVE_EXEC only on the loader path. The batch of 16-byte heads is what sees
+    EXCLAVE_EXECFN=; with 12 an inherited copy would survive beside the handler's."""
+    sh = ctx.vbin("sh")
+    original = os.path.join(ctx.root, os.path.dirname(tree.resolve(ctx.root, sh)).lstrip("/"), ".real", os.path.basename(tree.resolve(ctx.root, sh)))
+    hostbin = os.path.join(ctx.work, "identity-bin")
+    os.makedirs(hostbin, exist_ok=True)
+    hostsh = os.path.join(hostbin, "sh")                     # not a wrapper: a host program, run on the loader path
+    shutil.copy2(original, hostsh)
+    show = "tr '\\0' '\\n' < /proc/$$/environ | grep -a -E '^EXCLAVE_(EXEC|EXECFN|COMM)=' | sort"
+    planted = "EXCLAVE_EXEC=/planted EXCLAVE_EXECFN=/planted EXCLAVE_COMM=planted"
+    for target, loader in ((sh, False), (hostsh, True)):
+        rc, out, err = run([wrapper(ctx, "sh"), "-c", "%s exec %s -c %s" % (planted, target, sh_quote(show))], cwd=ctx.work, env=ctx.env)
+        names = [l.split("=", 1)[0] for l in out.splitlines()]
+        want = sorted(["EXCLAVE_COMM", "EXCLAVE_EXECFN"] + (["EXCLAVE_EXEC"] if loader else []))
+        expect(rc == 0 and names == want and "planted" not in out,
+               "%s: the kernel's copy of the environment holds %r, want one each of %r and nothing planted (%r)" % (target, out, want, err))
 
 
 @test

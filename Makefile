@@ -42,7 +42,7 @@ $(OUT): $(SRC) $(HDR) Makefile
 	@mv -f *.ci build/ 2>/dev/null || true
 	$(call linkcheck,)
 	objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
-	@readelf -n $@ | grep -q exclave || (echo "the note was stripped" && false)
+	@readelf -n $@ | grep -Eq '^ +exclave +0x' && readelf -n $@ | grep -Eq '^ +cont +0x' || (echo "a note was stripped: the launcher carries exclave and cont (7.4.5)" && false)
 	@readelf -S -W $@ | grep -q debug_gdb_scripts || (echo "the gdb script was stripped" && false)
 	@readelf --dyn-syms $@ | grep -q exclave_debug_hook || (echo "the gdb hook is not exported" && false)
 	@readelf -h $@ | grep -q 'DYN' && echo "built $@ ($$(stat -c %s $@) bytes stripped, ET_DYN; symbols in $@.debug)"
