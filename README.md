@@ -394,7 +394,6 @@ test/tree.py         what a tree says about itself: its compiler, its shell, whe
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule; test/stackcheck.py the stack budget
 LICENSE          the MIT licence; the launcher carries its text
 docs/DESIGN.md   the design and specification
-spike/           the prototypes that preceded the launcher, kept as they were; they cite the design by its earlier name, docs/PROPOSAL.md, in git history
 CLAUDE.md        working notes for contributors and coding agents
 ```
 

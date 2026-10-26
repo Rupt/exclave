@@ -112,9 +112,6 @@ The loop that has served well, in the order it pays:
   grammar of `docs/DESIGN.md` 6.2, and `format` output is the accepted spelling.
   There is no index: the launcher reads the manifest and the tree, and
   anything the tree can say is best not written down anywhere else.
-- **`spike/` holds the prototypes** that preceded the launcher, kept as
-  they were; the launcher in `src/` is built from the mechanisms rather
-  than by copying the code.
 - **Claims and measurements.** Figures in `docs/DESIGN.md` are current
   and measured on the reference machine; a change that moves one
   measures it again, and a number the current code has not produced is
@@ -181,8 +178,7 @@ third-party input is fetched there, pinned by its hash.
 under `~/.cache` or the session scratchpad is assumed to persist: the
 scratchpad lost every exclave once, so an input is best not kept only
 there, nor put where a script will remove it, and refetching beats
-hunting. The scratchpad suits traces and one-off trees
-(`spike/make-tree.sh`); a driver worth running twice belongs in `test/`.
+hunting. The scratchpad suits traces and one-off trees; a driver worth running twice belongs in `test/`.
 The arm64 exclave is made inside the VM, since an exclave is wrapped on
 its own architecture; the suite, the oracles and `test/exercise.py` make
 their own copies under `build/` (ignored by git). Cloud images for the
