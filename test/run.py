@@ -168,11 +168,7 @@ def make_exclave(ctx):
     # test additions to the tree
     with open(os.path.join(root, "usr", "share", "exclave-test-marker"), "w") as f:
         f.write("marker\n")
-    sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)                    # a socket file in the tree (13 item 31)
-    if os.path.lexists(os.path.join(root, "usr", "share", "exclave-test.sock")):   # a fixture made by an earlier run carries it already
-        os.remove(os.path.join(root, "usr", "share", "exclave-test.sock"))
-    sk.bind(os.path.join(root, "usr", "share", "exclave-test.sock"))
-    sk.close()
+    tree.socket_file(os.path.join(root, "usr", "share", "exclave-test.sock"))   # a socket file in the tree (13 item 31); a fixture carries one already
     for name, body in (("exclave-test-script", "#!/bin/sh\necho script ok $1 $#\n"),
                        ("exclave-test-noshebang", "echo noshebang ok\n"),
                        ("exclave-test-script2", "#!/usr/bin/exclave-test-script\n"),

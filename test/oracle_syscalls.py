@@ -17,7 +17,6 @@ import platform
 import random
 import re
 import shutil
-import socket
 import subprocess
 import sys
 
@@ -585,9 +584,7 @@ def main():
     os.symlink(host + "/hdir", os.path.join(root, "maze", "lHD"))
     shutil.copytree(os.path.join(root, "maze"), os.path.join(ex, "tree", "maze"), symlinks=True)
     for r in (root, os.path.join(ex, "tree")):                            # a socket file in the tree, for bind and connect (copytree cannot carry one)
-        sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sk.bind(os.path.join(r, "maze", "sock"))
-        sk.close()
+        tree.socket_file(os.path.join(r, "maze", "sock"))
         with open(os.path.join(r, "maze", "ro444"), "w") as f:              # a file its owner cannot write: access(W_OK) is EACCES before EROFS
             f.write("ro\n")
         os.chmod(os.path.join(r, "maze", "ro444"), 0o444)

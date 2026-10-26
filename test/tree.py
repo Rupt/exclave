@@ -7,6 +7,7 @@ import filecmp
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 
@@ -78,6 +79,21 @@ def libc(root, machine):
 
 
 # ---------------------------------------------------------------- an exclave for a driver (17)
+def socket_file(path):
+    """A socket file at path, bound through its directory's descriptor, so that only the name counts against sun_path's
+    108 bytes and a deep checkout or work directory does not (review O8-2). A stale one is replaced."""
+    d, name = os.path.split(path)
+    if os.path.lexists(path):
+        os.remove(path)
+    fd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
+    sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sk.bind("/proc/self/fd/%d/%s" % (fd, name))
+    finally:
+        sk.close()
+        os.close(fd)
+
+
 def copy_exclave(src, dst):
     """A copy of an exclave for a driver or a test to alter: the tree's files hard-linked, the files under .exclave/ copied, since a
     manifest or hashes file written through a hard link would change the given exclave's."""

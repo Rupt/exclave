@@ -14,7 +14,6 @@ import argparse
 import hashlib
 import os
 import shutil
-import socket
 import subprocess
 import sys
 
@@ -37,9 +36,7 @@ def setup(ex0, work):
     shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy)
     build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
     for r in (root, os.path.join(ex, "tree")):
-        sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sk.bind(os.path.join(r, "usr", "share", "exclave-test.sock"))
-        sk.close()
+        tree.socket_file(os.path.join(r, "usr", "share", "exclave-test.sock"))
         with open(os.path.join(r, "usr", "share", "exclave-test-marker"), "w") as f:
             f.write("marker\n")
     for f in oracle_ns.IDENTITY:                                          # as the namespace oracle: the host's link text, its target bound
