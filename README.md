@@ -421,8 +421,9 @@ exclave, pointing at a wrapper. The environment knob is `EXCLAVE_LOG`,
 the only one. `EXCLAVE_EXEC`, `EXCLAVE_EXECFN` and `EXCLAVE_COMM` are
 the launcher's own protocol: set by a launcher when it execs a wrapper
 or re-execs itself for a program on the loader path, the target and the
-identity the kernel would give it, removed before any program runs,
-never an interface; `.exclave/launcher PROGRAM ARGS...` is how a
+identity the kernel would give it, removed from the environment a
+program is given (the kernel's copy in `/proc/<pid>/environ` keeps
+them), never an interface; `.exclave/launcher PROGRAM ARGS...` is how a
 program without a wrapper is run from outside. At the border four
 variables are the exclave's, always the same:
 `PATH=/usr/local/bin:/usr/bin:/bin`, `LANG=C.UTF-8`, `TZ=UTC0` and

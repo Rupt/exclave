@@ -87,7 +87,8 @@ static const char *denied[] = { "GLIBC_TUNABLES", "GCONV_PATH", "LOCPATH", "NLSP
                                 "PATH", "LANG", "LANGUAGE", "TZ", "SHELL", 0 };
 static const char *fixed[] = { "PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "TZ=UTC0", "SHELL=/bin/sh", 0 };
 /* the launcher's protocol with itself (7.4.5): EXCLAVE_EXEC names a loader-path target, EXCLAVE_EXECFN and EXCLAVE_COMM the identity the
- * kernel would give the program; set by a handler or the positional entry, read by the launcher they exec, never seen by a program */
+ * kernel would give the program; set by a handler or the positional entry, read by the launcher they exec, removed from the environment a program is given (the kernel's copy in
+ * /proc/<pid>/environ keeps them, 13 item 46) */
 static int internal_var(const char *e) { return xstarts(e, "EXCLAVE_EXEC=") || xstarts(e, "EXCLAVE_EXECFN=") || xstarts(e, "EXCLAVE_COMM="); }
 static int env_denied(const char *e)
 {
@@ -150,7 +151,7 @@ static void read_manifest(unsigned long *auxv)
 
 /* 7.2: the launcher run as a program rather than as a wrapper, `.exclave/launcher PROGRAM ARGS...`, takes the program
  * as its first argument and re-execs itself once the way a handler does for a program on the loader path
- * (7.4.5): the target carried in EXCLAVE_EXEC, which is the launcher's own protocol and never reaches a program, and
+ * (7.4.5): the target carried in EXCLAVE_EXEC, which is the launcher's own protocol and is removed from the program's environment, and
  * argv shifted, so that the program's argv, cmdline and comm are its own. A relative program path is taken
  * from the working directory as execve would take it. */
 static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **envp)

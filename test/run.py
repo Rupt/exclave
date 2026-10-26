@@ -3,7 +3,7 @@
 
     test/run.py [--tree DIR | --exclave EXCLAVE] [--work DIR] [--keep] [-k NAME|SUBSTRING] [--order given|reverse|random] [--seed N] [--budget SECONDS]
 
-Makes an exclave from TREE (default $EXCLAVE_TEST_TREE), or from the unwrapped root of an existing EXCLAVE, under WORK
+Makes an exclave from TREE (default $EXCLAVE_TEST_TREE), or from the tree of an existing EXCLAVE, unwrapped,, under WORK
 (default build/test-work) with a few test files added to the tree, compiles test/progs/*.c with the tree's
 own C compiler (test/tree.py), and runs every named test; with --exclave, on the fixture kept under build/fixtures/
 when there is one (17). Needs python3 and a tree with a C compiler (see README.md). Optional:
@@ -2287,7 +2287,7 @@ def stat_bench(ctx):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tree", default=os.environ.get("EXCLAVE_TEST_TREE"))
-    ap.add_argument("--exclave", help="use the unwrapped root of this exclave as the tree")
+    ap.add_argument("--exclave", help="use this exclave's tree, unwrapped")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "test-work"))
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("-k", default="")
