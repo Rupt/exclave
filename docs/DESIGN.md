@@ -3519,9 +3519,19 @@ file is pinned by its BLAKE2b-256 in the script. An item `DIR` already
 has is skipped, and whatever is missing is fetched again. The
 repository holds no third-party input.
 
-**The gate** (`scripts/gate EXCLAVE...`) is the check run before a
-commit. It runs these steps in parallel, each with its own log under
-`build/gate/`, and prints one line per step, ok, SKIP or FAIL:
+**The gate** (`scripts/gate [--full] EXCLAVE...`) is the check run
+before a commit. It runs the steps below that the change can affect, the
+uncommitted paths or, in a clean tree, the last commit's: a launcher
+source, `Makefile`, `LICENSE` or `.python-version` runs every step and
+says the matrix is due, and so does the matrix's own code; the gate
+itself runs every step; the tool runs the unit
+step, the suite in the given order, the oracles, the probe, the Docker
+profile run and dogfood; the suite or its programs add the random
+order; a test or a helper runs the steps that use it; documents,
+scripts and settings run the code checks alone; and a path the rules do
+not know runs everything. `--full` runs every step whatever changed,
+about a minute. The steps run in parallel, each with its own log under
+`build/gate/`, one line each with its time, ok, SKIP or FAIL:
 
 - the code checks, `scripts/check`: ruff, ty, shellcheck, shfmt and
   taplo over the Python, the shell scripts and the TOML;
@@ -3621,13 +3631,18 @@ natively from the harness, as `openat2_xdev` does.
 
 **The kernel matrix** (`scripts/matrix --exclave EXCLAVE
 [--docker-profile FILE]`) runs one gcc exclave, built on the reference
-machine, in virtual machines, one at a time with 1 GB each. Each VM
+machine, in virtual machines, three at a time with 1 GB each
+(`--jobs`), all nine x86-64 rows in about five minutes. It runs when the
+gate says a change reaches the VMs: a launcher source, the pinned
+Python, or the matrix's own code; other changes leave the kernels'
+answers as they were. Each VM
 boots its distribution's cloud image under QEMU with KVM behind a
 copy-on-write overlay; cloud-init installs strace and, where the
 distribution has it, bubblewrap. The exclave, the test tree, the
 checkout's launcher and the pinned Python are copied in, the checkout
 installed into that Python in editable form as `uv sync` installs it
-here (a `.pth` naming it), and the exclave is relinked there. The Python is built for the VM's machine and libc and
+here (a `.pth` naming it), and the exclave is relinked there. The
+Python is built for the VM's machine and libc and
 installed by the repository's uv: the glibc builds need only glibc 2.17,
 so CentOS 7 runs the same Python as Fedora 42, and Alpine takes the musl
 build. A VM's own `python3`, if it has one, is never used.

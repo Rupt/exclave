@@ -1,18 +1,32 @@
 #!/bin/sh
-# scripts/gate EXCLAVE... — the commit gate (DESIGN.md 17): the code checks (scripts/check), the unit tests, the stack budget, and for every exclave
-# given the suite in the given and a random order (and, for the first exclave, under the plain terminal's AppArmor label), the
-# resolution oracle, the namespace oracle and the syscall probe; when EXCLAVE_TEST_INPUTS names the directory
-# scripts/inputs filled, the Docker profile run on its src/docker-seccomp.json and dogfood on its package sets. No step
-# touches the network. Every step runs in parallel; every driver
-# runs build/launcher on a copy of its own (the suite wraps one from the exclave's tree, the others take test/tree.py's
-# fresh_exclave), so the exclaves given are never run as they are nor written. One line per step, SKIP for an oracle that could not run here; logs under build/gate/. Exit status: the number of failed steps.
+# scripts/gate [--full] EXCLAVE... — the commit gate (DESIGN.md 17), run on the change at hand.
+#
+# By default it runs the steps the changed paths can affect: the uncommitted changes, or, in a clean
+# tree, the last commit. A launcher source runs everything; the tool, a test or a helper runs the
+# steps that exercise it; documents, scripts and settings run the code checks alone; a path the
+# rules below do not know runs everything. --full runs every step, whatever changed.
+#
+# The steps: the code checks (scripts/check), the unit tests, the stack budget, and for every exclave
+# given the suite in the given and a random order (and, for the first exclave, under the plain
+# terminal's AppArmor label), the resolution oracle, the namespace oracle and the syscall probe; when
+# EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled, the Docker profile run on its
+# src/docker-seccomp.json and dogfood on its package sets. No step touches the network. Every step
+# runs in parallel; every driver runs build/launcher on a copy of its own (the suite wraps one from the
+# exclave's tree, the others take test/tree.py's fresh_exclave), so the exclaves given are never run
+# as they are nor written. One line per step with its time, SKIP for an oracle that could not run
+# here; logs under build/gate/. Exit status: the number of failed steps.
 set -u
 . "$(dirname -- "$0")/lib.sh"
 here=$ROOT/test
 repo=$ROOT
 out=$repo/build/gate
+full=false
+if [ "${1-}" = --full ]; then
+    full=true
+    shift
+fi
 [ $# -ge 1 ] || {
-    echo "usage: scripts/gate EXCLAVE..." >&2
+    echo "usage: scripts/gate [--full] EXCLAVE..." >&2
     exit 2
 }
 [ -x "$repo/build/launcher" ] || {
@@ -26,8 +40,9 @@ step() { # step NAME CMD...: in the background, its status and log kept
     name=$1
     shift
     (
+        t=$(date +%s)
         "$@" >"$out/$name.log" 2>&1
-        echo $? >"$out/$name.rc"
+        echo "$? $(($(date +%s) - t))" >"$out/$name.rc"
     ) &
 }
 # shellcheck disable=SC2329  # run through step, by name
@@ -47,16 +62,55 @@ stack() {
     if ls "$repo"/build/launcher-aarch64.debug-*.ci >/dev/null 2>&1; then py "$here/stackcheck.py" "$repo"/build/launcher-aarch64.debug-*.ci; fi
 }
 
+# What the change can affect. Each flag names a group of steps; a path sets the ones it can affect.
+unit=false stack=false suite=false random=false plain=false oracles=false dogfood=false matrix=false
+changed=$(cd "$ROOT" && { git diff --name-only HEAD && git ls-files --others --exclude-standard; } | sort -u)
+what="uncommitted changes"
+if [ -z "$changed" ]; then
+    changed=$(cd "$ROOT" && git diff --name-only HEAD~1 HEAD)
+    what="the last commit"
+fi
+for path in $changed; do
+    case $path in
+    src/* | Makefile | LICENSE | .python-version)
+        full=true # the launcher, which everything runs, or the Python everything runs on
+        matrix=true
+        ;;
+    scripts/gate | scripts/lib.sh) full=true ;; # the gate itself
+    exclave/*) unit=true suite=true oracles=true dogfood=true ;;
+    test/run.py) suite=true random=true ;;
+    test/progs/*) suite=true random=true oracles=true ;; # the probe and ro_matrix are programs there too
+    test/tree.py) suite=true random=true oracles=true dogfood=true ;;
+    test/oracle_*.py | test/docker_profile.py) oracles=true ;;
+    test/syscalls.py) unit=true oracles=true ;;
+    test/*_test.c | test/grammar_test.py) unit=true ;;
+    test/stackcheck.py) stack=true ;;
+    test/dogfood.py) dogfood=true ;;
+    test/matrix.py | test/vm_run.py) matrix=true ;;
+    # scripts/check's alone: documents, settings, the fetchers, the other scripts and drivers
+    *.md | docs/* | scripts/* | tools/* | test/*.py | pyproject.toml | uv.lock | taplo.toml | .gitignore) ;;
+    *) full=true ;;
+    esac
+done
+if $full; then
+    unit=true stack=true suite=true random=true plain=true oracles=true dogfood=true
+    echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
+else
+    echo "gate: the steps $what can affect ($(echo "$changed" | wc -l) paths); --full runs every step"
+fi
+$matrix && echo "gate: the change reaches the VMs; run scripts/matrix before committing it"
+
 step check "$ROOT/scripts/check" # ruff, ty, shellcheck, shfmt and taplo, silent when clean
-step unit unit
-step stack stack
+$unit && step unit unit
+$stack && step stack stack
 for ex in "$@"; do
     n=$(basename "$ex" .exclave)
-    step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"
-    step "suite-$n-random" py "$here/run.py" --exclave "$ex" --work "$out/w-$n-random" --order random
-    if [ "$ex" = "$1" ] && command -v aa-exec >/dev/null 2>&1 && aa-exec -p unconfined true 2>/dev/null; then                                          # the plain terminal's
+    $suite && step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"
+    $random && step "suite-$n-random" py "$here/run.py" --exclave "$ex" --work "$out/w-$n-random" --order random
+    if $plain && [ "$ex" = "$1" ] && command -v aa-exec >/dev/null 2>&1 && aa-exec -p unconfined true 2>/dev/null; then                                # the plain terminal's
         step "suite-$n-plain" aa-exec -p unconfined "$UV" run --quiet --project "$ROOT" python "$here/run.py" --exclave "$ex" --work "$out/w-$n-plain" # AppArmor label (12), once
     fi
+    $oracles || continue
     step "resolve-$n" py "$here/oracle_resolve.py" --exclave "$ex" --work "$out/r-$n"
     step "ns-$n" py "$here/oracle_ns.py" --exclave "$ex" --work "$out/n-$n"
     step "syscalls-$n" py "$here/oracle_syscalls.py" --exclave "$ex" --work "$out/s-$n"
@@ -65,7 +119,7 @@ for ex in "$@"; do
     fi
 done
 if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
-    step dogfood py "$here/dogfood.py" --inputs "$EXCLAVE_TEST_INPUTS" --work "$out/dogfood"
+    $dogfood && step dogfood py "$here/dogfood.py" --inputs "$EXCLAVE_TEST_INPUTS" --work "$out/dogfood"
 else
     echo "docker, dogfood: EXCLAVE_TEST_INPUTS not set; skipped"
 fi
@@ -74,15 +128,15 @@ wait
 fails=0 skips=0
 for rc in "$out"/*.rc; do
     name=$(basename "$rc" .rc)
-    r=$(cat "$rc")
+    read -r r secs <"$rc"
     last=$(grep -v '^$' "$out/$name.log" | tail -1 | cut -c1-110)
     if [ "$r" != 0 ]; then
-        printf '%-22s FAIL  %s\n' "$name" "$last"
+        printf '%-22s FAIL %4ss  %s\n' "$name" "$secs" "$last"
         fails=$((fails + 1))
     elif case $name in resolve-* | ns-* | syscalls-* | docker-*) grep -q 'cannot run' "$out/$name.log" ;; *) false ;; esac then
-        printf '%-22s SKIP  %s\n' "$name" "$last"
+        printf '%-22s SKIP %4ss  %s\n' "$name" "$secs" "$last"
         skips=$((skips + 1)) # an oracle without bwrap, namespaces or openat2
-    else printf '%-22s ok    %s\n' "$name" "$last"; fi
+    else printf '%-22s ok   %4ss  %s\n' "$name" "$secs" "$last"; fi
 done
 echo "gate: $fails failed, $skips skipped, $(($(date +%s) - start)) s"
 exit $fails

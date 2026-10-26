@@ -41,9 +41,13 @@ The loop that has served well, in the order it pays:
    where a change is recorded; figures there are measured rather than
    guessed, because the documents are what a reader trusts.
 5. **Gate, matrix, commit.** `scripts/gate EXCLAVE...` on the gcc,
-   Alpine, Fedora and clang exclaves at zero failures, `test/matrix.py
-   --exclave EXCLAVE` before a launcher change is committed, one commit
-   per item.
+   Alpine, Fedora and clang exclaves at zero failures: it runs the steps
+   the change can affect, in seconds for a document or a script, and
+   says when the change reaches the VMs (a launcher source, the pinned
+   Python or the matrix itself); then, and only then,
+   `scripts/matrix --exclave EXCLAVE` before committing. `--full` runs
+   every gate step, worth it before a series of commits is pushed. One
+   commit per item.
 
 ## Preferences
 
@@ -138,10 +142,12 @@ The loop that has served well, in the order it pays:
   better left out than quoted.
 - **The gate.** `scripts/gate EXCLAVE...` (`EXCLAVE_TEST_INPUTS=DIR`,
   the directory `scripts/inputs` filled, adds the Docker profile and
-  dogfood) runs the unit tests, the stack budget, the suite on every
-  exclave in two orders and, for the first exclave, under the plain
-  terminal's AppArmor label, the oracles and the syscall probe, every step in parallel on copies, in about a
-  minute with a 30 s budget per test. Every driver runs `build/launcher`
+  dogfood) runs, of the code checks, the unit tests, the stack budget,
+  the suite on every exclave in two orders and, for the first exclave,
+  under the plain terminal's AppArmor label, the oracles and the syscall
+  probe, the ones the changed paths can affect (`--full`: all of them,
+  about a minute), every step in parallel on copies with its time
+  printed, and a 30 s budget per test. Every driver runs `build/launcher`
   on a copy of its own, the suite an exclave it wraps from the given
   exclave's tree and the others `tree.fresh_exclave`, a copy relinked
   with `build/launcher`, since the launcher an exclave carries is the
