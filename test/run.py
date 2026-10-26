@@ -1497,9 +1497,9 @@ def nested_older_launcher(ctx: Ctx) -> str | None:
     An older launcher nested inside a newer one reuses the newer filter and answers ENOSYS for a
     trap it does not know, never re-issuing it to the host. build/launcher-old is the current
     launcher built at filter version 3, without version 4's bind and connect in its filter or
-    handler (make builds it beside build/launcher). Across the syscall page's move (filter version
-    6) neither direction can run, and each is refused by name: this launcher under a filter older
-    than 6, and a launcher whose note has the old page generation exec'd from inside.
+    handler (scripts/build builds it beside build/launcher). Across the syscall page's move (filter
+    version 6) neither direction can run, and each is refused by name: this launcher under a filter
+    older than 6, and a launcher whose note has the old page generation exec'd from inside.
     """
     old = os.path.join(os.path.dirname(ctx.launcher_src), "launcher-old")
     if not os.path.exists(old):
@@ -4505,7 +4505,7 @@ def main() -> int:
     ap.add_argument(
         "--launcher",
         default=os.path.join(REPO, "build", "launcher"),
-        help="the launcher under test (default build/launcher; make debug builds a checked one)",
+        help="the launcher under test (default build/launcher; launcher-debug has UBSan's checks)",
     )
     ap.add_argument("--keep", action="store_true")
     ap.add_argument(
@@ -4599,7 +4599,7 @@ def prepare(args: argparse.Namespace, tree_: str, work: str, *, logging: bool) -
     ctx.work = work
     ctx.launcher_src = os.path.abspath(args.launcher)
     if not os.path.exists(ctx.launcher_src):
-        sys.exit(f"{args.launcher} missing: run make")
+        sys.exit(f"{args.launcher} missing: run scripts/build")
     if os.path.exists(ctx.work):
         shutil.rmtree(ctx.work)
     os.makedirs(ctx.work)

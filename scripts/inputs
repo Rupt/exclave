@@ -19,7 +19,7 @@ repo=$ROOT
     exit 2
 }
 [ -x "$repo/build/launcher" ] || {
-    echo "build/launcher missing: run make" >&2
+    echo "build/launcher missing: run scripts/build" >&2
     exit 2
 }
 dir=$(mkdir -p "$1" && cd "$1" && pwd) || exit 2

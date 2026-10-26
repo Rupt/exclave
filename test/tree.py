@@ -157,7 +157,7 @@ def fresh_exclave(src: str, dst: str, launcher: str = BUILD_LAUNCHER) -> str:
     every run, so nothing has to be remembered.
     """
     if not os.path.isfile(launcher):
-        sys.exit(f"no launcher at {launcher}: run make")
+        sys.exit(f"no launcher at {launcher}: run scripts/build")
     copy_exclave(src, dst)
     cli.cmd_relink(dst, launcher)
     return dst

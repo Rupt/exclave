@@ -923,7 +923,7 @@ neither launcher can run under the other's filter: a launcher under a
 filter older than 6 refuses by name at startup, and a handler sends a
 launcher whose note carries a page generation older than the present
 2, or no word, to its own child, which refuses it by name (7.4.5, 13
-item 45). `make` also builds `build/launcher-old`, the same sources at
+item 45). `scripts/build` also builds `build/launcher-old`, the same sources at
 version 3, without `bind` and `connect`, which version 4 added, the
 last version to add syscalls; the regression of 17 item 4 nests it
 inside the current launcher.
@@ -3503,7 +3503,7 @@ gate:
 
 ```sh
 scripts/install-uv
-make
+scripts/build
 scripts/inputs ~/.cache/exclave-inputs
 D=~/.cache/exclave-inputs
 EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave
@@ -3525,7 +3525,7 @@ repository holds no third-party input.
 **The gate** (`scripts/gate [--full] EXCLAVE...`) is the check run
 before a commit. It runs the steps below that the change can affect, the
 uncommitted paths or, in a clean tree, the last commit's: a launcher
-source, `Makefile`, `LICENSE` or `.python-version` runs every step and
+source, `scripts/build`, `scripts/lib.sh`, `LICENSE` or `.python-version` runs every step and
 says the matrix is due, and so does the matrix's own code; the gate
 itself runs every step; the tool runs the unit
 step, the suite in the given order, the oracles, the probe, the Docker
@@ -3538,15 +3538,16 @@ about a minute. The steps run in parallel, each with its own log under
 
 - the code checks, `scripts/check`: ruff, ty, shellcheck, shfmt and
   taplo over the Python, the shell scripts and the TOML; over the C,
-  clang-format (`.clang-format`), gcc's strict warnings as errors (`make warnings`: both launchers,
-  `build/launcher-old` and the unit tests) and clang-tidy with its
-  static analyser on the launcher for each architecture and on the
-  unit tests (`.clang-tidy`);
+  clang-format (`.clang-format`), gcc's strict warnings as errors (the
+  flags `scripts/lib.sh` gives every C build: the launcher for each
+  architecture and as `build/launcher-old`, and the unit tests) and
+  clang-tidy with its static analyser on the launcher for each
+  architecture and on the unit tests (`.clang-tidy`);
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py`, the scratch-pool test and the CPU
   level test, each built from the current sources for the host under
-  AddressSanitizer and UndefinedBehaviorSanitizer (`make unit`), where
-  a finding exits 99, which no test answers;
+  AddressSanitizer and UndefinedBehaviorSanitizer, where a finding
+  exits 99, which no test answers;
 - the stack budget of both launchers (the aarch64 one when it is
   built);
 - for every exclave given: the suite in the given order and in a
@@ -3554,8 +3555,8 @@ about a minute. The steps run in parallel, each with its own log under
   syscall probe;
 - for the first exclave, the suite once more under the plain
   terminal's AppArmor label (`aa-exec -p unconfined`), where user
-  namespaces are denied (12), and once on `build/launcher-debug`
-  (`make debug`), the launcher with gcc's undefined-behaviour checks,
+  namespaces are denied (12), and once on `build/launcher-debug`,
+  the launcher with gcc's undefined-behaviour checks,
   each a trap instruction, since the launcher links no runtime to
   report one;
 - when `EXCLAVE_TEST_INPUTS` names the directory `scripts/inputs`
@@ -3681,7 +3682,7 @@ noble-arm64 --debs-arm64 DIR [--docker-profile FILE]`) boots Ubuntu
 24.04's arm64 cloud image under `qemu-system-aarch64 -M virt -cpu max`
 with TCG and the AAVMF firmware, since user-mode emulation has no
 seccomp and the reference machine has no KVM for another architecture.
-It carries the aarch64 launchers, which `make` builds when
+It carries the aarch64 launchers, which `scripts/build` builds when
 `aarch64-linux-gnu-gcc` is installed, and the arm64 packages, and makes
 the gcc exclave inside the VM, since an exclave is wrapped on its own
 architecture. A fresh VM has no fixture, so the suite runs on the full
@@ -3926,7 +3927,7 @@ specified.
   answer skips with its reason (17 item 4).
 - **The suite runs on its fixture, the exclave pruned to what it
   touches** (17).
-- **The commit gate is one script, and `make` only builds**; a step
+- **The commit gate is one script, and `scripts/build` only builds**; a step
   that could not run is reported as SKIP (17).
 - **Every driver runs the build's launcher on a relinked copy of its
   own**: an exclave carries the launcher it was wrapped with (17).

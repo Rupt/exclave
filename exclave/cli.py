@@ -252,7 +252,7 @@ def install_launcher(ex: str, launcher: str | None = None, arch: str | None = No
         return
     launcher = launcher or default_launcher(arch)
     if not os.path.isfile(launcher):
-        msg = f"no launcher at {launcher} (run make)"
+        msg = f"no launcher at {launcher} (run scripts/build)"
         raise BuildError(msg)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copy2(launcher, dst)

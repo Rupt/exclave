@@ -176,7 +176,7 @@ def main() -> int:
     ap.add_argument("--cases", type=int, default=3000)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument(
-        "--c-parser", default=os.path.join(os.path.dirname(HERE), "build", "unit", "manifest_test")
+        "--c-parser", default=os.path.join(os.path.dirname(HERE), "build", "gate", "manifest_test")
     )
     args = ap.parse_args()
     rng = random.Random(args.seed)

@@ -1,20 +1,22 @@
 #!/bin/sh
 # scripts/gate [--full] EXCLAVE... — the commit gate (DESIGN.md 17), run on the change at hand.
 #
-# By default it runs the steps the changed paths can affect: the uncommitted changes, or, in a clean
-# tree, the last commit. A launcher source runs everything; the tool, a test or a helper runs the
-# steps that exercise it; documents, scripts and settings run the code checks alone; a path the
-# rules below do not know runs everything. --full runs every step, whatever changed.
+# It builds the launchers first (scripts/build), which takes no time when they are up to date. Then
+# by default it runs the steps the changed paths can affect: the uncommitted changes, or, in a clean
+# tree, the last commit. A launcher source or its build runs everything; the tool, a test or a helper
+# runs the steps that exercise it; documents, scripts and settings run the code checks alone; a path
+# the rules below do not know runs everything. --full runs every step, whatever changed.
 #
-# The steps: the code checks (scripts/check), the unit tests, the stack budget, and for every exclave
-# given the suite in the given and a random order (and, for the first exclave, under the plain
-# terminal's AppArmor label and on make debug's launcher), the resolution oracle, the namespace oracle and the syscall probe; when
-# EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled, the Docker profile run on its
-# src/docker-seccomp.json and dogfood on its package sets. No step touches the network. Every step
-# runs in parallel; every driver runs build/launcher on a copy of its own (the suite wraps one from the
-# exclave's tree, the others take test/tree.py's fresh_exclave), so the exclaves given are never run
-# as they are nor written. One line per step with its time, SKIP for an oracle that could not run
-# here; logs under build/gate/. Exit status: the number of failed steps.
+# The steps: the code checks (scripts/check), the unit tests under ASan and UBSan, the stack budget,
+# and for every exclave given the suite in the given and a random order (and, for the first
+# exclave, under the plain terminal's AppArmor label and on build/launcher-debug), the resolution
+# oracle, the namespace oracle and the syscall probe; when EXCLAVE_TEST_INPUTS names the directory
+# scripts/inputs filled, the Docker profile run on its src/docker-seccomp.json and dogfood on its
+# package sets. No step touches the network. Every step runs in parallel; every driver runs
+# build/launcher on a copy of its own (the suite wraps one from the exclave's tree, the others take
+# test/tree.py's fresh_exclave), so the exclaves given are never run as they are nor written. One
+# line per step with its time, SKIP for an oracle that could not run here; logs under build/gate/.
+# Exit status: the number of failed steps.
 set -u
 . "$(dirname -- "$0")/lib.sh"
 here=$ROOT/test
@@ -29,10 +31,7 @@ fi
     echo "usage: scripts/gate [--full] EXCLAVE..." >&2
     exit 2
 }
-[ -x "$repo/build/launcher" ] || {
-    echo "build/launcher missing: run make" >&2
-    exit 2
-}
+"$ROOT/scripts/build" || exit 2 # the launchers, unless they are up to date
 rm -rf "$out" && mkdir -p "$out" || exit 2
 start=$(date +%s)
 
@@ -46,17 +45,26 @@ step() { # step NAME CMD...: in the background, its status and log kept
     ) &
 }
 # shellcheck disable=SC2329  # run through step, by name
-unit() { # the parser, the filter, the scratch pool and the CPU check, under ASan and UBSan (make unit)
-    u=$repo/build/unit
-    make -s -C "$repo" unit &&
-        "$u/manifest_test" && py "$here/grammar_test.py" --c-parser "$u/manifest_test" &&
-        "$u/filter_test" && py "$here/syscalls.py" &&
-        "$u/scratch_test" &&
-        "$u/isa_test"
+# the parser, the filter, the scratch pool and the CPU check, just built for the host under ASan and
+# UBSan, a finding fatal (test/sanitize.c)
+unit() {
+    sanitized() { # sanitized OUT ARGS...
+        o=$1
+        shift
+        host_cc -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -o "$o" "$@" "$here/sanitize.c"
+    }
+    sanitized "$out/manifest_test" -DHOST_TEST "$here/manifest_test.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
+        "$out/manifest_test" && py "$here/grammar_test.py" --c-parser "$out/manifest_test" &&
+        sanitized "$out/filter_test" -DHOST_TEST "$here/filter_test.c" "$repo/src/filter.c" "$repo/src/str.c" &&
+        "$out/filter_test" && py "$here/syscalls.py" &&
+        sanitized "$out/scratch_test" -DSCRATCH_TEST "$here/scratch_test.c" "$repo/src/scratch.c" &&
+        "$out/scratch_test" &&
+        sanitized "$out/isa_test" -DHOST_TEST "$here/isa_test.c" "$repo/src/isa.c" "$repo/src/str.c" &&
+        "$out/isa_test"
 }
 # shellcheck disable=SC2329  # run through step, by name
 debug_suite() { # debug_suite EXCLAVE NAME: the suite on the launcher with its undefined-behaviour checks
-    make -s -C "$repo" debug && py "$here/run.py" --exclave "$1" --work "$out/w-$2-debug" --launcher "$repo/build/launcher-debug"
+    py "$here/run.py" --exclave "$1" --work "$out/w-$2-debug" --launcher "$repo/build/launcher-debug"
 }
 # shellcheck disable=SC2329  # run through step, by name
 stack() {
@@ -74,11 +82,11 @@ if [ -z "$changed" ]; then
 fi
 for path in $changed; do
     case $path in
-    src/* | Makefile | LICENSE | .python-version)
-        full=true # the launcher, which everything runs, or the Python everything runs on
+    src/* | scripts/build | scripts/lib.sh | LICENSE | .python-version)
+        full=true # the launcher and its build, which everything runs, or the Python everything runs on
         matrix=true
         ;;
-    scripts/gate | scripts/lib.sh) full=true ;; # the gate itself
+    scripts/gate) full=true ;; # the gate itself
     exclave/*) unit=true suite=true oracles=true dogfood=true ;;
     test/run.py) suite=true random=true ;;
     test/progs/*) suite=true random=true oracles=true ;; # the probe and ro_matrix are programs there too

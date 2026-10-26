@@ -30,7 +30,7 @@ __asm__(".section .note.exclave,\"a\"\n .balign 4\n"
 /* clang-format on */
 
 /* the launcher is the part of exclave every exclave holds, so it carries the licence's text, which the MIT licence asks to go
- * with every copy; not loaded, and kept by the strip (Makefile). readelf -p .exclave.license shows it */
+ * with every copy; not loaded, and kept by the strip (scripts/build). readelf -p .exclave.license shows it */
 __asm__(".pushsection .exclave.license,\"\",@progbits\n"
         " .incbin \"LICENSE\"\n"
         " .byte 0\n"

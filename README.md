@@ -54,7 +54,7 @@ kernel 7.0, glibc 2.39.
 
 ## First run
 
-You need an x86-64 or aarch64 Linux host with `gcc`, `make`, and `curl`
+You need an x86-64 or aarch64 Linux host with `gcc` and `curl`
 or `wget`, and the network: `scripts/install-uv` fetches a pinned,
 checksummed [uv](https://docs.astral.sh/uv/) into `.uv/`, which provides
 the pinned Python and everything else Python the project uses; the
@@ -64,7 +64,7 @@ here needs a privilege, and nothing is installed outside the checkout.
 
 ```bash
 scripts/install-uv
-make
+scripts/build
 scripts/example ~/exclave-example
 ```
 
@@ -73,7 +73,7 @@ prints each command as it runs, or for the long ones a line of summary
 with the command and its output in a log under `log/`, so its output
 and logs are the tutorial and each command is one you can run by hand:
 
-1. `make` builds `build/launcher`, the freestanding binary every
+1. `scripts/build` builds `build/launcher`, the freestanding binary every
    executable in an exclave is a hard link to.
 2. `fetch/debs.py` downloads Ubuntu 24.04's `gcc-13` closure, 94
    packages, and `exclave unpack` makes an unwrapped exclave from the
@@ -363,11 +363,11 @@ The repository's layout:
 ```
 scripts/install-uv   the pinned uv into .uv/, checked against a committed checksum per architecture; scripts/lib.sh what every script sources
 scripts/exclave      the exclave command; scripts/fetch-debs, fetch-apks and fetch-rpms the step before it
-scripts/example      the first run: from make to a program built inside an exclave that runs on any glibc since 2.17, every command shown
+scripts/example      the first run: from the build to a program built inside an exclave that runs on any glibc since 2.17, every command shown
 scripts/check        the code checks; scripts/gate the commit gate; scripts/inputs the development inputs; scripts/examples the example runs
 scripts/test         the suite; scripts/matrix, exercise, sysroot and dogfood the other test drivers
 pyproject.toml       the Python project: no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python
-Makefile             builds the launchers: build/launcher, and build/launcher-aarch64 with a cross compiler; make debug the launcher with UBSan's checks, make unit the unit tests under ASan and UBSan, make warnings the warnings as errors
+scripts/build        the launchers: build/launcher, build/launcher-old for the nesting regression, build/launcher-debug with UBSan's checks, and the aarch64 ones with a cross compiler; nothing when they are up to date
 src/sys.h            syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
 src/elf.h            the ELF structures the loader needs
 src/common.h         constants, the run-time state (struct exclave), every module's interface

@@ -51,28 +51,41 @@ run "$UV" run --quiet shellcheck --severity=style --shell=sh \
     --external-sources --source-path=SCRIPTDIR "$@"
 run "$UV" run --quiet ty check --quiet
 
-# The C, formatted above (.clang-format): gcc's warnings as errors (make warnings), then clang-tidy (.clang-tidy)
-# on the launcher for each architecture and on the unit tests for the host, a
-# process to a file. A file's output is shown only for a finding, since clang
-# counts aloud the warnings it suppressed.
-run make -s warnings
-tidy() { # tidy FILE CLANG-ARGS...
-    f=$1
-    shift
-    out=$(.venv/bin/clang-tidy --quiet "$f" -- "$@" 2>&1) || {
+# The C, formatted above (.clang-format), checked a process to a file. First
+# gcc's warnings as errors, nothing kept: the launcher's sources for each
+# architecture there is a compiler for and as build/launcher-old, and the unit
+# tests' for the host (lib.sh's flags). Then clang-tidy (.clang-tidy) on the
+# launcher for each architecture and on the unit tests. A file's output is
+# shown only for a finding, since clang counts aloud the warnings it suppressed.
+quiet() { # quiet CMD...: CMD's output only when it fails
+    out=$("$@" 2>&1) || {
         printf '%s\n' "$out"
         return 1
     }
 }
 pids=
+for f in src/*.c; do
+    for arch in $(c_arches); do
+        quiet launcher_cc "$arch" "$f" -Werror -c -o /dev/null &
+        pids="$pids $!"
+    done
+    quiet launcher_cc "$(uname -m)" -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD "$f" -Werror -c -o /dev/null &
+    pids="$pids $!"
+done
+for f in test/*_test.c test/sanitize.c src/manifest.c src/filter.c src/isa.c src/str.c; do
+    quiet host_cc -DHOST_TEST "$f" -Werror -c -o /dev/null &
+    pids="$pids $!"
+done
+quiet host_cc -DSCRATCH_TEST src/scratch.c -Werror -c -o /dev/null &
+pids="$pids $!"
 for target in x86_64 aarch64; do
     for f in src/*.c; do
-        tidy "$f" --target=$target-linux-gnu -std=gnu11 -ffreestanding -fno-builtin -nostdlib &
+        quiet .venv/bin/clang-tidy --quiet "$f" -- --target=$target-linux-gnu -std=gnu11 -ffreestanding -fno-builtin -nostdlib &
         pids="$pids $!"
     done
 done
 for f in test/*_test.c test/sanitize.c; do
-    tidy "$f" -std=gnu11 &
+    quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 &
     pids="$pids $!"
 done
 for pid in $pids; do wait "$pid" || status=1; done

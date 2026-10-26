@@ -79,7 +79,7 @@ The loop that has served well, in the order it pays:
   launchers, and what differs by architecture sits best in `src/sys.h`,
   `src/common.h` and `#if` blocks named for it; the aarch64 build leaves
   `x28` alone (`-ffixed-x28`), where a Go program keeps its goroutine
-  while the handler runs (7.5.3). `make` builds `build/launcher-aarch64`
+  while the handler runs (7.5.3). `scripts/build` builds `build/launcher-aarch64`
   when `aarch64-linux-gnu-gcc` is installed; it is tested in the arm64
   VM (`scripts/matrix --exclave EXCLAVE --only noble-arm64 --debs-arm64
   DIR --docker-profile FILE`), since user-mode emulation has no seccomp. A syscall the handler
@@ -95,7 +95,7 @@ The loop that has served well, in the order it pays:
   Program memory is read through `copy_in` and written through
   `copy_out`, paths and vectors alike. Environment strings the launcher
   hands a program should be writable.
-- **The filter's trap set is versioned.** `make` also builds
+- **The filter's trap set is versioned.** `scripts/build` also builds
   `build/launcher-old`, an older filter version without syscalls a later
   one added (version 3, without version 4's `bind` and `connect`), for
   the nesting regression; the version moves whenever the trap set
@@ -133,15 +133,18 @@ The loop that has served well, in the order it pays:
   modern types, a rule ignored in `pyproject.toml` only with its reason
   beside it, and a `# noqa` or `# ty: ignore[rule]` only where fixing
   would be wrong, with its reason on the line.
-- **The C is clang-formatted and clean under the Makefile's `WARNINGS`
-  and clang-tidy**, also in `scripts/check` (`.clang-format`, `make
-  warnings`, `.clang-tidy`); `scripts/check --fix` formats. A trailing
+- **The C is built by `scripts/build`**, with the flags `scripts/lib.sh`
+  gives every C build, and nothing is built when the launchers are up
+  to date; the gate runs it first.
+- **The C is clang-formatted and clean under gcc's strict warnings and
+  clang-tidy**, as `scripts/check` checks (`.clang-format`,
+  `lib.sh`'s flags, `.clang-tidy`); `scripts/check --fix` formats. A trailing
   comment that does not fit in 120 columns goes above its statement,
   and a table stays one between `clang-format off` and `on`. A check is
   turned off in `.clang-tidy` with its reason, and a `NOLINT(check)`
-  carries its reason on the line. The unit tests run under ASan and
-  UBSan (`make unit`), and the gate runs the suite once on
-  `make debug`'s launcher, whose UBSan checks trap.
+  carries its reason on the line. The gate's unit step runs the unit
+  tests under ASan and UBSan, and the gate runs the suite once on
+  `build/launcher-debug`, whose UBSan checks trap.
 - **Hashes are BLAKE2b-256.** Manifest and hashes file use the strict
   grammar of `docs/DESIGN.md` 6.2, and `format` output is the accepted spelling.
   There is no index: the launcher reads the manifest and the tree, and

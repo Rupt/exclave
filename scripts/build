@@ -1,0 +1,111 @@
+#!/bin/sh
+# scripts/build — the launchers, from src/ (DESIGN.md 7.1).
+#
+# The launcher is a freestanding ET_DYN object with no PT_INTERP: it runs as a
+# program (a wrapper, 6.1) and loads programs itself (7.3). For the machine's
+# own architecture it makes, under build/:
+#
+#   launcher        what every wrapper is a link to, stripped; launcher.debug
+#                   keeps the symbols, and launcher.debug-*.ci the call graph
+#                   and frames test/stackcheck.py reads
+#   launcher-old    the same sources at filter version 3, for the nesting
+#                   regression of 17.4: without the syscalls version 4 added,
+#                   so that a trap for one of them reaches a handler that must
+#                   answer ENOSYS rather than re-issue it
+#   launcher-debug  with gcc's undefined-behaviour checks, each a trap
+#                   instruction, since the launcher links no runtime to report
+#                   one: a failed check kills the program with SIGILL, which
+#                   gdb places from launcher-debug.debug. The gate runs the
+#                   suite on it.
+#
+# and, on x86-64 with the cross compiler, launcher-aarch64 and
+# launcher-old-aarch64. Nothing is built when every launcher is there and no
+# source, LICENSE, this script or lib.sh is newer than the last build; a line
+# for each launcher built.
+set -u
+. "$(dirname -- "$0")/lib.sh"
+cd "$ROOT" || exit 2
+mkdir -p build || exit 2
+stamp=build/.built
+native=$(uname -m)
+cross=$(c_arches | grep -vx "$native")
+
+fresh=true
+for f in "$stamp" build/launcher build/launcher-old build/launcher-debug; do
+    [ -e "$f" ] || fresh=false
+done
+for arch in $cross; do
+    [ -e "build/launcher-$arch" ] && [ -e "build/launcher-old-$arch" ] || fresh=false
+done
+if $fresh && [ -z "$(find src LICENSE scripts/build scripts/lib.sh -newer "$stamp" | head -n 1)" ]; then
+    exit 0
+fi
+
+# launcher ARCH OUT ARGS...: OUT.debug from every source, then OUT stripped
+# for shipping. The strip keeps .debug_gdb_scripts, the script gdb auto-loads
+# (7.6), .dynsym, the six names it reads, and .exclave.license, the licence's
+# text, which goes with every copy of the launcher.
+launcher() {
+    arch=$1 out=$2
+    shift 2
+    tools=
+    [ "$arch" = "$native" ] || tools=$arch-linux-gnu-
+    # plain RELA relocations, the only kind reloc_self reads; aarch64's linker
+    # does not know the option and warns that it ignores it
+    [ "$arch" = aarch64 ] || set -- "$@" -Wl,-z,nopack-relative-relocs
+    launcher_cc "$arch" "$@" -shared -Wl,-e,_start -Wl,--no-relax -Wl,-z,noexecstack -Wl,-z,norelro \
+        -Wl,-Bsymbolic -Wl,--build-id=none -o "$out.debug" src/*.c || return 1
+    # a freestanding link binds nothing: no PLT and no undefined symbol (an
+    # outline atomic helper of libgcc, say)
+    if "${tools}readelf" -d "$out.debug" | grep -q JMPREL; then
+        echo "build: $out has a PLT: a call left for a libc or libgcc" >&2
+        return 1
+    fi
+    if "${tools}nm" -u "$out.debug" | grep .; then
+        echo "build: $out has undefined symbols" >&2
+        return 1
+    fi
+    "${tools}objcopy" --strip-all --keep-section=.debug_gdb_scripts --keep-section=.exclave.license \
+        "$out.debug" "$out" || return 1
+    notes=$("${tools}readelf" -n "$out")
+    if ! printf '%s\n' "$notes" | grep -Eq '^ +exclave +0x' || ! printf '%s\n' "$notes" | grep -Eq '^ +cont +0x'; then
+        echo "build: $out lost a note: the launcher carries exclave and cont (7.4.5)" >&2
+        return 1
+    fi
+    "${tools}readelf" -S -W "$out" | grep -q debug_gdb_scripts || {
+        echo "build: $out lost the gdb script" >&2
+        return 1
+    }
+    "${tools}readelf" -p .exclave.license "$out" | grep -q 'MIT License' || {
+        echo "build: $out lost the licence" >&2
+        return 1
+    }
+    "${tools}readelf" --dyn-syms "$out" | grep -q exclave_debug_hook || {
+        echo "build: $out does not export the gdb hook" >&2
+        return 1
+    }
+    "${tools}readelf" -h "$out" | grep -q 'DYN' || {
+        echo "build: $out is not ET_DYN" >&2
+        return 1
+    }
+    echo "built $out ($(stat -c %s "$out") bytes stripped, $arch)"
+}
+
+rm -f "$stamp" build/launcher*.debug-*.ci
+# the machine's own launcher first and alone, so that a compile error is told once
+launcher "$native" build/launcher -fcallgraph-info=su -dumpdir build/launcher.debug- || exit 1
+pids=
+launcher "$native" build/launcher-old -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD &
+pids="$pids $!"
+launcher "$native" build/launcher-debug -fsanitize=undefined -fsanitize-trap=undefined -fsanitize=bounds-strict &
+pids="$pids $!"
+for arch in $cross; do
+    launcher "$arch" "build/launcher-$arch" -fcallgraph-info=su -dumpdir "build/launcher-$arch.debug-" &
+    pids="$pids $!"
+    launcher "$arch" "build/launcher-old-$arch" -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD &
+    pids="$pids $!"
+done
+status=0
+for pid in $pids; do wait "$pid" || status=1; done
+[ $status = 0 ] && touch "$stamp"
+exit $status

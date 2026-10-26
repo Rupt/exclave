@@ -32,3 +32,53 @@ fi
 py() {
     "$UV" run --quiet --project "$ROOT" python "$@"
 }
+
+# The C: the flags every build of it shares, scripts/build's, scripts/check's
+# and scripts/gate's, each a function that runs a compiler with them and then
+# its own arguments.
+
+# The architectures the launcher can be built for here: the machine's own, and
+# aarch64 too where an x86-64 machine has the cross compiler (7.1, 12).
+c_arches() {
+    uname -m
+    if [ "$(uname -m)" = x86_64 ] && command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+        echo aarch64
+    fi
+}
+
+# c_compile COMPILER ARGS...: COMPILER as C11 with GNU extensions and the
+# strict warnings, then ARGS. The warnings are all clean, and scripts/check
+# makes them errors; a build does not stop on one, since a newer gcc than the
+# one the code was checked with may warn of something new.
+c_compile() {
+    compiler=$1
+    shift
+    "$compiler" -std=gnu11 -Wall -Wextra -Wshadow -Wconversion -Wcast-qual -Wwrite-strings -Wstrict-prototypes \
+        -Wmissing-prototypes -Wmissing-declarations -Wredundant-decls -Wnested-externs -Wold-style-definition \
+        -Wundef -Wformat=2 -Wnull-dereference -Wduplicated-cond -Wduplicated-branches -Wlogical-op \
+        -Wjump-misses-init -Wvla -Wimplicit-fallthrough -Wunused-macros "$@"
+}
+
+# launcher_cc ARCH ARGS...: the launcher's compiler for ARCH, freestanding:
+# no libc, no builtins, nothing gcc would call outside the launcher's own code.
+launcher_cc() {
+    arch=$1
+    shift
+    compiler=${CC:-gcc}
+    [ "$arch" = "$(uname -m)" ] || compiler=$arch-linux-gnu-gcc
+    case $arch in
+    x86_64) set -- -fcf-protection=none -mno-red-zone "$@" ;;
+    # atomics inline, no libgcc to call; x28 never touched, since a Go program
+    # without cgo keeps its g there and its signal handler reads it as it finds
+    # it, in the middle of the launcher's handler too (7.5.3)
+    aarch64) set -- -mgeneral-regs-only -mno-outline-atomics -ffixed-x28 "$@" ;;
+    esac
+    c_compile "$compiler" -O2 -g -nostdlib -nostartfiles -ffreestanding -fno-stack-protector -fno-builtin \
+        -fPIC -fvisibility=hidden -fno-plt -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns "$@"
+}
+
+# host_cc ARGS...: the unit tests' compiler, for the host on its libc, whose
+# string.h declares again what sys.h declares.
+host_cc() {
+    c_compile "${CC:-gcc}" -O1 -g -Wno-redundant-decls -fno-builtin -fno-tree-loop-distribute-patterns "$@"
+}

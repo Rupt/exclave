@@ -2,7 +2,7 @@
 # scripts/example DIR — from a clean checkout to a program that runs on any glibc since 2.17, in one script
 # (README; DESIGN.md 9, 10). Everything it makes goes under DIR; the fetchers keep their caches under
 # ~/.cache, so a second run fetches nothing. The steps, each a command you can run by hand:
-#   1. make builds the launcher.
+#   1. scripts/build builds the launcher.
 #   2. scripts/fetch-debs downloads Ubuntu 24.04's gcc-13 closure; exclave unpack makes an unwrapped exclave from the files.
 #   3. scripts/fetch-rpms downloads CentOS 7's glibc; unpacked into an exclave of its own, its tree is copied into the
 #      gcc exclave at /opt/sysroot-el7, and the manifest says `data "/opt/sysroot-el7"`: nothing there is wrapped,
@@ -38,7 +38,7 @@ logged() { # logged NAME CMD...: the command and its long output go to log/NAME.
 sysroot=--sysroot=/opt/sysroot-el7 sysroot_b=-B/opt/sysroot-el7/usr/lib64/ # headers from the sysroot; -B for its start files and libc
 
 echo "== 1. the launcher"
-run make -s -C "$here"
+run "$here/scripts/build"
 
 echo "== 2. a gcc exclave from Ubuntu 24.04 packages"
 [ -n "$(ls debs 2>/dev/null)" ] || logged fetch-debs py "$here/fetch/debs.py" --out debs gcc-13 libc6-dev
