@@ -1,6 +1,6 @@
 // rs.rs — the Rust regressions of PROPOSAL.md 17.4: File::metadata (statx with AT_EMPTY_PATH),
-// Command::spawn (clone3 refused, then clone), the F-N12 spawn loop, std::fs on can and host paths, canonicalize.
-// Built by the host's rustc against the host's glibc, run inside a can in loader mode.
+// Command::spawn (clone3 refused, then clone), the F-N12 spawn loop, std::fs on exclave and host paths, canonicalize.
+// Built by the host's rustc against the host's glibc, run inside an exclave in loader mode.
 use std::fs;
 use std::io::ErrorKind;
 use std::os::unix::fs::MetadataExt;
@@ -30,11 +30,11 @@ fn main() {
     if n == 0 { fails += 1; println!("FAIL read_dir /usr/lib/gcc empty"); }
     match fs::write("/usr/share/exclave-new", "y") {
         Err(e) if e.raw_os_error() == Some(30) => {}
-        other => { fails += 1; println!("FAIL write to the can: {:?}", other); }
+        other => { fails += 1; println!("FAIL write to the exclave: {:?}", other); }
     }
     match fs::File::open("/usr/share/nonexistent") {
         Err(e) if e.kind() == ErrorKind::NotFound => {}
-        other => { fails += 1; println!("FAIL open of a missing can file: {:?}", other.map(|_| ())); }
+        other => { fails += 1; println!("FAIL open of a missing exclave file: {:?}", other.map(|_| ())); }
     }
     let cwd = std::env::current_dir().expect("cwd");
     let host = cwd.join("rs-host-file");

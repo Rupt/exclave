@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""sysroot.py — a sysroot as a data prefix (PROPOSAL.md 9, 6.2): a glibc from one distribution inside a gcc can
+"""sysroot.py — a sysroot as a data directory (PROPOSAL.md 9, 6.2): a glibc from one distribution inside a gcc exclave
 from another, and an output of that gcc that runs wherever that glibc's version is old enough.
 
-    test/sysroot.py --exclave GCC_CAN --rpms DIR --out FILE [--work DIR] [--prefix /opt/sysroot-el7]
+    test/sysroot.py --exclave GCC_EXCLAVE --rpms DIR --out FILE [--work DIR] [--prefix /opt/sysroot-el7]
 
-Makes a copy of the gcc can, opens it, unpacks the rpm files (a glibc, its headers, kernel headers, libgcc)
-into a can of their own with the tool, copies that tree into the copy at the prefix, records the prefix
-as `data` in the manifest and closes the copy: nothing under the prefix is wrapped, checked or executed.
+Makes a copy of the gcc exclave, unwraps it, unpacks the rpm files (a glibc, its headers, kernel headers, libgcc)
+into an exclave of their own with the tool, copies that tree into the copy at the prefix, records the prefix
+as `data` in the manifest and wraps the copy: nothing under the prefix is wrapped, checked or executed.
 Then compiles a hello with `--sysroot=PREFIX -B PREFIX/usr/lib64/` inside, checks that it binds no glibc
 symbol version newer than the sysroot's, runs it inside and on the host, and writes it to FILE; the kernel
 matrix packs that file and runs it natively in every VM, CentOS 7 at glibc 2.17 included.
@@ -37,7 +37,7 @@ def run(cmd, cwd=None, env=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--exclave", required=True, help="a closed gcc can")
+    ap.add_argument("--exclave", required=True, help="a wrapped gcc exclave")
     ap.add_argument("--rpms", required=True, help="directory of rpm files: glibc glibc-devel glibc-headers kernel-headers libgcc")
     ap.add_argument("--out", required=True, help="where to put the built program")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "sysroot-work"))
@@ -60,7 +60,7 @@ def main():
     dst = os.path.join(ex, "tree", a.prefix.lstrip("/"))
     shutil.copytree(os.path.join(sysroot_ex, "tree"), dst, symlinks=True, copy_function=exclave.link_or_copy)
     with open(os.path.join(ex, ".exclave", "manifest"), "wb") as f:
-        f.write(exclave.dump([exclave.Record("exclave", [("t", b"1")]), exclave.Record("data", [("s", a.prefix.encode())])], "can"))
+        f.write(exclave.dump([exclave.Record("exclave", [("t", b"1")]), exclave.Record("data", [("s", a.prefix.encode())])], "exclave"))
     rc, out, err = run([sys.executable, exclave_py, "wrap", ex])
     if rc:
         sys.exit("wrap: " + out + err)
@@ -86,7 +86,7 @@ def main():
         sys.exit("the output binds a glibc newer than the sysroot's, or none")
     rc, inside, err = run([os.path.join(ex, "tree", "usr", "bin", "sh"), "-c", prog], cwd=work, env=env)
     rc2, native, err2 = run([prog], cwd=work, env=env)
-    print("inside the can: %r; on this host: %r" % (inside.strip(), native.strip()))
+    print("inside the exclave: %r; on this host: %r" % (inside.strip(), native.strip()))
     if rc or rc2 or inside != native:
         sys.exit("the output does not run the same inside and outside: " + err + err2)
     shutil.copy2(prog, a.out)

@@ -2,7 +2,7 @@
  * script's $0 as the kernel spells them, for a host ELF exec'd by an absolute and by a relative path with argv[0] renamed,
  * a host script exec'd relative to a descriptor and through a descriptor alone (/dev/fd/N/name and /dev/fd/N), a host ELF
  * through a descriptor, and execve's own answers for a close-on-exec script descriptor, a header the loader cannot load
- * and a loader the can lacks. usage: exec_identity HOSTDIR, or "exec_identity HOSTDIR --child LABEL" as the program it
+ * and a loader the exclave lacks. usage: exec_identity HOSTDIR, or "exec_identity HOSTDIR --child LABEL" as the program it
  * copies and re-executes. Prints one line per case, "<case>: <answer>", the same in every world, so the kernel under
  * bwrap is the oracle; a descriptor number is printed as N. Exit 0 always. */
 #define _GNU_SOURCE
@@ -113,7 +113,7 @@ int main(int argc, char **argv)
     char *const fd_av[] = { "renamed", (char *)hd, "--child", "fd elf", 0 };
     child_lines("fd elf", efd, "", fd_av, AT_EMPTY_PATH);
     close(efd);
-    /* what execve itself answers: a 32-bit header the loader cannot load, and a loader the can lacks */
+    /* what execve itself answers: a 32-bit header the loader cannot load, and a loader the exclave lacks */
     snprintf(p, sizeof p, "%s/elf32", hd);
     { int o = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0755); write(o, "\x7f" "ELF\x01\x01\x01\0\0\0\0\0\0\0\0\0\x02\0\x03\0\x01\0\0\0", 24); close(o); }
     char *const b_av[] = { "elf32", 0 };

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""realsoft.py — build real projects inside a can and on the host, compare results and time.
+"""realsoft.py — build real projects inside an exclave and on the host, compare results and time.
 
-    test/realsoft.py --exclave CAN --src DIR [--work DIR] [--jobs N] [--only NAME,...]
+    test/realsoft.py --exclave EXCLAVE --src DIR [--work DIR] [--jobs N] [--only NAME,...]
 
 DIR holds source tarballs: zlib, lua, sqlite-autoconf, re2c. Each is extracted twice and built with the
-host's toolchain and with the can's (through the can's own sh, so configure scripts run inside the can).
+host's toolchain and with the exclave's (through the exclave's own sh, so configure scripts run inside it).
 The built program is run in both worlds. Times are wall-clock for configure and for make.
 """
 import argparse
@@ -54,7 +54,7 @@ def main():
         shutil.rmtree(work)
     os.makedirs(work)
     import tree
-    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "can"))   # a copy relinked with the build (17)
+    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "exclave"))   # a copy relinked with the build (17)
     env = {"PATH": "/usr/bin:/bin", "HOME": work, "J": str(a.jobs), "LANG": "C"}
     rows, failures = [], []
     for name, (prefix, conf, mk, check) in PROJECTS.items():
@@ -66,13 +66,13 @@ def main():
             continue
         tb = os.path.join(a.src, sorted(tarballs)[-1])
         results = {}
-        for world in ("host", "can"):
+        for world in ("host", "exclave"):
             d = os.path.join(work, world)
             os.makedirs(d, exist_ok=True)
             with tarfile.open(tb) as t:
                 t.extractall(d, filter="data")
             src = os.path.join(d, [e for e in os.listdir(d) if e.startswith(prefix)][0])
-            c = ex if world == "can" else None
+            c = ex if world == "exclave" else None
             ct = 0.0
             if conf:
                 ct, rc, out = timed(conf, src, env, c)
@@ -87,9 +87,9 @@ def main():
                 continue
             rc, out = sh(check, src, env, c)
             results[world] = (ct, mt, out.strip().splitlines()[-1] if out.strip() else "rc=%d" % rc)
-        h, k = results.get("host", (0, None, "-")), results.get("can", (0, None, "-"))
+        h, k = results.get("host", (0, None, "-")), results.get("exclave", (0, None, "-"))
         rows.append((name, "%.1f / %.1f" % (h[0], k[0]) if conf else "-", "%s / %s" % ("%.1f" % h[1] if h[1] is not None else "fail", "%.1f" % k[1] if k[1] is not None else "fail"), h[2], k[2]))
-    print("| Project | configure host / can (s) | make -j%d host / can (s) | result on the host | result in the can |" % a.jobs)
+    print("| Project | configure host / exclave (s) | make -j%d host / exclave (s) | result on the host | result in the exclave |" % a.jobs)
     print("|---|---|---|---|---|")
     for r in rows:
         print("| %s | %s | %s | %s | %s |" % r)

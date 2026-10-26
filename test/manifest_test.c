@@ -34,10 +34,10 @@ int main(int argc, char **argv)
 {
     if (argc == 2) return parse_file(argv[1]);
     OK("minimal", "exclave 1\n");
-    OK("full", "# a can\nexclave 1\n\ncpu \"x86-64-v2\"\n\ndata \"/opt/musl-sysroot\"\n\nhost \"/usr/local/share/fonts\"\n\nown \"/etc/hosts\"\nown \"/usr\"\n");
+    OK("full", "# an exclave\nexclave 1\n\ncpu \"x86-64-v2\"\n\ndata \"/opt/musl-sysroot\"\n\nhost \"/usr/local/share/fonts\"\n\nown \"/etc/hosts\"\nown \"/usr\"\n");
     OK("escapes", "exclave 1\nown \"/a\\\\b\\\"c\\n\\t\\x01\\xff\"\n");
     OK("utf8", "exclave 1\nown \"/caf\xc3\xa9/\xe2\x82\xac/\xf0\x9f\x98\x80\"\n# comment with \xc3\xa9 and\ttab\nhost \"/x\"\n");
-    OK("comment between", "exclave 1\n# about the claim\nown \"/opt\"\n");
+    OK("comment between", "exclave 1\n# about the own record\nown \"/opt\"\n");
     OK("non-canonical spelling accepted", "exclave 1\nown \"/\\x41\"\n");
     BAD("no final lf", "exclave 1\nown \"/a\"", "end with LF");
     BAD("bom", "\xef\xbb\xbf" "exclave 1\n", "byte order mark");
@@ -67,7 +67,7 @@ int main(int argc, char **argv)
     BAD("arity", "exclave 1\nown \"/a\" \"/b\"\n", "field count");
     BAD("type", "exclave 1\nown a\n", "field type");
     BAD("exclave not first", "own \"/a\"\nexclave 1\n", "first record must be exclave");
-    BAD("can version", "exclave 2\n", "unsupported exclave version");
+    BAD("exclave version", "exclave 2\n", "unsupported exclave version");
     BAD("relative own", "exclave 1\nown \"usr\"\n", "absolute");
     BAD("relative host", "exclave 1\nhost \"usr\"\n", "absolute");
     BAD("relative data", "exclave 1\ndata \"opt\"\n", "absolute");
@@ -79,14 +79,14 @@ int main(int argc, char **argv)
     BAD("empty", "", "end with LF");
     BAD("only blank", "\n", "empty manifest");
     BAD("bare quote field", "exclave 1\nown \"/a\" x\n", "field count");
-    /* decoded values, and the ISA default */
+    /* decoded values, and the CPU level default */
     {
         struct exclave c; memset(&c, 0, sizeof c); char err[256];
         const char *text = "exclave 1\n\nhost \"/srv/h\"\n\nown \"/a\\\\b\\\"c\\n\\t\\x01\"\nown \"/etc/hosts\"\n";
         runs++;
         if (manifest_parse(text, strlen(text), &c, err, sizeof err) != 0 || c.nown != 2 || strcmp(c.own[0], "/a\\b\"c\n\t\x01") != 0
             || strcmp(c.own[1], "/etc/hosts") != 0 || c.nhost != 1 || strcmp(c.host[0].v, "/srv/h") != 0 || strcmp(c.cpu, "x86-64") != 0)
-            { fails++; printf("FAIL decode: %s nown=%d nhost=%d isa=%s\n", err, c.nown, c.nhost, c.cpu); }
+            { fails++; printf("FAIL decode: %s nown=%d nhost=%d cpu=%s\n", err, c.nown, c.nhost, c.cpu); }
     }
     printf("%d tests, %d failures\n", runs, fails);
     return fails ? 1 : 0;

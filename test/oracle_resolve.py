@@ -2,11 +2,11 @@
 """oracle_resolve.py — the kernel as the oracle for canonicalisation (PROPOSAL.md 17, item 2).
 
 A random maze of directories, files and symlinks (relative, absolute, dangling, looping, with `..` and
-trailing slashes) is added to a copy of a can under /maze. Every generated path is resolved twice: by
+trailing slashes) is added to a copy of an exclave under /maze. Every generated path is resolved twice: by
 the kernel with openat2(RESOLVE_IN_ROOT) on the tree, which has chroot semantics, and by the launcher
-from inside the can. The resulting paths and errnos must agree.
+from inside the exclave. The resulting paths and errnos must agree.
 
-    test/oracle_resolve.py --exclave CAN [--work DIR] [--paths N] [--seed S] [--keep]
+    test/oracle_resolve.py --exclave EXCLAVE [--work DIR] [--paths N] [--seed S] [--keep]
 """
 import argparse
 import ctypes
@@ -138,16 +138,16 @@ def main():
     if os.path.exists(work):
         shutil.rmtree(work)
     import tree
-    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "can"))   # a copy relinked with the build (17)
+    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "exclave"))   # a copy relinked with the build (17)
     root = os.path.join(ex, "tree")
     dirs, files, links = make_maze(root, rng)
     with open(os.path.join(ex, ".exclave", "manifest"), "w") as f:
-        f.write("exclave 1\n")                                       # /maze is a non-empty top-level directory: can-owned by the tree alone (8.1)
+        f.write("exclave 1\n")                                       # /maze is a non-empty top-level directory: the exclave's by the tree alone (8.1)
     import platform
     import tree
     cc = tree.compiler(root, platform.machine())
     if not cc:
-        sys.exit("no C compiler in the can")
+        sys.exit("no C compiler in the exclave")
     gcc = os.path.join(root, tree.vbin(root, cc).lstrip("/"))
     prog = os.path.join(work, "resolve")
     r = subprocess.run([gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "resolve.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

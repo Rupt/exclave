@@ -1,10 +1,10 @@
 /* launcher.c — entry point (PROPOSAL.md 7.2, 7.6, 9).
  *
  * The launcher is an ET_DYN object with no interpreter: it relocates itself,
- * finds its can from its own path, reads the manifest, decides whether it is the
- * can boundary (no filter inherited) and prepares the environment
+ * finds its exclave from its own path, reads the manifest, decides whether it is at the
+ * border (no filter inherited) and prepares the environment
  * accordingly, installs the handler and, unless one of this version or newer is inherited, the filter, then
- * loads the program it stands for: the payload of the wrapper it was run as,
+ * loads the program it stands for: the original of the wrapper it was run as,
  * or the EXCLAVE_EXEC target when re-exec'd in loader mode, by a handler or by its own positional entry.
  */
 #include "common.h"
@@ -77,11 +77,11 @@ static const char *find_env(char **envp, const char *name)
     return 0;
 }
 
-/* 6.2: at the boundary the host's environment passes through minus the variables that would rebind the
- * loader, the libc or the compiler to the host, and minus four that name what the can decides for itself:
+/* 6.2: at the border the host's environment passes through minus the variables that would rebind the
+ * loader, the libc or the compiler to the host, and minus four that name what the exclave decides for itself:
  * the search path, the locale, the time zone and the shell. Those four are set to the same values in every
- * can on every host, what a reproducible build fixes by hand; what a can wants on PATH lives in its own
- * /usr/local/bin, and a can that wants another locale or zone ships the data and a wrapper script. */
+ * exclave on every host, what a reproducible build fixes by hand; what an exclave wants on PATH lives in its own
+ * /usr/local/bin, and an exclave that wants another locale or zone ships the data and a wrapper script. */
 static const char *denied[] = { "GLIBC_TUNABLES", "GCONV_PATH", "LOCPATH", "NLSPATH", "RESOLV_HOST_CONF", "HOSTALIASES",
                                 "TZDIR", "GCC_EXEC_PREFIX", "COMPILER_PATH", "LIBRARY_PATH",
                                 "PATH", "LANG", "LANGUAGE", "TZ", "SHELL", 0 };
@@ -179,7 +179,7 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
 
 /* 7.4.5 for a target that arrived by EXCLAVE_EXEC, the positional entry's or a handler's: the checks exec_target makes before
  * loading anything, in its order, so that the entry refuses what an exec inside refuses (review O5-1, F5-1): the target is
- * resolved as an exec resolves it, a data prefix is EACCES, a directory or a special file EACCES, the kernel's own answer
+ * resolved as an exec resolves it, a data directory is EACCES, a directory or a special file EACCES, the kernel's own answer
  * to X_OK is final, and a wrapper is exec'd as itself so that the kernel gives the program its identity (F5-9). The exit
  * status is a shell's: 126 for a file that exists and cannot run, 127 for one that does not. */
 static void loader_mode_check(char **argv, char **env2)
@@ -188,7 +188,7 @@ static void loader_mode_check(char **argv, char **env2)
     scpy(S->b1, C.program, PATH_MAX);                         /* the target as given, for the wrapper exec below */
     long r = canon(S, C.program, AT_FDCWD, 1, S->v); if (r < 0) die_status(r == -ENOENT ? 127 : 126, "cannot execute", C.program, r);
     scpy(C.program, S->v, PATH_MAX);
-    if (vis_in_data(C.program)) die_status(126, "cannot execute", C.program, EACCES);   /* 6.2: a data prefix is never executed */
+    if (vis_in_data(C.program)) die_status(126, "cannot execute", C.program, EACCES);   /* 6.2: a data directory is never executed */
     to_real_exec(C.program, S->real);
     struct kstat st;
     if (sys_stat(S->real, &st) < 0) die_status(127, "cannot execute", C.program, ENOENT);
@@ -240,7 +240,7 @@ void start_c(unsigned long *sp)
     reloc_self();
     /* 7.4.2: the probe comes before any syscall an inherited filter could trap. A filter from before the page moved allows
      * a launcher's syscalls from the old page only and would trap every one of this launcher's, so it is refused by name */
-    int have = filter_probe();                                /* a filter inherited: exec'd from inside a can, by a handler or a program */
+    int have = filter_probe();                                /* a filter inherited: exec'd from inside an exclave, by a handler or a program */
     if (have && have < FILTER_PAGE_SINCE) {
         static const char old[] = "launcher: a launcher from before the syscall page moved runs this process; relink its exclave (exclave relink)\n";
         raw_fatal(old, sizeof old - 1);
@@ -307,6 +307,6 @@ void start_c(unsigned long *sp)
     C.text_lo = (unsigned long)__ehdr_start; C.text_hi = (unsigned long)_etext;
     handler_install();
     if (have < FILTER_VERSION) filter_install();
-    log_msg(C.boundary ? "boundary" : "inside", C.program);
+    log_msg(C.boundary ? "border" : "inside", C.program);
     run(C.program, C.execfn, argc, argv, env2, auxv, 0);
 }

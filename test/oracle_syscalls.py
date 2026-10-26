@@ -9,7 +9,7 @@ what a buffer holds afterwards must agree case by case; a difference fails unles
 The expectations therefore come from the kernel, not from a test's author. Needs user namespaces and bwrap,
 like oracle_ns; says so and exits 0 when it cannot run.
 
-    test/oracle_syscalls.py --exclave CAN [--work DIR] [--seed S] [--only NAME] [--keep] [--show N] [--expected]
+    test/oracle_syscalls.py --exclave EXCLAVE [--work DIR] [--seed S] [--only NAME] [--keep] [--show N] [--expected]
 """
 import argparse
 import os
@@ -134,7 +134,7 @@ class Forms:
         self.true = tree.vbin(root, "true")
         self.sh = tree.vbin(root, "sh")
         h = host
-        ex = [("can_file", self.file), ("can_dir", self.dir), ("maze", "/maze"), ("root", "/"),
+        ex = [("exclave_file", self.file), ("exclave_dir", self.dir), ("maze", "/maze"), ("root", "/"),
                ("file_slash", self.file + "/"), ("dir_slash", self.dir + "/"), ("double_slash", "/" + self.file),
                ("dot", os.path.dirname(self.file) + "/./" + os.path.basename(self.file)),
                ("dotdot", self.dir + "/../" + self.dir.split("/")[-1] + "/" + os.path.basename(self.file)),
@@ -144,12 +144,12 @@ class Forms:
                ("ro_file", "/maze/ro444"), ("sock", "/maze/sock"),                   # a file its owner cannot write, and a special file: access(W_OK) has its own order
                ("passwd", "/etc/passwd"), ("resolv", "/etc/resolv.conf"), ("tmp", "/tmp"), ("dev_null", "/dev/null"),
                ("proc_exe", "/proc/self/exe"), ("proc_cwd", "/proc/self/cwd"), ("home", "/home"), ("opt", "/opt"),
-               ("can_to_host", "/maze/lH"), ("can_to_host_dir", "/maze/lHD"),
+               ("exclave_to_host", "/maze/lH"), ("exclave_to_host_dir", "/maze/lHD"),
                ("overlong", "/maze/" + "a" * 5000), ("long_component", "/maze/" + "b" * 256), ("long_ok", "/maze/" + "c" * 255),
                ("non_utf8", "/maze/\udcff\udcfe"), ("newline", "/maze/a\nb")]
         for kind, l in sorted(by_kind.items()):
             ex.append(("link_" + kind, l))
-        hostf = [("host_file", h + "/hfile"), ("host_dir", h + "/hdir"), ("host_to_can", h + "/hlink"), ("host_to_can_dir", h + "/hlnkdir"),
+        hostf = [("host_file", h + "/hfile"), ("host_dir", h + "/hdir"), ("host_to_exclave", h + "/hlink"), ("host_to_exclave_dir", h + "/hlnkdir"),
                  ("host_dangling", h + "/hdang"), ("host_loop", h + "/hloop"), ("host_rel_link", h + "/hrel"), ("host_missing", h + "/missing"),
                  ("host_dotdot", h + "/hdir/../hfile"), ("host_file_slash", h + "/hfile/"), ("host_tmp_new", "/tmp/exclave-probe-%d/new" % os.getpid()),
                  ("host_dot_last", h + "/hdir/."), ("host_dotdot_last", h + "/hdir/.."),
@@ -157,32 +157,32 @@ class Forms:
                  ("rel_root_by_dotdot", "../" * h.count("/") + "."), ("rel_etc_by_dotdot", "../" * h.count("/") + "etc/passwd")]   # up to the root from the host area, and into the tree
         self.paths = [(n, S(p)) for n, p in ex + hostf]
         self.paths += [("fault_end", "e:" + hx(self.file)), ("fault_null", "n:"), ("fault_unmapped", "u:")]
-        self.few = [(n, S(p)) for n, p in [("can_file", self.file), ("can_dir", self.dir), ("missing", "/maze/missing"), ("dir_slash", self.dir + "/"), ("file_slash", self.file + "/"),
+        self.few = [(n, S(p)) for n, p in [("exclave_file", self.file), ("exclave_dir", self.dir), ("missing", "/maze/missing"), ("dir_slash", self.dir + "/"), ("file_slash", self.file + "/"),
                                           ("above_root", "/.." + self.file), ("empty", ""), ("wrapper", self.true), ("host_file", h + "/hfile"),
-                                          ("host_dir", h + "/hdir"), ("host_missing", h + "/missing"), ("host_to_can", h + "/hlink"),
+                                          ("host_dir", h + "/hdir"), ("host_missing", h + "/missing"), ("host_to_exclave", h + "/hlink"),
                                           ("rel_file", "hfile")]] + [("fault_null", "n:")]   # no /tmp here: bwrap's bind makes it another mount, so a link or rename into it is EXDEV there and not natively
         # descriptor-relative forms: (label, dirfd token, path token)
         rel_ex = ["", ".", "..", "../" + os.path.basename(self.file), os.path.basename(self.file), "nonexistent", "../../etc/passwd", "../../../../tmp", self.file]
         rel_host = ["", ".", "..", "inner", "../hfile", "../hlink", "nonexistent", self.file]
         self.at = [("cwd/" + n, I(AT_FDCWD), p) for n, p in self.paths]
-        self.at += [("dfd_can/" + r, F(O_PATH | O_DIRECTORY, self.dir), S(r)) for r in rel_ex]
-        self.at += [("dfd_can_rd/" + r, F(O_RDONLY | O_DIRECTORY, self.dir), S(r)) for r in ("", "..", os.path.basename(self.file))]
+        self.at += [("dfd_exclave/" + r, F(O_PATH | O_DIRECTORY, self.dir), S(r)) for r in rel_ex]
+        self.at += [("dfd_exclave_rd/" + r, F(O_RDONLY | O_DIRECTORY, self.dir), S(r)) for r in ("", "..", os.path.basename(self.file))]
         self.at += [("dfd_host/" + r, F(O_PATH, h + "/hdir"), S(r)) for r in rel_host]
-        self.at += [("ffd_can/" + r, F(O_RDONLY, self.file), S(r)) for r in ("", "x", ".", self.file)]
+        self.at += [("ffd_exclave/" + r, F(O_RDONLY, self.file), S(r)) for r in ("", "x", ".", self.file)]
         self.at += [("ffd_host/" + r, F(O_RDONLY, h + "/hfile"), S(r)) for r in ("", "x")]
         self.at += [("ffd_host_w/", F(O_WRONLY, h + "/hfile"), S(""))]
-        self.at += [("lfd_can/", F(O_PATH | O_NOFOLLOW, by_kind.get("abs", self.file)), S(""))]
+        self.at += [("lfd_exclave/", F(O_PATH | O_NOFOLLOW, by_kind.get("abs", self.file)), S(""))]
         self.at += [("lfd_sh/", F(O_PATH | O_NOFOLLOW, self.sh), S("")), ("lfd_dang/", F(O_PATH | O_NOFOLLOW, h + "/hdang"), S(""))]
         self.at += [("wfd/", F(O_RDONLY, self.true), S("")), ("wfd_path/", F(O_PATH, self.true), S(""))]
         self.at += [("devnull_fd/", F(O_RDONLY, "/dev/null"), S("")), ("tmpfd/", F(O_PATH | O_DIRECTORY, "/tmp"), S("exclave-probe-%d" % os.getpid()))]
         self.at += [("badfd/" + n, I(-1), p) for n, p in [("rel", S("x")), ("abs", S(self.file)), ("empty", S(""))]]
         self.at += [("closedfd/" + n, I(999), p) for n, p in [("rel", S("x")), ("abs", S(self.file))]]
         self.at_few = [("cwd/" + n, I(AT_FDCWD), p) for n, p in self.few]
-        self.at_few += [("dfd_can/" + r, F(O_PATH | O_DIRECTORY, self.dir), S(r)) for r in ("", os.path.basename(self.file), "nonexistent")]
+        self.at_few += [("dfd_exclave/" + r, F(O_PATH | O_DIRECTORY, self.dir), S(r)) for r in ("", os.path.basename(self.file), "nonexistent")]
         self.at_few += [("dfd_host/" + r, F(O_PATH, h + "/hdir"), S(r)) for r in ("", "inner", "nonexistent", "../hfile")]
-        self.at_few += [("ffd_can/", F(O_RDONLY, self.file), S("")), ("ffd_host/", F(O_RDONLY, h + "/hfile"), S("")), ("badfd/rel", I(-1), S("x"))]
+        self.at_few += [("ffd_exclave/", F(O_RDONLY, self.file), S("")), ("ffd_host/", F(O_RDONLY, h + "/hfile"), S("")), ("badfd/rel", I(-1), S("x"))]
         # descriptors for the descriptor-addressed syscalls
-        self.fds = [("can_file_rd", F(O_RDONLY, self.file)), ("can_file_path", F(O_PATH, self.file)), ("can_dir", F(O_RDONLY | O_DIRECTORY, self.dir)),
+        self.fds = [("exclave_file_rd", F(O_RDONLY, self.file)), ("exclave_file_path", F(O_PATH, self.file)), ("exclave_dir", F(O_RDONLY | O_DIRECTORY, self.dir)),
                     ("wrapper", F(O_RDONLY, self.true)), ("host_file_rd", F(O_RDONLY, h + "/hfile")), ("host_file_wr", F(O_WRONLY, h + "/hfile")),
                     ("host_dir", F(O_RDONLY | O_DIRECTORY, h + "/hdir")), ("dev_null", F(O_RDONLY, "/dev/null")), ("badfd", I(-1))]
 
@@ -259,8 +259,8 @@ def generate(forms, nr, uid, gid):
     add("getcwd", "short", B("cwd", 4), I(4))
     add("getcwd", "all_ones", B("cwd", 4096), I(-1))
     for name in ("bind", "connect"):                                      # the structure's own rules, and a socket file in the tree
-        add(name, "can_sock", K(SOCK_STREAM), A("/maze/sock"), I(alen("/maze/sock")))
-        add(name, "can_sock_dgram", K(SOCK_DGRAM), A("/maze/sock"), I(alen("/maze/sock")))
+        add(name, "exclave_sock", K(SOCK_STREAM), A("/maze/sock"), I(alen("/maze/sock")))
+        add(name, "exclave_sock_dgram", K(SOCK_DGRAM), A("/maze/sock"), I(alen("/maze/sock")))
         add(name, "abstract", K(SOCK_STREAM), A("\0probe-abstract-%d" % os.getpid()), I(alen("\0probe-abstract-%d" % os.getpid())))   # one name per process
         add(name, "unnamed", K(SOCK_STREAM), A(""), I(2))
         add(name, "len_too_long", K(SOCK_STREAM), A(forms.file), I(200))
@@ -269,7 +269,7 @@ def generate(forms, nr, uid, gid):
         add(name, "null_addr", K(SOCK_STREAM), "n:", I(20))
         add(name, "fault_addr", K(SOCK_STREAM), "u:", I(20))
         add(name, "not_a_socket", F(O_RDONLY, forms.file), A(forms.host + "/hfile"), I(alen(forms.host + "/hfile")))
-    add("stat", "can_sock", S("/maze/sock"), B("stat", 256))
+    add("stat", "exclave_sock", S("/maze/sock"), B("stat", 256))
     add("execve", "true", S(forms.true), V("true"), V())
     add("execve", "sh_exit3", S(forms.sh), V("sh", "-c", "exit 3"), V("PATH=/usr/bin:/bin"))
     add("execve", "argv_null", S(forms.true), "n:", V())
@@ -376,7 +376,7 @@ def generate(forms, nr, uid, gid):
     dots = [("dot_last", S(forms.dir + "/.")), ("dotdot_last", S(forms.dir + "/..")), ("root", S("/")),
             ("host_dot_last", S(forms.host + "/hdir/.")), ("host_dotdot_last", S(forms.host + "/hdir/.."))]
     for n1, p1 in dots:
-        for n2, p2 in [(n, p) for n, p in two if n in ("can_file", "host_file", "host_missing")]:
+        for n2, p2 in [(n, p) for n, p in two if n in ("exclave_file", "host_file", "host_missing")]:
             for lab, x, y in (("%s->%s" % (n1, n2), p1, p2), ("%s->%s" % (n2, n1), p2, p1)):
                 add("rename", lab, x, y)
                 for fn, fl in (("plain", 0), ("noreplace", RENAME_NOREPLACE), ("exchange", RENAME_EXCHANGE)):
@@ -388,7 +388,7 @@ def generate(forms, nr, uid, gid):
             add("linkat", lab, d1, p1, d2, p2, I(0))
     add("linkat", "fd_empty", F(O_RDONLY, forms.file), S(""), I(AT_FDCWD), S(forms.host + "/hlinked"), I(AT_EMPTY_PATH))
     add("linkat", "hostfd_empty", F(O_RDONLY, forms.host + "/hfile"), S(""), I(AT_FDCWD), S(forms.host + "/hlinked2"), I(AT_EMPTY_PATH))
-    add("linkat", "hostfd_empty_to_can", F(O_RDONLY, forms.host + "/hfile"), S(""), I(AT_FDCWD), S("/maze/hnew"), I(AT_EMPTY_PATH))
+    add("linkat", "hostfd_empty_to_exclave", F(O_RDONLY, forms.host + "/hfile"), S(""), I(AT_FDCWD), S("/maze/hnew"), I(AT_EMPTY_PATH))
     for n, f in forms.fds:
         add("fchmod", n, f, I(0o644))
         add("fchown", n, f, I(uid), I(gid))
@@ -398,22 +398,22 @@ def generate(forms, nr, uid, gid):
         if not n.startswith("host"):                                   # not on a host file: ext4 on 5.10 to 6.1 refuses to clear the extent flag of
             add("ioctl", n + "/setflags", f, I(FS_IOC_SETFLAGS), B("raw", 8))   # a file recreated moments after its predecessor was deleted (13), which the reset does
             add("ioctl", n + "/fssetxattr", f, I(FS_IOC_FSSETXATTR), B("raw", 28))
-    # relative paths from a can-owned working directory
+    # relative paths from a working directory the exclave owns
     rel = ["", ".", "..", os.path.basename(forms.file), "../" + os.path.basename(forms.file), "nonexistent", "../../..", "../../../../etc/passwd", "../../home", "./"]
-    group[0] = "cwd_in_can"
-    add("chdir", "into_can", S(forms.dir))
-    add("getcwd", "in_can", B("cwd", 4096), I(4096))
+    group[0] = "cwd_in_exclave"
+    add("chdir", "into_exclave", S(forms.dir))
+    add("getcwd", "in_exclave", B("cwd", 4096), I(4096))
     for r in rel:
-        add("stat", "in_can/" + r, S(r), B("stat", 256))
-        add("open", "in_can/" + r, S(r), I(O_RDONLY), I(0))
-        add("readlink", "in_can/" + r, S(r), B("link", 4096), I(4096))
-        add("mkdir", "in_can/" + r, S(r), I(0o755))
-        add("access", "in_can/" + r, S(r), I(2))
-    add("utimensat", "in_can/null_path", I(AT_FDCWD), "n:", "t:1000,0,2000,0", I(0))
-    add("chdir", "up_from_can", S(".."))
-    add("getcwd", "up_from_can", B("cwd", 4096), I(4096))
-    add("chdir", "above_root_from_can", S("../../../.."))
-    add("getcwd", "above_root_from_can", B("cwd", 4096), I(4096))
+        add("stat", "in_exclave/" + r, S(r), B("stat", 256))
+        add("open", "in_exclave/" + r, S(r), I(O_RDONLY), I(0))
+        add("readlink", "in_exclave/" + r, S(r), B("link", 4096), I(4096))
+        add("mkdir", "in_exclave/" + r, S(r), I(0o755))
+        add("access", "in_exclave/" + r, S(r), I(2))
+    add("utimensat", "in_exclave/null_path", I(AT_FDCWD), "n:", "t:1000,0,2000,0", I(0))
+    add("chdir", "up_from_exclave", S(".."))
+    add("getcwd", "up_from_exclave", B("cwd", 4096), I(4096))
+    add("chdir", "above_root_from_exclave", S("../../../.."))
+    add("getcwd", "above_root_from_exclave", B("cwd", 4096), I(4096))
     add("chdir", "back", S(forms.host))
     add("getcwd", "back", B("cwd", 4096), I(4096))
     group[0] = None
@@ -525,7 +525,7 @@ EXPECTED = [
     ("bind", lambda l, b, o: l.startswith(("root/", "root_dotdot/", "rel_root_by_dotdot/")) and "after_chdir_rel" in l and errnos(b, o) == (30, 13),
      "a new top-level name is the host's (8.1 rule 2): the host's / answers EACCES for a create there, where the read-only root under bwrap says EROFS"),
     ("fanotify_mark", lambda l, b, o: errnos(b, o)[0] == 22,
-     "fanotify_mark checks its flags and descriptor before its path; the launcher resolves the path first, and fanotify needs CAP_SYS_ADMIN, which no can process has (13)"),
+     "fanotify_mark checks its flags and descriptor before its path; the launcher resolves the path first, and fanotify needs CAP_SYS_ADMIN, which no process in an exclave has (13)"),
     (None, lambda l, b, o: KERNEL < (6, 14) and "ro_file" in forms_in(l) and errnos(b, o) == (30, 13),
      "a truncate of a file its owner cannot write on a read-only mount: this kernel wants the mount before the permission (EROFS); vfs_truncate checks the permission first by 6.14 (it did not at 6.1), and the handler answers as it does"),
     ("utimensat", lambda l, b, o: KERNEL < (5, 9) and ("empty" in l or "bad_nsec" in l) and errnos(b, o)[0] == 22,
@@ -535,7 +535,7 @@ EXPECTED = [
     ("execveat", lambda l, b, o: KERNEL < (5, 9) and "sock" in forms_in(l) and b.startswith("ret=27136") and o.startswith("ret=28928"),
      "an exec of a socket: ENXIO from its open before 5.9, EACCES from may_open since (fs/namei.c); the handler answers as the newer kernels do"),
     (None, lambda l, b, o: errnos(b, o) == (26, 30),
-     "a write-open of an executable another process is running: the kernel says ETXTBSY before EROFS, the launcher EROFS (13); seen when the gate runs the same can copy's shell beside the probe"),
+     "a write-open of an executable another process is running: the kernel says ETXTBSY before EROFS, the launcher EROFS (13); seen when the gate runs the same exclave copy's shell beside the probe"),
 ]
 
 
@@ -574,14 +574,14 @@ def main():
             except PermissionError:
                 pass
     rng = random.Random(a.seed)
-    # the kernel's world: an unwrapped copy of the tree; the launcher's: a copy of the can; the same maze in both
+    # the kernel's world: an unwrapped copy of the tree; the launcher's: a copy of the exclave; the same maze in both
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(os.path.join(given, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy)
     build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
-    ex = tree.fresh_exclave(given, os.path.join(work, "can"))                  # the launcher's world: a copy relinked with the build (17)
+    ex = tree.fresh_exclave(given, os.path.join(work, "exclave"))              # the launcher's world: a copy relinked with the build (17)
     dirs, files, links = make_maze(root, rng)
     host = os.path.join(work, "area", "host")                              # ".." from the host area is a directory the reset owns
-    os.symlink(host + "/hfile", os.path.join(root, "maze", "lH"))          # a can link to a host file, and to a host directory
+    os.symlink(host + "/hfile", os.path.join(root, "maze", "lH"))          # an exclave link to a host file, and to a host directory
     os.symlink(host + "/hdir", os.path.join(root, "maze", "lHD"))
     shutil.copytree(os.path.join(root, "maze"), os.path.join(ex, "tree", "maze"), symlinks=True)
     for r in (root, os.path.join(ex, "tree")):                            # a socket file in the tree, for bind and connect (copytree cannot carry one)
@@ -606,12 +606,12 @@ def main():
     os.makedirs(bindir)
     cc = tree.compiler(root, MACHINE)
     if not cc:
-        sys.exit("no C compiler in the can")
+        sys.exit("no C compiler in the exclave")
     gcc = os.path.join(ex, "tree", tree.vbin(root, cc).lstrip("/"))       # the probe compiled through the build's launcher
     probe = os.path.join(bindir, "probe")
     r = subprocess.run([gcc, "-O1", "-o", probe, os.path.join(HERE, "progs", "probe.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode:
-        sys.exit("cannot compile probe.c with the can's compiler: " + r.stderr.decode(errors="replace"))
+        sys.exit("cannot compile probe.c with the exclave's compiler: " + r.stderr.decode(errors="replace"))
     nr = kernel_table(roots=(root, "/"))
     cases = generate(forms, nr, os.getuid(), os.getgid())
     if a.only:

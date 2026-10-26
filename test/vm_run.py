@@ -3,7 +3,7 @@
 
     test/vm_run.py --script SH [--only NAME,...] [--work DIR] [--images DIR] [--memory MB] FILE...
 
-For cans made to ship, where the matrix's suite does not apply: each x86-64 row of test/matrix.py boots as
+For exclaves made to ship, where the matrix's suite does not apply: each x86-64 row of test/matrix.py boots as
 there, the files are copied into the home directory beside the script, `sh SCRIPT` runs from there, and
 its exit status and last lines are the row. The whole output of each row goes to WORK/NAME.log. Exit
 status 0 when every row booted and the script exited 0.

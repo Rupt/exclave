@@ -1,5 +1,5 @@
 #!/bin/sh
-# test/inputs.sh DIR — the development inputs, remade from the network (PROPOSAL.md 17): the cans the gate
+# test/inputs.sh DIR — the development inputs, remade from the network (PROPOSAL.md 17): the exclaves the gate
 # runs on and the files the examples take. Nothing is kept anywhere but DIR and the fetchers' caches under
 # ~/.cache, and both may be empty at any time: whatever is missing is fetched again, and an item DIR already
 # has is skipped, so a rerun costs nothing. Afterwards:
@@ -30,7 +30,7 @@ fetch() {                                   # fetch NAME FETCHER ARGS...: packag
         echo "$name: FAIL, see $dir/log/$name.log"; rm -rf "$dir/$name"; fails=$((fails + 1)); return 1
     fi
 }
-can() {                                     # can NAME PKGDIR: unpack the package files into DIR/NAME.exclave and close it
+make_exclave() {                            # make_exclave NAME PKGDIR: unpack the package files into DIR/NAME.exclave and wrap it
     name=$1; pkgs=$2
     if grep -q '^tree ' "$dir/$name.exclave/.exclave/hashes" 2>/dev/null; then echo "$name.exclave: present"; return 0; fi
     rm -rf "$dir/$name.exclave"
@@ -54,11 +54,11 @@ file() {                                    # file URL NAME HASH: one file into 
 
 fedora=https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/42/Everything/x86_64/os
 centos=https://vault.centos.org/7.9.2009/os/x86_64
-fetch debs-gcc13 fetch-debs.py gcc-13 libc6-dev && can gcc13 debs-gcc13
-fetch apks fetch-apks.py gcc musl-dev binutils make linux-headers && can alpine apks
-fetch rpms-f42 fetch-rpms.py --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make && can f42 rpms-f42
-fetch debs-clang fetch-debs.py clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils && can clang debs-clang
-fetch debs-realsoft fetch-debs.py gcc g++ make libc6-dev python3 && can realsoft debs-realsoft
+fetch debs-gcc13 fetch-debs.py gcc-13 libc6-dev && make_exclave gcc13 debs-gcc13
+fetch apks fetch-apks.py gcc musl-dev binutils make linux-headers && make_exclave alpine apks
+fetch rpms-f42 fetch-rpms.py --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make && make_exclave f42 rpms-f42
+fetch debs-clang fetch-debs.py clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils && make_exclave clang debs-clang
+fetch debs-realsoft fetch-debs.py gcc g++ make libc6-dev python3 && make_exclave realsoft debs-realsoft
 fetch el7 fetch-rpms.py --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
 fetch debs-arm64 fetch-debs.py --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev
 file https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz ac034b9c7bbd9f8cc38953efaac07145ce0c8993107a1594d5cedd08fdf2a2bc

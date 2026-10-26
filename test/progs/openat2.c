@@ -1,4 +1,4 @@
-/* openat2.c — the openat2 regression of PROPOSAL.md 17.4: the resolve flags in the can's world (7.4.3).
+/* openat2.c — the openat2 regression of PROPOSAL.md 17.4: the resolve flags in the exclave's world (7.4.3).
  * usage: openat2 HOSTDIR   (HOSTDIR: a writable host directory). Prints FAIL lines; exit 1 on any; exit 3 when
  * the kernel has no openat2. Spellings come from the environment: EXCLAVE_TEST_SH (a symlink in the tree), EXCLAVE_TEST_TRUE. */
 #define _GNU_SOURCE
@@ -62,7 +62,7 @@ int main(int argc, char **argv)
     CHECK(o2(AT_FDCWD, "/proc/self/exe", O_RDONLY, 0, RESOLVE_NO_MAGICLINKS), ELOOP);
     CHECK(o2(root, "proc/self/exe", O_RDONLY, 0, RESOLVE_IN_ROOT), ELOOP);
     CHECK(o2(AT_FDCWD, "/proc/self/exe", O_RDONLY, 0, 0), 0);
-    /* no xdev: the can and the host are different mounts; an identity file is the host's */
+    /* no xdev: the exclave and the host are different mounts; an identity file is the host's */
     CHECK(o2(root, truep + 1, O_RDONLY, 0, RESOLVE_NO_XDEV), 0);
     CHECK(o2(root, "etc/passwd", O_RDONLY, 0, RESOLVE_NO_XDEV), EXDEV);
     CHECK(o2(root, "tmp", O_RDONLY | O_DIRECTORY, 0, RESOLVE_NO_XDEV), EXDEV);

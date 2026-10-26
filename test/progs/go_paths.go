@@ -1,7 +1,7 @@
 // go_paths.go — the Go regression of PROPOSAL.md 17.4: a static Go program doing path syscalls from goroutines.
 // Go issues its syscalls raw, creates threads with clone, installs its own handler for every signal, SIGSYS
 // included (7.5.2), and runs goroutines on small stacks with a signal stack per thread. Built by the host's
-// go with cgo off, run inside a can as a host program.
+// go with cgo off, run inside an exclave as a host program.
 package main
 
 import (
@@ -69,7 +69,7 @@ func main() {
 		fail("%s", e)
 	}
 
-	// exec: the can's true and its shell, by path and by PATH
+	// exec: the exclave's true and its shell, by path and by PATH
 	if err := exec.Command(truep).Run(); err != nil {
 		fail("exec %s: %v", truep, err)
 	}
@@ -80,12 +80,12 @@ func main() {
 		fail("exec %s -c: %q %v", sh, out, err)
 	}
 
-	// the can is read-only, the host is not
+	// the exclave is read-only, the host is not
 	if err := os.WriteFile("/usr/share/exclave-new", []byte("y"), 0644); err == nil || !strings.Contains(err.Error(), syscall.EROFS.Error()) {
-		fail("write to the can: %v", err)
+		fail("write to the exclave: %v", err)
 	}
 	if _, err := os.Open("/usr/share/nonexistent"); !os.IsNotExist(err) {
-		fail("open of a missing can file: %v", err)
+		fail("open of a missing exclave file: %v", err)
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -99,7 +99,7 @@ func main() {
 	}
 	os.Remove(host)
 
-	// identity: the program's own path, links, the working directory inside the can
+	// identity: the program's own path, links, the working directory inside the exclave
 	if exe, err := os.Executable(); err != nil || filepath.Base(exe) != filepath.Base(os.Args[0]) {
 		fail("os.Executable: %q %v", exe, err)
 	}
@@ -110,10 +110,10 @@ func main() {
 		fail("chdir /usr/share: %v", err)
 	} else {
 		if wd, err := os.Getwd(); err != nil || wd != "/usr/share" {
-			fail("getwd in the can: %q %v", wd, err)
+			fail("getwd in the exclave: %q %v", wd, err)
 		}
 		if _, err := os.Stat("exclave-test-marker"); err != nil {
-			fail("relative stat in the can: %v", err)
+			fail("relative stat in the exclave: %v", err)
 		}
 		if _, err := os.Stat("../share/exclave-test-marker"); err != nil {
 			fail("relative stat with ..: %v", err)

@@ -1,7 +1,7 @@
 /* sys.h — freestanding Linux syscall layer for the launcher.
  *
  * The launcher is built with -nostdlib -ffreestanding: it links against
- * nothing at all, so it can be dropped into any can and run on any
+ * nothing at all, so it can be dropped into any exclave and run on any
  * Linux of the same architecture regardless of what libc the host has.
  * Everything it needs from the OS is a raw syscall defined here.
  */

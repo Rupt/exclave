@@ -163,7 +163,7 @@ enum { REG_R8 = 0, REG_R9, REG_R10, REG_R11, REG_R12, REG_R13, REG_R14, REG_R15,
 #define SI_SYSCALL_OFF 24
 #define SI_ARCH_OFF 28
 
-/* ---------- the can's run-time state (7.2), filled at startup ---------- */
+/* ---------- the exclave's run-time state (7.2), filled at startup ---------- */
 struct hostmap { const char *v; const char *r; int is_file; };   /* virtual path -> host real path */
 
 struct exclave {
@@ -179,14 +179,14 @@ struct exclave {
     int loader_mode;               /* 1: re-exec'd with EXCLAVE_EXEC; program is not a wrapper */
     int descfd;                    /* loader mode for a descriptor with no path (13 item 25): the dup to close once the segments are mapped, else -1 */
     int exe_fixed;                 /* exe holds the descriptor's link text, the kernel's identity for such a program; run() leaves it */
-    int boundary;                  /* 1: no filter of ours inherited: this process is the can boundary (7.2) */
+    int boundary;                  /* 1: no filter of ours inherited: this process is at the border (7.2) */
     /* the manifest (6.2) and what the tree says (8.1); the limits are stated in 8.1 and enforced by exclave wrap */
     char cpu[32];
-    const char *own[512]; int nown;   /* the manifest's claims (at most 256), then every non-empty top-level entry of the tree (at most 256) */
+    const char *own[512]; int nown;   /* the manifest's own records (at most 256), then every non-empty top-level entry of the tree (at most 256) */
     struct hostmap host[128]; int nhost;   /* the manifest's host records (at most 32), then the identity files (8.4) */
-    const char *data[32]; int ndata;  /* data prefixes: never executed, never a loader (6.2) */
+    const char *data[32]; int ndata;  /* data directories: never executed, never a loader (6.2) */
     /* cwd rule (8.1.4) */
-    char cwdclaim[PATH_MAX]; long cwdclaim_len;   /* subtree claimed for the host; empty if none */
+    char cwdclaim[PATH_MAX]; long cwdclaim_len;   /* subtree given to the host; empty if none */
     unsigned long rlim[2]; int borrowed;   /* RLIMIT_NOFILE as the program had it, raised for the launcher's own opens (7.4.5) */
     /* diagnostics */
     int logfd;
@@ -228,8 +228,8 @@ struct scratch {
     char extra[8192];              /* argv and envp vectors, ELF headers, an extended open_how, a sockaddr */
     pid_t pid, tid;                /* the owner, looked up once per trap */
     unsigned resolve;              /* openat2's resolve flags for the walk (7.4.3); 0 for every other syscall */
-    int touched_exclave;               /* set by canon: the walk started at, passed through or ended in the can's domain, or rewrote a magic link */
-    unsigned long how0[3];         /* openat2's struct open_how as given, for a walk that never touched the can (7.4.3) */
+    int touched_exclave;               /* set by canon: the walk started at, passed through or ended in the exclave's domain, or rewrote a magic link */
+    unsigned long how0[3];         /* openat2's struct open_how as given, for a walk that never touched the exclave (7.4.3) */
 };
 struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame);
 void scratch_put(struct scratch *s);
@@ -246,10 +246,10 @@ int  vis_leads_to_host_file(const char *v);   /* v is a proper ancestor of a hos
 int  vis_walk_facts(const char *v, int *identity, int *leads, const char **real);   /* the three in one pass: 1 if the host's */
 int  vis_plain_host_chain(const char *p, unsigned from);   /* every prefix from that long the host's plainly: the one-step check may stand in */
 int  is_wrapper_real(const char *real, char *tmp);   /* tmp PATH_MAX */
-int  payload_of(const char *real, char *out);         /* out = real's payload path, dir/.real/base; 1 if it fits; no wrapper check */
+int  payload_of(const char *real, char *out);         /* out = real's original's path, dir/.real/base; 1 if it fits; no wrapper check */
 int  vis_readlink_identity(const char *v, char *out); /* 1 if v is an identity file that is a host symlink, out = its text; -EINVAL if not a symlink; 0 otherwise */
 int  vis_is_identity_file(const char *v);              /* 1 if v is exactly a host identity file */
-int  vis_in_data(const char *v);                       /* 1 if v lies under a data prefix (6.2) */
+int  vis_in_data(const char *v);                       /* 1 if v lies under a data directory (6.2) */
 
 /* ---------- the canonicalisation cache (cache.c, 7.4.4) ---------- */
 enum { CK_NONE = 1, CK_DIR, CK_LINK, CK_FILE, CK_WRAPPER };
@@ -276,5 +276,5 @@ extern const int path_syscalls[]; extern const int n_path_syscalls;
 void handler_install(void);
 void sig_restorer(void);
 
-/* ---------- ISA (isa.c) ---------- */
+/* ---------- CPU level (isa.c) ---------- */
 int isa_supported(const char *isa, unsigned long *auxv);   /* 1 yes, 0 no, -1 unknown string; auxv for AT_HWCAP on aarch64 */

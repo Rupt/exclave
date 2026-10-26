@@ -1,4 +1,4 @@
-"""build.py — extraction, synthesis, placeholders, the dependency report, pruning and the lockfile
+"""build.py — extraction, synthesis, placeholders, the dependency report, pruning and the hashes file
 (PROPOSAL.md 10.1, 10.4, 6.4).
 """
 import glob
@@ -201,7 +201,7 @@ def synthesise(root, debs, log=print):
                 _link(root, slink, "/etc/alternatives/" + sname, log, replace=True)
     # busybox (Alpine): the applet links are made by its post-install from the paths it ships in
     # /etc/busybox-paths.d, one path per line, each a link to /bin/busybox. The links are relative, as
-    # dash's /bin/sh below is, so that a link run from outside the can reaches the wrapper in the tree and
+    # dash's /bin/sh below is, so that a link run from outside the exclave reaches the wrapper in the tree and
     # not a host file of the same name; inside, a relative link resolves in virtual space the same way.
     bbd = _v(root, "/etc/busybox-paths.d")
     if os.path.isdir(bbd) and os.path.isfile(_v(root, "/bin/busybox")):
@@ -281,13 +281,13 @@ def synthesise(root, debs, log=print):
         _link(root, "/usr/lib/ssl/certs", "/etc/ssl/certs", log)
         _link(root, "/usr/lib/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt", log)
     # base-passwd: /etc/passwd and /etc/group come from update-passwd, not the package; the host's are used
-    # unless the manifest claims them (8.4), but the files must exist for tools that list /etc
+    # unless an own record names them (8.4), but the files must exist for tools that list /etc
     for name_, master in (("passwd", "passwd.master"), ("group", "group.master")):
         src, dst = _v(root, "/usr/share/base-passwd/" + master), _v(root, "/etc/" + name_)
         if "base-passwd" in names and os.path.exists(src) and not os.path.lexists(dst):
             shutil.copyfile(src, dst)
             log("synthesised /etc/%s from base-passwd" % name_)
-    # ldconfig: the can's own, static, before wrapping so the cache never indexes the launcher
+    # ldconfig: the exclave's own, static, before wrapping so the cache never indexes the launcher
     ld = None
     for cand in ("/usr/sbin/ldconfig.real", "/sbin/ldconfig.real", "/usr/sbin/ldconfig", "/sbin/ldconfig", "/usr/bin/ldconfig"):   # Fedora 42 merged sbin into bin
         p = _v(root, cand)
@@ -311,7 +311,7 @@ def synthesise(root, debs, log=print):
             r = subprocess.run([ld, "-r", root, "-f", "/etc/ld.so.conf.exclave" if tmp else "/etc/ld.so.conf"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except OSError as e:                                  # the tree's ldconfig is of another architecture: no cache here (10.1)
             r = None
-            log("the tree's ldconfig cannot run on this machine (%s): no ld.so.cache; close the can on a machine of its architecture" % e.strerror)
+            log("the tree's ldconfig cannot run on this machine (%s): no ld.so.cache; wrap the exclave on a machine of its architecture" % e.strerror)
         if tmp:
             os.remove(tmp)
         if r is None:
@@ -319,7 +319,7 @@ def synthesise(root, debs, log=print):
         elif r.returncode:
             log("ldconfig failed: " + r.stderr.decode(errors="replace").strip())
         else:
-            log("synthesised /etc/ld.so.cache with the can's ldconfig")
+            log("synthesised /etc/ld.so.cache with the exclave's ldconfig")
         aux = _v(root, "/var/cache/ldconfig")                 # records inodes and mtimes: never reproducible, never needed
         if os.path.isdir(aux):
             shutil.rmtree(aux)
@@ -358,7 +358,7 @@ def placeholders(root, strip=True, log=print):
             open(p, "wb").close()
 
 
-# ---------------------------------------------------------------- tree hash and lockfile (6.4)
+# ---------------------------------------------------------------- tree hash and hashes file (6.4)
 def _payload(real):
     d, n = os.path.split(real)
     p = os.path.join(d, ".real", n)
@@ -366,8 +366,8 @@ def _payload(real):
 
 
 def tree_hash(root):
-    """BLAKE2b-256 of the serialised listing of 6.4: payloads in place of wrappers, .real/ excluded, except
-    that a payload without a wrapper is hashed under its own name so that nothing is ever invisible
+    """BLAKE2b-256 of the serialised listing of 6.4: originals in place of wrappers, .real/ excluded, except
+    that an original without a wrapper is hashed under its own name so that nothing is ever invisible
     (review F4-5, O4-11)."""
     entries = []
     for dirpath, dirnames, filenames in os.walk(root):
@@ -397,10 +397,10 @@ def tree_hash(root):
 
 
 def write_lock(ex, pkgs, manifest_hash=None, tree=False, keep_hashes=False):
-    """6.4: the lock is a record of inputs and output. pkgs: [(name, version, arch, b2)], or None to keep the
-    pkg records of the lock already there. The closing step writes the launcher, manifest and tree hashes;
-    keep_hashes keeps the lock's manifest hash and recomputes the launcher and tree hashes (after prune or relink); otherwise they are dropped
-    (after unwrap: an open can has no output yet)."""
+    """6.4: the hashes file is a record of inputs and output. pkgs: [(name, version, arch, b2)], or None to keep
+    the pkg records already there. The wrapping step writes the launcher, manifest and tree hashes;
+    keep_hashes keeps the manifest hash and recomputes the launcher and tree hashes (after prune or relink); otherwise they are dropped
+    (after unwrap: an unwrapped exclave has no output yet)."""
     import exclave
     R = exclave.Record
     lock = os.path.join(ex, ".exclave", "hashes")
@@ -525,8 +525,8 @@ def prune(ex, logs, own, log=print):
             keep.add(final)
             if what in ("exec", "load"):
                 programs += 1
-    if not programs:                                          # an empty, foreign or failed log would empty the can (review O4-4, F4-11)
-        raise BuildError("the logs name no program in this can; nothing to prune to")
+    if not programs:                                          # an empty, foreign or failed log would empty the exclave (review O4-4, F4-11)
+        raise BuildError("the logs name no program in this exclave; nothing to prune to")
     for f in IDENTITY_FILES + ["/etc/ld.so.cache"]:
         if os.path.lexists(_v(root, f)):
             keep.add(f)
@@ -569,7 +569,7 @@ def prune(ex, logs, own, log=print):
                 continue
             st = os.lstat(real)
             is_wrap = not in_real and os.path.exists(os.path.join(dirpath, ".real", name))
-            if stat.S_ISREG(st.st_mode) and not is_wrap:      # payloads and plain files; a wrapper is a link to the launcher (review O4-15)
+            if stat.S_ISREG(st.st_mode) and not is_wrap:      # originals and plain files; a wrapper is a link to the launcher (review O4-15)
                 freed += st.st_size
             os.remove(real)
             removed += 1

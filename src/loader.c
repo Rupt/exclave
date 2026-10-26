@@ -1,6 +1,6 @@
 /* loader.c — userland ELF loader (PROPOSAL.md 7.3) and the debugger hooks (7.6).
  *
- * Maps the payload and the loader its header names the way the kernel would, builds
+ * Maps the original and the loader its header names the way the kernel would, builds
  * the initial stack from the launcher's own auxiliary vector, and jumps. Used
  * for every program: wrappers after the kernel has exec'd the launcher under the
  * program's name, and loader-path programs re-exec'd with EXCLAVE_EXEC.
@@ -13,7 +13,7 @@ static Phdr ph_main[128], ph_interp[64];
 /* 7.6: what a debugger needs, exported for the script the launcher carries in .debug_gdb_scripts (src/gdb.py):
  * where the program and its loader were mapped and which files they are, and a function gdb breakpoints to
  * learn them. The script adds the program's symbols at its base, walks the loader's link map for the
- * libraries and finds their payloads through .real/, so gdb needs no manual command. The exported names are
+ * libraries and finds their originals through .real/, so gdb needs no manual command. The exported names are
  * aliases so that the code reaches the variables directly, without a GOT slot to relocate. */
 static unsigned long payload_base, payload_entry, interp_base;
 static char payload_path[PATH_MAX], interp_path[PATH_MAX];
@@ -171,24 +171,24 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
 {
     Ehdr eh; unsigned long entry, phdr_va, base = 0, jump; int has_interp; char interp_v[PATH_MAX];
     int fd = open_elf(real, &eh, ph_main, 128);
-    static unsigned char nb[512]; int gen = 0;               /* another can's launcher from before the page moved, which a handler sends here (7.4.2) */
+    static unsigned char nb[512]; int gen = 0;               /* another exclave's launcher from before the page moved, which a handler sends here (7.4.2) */
     for (int i = 0; i < eh.e_phnum; i++) if (ph_main[i].p_type == PT_NOTE && ph_main[i].p_filesz <= 512) { int g = note_gen(fd, &ph_main[i], nb); if (g) gen = g; }
     if (gen && gen < PAGE_GENERATION)
-        die("a can's launcher from before the syscall page moved cannot run here; relink that exclave (exclave relink)", vpath, 0);
+        die("an exclave's launcher from before the syscall page moved cannot run here; relink that exclave (exclave relink)", vpath, 0);
     payload_base = map_elf(fd, &eh, ph_main, &entry, &phdr_va, &has_interp, interp_v, real);
     if (C.descfd > 2) { sys_close(C.descfd); C.descfd = -1; }   /* a program run from a descriptor with no path (13 item 25): mapped, the dup goes */
     sys_close(fd);
     jump = entry; payload_entry = entry; scpy(payload_path, real, PATH_MAX);
     if (has_interp) {
-        /* the program's own PT_INTERP, resolved in the can as the kernel would resolve it in a chroot (7.3);
-         * that every ELF in a can names one loader is the tool's static check, not a run-time rule */
+        /* the program's own PT_INTERP, resolved in the exclave as the kernel would resolve it in a chroot (7.3);
+         * that every ELF in an exclave names one loader is the tool's static check, not a run-time rule */
         static char ireal[PATH_MAX]; Ehdr ih; unsigned long ientry, iphdr; int ii; char dummy[PATH_MAX];
         struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0); if (!S) die("out of memory", 0, ENOMEM);
         struct kstat ist;
         if (canon(S, interp_v, AT_FDCWD, 1, S->v) < 0 || sys_stat(to_real(S->v, ireal, S->tmp), &ist) < 0)   /* through the wrapper redirect: ld.so is wrapped */
             die("program wants a loader this exclave does not have", interp_v, 0);
-        /* one world (7.4.5): the loader must be the can's own file, not one the visibility rule found on the
-         * host (a Nix or --dynamic-linker binary, review F4-1, O4-2) and not one parked in a data prefix (O4-3) */
+        /* one world (7.4.5): the loader must be the exclave's own file, not one the visibility rule found on the
+         * host (a Nix or --dynamic-linker binary, review F4-1, O4-2) and not one parked in a data directory (O4-3) */
         if (!is_exclave_path(S->v) || vis_in_data(S->v)) die("program wants a loader this exclave does not have", interp_v, 0);
         scratch_put(S);
         int ifd = open_elf(ireal, &ih, ph_interp, 64);

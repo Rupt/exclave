@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""docker_profile.py — a can under Docker's default seccomp profile (PROPOSAL.md 12, 17 item 5).
+"""docker_profile.py — an exclave under Docker's default seccomp profile (PROPOSAL.md 12, 17 item 5).
 
 Docker's default profile (a JSON allow-list with a default errno) is assembled here into a classic BPF
-program and installed by bwrap around a can workload, with the host's tree visible read-only, the way a
+program and installed by bwrap around an exclave's workload, with the host's tree visible read-only, the way a
 CI container would run it. The launcher then stacks its own filter on top. The profile runs twice: as
 assembled for this kernel, and as Docker installs it before kernel 4.8, where process_vm_readv is refused
 and the launcher copies program memory through a pipe (13); the workload includes a bad pointer that must be
 EFAULT either way. Needs bwrap and user namespaces; says so and exits 0 when it cannot run.
 
-    test/docker_profile.py --exclave CAN --profile docker-seccomp.json [--work DIR]
+    test/docker_profile.py --exclave EXCLAVE --profile docker-seccomp.json [--work DIR]
 """
 import argparse
 import json
@@ -35,7 +35,7 @@ DEFAULT_CAPS = {"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER", "CA
 
 
 def kernel_table(ex=None):
-    """The machine's syscall table from the can's headers (a gcc can ships linux-libc-dev) or the host's."""
+    """The machine's syscall table from the exclave's headers (a gcc exclave ships linux-libc-dev) or the host's."""
     from syscalls import kernel_table as table
     return table(roots=([os.path.join(ex, "tree")] if ex else []) + ["/"])
 
@@ -167,12 +167,12 @@ def main():
     if not shutil.which("bwrap") or subprocess.run(["bwrap", "--ro-bind", "/", "/", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
         print("bwrap or user namespaces unavailable; the Docker-profile run cannot happen here")
         return 0
-    import tree                                                  # the can's compiler and shell as the tree spells them
+    import tree                                                  # the exclave's compiler and shell as the tree spells them
     work = os.path.abspath(a.work)
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
-    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "can"))   # a copy relinked with the build (17)
+    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "exclave"))   # a copy relinked with the build (17)
     root = os.path.join(ex, "tree")
     cc = tree.compiler(root, MACHINE) or "cc"
     with open(os.path.join(work, "hello.c"), "w") as f:
@@ -195,7 +195,7 @@ def main():
         os.close(r)
         out, err = p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
         ok = p.returncode == 0 and "hello under docker profile 0" in out and "Read-only" in out and out.strip().endswith(exe)
-        print(("PASS" if ok else "FAIL") + " can under %s (%d BPF instructions): rc=%d\n%s%s" % (label, len(prog) // 8, p.returncode, out, err))
+        print(("PASS" if ok else "FAIL") + " exclave under %s (%d BPF instructions): rc=%d\n%s%s" % (label, len(prog) // 8, p.returncode, out, err))
         fails += not ok
     if not fails:
         shutil.rmtree(work, ignore_errors=True)

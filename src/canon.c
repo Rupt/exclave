@@ -45,7 +45,7 @@ int is_self_exe(const char *p, pid_t mypid)
 
 /* ---------- the one-step host check (PERFORMANCE.md 4 item 4) ----------
  * A walk through host directories lstats each, to follow a host symlink in virtual space (a link into /usr reaches the
- * can's) and to see the tree's root by another name (F3-13). Where the remaining directories are all plain host by the
+ * exclave's) and to see the tree's root by another name (F3-13). Where the remaining directories are all plain host by the
  * rule, one openat2 with RESOLVE_NO_SYMLINKS answers the first question for all of them: it succeeds only if each is a
  * directory reached without a link. The second needs no question where the tree's filesystem is mounted once and its
  * device is the tree's own: within one mount a directory has one path, and the rule has already refused the tree's own
@@ -178,7 +178,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
     int trailing = pl > 1 && path[pl - 1] == '/';
     /* openat2's resolve flags (7.4.3): a scoped walk (RESOLVE_IN_ROOT, RESOLVE_BENEATH) cannot leave S->v2, the
      * descriptor's directory; NO_SYMLINKS and the scoped flags refuse magic links; NO_XDEV refuses to cross between
-     * the can's domain and the host's, which is where the kernel under a bind mount changes mounts */
+     * the exclave's domain and the host's, which is where the kernel under a bind mount changes mounts */
     unsigned rf = S->resolve;
     const char *base = (rf & (RESOLVE_IN_ROOT | RESOLVE_BENEATH)) ? S->v2 : "";
     if (base[0] == '/' && base[1] == 0) base = "";
@@ -195,7 +195,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
          * launcher resolved that name from /proc/self/exe, so the path starts at the root (PERFORMANCE.md 6) */
         if (!rf && C.rootlen && xstrncmp(path, C.root, (size_t)C.rootlen) == 0 && (path[C.rootlen] == '/' || !path[C.rootlen])) {
             /* the walk's own answer for the directories above the tree, which the kernel searches: EACCES where one is
-             * not searchable, ENOENT where the can was moved while it runs (review O7-5); one question for six lstats */
+             * not searchable, ENOENT where the exclave was moved while it runs (review O7-5); one question for six lstats */
             long e = sys_faccessat(AT_FDCWD, C.dir, X_OK); if (e < 0) return (int)e;
             scpy(rest, path + C.rootlen, sizeof S->rest);
         }
@@ -203,7 +203,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         int tree = 0, r = (dfd == AT_FDCWD) ? cwd_virtual_in(rest, &tree) : fd_virtual_in(dfd, rest, &tree);
         if (r == -ENOENT) {                                    /* a directory deleted under the program, which the kernel still walks from and
                                                                 * the handler cannot name: the path is spelt through the magic link, a host
-                                                                * path the kernel resolves itself; a walk from there into the can stays
+                                                                * path the kernel resolves itself; a walk from there into the exclave stays
                                                                 * the host's (7.4.3) */
             char *n = S->b2; if (dfd != AT_FDCWD) ltoa_(dfd, n);
             scpy(out, dfd == AT_FDCWD ? "/proc/self/cwd" : "/proc/self/fd/", PATH_MAX); if (dfd != AT_FDCWD) scat(out, n, PATH_MAX);
@@ -247,12 +247,12 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         }
         size_t curl = xstrlen(cur); if (curl + 1 + cl + 1 >= PATH_MAX) return -ENAMETOOLONG;
         cur[curl] = '/'; xmemcpy(cur + curl + 1, comp, cl + 1);
-        /* the tree's real root directory is an alias of /: a path spelt through <can>/tree/ is the same path in
+        /* the tree's real root directory is an alias of /: a path spelt through <exclave>/tree/ is the same path in
          * virtual space, with the same ownership and the same read-only rule (review F3-1) */
         if (C.rootlen && xstrcmp(cur, C.root) == 0) { cur[0] = 0; S->touched_exclave = 1; while (*rp == '/') rp++; continue; }
         while (*rp == '/') rp++;
         int last = (*rp == 0);
-        /* a can-owned path is re-issued under the tree's root prefix: one that would not fit PATH_MAX there is refused here,
+        /* an exclave path is re-issued under the tree's root prefix: one that would not fit PATH_MAX there is refused here,
          * ENAMETOOLONG, and never cut to a shorter name (13) */
         if (C.rootlen + (long)(curl + 1 + cl) + (last ? trailing : 0) >= PATH_MAX && is_exclave_path(cur)) return -ENAMETOOLONG;
         if (rf & RESOLVE_NO_XDEV) {                            /* the mount changes where the domain does; an identity symlink that is
@@ -281,10 +281,10 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
             kind = CK_FILE;
         }
         else if (leads) kind = CK_DIR;                         /* on the way to an identity file: a directory (8.4) */
-        else if (!host) {                                      /* 7.4.4: can-owned components are remembered for the process's life */
+        else if (!host) {                                      /* 7.4.4: the exclave's components are remembered for the process's life */
             kind = cache_get(cur, tmp);                        /* the real path only for a component not yet remembered */
             if (!kind) {
-                scpy(real, C.root, PATH_MAX); scat(real, cur, PATH_MAX);   /* to_real_exec's answer for a can path; cur is never "/" here */
+                scpy(real, C.root, PATH_MAX); scat(real, cur, PATH_MAX);   /* to_real_exec's answer for an exclave path; cur is never "/" here */
                 kind = cache_classify(cur, real, tmp);
                 if (!kind) kind = CK_NONE;
             }
@@ -320,7 +320,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         if (kind != CK_LINK) {
             /* an intermediate component must be a directory: the kernel says so before it looks further, and
              * a textual ".." must not hide that (oracle 17.2); the final component is the kernel's business.
-             * A directory the can lacks on the way to a host identity file is the host's (8.4). */
+             * A directory the exclave lacks on the way to a host identity file is the host's (8.4). */
             if (!last) { if (kind == CK_NONE) return err; if (kind != CK_DIR) return -ENOTDIR; }
             continue;
         }

@@ -1,4 +1,4 @@
-# cont — build the launcher, run the checks.
+# exclave — build the launcher, run the checks.
 #
 # The launcher is a freestanding ET_DYN object with no PT_INTERP: it runs as a
 # program (a wrapper, PROPOSAL.md 6.1) and loads programs itself (7.3).
@@ -71,7 +71,7 @@ build/launcher-old-aarch64: $(SRC) $(HDR) Makefile
 	$(call linkcheck,aarch64-linux-gnu-)
 	aarch64-linux-gnu-objcopy --strip-all --keep-section=.debug_gdb_scripts $@.debug $@
 
-# the tests are test/gate.sh CAN... (the commit gate) and test/examples.sh CAN (the example runs); see README.md
+# the tests are test/gate.sh EXCLAVE... (the commit gate) and test/examples.sh EXCLAVE (the example runs); see README.md
 
 clean:
 	rm -rf build

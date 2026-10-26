@@ -1,4 +1,4 @@
-/* exec.c — exec fidelity: /proc/self/exe, own ELF header, fexecve of a wrapper and of a payload, execvp past a
+/* exec.c — exec fidelity: /proc/self/exe, own ELF header, fexecve of a wrapper and of an original, execvp past a
  * non-executable PATH hit, a program with its own seccomp filter, personality. Mode in argv[1]. */
 #define _GNU_SOURCE
 #include <errno.h>

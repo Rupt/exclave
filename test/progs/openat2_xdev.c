@@ -1,4 +1,4 @@
-/* openat2_xdev.c — openat2's resolve flags on walks that never touch the can (PROPOSAL.md 13 item 22, 17.4): RESOLVE_NO_XDEV
+/* openat2_xdev.c — openat2's resolve flags on walks that never touch the exclave (PROPOSAL.md 13 item 22, 17.4): RESOLVE_NO_XDEV
  * across the host's own mount boundaries, and the other flags on host-only walks. usage: openat2_xdev HOSTDIR. Prints one
  * line per case, "<case>: ret=<r> errno=<e>", the same in every world, so the kernel is the oracle: the regression replays these cases natively,
  * since bwrap rebuilds /dev and cannot answer for the host's mounts. Exit 0
@@ -44,7 +44,7 @@ int main(int argc, char **argv)
     show("no_xdev cwd to /dev/null", o2(AT_FDCWD, "/dev/null", O_RDONLY, RESOLVE_NO_XDEV));
     show("no_xdev cwd to /dev/shm", o2(AT_FDCWD, "/dev/shm", O_RDONLY | O_DIRECTORY, RESOLVE_NO_XDEV));
     show("no_xdev cwd to /proc/self/status", o2(AT_FDCWD, "/proc/self/status", O_RDONLY, RESOLVE_NO_XDEV));
-    show("no_xdev cwd to /usr/share (can)", o2(AT_FDCWD, "/usr/share", O_RDONLY | O_DIRECTORY, RESOLVE_NO_XDEV));
+    show("no_xdev cwd to /usr/share (exclave)", o2(AT_FDCWD, "/usr/share", O_RDONLY | O_DIRECTORY, RESOLVE_NO_XDEV));
     show("no_xdev cwd to .", o2(AT_FDCWD, ".", O_RDONLY | O_DIRECTORY, RESOLVE_NO_XDEV));
     show("no_xdev cwd to sub", o2(AT_FDCWD, "sub", O_RDONLY | O_DIRECTORY, RESOLVE_NO_XDEV));
     show("no_xdev cwd to ..", o2(AT_FDCWD, "..", O_RDONLY | O_DIRECTORY, RESOLVE_NO_XDEV));

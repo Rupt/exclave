@@ -2,7 +2,7 @@
  * posix_spawns, so a vfork child's handler runs beside the parent's and the copies from program memory must stay each
  * thread's own; and a forked child whose traps nest, a timer's handler trapping inside a trapped stat, while every
  * chunk the pool had is held by threads blocked in the parent, so that the child's pool must grow under nesting.
- * usage: spawn_threads HOSTDIR PROGRAM (a program to spawn, the can's true). Prints one line per part; exit 0 when
+ * usage: spawn_threads HOSTDIR PROGRAM (a program to spawn, the exclave's true). Prints one line per part; exit 0 when
  * both pass, which the second does only when a timer's trap landed and every stat, nested or not, succeeded. */
 #define _GNU_SOURCE
 #include <errno.h>

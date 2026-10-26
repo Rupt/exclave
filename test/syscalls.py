@@ -25,7 +25,7 @@ TRAP = set(['file_getattr', 'file_setattr', 'getxattrat', 'listxattrat', 'remove
 DENIED = set(['open_tree_attr'] + ['acct', 'chroot', 'clone3', 'fsconfig', 'fsmount', 'fsopen', 'fspick', 'io_uring_setup', 'mount', 'mount_setattr', 'move_mount', 'name_to_handle_at', 'open_tree', 'pivot_root', 'umount2', 'uselib'])
 # a path inside a struct or a name that is not a filesystem path: not translated; a datagram destination's
 # sockaddr_un (sendto, sendmsg, sendmmsg) reaches the kernel untranslated, which the visibility rule makes
-# harmless for /tmp, /run and /var/run and which 13 item 31 lists for can-owned paths; bind and connect
+# harmless for /tmp, /run and /var/run and which 13 item 31 lists for exclave paths; bind and connect
 # translate theirs (TRAP)
 STRUCT_PATH = set(['accept', 'accept4', 'bpf', 'getpeername', 'getsockname', 'mq_open', 'mq_unlink', 'quotactl', 'recvfrom', 'recvmmsg', 'recvmsg', 'sendmmsg', 'sendmsg', 'sendto', 'swapoff', 'swapon'])
 # no path argument at all
@@ -82,8 +82,8 @@ def parse_table(text):
 
 
 def kernel_table(path=None, roots=("/",)):
-    """The machine's table from a given header, else from the first root that has one (a gcc can ships
-    linux-libc-dev, so a can's root can be tried before the host's)."""
+    """The machine's table from a given header, else from the first root that has one (a gcc exclave ships
+    linux-libc-dev, so an exclave's root can be tried before the host's)."""
     if path is None:
         for r in roots:
             for rel in HEADERS:
@@ -93,7 +93,7 @@ def kernel_table(path=None, roots=("/",)):
             if path:
                 break
         else:
-            raise SystemExit("no syscall table on the host" + (" or in the can" if len(roots) > 1 else ""))
+            raise SystemExit("no syscall table on the host" + (" or in the exclave" if len(roots) > 1 else ""))
     table = parse_table(open(path).read())
     for nr, name in EXTRA.items():
         table.setdefault(name, nr)

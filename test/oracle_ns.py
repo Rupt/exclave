@@ -6,7 +6,7 @@ launcher. Exit status, stdout and stderr are compared, and the read-only matrix 
 run under bwrap so that its expectations are checked against the kernel itself rather than against the
 launcher. Needs user namespaces and bwrap; says so and exits 0 when it cannot run.
 
-    test/oracle_ns.py --exclave CAN [--work DIR] [--keep]
+    test/oracle_ns.py --exclave EXCLAVE [--work DIR] [--keep]
 """
 import argparse
 import os
@@ -22,8 +22,8 @@ import build  # noqa: E402
 import exclave  # noqa: E402
 
 import platform  # noqa: E402
-TRIPLET = "%s-linux-gnu" % platform.machine()                     # the can's multiarch directory: the suite runs on the can's own machine
-GCC = TRIPLET + "-gcc-13"                                         # replaced by what the tree says once the can is known (test/tree.py)
+TRIPLET = "%s-linux-gnu" % platform.machine()                     # the exclave's multiarch directory: the suite runs on the exclave's own machine
+GCC = TRIPLET + "-gcc-13"                                         # replaced by what the tree says once the exclave is known (test/tree.py)
 SH, SHX, LIBC, SH_LINK = "/usr/bin/sh", "/usr/bin/dash", "/lib/x86_64-linux-gnu/libc.so.6", "dash"   # likewise: the shell, the file behind it, libc, the link's text
 IDENTITY = ["/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf", "/etc/resolv.conf", "/etc/hosts",
             "/etc/ssl/certs/ca-certificates.crt"]
@@ -68,7 +68,7 @@ def run_bwrap(root, work, cmd, extra=()):
     if top != "/tmp":
         args += ["--tmpfs", top]
     args += ["--bind", work, work, "--chdir", work, "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "HOME", work, "--setenv", "W", work,
-             "--setenv", "LANG", "C.UTF-8", "--setenv", "TZ", "UTC0", "--setenv", "SHELL", "/bin/sh",    # the boundary constants of 6.2
+             "--setenv", "LANG", "C.UTF-8", "--setenv", "TZ", "UTC0", "--setenv", "SHELL", "/bin/sh",    # the border constants of 6.2
              "--setenv", "CC", GCC, "--setenv", "SH", SH, "--setenv", "SHX", SHX, "--setenv", "LIBC", LIBC,
              "--setenv", "EXCLAVE_TEST_SH", SH, "--setenv", "EXCLAVE_TEST_SH_LINK", SH_LINK]                   # the tree's spellings (test/tree.py)
     for f in IDENTITY:
@@ -86,7 +86,7 @@ def run_bwrap(root, work, cmd, extra=()):
 
 def run_launcher(ex, work, cmd, prog=None):
     env = {"PATH": "/usr/bin:/bin", "HOME": work, "W": work, "CC": GCC, "SH": SH, "SHX": SHX, "LIBC": LIBC, "EXCLAVE_TEST_SH": SH, "EXCLAVE_TEST_SH_LINK": SH_LINK,
-           "LANG": "en_GB.UTF-8", "TZ": "Asia/Tokyo"}                                        # the last two replaced at the boundary (6.2)
+           "LANG": "en_GB.UTF-8", "TZ": "Asia/Tokyo"}                                        # the last two replaced at the border (6.2)
     if prog:
         p = subprocess.run([os.path.join(ex, ".exclave", "launcher"), prog] + cmd, cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     else:
@@ -111,8 +111,8 @@ def main():
         shutil.rmtree(work)
     os.makedirs(work)
     import tree
-    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "can"))   # the launcher's world: a copy relinked with the build (17)
-    # an unwrapped copy of the tree for bwrap: hard links, then the payloads moved back over the wrappers
+    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "exclave"))   # the launcher's world: a copy relinked with the build (17)
+    # an unwrapped copy of the tree for bwrap: hard links, then the originals moved back over the wrappers
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy)
     build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
@@ -143,7 +143,7 @@ def main():
     prog = os.path.join(work, "ro_matrix")
     r = subprocess.run([gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "ro_matrix.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode:
-        sys.exit("cannot compile ro_matrix with the can's gcc: " + r.stderr.decode(errors="replace"))
+        sys.exit("cannot compile ro_matrix with the exclave's gcc: " + r.stderr.decode(errors="replace"))
     hostdir = os.path.join(work, "hostdir")
     os.makedirs(hostdir, exist_ok=True)
     rc, out, err = run_bwrap(root, work, "%s %s /usr/bin/dash" % (prog, hostdir))

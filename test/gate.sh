@@ -1,14 +1,14 @@
 #!/bin/sh
-# test/gate.sh CAN... — the commit gate (PROPOSAL.md 17): the unit tests, the stack budget, and for every can
-# given the suite in the given and a random order (and, for the first can, under the plain terminal's AppArmor label), the
+# test/gate.sh EXCLAVE... — the commit gate (PROPOSAL.md 17): the unit tests, the stack budget, and for every exclave
+# given the suite in the given and a random order (and, for the first exclave, under the plain terminal's AppArmor label), the
 # resolution oracle, the namespace oracle, the syscall probe and the Docker profile; dogfood when EXCLAVE_TEST_CACHE names a package cache. Every step runs in parallel; every driver
-# runs build/launcher on a copy of its own (the suite wraps one from the can's tree, the others take test/tree.py's
-# fresh_can), so the cans given are never run as they are nor written. One line per step; logs under build/gate/. Exit status: the number of failed steps.
+# runs build/launcher on a copy of its own (the suite wraps one from the exclave's tree, the others take test/tree.py's
+# fresh_exclave), so the exclaves given are never run as they are nor written. One line per step; logs under build/gate/. Exit status: the number of failed steps.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(dirname "$here")
 out=$repo/build/gate
-[ $# -ge 1 ] || { echo "usage: test/gate.sh CAN..." >&2; exit 2; }
+[ $# -ge 1 ] || { echo "usage: test/gate.sh EXCLAVE..." >&2; exit 2; }
 [ -x "$repo/build/launcher" ] || { echo "build/launcher missing: run make" >&2; exit 2; }
 rm -rf "$out" && mkdir -p "$out" || exit 2
 start=$(date +%s)
@@ -30,17 +30,17 @@ stack() {
 
 step unit unit
 step stack stack
-for can in "$@"; do
-    n=$(basename "$can" .exclave)
-    step "suite-$n" python3 "$here/run.py" --exclave "$can" --work "$out/w-$n"
-    step "suite-$n-random" python3 "$here/run.py" --exclave "$can" --work "$out/w-$n-random" --order random
-    if [ "$can" = "$1" ] && command -v aa-exec > /dev/null 2>&1 && aa-exec -p unconfined true 2> /dev/null; then   # the plain terminal's
-        step "suite-$n-plain" aa-exec -p unconfined python3 "$here/run.py" --exclave "$can" --work "$out/w-$n-plain"   # AppArmor label (12), once
+for ex in "$@"; do
+    n=$(basename "$ex" .exclave)
+    step "suite-$n" python3 "$here/run.py" --exclave "$ex" --work "$out/w-$n"
+    step "suite-$n-random" python3 "$here/run.py" --exclave "$ex" --work "$out/w-$n-random" --order random
+    if [ "$ex" = "$1" ] && command -v aa-exec > /dev/null 2>&1 && aa-exec -p unconfined true 2> /dev/null; then   # the plain terminal's
+        step "suite-$n-plain" aa-exec -p unconfined python3 "$here/run.py" --exclave "$ex" --work "$out/w-$n-plain"   # AppArmor label (12), once
     fi
-    step "resolve-$n" python3 "$here/oracle_resolve.py" --exclave "$can" --work "$out/r-$n"
-    step "ns-$n" python3 "$here/oracle_ns.py" --exclave "$can" --work "$out/n-$n"
-    step "syscalls-$n" python3 "$here/oracle_syscalls.py" --exclave "$can" --work "$out/s-$n"
-    step "docker-$n" python3 "$here/docker_profile.py" --exclave "$can" --profile "$here/docker-seccomp.json" --work "$out/d-$n"
+    step "resolve-$n" python3 "$here/oracle_resolve.py" --exclave "$ex" --work "$out/r-$n"
+    step "ns-$n" python3 "$here/oracle_ns.py" --exclave "$ex" --work "$out/n-$n"
+    step "syscalls-$n" python3 "$here/oracle_syscalls.py" --exclave "$ex" --work "$out/s-$n"
+    step "docker-$n" python3 "$here/docker_profile.py" --exclave "$ex" --profile "$here/docker-seccomp.json" --work "$out/d-$n"
 done
 if [ -n "${EXCLAVE_TEST_CACHE:-}" ]; then
     step dogfood python3 "$here/dogfood.py" --cache "$EXCLAVE_TEST_CACHE" --work "$out/dogfood"

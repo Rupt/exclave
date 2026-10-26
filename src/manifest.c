@@ -3,7 +3,7 @@
  * No syscalls: takes a buffer, fills struct exclave, reports "line L col C: why".
  * Compiled into the launcher and, with HOST_TEST, into test/manifest_test.c.
  * The launcher enforces the lexical and typing rules, not the canonical order.
- * The manifest is the one file the launcher reads: an ISA declaration and the
+ * The manifest is the one file the launcher reads: a CPU level and the
  * visibility overrides; everything else it needs it observes in the tree.
  */
 #include "common.h"
@@ -124,7 +124,7 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
 {
     struct cur cu = { (const unsigned char *)buf, (const unsigned char *)buf + len, 1, 1 };
     struct cur *K = &cu;
-    int seen_can = 0, seen_isa = 0, nrec = 0;
+    int seen_exclave = 0, seen_isa = 0, nrec = 0;
     int pending_comment = 0;
 
     if (len == 0 || buf[len - 1] != '\n') return fail(err, errn, K, "file must end with LF");
@@ -176,7 +176,7 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
             WANT(1, F_TOK);
             if (nrec != 1) return fail(err, errn, K, "exclave must be the first record");
             if (xstrcmp(f[0].s, "1") != 0) return fail(err, errn, K, "unsupported exclave version");
-            seen_can = 1;
+            seen_exclave = 1;
         } else if (nrec == 1) {
             return fail(err, errn, K, "first record must be exclave");
         } else if (xstrcmp(key, "cpu") == 0) {
@@ -201,7 +201,7 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
         K->line++;                                                       /* the record's LF */
     }
     if (pending_comment) return fail(err, errn, K, "comment after the last record");
-    if (!seen_can) return fail(err, errn, K, "empty manifest");
-    if (!seen_isa) scpy(c->cpu, ARCH_ISA_DEFAULT, sizeof c->cpu);      /* the baseline: a can that says nothing runs anywhere */
+    if (!seen_exclave) return fail(err, errn, K, "empty manifest");
+    if (!seen_isa) scpy(c->cpu, ARCH_ISA_DEFAULT, sizeof c->cpu);      /* the baseline: an exclave that says nothing runs anywhere */
     return 0;
 }

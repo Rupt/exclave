@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""bench.py — the performance table (PROPOSAL.md 13 item 2, 16). Best of three, native against the can.
+"""bench.py — the performance table (PROPOSAL.md 13 item 2, 16). Best of three, native against the exclave.
 
-    test/bench.py --exclave CAN [--sqlite PATH] [--work DIR] [--launcher LAUNCHER]
+    test/bench.py --exclave EXCLAVE [--sqlite PATH] [--work DIR] [--launcher LAUNCHER]
 
-The can must contain gcc-13; the host's /usr/bin/gcc-13, else its gcc, gives the native column.
+The exclave must contain gcc-13; the host's /usr/bin/gcc-13, else its gcc, gives the native column.
 """
 import argparse
 import os
@@ -95,7 +95,7 @@ def main():
         shutil.rmtree(work)
     os.makedirs(work)
     import tree
-    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "can"), launcher=os.path.abspath(a.launcher))   # a copy relinked with the build (17)
+    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "exclave"), launcher=os.path.abspath(a.launcher))   # a copy relinked with the build (17)
     cgcc, hgcc = os.path.join(ex, "tree", "usr", "bin", GCC), shutil.which("gcc-13") or shutil.which("gcc")
     launcher = os.path.join(ex, ".exclave", "launcher")
     env = {"PATH": "/usr/bin:/bin"}
@@ -114,8 +114,8 @@ def main():
         if p.returncode:
             raise SystemExit(p.stderr.decode())
     statb, spawnb = os.path.join(work, "statb"), os.path.join(work, "spawnb")
-    rows.append(("stat(), three-component can path, ns per call", best(lambda: int(native(statb, "/usr/include/stdio.h"))), best(lambda: int(inside(statb, "/usr/include/stdio.h")))))
-    rows.append(("stat(), seven-component can path, ns per call", best(lambda: int(native(statb, "/usr/lib/gcc/x86_64-linux-gnu/13/include/stddef.h"))), best(lambda: int(inside(statb, "/usr/lib/gcc/x86_64-linux-gnu/13/include/stddef.h")))))
+    rows.append(("stat(), three-component exclave path, ns per call", best(lambda: int(native(statb, "/usr/include/stdio.h"))), best(lambda: int(inside(statb, "/usr/include/stdio.h")))))
+    rows.append(("stat(), seven-component exclave path, ns per call", best(lambda: int(native(statb, "/usr/lib/gcc/x86_64-linux-gnu/13/include/stddef.h"))), best(lambda: int(inside(statb, "/usr/lib/gcc/x86_64-linux-gnu/13/include/stddef.h")))))
     hostfile = os.path.join(work, "statb.c")
     rows.append(("stat(), %d-component host path, ns per call" % hostfile.count("/"), best(lambda: int(native(statb, hostfile))), best(lambda: int(inside(statb, hostfile)))))
     rows.append(("stat(), relative name in the working directory, %d components deep on the host, ns per call" % work.count("/"), best(lambda: int(native(statb, "statb.c"))), best(lambda: int(inside(statb, "statb.c")))))
@@ -156,15 +156,15 @@ def main():
             raise SystemExit(p.stderr.decode())
     rows.append(("61-file project, -O1 -c each then link, s", best(lambda: _time(lambda: project(hgcc))) if hgcc else None, best(lambda: _time(lambda: project(cgcc)))))
     if a.sqlite and os.path.exists(a.sqlite) and hgcc:
-        rows.append(("gcc -O2 -c sqlite3.c, s", best(lambda: timed([hgcc, "-O2", "-c", a.sqlite, "-o", "sq_host.o"], work, env)), best(lambda: timed([cgcc, "-O2", "-c", a.sqlite, "-o", "sq_can.o"], work, env))))
-        same = open(os.path.join(work, "sq_host.o"), "rb").read() == open(os.path.join(work, "sq_can.o"), "rb").read()
+        rows.append(("gcc -O2 -c sqlite3.c, s", best(lambda: timed([hgcc, "-O2", "-c", a.sqlite, "-o", "sq_host.o"], work, env)), best(lambda: timed([cgcc, "-O2", "-c", a.sqlite, "-o", "sq_exclave.o"], work, env))))
+        same = open(os.path.join(work, "sq_host.o"), "rb").read() == open(os.path.join(work, "sq_exclave.o"), "rb").read()
         rows.append(("sqlite3.o identical", "yes" if same else "no", ""))
     if shutil.which("strace"):
         def count(gcc):
             p = subprocess.run(["strace", "-f", "-c", "-o", "sc.txt", gcc, "-O0", "hello.c", "-o", "h_sc"], cwd=work, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return int(open(os.path.join(work, "sc.txt")).read().strip().splitlines()[-1].split()[3])
         rows.append(("syscalls for one gcc -O0 hello.c, all processes", count(hgcc) if hgcc else None, count(cgcc)))
-    print("| Workload | native | can |")
+    print("| Workload | native | exclave |")
     print("|---|---|---|")
     for name, n, c in rows:
         fmt = lambda x: ("%.2f" % x if isinstance(x, float) else str(x)) if x is not None else ""

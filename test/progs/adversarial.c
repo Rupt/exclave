@@ -3,7 +3,7 @@
  * before an exec; a working directory deleted under the program; an exec with no descriptor left; mounts and roots
  * from inside; SIGSYS ignored, handled or fed to a signalfd; magic links under /proc/1; interpreter loops and chains;
  * an empty executable, a loader that is a directory. A second batch (sections 9 to 15): an exec with 0, 1 and 2 closed;
- * a pipe, a socket or /dev/null handed to fexecve; a hard link across the boundary, symlink chains at the kernel's
+ * a pipe, a socket or /dev/null handed to fexecve; a hard link across the border, symlink chains at the kernel's
  * limit and one past it, odd spellings of the self magic links; the read-only rule from mknod, ftruncate and a shared
  * writable mapping; CLONE_FS, CLONE_FILES, not dumpable, PER_LINUX32, a vfork child and a handler on an alternate
  * stack; io_uring and clone3 refused; a saturated cache, a huge environment, bad pointers; execute-only files and
@@ -37,7 +37,7 @@
 
 extern char **environ;
 #define HI (1UL << 32)                                        /* a bit the kernel never sees in an int argument */
-/* the newest syscall numbers this test names, for a can whose headers predate them (the number is stable per arch) */
+/* the newest syscall numbers this test names, for an exclave whose headers predate them (the number is stable per arch) */
 #if defined(__x86_64__)
 #ifndef SYS_io_uring_setup
 #define SYS_io_uring_setup 425
@@ -163,9 +163,9 @@ int main(int argc, char **argv)
     printf("readlinkat AT_FDCWD with upper bits: %s\n", r < 0 ? en(r) : "ok");
     P("openat dfd with upper bits", syscall(SYS_openat, HI | (unsigned)hfd, "f", O_RDONLY));
     P("utimensat host, flags upper bits only", syscall(SYS_utimensat, AT_FDCWD, p, ts, HI));
-    P("utimensat can, flags upper bits only", syscall(SYS_utimensat, AT_FDCWD, "/usr/share/exclave-test-marker", ts, HI));
-    P("faccessat2 can, flags upper bits only", syscall(SYS_faccessat2, AT_FDCWD, "/usr/share/exclave-test-marker", R_OK, HI));
-    P("newfstatat can, flags upper bits only", syscall(SYS_newfstatat, AT_FDCWD, "/usr/share/exclave-test-marker", &st, HI));
+    P("utimensat exclave, flags upper bits only", syscall(SYS_utimensat, AT_FDCWD, "/usr/share/exclave-test-marker", ts, HI));
+    P("faccessat2 exclave, flags upper bits only", syscall(SYS_faccessat2, AT_FDCWD, "/usr/share/exclave-test-marker", R_OK, HI));
+    P("newfstatat exclave, flags upper bits only", syscall(SYS_newfstatat, AT_FDCWD, "/usr/share/exclave-test-marker", &st, HI));
     P("getcwd size all ones", syscall(SYS_getcwd, buf, ~0UL));
     P("getcwd size 4 with upper bits", syscall(SYS_getcwd, buf, HI | 4));
     snprintf(q, sizeof q, "%s/a", hd); { int c = open(q, O_WRONLY | O_CREAT, 0644); close(c); }
@@ -176,9 +176,9 @@ int main(int argc, char **argv)
         struct sockaddr_un a = { AF_UNIX, "/usr/share/exclave-adv.sock" };
         int s = socket(AF_UNIX, SOCK_STREAM, 0);
         socklen_t l = (socklen_t)(2 + strlen(a.sun_path) + 1);
-        P("bind can path, addrlen upper bits", syscall(SYS_bind, s, &a, HI | l));
+        P("bind exclave path, addrlen upper bits", syscall(SYS_bind, s, &a, HI | l));
         strcpy(a.sun_path, "/usr/share/exclave-test.sock"); l = (socklen_t)(2 + strlen(a.sun_path) + 1);
-        P("connect can socket, addrlen upper bits", syscall(SYS_connect, s, &a, HI | l));
+        P("connect exclave socket, addrlen upper bits", syscall(SYS_connect, s, &a, HI | l));
         close(s);
     }
     P("openat2 size with upper bits", syscall(SYS_openat2, AT_FDCWD, "/usr/share", (unsigned long long[]){ O_RDONLY | O_DIRECTORY, 0, 0 }, HI | 24));
@@ -206,16 +206,16 @@ int main(int argc, char **argv)
 
     /* 4. an exec with no descriptor left: the kernel needs none */
     {
-        struct { const char *name; const char *path; } cases[] = { { "no fd left: exec can true", 0 }, { "no fd left: exec host ELF", 0 }, { "no fd left: exec host script", 0 } };
+        struct { const char *name; const char *path; } cases[] = { { "no fd left: exec exclave true", 0 }, { "no fd left: exec host ELF", 0 }, { "no fd left: exec host script", 0 } };
         char tp[4096], sp[4096], ep[4096];
-        snprintf(tp, sizeof tp, "%s", sh); char *s = strrchr(tp, '/'); strcpy(s + 1, "true");   /* the can's true beside its sh */
+        snprintf(tp, sizeof tp, "%s", sh); char *s = strrchr(tp, '/'); strcpy(s + 1, "true");   /* the exclave's true beside its sh */
         snprintf(sp, sizeof sp, "%s/s.sh", hd); script(sp, "#!/bin/sh\nexit 0\n");
         snprintf(ep, sizeof ep, "%s/self", hd);
         cases[0].path = tp; cases[1].path = ep; cases[2].path = sp;
         char *const av_true[] = { "true", 0 }; char *const av_self[] = { ep, (char *)hd, "--child", 0 }; char *const av_sh[] = { "s.sh", 0 };
         char *const *avs[] = { av_true, av_self, av_sh };
         for (int i = 0; i < 3; i++) { struct ex x = { cases[i].path, avs[i], 1 }; printf("%s: %s\n", cases[i].name, exec_answer(&x)); }
-        { struct ex x = { tp, av_true, 2 }; printf("no fd left, hard limit too: exec can true: %s\n", exec_answer(&x)); }
+        { struct ex x = { tp, av_true, 2 }; printf("no fd left, hard limit too: exec exclave true: %s\n", exec_answer(&x)); }
     }
 
     /* 5. mounts and roots from inside */
@@ -293,12 +293,12 @@ int main(int argc, char **argv)
           fflush(stdout); pid_t c = fork(); if (c == 0) { syscall(SYS_execveat, dn, "", av2, environ, AT_EMPTY_PATH); _exit(errno & 0x7f); }
           int st2; waitpid(c, &st2, 0); errno = WEXITSTATUS(st2); printf("fexecve of /dev/null: %s\n", en(-1)); close(dn); }
     }
-    /* 11. links: a hard link across the can boundary is EXDEV, a symlink chain at the kernel's limit and one over it, the self magic links */
+    /* 11. links: a hard link across the border is EXDEV, a symlink chain at the kernel's limit and one over it, the self magic links */
     {
         int cf = open("/usr/share/exclave-test-marker", O_RDONLY);
         snprintf(q, sizeof q, "/proc/self/fd/%d", cf); snprintf(p, sizeof p, "%s/hostname", hd);
-        P("linkat a can file by /proc/self/fd to a host name", linkat(AT_FDCWD, q, AT_FDCWD, p, AT_SYMLINK_FOLLOW));
-        P("linkat a can file by empty path to a host name", linkat(cf, "", AT_FDCWD, p, AT_EMPTY_PATH));
+        P("linkat an exclave file by /proc/self/fd to a host name", linkat(AT_FDCWD, q, AT_FDCWD, p, AT_SYMLINK_FOLLOW));
+        P("linkat an exclave file by empty path to a host name", linkat(cf, "", AT_FDCWD, p, AT_EMPTY_PATH));
         close(cf);
         for (int i = 41; i >= 1; i--) { snprintf(p, sizeof p, "%s/l%d", hd, i); if (i == 41) symlink("f", p); else { snprintf(q, sizeof q, "l%d", i + 1); symlink(q, p); } }
         snprintf(p, sizeof p, "%s/l2", hd); P("a chain of 40 symlinks", stat(p, &st));
@@ -309,22 +309,22 @@ int main(int argc, char **argv)
         printf("readlink /proc/self/task/tid/exe: %s\n", n > 0 && strcmp(tex, self) == 0 ? "the program" : "other");
         P("stat /proc/self/root/usr/share/exclave-test-marker", stat("/proc/self/root/usr/share/exclave-test-marker", &st));
         char slashes[4200]; memset(slashes, '/', 4000); strcpy(slashes + 4000, "usr/share/exclave-test-marker");
-        P("a path of 4000 slashes then a can file", stat(slashes, &st));
+        P("a path of 4000 slashes then an exclave file", stat(slashes, &st));
     }
     /* 12. the read-only rule from other angles: a device node, a read-only descriptor asked to write, a shared writable mapping, O_PATH with a write mode */
-    P("mknod a char device in the can", mknod("/usr/share/exclave-adv-dev", S_IFCHR | 0600, makedev(1, 3)));
+    P("mknod a char device in the exclave", mknod("/usr/share/exclave-adv-dev", S_IFCHR | 0600, makedev(1, 3)));
     { int cf = open("/usr/share/exclave-test-marker", O_RDONLY);
-      P("ftruncate a read-only can descriptor", ftruncate(cf, 0));
-      void *mm = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, cf, 0); printf("mmap PROT_WRITE MAP_SHARED of a read-only can descriptor: %s\n", mm == MAP_FAILED ? en(-1) : "mapped");
+      P("ftruncate a read-only exclave descriptor", ftruncate(cf, 0));
+      void *mm = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, cf, 0); printf("mmap PROT_WRITE MAP_SHARED of a read-only exclave descriptor: %s\n", mm == MAP_FAILED ? en(-1) : "mapped");
       if (mm != MAP_FAILED) munmap(mm, 4096);
       struct timespec mix[2] = { { 0, UTIME_NOW }, { 0, UTIME_OMIT } };
-      P("utimensat can descriptor NULL path, NOW and OMIT", syscall(SYS_utimensat, cf, NULL, mix, 0));
+      P("utimensat exclave descriptor NULL path, NOW and OMIT", syscall(SYS_utimensat, cf, NULL, mix, 0));
       close(cf); }
-    P("open a can file O_PATH with O_WRONLY", open("/usr/share/exclave-test-marker", O_PATH | O_WRONLY));
+    P("open an exclave file O_PATH with O_WRONLY", open("/usr/share/exclave-test-marker", O_PATH | O_WRONLY));
     P("truncate /dev/null", truncate("/dev/null", 0));
     /* 13. the process's own shape changed: CLONE_FS, CLONE_FILES, not dumpable, PER_LINUX32, a vfork child that traps, an alternate stack */
     { fflush(stdout); pid_t c = fork(); if (c == 0) { int u = unshare(CLONE_FS); int r0 = chdir("/usr/share"); long g = syscall(SYS_getcwd, buf, sizeof buf);
-        printf("unshare CLONE_FS then chdir into the can: %s, %s, getcwd %s\n", u ? "unshare failed" : "ok", r0 ? "chdir failed" : "ok", g > 0 ? buf : "failed"); fflush(stdout); _exit(0); } waitpid(c, 0, 0); }
+        printf("unshare CLONE_FS then chdir into the exclave: %s, %s, getcwd %s\n", u ? "unshare failed" : "ok", r0 ? "chdir failed" : "ok", g > 0 ? buf : "failed"); fflush(stdout); _exit(0); } waitpid(c, 0, 0); }
     { fflush(stdout); pid_t c = fork(); if (c == 0) { int u = unshare(CLONE_FILES); int r0 = stat("/usr/share/exclave-test-marker", &st); int r1 = open("/usr/share/exclave-test-marker", O_RDONLY);
         printf("unshare CLONE_FILES then trap: %s, stat %s, open %s\n", u ? "unshare failed" : "ok", r0 ? "failed" : "ok", r1 < 0 ? "failed" : "ok"); fflush(stdout); _exit(0); } waitpid(c, 0, 0); }
     { fflush(stdout); pid_t c = fork(); if (c == 0) { prctl(PR_SET_DUMPABLE, 0); int r0 = stat("/usr/share/exclave-test-marker", &st); long n = readlink("/proc/self/exe", buf, sizeof buf - 1);
@@ -345,7 +345,7 @@ int main(int argc, char **argv)
       snprintf(q, sizeof q, "%s/d2", hd); rename(p, q); P("openat on a descriptor of a directory renamed meanwhile", openat(dfd, "f", O_RDONLY)); close(dfd); }
     { int bad = 0; for (int i = 0; i < 20000; i++) { snprintf(q, sizeof q, "/usr/share/exclave-absent-%d", i); if (stat(q, &st) == 0 || errno != ENOENT) bad++; }
       int r0 = stat("/usr/share/exclave-test-marker", &st); int r1 = stat("/usr/share/exclave-absent-x", &st);
-      printf("20000 absent can paths then a present and an absent one: %d wrong, present %s, absent %s\n", bad, r0 ? "failed" : "ok", r1 == 0 || errno != ENOENT ? "wrong" : "ENOENT"); }
+      printf("20000 absent exclave paths then a present and an absent one: %d wrong, present %s, absent %s\n", bad, r0 ? "failed" : "ok", r1 == 0 || errno != ENOENT ? "wrong" : "ENOENT"); }
     { char tp[4096]; snprintf(tp, sizeof tp, "%s", sh); *strrchr(tp, '/') = 0; strcat(tp, "/true"); char *const av[] = { "true", 0 };
       static char *big[50002]; static char strs[50000][12]; for (int i = 0; i < 50000; i++) { snprintf(strs[i], 12, "V%d=%d", i, i); big[i] = strs[i]; } big[50000] = 0;
       struct ex x = { tp, av, 0, 0, big }; printf("exec of a wrapper with 50000 environment entries: %s\n", exec_answer(&x)); }

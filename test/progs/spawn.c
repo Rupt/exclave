@@ -22,7 +22,7 @@ int main(int argc, char **argv)
     if (argc > 2) TRUE = argv[2];
     char *av[] = { "sh", "-c", "exit 7", 0 };
     if (posix_spawn(&pid, "/bin/sh", 0, 0, av, environ) || waitpid(pid, &st, 0) < 0 || WEXITSTATUS(st) != 7) { fails++; printf("FAIL posix_spawn sh -c\n"); }
-    snprintf(cmd, sizeof cmd, "%s --version >/dev/null", argc > 1 ? argv[1] : "/usr/bin/x86_64-linux-gnu-gcc-13");   /* the can's gcc, by the test */
+    snprintf(cmd, sizeof cmd, "%s --version >/dev/null", argc > 1 ? argv[1] : "/usr/bin/x86_64-linux-gnu-gcc-13");   /* the exclave's gcc, by the test */
     if (system(cmd) != 0) { fails++; printf("FAIL system(gcc --version)\n"); }
     pthread_t t[8]; void *r;
     for (int i = 0; i < 8; i++) pthread_create(&t[i], 0, w, 0);

@@ -1,6 +1,6 @@
 /* filter.c — the seccomp filter (PROPOSAL.md 7.4.2).
  *
- * One classic-BPF program, installed at the can boundary, or over an older version's, and inherited
+ * One classic-BPF program, installed at the border, or over an older version's, and inherited
  * by every descendant. The launcher's own syscalls are recognised by their
  * instruction address: all of them are issued from the syscall page, which
  * every launcher maps at the same fixed address, so the filter stays valid
@@ -54,7 +54,7 @@ const int path_syscalls[] = {
 };
 const int n_path_syscalls = sizeof path_syscalls / sizeof path_syscalls[0];
 
-/* descriptor syscalls that could change a can file's attributes (8.2) or need a read-only answer */
+/* descriptor syscalls that could change an exclave file's attributes (8.2) or need a read-only answer */
 static const int fd_syscalls[] = { NR_fchmod, NR_fchown, NR_fsetxattr, NR_fremovexattr, NR_fstatfs };
 /* signal-mask syscalls the handler scrubs (7.5.2) */
 static const int mask_syscalls[] = { NR_rt_sigprocmask, NR_rt_sigsuspend };
@@ -195,7 +195,7 @@ void filter_install(void)
     if (sys_prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) die("PR_SET_NO_NEW_PRIVS failed", 0, 0);
     /* SPEC_ALLOW: a filter installed without it switches the process and its descendants to Speculative Store Bypass
      * Disable, forced, wherever the kernel's default is spec_store_bypass_disable=seccomp (4.17 to 5.15 and the
-     * backports before), which slows compute-bound code by up to several times; a can is not a security boundary and
+     * backports before), which slows compute-bound code by up to several times; an exclave is not a security boundary and
      * its programs did not ask for it (PERFORMANCE.md 3). A kernel without the flag answers EINVAL. */
     long r = SC3(NR_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_SPEC_ALLOW, &fp);
     if (r == -EINVAL) r = SC3(NR_seccomp, SECCOMP_SET_MODE_FILTER, 0, &fp);

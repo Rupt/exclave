@@ -3,14 +3,14 @@
 # (README; PROPOSAL.md 9, 10). Everything it makes goes under DIR; the fetchers keep their caches under
 # ~/.cache, so a second run fetches nothing. The steps, each a command you can run by hand:
 #   1. make builds the launcher.
-#   2. tools/fetch-debs.py downloads Ubuntu 24.04's gcc-13 closure; exclave unpack makes an open can from the files.
-#   3. tools/fetch-rpms.py downloads CentOS 7's glibc; unpacked into a can of its own, its tree is copied into the
-#      gcc can at /opt/sysroot-el7, and the manifest says `data "/opt/sysroot-el7"`: nothing there is wrapped,
-#      checked or executed. exclave wrap closes the can, and an entry symlink names its gcc.
-#   4. hello.c is compiled inside the can twice, plainly and against the sysroot, with EXCLAVE_LOG on; objdump shows
-#      which glibc symbol versions each output binds; the sysroot one runs on this host and inside the can.
-#   5. exclave prune keeps, in a copy of the can, what the compile touched; that copy compiles the program
-#      again, and exclave check reads the new log: the can you would ship, and the check you would run on it.
+#   2. tools/fetch-debs.py downloads Ubuntu 24.04's gcc-13 closure; exclave unpack makes an unwrapped exclave from the files.
+#   3. tools/fetch-rpms.py downloads CentOS 7's glibc; unpacked into an exclave of its own, its tree is copied into the
+#      gcc exclave at /opt/sysroot-el7, and the manifest says `data "/opt/sysroot-el7"`: nothing there is wrapped,
+#      checked or executed. exclave wrap wraps the exclave, and a shortcut names its gcc.
+#   4. hello.c is compiled inside the exclave twice, plainly and against the sysroot, with EXCLAVE_LOG on; objdump shows
+#      which glibc symbol versions each output binds; the sysroot one runs on this host and inside the exclave.
+#   5. exclave prune keeps, in a copy of the exclave, what the compile touched; that copy compiles the program
+#      again, and exclave check reads the new log: the exclave you would ship, and the check you would run on it.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 [ $# -eq 1 ] || { echo "usage: example.sh DIR" >&2; exit 2; }
@@ -29,7 +29,7 @@ sysroot="--sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/"       # heade
 echo "== 1. the launcher"
 run make -s -C "$here"
 
-echo "== 2. a gcc can from Ubuntu 24.04 packages"
+echo "== 2. a gcc exclave from Ubuntu 24.04 packages"
 [ -n "$(ls debs 2>/dev/null)" ] || logged fetch-debs python3 "$here/tools/fetch-debs.py" --out debs gcc-13 libc6-dev
 logged unpack exclave unpack gcc.exclave debs/*.deb
 
@@ -42,10 +42,10 @@ printf 'exclave 1\n\ndata "/opt/sysroot-el7"\n' > gcc.exclave/.exclave/manifest
 logged wrap exclave wrap gcc.exclave
 run ln -s tree/usr/bin/gcc-13 gcc.exclave/gcc
 
-echo "== 4. a program built inside, run on this host and inside the can"
+echo "== 4. a program built inside, run on this host and inside the exclave"
 cat > hello.c <<'HELLO'
 #include <stdio.h>
-int main(void) { printf("hello from a can\n"); return 0; }
+int main(void) { printf("hello from an exclave\n"); return 0; }
 HELLO
 run env EXCLAVE_LOG=log/plain.log gcc.exclave/gcc -o hello-plain hello.c
 run env EXCLAVE_LOG=log/hello.log gcc.exclave/gcc $sysroot -o hello hello.c
@@ -55,7 +55,7 @@ echo "  glibc symbol versions bound: hello-plain: $(versions hello-plain) hello:
 run ./hello
 run gcc.exclave/.exclave/launcher "$dir/hello"
 
-echo "== 5. the can pruned to what the compile touched, and the checks on it"
+echo "== 5. the exclave pruned to what the compile touched, and the checks on it"
 run cp -a gcc.exclave hello.exclave
 run exclave prune hello.exclave log/hello.log
 run env EXCLAVE_LOG=log/pruned.log hello.exclave/gcc $sysroot -o hello-pruned hello.c

@@ -1,6 +1,6 @@
 /* vis.c — the visibility rule (PROPOSAL.md section 8) and wrapper redirect (7.4.4).
  *
- * Decides, for a virtual path, whether it is the host's or the can's, and
+ * Decides, for a virtual path, whether it is the host's or the exclave's, and
  * turns it into a real path. The table is built once at startup from the
  * tree, the manifest, the working directory and the host identity files.
  */
@@ -8,7 +8,7 @@
 
 static const char *volatile_dirs[] = { "/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run", 0 };
 /* 8.1 rule 5: the host's by default; an own record naming one exactly removes it. The time zone is not
- * among them: inside a can it is UTC, set at the boundary (6.2). */
+ * among them: inside an exclave it is UTC, set at the border (6.2). */
 static const char *identity_files[] = { "/etc/passwd", "/etc/group", "/etc/nsswitch.conf", "/etc/host.conf",
                                         "/etc/resolv.conf", "/etc/hosts", "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", 0 };
 
@@ -18,7 +18,7 @@ struct dirent64 { unsigned long d_ino; long d_off; unsigned short d_reclen; unsi
 #define DT_LNK 10
 
 /* one getdents64: does the directory hold anything but . and ..? A directory that cannot be listed is not a
- * placeholder: it counts as the can's (review O4-8, F4-4), and a failure that is not the directory's own, no
+ * placeholder: it counts as the exclave's (review O4-8, F4-4), and a failure that is not the directory's own, no
  * descriptor left or an I/O error, is fatal rather than a silent answer of "the host's" */
 static int dir_nonempty(const char *real)
 {
@@ -38,14 +38,14 @@ static int dir_nonempty(const char *real)
     }
 }
 
-/* 8.1 rule 1: the can owns every top-level entry of its tree that is not an empty directory. Read from the
+/* 8.1 rule 1: the exclave owns every top-level entry of its tree that is not an empty directory. Read from the
  * tree at startup, so an edited tree needs no index to be refreshed; the manifest's own records are added
  * by the parser before this runs. About one directory read per top-level entry. */
 static void own_from_tree(void)
 {
     static char buf[16384]; static char real[PATH_MAX];
     long fd = sys_open(C.root, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0); if (fd < 0) die("cannot read tree/", C.root, fd);
-    int first = C.nown;                                        /* the manifest's claims come first; the tree has 256 slots of its own */
+    int first = C.nown;                                        /* the manifest's own records come first; the tree has 256 slots of its own */
     for (;;) {
         long n = sys_getdents64((int)fd, buf, sizeof buf);
         if (n < 0) die("cannot read tree/", C.root, n);
@@ -66,7 +66,7 @@ static void own_from_tree(void)
     sys_close((int)fd);
 }
 
-/* 8.1 rule 5: the identity files join the host table unless the manifest claims one by name; the table has
+/* 8.1 rule 5: the identity files join the host table unless an own record names one; the table has
  * room for them after the manifest's 32 by construction (review O4-10) */
 static void identity_defaults(void)
 {
@@ -79,7 +79,7 @@ static void identity_defaults(void)
     }
 }
 
-/* 6.2: a data prefix is never executed and never a loader */
+/* 6.2: a data directory is never executed and never a loader */
 int vis_in_data(const char *v)
 {
     for (int i = 0; i < C.ndata; i++) if (starts_dir(v, C.data[i])) return 1;
@@ -115,13 +115,13 @@ static void claim_cwd(void)
     C.cwdclaim[0] = 0; C.cwdclaim_len = 0;
     long n = sys_getcwd(real, PATH_MAX); if (n <= 0) return;
     if (C.boundary) log_msg("cwd", real);                       /* the workload's directory, for the dynamic check (10.3) */
-    if (starts_dir(real, C.root)) return;                       /* inside the tree: virtual path, no claim (8.1.4) */
-    if (real[0] == '/' && real[1] == 0) return;                 /* the root itself is the tree's (8.3): nothing to claim */
-    /* a real host path: claim it as a subtree if the base rule would otherwise hand it to the can; the claims
-     * themselves do not count, or a cwd above the can's directory would never be claimed */
+    if (starts_dir(real, C.root)) return;                       /* inside the tree: virtual path, nothing given (8.1.4) */
+    if (real[0] == '/' && real[1] == 0) return;                 /* the root itself is the tree's (8.3): nothing to give */
+    /* a real host path: give it to the host as a subtree if the base rule would otherwise hand it to the exclave; the
+     * subtrees given do not count, or a cwd above the exclave's directory would never be given */
     const char *r; if (base_is_host(real, &r)) return;
     scpy(C.cwdclaim, real, PATH_MAX); C.cwdclaim_len = (long)xstrlen(real);
-    log_msg("cwd claimed for the host", real);
+    log_msg("cwd given to the host", real);
 }
 
 void vis_init(void)
@@ -132,10 +132,10 @@ void vis_init(void)
     int n = 0;
     for (int i = 0; i < C.nhost; i++) {
         struct kstat st;
-        if (sys_lstat(C.host[i].v, &st) < 0) { log_msg("host path absent, using the can's", C.host[i].v); continue; }
+        if (sys_lstat(C.host[i].v, &st) < 0) { log_msg("host path absent, using the exclave's", C.host[i].v); continue; }
         if ((st.st_mode & S_IFMT) == S_IFDIR) { C.host[n] = C.host[i]; C.host[n].is_file = 0; id_link[n] = 0; n++; continue; }
         static char out[PATH_MAX], link[PATH_MAX];
-        if (!host_resolve(C.host[i].v, &st, out, link)) { log_msg("host path unresolvable, using the can's", C.host[i].v); continue; }
+        if (!host_resolve(C.host[i].v, &st, out, link)) { log_msg("host path unresolvable, using the exclave's", C.host[i].v); continue; }
         C.host[n].v = C.host[i].v; C.host[n].r = arena_str(out, xstrlen(out)); C.host[n].is_file = 1;
         id_link[n] = link[0] ? arena_str(link, xstrlen(link)) : 0; n++;
     }
@@ -144,7 +144,7 @@ void vis_init(void)
     claim_cwd();
 }
 
-/* The rule compiled (PERFORMANCE.md 2.2, 4 item 3). Every string the rule matches a path against, a claim, a host
+/* The rule compiled (PERFORMANCE.md 2.2, 4 item 3). Every string the rule matches a path against, an owned path, a host
  * record, an identity file, a volatile directory, and every proper ancestor of an identity file, is an entry of one
  * table built at startup, with what it is. starts_dir(v, p) holds exactly when p is v cut at a '/' or at its end, so
  * the prefixes of v the rule can match are found by one pass over v, hashing as it goes and looking each cut up: a
@@ -155,7 +155,7 @@ enum { R_OWN = 1, R_HOSTDIR = 2, R_HOSTFILE = 4, R_VOLATILE = 8, R_LEADS = 16 };
 static struct rule { const char *s; unsigned len, flags; int host; } rules[RULE_SLOTS];   /* host: the index of a file's record */
 static int nrules;                                             /* entries placed, at most half the slots */
 static int root_flags;                                         /* a rule string "/", which starts_dir lets match every absolute path */
-static unsigned dir_len;                                       /* the can's directory's length, for vis_is_host's claim on it */
+static unsigned dir_len;                                       /* the exclave's directory's length, for the subtree there that vis_is_host gives the host */
 
 static unsigned long rule_hash(unsigned long h, char c) { return (h ^ (unsigned char)c) * 1099511628211UL; }
 #define RULE_BASIS 1469598103934665603UL
@@ -194,7 +194,7 @@ static void rule_build(void)
     }
 }
 
-/* what the rule's strings say of v: the identity file it is, the longest host record and claim that are prefixes of it,
+/* what the rule's strings say of v: the identity file it is, the longest host record and owned path that are prefixes of it,
  * whether a volatile directory is */
 struct facts { struct rule *exact; long best_host, best_own; int vol; unsigned len; };
 static void rule_facts(const char *v, struct facts *f)
@@ -235,7 +235,7 @@ static struct rule *rule_exact(const char *v)
     return len ? rule_find(v, len, h) : 0;
 }
 
-/* 8.1 without the two claims: identity file > volatile > host records > own > default host; longest prefix wins.
+/* 8.1 without the two subtrees given to the host: identity file > volatile > host records > own > default host; longest prefix wins.
  * The root directory itself is the tree's, so ls / lists the tree and its placeholders (8.3, review O4-17). */
 static int base_is_host_facts(const char *v, const struct facts *f, const char **real)
 {
@@ -247,18 +247,18 @@ static int base_is_host_facts(const char *v, const struct facts *f, const char *
 }
 static int base_is_host(const char *v, const char **real) { struct facts f; rule_facts(v, &f); return base_is_host_facts(v, &f, real); }
 
-/* the full rule: the root, the identity files, then the two claims (8.1 rules 4 and 6), then the base rule */
+/* the full rule: the root, the identity files, then the two subtrees given to the host (8.1 rules 4 and 6), then the base rule */
 static int is_host_facts(const char *v, const struct facts *fp, const char **real)
 {
     struct facts f = *fp;
-    if (v[0] == '/' && v[1] == 0) return 0;                    /* the root itself is the tree's (8.3), before the claims that pass through it */
+    if (v[0] == '/' && v[1] == 0) return 0;                    /* the root itself is the tree's (8.3), before the subtrees that pass through it */
     if (f.exact && (f.exact->flags & R_HOSTFILE)) { *real = C.host[f.exact->host].r; return 1; }
-    /* 8.1.4: a claimed working directory is the host's as a subtree, and so is every directory on the way to
+    /* 8.1.4: a working directory given to the host is the host's as a subtree, and so is every directory on the way to
      * it, or realpath and pwd -P could not walk the path the process was started in */
     if (C.cwdclaim_len && on_the_way(v, f.len, C.cwdclaim, (unsigned)C.cwdclaim_len)) { *real = v; return 1; }
-    /* 8.1: the can's own directory is the host's as a subtree, and so are the directories on the way to it: a
+    /* 8.1: the exclave's own directory is the host's as a subtree, and so are the directories on the way to it: a
      * program that locates its files relative to its real executable path, as gcc does, must reach them
-     * wherever the can lives, including under a prefix its own tree owns */
+     * wherever the exclave lives, including under a prefix its own tree owns */
     if (on_the_way(v, f.len, C.dir, dir_len)) { *real = v; return 1; }
     return base_is_host_facts(v, &f, real);
 }
@@ -310,7 +310,7 @@ int vis_walk_facts(const char *v, int *identity, int *leads, const char **real)
     return is_host_facts(v, &f, real);
 }
 
-/* 8.4: the directories on the way to a host identity file exist on the host whether or not the can ships
+/* 8.4: the directories on the way to a host identity file exist on the host whether or not the exclave ships
  * them; a path walk treats them as directories so that the file itself can be reached */
 int vis_leads_to_host_file(const char *v)
 {
@@ -325,7 +325,7 @@ int is_wrapper_real(const char *real, char *tmp)
     if (st.st_dev != C.launcher_dev || st.st_ino != C.launcher_ino) {
         if (st.st_size != C.launcher_size) return 0;
     }
-    return payload_of(real, tmp) && sys_lstat(tmp, &st) == 0;   /* the launcher's inode or a copy: a wrapper only where its payload exists;
+    return payload_of(real, tmp) && sys_lstat(tmp, &st) == 0;   /* the launcher's inode or a copy: a wrapper only where its original exists;
                                                                     .exclave/launcher itself is not one (review F5-2) */
 }
 int payload_of(const char *real, char *out)
@@ -358,7 +358,7 @@ void from_real(char *r)
     if (r[C.rootlen] == 0) { r[0] = '/'; r[1] = 0; return; }
     if (r[C.rootlen] != '/') return;
     memmove(r, r + C.rootlen, xstrlen(r + C.rootlen) + 1);
-    /* a payload seen through /proc reports the wrapper's name: drop a final "/.real" directory */
+    /* an original seen through /proc reports the wrapper's name: drop a final "/.real" directory */
     char *b = xstrrchr(r, '/');
     if (b && b - r >= 6 && xmemcmp(b - 6, "/.real", 6) == 0) memmove(b - 6, b, xstrlen(b) + 1);
 }

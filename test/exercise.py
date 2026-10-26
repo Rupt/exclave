@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""exercise.py — one program, two worlds (PROPOSAL.md 17): compile PROG.c with the can's compiler, run it under bwrap with
+"""exercise.py — one program, two worlds (PROPOSAL.md 17): compile PROG.c with the exclave's compiler, run it under bwrap with
 the unwrapped tree read-only at / (the namespace oracle's world, where the kernel answers) and under the launcher, and
 print the two outputs side by side, marking the lines that differ. This is how a limitation is measured before it is
 fixed: the program prints one line per case, "<case>: <answer>", and the kernel's column is the expectation.
 
-    test/exercise.py --exclave CAN PROG.c [ARGS...]     HOSTDIR in ARGS is replaced by a fresh writable host directory
+    test/exercise.py --exclave EXCLAVE PROG.c [ARGS...]     HOSTDIR in ARGS is replaced by a fresh writable host directory
 
-The work lives under build/exercise/<can>-<lock hash>: a copy of the can relinked with build/launcher, and relinked again whenever the
+The work lives under build/exercise/<exclave>-<hashes file's hash>: a copy of the exclave relinked with build/launcher, and relinked again whenever the
 build has changed since, the unwrapped tree for bwrap, both with a socket file at /usr/share/exclave-test.sock and the
 suite's marker. Needs bwrap and user namespaces; says so and exits 1 when it cannot run. Exit status: the number of
 lines that differ."""
@@ -29,10 +29,10 @@ import build  # noqa: E402
 
 
 def setup(ex0, work):
-    """A closed copy for the launcher and an unwrapped tree for bwrap, made once per can."""
+    """A wrapped copy for the launcher and an unwrapped tree for bwrap, made once per exclave."""
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
-    ex = tree.fresh_exclave(ex0, os.path.join(work, "can"))                  # a copy relinked with the build (17)
+    ex = tree.fresh_exclave(ex0, os.path.join(work, "exclave"))              # a copy relinked with the build (17)
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy)
     build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
@@ -57,7 +57,7 @@ def setup(ex0, work):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--exclave", required=True)
-    ap.add_argument("prog", help="a C source, compiled with the can's compiler")
+    ap.add_argument("prog", help="a C source, compiled with the exclave's compiler")
     ap.add_argument("args", nargs="*", help="arguments; HOSTDIR is replaced by a fresh writable host directory")
     a = ap.parse_args()
     if not shutil.which("bwrap") or subprocess.run(["bwrap", "--ro-bind", "/", "/", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
@@ -65,11 +65,11 @@ def main():
     ex0 = os.path.abspath(a.exclave)
     key = hashlib.blake2b(open(os.path.join(ex0, ".exclave", "hashes"), "rb").read(), digest_size=6).hexdigest()
     work = os.path.join(REPO, "build", "exercise", os.path.basename(ex0).replace(".exclave", "") + "-" + key)
-    if not os.path.exists(os.path.join(work, "can", ".exclave", "hashes")):
+    if not os.path.exists(os.path.join(work, "exclave", ".exclave", "hashes")):
         setup(ex0, work)
-    elif tree.relink_if_stale(os.path.join(work, "can")):
+    elif tree.relink_if_stale(os.path.join(work, "exclave")):
         print("the build changed since this copy was made: relinked")
-    ex, root = os.path.join(work, "can"), os.path.join(work, "bare", "tree")
+    ex, root = os.path.join(work, "exclave"), os.path.join(work, "bare", "tree")
     r = os.path.join(ex, "tree")
     machine = os.uname().machine
     oracle_ns.GCC = tree.compiler(r, machine) or oracle_ns.GCC             # the tree's spellings for both worlds

@@ -1,7 +1,7 @@
 """tree.py — what a tree says about itself, for the suite and the oracles (PROPOSAL.md 17): a test asserts what the
 tree says, never what one distribution spells. Every function takes the tree's root directory; then the one way a
-driver takes a can: a copy of its own, relinked with the build, so that the launcher under test is always build/launcher
-and never the one a can was closed with; and the Go regression's builds, which the matrix makes on the host for VMs
+driver takes an exclave: a copy of its own, relinked with the build, so that the launcher under test is always build/launcher
+and never the one an exclave was wrapped with; and the Go regression's builds, which the matrix makes on the host for VMs
 that have no go."""
 import filecmp
 import os
@@ -77,10 +77,10 @@ def libc(root, machine):
     return "/lib/libc.so.6"
 
 
-# ---------------------------------------------------------------- a can for a driver (17)
+# ---------------------------------------------------------------- an exclave for a driver (17)
 def copy_exclave(src, dst):
-    """A copy of a can for a driver or a test to alter: the tree's files hard-linked, the files under .exclave/ copied, since a
-    manifest or lock written through a hard link would change the given can's."""
+    """A copy of an exclave for a driver or a test to alter: the tree's files hard-linked, the files under .exclave/ copied, since a
+    manifest or hashes file written through a hard link would change the given exclave's."""
     import exclave
     shutil.copytree(src, dst, symlinks=True, copy_function=exclave.link_or_copy)
     for name in os.listdir(os.path.join(dst, ".exclave")):
@@ -96,8 +96,8 @@ def copy_exclave(src, dst):
 
 
 def fresh_exclave(src, dst, launcher=BUILD_LAUNCHER):
-    """copy_can, then every wrapper relinked to build/launcher (exclave relink, about a second for a gcc can): the launcher a
-    driver runs is always the checkout's build, never the one a can carries, which is the one it was closed with and
+    """copy_exclave, then every wrapper relinked to build/launcher (exclave relink, about a second for a gcc exclave): the
+    launcher a driver runs is always the checkout's build, never the one an exclave carries, which is the one it was wrapped with and
     which a rebuild leaves behind. The copy is made anew on every run, so nothing has to be remembered."""
     import exclave
     if not os.path.isfile(launcher):

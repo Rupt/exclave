@@ -55,7 +55,7 @@ int main(int argc, char **argv)
     CHECK(mknod(missing, S_IFIFO | 0644, 0), EROFS);
     CHECK(symlink("x", missing), EROFS);
     CHECK(symlink("x", marker), EEXIST);
-    /* across the boundary */
+    /* across the border */
     CHECK(link(marker, hnew), EXDEV);
     CHECK(link(hfile, missing), EROFS);
     CHECK(rename(marker, missing), EROFS);
@@ -77,7 +77,7 @@ int main(int argc, char **argv)
     CHECK(access(marker, W_OK), EROFS);
     CHECK(access(marker, R_OK), 0);
     CHECK(access(missing, W_OK), ENOENT);
-    /* descriptors that name can files */
+    /* descriptors that name exclave files */
     int fd = open(marker, O_RDONLY); if (fd < 0) { printf("FAIL open marker: %s\n", strerror(errno)); return 1; }
     CHECK(fchmod(fd, 0644), EROFS);
     CHECK(fchown(fd, getuid(), getgid()), EROFS);
@@ -113,7 +113,7 @@ int main(int argc, char **argv)
     CHECK(rename(hnew, hfile), 0);
     CHECK(unlink(hfile), 0);
     CHECK(rmdir(hdir), 0);
-    /* wrapper redirect: opening a wrapper reads the payload */
+    /* wrapper redirect: opening a wrapper reads the original */
     { const char *w = argv[2] ? argv[2] : "/usr/bin/x86_64-linux-gnu-gcc-13"; char p[4096]; const char *b = strrchr(w, '/');
       snprintf(p, sizeof p, "%.*s/.real%s", (int)(b - w), w, b);
       struct stat a, c; int f = open(w, O_RDONLY); unsigned char h[4] = {0};

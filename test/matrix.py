@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""matrix.py — the kernel matrix (PROPOSAL.md 12, 17 item 5): a can built here, run in virtual machines.
+"""matrix.py — the kernel matrix (PROPOSAL.md 12, 17 item 5): an exclave built here, run in virtual machines.
 
-    test/matrix.py --exclave CAN [--only NAME,...] [--work DIR] [--images DIR] [--memory MB] [--arm64 --debs-arm64 DIR]
+    test/matrix.py --exclave EXCLAVE [--only NAME,...] [--work DIR] [--images DIR] [--memory MB] [--arm64 --debs-arm64 DIR]
 
 Each row of VMS names a distribution cloud image. The image is downloaded once, booted under QEMU with
 KVM behind a copy-on-write overlay and a cloud-init seed that installs python3 and strace (and bubblewrap
-where it exists), the can and this repository's test tree and launcher are copied in over SSH, and the
+where it exists), the exclave and this repository's test tree and launcher are copied in over SSH, and the
 regression suite runs there; the oracles, the syscall probe and the Docker-profile run follow where bubblewrap works.
 One VM at a time, 1 GB each, 2 GB for the emulated row. Results go to build/matrix-results.md.
 """
@@ -38,7 +38,7 @@ VMS = [
                                  "https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2"], "dnf", "SELinux enforcing", "x86_64"),
     ("alpine", "6.x", "alpine", ["https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.3-x86_64-bios-cloudinit-r0.qcow2",
                                  "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/cloud/nocloud_alpine-3.20.3-x86_64-bios-cloudinit-r0.qcow2"], "apk", "musl host, busybox", "x86_64"),
-    # aarch64 under TCG (12): the same suite and oracles, the arm64 launcher and can, ten to twenty times slower
+    # aarch64 under TCG (12): the same suite and oracles, the arm64 launcher and exclave, ten to twenty times slower
     ("noble-arm64", "6.8", "ubuntu", ["https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img"], "apt", "aarch64, TCG emulation", "aarch64"),]
 
 PACKAGES = {"apt": ["python3", "strace", "bubblewrap"], "dnf": ["python3", "strace", "bubblewrap"], "apk": ["python3", "strace", "bubblewrap", "bash"],
@@ -175,7 +175,7 @@ def main():
     ap.add_argument("--images", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-images"))
     ap.add_argument("--memory", type=int, default=1024)
     ap.add_argument("--arm64", action="store_true", help="include the emulated aarch64 VM (slow); --only names it too")
-    ap.add_argument("--debs-arm64", help="directory of arm64 .deb files the aarch64 VM makes its gcc can from")
+    ap.add_argument("--debs-arm64", help="directory of arm64 .deb files the aarch64 VM makes its gcc exclave from")
     a = ap.parse_args()
     if not shutil.which("qemu-system-x86_64") or not shutil.which("cloud-localds"):
         sys.exit("need qemu-system-x86_64 and cloud-localds")
@@ -186,10 +186,10 @@ def main():
     if not os.path.exists(key):
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
     pubkey = open(key + ".pub").read().strip()
-    # the payload: the can (hard links preserved by tar) and the repository's test tree, exclave, launcher and, where the
+    # the payload: the exclave (hard links preserved by tar) and the repository's test tree, exclave, launcher and, where the
     # host has go, the Go regression's programs built for the VM's machine. For the
     # aarch64 VM the payload carries the arm64 package files and the cross-built launchers under the suite's names:
-    # the can is unpacked and closed in the VM, on its own architecture (10.1).
+    # the exclave is unpacked and wrapped in the VM, on its own architecture (10.1).
     payloads = {}
 
     def payload_for(arch):
@@ -214,7 +214,7 @@ def main():
                         t.add(os.path.join(REPO, "build", "sysroot-hello"), arcname="repo/build/sysroot-hello")
                 else:
                     if not a.debs_arm64:
-                        sys.exit("the aarch64 VM needs --debs-arm64 DIR, a directory of arm64 .deb files for the gcc can")
+                        sys.exit("the aarch64 VM needs --debs-arm64 DIR, a directory of arm64 .deb files for the gcc exclave")
                     t.add(a.debs_arm64, arcname="debs")
                     t.add(os.path.join(REPO, "build", "launcher-aarch64"), arcname="repo/build/launcher")
                     if os.path.exists(os.path.join(REPO, "build", "launcher-old-aarch64")):
@@ -254,16 +254,16 @@ def main():
             if "unpacked" not in out:
                 results.append((name, uname, "cannot unpack: " + out[-200:], "", notes))
                 continue
-            if arch != "x86_64":                                  # the can is made here, on its own architecture (10.1)
+            if arch != "x86_64":                                  # the exclave is made here, on its own architecture (10.1)
                 rc, out = vm.ssh("cd m && python3 repo/exclave/exclave.py unpack ex debs/*.deb 2>&1 | tail -3 && python3 repo/exclave/exclave.py wrap ex 2>&1 | tail -3", timeout=3600 * slow)
-                log(name, "can:", " | ".join(l.strip() for l in out.splitlines()[-3:]))
-                if "closed" not in out:
-                    results.append((name, uname, "cannot make the can: " + out[-300:].replace("\n", " | "), "", notes))
+                log(name, "exclave:", " | ".join(l.strip() for l in out.splitlines()[-3:]))
+                if "ex is wrapped" not in out:
+                    results.append((name, uname, "cannot make the exclave: " + out[-300:].replace("\n", " | "), "", notes))
                     continue
-            else:                                                 # the can given carries the launcher that made it: the row tests the checkout's
+            else:                                                 # the exclave given carries the launcher that made it: the row tests the checkout's
                 rc, out = vm.ssh("cd m && python3 repo/exclave/exclave.py relink ex repo/build/launcher 2>&1 | tail -1", timeout=600 * slow)
                 if "relinked" not in out:
-                    results.append((name, uname, "cannot relink the can: " + out[-200:].replace("\n", " | "), "", notes))
+                    results.append((name, uname, "cannot relink the exclave: " + out[-200:].replace("\n", " | "), "", notes))
                     continue
             rc, out = vm.ssh("cd m && python3 repo/test/run.py --exclave $PWD/ex --work $PWD/work --budget %d 2>&1" % (60 * slow), timeout=2400 * slow)
             with open(os.path.join(work, name + "-suite.log"), "w") as f:
@@ -275,7 +275,7 @@ def main():
             for f in fails:
                 log(name, f[:200])
             # 12, 17.4: a noexec mount, made as root. Natively the shell answers EACCES; the launcher's loader cannot map
-            # a program there and says so; a can's shell answers EACCES as the kernel would (7.4.5).
+            # a program there and says so; an exclave's shell answers EACCES as the kernel would (7.4.5).
             rc, out = vm.ssh("S=sudo; command -v sudo >/dev/null 2>&1 || S=doas; echo 'int main(void){return 0;}' > nx.c && "
                              "m/ex/tree/usr/bin/$(uname -m)-linux-gnu-gcc-13 -o nxprog nx.c && $S mkdir -p /mnt/nx && $S mount -t tmpfs -o noexec tmpfs /mnt/nx && "
                              "$S cp nxprog /mnt/nx/prog && $S chmod 755 /mnt/nx/prog && mount | grep -q '/mnt/nx .*noexec' || { echo noexec setup failed; exit 0; }; "
@@ -285,7 +285,7 @@ def main():
             noexec = noexec[-1] if noexec else "noexec: " + out[-120:].replace("\n", " | ")
             log(name, noexec)
             notes = (notes + "; " if notes else "") + noexec
-            # 9: an output built inside the gcc can against an older glibc's sysroot (test/sysroot.py) runs natively here
+            # 9: an output built inside the gcc exclave against an older glibc's sysroot (test/sysroot.py) runs natively here
             rc, out = vm.ssh("if test -x m/repo/build/sysroot-hello; then o=$(m/repo/build/sysroot-hello 2>&1); r=$?; echo \"sysroot-rc=$r $o\"; else echo no-sysroot-hello; fi; "
                              "ldd --version 2>&1 | head -1", timeout=60)
             sysroot = " ".join(l.strip() for l in out.splitlines() if l.strip())
@@ -306,7 +306,7 @@ def main():
                                  "python3 repo/test/docker_profile.py --exclave $PWD/ex --profile repo/test/docker-seccomp.json --work $PWD/dw 2>&1 | tail -20", timeout=2400 * slow)
                 with open(os.path.join(work, name + "-oracles.log"), "w") as f:
                     f.write(out)
-                keep = [l.strip() for l in out.splitlines() if ("paths:" in l or "workloads," in l or "cases over" in l or l.startswith("PASS can") or l.startswith("FAIL can") or "cannot run" in l)]
+                keep = [l.strip() for l in out.splitlines() if ("paths:" in l or "workloads," in l or "cases over" in l or l.startswith("PASS exclave") or l.startswith("FAIL exclave") or "cannot run" in l)]
                 oracle = " / ".join(keep) or out[-300:].replace("\n", " | ")
                 log(name, oracle)
             else:
