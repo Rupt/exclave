@@ -136,7 +136,9 @@ The loop that has served well, in the order it pays:
 - **The C is clean under the Makefile's `WARNINGS` and clang-tidy**,
   also in `scripts/check` (`make warnings`, `.clang-tidy`): a check is
   turned off in `.clang-tidy` with its reason, and a `NOLINT(check)`
-  carries its reason on the line.
+  carries its reason on the line. The unit tests run under ASan and
+  UBSan (`make unit`), and the gate runs the suite once on
+  `make debug`'s launcher, whose UBSan checks trap.
 - **Hashes are BLAKE2b-256.** Manifest and hashes file use the strict
   grammar of `docs/DESIGN.md` 6.2, and `format` output is the accepted spelling.
   There is no index: the launcher reads the manifest and the tree, and

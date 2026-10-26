@@ -367,7 +367,7 @@ scripts/example      the first run: from make to a program built inside an excla
 scripts/check        the code checks; scripts/gate the commit gate; scripts/inputs the development inputs; scripts/examples the example runs
 scripts/test         the suite; scripts/matrix, exercise, sysroot and dogfood the other test drivers
 pyproject.toml       the Python project: no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python
-Makefile             builds the launchers: build/launcher, and build/launcher-aarch64 with a cross compiler; make warnings the warnings as errors
+Makefile             builds the launchers: build/launcher, and build/launcher-aarch64 with a cross compiler; make debug the launcher with UBSan's checks, make unit the unit tests under ASan and UBSan, make warnings the warnings as errors
 src/sys.h            syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
 src/elf.h            the ELF structures the loader needs
 src/common.h         constants, the run-time state (struct exclave), every module's interface

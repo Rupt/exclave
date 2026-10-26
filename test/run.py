@@ -4496,6 +4496,11 @@ def main() -> int:
     ap.add_argument("--tree", default=os.environ.get("EXCLAVE_TEST_TREE"))
     ap.add_argument("--exclave", help="use this exclave's tree, unwrapped")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "test-work"))
+    ap.add_argument(
+        "--launcher",
+        default=os.path.join(REPO, "build", "launcher"),
+        help="the launcher under test (default build/launcher; make debug builds a checked one)",
+    )
     ap.add_argument("--keep", action="store_true")
     ap.add_argument(
         "-k",
@@ -4585,9 +4590,9 @@ def prepare(args: argparse.Namespace, tree_: str, work: str, *, logging: bool) -
     ctx.from_exclave = bool(args.exclave)
     ctx.tree = tree_
     ctx.work = work
-    ctx.launcher_src = os.path.join(REPO, "build", "launcher")
+    ctx.launcher_src = os.path.abspath(args.launcher)
     if not os.path.exists(ctx.launcher_src):
-        sys.exit("build/launcher missing: run make")
+        sys.exit(f"{args.launcher} missing: run make")
     if os.path.exists(ctx.work):
         shutil.rmtree(ctx.work)
     os.makedirs(ctx.work)

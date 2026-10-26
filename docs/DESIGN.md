@@ -3544,7 +3544,9 @@ about a minute. The steps run in parallel, each with its own log under
   unit tests (`.clang-tidy`);
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py`, the scratch-pool test and the CPU
-  level test, each built from the current sources;
+  level test, each built from the current sources for the host under
+  AddressSanitizer and UndefinedBehaviorSanitizer (`make unit`), where
+  a finding exits 99, which no test answers;
 - the stack budget of both launchers (the aarch64 one when it is
   built);
 - for every exclave given: the suite in the given order and in a
@@ -3552,7 +3554,10 @@ about a minute. The steps run in parallel, each with its own log under
   syscall probe;
 - for the first exclave, the suite once more under the plain
   terminal's AppArmor label (`aa-exec -p unconfined`), where user
-  namespaces are denied (12);
+  namespaces are denied (12), and once on `build/launcher-debug`
+  (`make debug`), the launcher with gcc's undefined-behaviour checks,
+  each a trap instruction, since the launcher links no runtime to
+  report one;
 - when `EXCLAVE_TEST_INPUTS` names the directory `scripts/inputs`
   filled, the Docker profile run on every exclave, and dogfood:
   `test/dogfood.py` makes the tool's own exclave, then makes the same
@@ -3569,7 +3574,7 @@ budget of 30 s, against a slowest test of about 2 s natively, so a test
 that crawls fails instead of stalling the gate. The exit status is the
 number of failed steps. On the reference machine the whole gate, on the
 four exclaves with their fixtures and with the Docker profile and
-dogfood, takes 41 s (measured October 2026).
+dogfood, takes 43 s (measured October 2026).
 
 **The suite** (`scripts/test --exclave EXCLAVE`, or `--tree DIR` for an
 unwrapped tree) makes an exclave under its work directory, compiles
@@ -3577,7 +3582,8 @@ unwrapped tree) makes an exclave under its work directory, compiles
 `-k NAME` runs one test, or every test whose name contains a substring.
 `--order reverse` and `--order random` (with `--seed`) change the
 order. `--budget` sets the per-test limit. `--keep` keeps the work
-directory. The exit status is the number of failures.
+directory. `--launcher` tests another build in place of
+`build/launcher`, `build/launcher-debug` in the gate. The exit status is the number of failures.
 
 The Go regression is built static with cgo off, by the host's `go`, or
 on the reference machine for a matrix VM's machine. It runs as a host

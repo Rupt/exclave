@@ -69,7 +69,7 @@ for target in x86_64 aarch64; do
         pids="$pids $!"
     done
 done
-for f in test/*_test.c; do
+for f in test/*_test.c test/sanitize.c; do
     tidy "$f" -std=gnu11 &
     pids="$pids $!"
 done

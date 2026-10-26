@@ -121,7 +121,12 @@ def compare(rng: random.Random, cases: int, c_parser: str) -> int:
                 py = True
             except grammar.GrammarError:
                 py = False
-            c = subprocess.run([c_parser, path], capture_output=True, check=False).returncode == 0
+            rc = subprocess.run([c_parser, path], capture_output=True, check=False).returncode
+            if rc not in (0, 1):  # 99 is a sanitiser's finding (test/sanitize.c)
+                diverge += 1
+                print(f"FAIL the C parser exited {rc} on {text!r}")
+                continue
+            c = rc == 0
             if py != c:
                 diverge += 1
                 print(f"DIVERGE python={py} c={c} on {text!r}")
@@ -171,7 +176,7 @@ def main() -> int:
     ap.add_argument("--cases", type=int, default=3000)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument(
-        "--c-parser", default=os.path.join(os.path.dirname(HERE), "build", "gate", "manifest_test")
+        "--c-parser", default=os.path.join(os.path.dirname(HERE), "build", "unit", "manifest_test")
     )
     args = ap.parse_args()
     rng = random.Random(args.seed)

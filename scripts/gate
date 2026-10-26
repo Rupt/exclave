@@ -8,7 +8,7 @@
 #
 # The steps: the code checks (scripts/check), the unit tests, the stack budget, and for every exclave
 # given the suite in the given and a random order (and, for the first exclave, under the plain
-# terminal's AppArmor label), the resolution oracle, the namespace oracle and the syscall probe; when
+# terminal's AppArmor label and on make debug's launcher), the resolution oracle, the namespace oracle and the syscall probe; when
 # EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled, the Docker profile run on its
 # src/docker-seccomp.json and dogfood on its package sets. No step touches the network. Every step
 # runs in parallel; every driver runs build/launcher on a copy of its own (the suite wraps one from the
@@ -46,15 +46,17 @@ step() { # step NAME CMD...: in the background, its status and log kept
     ) &
 }
 # shellcheck disable=SC2329  # run through step, by name
-unit() {
-    cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/manifest_test" "$here/manifest_test.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
-        "$out/manifest_test" && py "$here/grammar_test.py" --c-parser "$out/manifest_test" &&
-        cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/filter_test" "$here/filter_test.c" "$repo/src/filter.c" "$repo/src/str.c" &&
-        "$out/filter_test" && py "$here/syscalls.py" &&
-        cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DSCRATCH_TEST -o "$out/scratch_test" "$here/scratch_test.c" "$repo/src/scratch.c" &&
-        "$out/scratch_test" &&
-        cc -std=gnu11 -O1 -g -Wall -fno-builtin -fno-tree-loop-distribute-patterns -DHOST_TEST -o "$out/isa_test" "$here/isa_test.c" "$repo/src/isa.c" "$repo/src/str.c" &&
-        "$out/isa_test" # the parser, the filter, the scratch pool and the CPU check just built, not stale builds
+unit() { # the parser, the filter, the scratch pool and the CPU check, under ASan and UBSan (make unit)
+    u=$repo/build/unit
+    make -s -C "$repo" unit &&
+        "$u/manifest_test" && py "$here/grammar_test.py" --c-parser "$u/manifest_test" &&
+        "$u/filter_test" && py "$here/syscalls.py" &&
+        "$u/scratch_test" &&
+        "$u/isa_test"
+}
+# shellcheck disable=SC2329  # run through step, by name
+debug_suite() { # debug_suite EXCLAVE NAME: the suite on the launcher with its undefined-behaviour checks
+    make -s -C "$repo" debug && py "$here/run.py" --exclave "$1" --work "$out/w-$2-debug" --launcher "$repo/build/launcher-debug"
 }
 # shellcheck disable=SC2329  # run through step, by name
 stack() {
@@ -110,6 +112,7 @@ for ex in "$@"; do
     if $plain && [ "$ex" = "$1" ] && command -v aa-exec >/dev/null 2>&1 && aa-exec -p unconfined true 2>/dev/null; then                                # the plain terminal's
         step "suite-$n-plain" aa-exec -p unconfined "$UV" run --quiet --project "$ROOT" python "$here/run.py" --exclave "$ex" --work "$out/w-$n-plain" # AppArmor label (12), once
     fi
+    if $plain && [ "$ex" = "$1" ]; then step "suite-$n-debug" debug_suite "$ex" "$n"; fi
     $oracles || continue
     step "resolve-$n" py "$here/oracle_resolve.py" --exclave "$ex" --work "$out/r-$n"
     step "ns-$n" py "$here/oracle_ns.py" --exclave "$ex" --work "$out/n-$n"

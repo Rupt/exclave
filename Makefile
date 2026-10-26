@@ -35,7 +35,7 @@ define linkcheck
 	@$(1)nm -u $@.debug | grep . && (echo "$@ has undefined symbols" && false) || true
 endef
 
-.PHONY: all clean warnings
+.PHONY: all clean debug unit warnings
 
 all: $(OUT) $(OLD) $(if $(AARCH64_CC),build/launcher-aarch64 build/launcher-old-aarch64)
 
@@ -91,10 +91,36 @@ warnings:
 	@s=0; for f in $(SRC); do $(CC) $(filter-out -fcallgraph-info=su,$(CFLAGS)) -Werror -c -o /dev/null $$f || s=1; \
 	    $(CC) $(filter-out -fcallgraph-info=su,$(CFLAGS)) -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD -Werror -c -o /dev/null $$f || s=1; done; \
 	$(if $(AARCH64_CC),for f in $(SRC); do $(AARCH64_CC) $(filter-out -fcallgraph-info=su,$(CFLAGS_AARCH64)) -Werror -c -o /dev/null $$f || s=1; done;) \
-	for f in test/*_test.c src/manifest.c src/filter.c src/isa.c src/str.c; do \
+	for f in test/*_test.c test/sanitize.c src/manifest.c src/filter.c src/isa.c src/str.c; do \
 	    $(CC) $(UNIT_FLAGS) -Werror -DHOST_TEST -c -o /dev/null $$f || s=1; done; \
 	$(CC) $(UNIT_FLAGS) -Werror -DSCRATCH_TEST -c -o /dev/null src/scratch.c || s=1; \
 	exit $$s
+
+# The unit tests, scripts/gate's unit step: the manifest parser, the filter, the scratch pool and the CPU check, built
+# for the host under AddressSanitizer and UndefinedBehaviorSanitizer, a finding fatal (test/sanitize.c).
+SANITIZE := -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+UNIT := build/unit/manifest_test build/unit/filter_test build/unit/scratch_test build/unit/isa_test
+unit: $(UNIT)
+build/unit/manifest_test: test/manifest_test.c src/manifest.c src/str.c
+build/unit/filter_test: test/filter_test.c src/filter.c src/str.c
+build/unit/isa_test: test/isa_test.c src/isa.c src/str.c
+build/unit/scratch_test: test/scratch_test.c src/scratch.c
+build/unit/manifest_test build/unit/filter_test build/unit/isa_test: UNIT_DEFINE := -DHOST_TEST
+build/unit/scratch_test: UNIT_DEFINE := -DSCRATCH_TEST
+$(UNIT): test/sanitize.c src/sys.h src/common.h Makefile
+	@mkdir -p build/unit
+	$(CC) $(UNIT_FLAGS) $(SANITIZE) $(UNIT_DEFINE) -o $@ $(filter %.c,$^)
+
+# build/launcher-debug: the launcher with gcc's undefined-behaviour checks, each a trap instruction, since the launcher
+# links no runtime to report one. A failed check kills the program with SIGILL at the faulting instruction, which gdb
+# places from build/launcher-debug.debug. The gate runs the suite on it (test/run.py --launcher build/launcher-debug).
+DEBUG_FLAGS := -fsanitize=undefined -fsanitize-trap=undefined -fsanitize=bounds-strict
+debug: build/launcher-debug
+build/launcher-debug: $(SRC) $(HDR) Makefile
+	@mkdir -p build
+	$(CC) $(filter-out -fcallgraph-info=su,$(CFLAGS)) $(DEBUG_FLAGS) $(LDFLAGS) -o $@.debug $(SRC)
+	$(call linkcheck,)
+	objcopy --strip-all --keep-section=.debug_gdb_scripts --keep-section=.exclave.license $@.debug $@
 
 # the tests are scripts/gate EXCLAVE... (the commit gate) and scripts/examples EXCLAVE (the example runs); see README.md
 
