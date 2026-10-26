@@ -2,11 +2,12 @@
 """matrix.py — the kernel matrix (PROPOSAL.md 12, 17 item 5): an exclave built here, run in virtual machines.
 
     test/matrix.py --exclave EXCLAVE [--only NAME,...] [--work DIR] [--images DIR] [--memory MB] [--arm64 --debs-arm64 DIR]
+                   [--docker-profile FILE]
 
 Each row of VMS names a distribution cloud image. The image is downloaded once, booted under QEMU with
 KVM behind a copy-on-write overlay and a cloud-init seed that installs python3 and strace (and bubblewrap
 where it exists), the exclave and this repository's test tree and launcher are copied in over SSH, and the
-regression suite runs there; the oracles, the syscall probe and the Docker-profile run follow where bubblewrap works.
+regression suite runs there; the oracles, the syscall probe and, given the profile, the Docker-profile run follow where bubblewrap works.
 One VM at a time, 1 GB each, 2 GB for the emulated row. Results go to build/matrix-results.md.
 """
 import argparse
@@ -176,6 +177,7 @@ def main():
     ap.add_argument("--memory", type=int, default=1024)
     ap.add_argument("--arm64", action="store_true", help="include the emulated aarch64 VM (slow); --only names it too")
     ap.add_argument("--debs-arm64", help="directory of arm64 .deb files the aarch64 VM makes its gcc exclave from")
+    ap.add_argument("--docker-profile", help="Docker's default seccomp profile (test/inputs.sh fetches it); without it the Docker-profile run is left out")
     a = ap.parse_args()
     if not shutil.which("qemu-system-x86_64") or not shutil.which("cloud-localds"):
         sys.exit("need qemu-system-x86_64 and cloud-localds")
@@ -201,6 +203,8 @@ def main():
             with tarfile.open(payload, "w:gz", compresslevel=1) as t:
                 for d in ("test", "exclave", "src"):                  # src: the filter model the suite builds in the VM (filter_model)
                     t.add(os.path.join(REPO, d), arcname="repo/" + d)
+                if a.docker_profile:
+                    t.add(a.docker_profile, arcname="docker-seccomp.json")
                 go = tree.go_toolchain()                          # the Go regression's programs, built here for the VM's machine: the VMs have no go
                 if go:
                     for n, p in tree.go_build(go, os.path.join(work, "go-" + arch), arch, work):
@@ -303,10 +307,11 @@ def main():
                 rc, out = vm.ssh("cd m && python3 repo/test/oracle_resolve.py --exclave $PWD/ex --work $PWD/rw 2>&1 | tail -30; echo ====; "
                                  "python3 repo/test/oracle_ns.py --exclave $PWD/ex --work $PWD/nw 2>&1 | tail -40; echo ====; "
                                  "python3 repo/test/oracle_syscalls.py --exclave $PWD/ex --work $PWD/sw --show 5000 2>&1 | tail -20000; echo ====; "
-                                 "python3 repo/test/docker_profile.py --exclave $PWD/ex --profile repo/test/docker-seccomp.json --work $PWD/dw 2>&1 | tail -20", timeout=2400 * slow)
+                                 + ("python3 repo/test/docker_profile.py --exclave $PWD/ex --profile $PWD/docker-seccomp.json --work $PWD/dw 2>&1 | tail -20"
+                                    if a.docker_profile else "echo 'docker profile: not given'"), timeout=2400 * slow)
                 with open(os.path.join(work, name + "-oracles.log"), "w") as f:
                     f.write(out)
-                keep = [l.strip() for l in out.splitlines() if ("paths:" in l or "workloads," in l or "cases over" in l or l.startswith("PASS exclave") or l.startswith("FAIL exclave") or "cannot run" in l)]
+                keep = [l.strip() for l in out.splitlines() if ("paths:" in l or "workloads," in l or "cases over" in l or l.startswith("PASS exclave") or l.startswith("FAIL exclave") or "cannot run" in l or "docker profile:" in l)]
                 oracle = " / ".join(keep) or out[-300:].replace("\n", " | ")
                 log(name, oracle)
             else:

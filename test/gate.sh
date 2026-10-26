@@ -1,7 +1,9 @@
 #!/bin/sh
 # test/gate.sh EXCLAVE... — the commit gate (PROPOSAL.md 17): the unit tests, the stack budget, and for every exclave
 # given the suite in the given and a random order (and, for the first exclave, under the plain terminal's AppArmor label), the
-# resolution oracle, the namespace oracle, the syscall probe and the Docker profile; dogfood when EXCLAVE_TEST_CACHE names a package cache. Every step runs in parallel; every driver
+# resolution oracle, the namespace oracle and the syscall probe; when EXCLAVE_TEST_INPUTS names the directory
+# test/inputs.sh filled, the Docker profile run on its src/docker-seccomp.json and dogfood on its package sets. No step
+# touches the network. Every step runs in parallel; every driver
 # runs build/launcher on a copy of its own (the suite wraps one from the exclave's tree, the others take test/tree.py's
 # fresh_exclave), so the exclaves given are never run as they are nor written. One line per step; logs under build/gate/. Exit status: the number of failed steps.
 set -u
@@ -42,12 +44,14 @@ for ex in "$@"; do
     step "resolve-$n" python3 "$here/oracle_resolve.py" --exclave "$ex" --work "$out/r-$n"
     step "ns-$n" python3 "$here/oracle_ns.py" --exclave "$ex" --work "$out/n-$n"
     step "syscalls-$n" python3 "$here/oracle_syscalls.py" --exclave "$ex" --work "$out/s-$n"
-    step "docker-$n" python3 "$here/docker_profile.py" --exclave "$ex" --profile "$here/docker-seccomp.json" --work "$out/d-$n"
+    if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
+        step "docker-$n" python3 "$here/docker_profile.py" --exclave "$ex" --profile "$EXCLAVE_TEST_INPUTS/src/docker-seccomp.json" --work "$out/d-$n"
+    fi
 done
-if [ -n "${EXCLAVE_TEST_CACHE:-}" ]; then
-    step dogfood python3 "$here/dogfood.py" --cache "$EXCLAVE_TEST_CACHE" --work "$out/dogfood"
+if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
+    step dogfood python3 "$here/dogfood.py" --inputs "$EXCLAVE_TEST_INPUTS" --work "$out/dogfood"
 else
-    echo "dogfood: EXCLAVE_TEST_CACHE not set; skipped"
+    echo "docker, dogfood: EXCLAVE_TEST_INPUTS not set; skipped"
 fi
 wait
 

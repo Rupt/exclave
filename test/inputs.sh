@@ -3,12 +3,14 @@
 # runs on and the files the examples take. Nothing is kept anywhere but DIR and the fetchers' caches under
 # ~/.cache, and both may be empty at any time: whatever is missing is fetched again, and an item DIR already
 # has is skipped, so a rerun costs nothing. Afterwards:
-#   EXCLAVE_TEST_CACHE=$HOME/.cache/exclave-debs test/gate.sh DIR/gcc13.exclave DIR/alpine.exclave DIR/f42.exclave DIR/clang.exclave
+#   EXCLAVE_TEST_INPUTS=DIR test/gate.sh DIR/gcc13.exclave DIR/alpine.exclave DIR/f42.exclave DIR/clang.exclave
 #   EXCLAVE_TEST_SRC=DIR/src EXCLAVE_TEST_SQLITE=DIR/src/sqlite3.c EXCLAVE_TEST_RPMS=DIR/el7 EXCLAVE_TEST_DEBS_ARM64=DIR/debs-arm64 test/examples.sh DIR/realsoft.exclave
 # The package sets are the ones the proposal measures (10.1, 12, 16.3): the noble gcc-13 and clang-18 closures,
 # Alpine 3.21's gcc, Fedora 42's gcc, the noble gcc, g++, make and python3 that test/realsoft.py builds with,
 # CentOS 7's glibc for the sysroot of 9, the noble arm64 gcc-13 closure for the emulated row, and the four
-# projects of test/realsoft.py with the SQLite amalgamation of test/bench.py.
+# projects of test/realsoft.py with the SQLite amalgamation of test/bench.py, and Docker's default seccomp profile
+# (moby/profiles, Apache-2.0), the version PRIOR-ART.md 4 checked, for test/docker_profile.py; and the python3,
+# zstd and xz-utils closure test/dogfood.py makes the tool's own exclave from. The tests themselves touch no network.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(dirname "$here")
@@ -55,12 +57,14 @@ file() {                                    # file URL NAME HASH: one file into 
 fedora=https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/42/Everything/x86_64/os
 centos=https://vault.centos.org/7.9.2009/os/x86_64
 fetch debs-gcc13 fetch-debs.py gcc-13 libc6-dev && make_exclave gcc13 debs-gcc13
+fetch debs-tool fetch-debs.py python3 zstd xz-utils
 fetch apks fetch-apks.py gcc musl-dev binutils make linux-headers && make_exclave alpine apks
 fetch rpms-f42 fetch-rpms.py --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make && make_exclave f42 rpms-f42
 fetch debs-clang fetch-debs.py clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils && make_exclave clang debs-clang
 fetch debs-realsoft fetch-debs.py gcc g++ make libc6-dev python3 && make_exclave realsoft debs-realsoft
 fetch el7 fetch-rpms.py --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
 fetch debs-arm64 fetch-debs.py --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev
+file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json 3d005310d39ca085839ee4d23373c37c5eaeee073951d1fed335c2553559b846
 file https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz ac034b9c7bbd9f8cc38953efaac07145ce0c8993107a1594d5cedd08fdf2a2bc
 file https://www.lua.org/ftp/lua-5.4.7.tar.gz lua-5.4.7.tar.gz 7a37bca67359c6917fd330eee4e5d9f50852c27a2f5bce4e40b2b3b02ce18830
 file https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz sqlite-autoconf-3460100.tar.gz 12fab9a1ef11d6cb772b7b88ef73102a7c1e02f7ae35f4c2d3263fbe7af706d8
