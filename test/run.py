@@ -841,6 +841,25 @@ def earlier_note_name(ctx):
 
 
 @test
+def pre_rename_can_refused(ctx):
+    """Review O8-1: a can from before revision 18 (.can/, root/) is refused by name by every command that takes an
+    exclave, before anything is read or written, rather than ending in a traceback; the README says how to convert it."""
+    old = os.path.join(ctx.work, "old-%d.can" % os.getpid())
+    os.makedirs(os.path.join(old, ".can"))
+    os.makedirs(os.path.join(old, "root", "usr", "bin"))
+    with open(os.path.join(old, ".can", "manifest"), "w") as f:
+        f.write("can 1\n")
+    log = os.path.join(ctx.work, "old-can.log")
+    open(log, "w").close()
+    before = sorted(os.walk(old))
+    for args in (["wrap"], ["unwrap"], ["check"], ["prune", log], ["hash"], ["relink"]):
+        rc, o, e = run([sys.executable, os.path.join(REPO, "exclave", "exclave.py"), args[0], old] + args[1:])
+        expect(rc != 0 and "a can from before revision 18" in e and "Traceback" not in e,
+               "%s on a can from before revision 18: rc=%d %r" % (args[0], rc, e[-300:]))
+    expect(sorted(os.walk(old)) == before, "a refused command changed the can")
+
+
+@test
 def real_root_is_the_tree(ctx):
     """The tree's real root is an alias of /: a path spelt through <exclave>/tree/ obeys the same rules (F3-1)."""
     root = ctx.root

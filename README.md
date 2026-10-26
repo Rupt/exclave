@@ -201,6 +201,30 @@ No recipe format and no closure copying: the runtime the result needs
 is packages you already have, and the static check verifies that every
 library resolves inside the exclave.
 
+## A can from before revision 18
+
+Until revision 18 an exclave was a can: `.can/` for `.exclave/`,
+`root/` for `tree/`, `opener` and `lock` for `launcher` and `hashes`.
+A can still runs as it is, from anywhere, and runs an exclave's
+programs as an exclave runs its own. The `exclave` command refuses one
+by name; converting it is renames, two edits and three commands,
+`exclave/exclave.py` standing for the command:
+
+```
+cd OLD.can && mv .can .exclave && mv root tree && mv .exclave/opener .exclave/launcher && mv .exclave/lock .exclave/hashes
+sed -i -e 's/^can 1$/exclave 1/' -e 's/^isa /cpu /' .exclave/manifest
+sed -i -e 's/^lock 1$/hashes 1/' -e 's/^cannery /tool /' -e 's/^opener /launcher /' .exclave/hashes
+cd .. && mv OLD.can OLD.exclave                               # the suffix is a convention; any name works
+exclave/exclave.py relink OLD.exclave build/launcher          # the current launcher behind every wrapper
+exclave/exclave.py unwrap OLD.exclave && exclave/exclave.py wrap OLD.exclave   # the manifest's hash, recorded again
+```
+
+Measured on a gcc can of revision 17's inputs: the converted exclave's
+hashes file equals the one a fresh `unpack` and `wrap` of the same
+packages writes, apart from the launcher's hash. A launcher from before
+the syscall page moved (revision 15 or earlier) refuses to run under
+this one and points at this README.
+
 ## The log and the checks
 
 `EXCLAVE_LOG=<file>` is the launcher's one knob. It appends one line per

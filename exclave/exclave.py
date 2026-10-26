@@ -783,6 +783,18 @@ def cmd_format(paths, check):
     return rc
 
 
+def require_exclave(ex, cmd):
+    """Refuse, in one line and before reading or writing anything, a directory the command cannot act on (review
+    O8-1): a can from before revision 18 is named as one, since its launcher's own refusal sends its user here."""
+    if os.path.isdir(os.path.join(ex, ".can")) and not os.path.isdir(os.path.join(ex, ".exclave")):
+        sys.exit("refusing: %s is a can from before revision 18, with .can/ and root/; convert it first "
+                 "(README, \"A can from before revision 18\")" % ex)
+    if not os.path.isdir(os.path.join(ex, "tree")):
+        sys.exit("refusing: %s has no tree/ directory" % ex)
+    if cmd != "wrap" and not os.path.isdir(os.path.join(ex, ".exclave")):
+        sys.exit("refusing: %s has no .exclave/ directory; wrap makes one" % ex)
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd")
@@ -796,6 +808,8 @@ def main(argv):
     p = sub.add_parser("hash"); p.add_argument("exclave")
     p = sub.add_parser("relink"); p.add_argument("exclave"); p.add_argument("launcher", nargs="?")
     a = ap.parse_args(argv)
+    if a.cmd not in ("unpack", "format"):
+        require_exclave(a.exclave, a.cmd)
     try:
         if a.cmd == "unpack":
             cmd_unpack(a.out, a.debs)
@@ -810,8 +824,6 @@ def main(argv):
         elif a.cmd == "format":
             return cmd_format(a.files, a.check)
         elif a.cmd == "hash":
-            if not os.path.isdir(os.path.join(a.exclave, "tree")):
-                sys.exit("refusing: %s has no tree/ directory" % a.exclave)
             print(build.tree_hash(os.path.join(a.exclave, "tree")))
         elif a.cmd == "relink":
             cmd_relink(a.exclave, a.launcher)
