@@ -1,8 +1,9 @@
 /* unix_socket.c — sockaddr_un paths under the visibility rule (PROPOSAL.md 13 item 31, 17.4): bind, connect and sendto
- * with a path of every class. usage: unix_socket HOSTDIR [EXDIR EXFILE EXSOCK]. Prints one line per case,
+ * with a path of every class. usage: unix_socket HOSTDIR [EXDIR EXFILE EXSOCK [CWDDIR]]. Prints one line per case,
  * "<case>: ret=<r> errno=<e>", the same in every world, so that the kernel under bwrap is the oracle for the launcher.
  * EXDIR: a directory the exclave owns (default /usr/share); EXFILE: a regular file it owns (default $EXCLAVE_TEST_TRUE); EXSOCK: a
- * socket file in the tree, if the maker put one there. Exit 0 always: the driver compares. */
+ * socket file in the tree, if the maker put one there; CWDDIR: the host working directory of the relative cases, of any
+ * depth (default HOSTDIR), where HOSTDIR must be short enough for sun_path. Exit 0 always: the driver compares. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <stddef.h>
@@ -47,6 +48,7 @@ int main(int argc, char **argv)
     const char *exdir = argc > 2 ? argv[2] : "/usr/share";
     const char *exfile = argc > 3 ? argv[3] : getenv("EXCLAVE_TEST_TRUE") ? getenv("EXCLAVE_TEST_TRUE") : "/usr/bin/true";
     const char *exsock = argc > 4 ? argv[4] : "";
+    const char *cwdd = argc > 5 ? argv[5] : host;
     char p[4096], q[4096];
     /* bind: host paths, exclave paths, an abstract name, relative paths from two working directories */
     snprintf(p, sizeof p, "%s/sock-host", host); bind_at("bind host dir", p, SOCK_STREAM);
@@ -61,7 +63,15 @@ int main(int argc, char **argv)
     { int s = socket(AF_UNIX, SOCK_STREAM, 0); struct sockaddr_un a; memset(&a, 0, sizeof a); a.sun_family = AF_UNIX;
       int n = snprintf(a.sun_path + 1, sizeof a.sun_path - 1, "exclave-abstract-%d", (int)getpid());        /* one name per process: suites run side by side */
       show("bind abstract", bind(s, (struct sockaddr *)&a, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + n))); close(s); }
-    if (chdir(host) == 0) bind_at("bind relative in host cwd", "sock-rel", SOCK_STREAM);
+    if (chdir(cwdd) == 0) {
+        bind_at("bind relative in host cwd", "sock-rel", SOCK_STREAM);
+        /* through the working directory's magic link: the walk is the handler's, and the real path can be longer than
+         * sun_path holds, which the handler names through a descriptor of the directory (13 item 31) */
+        int s = socket(AF_UNIX, SOCK_STREAM, 0); socklen_t l; struct sockaddr_un a = addr("/proc/self/cwd/sock-magic", &l); unlink("sock-magic");
+        long r = bind(s, (struct sockaddr *)&a, l); show("bind through /proc/self/cwd", r);
+        if (r == 0 && listen(s, 1) == 0) connect_to("connect through /proc/self/cwd", "/proc/self/cwd/sock-magic", SOCK_STREAM);
+        close(s); unlink("sock-magic");
+    }
     if (chdir(exdir) == 0) bind_at("bind relative in exclave cwd", "sock-rel", SOCK_STREAM);
     chdir(host);
     /* connect: a listener on the host, a host socket file without one, exclave files, an exclave socket, a missing name */

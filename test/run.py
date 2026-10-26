@@ -786,7 +786,7 @@ def nested_older_launcher(ctx):
     if not os.path.exists(old):
         return "no build/launcher-old"
     src = os.path.join(ctx.work, "nb.c")
-    sock = os.path.join(ctx.work, "nest-sock")
+    sock = "nest-sock-%d" % os.getpid()                                     # relative to the work directory, whatever its depth
     with open(src, "w") as f:                                                 # a bind at a fresh host path: 0 from the kernel
         f.write('#include <stdio.h>\n#include <errno.h>\n#include <string.h>\n#include <unistd.h>\n#include <sys/socket.h>\n#include <sys/un.h>\n'
                 'int main(void) { struct sockaddr_un a; memset(&a, 0, sizeof a); a.sun_family = AF_UNIX; strncpy(a.sun_path, "@PATH@", sizeof a.sun_path - 1);\n'
@@ -2130,9 +2130,14 @@ def adversarial(ctx):
     The kernel under bwrap measured the answers, but for the variables, the mounts, the hard limit, the filter's
     refusals and the execute-only files, which are the launcher's own (revision 16, extended)."""
     d = os.path.join(ctx.work, "advhost")
-    shutil.rmtree(d, ignore_errors=True)
-    os.makedirs(d)
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "adversarial"), [d], env=dict(ctx.env, SH=ctx.vbin("sh")))
+    short = "/tmp/exclave-adv-%d" % os.getpid()                # the interpreter chains' #! lines, which a deep work directory would outgrow
+    for p in (d, short):
+        shutil.rmtree(p, ignore_errors=True)
+        os.makedirs(p)
+    try:
+        rc, out, err = inside(ctx, os.path.join(ctx.progs, "adversarial"), [d, short], env=dict(ctx.env, SH=ctx.vbin("sh")))
+    finally:
+        shutil.rmtree(short, ignore_errors=True)
     expect(rc == 0, "adversarial: rc=%d %r %r" % (rc, out, err))
     lines = set(out.splitlines())
     want = ["readlink size 1 with upper bits: 1 byte, buffer intact", "readlink size -1 as int: EINVAL, buffer intact", "readlink size 0 as int: EINVAL, buffer intact",
@@ -2220,10 +2225,17 @@ def unix_socket(ctx):
     for an existing name and EROFS otherwise, from a working directory inside the tree too; a connect to an exclave path is
     ENOENT, ENOTDIR or ECONNREFUSED; host paths and abstract names work; the structure's own limits are EINVAL. A
     datagram destination in sendto stays as written (13), so only its host case is asserted."""
-    d = os.path.join(ctx.work, "sockhost")
-    shutil.rmtree(d, ignore_errors=True)
-    os.makedirs(d)
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "unix_socket"), [d, "/usr/share", ctx.vbin("true"), "/usr/share/exclave-test.sock"])
+    d = "/tmp/exclave-sockhost-%d" % os.getpid()               # absolute host names a program can write in sun_path's 108 bytes
+    deep = os.path.join(ctx.work, "sockhost")                  # relative ones from a working directory deeper than sun_path holds
+    deep = os.path.join(deep, "d" * max(1, 120 - len(deep)))
+    shutil.rmtree(os.path.join(ctx.work, "sockhost"), ignore_errors=True)
+    for p in (d, deep):
+        shutil.rmtree(p, ignore_errors=True)
+        os.makedirs(p)
+    try:
+        rc, out, err = inside(ctx, os.path.join(ctx.progs, "unix_socket"), [d, "/usr/share", ctx.vbin("true"), "/usr/share/exclave-test.sock", deep])
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
     expect(rc == 0, "unix_socket: %r %r" % (out, err))
     got = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
     want = {"bind host dir": "ret=0 errno=0", "bind /tmp": "ret=0 errno=0", "bind exclave dir": "ret=-1 errno=30",
@@ -2233,6 +2245,7 @@ def unix_socket(ctx):
             "connect host listener": "ret=0 errno=0", "connect host socket no listener": "ret=-1 errno=111", "connect exclave file": "ret=-1 errno=111",
             "connect exclave socket": "ret=-1 errno=111", "connect missing exclave path": "ret=-1 errno=2", "connect exclave dir": "ret=-1 errno=111",
             "connect under an exclave file": "ret=-1 errno=20", "connect missing host path": "ret=-1 errno=2", "sendto host dgram": "ret=1 errno=0",
+            "bind through /proc/self/cwd": "ret=0 errno=0", "connect through /proc/self/cwd": "ret=0 errno=0",
             "bind addrlen too long": "ret=-1 errno=22", "bind addrlen too short": "ret=-1 errno=22", "bind wrong family": "ret=-1 errno=22",
             "bind exclave path of 107 bytes": "ret=-1 errno=30", "connect exclave path of 107 bytes": "ret=-1 errno=2"}
     bad = ["%s: got %s, the kernel says %s" % (k, got.get(k), v) for k, v in want.items() if got.get(k) != v]

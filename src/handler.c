@@ -674,14 +674,34 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
     xmemcpy(S->b1, S->extra + 2, n); S->b1[n] = 0;
     if (S->b1[0] != '/') { r = sys_faccessat(AT_FDCWD, ".", X_OK); if (r < 0) return r; }
     if ((r = canon(S, S->b1, AT_FDCWD, nr == NR_connect, S->v)) < 0) { scpy(S->v, S->b1, PATH_MAX); return r; }
-    if (!is_exclave_path(S->v)) {                                /* a host path: the kernel gets the resolved real path, as for every
-                                                              * other syscall, since an exclave symlink may have led here (oracle 17.7) */
+    if (!is_exclave_path(S->v)) {
+        if (!S->touched_exclave) return RE5(nr, a[0], a[1], a[2], 0, 0);   /* a relative walk that stayed in the host's domain is the kernel's
+                                                              * own, as given: from a working directory of any depth, and getsockname answers the
+                                                              * program's own name */
+        /* otherwise the kernel gets the resolved real path, as for every other syscall, since an exclave symlink or a
+         * rewritten magic link may have led here (oracle 17.7) */
         to_real(S->v, S->real, S->tmp);
         size_t rl = xstrlen(S->real), gl = xstrlen(S->b1);
         size_t slash = gl > 1 && S->b1[gl - 1] == '/' && S->real[rl - 1] != '/';   /* a trailing slash is the kernel's to judge (filename_create) */
-        if (rl + slash > 107) return -ENAMETOOLONG;              /* sun_path is 108 bytes: a real path past it cannot be named (13) */
-        xmemcpy(S->extra + 2, S->real, rl); if (slash) S->extra[2 + rl] = '/'; S->extra[2 + rl + slash] = 0;
-        return RE5(nr, a[0], S->extra, 2 + rl + slash + 1, 0, 0);
+        if (rl + slash <= 107) {
+            xmemcpy(S->extra + 2, S->real, rl); if (slash) S->extra[2 + rl] = '/'; S->extra[2 + rl + slash] = 0;
+            return RE5(nr, a[0], S->extra, 2 + rl + slash + 1, 0, 0);
+        }
+        /* sun_path holds 107 bytes and a real path can be longer than the program's own: the name is re-issued through a
+         * descriptor of its directory, /proc/self/fd/N/NAME, which the kernel walks as it walks the path (13 item 31) */
+        char *e = S->real + rl; while (e > S->real && e[-1] == '/') e--;
+        char *b = e; while (b > S->real && b[-1] != '/') b--;
+        size_t nl = (size_t)(e - b);
+        if (b == S->real || nl == 0) return -ENAMETOOLONG;
+        xmemcpy(S->tmp, S->real, (size_t)(b - S->real)); S->tmp[b - S->real] = 0;
+        long fd = sys_open(S->tmp, O_PATH | O_DIRECTORY | O_CLOEXEC, 0); if (fd < 0) return fd;
+        char *p = (char *)S->extra + 2; scpy(p, "/proc/self/fd/", 108); ltoa_(fd, S->cur); scat(p, S->cur, 108);
+        size_t pl = xstrlen(p);
+        if (pl + 1 + nl + slash > 107) { sys_close((int)fd); return -ENAMETOOLONG; }
+        p[pl] = '/'; xmemcpy(p + pl + 1, b, nl); pl += 1 + nl; if (slash || *e) p[pl++] = '/'; p[pl] = 0;
+        r = RE5(nr, a[0], S->extra, 2 + pl + 1, 0, 0);
+        sys_close((int)fd);
+        return r;
     }
     if (nr == NR_bind) { r = ro_create(S, S->v, 0); return r == -EEXIST ? -EADDRINUSE : r; }
     if (!exists_exclave(S, S->v, (struct kstat *)S->b2)) return absent_errno(S);

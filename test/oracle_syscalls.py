@@ -59,6 +59,10 @@ def A(path):                      # a sockaddr_un holding this path, 108 bytes o
 def alen(path):                   # its length argument: the family, the bytes, and a NUL when there is room
     n = min(len(path.encode("utf-8", "surrogateescape")), 108)
     return 2 + n + (1 if n < 108 else 0)
+HOST_AREA = [None]                # the host area's path, set by main: its depth is the work directory's
+def unwritable(path):             # a host-area path past sun_path's 107 bytes, which no program can write whole: the kernel's answer
+    h = HOST_AREA[0]              # would be for the cut name, outside the area, so the case is the work directory's, not translation's
+    return bool(h) and path.startswith(h) and len(path.encode("utf-8", "surrogateescape")) > 107
 REL_SOCK = "probe-sock-%d" % os.getpid()     # the relative socket name: one per driver, since a chdir into /tmp binds it in the host's /tmp
 
 
@@ -243,7 +247,7 @@ def generate(forms, nr, uid, gid):
         add("inotify_add_watch", n, "I:", p, I(IN_MODIFY))
         add("fanotify_mark", n, I(-1), I(0), I(0), I(AT_FDCWD), p)
         add("execve", n, p, V("x"), V())
-        if raw_of(p) is not None:                                          # a sockaddr_un path is a path (13 item 31)
+        if raw_of(p) is not None and not unwritable(raw_of(p)):            # a sockaddr_un path is a path (13 item 31)
             add("bind", n, K(SOCK_STREAM), A(raw_of(p)), I(alen(raw_of(p))))
             add("connect", n, K(SOCK_STREAM), A(raw_of(p)), I(alen(raw_of(p))))
         group[0] = "chdir"
@@ -267,7 +271,8 @@ def generate(forms, nr, uid, gid):
         add(name, "len_hi", K(SOCK_STREAM), A("/maze/sock"), I((1 << 32) | alen("/maze/sock")))
         add(name, "null_addr", K(SOCK_STREAM), "n:", I(20))
         add(name, "fault_addr", K(SOCK_STREAM), "u:", I(20))
-        add(name, "not_a_socket", F(O_RDONLY, forms.file), A(forms.host + "/hfile"), I(alen(forms.host + "/hfile")))
+        if not unwritable(forms.host + "/hfile"):
+            add(name, "not_a_socket", F(O_RDONLY, forms.file), A(forms.host + "/hfile"), I(alen(forms.host + "/hfile")))
     add("stat", "exclave_sock", S("/maze/sock"), B("stat", 256))
     add("execve", "true", S(forms.true), V("true"), V())
     add("execve", "sh_exit3", S(forms.sh), V("sh", "-c", "exit 3"), V("PATH=/usr/bin:/bin"))
@@ -580,6 +585,7 @@ def main():
     ex = tree.fresh_exclave(given, os.path.join(work, "exclave"))              # the launcher's world: a copy relinked with the build (17)
     dirs, files, links = make_maze(root, rng)
     host = os.path.join(work, "area", "host")                              # ".." from the host area is a directory the reset owns
+    HOST_AREA[0] = host
     os.symlink(host + "/hfile", os.path.join(root, "maze", "lH"))          # an exclave link to a host file, and to a host directory
     os.symlink(host + "/hdir", os.path.join(root, "maze", "lHD"))
     shutil.copytree(os.path.join(root, "maze"), os.path.join(ex, "tree", "maze"), symlinks=True)

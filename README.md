@@ -101,7 +101,7 @@ What it prints on the reference machine, abridged:
 + env EXCLAVE_LOG=log/hello.log gcc.exclave/gcc --sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/ -o hello hello.c
   log/hello.log: 1220 lines, one per trapped syscall; the first:
     launcher 0 host path absent, using the exclave's /etc/pki/tls/certs/ca-bundle.crt
-    launcher 0 cwd /home/me/cont/build/example
+    launcher 0 cwd /home/me/exclave/build/example
     launcher 0 border /usr/bin/x86_64-linux-gnu-gcc-13
     load 0 /usr/bin/x86_64-linux-gnu-gcc-13
     access -2 /etc/ld.so.preload
@@ -109,7 +109,7 @@ What it prints on the reference machine, abridged:
   glibc symbol versions bound: hello-plain: GLIBC_2.2.5 GLIBC_2.34  hello: GLIBC_2.2.5
 + ./hello
 hello from an exclave
-+ gcc.exclave/.exclave/launcher /home/me/cont/build/example/hello
++ gcc.exclave/.exclave/launcher /home/me/exclave/build/example/hello
 hello from an exclave
 == 5. the exclave pruned to what the compile touched, and the checks on it
 + exclave prune hello.exclave log/hello.log

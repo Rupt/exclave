@@ -7,7 +7,8 @@
  * limit and one past it, odd spellings of the self magic links; the read-only rule from mknod, ftruncate and a shared
  * writable mapping; CLONE_FS, CLONE_FILES, not dumpable, PER_LINUX32, a vfork child and a handler on an alternate
  * stack; io_uring and clone3 refused; a saturated cache, a huge environment, bad pointers; execute-only files and
- * interpreters spelt oddly. usage: adversarial HOSTDIR, or "adversarial HOSTDIR --child".
+ * interpreters spelt oddly. usage: adversarial HOSTDIR [SHORTDIR], or "adversarial HOSTDIR --child"; SHORTDIR (default HOSTDIR) holds the
+ * interpreter chains, whose #! lines a deep HOSTDIR would outgrow.
  * Prints one line per case, "<case>: <answer>", the same in every world where the kernel is the oracle, so the
  * exerciser shows what differs; the named regression asserts the kernel's answers, and for the cases the launcher
  * decides for itself (its variables stripped, mounts refused) the launcher's. Exit 0 always. */
@@ -135,8 +136,9 @@ int main(int argc, char **argv)
         printf("child sees EXCLAVE_EXEC=%s EXCLAVE_EXECFN=%s EXCLAVE_COMM=%s\n", getenv("EXCLAVE_EXEC") ? "set" : "unset", getenv("EXCLAVE_EXECFN") ? "set" : "unset", getenv("EXCLAVE_COMM") ? "set" : "unset");
         return 0;
     }
-    if (argc < 2) { fprintf(stderr, "usage: adversarial HOSTDIR\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: adversarial HOSTDIR [SHORTDIR]\n"); return 2; }
     const char *hd = argv[1], *sh = getenv("SH") ? getenv("SH") : "/usr/bin/sh";
+    const char *sd = argc > 2 ? argv[2] : hd;                /* short: a #! line holds 255 bytes, which a deep work directory outgrows */
     char p[4096], q[4096], buf[64];
     snprintf(p, sizeof p, "%s/f", hd); { int c = open(p, O_WRONLY | O_CREAT, 0644); write(c, "f\n", 2); close(c); }
     snprintf(q, sizeof q, "%s/hl", hd); symlink("f", q);      /* a host symlink of one byte of text */
@@ -254,15 +256,15 @@ int main(int argc, char **argv)
     P("readlink /proc/1/exe", readlink("/proc/1/exe", buf, sizeof buf));
 
     /* 8. interpreters: a loop, a chain, an empty line, a missing one; an empty file; a loader that is a directory */
-    snprintf(p, sizeof p, "%s/loop.sh", hd); snprintf(q, sizeof q, "#!%s\n", p); script(p, q);
+    snprintf(p, sizeof p, "%s/loop.sh", sd); snprintf(q, sizeof q, "#!%s\n", p); script(p, q);
     { char *const av[] = { "loop.sh", 0 }; struct ex x = { p, av, 0 }; printf("exec of a script that is its own interpreter: %s\n", exec_answer(&x)); }
     for (int n = 3; n <= 6; n++) {
         for (int i = n; i >= 1; i--) {
-            snprintf(p, sizeof p, "%s/c%d_%d.sh", hd, n, i);
-            if (i == n) snprintf(q, sizeof q, "#!%s\nexit 0\n", sh); else snprintf(q, sizeof q, "#!%s/c%d_%d.sh\n", hd, n, i + 1);
+            snprintf(p, sizeof p, "%s/c%d_%d.sh", sd, n, i);
+            if (i == n) snprintf(q, sizeof q, "#!%s\nexit 0\n", sh); else snprintf(q, sizeof q, "#!%s/c%d_%d.sh\n", sd, n, i + 1);
             script(p, q);
         }
-        snprintf(p, sizeof p, "%s/c%d_1.sh", hd, n);
+        snprintf(p, sizeof p, "%s/c%d_1.sh", sd, n);
         char *const av[] = { "c", 0 }; struct ex x = { p, av, 0 };
         printf("exec of a chain of %d scripts: %s\n", n, exec_answer(&x));
     }
