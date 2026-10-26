@@ -68,8 +68,8 @@ and logs are the tutorial and each command is one you can run by hand:
    executable in a can is a hard link to.
 2. `tools/fetch-debs.py` downloads Ubuntu 24.04's `gcc-13` closure, 94
    packages, and `cannery unpack` makes an open can from the files:
-   the tree under `gcc.can/root/`, the maintainer scripts' effects
-   synthesised, every input recorded by hash in `gcc.can/.can/lock`.
+   the tree under `gcc.can/tree/`, the maintainer scripts' effects
+   synthesised, every input recorded by hash in `gcc.can/.exclave/hashes`.
 3. `tools/fetch-rpms.py` downloads CentOS 7's glibc, headers and
    `libgcc`; unpacked into a can of their own, the tree is copied into
    the gcc can at `/opt/sysroot-el7`, and a two-line manifest says
@@ -82,7 +82,7 @@ and logs are the tutorial and each command is one you can run by hand:
    one `GLIBC_2.34`, so it needs a glibc at least that new wherever it
    runs; the sysroot one `GLIBC_2.2.5` alone, so it runs on any glibc
    from 2.17 on, the oldest the kernel matrix has, which runs this same
-   build natively on CentOS 7. It runs on this host and, through `.can/opener`,
+   build natively on CentOS 7. It runs on this host and, through `.exclave/launcher`,
    inside the can on the can's loader.
 5. `cannery prune` keeps, in a copy, the 136 files that compile touched
    out of 9 567; the copy compiles the program again, and
@@ -94,7 +94,7 @@ What it prints on the reference machine, abridged:
 
 ```
 == 3. CentOS 7's glibc as a sysroot inside it
-+ cp -a sysroot.can/root gcc.can/root/opt/sysroot-el7
++ cp -a sysroot.can/tree gcc.can/tree/opt/sysroot-el7
   closed gcc.can (46 warnings; log/wrap.log)
 == 4. a program built inside, run on this host and inside the can
 + env CAN_LOG=log/hello.log gcc.can/gcc --sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/ -o hello hello.c
@@ -108,7 +108,7 @@ What it prints on the reference machine, abridged:
   glibc symbol versions bound: hello-plain: GLIBC_2.2.5 GLIBC_2.34  hello: GLIBC_2.2.5
 + ./hello
 hello from a can
-+ gcc.can/.can/opener /home/me/cont/build/example/hello
++ gcc.can/.exclave/launcher /home/me/cont/build/example/hello
 hello from a can
 == 5. the can pruned to what the compile touched, and the checks on it
 + cannery prune hello.can log/hello.log
@@ -144,7 +144,7 @@ with the can's own `ldconfig`, the CA bundle, `/etc/passwd`), adds the
 placeholders and records every input by hash in the lockfile. The
 result is a directory. `wrap` closes it: wraps every executable, runs
 the static check, records the manifest and tree hashes; `unwrap` opens
-it again; a bare directory holding a `root/` becomes a can by `wrap`
+it again; a bare directory holding a `tree/` becomes a can by `wrap`
 alone. Every can has a `README` at its top for whoever finds it
 without this repository: what it is, how to run its programs, what
 it touches and how to check it. The cannery writes it where the can
@@ -156,10 +156,10 @@ tools/fetch-apks.py --out apks gcc musl-dev binutils        # the same for Alpin
 tools/fetch-rpms.py --repo URL --out rpms gcc glibc-devel   # and for Fedora, Rocky, CentOS: any repository with repodata/
 cannery/cannery.py unpack gcc.can debs/*.deb               # package files -> an open can, a directory you may edit; .apk and .rpm files likewise
 cannery/cannery.py wrap gcc.can                            # close it: wrap every executable, static check, hashes into the lock
-ln -s root/usr/bin/gcc-13 gcc.can/gcc                      # an entry, if you want one
-gcc.can/gcc -O2 hello.c -o hello                           # any executable in root/ runs by path
-gcc.can/root/usr/bin/sh -c 'as --version'                  # the can's own shell, with the can's PATH
-gcc.can/.can/opener /path/to/host/program args...           # a program without a wrapper, a host tool or a built output, inside the can
+ln -s tree/usr/bin/gcc-13 gcc.can/gcc                      # an entry, if you want one
+gcc.can/gcc -O2 hello.c -o hello                           # any executable in tree/ runs by path
+gcc.can/tree/usr/bin/sh -c 'as --version'                  # the can's own shell, with the can's PATH
+gcc.can/.exclave/launcher /path/to/host/program args...           # a program without a wrapper, a host tool or a built output, inside the can
 gdb -iex 'set auto-load safe-path /' --args gcc.can/gcc -c x.c   # gdb: the opener carries the script; break, bt, source lines
 CAN_LOG=/tmp/can.log gcc.can/gcc -c x.c                    # the one knob: one line per trapped syscall
 cannery/cannery.py check gcc.can /tmp/can.log              # static check of every ELF, dynamic check of the logged run
@@ -167,13 +167,13 @@ cannery/cannery.py prune gcc.can /tmp/can.log              # keep what the logge
 cannery/cannery.py unwrap gcc.can                          # open a closed can to edit it; wrap closes it again
 cannery/cannery.py reopen gcc.can build/opener             # swap the opener after rebuilding it; the wrappers are relinked
 cannery/cannery.py hash gcc.can                            # the tree hash the lock records
-cannery/cannery.py fmt gcc.can/.can/manifest               # the canonical spelling of a manifest or lock; --check only reports
+cannery/cannery.py fmt gcc.can/.exclave/manifest               # the canonical spelling of a manifest or lock; --check only reports
 ```
 
 Between `unpack` and `wrap` the open can is yours: copy a built prefix
 in, delete what you do not want, add a data prefix, write the
-manifest. The manifest is `gcc.can/.can/manifest`, `can 1` when nothing
-is overridden, and has four other keys, each a string: `isa` names the
+manifest. The manifest is `gcc.can/.exclave/manifest`, `exclave 1` when nothing
+is overridden, and has four other keys, each a string: `cpu` names the
 level the binaries need (`"x86-64-v3"`; x86-64 when absent); `data`
 names a prefix that is never executed or loaded, not wrapped, not
 checked, a sysroot or a second libc's world; `host` puts a host path
@@ -189,9 +189,9 @@ A can of something you built is the same four lines, with the build
 system's own installer doing the building:
 
 ```
-gcc.can/root/usr/bin/sh -c './configure --prefix=/usr/local && make && make install DESTDIR=$PWD/stage'
+gcc.can/tree/usr/bin/sh -c './configure --prefix=/usr/local && make && make install DESTDIR=$PWD/stage'
 cannery/cannery.py unpack tool.can runtime/*.deb          # libc6 and whatever else the result links against
-cp -a stage/usr/local tool.can/root/usr/
+cp -a stage/usr/local tool.can/tree/usr/
 cannery/cannery.py wrap tool.can                          # the static check says whether it all links inside
 ```
 
@@ -246,7 +246,7 @@ first user meets, with the rule behind each and what to do:
 
 - **Host tools are not found by name.** `PATH` inside a can is
   `/usr/local/bin:/usr/bin:/bin`, the can's. A host program runs inside
-  by path, or through `.can/opener`, and only if the libraries it
+  by path, or through `.exclave/launcher`, and only if the libraries it
   needs are in the can. A symlink in the can's own `/usr/local/bin`
   puts a name on `PATH`.
 - **The tree is read-only.** A write anywhere the can owns is `EROFS`,
@@ -281,7 +281,7 @@ first user meets, with the rule behind each and what to do:
   the wrappers, and a copy that breaks hard links (`cp -r`, `git`,
   `zip`) still works, each wrapper then being a copy of the opener.
   `/proc/<pid>/exe` of a built output or a host program run inside
-  names `.can/opener` from outside, and a wrapped program's names its
+  names `.exclave/launcher` from outside, and a wrapped program's names its
   own path; from inside both are right.
 - **Nothing elevates.** seccomp needs `no_new_privs`, which also
   disables setuid, file capabilities and AppArmor transitions on exec:
@@ -389,7 +389,7 @@ The environment knob is `CAN_LOG`, the only one. `CAN_EXEC`, `CAN_EXECFN`
 and `CAN_COMM` are the opener's own protocol: set by an opener when it
 execs a wrapper or re-execs itself for a program on the loader path,
 the target and the identity the kernel would give it, removed before
-any program runs, never an interface; `.can/opener PROGRAM ARGS...` is
+any program runs, never an interface; `.exclave/launcher PROGRAM ARGS...` is
 how a program without a wrapper is run from outside. At the can boundary four variables are the can's, always the
 same: `PATH=/usr/local/bin:/usr/bin:/bin`, `LANG=C.UTF-8`, `TZ=UTC0`
 and `SHELL=/bin/sh`; `LANGUAGE`, every `LC_*` and the loader and libc

@@ -129,7 +129,7 @@ The loop that has served well, in the order it pays:
   run use the whole can and remake it. An opener or `test/tree.py`
   change that makes a test touch a file the fixture lacks fails that
   test until the fixture is removed. After rebuilding the opener, `cannery.py reopen
-  CAN` refreshes a can; replacing `.can/opener` alone leaves the
+  CAN` refreshes a can; replacing `.exclave/launcher` alone leaves the
   wrappers linked to the old file.
 - **Tests are independent.** A test in `test/run.py` makes what it
   needs and leaves the shared context alone; the fixtures are the can,

@@ -172,15 +172,15 @@ int manifest_parse(const char *buf, size_t len, struct can *c, char *err, size_t
         /* typing */
 #define WANT(n_, ...) do { int kinds[] = { __VA_ARGS__ }; if (nf != (n_)) return fail(err, errn, K, "wrong field count"); \
         for (int i = 0; i < nf; i++) if (f[i].kind != kinds[i]) return fail(err, errn, K, "wrong field type"); } while (0)
-        if (xstrcmp(key, "can") == 0) {
+        if (xstrcmp(key, "exclave") == 0) {
             WANT(1, F_TOK);
-            if (nrec != 1) return fail(err, errn, K, "can must be the first record");
-            if (xstrcmp(f[0].s, "1") != 0) return fail(err, errn, K, "unsupported can version");
+            if (nrec != 1) return fail(err, errn, K, "exclave must be the first record");
+            if (xstrcmp(f[0].s, "1") != 0) return fail(err, errn, K, "unsupported exclave version");
             seen_can = 1;
         } else if (nrec == 1) {
-            return fail(err, errn, K, "first record must be can");
-        } else if (xstrcmp(key, "isa") == 0) {
-            WANT(1, F_STR); if (seen_isa++) return fail(err, errn, K, "duplicate isa");
+            return fail(err, errn, K, "first record must be exclave");
+        } else if (xstrcmp(key, "cpu") == 0) {
+            WANT(1, F_STR); if (seen_isa++) return fail(err, errn, K, "duplicate cpu");
             scpy(c->isa, f[0].s, sizeof c->isa);
         } else if (xstrcmp(key, "own") == 0) {
             WANT(1, F_STR); if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "own must be a normalised absolute path");

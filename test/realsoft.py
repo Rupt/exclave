@@ -29,7 +29,7 @@ PROJECTS = {
 
 def sh(cmd, cwd, env, can=None):
     if can:
-        p = subprocess.run([os.path.join(can, "root", "usr", "bin", "sh"), "-c", cmd], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        p = subprocess.run([os.path.join(can, "tree", "usr", "bin", "sh"), "-c", cmd], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     else:
         p = subprocess.run(["/bin/sh", "-c", cmd], cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return p.returncode, p.stdout.decode(errors="replace")

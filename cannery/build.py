@@ -51,7 +51,7 @@ def reader(path):
 
 
 def extract(root, debs, log=print):
-    """debs: [(name, path, stanza)]. Extracts every data.tar into root/ after the merged-usr links.
+    """debs: [(name, path, stanza)]. Extracts every data.tar into tree/ after the merged-usr links.
     A regular file shipped by two packages is an error unless one declares Replaces on the other, with the
     merged-usr spellings of a path treated as one path; diversions in maintainer scripts are refused; a
     member whose path resolves outside the tree through a symlink is refused. Returns {relpath: owner}."""
@@ -403,24 +403,24 @@ def write_lock(can, pkgs, manifest_hash=None, tree=False, keep_hashes=False):
     (after unwrap: an open can has no output yet)."""
     import cannery
     R = cannery.Record
-    lock = os.path.join(can, ".can", "lock")
-    old = cannery.load(lock, "lock") if os.path.exists(lock) else []
+    lock = os.path.join(can, ".exclave", "hashes")
+    old = cannery.load(lock, "hashes") if os.path.exists(lock) else []
     if pkgs is None:
         pkgs = [tuple(f.decode("utf-8", "surrogateescape") for f in v) for v in cannery.values(old, "pkg")]
     if keep_hashes:
         m = cannery.values(old, "manifest")
         manifest_hash, tree = (m[0][0].decode() if m else None), bool(cannery.values(old, "tree"))
-    recs = [R("lock", [("t", b"1")]), R("cannery", [("s", CANNERY_VERSION.encode())])]
+    recs = [R("hashes", [("t", b"1")]), R("tool", [("s", CANNERY_VERSION.encode())])]
     if manifest_hash or tree:
-        recs.append(R("opener", [("s", cannery.b2_file(os.path.join(can, ".can", "opener")).encode())]))
+        recs.append(R("launcher", [("s", cannery.b2_file(os.path.join(can, ".exclave", "launcher")).encode())]))
     for name, ver, arch, h in sorted(pkgs):
         recs.append(R("pkg", [("s", name.encode()), ("s", ver.encode()), ("s", arch.encode()), ("s", h.encode())]))
     if manifest_hash:
         recs.append(R("manifest", [("s", manifest_hash.encode())]))
     if tree:
-        recs.append(R("tree", [("s", tree_hash(os.path.join(can, "root")).encode())]))
-    data = cannery.dump(recs, "lock")
-    cannery.parse(data, "lock")
+        recs.append(R("tree", [("s", tree_hash(os.path.join(can, "tree")).encode())]))
+    data = cannery.dump(recs, "hashes")
+    cannery.parse(data, "hashes")
     with open(lock, "wb") as f:
         f.write(data)
 
@@ -507,7 +507,7 @@ def prune(can, logs, own, log=print):
     Directories are never removed, so ownership and `ls` do not change. Returns (kept, removed, bytes)."""
     import cannery
     import elfcheck
-    root = os.path.join(can, "root")
+    root = os.path.join(can, "tree")
     keep, whole, programs = set(), set(), 0
     for what, r, v in log_lines(logs):
         if what == "opener" or not v.startswith("/") or r < 0:
@@ -579,7 +579,7 @@ def prune(can, logs, own, log=print):
 def unwrap(can, log=print):
     """Undo wrapping: every .real/NAME moves back over its wrapper. Leaves a plain tree."""
     import cannery
-    root = os.path.join(can, "root")
+    root = os.path.join(can, "tree")
     n = 0
     for dirpath, dirnames, filenames in os.walk(root, topdown=False):
         if os.path.basename(dirpath) != ".real":

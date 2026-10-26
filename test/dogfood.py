@@ -50,16 +50,16 @@ def main():
     print("building the cannery can")
     ccan = os.path.join(work, "cannery.can")
     run([sys.executable, cannery, "unpack", ccan] + debs(os.path.join(work, "debs-cannery")), work)
-    lib = os.path.join(ccan, "root", "usr", "lib", "cont")                # the cannery's own source and the opener, by hand: the can is a directory
+    lib = os.path.join(ccan, "tree", "usr", "lib", "cont")                # the cannery's own source and the opener, by hand: the can is a directory
     shutil.copytree(os.path.join(REPO, "cannery"), lib, ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy2(os.path.join(REPO, "build", "opener"), os.path.join(lib, "opener"))
-    entry = os.path.join(ccan, "root", "usr", "bin", "cannery")
+    entry = os.path.join(ccan, "tree", "usr", "bin", "cannery")
     with open(entry, "w") as f:
         f.write('#!/bin/sh\nexec python3 /usr/lib/cont/cannery.py "$@"\n')
     os.chmod(entry, 0o755)
     run([sys.executable, cannery, "wrap", ccan], work)
-    os.symlink("root/usr/bin/cannery", os.path.join(ccan, "cannery"))
-    run([os.path.join(ccan, "cannery"), "fmt", "--check", os.path.join(ccan, ".can", "manifest")], work)
+    os.symlink("tree/usr/bin/cannery", os.path.join(ccan, "cannery"))
+    run([os.path.join(ccan, "cannery"), "fmt", "--check", os.path.join(ccan, ".exclave", "manifest")], work)
     gcc_debs = debs(os.path.join(work, "debs-gcc"))
     print("building the gcc can on the host")
     run([sys.executable, cannery, "unpack", os.path.join(work, "gcc-host.can")] + gcc_debs, work)
@@ -67,12 +67,12 @@ def main():
     print("building the gcc can inside the cannery can")
     run([os.path.join(ccan, "cannery"), "unpack", os.path.join(work, "gcc-can.can")] + gcc_debs, work)
     run([os.path.join(ccan, "cannery"), "wrap", os.path.join(work, "gcc-can.can")], work)
-    a_lock = open(os.path.join(work, "gcc-host.can", ".can", "lock"), "rb").read()
-    b_lock = open(os.path.join(work, "gcc-can.can", ".can", "lock"), "rb").read()
+    a_lock = open(os.path.join(work, "gcc-host.can", ".exclave", "hashes"), "rb").read()
+    b_lock = open(os.path.join(work, "gcc-can.can", ".exclave", "hashes"), "rb").read()
     tree = [l for l in a_lock.decode().splitlines() if l.startswith("tree")]
     if a_lock == b_lock:
         print("PASS lockfiles identical; %s" % tree[0])
-        out = run([os.path.join(work, "gcc-can.can", "root", "usr", "bin", "gcc-13"), "--version"], work)
+        out = run([os.path.join(work, "gcc-can.can", "tree", "usr", "bin", "gcc-13"), "--version"], work)
         print("     " + out.splitlines()[0])
         if not a.keep:
             shutil.rmtree(work, ignore_errors=True)

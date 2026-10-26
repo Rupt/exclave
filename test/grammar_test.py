@@ -39,9 +39,9 @@ def properties(rng, cases):
         q = cannery.quote(b)
         if seen.setdefault(q, b) != b:
             bad += 1                                              # encode is injective
-        text = ("can 1\n\nown %s\n" % cannery.quote(b"/" + b)).encode()
+        text = ("exclave 1\n\nown %s\n" % cannery.quote(b"/" + b)).encode()
         try:
-            recs = cannery.parse(text, "can")
+            recs = cannery.parse(text, "exclave")
         except cannery.GrammarError as e:
             bad += 1
             print("FAIL parse of encoded %r: %s" % (b, e))
@@ -49,8 +49,8 @@ def properties(rng, cases):
         if recs[1].fields[0][1] != b"/" + b:                        # decode(encode(b)) == b
             bad += 1
             print("FAIL round trip %r" % b)
-        canon = cannery.dump(recs, "can")
-        if canon != text or cannery.dump(cannery.parse(canon, "can"), "can") != canon:   # fmt is idempotent
+        canon = cannery.dump(recs, "exclave")
+        if canon != text or cannery.dump(cannery.parse(canon, "exclave"), "exclave") != canon:   # fmt is idempotent
             bad += 1
             print("FAIL canonical form %r" % b)
     return bad
@@ -59,7 +59,7 @@ def properties(rng, cases):
 MUTATIONS = [
     lambda t, rng: t.replace(b"\n", b"\r\n", 1), lambda t, rng: t[:-1], lambda t, rng: b"\xef\xbb\xbf" + t,
     lambda t, rng: t.replace(b" ", b"  ", 1), lambda t, rng: t.replace(b" ", b"\t", 1), lambda t, rng: t.replace(b'"', b"", 1),
-    lambda t, rng: t.replace(b"own", b"Own", 1), lambda t, rng: t + b"# trailing\n", lambda t, rng: t.replace(b"can 1", b"can 2", 1),
+    lambda t, rng: t.replace(b"own", b"Own", 1), lambda t, rng: t + b"# trailing\n", lambda t, rng: t.replace(b"exclave 1", b"exclave 2", 1),
     lambda t, rng: t.replace(b'own "/', b'own "//', 1), lambda t, rng: t.replace(b'own "/', b'own "/./', 1), lambda t, rng: t.replace(b'own "/', b'own "/../', 1),
     lambda t, rng: t.replace(b'"/', b'"', 1), lambda t, rng: t.replace(b"\\x", b"\\X", 1), lambda t, rng: t.replace(b"own", b"env", 1),
     lambda t, rng: t[:rng.randint(0, len(t))] + bytes([rng.randint(0, 31)]) + t[rng.randint(0, len(t)):],
@@ -68,9 +68,9 @@ MUTATIONS = [
 
 
 def near_manifest(rng):
-    recs = ["can 1"]
+    recs = ["exclave 1"]
     for _ in range(rng.randint(0, 4)):
-        key = rng.choice(["own", "host", "data", "isa", "isa", "bogus"])
+        key = rng.choice(["own", "host", "data", "cpu", "cpu", "bogus"])
         val = rand_bytes(rng)
         recs.append("%s %s" % (key, cannery.quote((b"/" if key in ("own", "host", "data") else b"") + val)))
     if rng.random() < 0.3:
@@ -90,7 +90,7 @@ def compare(rng, cases, c_parser):
             with open(path, "wb") as f:
                 f.write(text)
             try:
-                cannery.parse(text, "can")
+                cannery.parse(text, "exclave")
                 py = True
             except cannery.GrammarError:
                 py = False
@@ -102,9 +102,9 @@ def compare(rng, cases, c_parser):
 
 
 POSITIONS = [                                     # an error on a known line, which both parsers must name (6.2)
-    (b'can 1\n\nisa "x86-64"\n\nown "/x"\nbogus 1\n', 6), (b'can 1\n\nown "/x"\nown "x"\n', 4),
-    (b'can 1\n\nown "/x"\r\n', 3), (b'can 1\n\nown "/\xff"\n', 3), (b'can 1\n\nown "/x" \n', 3),
-    (b'can 1\n\nown "/x"\n# after\n', 5), (b"can 1\n\n" + b"".join(b'own "/c%03d"\n' % i for i in range(257)), 259),
+    (b'exclave 1\n\ncpu "x86-64"\n\nown "/x"\nbogus 1\n', 6), (b'exclave 1\n\nown "/x"\nown "x"\n', 4),
+    (b'exclave 1\n\nown "/x"\r\n', 3), (b'exclave 1\n\nown "/\xff"\n', 3), (b'exclave 1\n\nown "/x" \n', 3),
+    (b'exclave 1\n\nown "/x"\n# after\n', 5), (b"exclave 1\n\n" + b"".join(b'own "/c%03d"\n' % i for i in range(257)), 259),
 ]
 
 
@@ -116,7 +116,7 @@ def positions(c_parser):
             with open(path, "wb") as f:
                 f.write(text)
             try:
-                cannery.parse(text, "can")
+                cannery.parse(text, "exclave")
                 py = "accepted"
             except cannery.GrammarError as e:
                 py = str(e)

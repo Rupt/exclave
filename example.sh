@@ -36,11 +36,11 @@ logged unpack cannery unpack gcc.can debs/*.deb
 echo "== 3. CentOS 7's glibc as a sysroot inside it"
 [ -n "$(ls el7 2>/dev/null)" ] || logged fetch-rpms python3 "$here/tools/fetch-rpms.py" --repo https://vault.centos.org/7.9.2009/os/x86_64 --no-base --out el7 glibc glibc-devel glibc-headers kernel-headers libgcc
 logged unpack-el7 cannery unpack sysroot.can el7/*.rpm
-run cp -a sysroot.can/root gcc.can/root/opt/sysroot-el7
-printf '%s\n' "+ printf 'can 1\\n\\ndata \"/opt/sysroot-el7\"\\n' > gcc.can/.can/manifest" >&2
-printf 'can 1\n\ndata "/opt/sysroot-el7"\n' > gcc.can/.can/manifest
+run cp -a sysroot.can/tree gcc.can/tree/opt/sysroot-el7
+printf '%s\n' "+ printf 'exclave 1\\n\\ndata \"/opt/sysroot-el7\"\\n' > gcc.can/.exclave/manifest" >&2
+printf 'exclave 1\n\ndata "/opt/sysroot-el7"\n' > gcc.can/.exclave/manifest
 logged wrap cannery wrap gcc.can
-run ln -s root/usr/bin/gcc-13 gcc.can/gcc
+run ln -s tree/usr/bin/gcc-13 gcc.can/gcc
 
 echo "== 4. a program built inside, run on this host and inside the can"
 cat > hello.c <<'HELLO'
@@ -50,10 +50,10 @@ HELLO
 run env CAN_LOG=log/plain.log gcc.can/gcc -o hello-plain hello.c
 run env CAN_LOG=log/hello.log gcc.can/gcc $sysroot -o hello hello.c
 echo "  log/hello.log: $(wc -l < log/hello.log) lines, one per trapped syscall; the first:"; head -6 log/hello.log | sed "s/^/    /"
-versions() { gcc.can/root/usr/bin/objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -u | tr '\n' ' '; }
+versions() { gcc.can/tree/usr/bin/objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -u | tr '\n' ' '; }
 echo "  glibc symbol versions bound: hello-plain: $(versions hello-plain) hello: $(versions hello)"
 run ./hello
-run gcc.can/.can/opener "$dir/hello"
+run gcc.can/.exclave/launcher "$dir/hello"
 
 echo "== 5. the can pruned to what the compile touched, and the checks on it"
 run cp -a gcc.can hello.can
@@ -61,6 +61,6 @@ run cannery prune hello.can log/hello.log
 run env CAN_LOG=log/pruned.log hello.can/gcc $sysroot -o hello-pruned hello.c
 run cannery check hello.can log/pruned.log
 run ./hello-pruned
-count() { find "$1/root" -type f -o -type l | wc -l; }
-echo "  files and symlinks under root/: $(count gcc.can) in gcc.can, $(count hello.can) in hello.can"
+count() { find "$1/tree" -type f -o -type l | wc -l; }
+echo "  files and symlinks under tree/: $(count gcc.can) in gcc.can, $(count hello.can) in hello.can"
 echo "example: done; everything is under $dir"

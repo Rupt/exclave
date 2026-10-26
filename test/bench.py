@@ -96,8 +96,8 @@ def main():
     os.makedirs(work)
     import tree
     can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"), opener=os.path.abspath(a.opener))   # a copy reopened with the build (17)
-    cgcc, hgcc = os.path.join(can, "root", "usr", "bin", GCC), shutil.which("gcc-13") or shutil.which("gcc")
-    opener = os.path.join(can, ".can", "opener")
+    cgcc, hgcc = os.path.join(can, "tree", "usr", "bin", GCC), shutil.which("gcc-13") or shutil.which("gcc")
+    opener = os.path.join(can, ".exclave", "launcher")
     env = {"PATH": "/usr/bin:/bin"}
     rows = []
 

@@ -32,10 +32,10 @@ fetch() {                                   # fetch NAME FETCHER ARGS...: packag
 }
 can() {                                     # can NAME PKGDIR: unpack the package files into DIR/NAME.can and close it
     name=$1; pkgs=$2
-    if grep -q '^tree ' "$dir/$name.can/.can/lock" 2>/dev/null; then echo "$name.can: present"; return 0; fi
+    if grep -q '^tree ' "$dir/$name.can/.exclave/hashes" 2>/dev/null; then echo "$name.can: present"; return 0; fi
     rm -rf "$dir/$name.can"
     if cannery unpack "$dir/$name.can" "$dir/$pkgs"/* > "$dir/log/$name.can.log" 2>&1 && cannery wrap "$dir/$name.can" >> "$dir/log/$name.can.log" 2>&1; then
-        echo "$name.can: $(grep -c '^pkg ' "$dir/$name.can/.can/lock") packages; $(tail -1 "$dir/log/$name.can.log")"
+        echo "$name.can: $(grep -c '^pkg ' "$dir/$name.can/.exclave/hashes") packages; $(tail -1 "$dir/log/$name.can.log")"
     else
         echo "$name.can: FAIL, see $dir/log/$name.can.log"; rm -rf "$dir/$name.can"; fails=$((fails + 1)); return 1
     fi

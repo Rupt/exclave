@@ -145,7 +145,7 @@ static int host_chain(struct scratch *S, char *cur, char **rpp)
     long fd = SC4(NR_openat2, AT_FDCWD, p, how, sizeof how);
     if (fd == -ENOSYS || fd == -E2BIG || fd == -EINVAL) { no_openat2 = 1; return 0; }   /* before 5.6 */
     if (fd < 0) return -1;
-    /* the kernel's name for what it reached must be the path itself: on a case-insensitive filesystem x.can/ROOT is the
+    /* the kernel's name for what it reached must be the path itself: on a case-insensitive filesystem x.exclave/TREE is the
      * tree's root under another spelling on the same mount, and the tree's root, pinned by the program's own mappings,
      * keeps its own name (review O7-1); any other difference, an alias nobody foresaw, is the walk's too */
     char l[32] = "/proc/self/fd/", nb[24]; ltoa_(fd, nb); scat(l, nb, sizeof l);
@@ -247,7 +247,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         }
         size_t curl = xstrlen(cur); if (curl + 1 + cl + 1 >= PATH_MAX) return -ENAMETOOLONG;
         cur[curl] = '/'; xmemcpy(cur + curl + 1, comp, cl + 1);
-        /* the tree's real root directory is an alias of /: a path spelt through <can>/root/ is the same path in
+        /* the tree's real root directory is an alias of /: a path spelt through <can>/tree/ is the same path in
          * virtual space, with the same ownership and the same read-only rule (review F3-1) */
         if (C.rootlen && xstrcmp(cur, C.root) == 0) { cur[0] = 0; S->touched_can = 1; while (*rp == '/') rp++; continue; }
         while (*rp == '/') rp++;

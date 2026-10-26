@@ -5,11 +5,11 @@ A can is a directory at every stage, and every command takes paths; `fmt --check
 
     cannery.py unpack OUT DEB...   Make the open can OUT from package files: extract, synthesise what
                                    maintainer scripts would have done, add the placeholders, record every
-                                   input in OUT/.can/lock, report dependencies the set does not satisfy.
-    cannery.py wrap CAN            Close a can: check the manifest (written as `can 1` if absent), the
+                                   input in OUT/.exclave/hashes, report dependencies the set does not satisfy.
+    cannery.py wrap CAN            Close a can: check the manifest (written as `exclave 1` if absent), the
                                    wrappers and every ELF, then wrap every executable and write the
                                    opener, manifest and tree hashes to the lock.
-                                   Idempotent; a bare directory holding root/ becomes a can.
+                                   Idempotent; a bare directory holding tree/ becomes a can.
     cannery.py unwrap CAN          Open a can: move every payload back over its wrapper.
     cannery.py check CAN [LOG...]  Wrappers, payloads, the tree against the lock's hash and the static
                                    check; with CAN_LOG files, the dynamic check of what a workload opened.
@@ -43,15 +43,15 @@ import elfcheck  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 # canonical key order per file kind (6.2, 6.4)
 KEY_ORDER = {
-    "can": ["can", "isa", "data", "host", "own"],
-    "lock": ["lock", "cannery", "opener", "pkg", "manifest", "tree"],
+    "exclave": ["exclave", "cpu", "data", "host", "own"],
+    "hashes": ["hashes", "tool", "launcher", "pkg", "manifest", "tree"],
 }
 # key -> (min fields, max fields, kinds) ; kinds: s string, t token
 SCHEMA = {
-    "can": (1, 1, "t"), "isa": (1, 1, "s"), "data": (1, 1, "s"), "host": (1, 1, "s"), "own": (1, 1, "s"),
-    "lock": (1, 1, "t"), "cannery": (1, 1, "s"), "opener": (1, 1, "s"), "pkg": (4, 4, "ssss"), "manifest": (1, 1, "s"), "tree": (1, 1, "s"),
+    "exclave": (1, 1, "t"), "cpu": (1, 1, "s"), "data": (1, 1, "s"), "host": (1, 1, "s"), "own": (1, 1, "s"),
+    "hashes": (1, 1, "t"), "tool": (1, 1, "s"), "launcher": (1, 1, "s"), "pkg": (4, 4, "ssss"), "manifest": (1, 1, "s"), "tree": (1, 1, "s"),
 }
-ONCE = {"can", "isa", "lock", "cannery", "opener", "manifest", "tree"}
+ONCE = {"exclave", "cpu", "hashes", "tool", "launcher", "manifest", "tree"}
 # the opener's tables (8.1): the manifest may carry this many records, the tree this many top-level entries
 LIMITS = {"own": 256, "host": 32, "data": 32, "top": 256}
 # 6.1: the can's README, for whoever finds the directory without knowing cont; written where the can has none
@@ -60,26 +60,26 @@ This directory is a can: Linux software packed with the libraries and
 files it needs, so that its programs run from here, by path, with
 nothing installed. It was made by the cannery, the build tool of a
 project called cont. It runs on Linux 3.10 or later, on the machine
-type it was built for ("file .can/opener" names it), with no root,
+type it was built for ("file .exclave/launcher" names it), with no root,
 setup step, daemon or container, and running it changes nothing in
-root/ or .can/ and leaves nothing behind. It is not a sandbox: its
+tree/ or .exclave/ and leaves nothing behind. It is not a sandbox: its
 programs run as you, with your files and your network.
 
 What is here
 
-  root/          the software's own /: usually the packages listed
-                 in .can/lock, unpacked as if installed.
-  .can/opener    a small program that starts the others. Every
-                 program in root/ is a hard link to it, a "wrapper";
+  tree/          the software's own /: usually the packages listed
+                 in .exclave/hashes, unpacked as if installed.
+  .exclave/launcher    a small program that starts the others. Every
+                 program in tree/ is a hard link to it, a "wrapper";
                  the real one sits in a hidden .real/ directory
-                 beside it, and running root/usr/bin/NAME runs
-                 root/usr/bin/.real/NAME inside the can.
-  .can/manifest  the maker's settings; "can 1" alone means none.
-  .can/lock      one "pkg" line per package that went in: name,
+                 beside it, and running tree/usr/bin/NAME runs
+                 tree/usr/bin/.real/NAME inside the can.
+  .exclave/manifest  the maker's settings; "exclave 1" alone means none.
+  .exclave/hashes      one "pkg" line per package that went in: name,
                  version, architecture and hash of the package file;
                  then hashes of the opener, the manifest and, on the
-                 "tree" line, all of root/. Not where they came from.
-  other names    shortcuts into root/ that the maker added.
+                 "tree" line, all of tree/. Not where they came from.
+  other names    shortcuts into tree/ that the maker added.
 
 A lock with no "tree" line marks an open, unfinished can: its
 programs are unwrapped and would use this system's libraries.
@@ -91,14 +91,14 @@ With CAN the path of this directory, run from your own directory:
   CAN/NAME ARGS...               a shortcut, if the maker made one
   CAN/root/usr/bin/NAME ARGS...  any program in the can
   CAN/root/bin/sh                a shell inside the can, if it has one
-  CAN/.can/opener PROG ARGS...   PROG run inside the can: one of your
+  CAN/.exclave/launcher PROG ARGS...   PROG run inside the can: one of your
                                  own, such as one the can's compiler
                                  built, or a can path, /usr/bin/NAME
 
-A symlink to a program in root/ works too; a copy does not, and a
+A symlink to a program in tree/ works too; a copy does not, and a
 program run straight from .real/ is likely to fail.
 
-Inside, a program sees the top-level directories that root/ fills,
+Inside, a program sees the top-level directories that tree/ fills,
 /usr, /etc, /lib and the rest, as its own, read-only: writing there
 fails as on a read-only disk. Everything else is this system's: /home,
 /tmp, /proc, /dev, the working directory, and eight files such as
@@ -116,17 +116,17 @@ Moving, copying, removing
 Nothing outside this directory refers to it: move it, copy it with
 cp -a, pack it with tar, or remove it with rm -r. A copy that splits
 the hard links (cp -r) still runs, larger by the opener's size per
-program. Do not edit a program in root/ in place: they are all one
+program. Do not edit a program in tree/ in place: they are all one
 file. A can does not run from a filesystem mounted noexec.
 
 Checking it
 
-The hashes are BLAKE2b-256, so "b2sum -l 256 .can/opener" prints the
+The hashes are BLAKE2b-256, so "b2sum -l 256 .exclave/launcher" prints the
 lock's opener hash, and a package file fetched again its pkg hash.
 The cannery, cont's build tool, is not part of this can:
 
   cannery check DIR   every program wrapped, the libraries each needs
-                      found inside, root/ against the lock's tree line
+                      found inside, tree/ against the lock's tree line
   cannery unwrap DIR  open the can for editing; cannery wrap DIR
                       closes it again
   cannery reopen DIR  put in another opener, relinking every program
@@ -174,7 +174,7 @@ def _utf8_len(b, i):
     return 0
 
 
-def parse(data, kind="can"):
+def parse(data, kind="exclave"):
     """Strict parse of the bytes of a manifest or lockfile. Returns [Record]."""
     if not isinstance(data, bytes):
         raise TypeError("bytes expected")
@@ -230,7 +230,7 @@ def parse(data, kind="can"):
         rec = Record(key, fields, comments, line)
         comments = []
         _check_record(rec, kind)
-        if kind == "can" and key in LIMITS:                           # the opener's tables (8.1), refused where the opener refuses
+        if kind == "exclave" and key in LIMITS:                           # the opener's tables (8.1), refused where the opener refuses
             counts[key] = counts.get(key, 0) + 1
             if counts[key] > LIMITS[key]:
                 _fail(line, 1, "more than %d %s records" % (LIMITS[key], key))
@@ -341,7 +341,7 @@ def quote(b):
     return "".join(out)
 
 
-def dump(records, kind="can"):
+def dump(records, kind="exclave"):
     """Canonical form (6.2): key groups in fixed order, one blank line between groups, sorted within a group,
     comments attached to their records."""
     groups = {}
@@ -380,19 +380,19 @@ def b2_file(path):
 
 # ---------------------------------------------------------------- the can as the opener sees it
 def manifest_path(can):
-    return os.path.join(can, ".can", "manifest")
+    return os.path.join(can, ".exclave", "manifest")
 
 
 def manifest(can):
-    """The manifest's records; `can 1` alone when the file is absent."""
+    """The manifest's records; `exclave 1` alone when the file is absent."""
     p = manifest_path(can)
-    return load(p, "can") if os.path.exists(p) else [Record("can", [("t", b"1")])]
+    return load(p, "exclave") if os.path.exists(p) else [Record("exclave", [("t", b"1")])]
 
 
 def owned_top(can):
-    """8.1 rule 1: every top-level entry of root/ that is not an empty directory; a directory that cannot be
+    """8.1 rule 1: every top-level entry of tree/ that is not an empty directory; a directory that cannot be
     listed is not a placeholder (review O4-8)."""
-    root = os.path.join(can, "root")
+    root = os.path.join(can, "tree")
     top = []
     for name in sorted(os.listdir(root)):
         p = os.path.join(root, name)
@@ -420,7 +420,7 @@ def check_limits(can):
     manifest(can)
     top = len(owned_top(can))                                 # as the opener counts them: a placeholder takes no slot
     if top > LIMITS["top"]:
-        raise build.BuildError("root/ has %d top-level entries; the opener holds %d" % (top, LIMITS["top"]))
+        raise build.BuildError("tree/ has %d top-level entries; the opener holds %d" % (top, LIMITS["top"]))
 
 
 def in_data(vpath, data):
@@ -451,7 +451,7 @@ def link_or_copy(src, dst):
 
 
 def opener_ino(can):
-    st = os.stat(os.path.join(can, ".can", "opener"))
+    st = os.stat(os.path.join(can, ".exclave", "launcher"))
     return (st.st_dev, st.st_ino, st.st_size)
 
 
@@ -499,8 +499,8 @@ def write_readme(can):
 
 
 def install_opener(can, opener=None, arch=None):
-    """Put an opener at CAN/.can/opener unless one is there already: the one for the packages' architecture."""
-    dst = os.path.join(can, ".can", "opener")
+    """Put an opener at CAN/.exclave/launcher unless one is there already: the one for the packages' architecture."""
+    dst = os.path.join(can, ".exclave", "launcher")
     if os.path.exists(dst):
         return
     opener = opener or default_opener(arch)
@@ -535,8 +535,8 @@ def cmd_unpack(out, debs, log=print):
         pkgs.append((name, path, fields, ver, arch))
     if len(arches) > 1:
         raise build.BuildError("the packages mix architectures %s" % sorted(arches))
-    os.makedirs(os.path.join(out, ".can"))
-    root = os.path.join(out, "root")
+    os.makedirs(os.path.join(out, ".exclave"))
+    root = os.path.join(out, "tree")
     triples = [(n, p, f) for n, p, f, _, _ in pkgs]
     try:
         build.extract(root, triples, log=log)
@@ -557,7 +557,7 @@ def wrapper_problems(can, data=()):
     """6.1 as the tree stands: a wrapper of another opener (stale), a wrapper without a payload, a payload
     without a wrapper (a stray under the reserved name), an executable its user cannot run. Returns the list
     of problems; cmd_check adds the executables not wrapped, which wrap is about to wrap."""
-    root = os.path.join(can, "root")
+    root = os.path.join(can, "tree")
     oi = opener_ino(can)
     problems = []
     for real, v, st in walk_files(root):
@@ -582,10 +582,10 @@ def wrapper_problems(can, data=()):
 
 
 def wrap_files(can, data=(), quiet=False):
-    """6.1: every executable file in root/ outside data prefixes becomes a hard link to the opener; the
+    """6.1: every executable file in tree/ outside data prefixes becomes a hard link to the opener; the
     original moves to .real/. Never over an existing payload (review F4-2)."""
-    root = os.path.join(can, "root")
-    opener = os.path.join(can, ".can", "opener")
+    root = os.path.join(can, "tree")
+    opener = os.path.join(can, ".exclave", "launcher")
     oi = opener_ino(can)
     n = 0
     for real, v, st in list(walk_files(root)):
@@ -613,19 +613,19 @@ def cmd_wrap(can, quiet=False):
     """Close a can: opener, placeholders, manifest, the wrapper and static checks on the tree as it stands,
     then the wrappers, then the lock's opener, manifest and tree hashes. A refusal happens before anything
     is wrapped, so a refused can is left unwrapped (review F4-8, O4-7)."""
-    root = os.path.join(can, "root")
+    root = os.path.join(can, "tree")
     if not os.path.isdir(root):
-        sys.exit("refusing: %s has no root/ directory" % can)
+        sys.exit("refusing: %s has no tree/ directory" % can)
     install_opener(can)
     build.placeholders(root, strip=False, log=lambda *a: None)   # 8.1: the conventional names and the identity files, if the tree lacks them
     mp = manifest_path(can)
     if not os.path.exists(mp):
         with open(mp, "wb") as f:
-            f.write(b"can 1\n")
+            f.write(b"exclave 1\n")
     with open(mp, "rb") as f:
         mdata = f.read()
-    recs = parse(mdata, "can")
-    if dump(recs, "can") != mdata:
+    recs = parse(mdata, "exclave")
+    if dump(recs, "exclave") != mdata:
         sys.exit("refusing: %s is not canonical; run cannery fmt on it" % mp)
     check_limits(can)
     data = data_prefixes(can)
@@ -660,8 +660,8 @@ def cmd_reopen(can, opener=None):
     opener = opener or default_opener()
     if not os.path.isfile(opener):
         sys.exit("no opener at %s" % opener)
-    root = os.path.join(can, "root")
-    new = os.path.join(can, ".can", "opener.new")
+    root = os.path.join(can, "tree")
+    new = os.path.join(can, ".exclave", "launcher.new")
     shutil.copy2(opener, new)
     os.chmod(new, 0o755)
     n, strays = 0, []
@@ -680,12 +680,12 @@ def cmd_reopen(can, opener=None):
             except OSError:
                 shutil.copy2(new, w)
             n += 1
-    os.replace(new, os.path.join(can, ".can", "opener"))
+    os.replace(new, os.path.join(can, ".exclave", "launcher"))
     write_readme(can)
     for s in strays:
         print("payload without wrapper, left alone: " + s)
-    if os.path.exists(os.path.join(can, ".can", "lock")):
-        recs = load(os.path.join(can, ".can", "lock"), "lock")
+    if os.path.exists(os.path.join(can, ".exclave", "hashes")):
+        recs = load(os.path.join(can, ".exclave", "hashes"), "hashes")
         if values(recs, "tree"):
             build.write_lock(can, None, keep_hashes=True)
     print("relinked %d wrappers to the new opener" % n)
@@ -706,7 +706,7 @@ def static_report(can, quiet=False):
 def cmd_check(can, logs=()):
     """A closed can: every executable outside data prefixes wrapped, no stray or stale wrapper, the static
     check, the tree against the lock's hash (review O4-18), and with logs the dynamic check."""
-    root = os.path.join(can, "root")
+    root = os.path.join(can, "tree")
     data = data_prefixes(can)
     oi = opener_ino(can)
     problems = wrapper_problems(can, data)
@@ -714,9 +714,9 @@ def cmd_check(can, logs=()):
         if stat.S_ISREG(st.st_mode) and st.st_mode & 0o111 and not in_data(v, data) and not is_wrapper(real, oi) \
                 and not os.path.exists(os.path.join(os.path.dirname(real), ".real", os.path.basename(real))):
             problems.append("executable not wrapped: " + v)
-    lock = os.path.join(can, ".can", "lock")
+    lock = os.path.join(can, ".exclave", "hashes")
     if os.path.exists(lock):
-        recorded = values(load(lock, "lock"), "tree")
+        recorded = values(load(lock, "hashes"), "tree")
         if recorded:
             actual = build.tree_hash(root)
             if recorded[0][0].decode() != actual:
@@ -744,8 +744,8 @@ def cmd_check(can, logs=()):
 def cmd_prune(can, logs):
     kept, removed, freed = build.prune(can, logs, owned(can))
     print("pruned %s: kept %d files, removed %d, %d bytes freed" % (can, kept, removed, freed))
-    lock = os.path.join(can, ".can", "lock")
-    if os.path.exists(lock) and values(load(lock, "lock"), "tree"):
+    lock = os.path.join(can, ".exclave", "hashes")
+    if os.path.exists(lock) and values(load(lock, "hashes"), "tree"):
         build.write_lock(can, None, keep_hashes=True)         # the lock records the output as it now is (review F4-6)
     rep = static_report(can)
     return 1 if rep.errors else 0
@@ -757,7 +757,7 @@ def cmd_fmt(paths, check):
         with open(p, "rb") as f:
             data = f.read()
         first = next((l for l in data.split(b"\n") if l and not l.startswith(b"#")), b"")
-        kind = "lock" if first.startswith(b"lock ") else "can"        # by the first record, not the file's name (review O4-16)
+        kind = "hashes" if first.startswith(b"hashes ") else "exclave"        # by the first record, not the file's name (review O4-16)
         try:
             recs = parse(data, kind)
         except GrammarError as e:
@@ -803,9 +803,9 @@ def main(argv):
         elif a.cmd == "fmt":
             return cmd_fmt(a.files, a.check)
         elif a.cmd == "hash":
-            if not os.path.isdir(os.path.join(a.can, "root")):
-                sys.exit("refusing: %s has no root/ directory" % a.can)
-            print(build.tree_hash(os.path.join(a.can, "root")))
+            if not os.path.isdir(os.path.join(a.can, "tree")):
+                sys.exit("refusing: %s has no tree/ directory" % a.can)
+            print(build.tree_hash(os.path.join(a.can, "tree")))
         elif a.cmd == "reopen":
             cmd_reopen(a.can, a.opener)
     except GrammarError as e:

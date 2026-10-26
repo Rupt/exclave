@@ -37,7 +37,7 @@ DEFAULT_CAPS = {"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER", "CA
 def kernel_table(can=None):
     """The machine's syscall table from the can's headers (a gcc can ships linux-libc-dev) or the host's."""
     from syscalls import kernel_table as table
-    return table(roots=([os.path.join(can, "root")] if can else []) + ["/"])
+    return table(roots=([os.path.join(can, "tree")] if can else []) + ["/"])
 
 
 class BPF:
@@ -173,7 +173,7 @@ def main():
         shutil.rmtree(work)
     os.makedirs(work)
     can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy reopened with the build (17)
-    root = os.path.join(can, "root")
+    root = os.path.join(can, "tree")
     cc = tree.compiler(root, MACHINE) or "cc"
     with open(os.path.join(work, "hello.c"), "w") as f:
         f.write('#include <errno.h>\n#include <stdio.h>\n#include <pthread.h>\n#include <spawn.h>\n#include <sys/wait.h>\n#include <unistd.h>\nextern char **environ;\n'

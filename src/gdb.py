@@ -35,8 +35,8 @@ def _can_root():
         return None
     d = os.path.dirname(os.path.realpath(exe))
     while d and d != "/":
-        if os.path.exists(os.path.join(d, ".can", "manifest")):
-            return os.path.join(d, "root")
+        if os.path.exists(os.path.join(d, ".exclave", "manifest")):
+            return os.path.join(d, "tree")
         d = os.path.dirname(d)
     return None
 

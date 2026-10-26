@@ -57,34 +57,34 @@ def main():
     rc, out, err = run([sys.executable, cannery_py, "unpack", sysroot_can] + rpms)
     if rc:
         sys.exit("unpack: " + out + err)
-    dst = os.path.join(can, "root", a.prefix.lstrip("/"))
-    shutil.copytree(os.path.join(sysroot_can, "root"), dst, symlinks=True, copy_function=cannery.link_or_copy)
-    with open(os.path.join(can, ".can", "manifest"), "wb") as f:
-        f.write(cannery.dump([cannery.Record("can", [("t", b"1")]), cannery.Record("data", [("s", a.prefix.encode())])], "can"))
+    dst = os.path.join(can, "tree", a.prefix.lstrip("/"))
+    shutil.copytree(os.path.join(sysroot_can, "tree"), dst, symlinks=True, copy_function=cannery.link_or_copy)
+    with open(os.path.join(can, ".exclave", "manifest"), "wb") as f:
+        f.write(cannery.dump([cannery.Record("exclave", [("t", b"1")]), cannery.Record("data", [("s", a.prefix.encode())])], "can"))
     rc, out, err = run([sys.executable, cannery_py, "wrap", can])
     if rc:
         sys.exit("wrap: " + out + err)
     print([l for l in out.splitlines() if l.startswith("static check")][-1])
-    gcc = next(n for n in ("x86_64-linux-gnu-gcc-13", "gcc") if os.path.exists(os.path.join(can, "root", "usr", "bin", n)))
+    gcc = next(n for n in ("x86_64-linux-gnu-gcc-13", "gcc") if os.path.exists(os.path.join(can, "tree", "usr", "bin", n)))
     src = os.path.join(work, "hello.c")
     with open(src, "w") as f:
         f.write(HELLO)
     prog = os.path.join(work, "hello")
     env = {"PATH": "/usr/bin:/bin"}
-    rc, out, err = run([os.path.join(can, "root", "usr", "bin", gcc), "--sysroot=" + a.prefix, "-B" + a.prefix + "/usr/lib64/", "-o", prog, src], cwd=work, env=env)
+    rc, out, err = run([os.path.join(can, "tree", "usr", "bin", gcc), "--sysroot=" + a.prefix, "-B" + a.prefix + "/usr/lib64/", "-o", prog, src], cwd=work, env=env)
     if rc:
         sys.exit("compile against the sysroot: " + err)
-    rc, out, err = run([os.path.join(can, "root", "usr", "bin", "objdump"), "-T", prog], cwd=work, env=env)
+    rc, out, err = run([os.path.join(can, "tree", "usr", "bin", "objdump"), "-T", prog], cwd=work, env=env)
     versions = sorted(set(re.findall(r"GLIBC_([0-9.]+)", out)), key=lambda v: [int(x) for x in v.split(".")])
     import elfcheck
-    gv = elfcheck.glibc_version(elfcheck.Tree(os.path.join(sysroot_can, "root")))   # the banner in libc.so.6, any glibc (review O5-7)
+    gv = elfcheck.glibc_version(elfcheck.Tree(os.path.join(sysroot_can, "tree")))   # the banner in libc.so.6, any glibc (review O5-7)
     if gv is None:
         sys.exit("cannot read the sysroot's glibc version from its libc.so.6")
     have = "%d.%d" % gv
     print("symbol versions bound: %s; the sysroot's glibc: %s" % (" ".join(versions), have))
     if not versions or [int(x) for x in versions[-1].split(".")] > [int(x) for x in have.split(".")]:
         sys.exit("the output binds a glibc newer than the sysroot's, or none")
-    rc, inside, err = run([os.path.join(can, "root", "usr", "bin", "sh"), "-c", prog], cwd=work, env=env)
+    rc, inside, err = run([os.path.join(can, "tree", "usr", "bin", "sh"), "-c", prog], cwd=work, env=env)
     rc2, native, err2 = run([prog], cwd=work, env=env)
     print("inside the can: %r; on this host: %r" % (inside.strip(), native.strip()))
     if rc or rc2 or inside != native:

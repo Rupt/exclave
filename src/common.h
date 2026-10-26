@@ -167,10 +167,10 @@ enum { REG_R8 = 0, REG_R9, REG_R10, REG_R11, REG_R12, REG_R13, REG_R14, REG_R15,
 struct hostmap { const char *v; const char *r; int is_file; };   /* virtual path -> host real path */
 
 struct can {
-    char dir[PATH_MAX];            /* directory holding .can/ */
-    char root[PATH_MAX];           /* dir/root */
+    char dir[PATH_MAX];            /* directory holding .exclave/ */
+    char root[PATH_MAX];           /* dir/tree */
     long rootlen;
-    char opener[PATH_MAX];         /* dir/.can/opener */
+    char opener[PATH_MAX];         /* dir/.exclave/launcher */
     unsigned long opener_dev, opener_ino; long opener_size;
     char program[PATH_MAX];        /* virtual path of the program this process runs */
     char exe[PATH_MAX];            /* what /proc/self/exe answers: the program, or a wrapped script's interpreter (F3-22) */

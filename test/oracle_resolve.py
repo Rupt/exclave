@@ -139,10 +139,10 @@ def main():
         shutil.rmtree(work)
     import tree
     can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # a copy reopened with the build (17)
-    root = os.path.join(can, "root")
+    root = os.path.join(can, "tree")
     dirs, files, links = make_maze(root, rng)
-    with open(os.path.join(can, ".can", "manifest"), "w") as f:
-        f.write("can 1\n")                                       # /maze is a non-empty top-level directory: can-owned by the tree alone (8.1)
+    with open(os.path.join(can, ".exclave", "manifest"), "w") as f:
+        f.write("exclave 1\n")                                       # /maze is a non-empty top-level directory: can-owned by the tree alone (8.1)
     import platform
     import tree
     cc = tree.compiler(root, platform.machine())
@@ -154,7 +154,7 @@ def main():
     if r.returncode:
         sys.exit("cannot compile resolve.c: " + r.stderr.decode(errors="replace"))
     paths = gen_paths(rng, dirs, files, links, a.paths)
-    p = subprocess.run([os.path.join(can, ".can", "opener"), prog], input="\n".join(paths).encode() + b"\n", cwd=work, env={"PATH": "/usr/bin:/bin"},
+    p = subprocess.run([os.path.join(can, ".exclave", "launcher"), prog], input="\n".join(paths).encode() + b"\n", cwd=work, env={"PATH": "/usr/bin:/bin"},
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     answers = p.stdout.decode(errors="replace").splitlines()
     if len(answers) != len(paths):

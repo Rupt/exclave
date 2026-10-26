@@ -112,25 +112,25 @@ static void find_can(const char *exe)
 {
     char d[PATH_MAX]; scpy(d, exe, PATH_MAX);
     for (;;) {
-        char *s = xstrrchr(d, '/'); if (!s || s == d) die("not inside a can: a can's opener runs from the can's .can/ or as a program in its root/, and no directory above this one has .can/manifest", exe, 0);
+        char *s = xstrrchr(d, '/'); if (!s || s == d) die("not inside a can: a can's opener runs from the can's .exclave/ or as a program in its tree/, and no directory above this one has .exclave/manifest", exe, 0);
         *s = 0;
-        char p[PATH_MAX]; scpy(p, d, PATH_MAX); scat(p, "/.can/manifest", PATH_MAX);
+        char p[PATH_MAX]; scpy(p, d, PATH_MAX); scat(p, "/.exclave/manifest", PATH_MAX);
         struct kstat st;
         if (sys_stat(p, &st) == 0) break;
     }
     scpy(C.dir, d, PATH_MAX);
-    scpy(C.root, d, PATH_MAX); scat(C.root, "/root", PATH_MAX); C.rootlen = (long)xstrlen(C.root);
-    scpy(C.opener, d, PATH_MAX); scat(C.opener, "/.can/opener", PATH_MAX);
+    scpy(C.root, d, PATH_MAX); scat(C.root, "/tree", PATH_MAX); C.rootlen = (long)xstrlen(C.root);
+    scpy(C.opener, d, PATH_MAX); scat(C.opener, "/.exclave/launcher", PATH_MAX);
     struct kstat st;
     if (sys_stat(C.opener, &st) < 0) die("can has no opener", C.opener, 0);
     C.opener_dev = st.st_dev; C.opener_ino = st.st_ino; C.opener_size = st.st_size;
-    if (sys_stat(C.root, &st) < 0 || (st.st_mode & S_IFMT) != S_IFDIR) die("can has no root/", C.root, 0);
+    if (sys_stat(C.root, &st) < 0 || (st.st_mode & S_IFMT) != S_IFDIR) die("can has no tree/", C.root, 0);
     C.root_dev = st.st_dev; C.root_ino = st.st_ino;
 }
 
 static void read_manifest(unsigned long *auxv)
 {
-    char p[PATH_MAX]; scpy(p, C.dir, PATH_MAX); scat(p, "/.can/manifest", PATH_MAX);
+    char p[PATH_MAX]; scpy(p, C.dir, PATH_MAX); scat(p, "/.exclave/manifest", PATH_MAX);
     long fd = sys_open(p, O_RDONLY | O_CLOEXEC, 0); if (fd < 0) die("cannot open manifest", p, fd);
     struct kstat st; if (SC2(NR_fstat, fd, &st) < 0) die("cannot stat manifest", p, 0);
     if (st.st_size == 0) die("manifest is empty", p, 0);
@@ -145,14 +145,14 @@ static void read_manifest(unsigned long *auxv)
     if (ok == 0) die("this CPU lacks the can's ISA level", C.isa, 0);
 }
 
-/* 7.2: the opener run as a program rather than as a wrapper, `.can/opener PROGRAM ARGS...`, takes the program
+/* 7.2: the opener run as a program rather than as a wrapper, `.exclave/launcher PROGRAM ARGS...`, takes the program
  * as its first argument and re-execs itself once the way a handler does for a program on the loader path
  * (7.4.5): the target carried in CAN_EXEC, which is the opener's own protocol and never reaches a program, and
  * argv shifted, so that the program's argv, cmdline and comm are its own. A relative program path is taken
  * from the working directory as execve would take it. */
 static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **envp)
 {
-    if (argc < 2) die("this is a can's opener, behind every program in root/: run one of those by path, or .can/opener PROGRAM [ARGS...] to run another inside the can; the can's README says more", 0, 0);
+    if (argc < 2) die("this is a can's opener, behind every program in tree/: run one of those by path, or .exclave/launcher PROGRAM [ARGS...] to run another inside the can; the can's README says more", 0, 0);
     if (xstrlen(argv[1]) >= PATH_MAX) die("program path too long", 0, ENAMETOOLONG);
     char *t = arena_alloc(PATH_MAX);
     if (argv[1][0] == '/') scpy(t, argv[1], PATH_MAX);
@@ -294,7 +294,7 @@ void start_c(unsigned long *sp)
             C.descfd = (int)m;
         }
     } else {
-        entry_exec(argc, argv, envp);                          /* the opener run by hand: .can/opener PROGRAM ARGS... */
+        entry_exec(argc, argv, envp);                          /* the opener run by hand: .exclave/launcher PROGRAM ARGS... */
     }
 
     C.boundary = have == 0;

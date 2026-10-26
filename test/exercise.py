@@ -33,10 +33,10 @@ def setup(can0, work):
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
     can = tree.fresh_can(can0, os.path.join(work, "can"))                  # a copy reopened with the build (17)
-    root = os.path.join(work, "tree", "root")
-    shutil.copytree(os.path.join(can, "root"), root, symlinks=True, copy_function=cannery.link_or_copy)
-    build.unwrap(os.path.join(work, "tree"), log=lambda *x: None)
-    for r in (root, os.path.join(can, "root")):
+    root = os.path.join(work, "bare", "tree")
+    shutil.copytree(os.path.join(can, "tree"), root, symlinks=True, copy_function=cannery.link_or_copy)
+    build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
+    for r in (root, os.path.join(can, "tree")):
         sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sk.bind(os.path.join(r, "usr", "share", "cont-test.sock"))
         sk.close()
@@ -63,14 +63,14 @@ def main():
     if not shutil.which("bwrap") or subprocess.run(["bwrap", "--ro-bind", "/", "/", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
         sys.exit("bwrap or user namespaces unavailable; the kernel's world cannot be made here")
     can0 = os.path.abspath(a.can)
-    key = hashlib.blake2b(open(os.path.join(can0, ".can", "lock"), "rb").read(), digest_size=6).hexdigest()
+    key = hashlib.blake2b(open(os.path.join(can0, ".exclave", "hashes"), "rb").read(), digest_size=6).hexdigest()
     work = os.path.join(REPO, "build", "exercise", os.path.basename(can0).replace(".can", "") + "-" + key)
-    if not os.path.exists(os.path.join(work, "can", ".can", "lock")):
+    if not os.path.exists(os.path.join(work, "can", ".exclave", "hashes")):
         setup(can0, work)
     elif tree.reopen_if_stale(os.path.join(work, "can")):
         print("the build changed since this copy was made: reopened")
-    can, root = os.path.join(work, "can"), os.path.join(work, "tree", "root")
-    r = os.path.join(can, "root")
+    can, root = os.path.join(work, "can"), os.path.join(work, "bare", "tree")
+    r = os.path.join(can, "tree")
     machine = os.uname().machine
     oracle_ns.GCC = tree.compiler(r, machine) or oracle_ns.GCC             # the tree's spellings for both worlds
     oracle_ns.SH, oracle_ns.SHX, oracle_ns.LIBC = tree.vbin(r, "sh"), tree.resolve(r, tree.vbin(r, "sh")), tree.libc(r, machine)

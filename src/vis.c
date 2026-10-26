@@ -25,10 +25,10 @@ static int dir_nonempty(const char *real)
     static char buf[4096];
     long fd = sys_open(real, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
     if (fd == -EACCES || fd == -EPERM) return 1;
-    if (fd < 0) die("cannot read a top-level directory of root/", real, fd);
+    if (fd < 0) die("cannot read a top-level directory of tree/", real, fd);
     for (;;) {
         long n = sys_getdents64((int)fd, buf, sizeof buf);
-        if (n < 0) die("cannot read a top-level directory of root/", real, n);
+        if (n < 0) die("cannot read a top-level directory of tree/", real, n);
         if (n == 0) { sys_close((int)fd); return 0; }
         for (long o = 0; o < n;) {
             struct dirent64 *d = (struct dirent64 *)(buf + o);
@@ -44,11 +44,11 @@ static int dir_nonempty(const char *real)
 static void own_from_tree(void)
 {
     static char buf[16384]; static char real[PATH_MAX];
-    long fd = sys_open(C.root, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0); if (fd < 0) die("cannot read root/", C.root, fd);
+    long fd = sys_open(C.root, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0); if (fd < 0) die("cannot read tree/", C.root, fd);
     int first = C.nown;                                        /* the manifest's claims come first; the tree has 256 slots of its own */
     for (;;) {
         long n = sys_getdents64((int)fd, buf, sizeof buf);
-        if (n < 0) die("cannot read root/", C.root, n);
+        if (n < 0) die("cannot read tree/", C.root, n);
         if (n == 0) break;
         for (long o = 0; o < n;) {
             struct dirent64 *d = (struct dirent64 *)(buf + o); o += d->d_reclen;
@@ -57,7 +57,7 @@ static void own_from_tree(void)
             int type = d->d_type;
             if (type == DT_UNKNOWN) { struct kstat st; if (sys_lstat(real, &st) < 0) continue; type = (st.st_mode & S_IFMT) == S_IFDIR ? DT_DIR : (st.st_mode & S_IFMT) == S_IFLNK ? DT_LNK : 8; }
             if (type == DT_DIR && !dir_nonempty(real)) continue;      /* a placeholder: ls / shows it, the host owns it */
-            if (C.nown - first >= 256) die("more than 256 top-level entries in root/", C.root, 0);
+            if (C.nown - first >= 256) die("more than 256 top-level entries in tree/", C.root, 0);
             size_t l = xstrlen(d->d_name);
             char *v = arena_alloc(l + 2); v[0] = '/'; xmemcpy(v + 1, d->d_name, l + 1);
             C.own[C.nown++] = v;
@@ -326,7 +326,7 @@ int is_wrapper_real(const char *real, char *tmp)
         if (st.st_size != C.opener_size) return 0;
     }
     return payload_of(real, tmp) && sys_lstat(tmp, &st) == 0;   /* the opener's inode or a copy: a wrapper only where its payload exists;
-                                                                    .can/opener itself is not one (review F5-2) */
+                                                                    .exclave/launcher itself is not one (review F5-2) */
 }
 int payload_of(const char *real, char *out)
 {

@@ -482,7 +482,7 @@ def run_bwrap(root, host, bindir, probe, cases):
 
 def run_opener(can, host, probe, cases):
     with open(cases, "rb") as inp:
-        p = subprocess.run([os.path.join(can, ".can", "opener"), probe], cwd=host, stdin=inp, env={"PATH": "/usr/bin:/bin", "HOME": host},
+        p = subprocess.run([os.path.join(can, ".exclave", "launcher"), probe], cwd=host, stdin=inp, env={"PATH": "/usr/bin:/bin", "HOME": host},
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
@@ -575,16 +575,16 @@ def main():
                 pass
     rng = random.Random(a.seed)
     # the kernel's world: an unwrapped copy of the tree; the opener's: a copy of the can; the same maze in both
-    root = os.path.join(work, "tree", "root")
-    shutil.copytree(os.path.join(given, "root"), root, symlinks=True, copy_function=cannery.link_or_copy)
-    build.unwrap(os.path.join(work, "tree"), log=lambda *x: None)
+    root = os.path.join(work, "bare", "tree")
+    shutil.copytree(os.path.join(given, "tree"), root, symlinks=True, copy_function=cannery.link_or_copy)
+    build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
     can = tree.fresh_can(given, os.path.join(work, "can"))                  # the opener's world: a copy reopened with the build (17)
     dirs, files, links = make_maze(root, rng)
     host = os.path.join(work, "area", "host")                              # ".." from the host area is a directory the reset owns
     os.symlink(host + "/hfile", os.path.join(root, "maze", "lH"))          # a can link to a host file, and to a host directory
     os.symlink(host + "/hdir", os.path.join(root, "maze", "lHD"))
-    shutil.copytree(os.path.join(root, "maze"), os.path.join(can, "root", "maze"), symlinks=True)
-    for r in (root, os.path.join(can, "root")):                            # a socket file in the tree, for bind and connect (copytree cannot carry one)
+    shutil.copytree(os.path.join(root, "maze"), os.path.join(can, "tree", "maze"), symlinks=True)
+    for r in (root, os.path.join(can, "tree")):                            # a socket file in the tree, for bind and connect (copytree cannot carry one)
         sk = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sk.bind(os.path.join(r, "maze", "sock"))
         sk.close()
@@ -607,7 +607,7 @@ def main():
     cc = tree.compiler(root, MACHINE)
     if not cc:
         sys.exit("no C compiler in the can")
-    gcc = os.path.join(can, "root", tree.vbin(root, cc).lstrip("/"))       # the probe compiled through the build's opener
+    gcc = os.path.join(can, "tree", tree.vbin(root, cc).lstrip("/"))       # the probe compiled through the build's opener
     probe = os.path.join(bindir, "probe")
     r = subprocess.run([gcc, "-O1", "-o", probe, os.path.join(HERE, "progs", "probe.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode:
@@ -628,9 +628,9 @@ def main():
         with open(path, "w") as f:
             for i, (label, n, toks, _) in enumerate(mine):
                 f.write("%d %d %s\n" % (i, nr[n], " ".join(toks)))
-        host_reset(host, os.path.join(can, "root"), probe)
+        host_reset(host, os.path.join(can, "tree"), probe)
         bw = run_bwrap(root, host, bindir, probe, path)
-        host_reset(host, os.path.join(can, "root"), probe)
+        host_reset(host, os.path.join(can, "tree"), probe)
         op = run_opener(can, host, probe, path)
         bl, ol = bw[1].splitlines(), op[1].splitlines()
         if len(bl) != len(mine) or len(ol) != len(mine):

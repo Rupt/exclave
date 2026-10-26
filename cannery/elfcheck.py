@@ -1,7 +1,7 @@
 """elfcheck.py — the static and dynamic checks (PROPOSAL.md 10.3).
 
-Static: every ELF under root/ outside data prefixes, payloads in place of wrappers, must name one
-interpreter between them (through the tree's symlinks), every DT_NEEDED must resolve under root/ by the
+Static: every ELF under tree/ outside data prefixes, payloads in place of wrappers, must name one
+interpreter between them (through the tree's symlinks), every DT_NEEDED must resolve under tree/ by the
 loader's own algorithm, every library reached must depend on that loader's libc and nothing else. Anything that would resolve on the host, and anything that would mix
 libcs, is reported and the can is refused. Static executables are reported.
 
@@ -147,7 +147,7 @@ class Elf:
 
 
 class Tree:
-    """Virtual-path resolution inside root/, wrappers redirected to payloads."""
+    """Virtual-path resolution inside tree/, wrappers redirected to payloads."""
 
     def __init__(self, root):
         self.root = root
@@ -309,10 +309,10 @@ def _has_musl_loader(tree):
 def static_check(can, own, data_prefixes=(), log=print):
     """Returns a Report. own: the ownership set of 8.1 as the opener computes it."""
     import platform
-    tree, rep = Tree(os.path.join(can, "root")), Report()
+    tree, rep = Tree(os.path.join(can, "tree")), Report()
     native = {v[0]: k for k, v in MACHINES.items()}.get(platform.machine())
     try:
-        set_machine(Elf(os.path.join(can, ".can", "opener")).machine)   # the can's machine is its opener's
+        set_machine(Elf(os.path.join(can, ".exclave", "launcher")).machine)   # the can's machine is its opener's
     except (ValueError, OSError):
         set_machine(native or 62)                                       # no opener yet: the machine the check runs on
     if native != MACHINE:                                    # 10.1: a can is closed on a machine of its architecture, where its loader can be asked
@@ -503,7 +503,7 @@ def dynamic_check(can, logs, own, log=print):
             continue
         else:
             rep.errors.append("library opened on the host: " + lib)
-    tree = Tree(os.path.join(can, "root"))
+    tree = Tree(os.path.join(can, "tree"))
     if os.path.exists("/etc/nsswitch.conf"):
         mods = set()
         for line in open("/etc/nsswitch.conf", encoding="utf-8", errors="replace"):

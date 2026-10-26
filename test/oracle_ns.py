@@ -88,9 +88,9 @@ def run_opener(can, work, cmd, prog=None):
     env = {"PATH": "/usr/bin:/bin", "HOME": work, "W": work, "CC": GCC, "SH": SH, "SHX": SHX, "LIBC": LIBC, "CONT_SH": SH, "CONT_SH_LINK": SH_LINK,
            "LANG": "en_GB.UTF-8", "TZ": "Asia/Tokyo"}                                        # the last two replaced at the boundary (6.2)
     if prog:
-        p = subprocess.run([os.path.join(can, ".can", "opener"), prog] + cmd, cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.run([os.path.join(can, ".exclave", "launcher"), prog] + cmd, cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     else:
-        p = subprocess.run([os.path.join(can, "root", __import__("tree").vbin(os.path.join(can, "root"), "sh").lstrip("/")), "-c", cmd], cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.run([os.path.join(can, "tree", __import__("tree").vbin(os.path.join(can, "tree"), "sh").lstrip("/")), "-c", cmd], cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
@@ -113,9 +113,9 @@ def main():
     import tree
     can = tree.fresh_can(os.path.abspath(a.can), os.path.join(work, "can"))   # the opener's world: a copy reopened with the build (17)
     # an unwrapped copy of the tree for bwrap: hard links, then the payloads moved back over the wrappers
-    root = os.path.join(work, "tree", "root")
-    shutil.copytree(os.path.join(can, "root"), root, symlinks=True, copy_function=cannery.link_or_copy)
-    build.unwrap(os.path.join(work, "tree"), log=lambda *x: None)
+    root = os.path.join(work, "bare", "tree")
+    shutil.copytree(os.path.join(can, "tree"), root, symlinks=True, copy_function=cannery.link_or_copy)
+    build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
     with open(os.path.join(root, "usr", "share", "cont-test-marker"), "w") as f:
         f.write("marker\n")
     # an identity file that is a host symlink: a bind of the host's file would hide its link text, which the
@@ -135,11 +135,11 @@ def main():
     fails = 0
     # 1. the read-only matrix against the kernel: the same program, the same expectations, a real read-only bind
     global GCC, SH, SHX, LIBC, SH_LINK
-    r = os.path.join(can, "root")
+    r = os.path.join(can, "tree")
     GCC = tree.compiler(r, platform.machine()) or GCC
     SH, SHX, LIBC = tree.vbin(r, "sh"), tree.resolve(r, tree.vbin(r, "sh")), tree.libc(r, platform.machine())
     SH_LINK = os.readlink(os.path.join(r, SH.lstrip("/"))) if os.path.islink(os.path.join(r, SH.lstrip("/"))) else ""
-    gcc = os.path.join(can, "root", tree.vbin(os.path.join(can, "root"), GCC).lstrip("/"))
+    gcc = os.path.join(can, "tree", tree.vbin(os.path.join(can, "tree"), GCC).lstrip("/"))
     prog = os.path.join(work, "ro_matrix")
     r = subprocess.run([gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "ro_matrix.c")], cwd=work, env={"PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if r.returncode:

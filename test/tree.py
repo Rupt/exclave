@@ -79,12 +79,12 @@ def libc(root, machine):
 
 # ---------------------------------------------------------------- a can for a driver (17)
 def copy_can(src, dst):
-    """A copy of a can for a driver or a test to alter: the tree's files hard-linked, the files under .can/ copied, since a
+    """A copy of a can for a driver or a test to alter: the tree's files hard-linked, the files under .exclave/ copied, since a
     manifest or lock written through a hard link would change the given can's."""
     import cannery
     shutil.copytree(src, dst, symlinks=True, copy_function=cannery.link_or_copy)
-    for name in os.listdir(os.path.join(dst, ".can")):
-        p = os.path.join(dst, ".can", name)
+    for name in os.listdir(os.path.join(dst, ".exclave")):
+        p = os.path.join(dst, ".exclave", name)
         if os.path.isfile(p) and not os.path.islink(p):
             data = open(p, "rb").read()
             mode = os.stat(p).st_mode
@@ -111,7 +111,7 @@ def reopen_if_stale(can, opener=BUILD_OPENER):
     """A copy kept between runs, reopened again when the build has changed since it was made: the check is a byte
     comparison of two small files, the reopen a second, so a rebuild never has to be remembered by hand."""
     import cannery
-    if not filecmp.cmp(opener, os.path.join(can, ".can", "opener"), shallow=False):
+    if not filecmp.cmp(opener, os.path.join(can, ".exclave", "launcher"), shallow=False):
         cannery.cmd_reopen(can, opener)
         return True
     return False
