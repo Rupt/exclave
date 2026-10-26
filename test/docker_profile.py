@@ -1,11 +1,12 @@
 """docker_profile.py — an exclave under Docker's default seccomp profile (DESIGN.md 12, 17 item 5).
 
-Docker's default profile (a JSON allow-list with a default errno) is assembled here into a classic BPF
-program and installed by bwrap around an exclave's workload, with the host's tree visible read-only, the way a
-CI container would run it. The launcher then stacks its own filter on top. The profile runs twice: as
-assembled for this kernel, and as Docker installs it before kernel 4.8, where process_vm_readv is refused
-and the launcher copies program memory through a pipe (13); the workload includes a bad pointer that must be
-EFAULT either way. Needs bwrap and user namespaces; says so and exits 0 when it cannot run.
+Docker's default profile (a JSON allow-list with a default errno) is assembled here into a classic
+BPF program and installed by bwrap around an exclave's workload, with the host's tree visible
+read-only, the way a CI container would run it. The launcher then stacks its own filter on top. The
+profile runs twice: as assembled for this kernel, and as Docker installs it before kernel 4.8, where
+process_vm_readv is refused and the launcher copies program memory through a pipe (13); the workload
+includes a bad pointer that must be EFAULT either way. Needs bwrap and user namespaces; says so and
+exits 0 when it cannot run.
 
     test/docker_profile.py --exclave EXCLAVE --profile docker-seccomp.json [--work DIR]
 """
@@ -17,6 +18,8 @@ import shutil
 import struct
 import subprocess
 import sys
+from typing import Any
+lazy from collections.abc import Callable
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -47,8 +50,11 @@ DEFAULT_CAPS = {
 }
 
 
-def kernel_table(ex=None):
-    """The machine's syscall table from the exclave's headers (a gcc exclave ships linux-libc-dev) or the host's."""
+def kernel_table(ex: str | None = None) -> dict[str, int]:
+    """The machine's syscall table from the exclave's headers or the host's.
+
+    A gcc exclave ships linux-libc-dev.
+    """
     from syscalls import kernel_table as table
 
     return table(roots=([os.path.join(ex, "tree")] if ex else []) + ["/"])
@@ -69,19 +75,20 @@ class BPF:
     )
 
     def __init__(self) -> None:
-        self.insns, self.fixups = [], []
+        self.insns: list[list[int]] = []
+        self.fixups: list[tuple[int, int, Callable[[], int]]] = []
 
-    def emit(self, code, jt, jf, k):
+    def emit(self, code: int, jt: int, jf: int, k: int) -> int:
         self.insns.append([code, jt, jf, k & 0xFFFFFFFF])
         return len(self.insns) - 1
 
-    def label(self):
+    def label(self) -> int:
         return len(self.insns)
 
-    def jump_to(self, i, field, target) -> None:
+    def jump_to(self, i: int, field: int, target: Callable[[], int]) -> None:
         self.fixups.append((i, field, target))
 
-    def pack(self):
+    def pack(self) -> bytes:
         for i, field, target in self.fixups:
             off = target() - (i + 1)
             if off < 0 or off > 255:
@@ -91,8 +98,14 @@ class BPF:
         return b"".join(struct.pack("<HBBI", c, jt, jf, k) for c, jt, jf, k in self.insns)
 
 
-def build(profile, table, kernel=None):
-    """kernel: a (major, minor) to apply the profile's minKernel conditions against; None takes every such entry."""
+def build(
+    profile: dict[str, Any], table: dict[str, int], kernel: tuple[int, int] | None = None
+) -> BPF:
+    """The profile as a BPF program for this machine.
+
+    kernel: a (major, minor) to apply the profile's minKernel conditions against; None takes every
+    such entry.
+    """
     default = profile.get("defaultAction", "SCMP_ACT_ERRNO")
     default_errno = int(profile.get("defaultErrnoRet", 1))
     b = BPF()
@@ -100,7 +113,7 @@ def build(profile, table, kernel=None):
     b.emit(BPF.JEQ_K, 1, 0, AUDIT_ARCH)
     b.emit(BPF.RET_K, 0, 0, RET_KILL)
     b.emit(BPF.LD_ABS, 0, 0, 0)  # nr
-    rules = []
+    rules: list[tuple[int, list[dict[str, Any]], int]] = []
     for entry in profile.get("syscalls", []):
         inc, exc = entry.get("includes", {}), entry.get("excludes", {})
         if inc.get("caps") and not set(inc["caps"]) & DEFAULT_CAPS:
@@ -126,9 +139,11 @@ def build(profile, table, kernel=None):
             "SCMP_ACT_KILL": RET_KILL,
             "SCMP_ACT_KILL_PROCESS": RET_KILL,
         }[action]
-        for name in entry.get("names", [entry.get("name")] if entry.get("name") else []):
-            if name in table:
-                rules.append((table[name], entry.get("args") or [], ret))
+        rules.extend(
+            (table[name], entry.get("args") or [], ret)
+            for name in entry.get("names", [entry.get("name")] if entry.get("name") else [])
+            if name in table
+        )
     # one block per rule: jeq nr -> [arg checks] -> ret ; the rules are few enough for short jumps
     for nr, args, ret in rules:
         skip = []
@@ -160,11 +175,10 @@ def build(profile, table, kernel=None):
                     skip += [(j1, 2), (j2, 2)]
                 else:  # NE: equal means the rule does not apply
                     b.jump_to(j1, 2, b.label)  # hi differs: applies
-                    b.jump_to(
-                        j2, 1, lambda b=b, j2=j2: j2 + 1
-                    )  # unreachable: assemble() refuses SCMP_CMP_NE before building
+                    # unreachable: assemble() refuses SCMP_CMP_NE before building
+                    b.jump_to(j2, 1, lambda j2=j2: j2 + 1)
                     skip_eq = b.emit(BPF.JA, 0, 0, 0)
-                    b.jump_to(skip_eq, 3, None)
+                    b.jump_to(skip_eq, 3, None)  # ty: ignore[invalid-argument-type] -- unreachable, as above
             elif op in ("SCMP_CMP_LT", "SCMP_CMP_LE", "SCMP_CMP_GT", "SCMP_CMP_GE"):
                 b.emit(BPF.LD_ABS, 0, 0, lo)  # 32-bit compare: enough for the profile's uses
                 if op == "SCMP_CMP_GE":
@@ -193,8 +207,11 @@ def build(profile, table, kernel=None):
     return b
 
 
-def assemble(profile_path, ex=None, kernel=None):
-    profile = json.load(open(profile_path))
+def assemble(
+    profile_path: str, ex: str | None = None, kernel: tuple[int, int] | None = None
+) -> bytes:
+    with open(profile_path) as f:
+        profile = json.load(f)
     table = kernel_table(ex)
     BPF()
     # the NE case above is awkward; the default profile has no NE rules, so refuse rather than guess
@@ -220,6 +237,7 @@ def main() -> int:
             ["bwrap", "--ro-bind", "/", "/", "true"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            check=False,
         ).returncode
     ):
         print("bwrap or user namespaces unavailable; the Docker-profile run cannot run here")
@@ -230,24 +248,26 @@ def main() -> int:
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
-    ex = tree.fresh_exclave(
-        os.path.abspath(a.exclave), os.path.join(work, "exclave")
-    )  # a copy relinked with the build (17)
+    # a copy relinked with the build (17)
+    ex = tree.fresh_exclave(os.path.abspath(a.exclave), os.path.join(work, "exclave"))
     root = os.path.join(ex, "tree")
     cc = tree.compiler(root, MACHINE) or "cc"
     with open(os.path.join(work, "hello.c"), "w") as f:
         f.write(
-            "#include <errno.h>\n#include <stdio.h>\n#include <pthread.h>\n#include <spawn.h>\n#include <sys/wait.h>\n#include <unistd.h>\nextern char **environ;\n"
-            "static void *t(void *a) { return a; }\n"
-            'int main(void) { pthread_t th; pthread_create(&th, 0, t, 0); pthread_join(th, 0); pid_t p; char *av[] = {"true", 0};\n'
-            " if (access((const char *)16, F_OK) != -1 || errno != EFAULT) return 3;   /* a bad pointer is EFAULT however the handler reads memory (13) */\n"
-            ' if (posix_spawn(&p, "TRUEPATH", 0, 0, av, environ)) return 2; int st; waitpid(p, &st, 0); printf("hello under docker profile %d\\n", st); return st; }\n'.replace(
-                "TRUEPATH", tree.vbin(root, "true")
-            )
+            (
+                "#include <errno.h>\n#include <stdio.h>\n#include <pthread.h>\n#include <spawn.h>\n"
+                "#include <sys/wait.h>\n#include <unistd.h>\nextern char **environ;\n"
+                "static void *t(void *a) { return a; }\n"
+                "int main(void) { pthread_t th; pthread_create(&th, 0, t, 0); pthread_join(th, 0); "
+                'pid_t p; char *av[] = {"true", 0};\n'
+                " if (access((const char *)16, F_OK) != -1 || errno != EFAULT) return 3;   "
+                "/* a bad pointer is EFAULT however the handler reads memory (13) */\n"
+                ' if (posix_spawn(&p, "TRUEPATH", 0, 0, av, environ)) return 2; int st; '
+                'waitpid(p, &st, 0); printf("hello under docker profile %d\\n", st); return st; }\n'
+            ).replace("TRUEPATH", tree.vbin(root, "true"))
         )
-    exe = tree.resolve(
-        root, tree.vbin(root, "readlink")
-    )  # what /proc/self/exe reads for the wrapper, or the applet's busybox
+    # what /proc/self/exe reads for the wrapper, or the applet's busybox
+    exe = tree.resolve(root, tree.vbin(root, "readlink"))
     fails = 0
     for label, kernel in (
         ("Docker's default profile", None),
@@ -281,9 +301,12 @@ def main() -> int:
             work,
             os.path.join(root, tree.vbin(root, "sh").lstrip("/")),
             "-c",
-            f"{cc} -O1 -pthread hello.c -o hello && ./hello && ls /usr/lib >/dev/null && cat /etc/passwd | head -1 && touch /usr/x 2>&1; readlink /proc/self/exe",
+            (
+                f"{cc} -O1 -pthread hello.c -o hello && ./hello && ls /usr/lib >/dev/null "
+                "&& cat /etc/passwd | head -1 && touch /usr/x 2>&1; readlink /proc/self/exe"
+            ),
         ]
-        p = subprocess.run(cmd, pass_fds=[r], capture_output=True)
+        p = subprocess.run(cmd, pass_fds=[r], capture_output=True, check=False)
         os.close(r)
         out, err = p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
         ok = (
@@ -294,8 +317,8 @@ def main() -> int:
         )
         print(
             ("PASS" if ok else "FAIL")
-            + " exclave under %s (%d BPF instructions): rc=%d\n%s%s"
-            % (label, len(prog) // 8, p.returncode, out, err)
+            + f" exclave under {label} ({len(prog) // 8} BPF instructions): rc={p.returncode}\n"
+            + f"{out}{err}"
         )
         fails += not ok
     if not fails:

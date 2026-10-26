@@ -1,74 +1,84 @@
 """oracle_syscalls.py — the differential syscall probe (DESIGN.md 17, item 7).
 
-Every trapped path and descriptor syscall of src/filter.c, and the two chattr ioctls, is issued with every path
-form of 7.4.4, and every flag that changes
-resolution, over a random maze, by one program (test/progs/probe.c) under two projections of the same tree:
-the kernel's, a bwrap read-only bind of the unwrapped tree at /, and the launcher's. Return value, errno and
-what a buffer holds afterwards must agree case by case; a difference fails unless EXPECTED names its reason.
-The expectations therefore come from the kernel, not from a test's author. Needs user namespaces and bwrap,
-like oracle_ns; says so ("cannot run") and exits 0 when it cannot run, and the gate prints that step as SKIP.
+Every trapped path and descriptor syscall of src/filter.c, and the two chattr ioctls, is issued with
+every path form of 7.4.4, and every flag that changes resolution, over a random maze, by one program
+(test/progs/probe.c) under two projections of the same tree: the kernel's, a bwrap read-only bind of
+the unwrapped tree at /, and the launcher's. Return value, errno and what a buffer holds afterwards
+must agree case by case; a difference fails unless EXPECTED names its reason. The expectations
+therefore come from the kernel, not from a test's author. Needs user namespaces and bwrap, like
+oracle_ns; says so ("cannot run") and exits 0 when it cannot run, and the gate prints that step as
+SKIP.
 
-    test/oracle_syscalls.py --exclave EXCLAVE [--work DIR] [--seed S] [--only NAME] [--keep] [--show N] [--expected]
+    test/oracle_syscalls.py --exclave EXCLAVE [--work DIR] [--seed S] [--only NAME] [--keep]
+        [--show N] [--expected]
 
-Arguments. probe.c reads cases, each a syscall number and encoded arguments, and issues each through syscall(2),
-so no libc wrapper stands in between; it prints the return value, the errno and what a buffer holds afterwards.
-An argument is one of: a path (s:), or a descriptor opened on a named path before the call (f:); an integer (i:)
-or a buffer of a named kind; a string that ends at an unmapped page (e:), a null pointer (n:) or a pointer into
-an unmapped page (u:); a string vector or a struct xattr_args; an inotify descriptor, a unix socket (k:) or a
-sockaddr_un (A:); a struct open_how. execve runs in a forked child whose exit status is the answer.
+Arguments. probe.c reads cases, each a syscall number and encoded arguments, and issues each through
+syscall(2), so no libc wrapper stands in between; it prints the return value, the errno and what a
+buffer holds afterwards. An argument is one of: a path (s:), or a descriptor opened on a named path
+before the call (f:); an integer (i:) or a buffer of a named kind; a string that ends at an unmapped
+page (e:), a null pointer (n:) or a pointer into an unmapped page (u:); a string vector or a struct
+xattr_args; an inotify descriptor, a unix socket (k:) or a sockaddr_un (A:); a struct open_how.
+execve runs in a forked child whose exit status is the answer.
 
-Cases. The table covers the 61 trapped path syscalls and six descriptor-addressed ones (fchmod, fchown,
-fsetxattr, fremovexattr, fstatfs, and ioctl with FS_IOC_SETFLAGS and FS_IOC_FSSETXATTR), crossed with every flag
-that changes resolution and with 66 path forms (class Forms) over a random maze:
-  - inside the exclave: a file, a directory and a symlink of every kind (loop, chained, dangling, absolute,
-    relative), a wrapper, the shell's link, an identity file, a placeholder, /proc/self/exe, and an exclave link
-    to a host file and to a host directory;
-  - on the host: files, directories and links of every kind, and relative paths from the host side, up to the
-    root and back into the tree;
-  - spellings: ., .. and / as the last component, a trailing slash, //, empty, overlong, a 256-byte component,
-    bytes that are not UTF-8, and a newline;
+Cases. The table covers the 61 trapped path syscalls and six descriptor-addressed ones (fchmod,
+fchown, fsetxattr, fremovexattr, fstatfs, and ioctl with FS_IOC_SETFLAGS and FS_IOC_FSSETXATTR),
+crossed with every flag that changes resolution and with 66 path forms (class Forms) over a random
+maze:
+  - inside the exclave: a file, a directory and a symlink of every kind (loop, chained, dangling,
+    absolute, relative), a wrapper, the shell's link, an identity file, a placeholder,
+    /proc/self/exe, and an exclave link to a host file and to a host directory;
+  - on the host: files, directories and links of every kind, and relative paths from the host side,
+    up to the root and back into the tree;
+  - spellings: ., .. and / as the last component, a trailing slash, //, empty, overlong, a 256-byte
+    component, bytes that are not UTF-8, and a newline;
   - the three fault forms, and a socket file in the tree.
-The *at forms add descriptors opened O_PATH or O_RDONLY on exclave and host directories, files and symlinks, a
-wrapper, /dev/null, AT_FDCWD, a closed descriptor and a negative one. The two-path forms take pairs from a
-shorter list (Forms.few). openat2 covers every descriptor-relative form with seven flag words and seven resolve
-words, plus its struct's own rules. Cases that depend on one another run in one group, in order, such as the
-relative forms after a chdir into the exclave; each world runs one process per group, with the host area reset
-before each world, and the answers are compared line by line.
+The *at forms add descriptors opened O_PATH or O_RDONLY on exclave and host directories, files and
+symlinks, a wrapper, /dev/null, AT_FDCWD, a closed descriptor and a negative one. The two-path forms
+take pairs from a shorter list (Forms.few). openat2 covers every descriptor-relative form with seven
+flag words and seven resolve words, plus its struct's own rules. Cases that depend on one another
+run in one group, in order, such as the relative forms after a chdir into the exclave; each world
+runs one process per group, with the host area reset before each world, and the answers are compared
+line by line.
 
-The two worlds. The same binary, compiled by the exclave's compiler, runs under bwrap, with the unwrapped tree
-read-only at / and the visibility rule of 8.1 spelt in bwrap's terms (the identity files and the host's top-level
-directories bound from the host), and under the launcher, with a copy of the exclave relinked with the build.
+The two worlds. The same binary, compiled by the exclave's compiler, runs under bwrap, with the
+unwrapped tree read-only at / and the visibility rule of 8.1 spelt in bwrap's terms (the identity
+files and the host's top-level directories bound from the host), and under the launcher, with a copy
+of the exclave relinked with the build.
 
-openat2 and EAGAIN. A scoped walk (RESOLVE_BENEATH, RESOLVE_IN_ROOT) answers EAGAIN when a rename or a mount
-anywhere on the system raced it (handle_dots in fs/namei.c), and openat2(2) tells the caller to retry; probe.c
-does, so the kernel's answer is the retry's. Measured natively under 170 000 renames a second, 4 900 of a million
-such walks answered EAGAIN and every one succeeded on its first retry; with no renames, none of a million did.
-RESOLVE_CACHED's EAGAIN is not a race and is not retried.
+openat2 and EAGAIN. A scoped walk (RESOLVE_BENEATH, RESOLVE_IN_ROOT) answers EAGAIN when a rename or
+a mount anywhere on the system raced it (handle_dots in fs/namei.c), and openat2(2) tells the caller
+to retry; probe.c does, so the kernel's answer is the retry's. Measured natively under 170 000
+renames a second, 4 900 of a million such walks answered EAGAIN and every one succeeded on its first
+retry; with no renames, none of a million did. RESOLVE_CACHED's EAGAIN is not a race and is not
+retried.
 
-Accepted differences. EXPECTED is part of the design (DESIGN.md 17 item 7): each entry names the rule that makes
-a difference right, and a difference no entry names fails. The entries are of three kinds:
-  - the oracle's own construction: a host entry bound into bwrap's read-only root answers EROFS there; uid 0 is
-    unmapped in bwrap's user namespace; a new top-level name is the host's (8.1), whose / answers EACCES where
-    bwrap's root says EROFS; an identity symlink whose host target is on a tmpfs gives other xattr answers than
-    the tree copy; RESOLVE_CACHED answers EAGAIN under bwrap's cold cache;
-  - stated limitations: fanotify_mark's order of checks (13 item 41); ETXTBSY before EROFS when another gate step
-    runs the exclave copy's shell while the probe write-opens it (13 item 29);
-  - for the kernel matrix (12.1), what an older kernel lacks or decided differently, each with the kernel change,
-    the handler answering as the newest kernel does: ENOSYS for a syscall the kernel lacks; EISDIR for
-    O_CREAT|O_EXCL on ., .. or / before 5.8; linkat with AT_EMPTY_PATH refused with ENOENT before 6.10;
-    RENAME_WHITEOUT's capability check in the initial user namespace; O_DIRECTORY|O_CREAT opening or creating
-    before 6.3; RHEL 8's 4.18 openat2 answering EXDEV for a create through a symlink under RESOLVE_NO_XDEV;
-    RESOLVE_CACHED unknown before 5.12; utimensat refusing AT_EMPTY_PATH and checking the nanoseconds first before
-    5.9; an exec of a socket answered ENXIO before 5.9; truncate checking the mount before the permission on 6.1
-    and earlier (6.14 checks the permission first).
+Accepted differences. EXPECTED is part of the design (DESIGN.md 17 item 7): each entry names the
+rule that makes a difference right, and a difference no entry names fails. The entries are of three
+kinds:
+  - the oracle's own construction: a host entry bound into bwrap's read-only root answers EROFS
+    there; uid 0 is unmapped in bwrap's user namespace; a new top-level name is the host's (8.1),
+    whose / answers EACCES where bwrap's root says EROFS; an identity symlink whose host target is
+    on a tmpfs gives other xattr answers than the tree copy; RESOLVE_CACHED answers EAGAIN under
+    bwrap's cold cache;
+  - stated limitations: fanotify_mark's order of checks (13 item 41); ETXTBSY before EROFS when
+    another gate step runs the exclave copy's shell while the probe write-opens it (13 item 29);
+  - for the kernel matrix (12.1), what an older kernel lacks or decided differently, each with the
+    kernel change, the handler answering as the newest kernel does: ENOSYS for a syscall the kernel
+    lacks; EISDIR for O_CREAT|O_EXCL on ., .. or / before 5.8; linkat with AT_EMPTY_PATH refused
+    with ENOENT before 6.10; RENAME_WHITEOUT's capability check in the initial user namespace;
+    O_DIRECTORY|O_CREAT opening or creating before 6.3; RHEL 8's 4.18 openat2 answering EXDEV for a
+    create through a symlink under RESOLVE_NO_XDEV; RESOLVE_CACHED unknown before 5.12; utimensat
+    refusing AT_EMPTY_PATH and checking the nanoseconds first before 5.9; an exec of a socket
+    answered ENXIO before 5.9; truncate checking the mount before the permission on 6.1 and earlier
+    (6.14 checks the permission first).
 More differences are accepted on older kernels, where more of the kernel entries apply.
 
-Counts. On the reference machine the probe runs 19 093 cases in 68 groups (one per syscall, plus the cases run
-after a chdir into the exclave) on each of the gate's four exclaves, none differing; between 362 and 368 are
-accepted, all but 65 of them RESOLVE_CACHED's EAGAIN, whose count moves by a few between runs. The count is for
-x86-64 from the gate's work directory: a syscall missing from the machine's table is left out, and so is a
-host-area socket address longer than sun_path's 107 bytes, which no program could write whole, so a deeper work
-directory gives fewer cases.
+Counts. On the reference machine the probe runs 19 093 cases in 68 groups (one per syscall, plus the
+cases run after a chdir into the exclave) on each of the gate's four exclaves, none differing;
+between 362 and 368 are accepted, all but 65 of them RESOLVE_CACHED's EAGAIN, whose count moves by a
+few between runs. The count is for x86-64 from the gate's work directory: a syscall missing from the
+machine's table is left out, and so is a host-area socket address longer than sun_path's 107 bytes,
+which no program could write whole, so a deeper work directory gives fewer cases.
 """
 
 import argparse
@@ -79,6 +89,7 @@ import re
 import shutil
 import subprocess
 import sys
+lazy from collections.abc import Callable
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -92,16 +103,13 @@ import build  # noqa: E402
 import exclave  # noqa: E402
 
 MACHINE = platform.machine()
-KERNEL = tuple(
-    int(x) for x in re.match(r"(\d+)\.(\d+)", os.uname().release).groups()
-)  # orderings have moved between kernels (8.2)
+# orderings have moved between kernels (8.2)
+RELEASE = re.match(r"(\d+)\.(\d+)", os.uname().release)
+assert RELEASE
+KERNEL = tuple(int(x) for x in RELEASE.groups())
 O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_EXCL, O_TRUNC = 0, 1, 2, os.O_CREAT, os.O_EXCL, os.O_TRUNC
-O_DIRECTORY, O_NOFOLLOW, O_PATH, O_TMPFILE = (
-    os.O_DIRECTORY,
-    os.O_NOFOLLOW,
-    os.O_PATH,
-    os.O_TMPFILE,
-)  # this machine's bits
+# this machine's bits
+O_DIRECTORY, O_NOFOLLOW, O_PATH, O_TMPFILE = os.O_DIRECTORY, os.O_NOFOLLOW, os.O_PATH, os.O_TMPFILE
 AT_FDCWD, AT_SYMLINK_NOFOLLOW, AT_REMOVEDIR, AT_SYMLINK_FOLLOW, AT_EMPTY_PATH, AT_EACCESS = (
     -100,
     0x100,
@@ -120,7 +128,7 @@ RENAME_NOREPLACE, RENAME_EXCHANGE, RENAME_WHITEOUT = 1, 2, 4
     RESOLVE_CACHED,
 ) = 1, 2, 4, 8, 0x10, 0x20
 UTIME_NOW, UTIME_OMIT = (1 << 30) - 1, (1 << 30) - 2
-FS_IOC_SETFLAGS = 0x40086602 if MACHINE == "x86_64" else 0x40086602
+FS_IOC_SETFLAGS = 0x40086602  # _IOW('f', 2, long), the same on both machines
 FS_IOC_FSSETXATTR = 0x401C5820  # _IOW('X', 32, struct fsxattr), the same on both machines
 IN_MODIFY = 2
 STATX_BASIC_STATS = 0x7FF
@@ -135,88 +143,92 @@ IDENTITY = [
 ]
 
 
-def hx(s):
+def hx(s: str | bytes) -> str:
     return s.encode("utf-8", "surrogateescape").hex() if isinstance(s, str) else s.hex()
 
 
 SOCK_STREAM, SOCK_DGRAM = 1, 2
 
 
-def K(type_) -> str:  # a unix socket descriptor of this type
-    return "k:%d" % type_
+# a unix socket descriptor of this type
+def K(type_: int) -> str:  # noqa: N802 -- a token's constructor, named for its token's letter
+    return f"k:{type_}"
 
 
-def A(
-    path,
-):  # a sockaddr_un holding this path, 108 bytes of it at most (unterminated at 108, as the kernel allows)
+# a sockaddr_un holding this path, 108 bytes of it at most (unterminated at 108, as the kernel
+# allows)
+def A(path: str) -> str:  # noqa: N802 -- as K
     return "A:" + path.encode("utf-8", "surrogateescape")[:108].hex()
 
 
-def alen(path):  # its length argument: the family, the bytes, and a NUL when there is room
+def alen(
+    path: str,
+) -> int:  # its length argument: the family, the bytes, and a NUL when there is room
     n = min(len(path.encode("utf-8", "surrogateescape")), 108)
     return 2 + n + (1 if n < 108 else 0)
 
 
-HOST_AREA = [None]  # the host area's path, set by main: its depth is the work directory's
+# the host area's path, set by main: its depth is the work directory's
+HOST_AREA: list[str | None] = [None]
 
 
-def unwritable(
-    path,
-):  # a host-area path past sun_path's 107 bytes, which no program can write whole: the kernel's answer
-    h = HOST_AREA[
-        0
-    ]  # would be for the cut name, outside the area, so the case is the work directory's, not translation's
+# a host-area path past sun_path's 107 bytes, which no program can write whole: the kernel's answer
+# would be for the cut name, outside the area, so the case is the work directory's, not
+# translation's
+def unwritable(path: str) -> bool:
+    h = HOST_AREA[0]
     return bool(h) and path.startswith(h) and len(path.encode("utf-8", "surrogateescape")) > 107
 
 
-REL_SOCK = (
-    "probe-sock-%d" % os.getpid()
-)  # the relative socket name: one per driver, since a chdir into /tmp binds it in the host's /tmp
+# the relative socket name: one per driver, since a chdir into /tmp binds it in the host's /tmp
+REL_SOCK = f"probe-sock-{os.getpid()}"
 
 
-def raw_of(
-    tok,
-):  # the path behind an s: token; None for the fault forms, which a sockaddr cannot carry
+# the path behind an s: token; None for the fault forms, which a sockaddr cannot carry
+def raw_of(tok: str) -> str | None:
     return (
         bytes.fromhex(tok[2:]).decode("utf-8", "surrogateescape") if tok.startswith("s:") else None
     )
 
 
-def S(path):  # a string argument
+# a string argument
+def S(path: str) -> str:  # noqa: N802 -- as K
     return "s:" + hx(path)
 
 
-def I(n) -> str:  # an integer argument
-    return "i:%d" % n
+# an integer argument
+def I(n: int) -> str:  # noqa: E743, N802 -- as K
+    return f"i:{n}"
 
 
-def F(flags, path) -> str:  # a descriptor opened on path before the call
-    return "f:%d:%s" % (flags, hx(path))
+# a descriptor opened on path before the call
+def F(flags: int, path: str) -> str:  # noqa: N802 -- as K
+    return f"f:{flags}:{hx(path)}"
 
 
-def B(kind, size) -> str:  # a buffer
-    return "b:%s:%d" % (kind, size)
+# a buffer
+def B(kind: str, size: int) -> str:  # noqa: N802 -- as K
+    return f"b:{kind}:{size}"
 
 
-def V(*strings):  # a string vector
+# a string vector
+def V(*strings: str) -> str:  # noqa: N802 -- as K
     return "v:" + ",".join(hx(s) for s in strings)
 
 
-def X(value, flags=0) -> str:  # struct xattr_args
-    return "x:%s:%d" % (hx(value), flags)
+# struct xattr_args
+def X(value: str, flags: int = 0) -> str:  # noqa: N802 -- as K
+    return f"x:{hx(value)}:{flags}"
 
 
-def H(flags, mode=0, resolve=0, size=24, tail=None) -> str:  # struct open_how
-    return "h:%d:%d:%d:%d%s" % (
-        flags,
-        mode,
-        resolve,
-        size,
-        ":%d" % tail if tail is not None else "",
-    )
+# struct open_how
+def H(  # noqa: N802 -- as K
+    flags: int, mode: int = 0, resolve: int = 0, size: int = 24, tail: int | None = None
+) -> str:
+    return f"h:{flags}:{mode}:{resolve}:{size}" + (f":{tail}" if tail is not None else "")
 
 
-def decode(tok):
+def decode(tok: str) -> str:
     """A token back to something readable, for the report."""
     k, _, p = tok.partition(":")
     if k == "s":
@@ -236,12 +248,14 @@ def decode(tok):
 class Forms:
     """The path forms of 7.4.4 over this maze, this tree and the host area."""
 
-    def __init__(self, root, host, links, dirs, files) -> None:
+    def __init__(
+        self, root: str, host: str, links: list[str], _dirs: list[str], files: list[str]
+    ) -> None:
         self.host = host
-        by_kind = {}
-        for l in links:
-            t = os.readlink(os.path.join(root, l.lstrip("/")))
-            if t == l:
+        by_kind: dict[str, str] = {}
+        for link in links:
+            t = os.readlink(os.path.join(root, link.lstrip("/")))
+            if t == link:
                 kind = "loop"
             elif t.startswith("/maze/l"):
                 kind = "link"
@@ -251,7 +265,7 @@ class Forms:
                 kind = "abs"
             else:
                 kind = "rel"
-            by_kind.setdefault(kind, l)
+            by_kind.setdefault(kind, link)
         self.link = by_kind
         # a file in a subdirectory, and a directory that has a file child
         self.file = min(files, key=lambda f: -f.count("/"))
@@ -283,11 +297,9 @@ class Forms:
             ("empty", ""),
             ("wrapper", self.true),
             ("sh_link", self.sh),
+            # a file its owner cannot write, and a special file: access(W_OK) has its own order
             ("ro_file", "/maze/ro444"),
-            (
-                "sock",
-                "/maze/sock",
-            ),  # a file its owner cannot write, and a special file: access(W_OK) has its own order
+            ("sock", "/maze/sock"),
             ("passwd", "/etc/passwd"),
             ("resolv", "/etc/resolv.conf"),
             ("tmp", "/tmp"),
@@ -304,8 +316,8 @@ class Forms:
             ("non_utf8", "/maze/\udcff\udcfe"),
             ("newline", "/maze/a\nb"),
         ]
-        for kind, l in sorted(by_kind.items()):
-            ex.append(("link_" + kind, l))
+        for kind, link in sorted(by_kind.items()):
+            ex.append(("link_" + kind, link))
         hostf = [
             ("host_file", h + "/hfile"),
             ("host_dir", h + "/hdir"),
@@ -317,7 +329,7 @@ class Forms:
             ("host_missing", h + "/missing"),
             ("host_dotdot", h + "/hdir/../hfile"),
             ("host_file_slash", h + "/hfile/"),
-            ("host_tmp_new", "/tmp/exclave-probe-%d/new" % os.getpid()),
+            ("host_tmp_new", f"/tmp/exclave-probe-{os.getpid()}/new"),
             ("host_dot_last", h + "/hdir/."),
             ("host_dotdot_last", h + "/hdir/.."),
             ("rel_file", "hfile"),
@@ -335,27 +347,26 @@ class Forms:
             ("fault_null", "n:"),
             ("fault_unmapped", "u:"),
         ]
-        self.few = (
-            [
-                (n, S(p))
-                for n, p in [
-                    ("exclave_file", self.file),
-                    ("exclave_dir", self.dir),
-                    ("missing", "/maze/missing"),
-                    ("dir_slash", self.dir + "/"),
-                    ("file_slash", self.file + "/"),
-                    ("above_root", "/.." + self.file),
-                    ("empty", ""),
-                    ("wrapper", self.true),
-                    ("host_file", h + "/hfile"),
-                    ("host_dir", h + "/hdir"),
-                    ("host_missing", h + "/missing"),
-                    ("host_to_exclave", h + "/hlink"),
-                    ("rel_file", "hfile"),
-                ]
+        # no /tmp here: bwrap's bind makes it another mount, so a link or rename into it is EXDEV
+        # there and not natively
+        self.few = [
+            (n, S(p))
+            for n, p in [
+                ("exclave_file", self.file),
+                ("exclave_dir", self.dir),
+                ("missing", "/maze/missing"),
+                ("dir_slash", self.dir + "/"),
+                ("file_slash", self.file + "/"),
+                ("above_root", "/.." + self.file),
+                ("empty", ""),
+                ("wrapper", self.true),
+                ("host_file", h + "/hfile"),
+                ("host_dir", h + "/hdir"),
+                ("host_missing", h + "/missing"),
+                ("host_to_exclave", h + "/hlink"),
+                ("rel_file", "hfile"),
             ]
-            + [("fault_null", "n:")]
-        )  # no /tmp here: bwrap's bind makes it another mount, so a link or rename into it is EXDEV there and not natively
+        ] + [("fault_null", "n:")]
         # descriptor-relative forms: (label, dirfd token, path token)
         rel_ex = [
             "",
@@ -392,7 +403,7 @@ class Forms:
         ]
         self.at += [
             ("devnull_fd/", F(O_RDONLY, "/dev/null"), S("")),
-            ("tmpfd/", F(O_PATH | O_DIRECTORY, "/tmp"), S("exclave-probe-%d" % os.getpid())),
+            ("tmpfd/", F(O_PATH | O_DIRECTORY, "/tmp"), S(f"exclave-probe-{os.getpid()}")),
         ]
         self.at += [
             ("badfd/" + n, I(-1), p)
@@ -429,12 +440,17 @@ class Forms:
         ]
 
 
-def generate(forms, nr, uid, gid):
-    """(label, syscall name, [tokens]) for every case; a name absent from this machine's table is skipped."""
-    out = []
-    group = [None]  # cases that depend on one another run in one group, in order
+def generate(
+    forms: Forms, nr: dict[str, int], uid: int, gid: int
+) -> list[tuple[str, str, list[str], str]]:
+    """(label, syscall name, [tokens], group) for every case.
 
-    def add(name, label, *toks) -> None:
+    A name absent from this machine's table is skipped.
+    """
+    out: list[tuple[str, str, list[str], str]] = []
+    group: list[str | None] = [None]  # cases that depend on one another run in one group, in order
+
+    def add(name: str, label: str, *toks: str) -> None:
         if name in nr:
             out.append((label, name, list(toks), group[0] or name))
 
@@ -462,7 +478,9 @@ def generate(forms, nr, uid, gid):
     for n, p in forms.paths:
         for fn, fl in open_flags:
             if n == "proc_exe" and fl & O_TRUNC:
-                continue  # would truncate the running probe: the kernel says ETXTBSY, the launcher does not (13)
+                # would truncate the running probe: the kernel says ETXTBSY,
+                # the launcher does not (13)
+                continue
             add("open", f"{n}/{fn}", p, I(fl), I(0o644))
         if n != "proc_exe":
             add("creat", n, p, I(0o644))
@@ -473,9 +491,8 @@ def generate(forms, nr, uid, gid):
         add("readlink", n, p, B("link", 4096), I(4096))
         add("readlink", n + "/short", p, B("link", 4), I(4))
         add("readlink", n + "/zero", p, B("link", 4), I(0))
-        add(
-            "readlink", n + "/hi_zero", p, B("link", 4), I(1 << 32)
-        )  # an int argument with bits above the word: the kernel sees 0
+        # an int argument with bits above the word: the kernel sees 0
+        add("readlink", n + "/hi_zero", p, B("link", 4), I(1 << 32))
         add("readlink", n + "/hi_minus", p, B("link", 4), I((1 << 32) | 0xFFFFFFFF))  # and -1
         if n != "proc_exe":
             add("truncate", n, p, I(0))
@@ -505,19 +522,17 @@ def generate(forms, nr, uid, gid):
         add("inotify_add_watch", n, "I:", p, I(IN_MODIFY))
         add("fanotify_mark", n, I(-1), I(0), I(0), I(AT_FDCWD), p)
         add("execve", n, p, V("x"), V())
-        if raw_of(p) is not None and not unwritable(
-            raw_of(p)
-        ):  # a sockaddr_un path is a path (13 item 31)
-            add("bind", n, K(SOCK_STREAM), A(raw_of(p)), I(alen(raw_of(p))))
-            add("connect", n, K(SOCK_STREAM), A(raw_of(p)), I(alen(raw_of(p))))
+        raw = raw_of(p)
+        if raw is not None and not unwritable(raw):  # a sockaddr_un path is a path (13 item 31)
+            add("bind", n, K(SOCK_STREAM), A(raw), I(alen(raw)))
+            add("connect", n, K(SOCK_STREAM), A(raw), I(alen(raw)))
         group[0] = "chdir"
         add("chdir", n, p)
         add("getcwd", n + "/after_chdir", B("cwd", 4096), I(4096))
         add("stat", n + "/after_chdir_dot", S("."), B("stat", 256))
         add("stat", n + "/after_chdir_dotdot", S(".."), B("stat", 256))
-        add(
-            "bind", n + "/after_chdir_rel", K(SOCK_STREAM), A(REL_SOCK), I(alen(REL_SOCK))
-        )  # a relative bind from that directory
+        # a relative bind from that directory
+        add("bind", n + "/after_chdir_rel", K(SOCK_STREAM), A(REL_SOCK), I(alen(REL_SOCK)))
         add("connect", n + "/after_chdir_rel", K(SOCK_STREAM), A(REL_SOCK), I(alen(REL_SOCK)))
         add("chdir", n + "/back", S(forms.host))
         group[0] = None
@@ -526,13 +541,14 @@ def generate(forms, nr, uid, gid):
     for name in ("bind", "connect"):  # the structure's own rules, and a socket file in the tree
         add(name, "exclave_sock", K(SOCK_STREAM), A("/maze/sock"), I(alen("/maze/sock")))
         add(name, "exclave_sock_dgram", K(SOCK_DGRAM), A("/maze/sock"), I(alen("/maze/sock")))
+        # one name per process
         add(
             name,
             "abstract",
             K(SOCK_STREAM),
-            A("\0probe-abstract-%d" % os.getpid()),
-            I(alen("\0probe-abstract-%d" % os.getpid())),
-        )  # one name per process
+            A(f"\0probe-abstract-{os.getpid()}"),
+            I(alen(f"\0probe-abstract-{os.getpid()}")),
+        )
         add(name, "unnamed", K(SOCK_STREAM), A(""), I(2))
         add(name, "len_too_long", K(SOCK_STREAM), A(forms.file), I(200))
         add(name, "len_too_short", K(SOCK_STREAM), A(forms.file), I(1))
@@ -578,8 +594,8 @@ def generate(forms, nr, uid, gid):
         add("fchmodat2", n + "/nofollow", d, p, I(0o644), I(AT_SYMLINK_NOFOLLOW))
         add("utimensat", n, d, p, "t:1000,0,2000,0", I(0))
         add("utimensat", n + "/nofollow", d, p, "t:1000,0,2000,0", I(AT_SYMLINK_NOFOLLOW))
-        add("utimensat", n + "/now", d, p, "t:0,%d,0,%d" % (UTIME_NOW, UTIME_NOW), I(0))
-        add("utimensat", n + "/omit", d, p, "t:0,%d,0,%d" % (UTIME_OMIT, UTIME_OMIT), I(0))
+        add("utimensat", n + "/now", d, p, f"t:0,{UTIME_NOW},0,{UTIME_NOW}", I(0))
+        add("utimensat", n + "/omit", d, p, f"t:0,{UTIME_OMIT},0,{UTIME_OMIT}", I(0))
         add("utimensat", n + "/null_times", d, p, "n:", I(0))
         add("utimensat", n + "/bad_nsec", d, p, "t:0,1000000000,0,0", I(0))
         add("utimensat", n + "/bad_flags", d, p, "t:1000,0,2000,0", I(0x8000))
@@ -683,7 +699,8 @@ def generate(forms, nr, uid, gid):
         I(AT_EMPTY_PATH),
     )
     add("newfstatat", "fd_null", F(O_RDONLY, forms.file), "n:", B("stat", 256), I(0))
-    # AT_EMPTY_PATH with an empty or a NULL path: the *xattrat and file_*attr calls name the descriptor either way (getname_maybe_null)
+    # AT_EMPTY_PATH with an empty or a NULL path: the *xattrat and file_*attr calls name the
+    # descriptor either way (getname_maybe_null)
     for fn, d in (
         ("fd", F(O_RDONLY, forms.file)),
         ("hostfd", F(O_RDONLY, forms.host + "/hfile")),
@@ -725,7 +742,8 @@ def generate(forms, nr, uid, gid):
                 add("renameat2", f"{lab}/{fn}", I(AT_FDCWD), p1, I(AT_FDCWD), p2, I(fl))
             for fn, fl in (("plain", 0), ("follow", AT_SYMLINK_FOLLOW), ("empty", AT_EMPTY_PATH)):
                 add("linkat", f"{lab}/{fn}", I(AT_FDCWD), p1, I(AT_FDCWD), p2, I(fl))
-    # a last component that is ".", ".." or the root, either side: do_renameat2 answers EBUSY before the write check
+    # a last component that is ".", ".." or the root, either side: do_renameat2 answers EBUSY
+    # before the write check
     dots = [
         ("dot_last", S(forms.dir + "/.")),
         ("dotdot_last", S(forms.dir + "/..")),
@@ -783,12 +801,10 @@ def generate(forms, nr, uid, gid):
         add("fsetxattr", n, f, S("user.probe"), S("v"), I(1), I(0))
         add("fremovexattr", n, f, S("user.probe"))
         add("fstatfs", n, f, B("raw", 256))
-        if not n.startswith(
-            "host"
-        ):  # not on a host file: ext4 on 5.10 to 6.1 refuses to clear the extent flag of
-            add(
-                "ioctl", n + "/setflags", f, I(FS_IOC_SETFLAGS), B("raw", 8)
-            )  # a file recreated moments after its predecessor was deleted (13), which the reset does
+        # not on a host file: ext4 on 5.10 to 6.1 refuses to clear the extent flag of a file
+        # recreated moments after its predecessor was deleted (13), which the reset does
+        if not n.startswith("host"):
+            add("ioctl", n + "/setflags", f, I(FS_IOC_SETFLAGS), B("raw", 8))
             add("ioctl", n + "/fssetxattr", f, I(FS_IOC_FSSETXATTR), B("raw", 28))
     # relative paths from a working directory the exclave owns
     rel = [
@@ -823,7 +839,7 @@ def generate(forms, nr, uid, gid):
     return out
 
 
-def rmtree(d) -> None:
+def rmtree(d: str) -> None:
     """Rmtree after a chmod case may have taken the directories' permissions away."""
     if not os.path.isdir(d):
         return
@@ -835,10 +851,11 @@ def rmtree(d) -> None:
     shutil.rmtree(d)
 
 
-def host_reset(host, ex_tree, probe) -> None:
+def host_reset(host: str, _ex_tree: str, probe: str) -> None:
     """The host area both worlds see at the same path, identical before every run."""
-    # a chmod of /proc/self/exe takes the probe's own x bit, and an xattr case leaves an attribute on it: the probe
-    # written again as a new file has neither, on any Python (a musl build has no os.listxattr), and the default label
+    # a chmod of /proc/self/exe takes the probe's own x bit, and an xattr case leaves an attribute
+    # on it: the probe written again as a new file has neither, on any Python (a musl build has no
+    # os.listxattr), and the default label
     with open(probe, "rb") as f:
         data = f.read()
     with open(probe + ".reset", "wb") as f:
@@ -846,7 +863,7 @@ def host_reset(host, ex_tree, probe) -> None:
     os.chmod(probe + ".reset", 0o755)
     os.replace(probe + ".reset", probe)
     rmtree(os.path.dirname(host))
-    rmtree("/tmp/exclave-probe-%d" % os.getpid())
+    rmtree(f"/tmp/exclave-probe-{os.getpid()}")
     if os.path.lexists("/tmp/" + REL_SOCK):  # a relative bind after a chdir into /tmp
         os.remove("/tmp/" + REL_SOCK)
     os.makedirs(host + "/hdir")
@@ -862,13 +879,15 @@ def host_reset(host, ex_tree, probe) -> None:
         ("hrel", "hdir/inner"),
     ):
         os.symlink(target, os.path.join(host, name))
-    os.makedirs("/tmp/exclave-probe-%d" % os.getpid())
+    os.makedirs(f"/tmp/exclave-probe-{os.getpid()}")
 
 
-def run_bwrap(root, host, bindir, probe, cases):
-    """The kernel's projection of the tree: the unwrapped tree read-only at /, and the visibility rule of 8.1
-    spelt in bwrap's terms: every placeholder of the tree is the host's directory, the kernel's volatile
-    directories are the host's, and the identity files are the host's files with the host's permissions.
+def run_bwrap(root: str, host: str, _bindir: str, probe: str, cases: str) -> tuple[int, str, str]:
+    """The kernel's projection of the tree.
+
+    The unwrapped tree read-only at /, and the visibility rule of 8.1 spelt in bwrap's terms: every
+    placeholder of the tree is the host's directory, the kernel's volatile directories are the
+    host's, and the identity files are the host's files with the host's permissions.
     """
     args = ["bwrap", "--ro-bind", root, "/", "--proc", "/proc", "--dev-bind", "/dev", "/dev"]
     for top in sorted(os.listdir(root)):
@@ -888,9 +907,8 @@ def run_bwrap(root, host, bindir, probe, cases):
     for f in IDENTITY:
         if os.path.exists(f) and os.path.lexists(os.path.join(root, f.lstrip("/"))):
             t = os.path.realpath(f) if os.path.islink(f) else f
-            if not any(
-                t.startswith(b + "/") for b in ("/run", "/tmp", "/dev", "/proc")
-            ):  # the volatile ones are bound above
+            # the volatile ones are bound above
+            if not any(t.startswith(b + "/") for b in ("/run", "/tmp", "/dev", "/proc")):
                 args += ["--bind", t, t]
     work = os.path.dirname(os.path.dirname(host))
     if not work.startswith("/home/"):
@@ -915,11 +933,11 @@ def run_bwrap(root, host, bindir, probe, cases):
         "/bin/sh",
     ]
     with open(cases, "rb") as inp:
-        p = subprocess.run([*args, probe], env={}, stdin=inp, capture_output=True)
+        p = subprocess.run([*args, probe], env={}, stdin=inp, capture_output=True, check=False)
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
-def run_launcher(ex, host, probe, cases):
+def run_launcher(ex: str, host: str, probe: str, cases: str) -> tuple[int, str, str]:
     with open(cases, "rb") as inp:
         p = subprocess.run(
             [os.path.join(ex, ".exclave", "launcher"), probe],
@@ -927,145 +945,203 @@ def run_launcher(ex, host, probe, cases):
             stdin=inp,
             env={"PATH": "/usr/bin:/bin", "HOME": host},
             capture_output=True,
+            check=False,
         )
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
-def forms_in(label):
+def forms_in(label: str) -> set[str]:
     return set(label.replace("->", "/").split("/"))
 
 
-def errnos(b, o):
-    return int(b.split("errno=")[1].split()[0]), int(o.split("errno=")[1].split()[0])
+def errnos(b: str, o: str) -> tuple[int, int]:
+    return int(b.split("errno=")[1].split(maxsplit=1)[0]), int(
+        o.split("errno=")[1].split(maxsplit=1)[0]
+    )
 
 
-# differences with a reason: (syscall name or None, predicate on (label, bwrap answer, launcher answer), reason).
-# The list is part of the design (17): each entry names the rule that makes the difference right.
-BOUND = {
-    "passwd",
-    "resolv",
-    "tmp",
-    "home",
-    "opt",
-    "dev_null",
-    "rel_etc_by_dotdot",
-}  # bound from the host into the read-only root under bwrap
-EXPECTED = [
-    # the kernel matrix (12): what this kernel lacks or decided differently, each entry naming the kernel change
+# differences with a reason: (syscall name or None, predicate on (label, bwrap answer, launcher
+# answer), reason). The list is part of the design (17): each entry names the rule that makes the
+# difference right.
+# bound from the host into the read-only root under bwrap
+BOUND = {"passwd", "resolv", "tmp", "home", "opt", "dev_null", "rel_etc_by_dotdot"}
+EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
+    # the kernel matrix (12): what this kernel lacks or decided differently, each entry naming the
+    # kernel change
     (
         None,
-        lambda l, b, o: errnos(b, o)[0] == 38,
-        "a syscall this kernel lacks (ENOSYS): the handler answers what it can from its own rule and re-issues the rest, so only the error cases differ",
+        lambda _, b, o: errnos(b, o)[0] == 38,
+        (
+            "a syscall this kernel lacks (ENOSYS): the handler answers what it can from its own "
+            "rule and re-issues the rest, so only the error cases differ"
+        ),
     ),
     (
         None,
-        lambda l, b, o: KERNEL < (5, 8) and "creat_excl" in l and errnos(b, o) == (21, 17),
-        "O_CREAT|O_EXCL on '.', '..' or '/': EISDIR before the lookup rework of 5.8, EEXIST since; the handler answers as the newer kernels do",
+        lambda label, b, o: KERNEL < (5, 8) and "creat_excl" in label and errnos(b, o) == (21, 17),
+        (
+            "O_CREAT|O_EXCL on '.', '..' or '/': EISDIR before the lookup rework of 5.8, EEXIST "
+            "since; the handler answers as the newer kernels do"
+        ),
     ),
     (
         "linkat",
-        lambda l, b, o: KERNEL < (6, 10) and "empty" in l and errnos(b, o)[0] == 2,
-        "linkat with AT_EMPTY_PATH needed CAP_DAC_READ_SEARCH (ENOENT without it) until 6.10 allowed it for files with a link; the handler answers as the newer kernels do",
-    ),
-    (
-        "openat2",
-        lambda l, b, o: "cached" in l and errnos(b, o)[0] == 11,
-        "RESOLVE_CACHED: the kernel answers EAGAIN where the lookup would need I/O, and bwrap's fresh mount namespace has a cold cache; the handler drops the flag, as openat2(2) permits, and resolves",
-    ),
-    (
-        "openat2",
-        lambda l, b, o: KERNEL < (6, 3) and "dir_creat" in l and errnos(b, o)[1] == 22,
-        "O_DIRECTORY|O_CREAT is EINVAL since 6.3 (open.c); this kernel opens or creates instead; the handler answers as the newer kernels do",
-    ),
-    (
-        "openat2",
-        lambda l, b, o: (
-            KERNEL < (5, 6) and "no_xdev" in l and "creat" in l and errnos(b, o)[0] == 18
+        lambda label, b, o: KERNEL < (6, 10) and "empty" in label and errnos(b, o)[0] == 2,
+        (
+            "linkat with AT_EMPTY_PATH needed CAP_DAC_READ_SEARCH (ENOENT without it) until 6.10 "
+            "allowed it for files with a link; the handler answers as the newer kernels do"
         ),
-        "RHEL 8's 4.18 backport of openat2 answers EXDEV for a create through a symlink under RESOLVE_NO_XDEV; 5.6 and later resolve it",
     ),
     (
         "openat2",
-        lambda l, b, o: KERNEL < (5, 12) and "cached" in l and errnos(b, o)[0] == 22,
-        "RESOLVE_CACHED is 5.12+: EINVAL before; the handler drops it, as openat2(2) permits, and answers from the walk",
-    ),
-    (
-        None,
-        lambda l, b, o: "whiteout" in l and errnos(b, o)[0] == 1,
-        "RENAME_WHITEOUT: this kernel checks a capability in the initial user namespace before any lookup (EPERM); later kernels check the caller's, which bwrap's namespace grants",
-    ),
-    (
-        None,
-        lambda l, b, o: "resolv" in forms_in(l) and errnos(b, o) == (61, 95),
-        "the host's identity symlink resolves to a file on another filesystem (a tmpfs under /run) whose xattr answers differ from the tree copy's symlink",
-    ),
-    (
-        None,
-        lambda l, b, o: (
-            forms_in(l) & BOUND and errnos(b, o)[0] == 30 and errnos(b, o)[1] in (1, 13)
+        lambda label, b, o: "cached" in label and errnos(b, o)[0] == 11,
+        (
+            "RESOLVE_CACHED: the kernel answers EAGAIN where the lookup would need I/O, and "
+            "bwrap's fresh mount namespace has a cold cache; the handler drops the flag, as "
+            "openat2(2) permits, and resolves"
         ),
-        "a host entry bound into bwrap's read-only root: its parent directory, or the identity symlink itself, is read-only there (EROFS); the launcher answers with the host's permissions (8.1, 8.4)",
+    ),
+    (
+        "openat2",
+        lambda label, b, o: KERNEL < (6, 3) and "dir_creat" in label and errnos(b, o)[1] == 22,
+        (
+            "O_DIRECTORY|O_CREAT is EINVAL since 6.3 (open.c); this kernel opens or creates "
+            "instead; the handler answers as the newer kernels do"
+        ),
+    ),
+    (
+        "openat2",
+        lambda label, b, o: (
+            KERNEL < (5, 6) and "no_xdev" in label and "creat" in label and errnos(b, o)[0] == 18
+        ),
+        (
+            "RHEL 8's 4.18 backport of openat2 answers EXDEV for a create through a symlink under "
+            "RESOLVE_NO_XDEV; 5.6 and later resolve it"
+        ),
+    ),
+    (
+        "openat2",
+        lambda label, b, o: KERNEL < (5, 12) and "cached" in label and errnos(b, o)[0] == 22,
+        (
+            "RESOLVE_CACHED is 5.12+: EINVAL before; the handler drops it, as openat2(2) permits, "
+            "and answers from the walk"
+        ),
     ),
     (
         None,
-        lambda l, b, o: "to_root" in forms_in(l) and errnos(b, o) == (22, 1),
+        lambda label, b, o: "whiteout" in label and errnos(b, o)[0] == 1,
+        (
+            "RENAME_WHITEOUT: this kernel checks a capability in the initial user namespace "
+            "before any lookup (EPERM); later kernels check the caller's, which bwrap's namespace "
+            "grants"
+        ),
+    ),
+    (
+        None,
+        lambda label, b, o: "resolv" in forms_in(label) and errnos(b, o) == (61, 95),
+        (
+            "the host's identity symlink resolves to a file on another filesystem (a tmpfs under "
+            "/run) whose xattr answers differ from the tree copy's symlink"
+        ),
+    ),
+    (
+        None,
+        lambda label, b, o: (
+            forms_in(label) & BOUND and errnos(b, o)[0] == 30 and errnos(b, o)[1] in (1, 13)
+        ),
+        (
+            "a host entry bound into bwrap's read-only root: its parent directory, or the "
+            "identity symlink itself, is read-only there (EROFS); the launcher answers with the "
+            "host's permissions (8.1, 8.4)"
+        ),
+    ),
+    (
+        None,
+        lambda label, b, o: "to_root" in forms_in(label) and errnos(b, o) == (22, 1),
         "uid 0 is not mapped in bwrap's user namespace (EINVAL); the launcher runs in none (EPERM)",
     ),
     (
         "bind",
-        lambda l, b, o: (
-            l.startswith(("root/", "root_dotdot/", "rel_root_by_dotdot/"))
-            and "after_chdir_rel" in l
+        lambda label, b, o: (
+            label.startswith(("root/", "root_dotdot/", "rel_root_by_dotdot/"))
+            and "after_chdir_rel" in label
             and errnos(b, o) == (30, 13)
         ),
-        "a new top-level name is the host's (8.1 rule 2): the host's / answers EACCES for a create there, where the read-only root under bwrap says EROFS",
+        (
+            "a new top-level name is the host's (8.1 rule 2): the host's / answers EACCES for a "
+            "create there, where the read-only root under bwrap says EROFS"
+        ),
     ),
     (
         "fanotify_mark",
-        lambda l, b, o: errnos(b, o)[0] == 22,
-        "fanotify_mark checks its flags and descriptor before its path; the launcher resolves the path first, and fanotify needs CAP_SYS_ADMIN, which no process in an exclave has (13)",
+        lambda _, b, o: errnos(b, o)[0] == 22,
+        (
+            "fanotify_mark checks its flags and descriptor before its path; the launcher resolves "
+            "the path first, and fanotify needs CAP_SYS_ADMIN, which no process in an exclave has "
+            "(13)"
+        ),
     ),
     (
         None,
-        lambda l, b, o: KERNEL < (6, 14) and "ro_file" in forms_in(l) and errnos(b, o) == (30, 13),
-        "a truncate of a file its owner cannot write on a read-only mount: this kernel wants the mount before the permission (EROFS); vfs_truncate checks the permission first by 6.14 (it did not at 6.1), and the handler answers as it does",
+        lambda label, b, o: (
+            KERNEL < (6, 14) and "ro_file" in forms_in(label) and errnos(b, o) == (30, 13)
+        ),
+        (
+            "a truncate of a file its owner cannot write on a read-only mount: this kernel wants "
+            "the mount before the permission (EROFS); vfs_truncate checks the permission first by "
+            "6.14 (it did not at 6.1), and the handler answers as it does"
+        ),
     ),
     (
         "utimensat",
-        lambda l, b, o: (
-            KERNEL < (5, 9) and ("empty" in l or "bad_nsec" in l) and errnos(b, o)[0] == 22
+        lambda label, b, o: (
+            KERNEL < (5, 9) and ("empty" in label or "bad_nsec" in label) and errnos(b, o)[0] == 22
         ),
-        "utimensat before 5.9 refused AT_EMPTY_PATH and checked the nanoseconds before the lookup (EINVAL); since 5.9 (vfs_utimes) it takes the flag and the lookup's answer comes first, as the handler answers",
+        (
+            "utimensat before 5.9 refused AT_EMPTY_PATH and checked the nanoseconds before the "
+            "lookup (EINVAL); since 5.9 (vfs_utimes) it takes the flag and the lookup's answer "
+            "comes first, as the handler answers"
+        ),
     ),
     (
         "execve",
-        lambda l, b, o: (
+        lambda label, b, o: (
             KERNEL < (5, 9)
-            and "sock" in forms_in(l)
+            and "sock" in forms_in(label)
             and b.startswith("ret=27136")
             and o.startswith("ret=28928")
         ),
-        "an exec of a socket: ENXIO from its open before 5.9, EACCES from may_open since (fs/namei.c); the handler answers as the newer kernels do",
+        (
+            "an exec of a socket: ENXIO from its open before 5.9, EACCES from may_open since "
+            "(fs/namei.c); the handler answers as the newer kernels do"
+        ),
     ),
     (
         "execveat",
-        lambda l, b, o: (
+        lambda label, b, o: (
             KERNEL < (5, 9)
-            and "sock" in forms_in(l)
+            and "sock" in forms_in(label)
             and b.startswith("ret=27136")
             and o.startswith("ret=28928")
         ),
-        "an exec of a socket: ENXIO from its open before 5.9, EACCES from may_open since (fs/namei.c); the handler answers as the newer kernels do",
+        (
+            "an exec of a socket: ENXIO from its open before 5.9, EACCES from may_open since "
+            "(fs/namei.c); the handler answers as the newer kernels do"
+        ),
     ),
     (
         None,
-        lambda l, b, o: errnos(b, o) == (26, 30),
-        "a write-open of an executable another process is running: the kernel says ETXTBSY before EROFS, the launcher EROFS (13); seen when the gate runs the same exclave copy's shell beside the probe",
+        lambda _, b, o: errnos(b, o) == (26, 30),
+        (
+            "a write-open of an executable another process is running: the kernel says ETXTBSY "
+            "before EROFS, the launcher EROFS (13); seen when the gate runs the same exclave "
+            "copy's shell beside the probe"
+        ),
     ),
 ]
 
 
-def expected(name, label, b, o):
+def expected(name: str, label: str, b: str, o: str) -> str | None:
     for n, pred, reason in EXPECTED:
         if (n is None or n == name) and pred(label, b, o):
             return reason
@@ -1093,16 +1169,20 @@ def main() -> int:
         ["bwrap", "--ro-bind", "/", "/", "true"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        check=False,
     ).returncode:
         print(
-            "bwrap cannot create namespaces here (user namespaces denied); the syscall probe cannot run"
+            "bwrap cannot create namespaces here (user namespaces denied); "
+            "the syscall probe cannot run"
         )
         return 0
     given, work = os.path.abspath(a.exclave), os.path.abspath(a.work)
     rmtree(work)
     os.makedirs(work)
-    for d in os.listdir("/tmp"):  # an earlier run that died left its area behind; a
-        if d.startswith("exclave-probe-"):  # running one (the gate runs several) keeps its own
+    # an earlier run that died left its area behind; a running one (the gate runs several) keeps
+    # its own
+    for d in os.listdir("/tmp"):
+        if d.startswith("exclave-probe-"):
             try:
                 os.kill(int(d[11:]), 0)
             except ValueError, ProcessLookupError:
@@ -1110,33 +1190,28 @@ def main() -> int:
             except PermissionError:
                 pass
     rng = random.Random(a.seed)
-    # the kernel's world: an unwrapped copy of the tree; the launcher's: a copy of the exclave; the same maze in both
+    # the kernel's world: an unwrapped copy of the tree; the launcher's: a copy of the exclave; the
+    # same maze in both
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(
         os.path.join(given, "tree"), root, symlinks=True, copy_function=exclave.link_or_copy
     )
-    build.unwrap(os.path.join(work, "bare"), log=lambda *x: None)
-    ex = tree.fresh_exclave(
-        given, os.path.join(work, "exclave")
-    )  # the launcher's world: a copy relinked with the build (17)
+    build.unwrap(os.path.join(work, "bare"), log=lambda *_: None)
+    # the launcher's world: a copy relinked with the build (17)
+    ex = tree.fresh_exclave(given, os.path.join(work, "exclave"))
     dirs, files, links = make_maze(root, rng)
-    host = os.path.join(
-        work, "area", "host"
-    )  # ".." from the host area is a directory the reset owns
+    # ".." from the host area is a directory the reset owns
+    host = os.path.join(work, "area", "host")
     HOST_AREA[0] = host
-    os.symlink(
-        host + "/hfile", os.path.join(root, "maze", "lH")
-    )  # an exclave link to a host file, and to a host directory
+    # an exclave link to a host file, and to a host directory
+    os.symlink(host + "/hfile", os.path.join(root, "maze", "lH"))
     os.symlink(host + "/hdir", os.path.join(root, "maze", "lHD"))
     shutil.copytree(os.path.join(root, "maze"), os.path.join(ex, "tree", "maze"), symlinks=True)
-    for r in (
-        root,
-        os.path.join(ex, "tree"),
-    ):  # a socket file in the tree, for bind and connect (copytree cannot carry one)
+    # a socket file in the tree, for bind and connect (copytree cannot carry one)
+    for r in (root, os.path.join(ex, "tree")):
         tree.socket_file(os.path.join(r, "maze", "sock"))
-        with open(
-            os.path.join(r, "maze", "ro444"), "w"
-        ) as f:  # a file its owner cannot write: access(W_OK) is EACCES before EROFS
+        # a file its owner cannot write: access(W_OK) is EACCES before EROFS
+        with open(os.path.join(r, "maze", "ro444"), "w") as f:
             f.write("ro\n")
         os.chmod(os.path.join(r, "maze", "ro444"), 0o444)
     for f in IDENTITY:  # as oracle_ns: the host's link text in the copy, its target bound
@@ -1155,15 +1230,15 @@ def main() -> int:
     cc = tree.compiler(root, MACHINE)
     if not cc:
         sys.exit("no C compiler in the exclave")
-    gcc = os.path.join(
-        ex, "tree", tree.vbin(root, cc).lstrip("/")
-    )  # the probe compiled through the build's launcher
+    # the probe compiled through the build's launcher
+    gcc = os.path.join(ex, "tree", tree.vbin(root, cc).lstrip("/"))
     probe = os.path.join(bindir, "probe")
     r = subprocess.run(
         [gcc, "-O1", "-o", probe, os.path.join(HERE, "progs", "probe.c")],
         cwd=work,
         env={"PATH": "/usr/bin:/bin"},
         capture_output=True,
+        check=False,
     )
     if r.returncode:
         sys.exit(
@@ -1185,8 +1260,7 @@ def main() -> int:
         path = os.path.join(bindir, "cases-" + name)
         with open(path, "w") as f:
             f.writelines(
-                "%d %d %s\n" % (i, nr[n], " ".join(toks))
-                for i, (label, n, toks, _) in enumerate(mine)
+                f"{i} {nr[n]} {' '.join(toks)}\n" for i, (label, n, toks, _) in enumerate(mine)
             )
         host_reset(host, os.path.join(ex, "tree"), probe)
         bw = run_bwrap(root, host, bindir, probe, path)
@@ -1196,25 +1270,17 @@ def main() -> int:
         if len(bl) != len(mine) or len(ol) != len(mine):
             stopped = mine[min(len(bl), len(ol))][0]
             print(
-                "FAIL %s: %d cases, bwrap answered %d (rc %d: %s), the launcher %d (rc %d: %s); the first unanswered case is %s"
-                % (
-                    name,
-                    len(mine),
-                    len(bl),
-                    bw[0],
-                    bw[2].strip()[-200:],
-                    len(ol),
-                    op[0],
-                    op[2].strip()[-200:],
-                    stopped,
-                )
+                f"FAIL {name}: {len(mine)} cases, "
+                f"bwrap answered {len(bl)} (rc {bw[0]}: {bw[2].strip()[-200:]}), "
+                f"the launcher {len(ol)} (rc {op[0]}: {op[2].strip()[-200:]}); "
+                f"the first unanswered case is {stopped}"
             )
             differ += 1
             continue
         d = 0
-        for (label, n, toks, _), b, o in zip(mine, bl, ol, strict=False):
+        for (label, n, toks, _), bline, oline in zip(mine, bl, ol, strict=False):
             total += 1
-            b, o = b.split(" ", 1)[1], o.split(" ", 1)[1]
+            b, o = bline.split(" ", 1)[1], oline.split(" ", 1)[1]
             if b == o:
                 continue
             why = expected(n, label, b, o)
@@ -1236,12 +1302,12 @@ def main() -> int:
                         n, label, ", ".join(decode(t) for t in toks), b, o
                     )
                 )
-        print("%-18s %5d cases, %d differ" % (name, len(mine), d))
+        print(f"{name:<18} {len(mine):5d} cases, {d} differ")
     print(
-        "%d cases over %d syscalls: %d differ, %d differences expected"
-        % (total, len(names), differ, accepted)
+        f"{total} cases over {len(names)} syscalls: {differ} differ, "
+        f"{accepted} differences expected"
     )
-    rmtree("/tmp/exclave-probe-%d" % os.getpid())
+    rmtree(f"/tmp/exclave-probe-{os.getpid()}")
     if not a.keep and not differ:
         shutil.rmtree(work, ignore_errors=True)
     return 1 if differ else 0
