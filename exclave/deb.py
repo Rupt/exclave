@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+from compression import zstd
 
 
 class DebError(Exception):
@@ -54,13 +55,10 @@ def decompress(name, data):
     if name.endswith(".bz2"):
         return bz2.decompress(data)
     if name.endswith(".zst"):
-        tool = shutil.which("zstd")
-        if not tool:
-            raise DebError("zstd tool not found; needed for %s" % name)
-        p = subprocess.run([tool, "-d", "-q", "--stdout"], input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if p.returncode:
-            raise DebError("zstd failed on %s: %s" % (name, p.stderr.decode(errors="replace")))
-        return p.stdout
+        try:
+            return zstd.decompress(data)
+        except zstd.ZstdError as e:
+            raise DebError("zstd failed on %s: %s" % (name, e))
     if name.endswith(".tar"):
         return data
     raise DebError("unknown compression: " + name)

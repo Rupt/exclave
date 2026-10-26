@@ -3,7 +3,7 @@
 An .rpm is a 96-byte lead, a signature header, a header and a compressed cpio payload. The header is an
 index of tagged entries; the reader takes the names, versions, architecture, dependencies and the
 install scripts from it, and the payload's compressor. The payload is cpio in the "newc" form (or "crc"),
-gzip, xz or zstd, and is read in Python, zstd through the tool the tool's own exclave ships. The interface is
+gzip, xz or zstd, and is read in Python, zstd through the standard library's compression.zstd. The interface is
 deb.py's, so build.py serves every reader: control(path) -> (fields, scripts) with Debian's field names,
 open_tar(path, "data.tar") -> the payload members with tarfile's shape, parse_deps, satisfies.
 `Obsoletes` is presented as `Replaces`.
@@ -50,6 +50,7 @@ import shutil
 import struct
 import subprocess
 import tarfile
+from compression import zstd
 
 
 class RpmError(Exception):
@@ -123,13 +124,10 @@ def _decompress(comp, data):
     if comp == "bzip2":
         return bz2.decompress(data)
     if comp == "zstd":
-        tool = shutil.which("zstd")
-        if not tool:
-            raise RpmError("zstd tool not found; needed for a zstd payload")
-        p = subprocess.run([tool, "-d", "-q", "--stdout"], input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if p.returncode:
-            raise RpmError("zstd failed: " + p.stderr.decode(errors="replace"))
-        return p.stdout
+        try:
+            return zstd.decompress(data)
+        except zstd.ZstdError as e:
+            raise RpmError("zstd failed: %s" % e)
     raise RpmError("unknown payload compressor %r" % comp)
 
 

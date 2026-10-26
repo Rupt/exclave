@@ -25,6 +25,7 @@ import subprocess
 import sys
 import urllib.request
 import xml.etree.ElementTree as ET
+from compression import zstd
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "exclave"))
 import rpm  # noqa: E402
@@ -48,10 +49,7 @@ def _decompress(name, data):
     if name.endswith(".xz"):
         return lzma.decompress(data)
     if name.endswith(".zst"):
-        tool = shutil.which("zstd")
-        if not tool:
-            raise RepoError("zstd tool needed for " + name)
-        return subprocess.run([tool, "-d", "-q", "--stdout"], input=data, stdout=subprocess.PIPE, check=True).stdout
+        return zstd.decompress(data)
     return data
 
 
