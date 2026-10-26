@@ -107,7 +107,23 @@ The loop that has served well, in the order it pays:
   it. `curl` has not been needed. A package reader (`deb.py`, `apk.py`,
   `rpm.py`) has one interface and is chosen by the file. A change to
   the tool's output is checked by `test/dogfood.py`. `src/gdb.py` is
-  data the launcher carries for gdb, not code it runs.
+  data the launcher carries for gdb, not code it runs, and it runs on
+  gdb's own Python (ruff targets 3.7 there).
+- **Python runs only through the pinned uv**, never the machine's
+  `python3`: `scripts/install-uv` puts uv in `.uv/` (a static musl build
+  per architecture, checked against a committed checksum), uv installs
+  the Python `.python-version` names (3.15) and the dev tools `uv.lock`
+  pins, and every command is a POSIX `sh` wrapper in `scripts/` that
+  sources `scripts/lib.sh`. Python files are programs the wrappers run,
+  without shebangs or executable bits. The matrix carries the same
+  Python into its VMs, and the tool's own exclave is built on it.
+  Running Python by hand: `.uv/bin/uv run python FILE` with the
+  environment `scripts/lib.sh` sets.
+- **The Python is ruff- and ty-clean**, as `scripts/check` checks
+  (ruff, ty, shellcheck, shfmt, taplo): every function annotated with
+  modern types, a rule ignored in `pyproject.toml` only with its reason
+  beside it, and a `# noqa` or `# ty: ignore[rule]` only where fixing
+  would be wrong, with its reason on the line.
 - **Hashes are BLAKE2b-256.** Manifest and hashes file use the strict
   grammar of `docs/DESIGN.md` 6.2, and `format` output is the accepted spelling.
   There is no index: the launcher reads the manifest and the tree, and

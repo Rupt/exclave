@@ -675,8 +675,8 @@ a `noexec` temporary directory would make its failure ugly.
 
 ## 7. The launcher
 
-The launcher is one static, freestanding, `ET_DYN` binary of 88 000
-bytes stripped on x86-64 and 90 000 on aarch64 (measured October
+The launcher is one static, freestanding, `ET_DYN` binary of 88 744
+bytes stripped on x86-64 and 90 744 on aarch64 (measured October
 2026), with no libc and no `PT_INTERP`; it relocates itself. Every
 executable in an exclave's tree is a hard link to it, a *wrapper*, and
 the program a wrapper stands for, its *original*, sits beside it in
@@ -1748,10 +1748,12 @@ before a user does.
 ## 10. The `exclave` command
 
 The `exclave` command builds exclaves. It is a Python program, standard
-library only, that runs on Python 3.6 or later, and it is itself shipped
-as an exclave with its own Python, `zstd` and `xz` (10.5). Bootstrapping
-it the first time needs a host Python; a standalone CPython build works
-as well.
+library only, run as `scripts/exclave` by the pinned Python: the uv that
+`scripts/install-uv` puts in `.uv/` installs the version `.python-version`
+names (3.15) into the checkout, and every script runs through it
+(`scripts/lib.sh`), so nothing the machine has installed decides which
+Python runs. The tool is also shipped as an exclave of itself, with that
+Python inside (10.5).
 
 The tool takes files and writes directories. It never opens a network
 connection. The package files it is given are its inputs, whoever
@@ -1813,8 +1815,7 @@ set that mixes formats is refused. From `.deb` files, in five steps:
    member whose path resolves outside the tree through a symlink is
    refused, and so is a member under the reserved name `.real` (6.1).
    `ar` and `tar` are read in Python, xz, gzip and bzip2 through the
-   standard library, and zstd through a `zstd` command, which the tool's
-   exclave ships and a host run of the tool needs on its `PATH`. Modes
+   standard library, and zstd through its `compression.zstd`. Modes
    and modification times come from the archive, with setuid and setgid
    bits dropped (they mean nothing under `no_new_privs`, 12) and every
    file made readable by its owner; special files are skipped with a
@@ -2090,17 +2091,21 @@ run the whole workload, add back from an unpruned copy.
 
 ### 10.5 Dogfooding
 
-The tool's own exclave is built by `exclave unpack` from the packages
-`python3`, `zstd` and `xz-utils`. The tool's source and the launcher are
-copied into the unwrapped exclave by hand, and `exclave wrap` wraps it.
-Its shortcut is a shell script that runs `python3` on the tool, which is
-one reason scripts are wrapped (6.1).
+The tool's own exclave is built by `exclave unpack` from Ubuntu's base
+system, the closure of `libc6` and `libgcc-s1`. The pinned Python's own
+tree, the one running the build, is copied in at `/opt/python`, without
+Tcl/Tk, whose libraries search a directory of the machine they were
+built on, which the static check rightly refuses; the tool's source and
+the launcher are copied in by hand, and `exclave wrap` wraps it, its
+static check verifying that the Python's libraries resolve inside. Its
+shortcut is a shell script that runs `/opt/python/bin/python3` on the
+tool, which is one reason scripts are wrapped (6.1).
 
 A tool's exclave can build the next one. That is a cross-exclave
 invocation, with each exclave holding a launcher of its own, and
 `test/dogfood.py` tests it as one. `scripts/dogfood --inputs DIR` takes
 two package sets that `scripts/inputs DIR` fetched with
-`tools/fetch-debs.py`, the tool's (`debs-tool`) and the gcc 13 closure
+`tools/fetch-debs.py`, the tool's (`debs-base`) and the gcc 13 closure
 (`debs-gcc13`), and touches no network. It builds the tool's exclave,
 then builds the same gcc exclave twice from the same files: once with
 the checkout's tool on the host, and once with the tool's exclave from
@@ -3467,8 +3472,11 @@ includes a bad pointer that must be `EFAULT` either way.
 it. It walks gcc's call graph from `on_sigsys` in both launchers' builds
 and enforces the handler's stack budget of 7.5.4.
 
-**Requirements.** The build needs gcc and make; the tool and the
-drivers need python3. The namespace oracle, the syscall probe, the
+**Requirements.** The build needs gcc and make, and `scripts/install-uv`
+needs curl or wget. Every Python program, the tool and every driver,
+runs on the pinned Python uv installs into the checkout, and the code
+checks' ruff, ty, shellcheck, shfmt and taplo come from `uv.lock` the
+same way; none is taken from the machine. The namespace oracle, the syscall probe, the
 Docker profile run and the exerciser need `bwrap` (bubblewrap) and
 unprivileged user namespaces; the resolution oracle needs `openat2`
 (Linux 5.6). The suite uses `strace`, `gdb`, Go and `rustc`; a test
@@ -3481,10 +3489,11 @@ AAVMF firmware for the emulated row). Where `bwrap` cannot create a user namespa
 the probe says it cannot run and exits 0, and the gate prints that step
 as SKIP rather than ok.
 
-**Running it.** From a clean checkout, three commands reach a passing
+**Running it.** From a clean checkout, four commands reach a passing
 gate:
 
 ```sh
+scripts/install-uv
 make
 scripts/inputs ~/.cache/exclave-inputs
 D=~/.cache/exclave-inputs
@@ -3494,7 +3503,7 @@ EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave $D/alpine.exclave $D/f42.ex
 `scripts/inputs DIR` makes the gate's four exclaves: Ubuntu 24.04's
 gcc-13 closure, Alpine 3.21's gcc, Fedora 42's gcc, and Ubuntu 24.04's
 clang-18 closure. It also makes what dogfood and the example runs take:
-the tool's own package closure, the packages `test/realsoft.py` builds
+the base system the tool's own exclave is built on, the packages `test/realsoft.py` builds
 with, CentOS 7's glibc for the sysroot of 9, the arm64 gcc-13 closure,
 Docker's default seccomp profile, and the source tarballs of
 `test/realsoft.py` and `test/bench.py`. Packages come through the
@@ -3508,6 +3517,8 @@ repository holds no third-party input.
 commit. It runs these steps in parallel, each with its own log under
 `build/gate/`, and prints one line per step, ok, SKIP or FAIL:
 
+- the code checks, `scripts/check`: ruff, ty, shellcheck, shfmt and
+  taplo over the Python, the shell scripts and the TOML;
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py`, the scratch-pool test and the CPU
   level test, each built from the current sources;
@@ -3606,9 +3617,13 @@ natively from the harness, as `openat2_xdev` does.
 [--docker-profile FILE]`) runs one gcc exclave, built on the reference
 machine, in virtual machines, one at a time with 1 GB each. Each VM
 boots its distribution's cloud image under QEMU with KVM behind a
-copy-on-write overlay; cloud-init installs python3, strace and, where
-the distribution has it, bubblewrap. The exclave, the test tree and the
-checkout's launcher are copied in, and the exclave is relinked there.
+copy-on-write overlay; cloud-init installs strace and, where the
+distribution has it, bubblewrap. The exclave, the test tree, the
+checkout's launcher and the pinned Python are copied in, and the exclave
+is relinked there. The Python is built for the VM's machine and libc and
+installed by the repository's uv: the glibc builds need only glibc 2.17,
+so CentOS 7 runs the same Python as Fedora 42, and Alpine takes the musl
+build. A VM's own `python3`, if it has one, is never used.
 Each row runs the suite on the full exclave with a budget scaled to the
 VM. Where `bwrap` works it then runs the two oracles, the probe and,
 given the profile, the Docker profile run, first lifting the AppArmor
@@ -3831,6 +3846,13 @@ specified.
 - **The tool is Python and runs as an exclave of itself**: a gcc
   exclave built from inside it must reproduce the host-built hashes
   file (10.5).
+- **One pinned Python, never the machine's**: uv, pinned with a
+  checksum per architecture in `scripts/install-uv`, installs the
+  version `.python-version` names into the checkout, and every script,
+  the matrix VMs and the tool's own exclave run that one (10, 10.5, 17).
+- **The Python is ruff- and ty-clean**: `scripts/check` runs ruff, ty,
+  shellcheck, shfmt and taplo from `uv.lock`, and an ignored rule or a
+  suppression carries its reason (17).
 - **`wrap` checks before it touches the tree**: a refused exclave is
   left unwrapped (10.1, 10.3).
 - **An exclave is wrapped on a machine of its architecture**: the static

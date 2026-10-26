@@ -1,5 +1,5 @@
 #!/bin/sh
-# scripts/gate EXCLAVE... — the commit gate (DESIGN.md 17): the unit tests, the stack budget, and for every exclave
+# scripts/gate EXCLAVE... — the commit gate (DESIGN.md 17): the code checks (scripts/check), the unit tests, the stack budget, and for every exclave
 # given the suite in the given and a random order (and, for the first exclave, under the plain terminal's AppArmor label), the
 # resolution oracle, the namespace oracle and the syscall probe; when EXCLAVE_TEST_INPUTS names the directory
 # scripts/inputs filled, the Docker profile run on its src/docker-seccomp.json and dogfood on its package sets. No step
@@ -47,6 +47,7 @@ stack() {
     if ls "$repo"/build/launcher-aarch64.debug-*.ci >/dev/null 2>&1; then py "$here/stackcheck.py" "$repo"/build/launcher-aarch64.debug-*.ci; fi
 }
 
+step check "$ROOT/scripts/check" # ruff, ty, shellcheck, shfmt and taplo, silent when clean
 step unit unit
 step stack stack
 for ex in "$@"; do

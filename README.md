@@ -326,6 +326,12 @@ exclaves pruned this way.
 
 ## Development
 
+Every command is a POSIX shell script in `scripts/`, run from anywhere.
+Python runs only through the pinned uv in `.uv/` (`scripts/install-uv`):
+it installs the Python `.python-version` names and the tools `uv.lock`
+pins, ruff and ty among them, inside the checkout, so a run depends on
+neither the caller's shell nor what the machine has installed.
+
 Requirements beyond the first run's: `bubblewrap` and unprivileged user
 namespaces for the kernel oracles and the syscall probe; `strace`,
 `gdb`, Go and `rustc` for the suite's regressions; optionally
@@ -343,9 +349,10 @@ downloads cloud images and whose VMs install packages. Section 17 of
 the design decisions a change is expected to respect.
 
 ```
+scripts/check                            # ruff, ty, shellcheck, shfmt and taplo, all from uv.lock; --fix lets them correct
 scripts/inputs ~/.cache/exclave-inputs   # the development inputs: the gate's four exclaves, Docker's seccomp profile, the examples' inputs; skips what is present
 D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # the commit gate, about a minute: unit tests, stack budget, the suite on every exclave in two orders and the first once under the plain terminal's label, the oracles, the syscall probe, the Docker profile, dogfood
-scripts/test --exclave gcc.exclave     # the suite alone; -k NAME, --order random
+scripts/test --exclave gcc.exclave       # the suite alone; -k NAME, --order random
 scripts/matrix --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix: cloud images under QEMU/KVM, one VM at a time, about ten minutes
 scripts/exercise --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the launcher, side by side
 scripts/examples ~/.cache/exclave-inputs/realsoft.exclave   # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_DEBS_ARM64 (the emulated aarch64 row), EXCLAVE_TEST_DOCKER (its Docker profile run)
@@ -354,51 +361,55 @@ scripts/examples ~/.cache/exclave-inputs/realsoft.exclave   # the example runs, 
 The repository's layout:
 
 ```
-scripts/example       the first run: from make to a program built inside an exclave that runs on any glibc since 2.17, every command shown
-Makefile         builds the launchers: build/launcher, and build/launcher-aarch64 with a cross compiler
-src/sys.h        syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
-src/elf.h        the ELF structures the loader needs
-src/common.h     constants, the run-time state (struct exclave), every module's interface
-src/launcher.c   entry: syscall page, self-relocation, find the exclave, manifest, border, env, load
-src/manifest.c   the strict grammar parser (6.2); also built for the host by the gate's unit step
-src/loader.c     userland ELF loader and the probe for a launcher's notes (7.3); the facts exported for gdb (7.6)
-src/gdb.py       the script the launcher carries in .debug_gdb_scripts and gdb auto-loads (7.6, 13.1)
-src/filter.c     the seccomp program (7.4.2)
-src/handler.c    the SIGSYS handler: translation, read-only rule, exec, signal masks (7.4.3, 7.5, 8.2)
-src/canon.c      canonicalisation in virtual space (7.4.4)
-src/cache.c      the per-process component cache (7.4.4)
-src/vis.c        the visibility rule, ownership read from the tree, identity files, wrapper redirect (8)
-src/scratch.c    handler memory: mmap'd chunks with liveness reclamation (7.5.4)
-src/isa.c        the CPU check (7.7): x86-64 psABI levels by cpuid, aarch64 levels by AT_HWCAP
-src/str.c        string helpers, arena, the shebang parser
-src/log.c        EXCLAVE_LOG and fatal messages
+scripts/install-uv   the pinned uv into .uv/, checked against a committed checksum per architecture; scripts/lib.sh what every script sources
+scripts/exclave      the exclave command; scripts/fetch-debs, fetch-apks and fetch-rpms the step before it
+scripts/example      the first run: from make to a program built inside an exclave that runs on any glibc since 2.17, every command shown
+scripts/check        the code checks; scripts/gate the commit gate; scripts/inputs the development inputs; scripts/examples the example runs
+scripts/test         the suite; scripts/matrix, exercise, sysroot and dogfood the other test drivers
+pyproject.toml       the Python project: no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python
+Makefile             builds the launchers: build/launcher, and build/launcher-aarch64 with a cross compiler
+src/sys.h            syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
+src/elf.h            the ELF structures the loader needs
+src/common.h         constants, the run-time state (struct exclave), every module's interface
+src/launcher.c       entry: syscall page, self-relocation, find the exclave, manifest, border, env, load
+src/manifest.c       the strict grammar parser (6.2); also built for the host by the gate's unit step
+src/loader.c         userland ELF loader and the probe for a launcher's notes (7.3); the facts exported for gdb (7.6)
+src/gdb.py           the script the launcher carries in .debug_gdb_scripts and gdb auto-loads (7.6, 13.1)
+src/filter.c         the seccomp program (7.4.2)
+src/handler.c        the SIGSYS handler: translation, read-only rule, exec, signal masks (7.4.3, 7.5, 8.2)
+src/canon.c          canonicalisation in virtual space (7.4.4)
+src/cache.c          the per-process component cache (7.4.4)
+src/vis.c            the visibility rule, ownership read from the tree, identity files, wrapper redirect (8)
+src/scratch.c        handler memory: mmap'd chunks with liveness reclamation (7.5.4)
+src/isa.c            the CPU check (7.7): x86-64 psABI levels by cpuid and XCR0, aarch64 levels by AT_HWCAP
+src/str.c            string helpers, arena, the shebang parser
+src/log.c            EXCLAVE_LOG and fatal messages
 exclave/exclave.py   the command line: grammar, unpack, wrap, unwrap, check, prune, format, hash, relink
 exclave/deb.py       ar, tar, compression, control stanzas, dependency fields, Debian version order
 exclave/apk.py       the Alpine reader with deb.py's interface: gzip streams, .PKGINFO, apk's dependency and version syntax
 exclave/rpm.py       the rpm reader with the same interface: lead and headers, the cpio payload, rpm's flags and version order
 exclave/build.py     extraction rules, synthesis, placeholders, dependency report, pruning, tree hash, hashes file, unwrap
 exclave/elfcheck.py  the static and dynamic checks of 10.3
-tools/fetch-debs.py  an example of the step before the tool: resolve a closure from an archive and download it, checked against the index; the Release signature is not verified, so prefer an https mirror
+tools/fetch-debs.py  resolve a closure from a Debian archive and download it, checked against the index; the Release signature is not verified, so prefer an https mirror
 tools/fetch-apks.py  the same for an Alpine repository: each package's checksums as apk checks them; the index's signature is not verified
 tools/fetch-rpms.py  the same for a yum or dnf repository, verified by the index's SHA-256
-test/sysroot.py      a glibc sysroot as a data directory and an output built against it, for the matrix to run natively
 test/run.py          the regression suite; test/progs/ its C, Rust and Go programs
+test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
 test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the openat2 oracle
 test/oracle_syscalls.py  the differential syscall probe: every trapped path and descriptor syscall with every path form under bwrap and under the launcher; test/progs/probe.c its interpreter
-scripts/inputs       the development inputs, remade from the network through ~/.cache
 test/exercise.py     one program run under bwrap and under the launcher, the answers side by side: how a limitation is measured before it is fixed
 test/docker_profile.py   an exclave under Docker's default seccomp profile, which scripts/inputs fetches
+test/matrix.py       the kernel matrix in VMs, carrying the pinned Python for each; test/vm_run.py one VM
+test/sysroot.py      a glibc sysroot as a data directory and an output built against it, for the matrix to run natively
+test/dogfood.py      the tool's exclave building an exclave that must reproduce the host-built hashes file
+test/realsoft.py     real projects built inside and outside an exclave; test/bench.py the performance table
+test/syscalls.py     every kernel syscall classified; test/stackcheck.py the stack budget
+test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule
 test/scratch_test.c  the scratch pool's sweep under the interleaving that once shared a chunk
 test/isa_test.c      the CPU level check against made-up cpuid and XCR0 values and against gcc's own answer
-test/syscalls.py     every kernel syscall classified; test/bench.py the performance table
-test/realsoft.py     real projects built inside and outside an exclave; test/matrix.py the kernel matrix in VMs, test/vm_run.py one VM
-test/dogfood.py      the tool's exclave building an exclave that must reproduce the host-built hashes file
-scripts/gate         the commit gate, every step in parallel on copies of the exclaves given; scripts/examples the example runs
-test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
-test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule; test/stackcheck.py the stack budget
-LICENSE          the MIT licence; the launcher carries its text
-docs/DESIGN.md   the design and specification
-CLAUDE.md        working notes for contributors and coding agents
+LICENSE              the MIT licence; the launcher carries its text
+docs/DESIGN.md       the design and specification
+CLAUDE.md            working notes for contributors and coding agents
 ```
 
 ## Reporting problems and contributing
