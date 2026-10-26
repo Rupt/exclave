@@ -177,3 +177,6 @@ its own architecture; the suite, the oracles and `test/exercise.py` make
 their own copies under `build/` (ignored by git). Cloud images for the
 matrix live in `~/.cache/exclave-images`; QEMU with KVM and
 `cloud-image-utils` are installed, and this user can open `/dev/kvm`.
+A clone that runs the gate wants a short path, 47 characters or fewer
+(proposal 17): the probe binds host sockets in its work directory, so
+`/tmp/<name>` suits where the scratchpad's path is too long.

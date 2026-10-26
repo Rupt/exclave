@@ -31,7 +31,7 @@ glibc since 2.17, which the kernel matrix checks natively on each VM;
 the launcher builds for aarch64 from the same sources and the matrix has
 an emulated arm64 row. gdb debugs a program in an exclave once the
 exclave is in its auto-load safe-path: the launcher carries the script
-gdb needs. The regression suite (72 named tests), the kernel oracles, a
+gdb needs. The regression suite (74 named tests), the kernel oracles, a
 differential syscall probe that agrees with the kernel on 19 093 cases
 per exclave, and Docker's default seccomp profile pass on the gcc,
 Alpine, Fedora and clang exclaves, each pruned to what the suite
