@@ -1,5 +1,9 @@
 # Spikes
 
+> These prototypes predate the launcher and the project's name. They
+> cite the design as `docs/PROPOSAL.md`, now `docs/DESIGN.md` (its
+> earlier form is in git history), and call the launcher "the opener".
+
 Two prototypes written before the design settled, to retire the risks in
 the proposal. They are evidence, not the opener: `docs/PROPOSAL.md`
 sections 15 and 16 cite their measurements, so they are frozen. Both
