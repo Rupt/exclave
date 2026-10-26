@@ -497,10 +497,14 @@ def rmtree(d):
 
 def host_reset(host, ex_tree, probe):
     """The host area both worlds see at the same path, identical before every run."""
-    os.chmod(probe, 0o755)                                              # a chmod of /proc/self/exe takes the probe's own x bit
-    for x in os.listxattr(probe):                                       # and an xattr case leaves an attribute on it
-        if x.startswith("user."):                                       # (an SELinux label is not ours to remove)
-            os.removexattr(probe, x)
+    # a chmod of /proc/self/exe takes the probe's own x bit, and an xattr case leaves an attribute on it: the probe
+    # written again as a new file has neither, on any Python (a musl build has no os.listxattr), and the default label
+    with open(probe, "rb") as f:
+        data = f.read()
+    with open(probe + ".reset", "wb") as f:
+        f.write(data)
+    os.chmod(probe + ".reset", 0o755)
+    os.replace(probe + ".reset", probe)
     rmtree(os.path.dirname(host))
     rmtree("/tmp/exclave-probe-%d" % os.getpid())
     if os.path.lexists("/tmp/" + REL_SOCK):                              # a relative bind after a chdir into /tmp
