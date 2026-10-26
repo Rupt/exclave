@@ -15,38 +15,34 @@ original program and the exclave's own `ld.so` itself. The **`exclave`
 command** builds exclaves from files: package files it is handed, or
 any filesystem tree, and is itself an exclave.
 
+> **Experimental.** exclave works and is tested widely (below), but it
+> has no release or version number yet, and its format may still change.
+
 ## Status
 
-Milestones 1a to 3 are built. The `exclave` command takes files and
-never fetches, the hashes file records inputs and output by hash and
-locates nothing, the launcher reads the manifest and the tree and
-nothing generated, and an exclave is a directory at every stage. A gcc
-exclave from Ubuntu or Debian packages builds zlib, Lua, SQLite and re2c
-from source with their configure scripts, at native speed for the
-compiles and about a third more for the configure scripts; an Alpine
-exclave from `.apk` files and a Fedora exclave from `.rpm` files compile
-and run C inside; a clang exclave compiles C and C++; a CentOS 7 glibc
-as a data directory in the gcc exclave gives outputs that run on every
-glibc since 2.17, which the kernel matrix checks natively on each VM;
-the launcher builds for aarch64 from the same sources and the matrix has
-an emulated arm64 row. gdb debugs a program in an exclave once the
-exclave is in its auto-load safe-path: the launcher carries the script
-gdb needs. The regression suite (74 named tests), the kernel oracles, a
-differential syscall probe that agrees with the kernel on 19 093 cases
-per exclave, and Docker's default seccomp profile pass on the gcc,
-Alpine, Fedora and clang exclaves, each pruned to what the suite
-touches, in one gate of about a minute on the reference machine, where
-the plain-terminal AppArmor label passes too, and the kernel matrix in
-QEMU virtual machines passes on nine distributions from CentOS 7 at
-kernel 3.10 to Fedora 42, Alpine's musl userland and SELinux included.
-The tool ships as an exclave, and the gcc exclave it builds from inside
-its exclave reproduces the host-built hashes file byte for byte. Trace
-pruning keeps 212 of a gcc exclave's 4 851 files for a hello-world
-compile, 87 of them the packages' licence texts. `example.sh` walks the path from a clean checkout to a program
-built inside an exclave that runs on any glibc since 2.17, in nine
-seconds once the packages are cached. Section 18 of the proposal has the
-milestone table; 16 the measurements; 12 the matrix and the Alpine
-exclave; `docs/REVIEW-RESPONSE.md` every review finding.
+- **Packages in, a directory out.** The `exclave` command builds
+  exclaves from Debian and Ubuntu `.deb`, Alpine `.apk` and Fedora,
+  Rocky or CentOS `.rpm` files, or from any filesystem tree. It takes
+  files and never fetches; three small fetchers in `tools/` are the
+  step before it.
+- **Compilers first.** A gcc exclave builds zlib, Lua, SQLite and re2c
+  from source with their configure scripts, at native speed for the
+  compiles and about a third slower for the configure scripts. A clang
+  exclave compiles C and C++; Alpine and Fedora exclaves compile and run
+  C. A CentOS 7 glibc as a data directory gives outputs that run on
+  every glibc since 2.17.
+- **x86-64 and aarch64.** One source builds both launchers.
+- **gdb** debugs a program in an exclave: the launcher carries the
+  script gdb needs.
+- **Tested against the kernel.** A suite of 74 named tests, oracles that
+  compare the launcher's answers with the kernel's under a read-only
+  bind mount, and a differential probe of 19 093 syscall cases pass on
+  gcc, clang, Alpine and Fedora exclaves, under Docker's default seccomp
+  profile, and in virtual machines from CentOS 7 at kernel 3.10 to
+  Fedora 42 and an emulated arm64 Ubuntu.
+
+Figures here and in `docs/DESIGN.md` are measured on the reference
+machine: Ubuntu 24.04, kernel 7.0, x86-64, glibc 2.39.
 
 ## First run
 
@@ -201,14 +197,14 @@ No recipe format and no closure copying: the runtime the result needs
 is packages you already have, and the static check verifies that every
 library resolves inside the exclave.
 
-## A can from before revision 18
+## Bundles made before the rename
 
-Until revision 18 an exclave was a can: `.can/` for `.exclave/`,
-`root/` for `tree/`, `opener` and `lock` for `launcher` and `hashes`.
-A can still runs as it is, from anywhere, and runs an exclave's
-programs as an exclave runs its own. The `exclave` command refuses one
-by name; converting it is renames, two edits and three commands,
-`exclave/exclave.py` standing for the command:
+exclave was once called `cont`, and an exclave a can: `.can/` for
+`.exclave/`, `root/` for `tree/`, `opener` and `lock` for `launcher` and
+`hashes`. A can still runs as it is, from anywhere, and runs an
+exclave's programs as an exclave runs its own. The `exclave` command
+refuses one by name; converting it is renames, two edits and three
+commands, `exclave/exclave.py` standing for the command:
 
 ```
 cd OLD.can && mv .can .exclave && mv root tree && mv .exclave/opener .exclave/launcher && mv .exclave/lock .exclave/hashes
@@ -219,11 +215,10 @@ exclave/exclave.py relink OLD.exclave build/launcher          # the current laun
 exclave/exclave.py unwrap OLD.exclave && exclave/exclave.py wrap OLD.exclave   # the manifest's hash, recorded again
 ```
 
-Measured on a gcc can of revision 17's inputs: the converted exclave's
-hashes file equals the one a fresh `unpack` and `wrap` of the same
-packages writes, apart from the launcher's hash. A launcher from before
-the syscall page moved (revision 15 or earlier) refuses to run under
-this one and points at this README.
+The converted exclave's hashes file equals the one a fresh `unpack` and
+`wrap` of the same packages writes, apart from the launcher's hash. A
+launcher old enough to put its syscall page at another address refuses
+to run under the current one and points here; relinking fixes it.
 
 ## The log and the checks
 
@@ -267,7 +262,7 @@ exclaves pruned this way.
 
 ## What bites first
 
-The proposal's section 13 lists every limitation. These are the ones a
+Section 13 of `docs/DESIGN.md` lists every limitation. These are the ones a
 first user meets, with the rule behind each and what to do:
 
 - **Host tools are not found by name.** `PATH` inside an exclave is
@@ -325,8 +320,8 @@ first user meets, with the rule behind each and what to do:
   binary at the same mtime; ccache needs `compiler_check = %compiler% -v`.
 - **Overhead** is per trapped syscall: about 9x on a tight `stat`
   loop, within noise on a compute-bound compile, about half again on
-  thirty small compiles, where process start dominates. Section 16
-  has the measurements.
+  thirty small compiles, where process start dominates. Section 16 of
+  `docs/DESIGN.md` has the measurements.
 - **A running program on a host path is not protected from another
   process's writes**, since the kernel executes the launcher, not the
   file: natively `gcc -o prog` over a running `prog` fails, in an
@@ -335,7 +330,12 @@ first user meets, with the rule behind each and what to do:
   wants to; it isolates software from the host's files, not the host
   from the software.
 
-## The tests
+## Development
+
+The tests need the development inputs, which one script downloads
+through caches under `~/.cache`; nothing else touches the network.
+Section 17 of `docs/DESIGN.md` describes what each test establishes,
+and section 19 the design decisions a change is expected to respect.
 
 ```
 test/inputs.sh ~/.cache/exclave-inputs   # the development inputs from the network: the four exclaves of the gate, Docker's seccomp profile, the examples' inputs; skips what is present. Nothing else fetches
@@ -348,20 +348,13 @@ test/sysroot.py --exclave gcc.exclave --rpms el7/ --out hello   # the sysroot re
 test/dogfood.py --inputs DIR          # the tool as an exclave, and a cross-exclave build that must reproduce
 ```
 
-## Read in this order
+## Documentation
 
-1. `docs/PROPOSAL.md`: the design, self-contained. Sections 6 to 8 are
-   the specification; 10 the `exclave` command; 17 the tests; 18 the
-   milestones; 19 the decisions.
-2. `src/`: the launcher, one module per section of the proposal (below).
-3. `docs/REVIEW-RESPONSE.md`: every review finding and where it landed.
-4. `docs/PRIOR-ART.md`: the related systems and the primary sources
-   for the kernel and loader facts relied on. `docs/reviews/`: the
-   review reports; round 3 reviewed the code and is the best reading on
-   where the implementation is subtle.
-5. `docs/PERFORMANCE.md`: where an exclave's overhead goes, measured, what
-   was done about it and what was deliberately left alone.
-6. `spike/README.md`: the prototypes that preceded the launcher, frozen.
+- `docs/DESIGN.md`: the design and specification, self-contained. 6 is
+  the format, 7 the launcher, 8 the visibility rule, 10 the `exclave`
+  command, 12 where it runs, 13 the limitations, 16 performance, 17
+  the tests, 19 the decisions.
+- `src/`: the launcher, one module per part of the design (below).
 
 ## Layout
 
@@ -405,7 +398,7 @@ test/gate.sh         the commit gate, every step in parallel on copies of the ex
 test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule; test/stackcheck.py the stack budget
 LICENSE          the MIT licence; the launcher carries its text
-docs/            proposal (revision 19), review response, prior art, performance, review reports
+docs/DESIGN.md   the design and specification
 spike/           frozen prototypes and their tests
 ```
 
@@ -430,10 +423,7 @@ variables are the exclave's, always the same:
 `PATH=/usr/local/bin:/usr/bin:/bin`, `LANG=C.UTF-8`, `TZ=UTC0` and
 `SHELL=/bin/sh`; `LANGUAGE`, every `LC_*` and the loader and libc
 variables are dropped; everything else passes through, and inside the
-border nothing else is touched. Until revision 18 the project was
-`cont`, the format a can, the launcher the opener and the tool the
-cannery; section 5 of `docs/PROPOSAL.md` lists every earlier name
-beside its new one.
+border nothing else is touched.
 
 ## Licence
 

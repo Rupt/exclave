@@ -4,10 +4,14 @@ If a rule prevents you from improving or maintaining exclave, ignore it.
 Everything below is a preference with its reason beside it; weigh the
 cost and the benefit and use your judgement.
 
-Start with `README.md`, then `docs/PROPOSAL.md` in full. The proposal is
-the specification; section 19 lists decisions that are settled, which
-the user reopens and an agent usually leaves alone.
-`docs/REVIEW-RESPONSE.md` has every review finding and where it landed.
+Start with `README.md`, then `docs/DESIGN.md` in full. The design
+document is the specification, written for the public: it states what
+is true, not how it came to be, so it carries no revision markers,
+change lists or review IDs, and history lives in git. Section 19 lists
+decisions that are settled, which the user reopens and an agent usually
+leaves alone. Source comments cite its sections and the numbered items
+of 13, 16.6 and 17 by number, so those numbers stay put: a new
+limitation is a new item at the end of 13, and nothing is renumbered.
 
 ## How a change is usually made
 
@@ -32,8 +36,8 @@ The loop that has served well, in the order it pays:
    says rather than what Debian says (`test/tree.py`, `tree_facts`)
    passes on every exclave kind, and an exclave kind that cannot answer
    can skip with its reason.
-4. **Documents.** The proposal's rule (7 or 8), its limitation (13),
-   the regression list (17.4), the change list (2) and section 19 are
+4. **Documents.** The design's rule (7 or 8), its limitation (13),
+   the regression list (17 item 4), performance (16) and section 19 are
    where a change is recorded; figures there are measured rather than
    guessed, because the documents are what a reader trusts.
 5. **Gate, matrix, commit.** `test/gate.sh EXCLAVE...` on the gcc,
@@ -45,15 +49,17 @@ The loop that has served well, in the order it pays:
 
 - **Commits**: one short status line, imperative, the length of a
   subject line and not a paragraph folded onto one line, no body, no
-  `Co-Authored-By`. Name what changed and let the diff, the proposal
+  `Co-Authored-By`. Name what changed and let the diff, the design
   and the tests carry the detail; much of the history here is
   overlong, so match the intent rather than that habit. Pushing is the
   user's to do. Committing when asked, or when the instruction clearly
   implies it, keeps the history the user's.
-- **Documents stay self-contained and canonical.** `docs/PROPOSAL.md`
+- **Documents stay self-contained and canonical.** `docs/DESIGN.md`
   should read without the conversation that produced it, so a design
-  change goes into the proposal rather than a side note, and earlier
-  revisions live in git history rather than archive files.
+  change goes into it rather than a side note, and earlier states live
+  in git history rather than archive files, review notes or change
+  lists. Comments in code are held to the same: no review IDs or
+  revision numbers.
 - **No options.** The launcher has one environment knob, `EXCLAVE_LOG`,
   and the tool's commands take paths, `format --check` the one flag. A
   flag, a mode or a manifest key is rarely the answer; the rule that
@@ -103,15 +109,16 @@ The loop that has served well, in the order it pays:
   the tool's output is checked by `test/dogfood.py`. `src/gdb.py` is
   data the launcher carries for gdb, not code it runs.
 - **Hashes are BLAKE2b-256.** Manifest and hashes file use the strict
-  grammar of proposal 6.2, and `format` output is the accepted spelling.
+  grammar of `docs/DESIGN.md` 6.2, and `format` output is the accepted spelling.
   There is no index: the launcher reads the manifest and the tree, and
   anything the tree can say is best not written down anywhere else.
-- **`spike/` is frozen evidence.** Its numbers are cited, so the spikes
-  are better left unedited; the launcher in `src/` is built from the
-  mechanisms rather than by copying the code.
-- **Claims and measurements.** Figures in the proposal are marked by
-  the revision that measured them; a number the current filter has not
-  produced is better left out than quoted.
+- **`spike/` holds the prototypes** that preceded the launcher, kept as
+  they were; the launcher in `src/` is built from the mechanisms rather
+  than by copying the code.
+- **Claims and measurements.** Figures in `docs/DESIGN.md` are current
+  and measured on the reference machine; a change that moves one
+  measures it again, and a number the current code has not produced is
+  better left out than quoted.
 - **The gate.** `test/gate.sh EXCLAVE...` (`EXCLAVE_TEST_INPUTS=DIR`,
   the directory `test/inputs.sh` filled, adds the Docker profile and
   dogfood) runs the unit tests, the stack budget, the suite on every
@@ -155,7 +162,7 @@ one. From a plain terminal user namespaces are denied by AppArmor;
 otherwise permitted. `gdb -p` on a non-descendant is refused by Yama.
 `perf` cannot read the maps of a process under a different AppArmor
 label. Docker's default seccomp profile was checked syscall by
-syscall; the results are in `docs/PRIOR-ART.md` section 4. The archive
+syscall; the results are in `docs/DESIGN.md` section 15. The archive
 mirror configured on this machine is `http://gb.archive.ubuntu.com/ubuntu`;
 `archive.ubuntu.com` has served this machine at 13 kB/s.
 
