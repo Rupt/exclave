@@ -3583,15 +3583,20 @@ itself touches. The first run on an exclave logs every invocation it
 makes inside it (`EXCLAVE_LOG`). If that run has no failure, it prunes a
 copy to those logs with `exclave prune` and keeps it under
 `build/fixtures/` if the copy passes the static check, so a partial log
-never makes a partial fixture. The fixture is keyed by the exclave's
-hashes file and a hash of `test/run.py`, `test/progs/` and `exclave/`; a
-run with no fixture for its key uses the full exclave and makes one. On
+never makes a partial fixture. There is one fixture per exclave, named
+by its hashes file and stamped with a hash of the sources that decide
+what the tests touch: `test/run.py`, `test/tree.py`, `test/progs/`,
+`exclave/` and the launcher's. A run with no fixture uses the full
+exclave and makes one, removing that exclave's older ones. A fixture
+with another stamp is still used, since a change to the sources rarely
+changes what the tests touch: when every test passes the stamp is
+renewed, and a test that fails runs again on the whole exclave, whose
+answer decides, and the stale fixture goes for the next run to remake. On
 the reference machine the fixtures of the gcc, clang, Fedora and Alpine
 exclaves hold 1 070, 1 062, 1 269 and 548 files, a sixth to a quarter of
 each exclave's, counting every entry of `tree/` that is not a directory
-or a symlink to one, originals included. A change outside the key, to
-the launcher or to `test/tree.py`, that makes a test touch a file the
-fixture lacks fails that test until the fixture is removed.
+or a symlink to one, originals included. On the fixture one suite takes
+17 s on the reference machine, on the whole exclave 30 s.
 
 **The probe** (`test/progs/probe.c`, `test/oracle_syscalls.py`) puts the
 whole trapped-syscall surface in front of the kernel. It crosses the 61

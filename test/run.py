@@ -242,33 +242,41 @@ def shared_state(ctx: Ctx) -> tuple[bytes, bytes, tuple[tuple[str, int, int, int
     )
 
 
-def fixture_key(ex: str) -> str | None:
-    """The key of the pruned fixture (17), or None for an exclave without a hashes file.
+def fixture_keys(ex: str) -> tuple[str, str] | None:
+    """The keys of the pruned fixture (17): the exclave's, and the sources'; None without hashes.
 
-    The pruned fixture (17) depends on the source exclave, whose hashes file hashes its tree, and on
-    what the tests touch, which their sources decide; an exclave without a hashes file gets no
-    fixture.
+    The fixture is named by the exclave's hashes file, which hashes its tree, so each exclave has
+    one. What the tests touch is decided by their sources, the tool's and the launcher's, whose key
+    the fixture keeps as a stamp: a fixture made with other sources is almost always still enough,
+    and a run on it checks any failure again on the whole exclave (main).
     """
     import hashlib
 
     lock = os.path.join(ex, ".exclave", "hashes")
     if not os.path.isfile(lock):
         return None
-    h = hashlib.blake2b(digest_size=6)
-    h.update(read_bytes(lock))
-    files = [os.path.join(HERE, "run.py")]
+    files = [os.path.join(HERE, "run.py"), os.path.join(HERE, "tree.py")]
     files += sorted(os.path.join(HERE, "progs", f) for f in os.listdir(os.path.join(HERE, "progs")))
+    files += sorted(
+        os.path.join(REPO, "src", f)
+        for f in os.listdir(os.path.join(REPO, "src"))
+        if f[-2:] in (".c", ".h")
+    )
     files += sorted(
         os.path.join(REPO, "exclave", f)
         for f in os.listdir(os.path.join(REPO, "exclave"))
         if f.endswith(".py")
     )
+    sources = hashlib.blake2b(digest_size=6)
     for f in files:
-        h.update(os.path.basename(f).encode() + b"\0" + read_bytes(f) + b"\0")
-    return h.hexdigest()
+        sources.update(os.path.basename(f).encode() + b"\0" + read_bytes(f) + b"\0")
+    return hashlib.blake2b(read_bytes(lock), digest_size=6).hexdigest(), sources.hexdigest()
 
 
-def make_fixture(ctx: Ctx, dst: str) -> None:
+STAMP = ".sources"  # in a fixture: the sources' key it was made with
+
+
+def make_fixture(ctx: Ctx, dst: str, sources: str) -> None:
     """Keep the shared exclave, pruned to what this run touched, for the next run (17).
 
     The prune is the tool's own, from every EXCLAVE_LOG file the run wrote: the same tree the tests
@@ -287,10 +295,17 @@ def make_fixture(ctx: Ctx, dst: str) -> None:
         print("fixture not kept: the pruned exclave does not pass the static check")
         shutil.rmtree(tmp, ignore_errors=True)
         return
+    with open(os.path.join(tmp, STAMP), "w") as f:
+        f.write(sources + "\n")
     if os.path.isdir(dst):  # another run made it meanwhile
         shutil.rmtree(tmp, ignore_errors=True)
     else:
         os.rename(tmp, dst)
+    # one fixture per exclave name: those of the exclave's earlier contents go
+    name = os.path.basename(dst).rsplit("-", 1)[0]
+    for old in os.listdir(os.path.dirname(dst)):
+        if old.rsplit("-", 1)[0] == name and old != os.path.basename(dst) and ".tmp" not in old:
+            shutil.rmtree(os.path.join(os.path.dirname(dst), old), ignore_errors=True)
     n = sum(len(fn) for dp, dn, fn in os.walk(os.path.join(dst, "tree")))
     print(f"fixture: {n} files, kept at {dst}")
 
@@ -4483,28 +4498,68 @@ def main() -> int:
             "need --tree DIR (or $EXCLAVE_TEST_TREE) or --exclave EXCLAVE: a gcc tree to wrap; "
             "see README.md"
         )
-    ctx = Ctx()
-    ctx.from_exclave = bool(a.exclave)
-    ctx.tree = os.path.abspath(a.tree)
-    ctx.work = os.path.abspath(a.work)
     # the pruned fixture (17): the source exclave pruned to what the suite touches, made by the
-    # first run on an exclave and used by every later one until the exclave or the tests change
-    fixture = None
-    key = fixture_key(a.exclave) if a.exclave else None
-    if key:
-        fixture = os.path.join(
-            REPO,
-            "build",
-            "fixtures",
-            os.path.basename(os.path.abspath(a.exclave)).replace(".exclave", "") + "-" + key,
-        )
-    logging = False
+    # first run on an exclave and used by every later one until the exclave changes
+    fixture, sources, stale, logging = None, "", False, False
+    keys = fixture_keys(a.exclave) if a.exclave else None
+    tree_ = os.path.abspath(a.tree)
+    if keys:
+        name = os.path.basename(os.path.abspath(a.exclave)).replace(".exclave", "")
+        fixture, sources = os.path.join(REPO, "build", "fixtures", f"{name}-{keys[0]}"), keys[1]
     if fixture and os.path.isdir(fixture):
-        ctx.tree = os.path.join(fixture, "tree")
-        print(f"fixture: {fixture}")
+        tree_ = os.path.join(fixture, "tree")
+        try:
+            stale = read_text(os.path.join(fixture, STAMP)).strip() != sources
+        except OSError:
+            stale = True
+        print(
+            f"fixture: {fixture}"
+            + (" (made with other sources: a failure is rechecked)" if stale else "")
+        )
     elif fixture:
         logging = True
-        print("fixture: none yet for this exclave and these tests; this run makes it")
+        print("fixture: none yet for this exclave; this run makes it")
+    ctx = prepare(a, tree_, os.path.abspath(a.work), logging=logging)
+    # a test's own name runs it alone, spawn beside spawn_threads
+    exact = [t for t in TESTS if t.__name__ == a.k]
+    order = exact or [t for t in TESTS if not a.k or a.k in t.__name__]
+    if a.order == "reverse":
+        order.reverse()
+    elif a.order == "random":
+        import random
+
+        seed = a.seed if a.seed is not None else int(time.time()) % 100000
+        random.Random(seed).shuffle(order)
+        print(f"random order, seed {seed}")
+    failed = run_tests(ctx, order, a.budget)
+    if stale and failed and fixture:
+        # the fixture may lack a file these sources now touch: the failures again on the whole
+        # exclave decide, and the fixture goes, for the next run to make afresh
+        print(f"rechecking {len(failed)} on the whole exclave, the fixture predating these sources")
+        whole = prepare(
+            a, os.path.abspath(a.tree), os.path.abspath(a.work) + "-whole", logging=False
+        )
+        failed = run_tests(whole, failed, a.budget)
+        shutil.rmtree(fixture, ignore_errors=True)
+        if not a.keep and not failed:
+            shutil.rmtree(whole.work, ignore_errors=True)
+    elif stale and not a.k and fixture:
+        with open(os.path.join(fixture, STAMP), "w") as f:  # still enough for these sources
+            f.write(sources + "\n")
+    print(f"{len(order)} tests, {len(failed)} failures")
+    if logging and fixture and not failed and not a.k:
+        make_fixture(ctx, fixture, sources)
+    if not a.keep and not failed:
+        shutil.rmtree(ctx.work, ignore_errors=True)
+    return len(failed)
+
+
+def prepare(a: argparse.Namespace, tree_: str, work: str, *, logging: bool) -> Ctx:
+    """The fixtures every test is given: the exclave wrapped from tree_, the programs compiled."""
+    ctx = Ctx()
+    ctx.from_exclave = bool(a.exclave)
+    ctx.tree = tree_
+    ctx.work = work
     ctx.launcher_src = os.path.join(REPO, "build", "launcher")
     if not os.path.exists(ctx.launcher_src):
         sys.exit("build/launcher missing: run make")
@@ -4521,32 +4576,26 @@ def main() -> int:
     compile_progs(ctx)
     ctx.shared = shared_state(ctx)
     print(f"exclave made and programs compiled in {time.time() - t0:.1f}s")
-    fails = 0
-    # a test's own name runs it alone, spawn beside spawn_threads
-    exact = [t for t in TESTS if t.__name__ == a.k]
-    order = exact or [t for t in TESTS if not a.k or a.k in t.__name__]
-    if a.order == "reverse":
-        order.reverse()
-    elif a.order == "random":
-        import random
+    return ctx
 
-        seed = a.seed if a.seed is not None else int(time.time()) % 100000
-        random.Random(seed).shuffle(order)
-        print(f"random order, seed {seed}")
+
+def run_tests(ctx: Ctx, order: list[Test], budget: float) -> list[Test]:
+    """Run the tests in order, one PASS or FAIL line each; the ones that failed."""
+    failed: list[Test] = []
     for t in order:
         t0 = time.time()
         try:
             note = t(ctx)
             # a test that hangs is caught by run()'s timeouts; one that crawls, here (17)
             took = time.time() - t0
-            expect(took <= a.budget, f"took {took:.1f} s, over the budget of {a.budget:g} s")
+            expect(took <= budget, f"took {took:.1f} s, over the budget of {budget:g} s")
             print(f"PASS {t.__name__:<26} {time.time() - t0:5.1f}s {note or ''}")
         except AssertionError as e:
-            fails += 1
+            failed.append(t)
             why = str(e).strip().replace("\n", "\n     ")
             print(f"FAIL {t.__name__:<26} {time.time() - t0:5.1f}s {why}")
         except Exception as e:  # noqa: BLE001
-            fails += 1
+            failed.append(t)
             print(f"FAIL {t.__name__:<26} {time.time() - t0:5.1f}s {type(e).__name__}: {e}")
         # a test must leave the fixtures alone, whether it passed or not (17)
         now = shared_state(ctx)
@@ -4563,14 +4612,10 @@ def main() -> int:
                 f"FAIL {t.__name__:<26} {time.time() - t0:5.1f}s "
                 f"the test changed the shared exclave: {', '.join(changed)}"
             )
-            fails += 1
+            if t not in failed:
+                failed.append(t)
             ctx.shared = now
-    print(f"{len(order)} tests, {fails} failures")
-    if logging and fixture and not fails and not a.k:
-        make_fixture(ctx, fixture)
-    if not a.keep and not fails:
-        shutil.rmtree(ctx.work, ignore_errors=True)
-    return fails
+    return failed
 
 
 if __name__ == "__main__":

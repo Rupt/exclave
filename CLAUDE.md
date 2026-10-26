@@ -155,11 +155,11 @@ The loop that has served well, in the order it pays:
   is relinked again when the build has changed. A hand-made copy has
   neither: relink it. The suite runs on the exclave pruned to what it
   touches, made by the first run on an exclave and kept under
-  `build/fixtures/`, keyed by the exclave's hashes and the sources of
-  the suite, its programs and the tool; a change to those makes the next
-  run use the whole exclave and remake it. A launcher or `test/tree.py`
-  change that makes a test touch a file the fixture lacks fails that
-  test until the fixture is removed. After rebuilding the launcher,
+  `build/fixtures/`, one per exclave, stamped with the sources of the
+  suite, its programs, the tool and the launcher. A fixture made with
+  other sources is still used, and is almost always enough; a test that
+  fails on it runs again on the whole exclave, which decides, and the
+  stale fixture goes for the next run to remake. After rebuilding the launcher,
   `scripts/exclave relink EXCLAVE` refreshes an exclave; replacing
   `.exclave/launcher` alone leaves the wrappers linked to the old file.
 - **Tests are independent.** A test in `test/run.py` makes what it
