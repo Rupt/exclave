@@ -5,6 +5,20 @@ An .apk is three gzip members back to back, each a tar stream: the signature, th
 as one stream and tarfile reads the headers as one archive, since the first two streams carry no end-of-
 archive blocks. The interface is deb.py's, so build.py serves every reader: control(path) -> (fields, scripts)
 with Debian's field names, open_tar(path, "data.tar") -> the data members, parse_deps, satisfies.
+
+What unpack does differently for an Alpine set, here and in build.py:
+
+- `depend` and `provides` name packages, shared objects (`so:libc.musl-x86_64.so.1`), commands
+  (`cmd:gcc`) and pkg-config modules (`pc:zlib`). Versions are ordered as apk-tools orders them, `_rc`
+  before the release and `-r` revisions after. A file dependency, such as `/bin/sh`, names something
+  some package must ship; the dependency report asks the extracted tree whether one does.
+- Alpine's /bin, /sbin and /lib are directories of their own, so the merged-/usr links are not made.
+- One synthesis rule: busybox's post-install makes its applet links with `busybox --install`; build.py
+  makes them from the paths the package ships in /etc/busybox-paths.d, each a relative link to
+  /bin/busybox, so that tree/bin/sh run from outside the exclave reaches the wrapper in the tree
+  (DESIGN.md 13 item 37).
+- musl has no ld.so.cache, and the static check asks for none.
+- Licence texts come only with a package's `-doc` package (DESIGN.md 10.4).
 """
 import io
 import re

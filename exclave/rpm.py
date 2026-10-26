@@ -6,6 +6,40 @@ install scripts from it, and the payload's compressor. The payload is cpio in th
 gzip, xz or zstd, and is read in Python, zstd through the tool the tool's own exclave ships. The interface is
 deb.py's, so build.py serves every reader: control(path) -> (fields, scripts) with Debian's field names,
 open_tar(path, "data.tar") -> the payload members with tarfile's shape, parse_deps, satisfies.
+`Obsoletes` is presented as `Replaces`.
+
+What unpack does differently for an rpm set, here and in build.py; the synthesis rules are Debian's
+(DESIGN.md 10.1), and these are the places rpm needs more:
+
+- cpio records hard links as entries of one inode with the content on the last; the reader gives the
+  content to the first and links the rest, as tar would.
+- Versions are ordered as rpmvercmp orders them: epoch first, then version and release segment by
+  segment.
+- Dependencies come as rpm spells them: package names, the provides a library's package declares
+  (`libc.so.6(GLIBC_2.2.5)(64bit)`, `rtld(GNU_HASH)`), and file names. `rpmlib(...)` features and
+  rich dependencies (`(a or b)`) are rpm's own and are skipped.
+- `alternatives --install` lines in %post are read in either spelling, the tree's own ldconfig runs
+  where it is static, and the identity files are placeholders. `setup` ships /etc/passwd, so nothing
+  is made for it.
+- An `alternatives --install` line replaces a file or link already standing at the link path, as both
+  implementations do. Fedora's binutils needs this: it ships gold at /usr/bin/ld and removes it in
+  %post before installing ld.bfd as the alternative.
+- Fedora, RHEL and CentOS 7 have merged /usr, so the merged-/usr links are made. A symlink that one
+  package ships at a path under which other packages ship files is made before anything is
+  extracted, whatever the order of the packages, so those files land where the link points.
+- Fedora 42's `filesystem` package merges sbin into bin in its %posttrans, written in Lua: when every
+  entry of /usr/sbin is a link `../bin/<name>`, the directory becomes a link to bin. build.py does the
+  same when that script is present.
+- Red Hat's ld.so.conf says `include ld.so.conf.d/*.conf`, relative to /etc, which ldconfig refuses
+  under -r. build.py runs ldconfig on a temporary copy in the tree with the pattern spelt from /etc,
+  and removes the copy afterwards.
+- Files shipped unreadable, such as Fedora's /etc/gshadow at mode 0, are made readable by their owner,
+  since a tree its owner cannot read can be neither hashed nor copied. A tree that comes from outside
+  with such a file is refused by `wrap`, naming the file (DESIGN.md 10.3).
+- Fedora's ca-certificates ships a p11-kit trust source and links every consumer path to the bundle
+  that update-ca-trust extracts in %post. build.py extracts it the same way, one PEM for each anchor
+  marked trusted and not distrusted, so that the Red Hat identity file of DESIGN.md 8.4 has a copy to
+  fall back to.
 """
 import bz2
 import gzip
