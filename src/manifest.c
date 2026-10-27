@@ -177,7 +177,7 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
 {
     struct cur cu = {(const unsigned char *)buf, (const unsigned char *)buf + len, 1, 1};
     struct cur *K = &cu;
-    int seen_exclave = 0, seen_isa = 0, nrec = 0;
+    int seen_exclave = 0, seen_cpu = 0, nrec = 0;
     int pending_comment = 0;
 
     if (len == 0 || buf[len - 1] != '\n') return fail(err, errn, K, "file must end with LF");
@@ -260,7 +260,8 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
             return fail(err, errn, K, "first record must be exclave");
         } else if (xstrcmp(key, "cpu") == 0) {
             WANT(1, F_STR);
-            if (seen_isa++) return fail(err, errn, K, "duplicate cpu");
+            if (seen_cpu++) return fail(err, errn, K, "duplicate cpu");
+            if (xstrlen(f[0].s) != f[0].n) return fail(err, errn, K, "cpu must not contain NUL");
             scpy(c->cpu, f[0].s, sizeof c->cpu);
         } else if (xstrcmp(key, "own") == 0) {
             WANT(1, F_STR);
@@ -290,6 +291,6 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
     if (pending_comment) return fail(err, errn, K, "comment after the last record");
     if (!seen_exclave) return fail(err, errn, K, "empty manifest");
     /* the baseline: an exclave that says nothing runs anywhere */
-    if (!seen_isa) scpy(c->cpu, ARCH_ISA_DEFAULT, sizeof c->cpu);
+    if (!seen_cpu) scpy(c->cpu, ARCH_ISA_DEFAULT, sizeof c->cpu);
     return 0;
 }

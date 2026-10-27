@@ -228,6 +228,8 @@ def _check_record(rec: Record, kind: Kind) -> None:
         _fail(rec.line, 1, "wrong field count or type for " + rec.key)
     if rec.key in ("own", "host", "data") and not _normalised_abs(rec.fields[0][1]):
         _fail(rec.line, 1, rec.key + " must be a normalised absolute path")
+    if rec.key == "cpu" and b"\0" in rec.fields[0][1]:
+        _fail(rec.line, 1, "cpu must not contain NUL")
 
 
 def _normalised_abs(b: bytes) -> bool:

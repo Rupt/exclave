@@ -78,6 +78,7 @@ int main(int argc, char **argv)
     BAD("unterminated", "exclave 1\nown \"/a\n", "unterminated");
     BAD("trailing comment", "exclave 1\nown \"/a\"\n# end\n", "comment after");
     BAD("dup cpu", "exclave 1\ncpu \"x86-64\"\ncpu \"x86-64\"\n", "duplicate");
+    BAD("cpu with a NUL", "exclave 1\ncpu \"x86-64\\x00junk\"\n", "NUL");
     BAD("unknown key", "exclave 1\nfoo \"x\"\n", "unknown key");
     BAD("old index key", "exclave 1\ninterp \"/lib64/ld-linux-x86-64.so.2\"\n", "unknown key");
     BAD("old env key", "exclave 1\nenv \"CC\" \"gcc\"\n", "unknown key");

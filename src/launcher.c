@@ -370,6 +370,7 @@ __attribute__((used)) static void start_c(unsigned long *sp)   /* called by _sta
     read_manifest(auxv);
 
     const char *target, *fn, *cm;
+    C.descfd = -1;
     /* a wrapper: the kernel ran the launcher under the program's name. Decided first,
      * so that EXCLAVE_EXEC in anyone's environment is inert for the whole tree */
     if (starts_dir(exe, C.root)) {
@@ -398,7 +399,6 @@ __attribute__((used)) static void start_c(unsigned long *sp)   /* called by _sta
         cm = find_env(envp, "EXCLAVE_COMM");
         scpy(C.execfn, fn ? fn : target, PATH_MAX);
         scpy(C.comm, cm ? cm : base_name(C.execfn), sizeof C.comm);
-        C.descfd = -1;
         /* a descriptor with no path (13 item 25): the kernel's identity for the
          * program is the link's text; the dup is closed once the segments are mapped */
         if (xstarts(target, "/proc/self/fd/")) {

@@ -489,7 +489,7 @@ own "/etc/hosts"                               a path the exclave owns (removes 
 ```
 
 `exclave` and `cpu` may appear once; `data`, `host` and `own` may
-repeat. Without a `cpu` record the level is the architecture's
+repeat, and `cpu` holds no NUL. Without a `cpu` record the level is the architecture's
 baseline, `x86-64` or `aarch64`, so an exclave that says nothing runs
 on any machine of its architecture.
 

@@ -368,11 +368,15 @@ static long do_openat2(struct scratch *S, long *a)
     if (size < 24) return -EINVAL;
     /* an extended struct: the tail must be zero (copy_struct_from_user) */
     if (size > 24) {
-        if (size > 4096) return -E2BIG;
-        if (copy_in(S->pid, S->extra, (const void *)a[2], (size_t)size) != size) return -EFAULT;
-        for (long i = 24; i < size; i++)
-            if (S->extra[i]) return -E2BIG;
-        xmemcpy(how, S->extra, 24);
+        /* up to a page, the kernel's page (13 item 43), read a scratch buffer at a time */
+        if ((unsigned long)size > C.pagesz) return -E2BIG;
+        for (long off = 0; off < size; off += (long)sizeof S->extra) {
+            long n = size - off < (long)sizeof S->extra ? size - off : (long)sizeof S->extra;
+            if (copy_in(S->pid, S->extra, (const char *)a[2] + off, (size_t)n) != n) return -EFAULT;
+            if (off == 0) xmemcpy(how, S->extra, 24);
+            for (long i = off == 0 ? 24 : 0; i < n; i++)
+                if (S->extra[i]) return -E2BIG;
+        }
     } else if ((r = copy_exact(S->pid, how, (const void *)a[2], 24))) return r;
     unsigned long flags = how[0], mode = how[1], rf = how[2];
     if (flags & ~VALID_OPEN_FLAGS) return -EINVAL;
@@ -564,6 +568,8 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
         return argc;
     }
     /* rest, cur, real, tmp and v of S2, contiguous, hold six PATH_MAXes */
+    _Static_assert(offsetof(struct scratch, v) + PATH_MAX - offsetof(struct scratch, rest) == 6UL * PATH_MAX,
+                   "rest through v are one region of six PATH_MAXes");
     nargv = vector(S2->rest, 6UL * PATH_MAX, argc + 4, &big2);
     if (!nargv) {
         vector_free(big1, argc + 1);

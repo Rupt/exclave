@@ -61,6 +61,8 @@ c_compile() {
 
 # launcher_cc ARCH ARGS...: the launcher's compiler for ARCH, freestanding:
 # no libc, no builtins, nothing gcc would call outside the launcher's own code.
+# The handler reads its scratch buffers as whatever the syscall at hand
+# fills, a stat, an iovec array, a vector, so type-based aliasing is off.
 launcher_cc() {
     arch=$1
     shift
@@ -73,7 +75,7 @@ launcher_cc() {
     # it, in the middle of the launcher's handler too (7.5.3)
     aarch64) set -- -mgeneral-regs-only -mno-outline-atomics -ffixed-x28 "$@" ;;
     esac
-    c_compile "$compiler" -O2 -g -nostdlib -nostartfiles -ffreestanding -fno-stack-protector -fno-builtin \
+    c_compile "$compiler" -O2 -g -nostdlib -nostartfiles -ffreestanding -fno-stack-protector -fno-builtin -fno-strict-aliasing \
         -fPIC -fvisibility=hidden -fno-plt -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns "$@"
 }
 
