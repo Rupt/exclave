@@ -1857,10 +1857,20 @@ refused. From `.deb` files, in five steps:
    refused with a message, since the tree would have to hold the file
    under dpkg's renamed name. Diversions with `--no-rename`, and the
    merged-`/usr` and `zutils` transitions that every Ubuntu 24.04
-   closure carries, leave a fresh tree unchanged and are ignored. A
-   member whose path resolves outside the tree through a symlink is
-   refused, as is a hard link whose target does, and so is a member
-   under the reserved name `.real` (6.1). A package file that cannot
+   closure carries, leave a fresh tree unchanged and are ignored.
+   Every path, a member's, a hard link's target, and each one the next
+   two steps read or write, resolves with the tree as its root, as dpkg
+   resolves it in the root it installs into: an absolute symlink starts
+   at the tree's root and `..` stops there, so a link that points out of
+   the tree leads back into it, and nothing outside the tree is read,
+   written or removed (`unpack/root.py` walks each path one directory
+   descriptor at a time, no component followed but by reading it, at
+   most 40 links). A hard link to a file the tree does not hold is
+   refused, and so are `..` in a member's name and a member under the
+   reserved name `.real` (6.1). Payloads are read as they decompress,
+   never held whole, and a set whose files' declared sizes would leave
+   the output's filesystem with less than 256 MiB free is refused before
+   a byte of it is written. A package file that cannot
    be read is refused in one line, and a failed unpack leaves no
    output behind. An archive ends where its format says: anything but
    NUL padding after a tar archive's last member, where a header that
@@ -3629,11 +3639,13 @@ its time, ok, SKIP or FAIL:
   built);
 - unpack's tests (`test/unpack_test.py`), which need no exclave: each
   reader's own, and hostile package files in each format, built by
-  `test/packages.py` (escapes by `..`, by symlinks relative and
-  absolute and by hard links; `.real`; modes and special files;
-  conflicts and `Replaces`; payloads cut short, flipped, empty or not
-  compressed; tar's long names and base-256 numbers, and data after an
-  archive's end). A refusal must be one line with nothing left behind,
+  `test/packages.py` (`..` and `.real` refused; symlinks that climb
+  out or are absolute, and synthesis and the volatile step through
+  links to the host, kept inside the tree; hard links to what the tree
+  does not hold; modes and special files; conflicts and `Replaces`;
+  payloads cut short, flipped, empty or not compressed, and declared
+  sizes the disk cannot hold; tar's long names and base-256 numbers,
+  and data after an archive's end). A refusal must be one line with nothing left behind,
   and no case may change a directory beside the output that the
   packages aim at;
 - for every exclave given: the suite in the given order and in a

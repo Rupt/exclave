@@ -11,11 +11,12 @@ import io
 import lzma
 import os
 import re
-import tarfile
 import zlib
 from compression import zstd
+from typing import Any, BinaryIO
+lazy from collections.abc import Callable
 
-from unpack.reader import Dep, PackageError, after_end
+from unpack.reader import Dep, PackageError, Readable, StreamTar, Window
 
 # Debian and Ubuntu merge /bin, /sbin and /lib into /usr.
 MERGED_USR: bool = True
@@ -83,28 +84,59 @@ def decompress(name: str, data: bytes) -> bytes:
         raise DebError(msg) from e
 
 
-def open_tar(path: str, member: str) -> tarfile.TarFile:
-    """Open the .deb's control.tar.* or data.tar.* member as a tar file held in memory.
+class _Slice(io.RawIOBase):
+    """The bytes of one ar member, read from the package file."""
+
+    def __init__(self, path: str, offset: int, size: int) -> None:
+        super().__init__()
+        self.f = open(path, "rb")  # noqa: SIM115 -- closed with the slice
+        self.f.seek(offset)
+        self.left = size
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b: Any) -> int:  # noqa: ANN401 -- io's own buffer type
+        n = self.f.readinto(memoryview(b)[: min(len(b), self.left)]) or 0
+        self.left -= n
+        return n
+
+    def close(self) -> None:
+        self.f.close()
+        super().close()
+
+
+def open_tar(path: str, member: str) -> StreamTar:
+    """Open the .deb's control.tar.* or data.tar.* member as a tar archive read as it decompresses.
 
     Raises:
-        DebError: When the archive or the tar member cannot be read.
+        DebError: When the archive has no such member or its compression is unknown.
     """
-    name, data = ar_read(path, member)
-    raw = decompress(name, data)
-    try:
-        t = tarfile.open(fileobj=io.BytesIO(raw), mode="r:")  # noqa: SIM115 -- returned open
-        t.getmembers()  # every header read now, so a corrupt one is refused here
-    except tarfile.TarError as e:
-        msg = f"{path}: corrupt {name}: {e}"
-        raise DebError(msg) from e
-    if why := after_end(raw, t.offset):
-        t.close()
-        msg = f"{path}: corrupt {name}: {why}"
+    found = [m for m in ar_members(path) if m[0] == member or m[0].startswith(member + ".")]
+    if not found:
+        msg = f"{path}: no member {member}"
         raise DebError(msg)
-    return t
+    name, off, size = found[0]
+    suffix = os.path.splitext(name)[1]
+    raw: BinaryIO = io.BufferedReader(_Slice(path, off, size))
+    streams: dict[str, Callable[[BinaryIO], Readable]] = {
+        ".xz": lzma.LZMAFile,
+        ".lzma": lzma.LZMAFile,
+        ".gz": lambda f: gzip.GzipFile(fileobj=f),
+        ".bz2": bz2.BZ2File,
+        ".zst": zstd.ZstdFile,
+        ".tar": lambda f: f,
+    }
+    if suffix not in streams:
+        raw.close()
+        msg = f"{path}: unknown compression: {name}"
+        raise DebError(msg)
+    return StreamTar(
+        Window(streams[suffix](raw), f"{path}: corrupt {name}"), f"{path}: corrupt {name}"
+    )
 
 
-def open_data(path: str) -> tarfile.TarFile:
+def open_data(path: str) -> StreamTar:
     """Return the package's payload, data.tar.*."""
     return open_tar(path, "data.tar")
 
@@ -114,7 +146,7 @@ def control(path: str) -> tuple[dict[str, str], dict[str, str]]:
     fields: dict[str, str] = {}
     scripts: dict[str, str] = {}
     with open_tar(path, "control.tar") as t:
-        for m in t.getmembers():
+        for m in t:
             n = m.name.removeprefix("./")
             if not m.isfile():
                 continue

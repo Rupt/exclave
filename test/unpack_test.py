@@ -351,11 +351,13 @@ def apk_unpack(ctx: Ctx) -> None:
 
 @test
 def tool_extraction_rules(ctx: Ctx) -> None:
-    """10.1: a member reached through a package's own symlink is refused.
+    """10.1: a member reached through a package's own symlink stays in the tree.
 
-    So is a hard link whose target is reached through one, which would put a file from outside the
-    tree into it. Two spellings of one path under merged usr conflict. A corrupt package is refused
-    in one line, and unpack leaves nothing behind.
+    The symlink resolves with the tree as its root, as dpkg's would in the root it installs into, so
+    a link that climbs out leads back in. A hard link whose target is reached through an absolute
+    link to the host's file names a file the tree does not hold, and is refused. Two spellings of
+    one path under merged usr conflict. A corrupt package is refused in one line, and unpack leaves
+    nothing behind.
     """
     d = os.path.join(ctx.work, "debs")
     os.makedirs(d, exist_ok=True)
@@ -374,15 +376,13 @@ def tool_extraction_rules(ctx: Ctx) -> None:
         ],
     )
     root = os.path.join(ctx.work, "root-evil")
-    try:
-        steps.extract(
-            root, [steps.Package("evil", os.path.join(d, "evil.deb"), {})], log=lambda *_: None
-        )
-    except steps.UnpackError as e:
-        expect("escapes" in str(e), str(e))
-    else:
-        msg = "a member behind a symlink out of the tree was extracted"
-        raise AssertionError(msg)
+    steps.extract(
+        root, [steps.Package("evil", os.path.join(d, "evil.deb"), {})], log=lambda *_: None
+    )
+    expect(
+        read_text(os.path.join(root, "escaped", "README")) == "ESCAPED\n",
+        "the member behind a climbing symlink is not at /escaped/README in the tree",
+    )
     expect(
         read_text(os.path.join(outside, "README")) == "ORIGINAL\n",
         "the file outside the tree was written",
@@ -400,7 +400,7 @@ def tool_extraction_rules(ctx: Ctx) -> None:
     try:
         steps.extract(root, [steps.Package("thief", os.path.join(d, "thief.deb"), {})])
     except steps.UnpackError as e:
-        expect("escapes" in str(e), str(e))
+        expect("does not hold" in str(e), str(e))
     else:
         msg = "a hard link to a file outside the tree was extracted"
         raise AssertionError(msg)
@@ -448,10 +448,10 @@ def tool_extraction_rules(ctx: Ctx) -> None:
 
 @test
 def busybox_links_stay_in_the_tree(ctx: Ctx) -> None:
-    """10.1: a path in /etc/busybox-paths.d is a member's path, refused when it leaves the tree.
+    """10.1: a path in /etc/busybox-paths.d is a member's path, which stays in the tree.
 
-    By `..`, or through a symlink the set ships, such as one to /tmp: the applet link would land on
-    the host.
+    `..` is refused, and a symlink the set ships, such as one to /tmp, resolves in the tree: the
+    applet link never lands on the host.
     """
     d = os.path.join(ctx.work, "busybox-escape")
     os.makedirs(d, exist_ok=True)
@@ -478,65 +478,114 @@ def busybox_links_stay_in_the_tree(ctx: Ctx) -> None:
         out = os.path.join(ctx.work, f"busybox-{case}.exclave")
         rc, o, e = run([*UNPACK, out, pkg])
         expect(
-            rc != 0 and "tree" in e,
-            f"{case}: a busybox path out of the tree was not refused: {o}{e}",
+            (rc != 0 and "escapes the tree" in e and not os.path.lexists(out))
+            if case == "dotdot"
+            else rc == 0,
+            f"{case}: rc={rc} {o}{e}",
         )
         expect(
-            not os.path.lexists(escape) and not os.path.lexists(host) and not os.path.lexists(out),
-            f"{case}: an applet link was made outside the tree, or the output was kept",
+            not os.path.lexists(escape) and not os.path.lexists(host),
+            f"{case}: an applet link was made outside the tree",
         )
 
 
 # ---------------------------------------------------------------- hostile package files
 @test
-def escapes_are_refused(ctx: Ctx) -> None:
+def escapes_stay_in_the_tree(ctx: Ctx) -> None:
     """10.1: no member reaches outside the tree, in any format.
 
-    Not by `..` in its name or a hard link's, not through a symlink the set ships, relative or
-    absolute, and not by the reserved name .real; a name with a leading slash lands in the tree.
+    `..` in a member's name or a hard link's, and the reserved name .real, are refused. A symlink
+    the set ships resolves with the tree as its root, as dpkg's would in the root it installs into:
+    one that climbs out leads back in, and an absolute one starts at the tree's root. A hard link
+    to a file through an absolute link to the host names a file the tree does not hold, and is
+    refused. A name with a leading slash lands in the tree.
     """
     secret = os.path.join(ctx.host, "secret")
     for fmt in FORMATS:
         for name, members, why in (
             ("dotdot", [("usr/../../host/x", "file", b"x", 0o644)], "escapes the tree"),
             ("real", [("usr/bin/.real/x", "file", b"x", 0o755)], "reserved name .real"),
-            (
-                "climb",
-                [
-                    ("usr", "dir", None, 0o755),
-                    ("usr/share", "dir", None, 0o755),
-                    ("usr/share/doc", "sym", "../../../../host", 0o777),
-                    ("usr/share/doc/x", "file", b"x", 0o644),
-                ],
-                "escapes the tree",
-            ),
         ):
             refused(ctx, f"{fmt}-{name}", [package(ctx, fmt, f"{fmt}-{name}", members)], why)
-        # an absolute link: never a write on the host, whether refused or kept in the tree
-        members = [("opt", "sym", ctx.host, 0o777), ("opt/x", "file", b"x", 0o644)]
-        unpack(ctx, f"{fmt}-absolute", [package(ctx, fmt, f"{fmt}-absolute", members)])
-        root, _ = accepted(
-            ctx,
-            f"{fmt}-slash",
-            [package(ctx, fmt, f"{fmt}-slash", [("/abs/x", "file", b"a", 0o644)])],
-        )
-        expect(
-            read_text(os.path.join(root, "abs", "x")) == "a", f"{fmt}: /abs/x is not in the tree"
-        )
-    for fmt in ("deb", "apk"):  # the rpm builder makes no hard links
-        for name, members in (
-            ("hard-dotdot", [("f", "file", b"f", 0o644), ("h", "hard", "../host/secret", 0o644)]),
-            (
-                "hard-through",
-                [
-                    ("usr", "dir", None, 0o755),
-                    ("usr/out", "sym", ctx.host, 0o777),
-                    ("usr/copy", "hard", "usr/out/secret", 0o644),
-                ],
-            ),
+        climb: list[Member] = [
+            ("usr", "dir", None, 0o755),
+            ("usr/share", "dir", None, 0o755),
+            ("usr/share/doc", "sym", "../../../../host", 0o777),
+            ("usr/share/doc/x", "file", b"x", 0o644),
+        ]
+        absolute: list[Member] = [("opt", "sym", ctx.host, 0o777), ("opt/x", "file", b"x", 0o644)]
+        slash: list[Member] = [("/abs/x", "file", b"x", 0o644)]
+        for name, members, lands in (
+            ("climb", climb, "host/x"),
+            ("absolute", absolute, ctx.host.lstrip("/") + "/x"),
+            ("slash", slash, "abs/x"),
         ):
-            refused(ctx, f"{fmt}-{name}", [package(ctx, fmt, f"{fmt}-{name}", members)], "escapes")
+            root, _ = accepted(ctx, f"{fmt}-{name}", [package(ctx, fmt, f"{fmt}-{name}", members)])
+            expect(read_text(os.path.join(root, lands)) == "x", f"{fmt} {name}: not at /{lands}")
+    for fmt in ("deb", "apk"):  # the rpm builder makes no hard links
+        hard_dotdot: list[Member] = [
+            ("f", "file", b"f", 0o644),
+            ("h", "hard", "../host/secret", 0o644),
+        ]
+        hard_through: list[Member] = [
+            ("usr", "dir", None, 0o755),
+            ("usr/out", "sym", ctx.host, 0o777),
+            ("usr/copy", "hard", "usr/out/secret", 0o644),
+        ]
+        for name, members, why in (
+            ("hard-dotdot", hard_dotdot, "escapes the tree"),
+            ("hard-through", hard_through, "does not hold"),
+        ):
+            refused(ctx, f"{fmt}-{name}", [package(ctx, fmt, f"{fmt}-{name}", members)], why)
     expect(os.stat(secret).st_nlink == 1, "a hard link to the host's file was made")
+
+
+@test
+def synthesis_stays_in_the_tree(ctx: Ctx) -> None:
+    """10.1, 8.1: synthesis reads and writes the tree as its root, and so does the volatile step.
+
+    A set that ships /etc, /usr/share/base-passwd or /var as absolute links to a host directory
+    makes /etc/passwd from the tree's own master, copies nothing of the host's, and removes nothing
+    of the host's /var/tmp.
+    """
+    os.makedirs(os.path.join(ctx.host, "tmp"))
+    for name in ("passwd.master", "group.master", "tmp/keep"):
+        with open(os.path.join(ctx.host, name), "w") as f:
+            f.write("the host's own\n")
+    master: list[Member] = [
+        ("usr/share/base-passwd/passwd.master", "file", b"root:x:0:0::/root:/bin/sh\n", 0o644),
+        ("usr/share/base-passwd/group.master", "file", b"root:x:0:\n", 0o644),
+    ]
+    etc_out: list[Member] = [("etc", "sym", ctx.host, 0o777)]
+    root, _ = accepted(ctx, "write-through", [package(ctx, "deb", "base-passwd", master + etc_out)])
+    written = os.path.join(root, ctx.host.lstrip("/"), "passwd")
+    expect(read_text(written).startswith("root:x:0:0"), "/etc/passwd is not in the tree")
+    shutil.rmtree(os.path.join(ctx.work, "pkgs"))  # the second base-passwd, by the same name
+    master_out: list[Member] = [("usr/share/base-passwd", "sym", ctx.host, 0o777)]
+    root, _ = accepted(ctx, "read-through", [package(ctx, "deb", "base-passwd", master_out)])
+    expect(
+        not os.path.lexists(os.path.join(root, "etc", "passwd")),
+        "/etc/passwd was copied from the host's master",
+    )
+    for fmt in FORMATS:
+        var_out: list[Member] = [("var", "sym", ctx.host, 0o777), ("usr/x", "file", b"x", 0o644)]
+        accepted(ctx, f"{fmt}-volatile", [package(ctx, fmt, f"{fmt}-volatile", var_out)])
+
+
+@test
+def declared_sizes_are_bounded(ctx: Ctx) -> None:
+    """10.1: a member whose size would leave the output's filesystem short of room is refused.
+
+    Before a byte of it is written, by the size its header declares, so that a payload that
+    decompresses without end is refused rather than filling the disk.
+    """
+    huge = tarfile.TarInfo("usr/huge")
+    huge.size = 1 << 50
+    huge.mtime = MTIME
+    raw = huge.tobuf(tarfile.GNU_FORMAT) + b"\0" * 1024
+    for fmt in ("deb", "apk"):
+        data = compress(raw, ".gz") if fmt == "deb" else gzip.compress(raw, mtime=0)
+        refused(ctx, f"{fmt}-huge", [package(ctx, fmt, f"{fmt}-huge", [], data=data)], "free")
 
 
 @test

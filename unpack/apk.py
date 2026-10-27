@@ -22,11 +22,8 @@ Alpine's formats differ from Debian's in ways the rest of unpack sees through th
 import gzip
 import io
 import re
-import tarfile
-import zlib
-from typing import IO, Self
 
-from unpack.reader import Dep, PackageError, after_end
+from unpack.reader import Dep, PackageError, StreamTar, Window
 
 
 class ApkError(PackageError):
@@ -52,64 +49,39 @@ def _norm(name: str) -> str:
     return name.lstrip("/")
 
 
-class _Members:
-    """The data members of an .apk, the archive without its top-level control dot-files."""
+def _open(path: str, *, data: bool) -> StreamTar:
+    """Open the .apk as one tar archive read as it decompresses: its data members, or every member.
 
-    def __init__(self, tar: tarfile.TarFile) -> None:
-        self.tar = tar
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        self.tar.close()
-
-    def getmembers(self) -> list[tarfile.TarInfo]:
-        return [m for m in self.tar.getmembers() if not _norm(m.name).startswith(".")]
-
-    def extractfile(self, m: tarfile.TarInfo) -> IO[bytes] | None:
-        return self.tar.extractfile(m)
-
-
-def _open(path: str) -> tarfile.TarFile:
-    """Open the .apk as one tar archive held in memory, every header read.
-
-    Raises:
-        ApkError: When the file is not gzip or the archive inside is corrupt.
+    The gzip members decompress as one stream, so the signature's and the control files' streams,
+    which carry no end-of-archive blocks, run on into the data's.
     """
-    try:
-        with open(path, "rb") as f:
-            data = gzip.decompress(f.read())
-        t = tarfile.open(fileobj=io.BytesIO(data), mode="r:")  # noqa: SIM115 -- returned open
-        t.getmembers()
-    except (tarfile.TarError, OSError, EOFError, zlib.error) as e:
-        msg = f"{path}: not an apk: {e}"
-        raise ApkError(msg) from e
-    if why := after_end(data, t.offset):
-        t.close()
-        msg = f"{path}: not an apk: {why}"
-        raise ApkError(msg)
-    return t
+    label = f"{path}: not an apk"
+    stream = gzip.GzipFile(fileobj=io.BufferedReader(io.FileIO(path)))
+    keep = (lambda m: not _norm(m.name).startswith(".")) if data else None
+    return StreamTar(Window(stream, label), label, keep)
 
 
-def open_data(path: str) -> _Members:
-    """Return the package's payload, the files it installs."""
-    return _Members(_open(path))
+def open_data(path: str) -> StreamTar:
+    """Return the package's payload, the files it installs: the archive without its dot-files."""
+    return _open(path, data=True)
 
 
 def control(path: str) -> tuple[dict[str, str], dict[str, str]]:
     """Return the package's control fields and its install scripts by name.
 
     .PKGINFO's keys are given Debian's field names: pkgname is Package, depend is Depends, and so
-    on; noarch is spelt all.
+    on; noarch is spelt all. The control files are those before the first data member, as
+    apk-tools reads them; the data is read, and checked, by open_data.
     """
     fields: dict[str, str] = {}
     scripts: dict[str, str] = {}
     raw: dict[str, list[str]] = {}
-    with _open(path) as t:
-        for m in t.getmembers():
+    with _open(path, data=False) as t:
+        for m in t:
             n = _norm(m.name)
-            if not n.startswith(".") or not m.isfile():
+            if not n.startswith("."):
+                break
+            if not m.isfile():
                 continue
             f = t.extractfile(m)
             assert f is not None  # a regular file always has its content

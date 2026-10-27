@@ -46,12 +46,12 @@ import io
 import lzma
 import re
 import struct
-import zlib
 from compression import zstd
 from dataclasses import dataclass
-from typing import Any, BinaryIO, NamedTuple, Self
+from typing import IO, Any, BinaryIO, Self
+lazy from collections.abc import Callable, Iterator
 
-from unpack.reader import Dep, PackageError, after_end
+from unpack.reader import Dep, PackageError, Readable, Window
 
 # A header's values: bytes, int, str or a list of them. Each tag's type is fixed by rpm's tag table,
 # which the reader follows and a static type cannot express.
@@ -149,88 +149,14 @@ def _sections(path: str) -> tuple[Header, int, str]:
     return h, payload, comp
 
 
-def _decompress(comp: str, data: bytes) -> bytes:
-    """Decompress a payload by the compressor its header names.
-
-    Raises:
-        RpmError: When the compressor is unknown or the data is corrupt.
-    """
-    decompressors = {
-        "gzip": gzip.decompress,
-        "xz": lzma.decompress,
-        "lzma": lzma.decompress,
-        "bzip2": bz2.decompress,
-        "zstd": zstd.decompress,
-    }
-    if comp not in decompressors:
-        msg = f"unknown payload compressor {comp!r}"
-        raise RpmError(msg)
-    try:
-        return decompressors[comp](data)
-    except (lzma.LZMAError, zstd.ZstdError, OSError, EOFError, ValueError, zlib.error) as e:
-        msg = f"corrupt {comp} payload: {e}"
-        raise RpmError(msg) from e
-
-
-class _CpioEntry(NamedTuple):
-    name: str
-    mode: int
-    mtime: int
-    content: bytes
-    nlink: int
-    inode: tuple[int, int, int]  # (device major, device minor, inode number)
-
-
-def _cpio_members(data: bytes) -> list[_CpioEntry]:
-    """Return the entries of a newc or crc cpio archive.
-
-    The archive ends at its trailer, which must be there, every entry whole before it and nothing
-    but NUL padding after it (10.1).
-
-    Raises:
-        RpmError: When a header is corrupt, an entry or the trailer is missing, or data follows.
-    """
-    out: list[_CpioEntry] = []
-    p = 0
-    while p + 110 <= len(data):
-        magic = data[p : p + 6]
-        if magic not in (b"070701", b"070702"):
-            msg = f"bad cpio header at {p}"
-            raise RpmError(msg)
-        try:
-            fields = [int(data[p + 6 + 8 * k : p + 14 + 8 * k], 16) for k in range(13)]
-        except ValueError as e:
-            msg = f"bad cpio header at {p}"
-            raise RpmError(msg) from e
-        (
-            ino,
-            mode,
-            _uid,
-            _gid,
-            nlink,
-            mtime,
-            size,
-            devmaj,
-            devmin,
-            _rdevmaj,
-            _rdevmin,
-            namesize,
-            _chk,
-        ) = fields
-        name = data[p + 110 : p + 110 + namesize - 1].decode("utf-8", "surrogateescape")
-        start = (p + 110 + namesize + 3) & ~3
-        if start + size > len(data):
-            msg = f"cpio entry {name!r} runs past the end of the payload"
-            raise RpmError(msg)
-        if name == "TRAILER!!!":
-            if why := after_end(data, start + size):
-                raise RpmError(why)
-            return out
-        content = data[start : start + size]
-        out.append(_CpioEntry(name, mode, mtime, content, nlink, (devmaj, devmin, ino)))
-        p = (start + size + 3) & ~3
-    msg = "the cpio payload has no trailer: it is cut short"
-    raise RpmError(msg)
+# each payload compressor's stream
+_STREAMS: dict[str, Callable[[BinaryIO], Readable]] = {
+    "gzip": lambda f: gzip.GzipFile(fileobj=f),
+    "xz": lzma.LZMAFile,
+    "lzma": lzma.LZMAFile,
+    "bzip2": bz2.BZ2File,
+    "zstd": zstd.ZstdFile,
+}
 
 
 @dataclass(slots=True)
@@ -242,7 +168,7 @@ class _Member:
     mtime: int
     kind: str  # "dir", "sym", "lnk", "file" or "special"
     linkname: str = ""
-    content: bytes = b""
+    size: int = 0
 
     def isdir(self) -> bool:
         return self.kind == "dir"
@@ -257,60 +183,134 @@ class _Member:
         return self.kind == "file"
 
 
-class _Payload:
-    """The payload's members as an archive."""
+class _Contents(io.RawIOBase):
+    """The current entry's data in the payload's stream, which must hold all of it."""
 
-    def __init__(self, members: list[_Member]) -> None:
-        self.members = members
+    def __init__(self, window: Window, size: int, name: str) -> None:
+        super().__init__()
+        self.window, self.left, self.name = window, size, name
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b: Any) -> int:  # noqa: ANN401 -- io's own buffer type
+        if not self.left:
+            return 0
+        data = self.window.read(min(len(b), self.left))
+        if not data:
+            msg = f"cpio entry {self.name!r} runs past the end of the payload"
+            raise RpmError(msg)
+        b[: len(data)] = data
+        self.left -= len(data)
+        return len(data)
+
+
+class _Payload:
+    """The payload's cpio archive, its entries handed out as they decompress, in its order.
+
+    The archive ends at its trailer, which must be there, every entry whole before it and nothing
+    but NUL padding after it (10.1). cpio records a hard link as several entries of one inode, the
+    content on the last of them; the entry with the content is handed out as the file, and the
+    others, held back until it comes, as links to it, as tar would have them.
+    """
+
+    def __init__(self, path: str) -> None:
+        _h, payload, comp = _sections(path)
+        if comp not in _STREAMS:
+            msg = f"{path}: unknown payload compressor {comp!r}"
+            raise RpmError(msg)
+        f = io.BufferedReader(io.FileIO(path))
+        f.seek(payload)
+        label = f"{path}: corrupt {comp} payload"
+        self.window = Window(_STREAMS[comp](f), label)
+        self.label = label
+        self.current: _Contents | None = None
 
     def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_: object) -> None:
-        pass
+        self.window.close()
 
-    def getmembers(self) -> list[_Member]:
-        return self.members
+    def _exact(self, n: int, what: str) -> bytes:
+        data = self.window.read(n)
+        if len(data) < n:
+            msg = f"{self.label}: {what}"
+            raise RpmError(msg)
+        return data
 
-    def extractfile(self, m: _Member) -> io.BytesIO:
-        return io.BytesIO(m.content)
+    def __iter__(self) -> Iterator[_Member]:
+        held: dict[tuple[int, int, int], list[_Member]] = {}  # links waiting for their content
+        files: dict[tuple[int, int, int], _Member] = {}  # the entry each inode's links name
+        w = self.window
+        while True:
+            start = w.tell()
+            header = self._exact(110, "the cpio payload has no trailer: it is cut short")
+            if header[:6] not in (b"070701", b"070702"):
+                msg = f"{self.label}: bad cpio header at {start}"
+                raise RpmError(msg)
+            try:
+                fields = [int(header[6 + 8 * k : 14 + 8 * k], 16) for k in range(13)]
+            except ValueError as e:
+                msg = f"{self.label}: bad cpio header at {start}"
+                raise RpmError(msg) from e
+            ino, mode, _uid, _gid, nlink, mtime, size, devmaj, devmin, _rmaj, _rmin, nsize, _c = (
+                fields
+            )
+            raw = self._exact(nsize, "the cpio payload ends inside a name")
+            name = raw[: nsize - 1].decode("utf-8", "surrogateescape")
+            self._exact(-w.tell() % 4, "the cpio payload ends inside a name")
+            data_at = w.tell()
+            if name == "TRAILER!!!":
+                self._exact(size, f"cpio entry {name!r} runs past the end of the payload")
+                for group in held.values():  # hard links whose inode carried no content
+                    first, *rest = group
+                    first.kind = "file"
+                    yield first
+                    yield from (_Member(m.name, m.mode, m.mtime, "lnk", first.name) for m in rest)
+                if why := w.after_end(w.tell()):
+                    msg = f"{self.label}: {why}"
+                    raise RpmError(msg)
+                return
+            name = name.removeprefix("./")
+            perm, fmt, inode = mode & 0o7777, mode & 0o170000, (devmaj, devmin, ino)
+            if fmt == 0o040000:
+                yield _Member(name, perm, mtime, "dir")
+            elif fmt == 0o120000:
+                link = self._exact(size, f"cpio entry {name!r} runs past the end of the payload")
+                yield _Member(name, perm, mtime, "sym", link.decode("utf-8", "surrogateescape"))
+            elif fmt == 0o100000 and nlink > 1 and inode in files:
+                yield _Member(name, perm, mtime, "lnk", files[inode].name)
+            elif fmt == 0o100000 and nlink > 1 and not size:
+                held.setdefault(inode, []).append(_Member(name, perm, mtime, "held"))
+            elif fmt == 0o100000:
+                m = _Member(name, perm, mtime, "file", size=size)
+                self.current = _Contents(w, size, name)
+                yield m
+                if nlink > 1:
+                    files[inode] = m
+                    for h in held.pop(inode, []):
+                        yield _Member(h.name, h.mode, h.mtime, "lnk", name)
+            else:
+                yield _Member(name, perm, mtime, "special")
+            # past what the caller left unread of the data, and its padding to four bytes
+            end = data_at + size
+            if w.tell() > end:
+                msg = f"{self.label}: cpio entry {name!r} is shorter than its data"
+                raise RpmError(msg)
+            self._exact(end - w.tell(), f"cpio entry {name!r} runs past the end of the payload")
+            self._exact(-end % 4, f"cpio entry {name!r} runs past the end of the payload")
+            self.current = None
+
+    def extractfile(self, m: _Member) -> IO[bytes]:
+        assert self.current is not None  # the current member's contents, only
+        assert m.kind == "file"
+        return io.BufferedReader(self.current)
 
 
 def open_data(path: str) -> _Payload:
-    """Return the package's payload, the files it installs.
-
-    cpio records a hard link as several entries of one inode, the content on the last of them; the
-    reader gives the content to the first and makes the rest links to it, as tar would.
-    """
-    _h, payload, comp = _sections(path)
-    with open(path, "rb") as f:
-        f.seek(payload)
-        data = _decompress(comp, f.read())
-    raw = _cpio_members(data)
-    first: dict[tuple[int, int, int], _Member] = {}
-    members: list[_Member] = []
-    for entry in raw:
-        name = entry.name.removeprefix("./")
-        perm, fmt = entry.mode & 0o7777, entry.mode & 0o170000
-        if fmt == 0o040000:
-            members.append(_Member(name, perm, entry.mtime, "dir"))
-        elif fmt == 0o120000:
-            link = entry.content.decode("utf-8", "surrogateescape")
-            members.append(_Member(name, perm, entry.mtime, "sym", linkname=link))
-        elif fmt == 0o100000:
-            first_link = first.get(entry.inode) if entry.nlink > 1 else None
-            if first_link:
-                members.append(_Member(name, perm, entry.mtime, "lnk", linkname=first_link.name))
-                if entry.content and not first_link.content:
-                    first_link.content = entry.content
-            else:
-                m = _Member(name, perm, entry.mtime, "file", content=entry.content)
-                if entry.nlink > 1:
-                    first[entry.inode] = m
-                members.append(m)
-        else:
-            members.append(_Member(name, perm, entry.mtime, "special"))
-    return _Payload(members)
+    """Return the package's payload, the files it installs."""
+    return _Payload(path)
 
 
 def _deps(h: Header, names: int, versions: int, flags: int) -> list[str]:
