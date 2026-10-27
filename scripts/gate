@@ -10,7 +10,8 @@
 # The steps: the code checks (scripts/check), the unit tests under ASan and UBSan, the stack budget,
 # and for every exclave given the suite in the given and a random order (and, for the first
 # exclave, under the plain terminal's AppArmor label and on build/launcher-debug), the resolution
-# oracle, the namespace oracle and the syscall probe; and when EXCLAVE_TEST_INPUTS names the
+# oracle, the namespace oracle and the syscall probe; unpack's tests on hostile package files
+# (test/unpack_test.py); and when EXCLAVE_TEST_INPUTS names the
 # directory scripts/inputs filled, the Docker profile run on its src/docker-seccomp.json. No step
 # touches the network. The steps run four at a time, or N with --jobs, so
 # that the machine stays usable meanwhile; every driver runs
@@ -89,7 +90,7 @@ stack() {
 }
 
 # What the change can affect. Each flag names a group of steps; a path sets the ones it can affect.
-unit=false stack=false suite=false random=false plain=false oracles=false matrix=false
+unit=false stack=false suite=false random=false plain=false oracles=false matrix=false unpacking=false
 changed=$(cd "$ROOT" && { git diff --name-only HEAD && git ls-files --others --exclude-standard; } | sort -u)
 what="uncommitted changes"
 if [ -z "$changed" ]; then
@@ -104,7 +105,9 @@ for path in $changed; do
         ;;
     scripts/gate) full=true ;;                                           # the gate itself
     tool/*) unit=true suite=true random=true oracles=true matrix=true ;; # the command every driver and VM runs
-    unpack/*) suite=true random=true ;;
+    unpack/*) suite=true random=true unpacking=true ;;
+    test/unpack_test.py) unpacking=true ;;
+    test/packages.py) suite=true random=true unpacking=true ;;
     test/run.py) suite=true random=true ;;
     test/progs/*) suite=true random=true oracles=true ;; # the probe and ro_matrix are programs there too
     test/tree.py) suite=true random=true oracles=true ;;
@@ -119,7 +122,7 @@ for path in $changed; do
     esac
 done
 if $full; then
-    unit=true stack=true suite=true random=true plain=true oracles=true
+    unit=true stack=true suite=true random=true plain=true oracles=true unpacking=true
     echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
 else
     echo "gate: the steps $what can affect ($(echo "$changed" | wc -l) paths); --full runs every step"
@@ -129,6 +132,7 @@ $matrix && echo "gate: the change reaches the VMs: scripts/matrix is due, and ru
 step check "$ROOT/scripts/check" # ruff, ty, shellcheck, shfmt and taplo, silent when clean
 $unit && step unit unit
 $stack && step stack stack
+$unpacking && step unpack py "$here/unpack_test.py" --work "$out/unpack" # unpack's rules on hostile package files
 for ex in "$@"; do
     n=$(basename "$ex" .exclave)
     $suite && step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"

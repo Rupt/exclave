@@ -411,6 +411,7 @@ fetch/debs.py        resolve a closure from a Debian archive and download it, ch
 fetch/apks.py        the same for an Alpine repository: each package's checksums as apk checks them; the index's signature is not verified
 fetch/rpms.py        the same for a yum or dnf repository, verified by the index's SHA-256
 test/run.py          the regression suite; test/progs/ its C, Rust and Go programs
+test/unpack_test.py  unpack's rules on hostile .deb, .apk and .rpm files; test/packages.py builds them
 test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
 test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the openat2 oracle
 test/oracle_syscalls.py  the differential syscall probe: every trapped path and descriptor syscall with every path form under bwrap and under the launcher; test/progs/probe.c its interpreter

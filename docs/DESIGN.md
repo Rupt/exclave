@@ -3599,7 +3599,7 @@ says the matrix is due, and so does the matrix's own code; the gate
 itself runs every step; the command, `tool/`, runs the unit step, the
 suite in both orders, the oracles, the probe and the Docker profile
 run, and says the matrix is due, since the VMs run it; `unpack/` runs
-the suite in both orders; the suite or its programs add the random
+the suite in both orders and unpack's tests; the suite or its programs add the random
 order; a test or a helper runs the steps that use it; documents,
 scripts and settings run the code checks alone; and a path the rules do
 not know runs everything. `--full` runs every step whatever changed.
@@ -3622,6 +3622,14 @@ its time, ok, SKIP or FAIL:
   exits 99, which no test answers;
 - the stack budget of both launchers (the aarch64 one when it is
   built);
+- unpack's tests (`test/unpack_test.py`), which need no exclave: each
+  reader's own, and hostile package files in each format, built by
+  `test/packages.py` (escapes by `..`, by symlinks relative and
+  absolute and by hard links; `.real`; modes and special files;
+  conflicts and `Replaces`; payloads cut short, flipped, empty or not
+  compressed; tar's long names and base-256 numbers). A refusal must be one line with nothing left behind,
+  and no case may change a directory beside the output that the
+  packages aim at;
 - for every exclave given: the suite in the given order and in a
   random order, the resolution oracle, the namespace oracle and the
   syscall probe;
