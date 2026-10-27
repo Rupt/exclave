@@ -117,14 +117,11 @@ def log_lines(logs: Iterable[str]) -> Iterator[tuple[str, int, str]]:
     followed by an n stays a backslash.
     """
     for lp in logs:
-        with open(lp, encoding="utf-8", errors="surrogateescape") as f:
+        with open(lp, encoding="utf-8", errors="surrogateescape", newline="\n") as f:
             for line in f:
-                parts = line.rstrip("\n").split(" ", 2)
-                if len(parts) != 3:
+                parts = line.removesuffix("\n").split(" ", 2)
+                if len(parts) != 3 or not re.fullmatch(r"-?[0-9]+", parts[1]):
                     continue
-                try:
-                    result = int(parts[1])
-                except ValueError:
-                    continue
+                result = int(parts[1])
                 path = re.sub(r"\\([n\\])", lambda m: "\n" if m.group(1) == "n" else "\\", parts[2])
                 yield parts[0], result, path

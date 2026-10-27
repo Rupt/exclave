@@ -174,7 +174,7 @@ class Elf:
             try:
                 self._parse(f, h)
             except struct.error as e:
-                msg = f"truncated or malformed ELF: {e}"
+                msg = "truncated or malformed ELF: its program headers run past the end of the file"
                 raise ValueError(msg) from e
 
     def _parse(self, f: BinaryIO, h: bytes) -> None:
@@ -329,16 +329,18 @@ def read_cache(tree: Tree) -> dict[str, list[str]] | None:
     Returns:
         Each soname's paths in the cache's order, or None when the tree has no cache.
     """
-    real = tree.real("/etc/ld.so.cache")
-    if not os.path.isfile(real):
+    r = tree.resolve("/etc/ld.so.cache")
+    if r is None or not os.path.isfile(tree.real(r)):
         return None
-    with open(real, "rb") as f:
+    with open(tree.real(r), "rb") as f:
         data = f.read()
     off = data.find(b"glibc-ld.so.cache1.1")
-    if off < 0:
+    if off < 0 or off + 48 > len(data):
         return {}
     nlibs, _len_strings = struct.unpack_from("<II", data, off + 20)
     entries = off + 48
+    if entries + 24 * nlibs > len(data):  # truncated: no entry is to be trusted
+        return {}
     table: dict[str, list[str]] = {}
     # offsets are from the header; fall back to the string table
     for base in (off, entries + 24 * nlibs):
@@ -536,8 +538,10 @@ def static_check(ex: str, own: Ownership, data_prefixes: Sequence[str] = ()) -> 
             continue
         # a link the host would take for a directory is a link here, judged in the tree
         links = [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]
-        dirnames[:] = [d for d in dirnames if d != ".real" and d not in links]
-        for name in filenames + links:
+        dirnames[:] = sorted(
+            (d for d in dirnames if d != ".real" and d not in links), key=os.fsencode
+        )
+        for name in sorted(filenames + links, key=os.fsencode):
             vpath = rel + "/" + name
             real = os.path.join(dirpath, name)
             st = os.lstat(real)
@@ -676,7 +680,10 @@ def static_check(ex: str, own: Ownership, data_prefixes: Sequence[str] = ()) -> 
                 )
             try:
                 fe = Elf(tree.payload(found))
-            except (ValueError, OSError) as exc:
+            except OSError as exc:
+                rep.errors.append(f"{found}: {exc.strerror}")
+                continue
+            except ValueError as exc:
                 rep.errors.append(f"{found}: {exc}")
                 continue
             check(found, fe, below, [*chain, vpath])
@@ -765,7 +772,7 @@ def dynamic_check(ex: str, logs: Iterable[str], own: Ownership) -> Report:
             # the launcher logs no "given" line for it; it is the workload's own all the same.
             if layout.under_any(c, layout.VOLATILE):
                 cwds.add(c)
-        if what == "open" and r >= 0 and re.search(r"\.so(\.\d+)*$", path):
+        if what == "open" and r >= 0 and re.search(r"\.so(\.[0-9]+)*\Z", path):
             libs.add(path)
     for lib in sorted(libs, key=os.fsencode):
         # the workload's own build directory: the host's by 8.1 rule 4, whatever prefix it lies
