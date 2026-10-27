@@ -261,20 +261,11 @@ static void split_add(struct strs *out, const char *list, const char *origin)
     }
 }
 
-struct search {
-    const char *root;
-    const struct cache *cache;
-    const struct strs *defaults;
-    const char *interp;            /* the loader's virtual path, or NULL for a static program */
-    const struct ownership *own;   /* with host_hits, to find searched directories that are the host's */
-    struct strs *host_hits;
-};
-
 /* The virtual path the loader would load for a DT_NEEDED entry, or NULL. The loader satisfies its own soname without
  * a search; a name with a slash is loaded as a path; otherwise glibc's search: RPATH (with those inherited) unless
  * there is a RUNPATH, then RUNPATH, the cache and the default directories. */
-static char *find_library(const struct search *s, const char *name, const struct elf *e, const char *vpath,
-                          const struct strs *rpaths)
+char *find_library(const struct search *s, const char *name, const struct elf *e, const char *vpath,
+                   const struct strs *rpaths)
 {
     if (s->interp && !strcmp(name, basename_of(s->interp))) {
         char *r = tree_resolve(s->root, s->interp, 1, NULL);
@@ -333,7 +324,7 @@ static char *find_library(const struct search *s, const char *name, const struct
 /* The default search directories of the tree's loader, and the reason when they were assumed: glibc 2.33 and later
  * prints them with --list-diagnostics; musl's are fixed; an older glibc is taken to search Debian's and Fedora's
  * defaults. The loader run is the file PT_INTERP names in the tree, never a host file an absolute link names. */
-static char *loader_dirs(const char *root, const char *interp, struct strs *out)
+char *loader_dirs(const char *root, const char *interp, struct strs *out)
 {
     if (!interp) {
         default_dirs(out);
@@ -935,45 +926,70 @@ static int library_name(const char *p)
 
 static int bytes_order(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
 
+size_t read_log(const char *path, struct log_line **out)
+{
+    size_t n, count = 0;
+    char *data = read_file(path, &n);
+    *out = NULL;
+    for (char *line = data; line < data + n;) {
+        char *end = memchr(line, '\n', (size_t)(data + n - line));
+        if (end) *end = 0;
+        char *next = end ? end + 1 : data + n;
+        /* CALL RESULT PATH, the result an integer (6.2) */
+        char *sp1 = strchr(line, ' '), *sp2 = sp1 ? strchr(sp1 + 1, ' ') : NULL;
+        if (sp2) {
+            *sp1 = *sp2 = 0;
+            const char *num = sp1 + 1 + (sp1[1] == '-');
+            if (*num && strspn(num, "0123456789") == strlen(num)) {
+                unescape(sp2 + 1);
+                *out = xrealloc(*out, (count + 1) * sizeof **out);
+                struct log_line *x = &(*out)[count++];
+                x->what = xrealloc(NULL, strlen(line) + 1);
+                strcpy(x->what, line); /* NOLINT(clang-analyzer-security.insecureAPI.strcpy) -- sized above */
+                x->path = xrealloc(NULL, strlen(sp2 + 1) + 1);
+                strcpy(x->path, sp2 + 1); /* NOLINT(clang-analyzer-security.insecureAPI.strcpy) -- sized above */
+                x->result = strtol(sp1 + 1, NULL, 10);
+            }
+        }
+        line = next;
+    }
+    free(data);
+    return count;
+}
+
+void free_log(struct log_line *l, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        free(l[i].what);
+        free(l[i].path);
+    }
+    free(l);
+}
+
 void dynamic_check(const char *ex, char **logs, int nlogs, const struct ownership *own, struct report *rep)
 {
     *rep = (struct report){0};
     struct strs libs = {0}, cwds = {0};
     for (int l = 0; l < nlogs; l++) {
-        size_t n;
-        char *data = read_file(logs[l], &n);
-        for (char *line = data; line < data + n;) {
-            char *end = memchr(line, '\n', (size_t)(data + n - line));
-            if (end) *end = 0;
-            char *next = end ? end + 1 : data + n;
-            /* CALL RESULT PATH, the result an integer (6.2) */
-            char *sp1 = strchr(line, ' '), *sp2 = sp1 ? strchr(sp1 + 1, ' ') : NULL;
-            if (sp2) {
-                *sp1 = *sp2 = 0;
-                const char *num = sp1 + 1 + (sp1[1] == '-');
-                int ok = *num && strspn(num, "0123456789") == strlen(num);
-                if (ok) {
-                    rep->lines++;
-                    char *what = line, *path = sp2 + 1;
-                    long r = strtol(sp1 + 1, NULL, 10);
-                    unescape(path);
-                    static const char given[] = "cwd given to the host ";
-                    /* 8.1 rule 4 as the launcher applied it; the plain cwd line is a diagnostic and gives nothing */
-                    if (!strcmp(what, "launcher") && !strncmp(path, given, sizeof given - 1)) {
-                        if (strcmp(path + sizeof given - 1, "/") != 0) strs_add(&cwds, path + sizeof given - 1);
-                    } else if (!strcmp(what, "launcher") && !strncmp(path, "cwd ", 4) &&
-                               strncmp(path, "cwd given", 9) != 0 && volatile_path(path + 4)) {
-                        /* a working directory under a volatile prefix is the host's already (8.1 rule 3), so the
-                         * launcher logs no given line for it; it is the workload's own all the same */
-                        strs_add(&cwds, path + 4);
-                    }
-                    if (!strcmp(what, "open") && r >= 0 && library_name(path) && !strs_has(&libs, path))
-                        strs_add(&libs, path);
-                }
+        struct log_line *lines;
+        size_t n = read_log(logs[l], &lines);
+        rep->lines += n;
+        for (size_t i = 0; i < n; i++) {
+            const char *what = lines[i].what, *path = lines[i].path;
+            static const char given[] = "cwd given to the host ";
+            /* 8.1 rule 4 as the launcher applied it; the plain cwd line is a diagnostic and gives nothing */
+            if (!strcmp(what, "launcher") && !strncmp(path, given, sizeof given - 1)) {
+                if (strcmp(path + sizeof given - 1, "/") != 0) strs_add(&cwds, path + sizeof given - 1);
+            } else if (!strcmp(what, "launcher") && !strncmp(path, "cwd ", 4) && strncmp(path, "cwd given", 9) != 0 &&
+                       volatile_path(path + 4)) {
+                /* a working directory under a volatile prefix is the host's already (8.1 rule 3), so the launcher
+                 * logs no given line for it; it is the workload's own all the same */
+                strs_add(&cwds, path + 4);
             }
-            line = next;
+            if (!strcmp(what, "open") && lines[i].result >= 0 && library_name(path) && !strs_has(&libs, path))
+                strs_add(&libs, path);
         }
-        free(data);
+        free_log(lines, n);
     }
     if (libs.n) qsort(libs.s, libs.n, sizeof *libs.s, bytes_order);
     for (size_t i = 0; i < libs.n; i++) {

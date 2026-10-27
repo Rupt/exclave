@@ -172,6 +172,29 @@ int static_report(const char *ex);
 void wrapper_problems(const char *ex, const struct strs *data, struct strs *out);
 void located_links(const char *ex, struct strs *out);
 int cmd_check(int argc, char **argv);
+/* the loader's search (10.3) */
+struct search {
+    const char *root;
+    const struct cache *cache;
+    const struct strs *defaults;
+    const char *interp;          /* the loader's virtual path, or NULL for a static program */
+    const struct ownership *own; /* with host_hits, to find searched directories that are the host's */
+    struct strs *host_hits;
+};
+char *find_library(const struct search *s, const char *name, const struct elf *e, const char *vpath,
+                   const struct strs *rpaths);
+char *loader_dirs(const char *root, const char *interp, struct strs *out);
+/* an EXCLAVE_LOG file's lines (6.2): CALL RESULT PATH, the path's escapes undone */
+struct log_line {
+    char *what, *path;
+    long result;
+};
+size_t read_log(const char *path, struct log_line **out);
+void free_log(struct log_line *l, size_t n);
+/* the host identity files (8.4) */
+#define N_IDENTITY_FILES 8
+extern const char *const IDENTITY_FILES[N_IDENTITY_FILES];
+int cmd_prune(int argc, char **argv);
 
 char *read_file(const char *path, size_t *n);
 

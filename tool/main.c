@@ -5,6 +5,7 @@
  *     exclave format [--check] FILE...    Parse with the strict grammar and rewrite in canonical form; --check
  *                                         only reports.
  *     exclave hash EXCLAVE                The tree hash of 6.4.
+ *     exclave prune EXCLAVE LOG...        Drop every file no logged workload touched (10.4).
  *     exclave relink EXCLAVE [LAUNCHER]   Replace the launcher and relink every wrapper.
  *     exclave unwrap EXCLAVE              Move every original back over its wrapper.
  *     exclave wrap EXCLAVE                Wrap an exclave: add the launcher and the placeholders where missing, check
@@ -157,7 +158,7 @@ int main(int argc, char **argv)
         const char *name;
         int (*run)(int, char **);
     } commands[] = {
-        {"check", cmd_check},   {"format", cmd_format}, {"hash", cmd_hash},
+        {"check", cmd_check},   {"format", cmd_format}, {"hash", cmd_hash}, {"prune", cmd_prune},
         {"relink", cmd_relink}, {"unwrap", cmd_unwrap}, {"wrap", cmd_wrap},
     };
     if (argc < 2) usage("COMMAND ARGS...");

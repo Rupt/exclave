@@ -320,7 +320,7 @@ int cmd_relink(int argc, char **argv)
 static const char *const PLACEHOLDERS[] = {"proc", "dev",  "sys", "tmp",   "run", "var/tmp", "home",
                                            "root", "boot", "mnt", "media", "opt", "srv"};
 /* The host identity files (8.4): shipped empty, the host's at run time. */
-static const char *const IDENTITY_FILES[] = {
+const char *const IDENTITY_FILES[N_IDENTITY_FILES] = {
     "/etc/passwd",
     "/etc/group",
     "/etc/nsswitch.conf",
@@ -362,7 +362,7 @@ static void placeholders(const char *root)
         if (!lexists(p)) make_dirs(p);
         free(p);
     }
-    for (size_t i = 0; i < sizeof IDENTITY_FILES / sizeof *IDENTITY_FILES; i++) {
+    for (size_t i = 0; i < N_IDENTITY_FILES; i++) {
         const char *f = IDENTITY_FILES[i];
         char *d = dirname_of(f), *dreal = tree_real(root, d);
         /* the directory as the tree resolves it: Fedora's /etc/ssl/certs is a link into /etc/pki */

@@ -15,7 +15,9 @@ so. Prints one line per difference and a summary; exit status 1 when one is unex
 Format takes files instead: batches of manifests and hashes files, valid, reordered and malformed
 (test/grammar_test.py's), and the given exclaves' own, with and without --check.
 
-Check is given an EXCLAVE_LOG with each generated tree: library opens, working directories, and
+Prune is given a log of each tree's own paths, sampled over a sorted walk so that both copies get
+the same one, alone, with the odd lines below, and empty. Check is given an EXCLAVE_LOG with each
+generated tree: library opens, working directories, and
 lines a careless reader would misread. A third of the generated trees hold an ELF world, this
 host's true, its loader and its libc where its PT_INTERP and the loader's directories put them,
 and every generated tree may hold an ELF file that is malformed in one of the ways the static
@@ -336,6 +338,53 @@ def unwrapped_copy_of(src: str) -> Callable[[str], None]:
     return make
 
 
+def program_log(ex: str, seed: int) -> None:
+    """Write EX/plog: a workload's log of the tree's own paths, sampled with the seed.
+
+    Executables run, other files and some directories opened, a link or two followed, a failed
+    call and a host path; the tree is walked in the order of its names' bytes, so that two copies
+    get the same log.
+    """
+    rng = random.Random(seed)
+    root = os.path.join(ex, "tree")
+    files, dirs = [], []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort(key=os.fsencode)
+        rel = "/" + os.path.relpath(dirpath, root) if dirpath != root else ""
+        dirs.append(rel or "/")
+        if "/.real" not in rel:
+            files += [
+                (rel + "/" + n, os.lstat(os.path.join(dirpath, n)).st_mode)
+                for n in sorted(filenames, key=os.fsencode)
+            ]
+    lines = []
+    for v, mode in rng.sample(files, min(len(files), 40)):
+        call = "exec" if mode & 0o111 else rng.choice(["open", "open", "load"])
+        lines.append(
+            f"{call} {rng.choice([0, 3, -2])} {v}".replace("\\", "\\\\").replace("\n", "\\n")
+        )
+    lines += [f"open 3 {d}" for d in rng.sample(dirs, min(len(dirs), 3))]
+    lines += [
+        "open 3 /proc/self/maps",
+        "launcher 0 cwd given to the host /home/u",
+        "exec -2 /nowhere",
+    ]
+    rng.shuffle(lines)
+    with open(os.path.join(ex, "plog"), "w", encoding="utf-8", errors="surrogateescape") as f:
+        f.write("\n".join(lines) + "\n")
+    open(os.path.join(ex, "empty"), "w").close()
+
+
+def with_log(make: Callable[[str], None], seed: int) -> Callable[[str], None]:
+    """Return make, then the program log written beside the tree it made."""
+
+    def made(at: str) -> None:
+        make(at)
+        program_log(at, seed)
+
+    return made
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -392,6 +441,19 @@ def main() -> int:
                 for label, m in inputs
                 if label.startswith("given") and isinstance(m, str)
             ]
+        if cmd == "prune":  # with a log of the tree's own paths, alone, with odd lines, and empty
+            cases = [("usage", [], None), ("usage", ["EX"], inputs[-1][1])]
+            for i, (label, m) in enumerate(inputs):
+                if label.startswith("refusal"):
+                    cases.append((label, ["EX", "/dev/null"], m))
+                    continue
+                make = copy_of(m) if isinstance(m, str) else m
+                cases.append((label, ["EX", "EX/plog"], with_log(make, i)))
+                if callable(m):
+                    cases.append(
+                        (label + ", odd lines", ["EX", "EX/plog", "EX/log"], with_log(make, i))
+                    )
+                cases.append((label + ", empty log", ["EX", "EX/empty"], with_log(make, i)))
         if cmd == "check":  # with the log written beside the tree
             cases += [(label + ", log", ["EX", "EX/log"], m) for label, m in inputs if callable(m)]
         if cmd == "relink":  # with a launcher named, and with one that is not there
