@@ -556,11 +556,13 @@ run goes on. The launcher appends its decisions, as lines beginning
 `launcher 0`, and every translated syscall as `<syscall> <result>
 <virtual path>`: one line, in one write unless the path needs more
 than two escapes. A syscall whose path could not be resolved is logged
-with the path as the program gave it. A newline in a path is written
-as `\n` and a backslash as `\\`, the only two escapes, which the tool
-undoes when it reads a log (10.3, 10.4; 13 item 34). The launcher at
-the border also logs the working directory it started in. The log
-changes nothing else.
+with the path as the program gave it. An exec is logged as `exec 0`
+when the handler hands it to the kernel, since one that succeeds never
+returns; one that fails adds a second line with its error. A newline
+in a path is written as `\n` and a backslash as `\\`, the only two
+escapes, which the tool undoes when it reads a log (10.3, 10.4; 13
+item 34). The launcher at the border also logs the working directory
+it started in. The log changes nothing else.
 
 ### 6.3 What the launcher reads
 
