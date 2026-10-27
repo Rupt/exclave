@@ -36,6 +36,10 @@ struct chunk {
 };
 /* ready: the owner fields are those of the holder of busy; seq: advanced by every claim and release */
 
+/* Whether c's owner fields are set, read with acquire ordering: a reader that sees ready sees the fields the claim
+ * stored before it, on aarch64 too, where loads may otherwise pass one another. */
+static int owner_set(struct chunk *c) { return __atomic_load_n(&c->ready, __ATOMIC_ACQUIRE); }
+
 #define MAX_CHUNKS 4096
 /* a slot is reserved by advancing nchunks and filled once its chunk is mapped and claimed */
 static struct chunk *volatile chunks[MAX_CHUNKS];
@@ -89,7 +93,7 @@ struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame)
         /* the sequence first: the owner read after it is that claim's or a later one's */
         unsigned long q = k->seq;
         __sync_synchronize();
-        if (!k->busy || !k->ready || owner_alive(k, pid)) continue;
+        if (!k->busy || !owner_set(k) || owner_alive(k, pid)) continue;
         BETWEEN(k);
         if (__sync_bool_compare_and_swap(&k->seq, q, q + 1)) {
             k->ready = 0;
@@ -146,7 +150,7 @@ int nest_enter(pid_t pid, pid_t tid, unsigned long frame)
     for (int i = 0; i < n; i++) {
         struct chunk *c = chunks[i];
         /* ready: a chunk mid-claim by another thread has stale fields */
-        if (!c || !c->busy || !c->ready || c->pid != pid || c->tid != tid) continue;
+        if (!c || !c->busy || !owner_set(c) || c->pid != pid || c->tid != tid) continue;
         if (c->frame <= frame) release(c);
         else d++;
     }
