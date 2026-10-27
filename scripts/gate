@@ -104,6 +104,7 @@ for path in $changed; do
         matrix=true
         ;;
     scripts/gate) full=true ;;                                                          # the gate itself
+    tool/unpack.c | tool/inflate.c | tool/tar.c) unpacking=true ;;                      # only exclave unpack, which no VM runs
     tool/*) unit=true suite=true random=true oracles=true matrix=true unpacking=true ;; # the command every driver and VM runs
     unpack/* | test/unpack_oracle.py) suite=true random=true unpacking=true ;;
     test/run.py) suite=true random=true ;;
@@ -125,7 +126,7 @@ if $full; then
 else
     echo "gate: the steps $what can affect ($(echo "$changed" | wc -l) paths); --full runs every step"
 fi
-$matrix && echo "gate: the change reaches the VMs; run scripts/matrix before committing it"
+$matrix && echo "gate: the change reaches the VMs: scripts/matrix is due, and runs when approved"
 
 step check "$ROOT/scripts/check" # ruff, ty, shellcheck, shfmt and taplo, silent when clean
 $unit && step unit unit

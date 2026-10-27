@@ -40,14 +40,17 @@ The loop that has served well, in the order it pays:
    the regression list (17 item 4), performance (16) and section 19 are
    where a change is recorded; figures there are measured rather than
    guessed, because the documents are what a reader trusts.
-5. **Gate, matrix, commit.** `scripts/gate EXCLAVE...` on the gcc,
-   Alpine, Fedora and clang exclaves at zero failures: it runs the steps
-   the change can affect, in seconds for a document or a script, and
-   says when the change reaches the VMs (a launcher source, the pinned
-   Python or the matrix itself); then, and only then,
-   `scripts/matrix --exclave EXCLAVE` before committing. `--full` runs
-   every gate step, worth it before a series of commits is pushed. One
-   commit per item.
+5. **Gate, commit; the matrix when the user approves.** `scripts/gate
+   EXCLAVE...` on the gcc, Alpine, Fedora and clang exclaves at zero
+   failures, then the commit: the gate runs the steps the change can
+   affect, in seconds for a document or a script, and says when the
+   change reaches the VMs (a launcher source, the command, the pinned
+   Python or the matrix itself). The matrix, `scripts/matrix --exclave
+   EXCLAVE`, costs this laptop about eleven minutes, so it runs only when
+   the user approves it, usually once before a series is pushed; a
+   commit does not wait for it, and asking names the commits it has not
+   seen. `--full` runs every gate step, worth it before a series of
+   commits is pushed. One commit per item.
 
 ## Preferences
 
@@ -110,7 +113,9 @@ The loop that has served well, in the order it pays:
   (`tool/blobs.S`), takes a directory holding `tree/` and does not open
   a network connection. Its `unpack` makes from `.apk` files the tree
   `scripts/unpack` makes, and `test/unpack_oracle.py` holds the two to
-  the same answer. It is ordinary C on the C library, unlike the
+  the same answer. No VM runs `unpack`, so a file only it uses goes into
+  the gate's list of them, which runs the unpack oracle and does not
+  call the matrix due. It is ordinary C on the C library, unlike the
   launcher, since it never runs inside another program; paths are bytes
   and every list it prints or hashes is in the order of their bytes.
   The tests judge it only through its commands. The steps before it are

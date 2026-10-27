@@ -3602,8 +3602,11 @@ source, `scripts/build`, `scripts/lib.sh`, `LICENSE` or `.python-version` runs e
 says the matrix is due, and so does the matrix's own code; the gate
 itself runs every step; the command, `tool/`, runs the unit step, the
 suite in both orders, the oracles, the probe, the unpack oracle and the
-Docker profile run, and says the matrix is due, since the VMs run it;
-`unpack/` runs the suite in both orders and the unpack oracle; the suite or its programs add the random
+Docker profile run, and says the matrix is due, since the VMs run it,
+except the files only `exclave unpack` uses (`tool/unpack.c`,
+`tool/inflate.c`, `tool/tar.c`), which run the unpack oracle, since no
+VM runs `unpack`; `unpack/` runs the suite in both orders and the
+unpack oracle; the suite or its programs add the random
 order; a test or a helper runs the steps that use it; documents,
 scripts and settings run the code checks alone; and a path the rules do
 not know runs everything. `--full` runs every step whatever changed.
@@ -3733,10 +3736,12 @@ natively from the harness, as `openat2_xdev` does.
 **The kernel matrix** (`scripts/matrix --exclave EXCLAVE
 [--docker-profile FILE]`) runs one gcc exclave, built on the reference
 machine, in virtual machines, one at a time with 1 GB each (`--jobs N`
-for more), all nine x86-64 rows in about eleven minutes. It runs when the
-gate says a change reaches the VMs: a launcher source, the command, the
-pinned Python, or the matrix's own code; other changes leave the
-kernels' answers as they were. Each VM
+for more), all nine x86-64 rows in about eleven minutes. It is due when
+the gate says a change reaches the VMs: a launcher source, the command,
+the pinned Python, or the matrix's own code; other changes leave the
+kernels' answers as they were. Being the costliest check, it runs when
+the maintainer approves it, usually once before a series of commits is
+pushed, rather than before each commit. Each VM
 boots its distribution's cloud image under QEMU with KVM behind a
 copy-on-write overlay; cloud-init installs strace and, where the
 distribution has it, bubblewrap. The exclave, the test tree, the
