@@ -48,6 +48,7 @@ logged unpack unpack gcc.exclave debs/*.deb
 echo "== 3. CentOS 7's glibc as a sysroot inside it"
 [ -n "$(ls el7 2>/dev/null)" ] || logged fetch-rpms py "$here/fetch/rpms.py" --repo https://vault.centos.org/7.9.2009/os/x86_64 --no-base --out el7 glibc glibc-devel glibc-headers kernel-headers libgcc
 logged unpack-el7 unpack sysroot.exclave el7/*.rpm
+run mkdir -p gcc.exclave/tree/opt # the placeholders are wrap's, which comes after
 run cp -a sysroot.exclave/tree gcc.exclave/tree/opt/sysroot-el7
 printf '%s\n' "+ printf 'exclave 1\\n\\ndata \"/opt/sysroot-el7\"\\n' > gcc.exclave/.exclave/manifest" >&2
 printf 'exclave 1\n\ndata "/opt/sysroot-el7"\n' >gcc.exclave/.exclave/manifest

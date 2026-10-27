@@ -95,7 +95,7 @@ and logs are the tutorial and each command is one you can run by hand:
    build natively on CentOS 7. It runs on this host and, through
    `.exclave/launcher`, inside the exclave on the exclave's loader.
 5. `exclave prune` keeps, in a copy, the files that compile touched
-   and the packages' licence texts: 227 of the 9 567 files and links
+   and the packages' licence texts: 226 of the 9 564 files and links
    under `tree/`; the copy compiles the program again, and
    `exclave check` reads the new log: that copy is the exclave you would
    ship for that workload, and the check is the one you would run on
@@ -106,6 +106,7 @@ What it prints on the reference machine, abridged; `exclave` in it is
 
 ```
 == 3. CentOS 7's glibc as a sysroot inside it
++ mkdir -p gcc.exclave/tree/opt
 + cp -a sysroot.exclave/tree gcc.exclave/tree/opt/sysroot-el7
   gcc.exclave is wrapped (46 warnings; log/wrap.log)
 == 4. a program built inside, run on this host and inside the exclave
@@ -124,7 +125,7 @@ hello from an exclave
 hello from an exclave
 == 5. the exclave pruned to what the compile touched, and the checks on it
 + exclave prune hello.exclave log/hello.log
-pruned hello.exclave: kept 227 files, removed 9340, 359383346 bytes freed
+pruned hello.exclave: kept 226 files, removed 9338, 359454788 bytes freed
 static check: 24 ELF files, 2 static executables, 0 warnings, 0 errors
 + exclave check hello.exclave log/pruned.log
 0 wrapper problems
