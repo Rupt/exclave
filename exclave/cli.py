@@ -28,6 +28,7 @@ The tool never opens a network connection.
 
 import argparse
 import hashlib
+import io
 import os
 import shutil
 import stat
@@ -591,6 +592,9 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the command line, and return its exit status."""
+    # a path that is not UTF-8 is written as its bytes, on standard error as on standard output
+    if isinstance(sys.stderr, io.TextIOWrapper):
+        sys.stderr.reconfigure(errors="surrogateescape")
     args = _parser().parse_args(argv)
     try:
         if args.cmd != "format":
