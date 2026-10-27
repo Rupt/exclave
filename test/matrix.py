@@ -510,13 +510,13 @@ def main() -> int:
         log("packing the test tree for", arch)
         with tarfile.open(payload, "w:gz", compresslevel=1) as t:
             # src: the filter model the suite builds in the VM (filter_model)
-            for d in ("test", "exclave", "src"):
+            for d in ("test", "exclave", "unpack", "src"):
                 t.add(os.path.join(REPO, d), arcname="repo/" + d)
             # the text the launcher carries, which exclave_readme compares
             t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")
             t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
-            # the exclave package installed into that Python as uv sync installs it here, in
-            # editable form: a .pth naming the checkout, relative to site-packages
+            # the exclave and unpack packages installed into that Python as uv sync installs them
+            # here, in editable form: a .pth naming the checkout, relative to site-packages
             pth = b"../../../../repo\n"
             info = tarfile.TarInfo(f"python/lib/{PYDIR}/site-packages/_exclave.pth")
             info.size = len(pth)
@@ -607,7 +607,7 @@ def main() -> int:
                 return failure(uname, "cannot unpack: " + out[-200:])
             if arch != "x86_64":  # the exclave is made here, on its own architecture (10.1)
                 _rc, out = vm.ssh(
-                    "cd m && $PWD/python/bin/python3 -m exclave unpack ex debs/*.deb "
+                    "cd m && $PWD/python/bin/python3 -m unpack ex debs/*.deb "
                     "2>&1 | tail -3 && "
                     "$PWD/python/bin/python3 -m exclave wrap ex 2>&1 | tail -3",
                     timeout=3600 * slow,

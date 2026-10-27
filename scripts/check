@@ -109,7 +109,7 @@ if awk '/clang-format off/ { off = 1 } /clang-format on/ { off = 0 }
 run "$UV" run --quiet python test/c_unused.py
 
 # A suppression says why on its line: `# noqa: RULE -- reason`.
-if grep -rnE '# (noqa: [A-Z0-9, ]+|ty: ignore\[[a-z0-9, -]+\])$' --include='*.py' exclave fetch test src; then
+if grep -rnE '# (noqa: [A-Z0-9, ]+|ty: ignore\[[a-z0-9, -]+\])$' --include='*.py' exclave unpack fetch test src; then
     echo "check: a suppression above gives no reason" >&2
     status=1
 fi

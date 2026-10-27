@@ -1,6 +1,6 @@
 """The interface every package reader provides (DESIGN.md 10.1).
 
-`exclave.deb`, `exclave.apk` and `exclave.rpm` each satisfy `Reader`, and `exclave.build` picks one
+`unpack.deb`, `unpack.apk` and `unpack.rpm` each satisfy `Reader`, and `unpack.steps` picks one
 by the package file's name. A reader presents its format in Debian's terms: control fields named as
 dpkg names them, and the payload as members shaped like `tarfile.TarInfo`.
 """

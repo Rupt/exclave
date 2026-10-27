@@ -45,6 +45,7 @@ lazy import tempfile
 import tree
 
 from exclave import build, cli, grammar, layout
+from unpack import steps
 lazy from exclave import elfcheck
 
 if TYPE_CHECKING:
@@ -54,6 +55,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 # the tool, as the pinned Python runs it: the exclave package's entry point
 TOOL = (sys.executable, "-m", "exclave")
+UNPACK = (sys.executable, "-m", "unpack")
 
 
 # Debian's name; make_exclave takes the tree's gcc when that one is absent (an Alpine exclave, an
@@ -2324,8 +2326,7 @@ def rpm_unpack(ctx: Ctx) -> None:
     out = os.path.join(ctx.work, "rpm.exclave")
     rc, o, e = run(
         [
-            *TOOL,
-            "unpack",
+            *UNPACK,
             out,
             os.path.join(d, "tool-1.0-1.x86_64.rpm"),
             os.path.join(d, "libfoo-1.0-1.x86_64.rpm"),
@@ -2383,8 +2384,7 @@ def rpm_unpack(ctx: Ctx) -> None:
     make_apk(os.path.join(d, "x-1.0-r0.apk"), "x", [("usr", "dir", None, 0o755)])
     rc, o, e = run(
         [
-            *TOOL,
-            "unpack",
+            *UNPACK,
             out + "2",
             os.path.join(d, "x-1.0-r0.apk"),
             os.path.join(d, "tool-1.0-1.x86_64.rpm"),
@@ -2431,13 +2431,7 @@ def apk_unpack(ctx: Ctx) -> None:
     )
     out = os.path.join(ctx.work, "apk.exclave")
     rc, o, e = run(
-        [
-            *TOOL,
-            "unpack",
-            out,
-            os.path.join(d, "tool-1.0-r0.apk"),
-            os.path.join(d, "libfoo-1.0-r0.apk"),
-        ]
+        [*UNPACK, out, os.path.join(d, "tool-1.0-r0.apk"), os.path.join(d, "libfoo-1.0-r0.apk")]
     )
     expect(rc == 0, "unpack: " + o + e)
     expect(
@@ -2478,7 +2472,7 @@ def apk_unpack(ctx: Ctx) -> None:
     )
     make_deb(os.path.join(d, "x.deb"), "x", [("./usr", "dir", None, 0o755)])
     rc, o, e = run(
-        [*TOOL, "unpack", out + "2", os.path.join(d, "x.deb"), os.path.join(d, "tool-1.0-r0.apk")]
+        [*UNPACK, out + "2", os.path.join(d, "x.deb"), os.path.join(d, "tool-1.0-r0.apk")]
     )
     expect(rc != 0 and "one format per exclave" in o + e, "a mixed set must be refused: " + o + e)
 
@@ -2487,10 +2481,10 @@ def apk_unpack(ctx: Ctx) -> None:
 def exclave_readme(ctx: Ctx) -> None:
     """6.1: every exclave explains itself to whoever finds it.
 
-    Unpack, wrap and relink write README at the top where the exclave has none and leave the maker's
-    own, or a shortcut by that name, alone; the files it names are there; the launcher run bare
-    names it, and a launcher outside any exclave says so. The launcher carries the licence's text,
-    and the README names its copyright line.
+    Wrap and relink write README at the top where the exclave has none and leave the maker's own,
+    or a shortcut by that name, alone, and unpack, the step before the tool, writes none; the files
+    it names are there; the launcher run bare names it, and a launcher outside any exclave says so.
+    The launcher carries the licence's text, and the README names its copyright line.
     """
     d = os.path.join(ctx.work, "readme-apks")
     os.makedirs(d, exist_ok=True)
@@ -2504,10 +2498,13 @@ def exclave_readme(ctx: Ctx) -> None:
         ],
     )
     out = os.path.join(ctx.work, "readme-unpacked.exclave")
-    rc, o, e = run([*TOOL, "unpack", out, os.path.join(d, "x-1.0-r0.apk")])
+    rc, o, e = run([*UNPACK, out, os.path.join(d, "x-1.0-r0.apk")])
     expect(rc == 0, "unpack: " + o + e)
+    expect(not os.path.lexists(os.path.join(out, "README")), "unpack wrote a README")
+    rc, o, e = run([*TOOL, "wrap", out])
+    expect(rc == 0, "wrap: " + o + e)
     with open(os.path.join(out, "README"), "rb") as f:
-        expect(f.read() == cli.README_TEXT, "unpack wrote no README")
+        expect(f.read() == cli.README_TEXT, "wrap wrote no README")
     # a bare directory holding tree/, made an exclave by wrap alone
     bare = os.path.join(ctx.work, "readme-bare")
     os.makedirs(os.path.join(bare, "tree", "usr", "share"))
@@ -2598,10 +2595,10 @@ def tool_extraction_rules(ctx: Ctx) -> None:
     )
     root = os.path.join(ctx.work, "root-evil")
     try:
-        build.extract(
-            root, [build.Package("evil", os.path.join(d, "evil.deb"), {})], log=lambda *_: None
+        steps.extract(
+            root, [steps.Package("evil", os.path.join(d, "evil.deb"), {})], log=lambda *_: None
         )
-    except build.BuildError as e:
+    except steps.UnpackError as e:
         expect("escapes" in str(e), str(e))
     else:
         msg = "a member behind a symlink out of the tree was extracted"
@@ -2621,8 +2618,8 @@ def tool_extraction_rules(ctx: Ctx) -> None:
     )
     root = os.path.join(ctx.work, "root-thief")
     try:
-        build.extract(root, [build.Package("thief", os.path.join(d, "thief.deb"), {})])
-    except build.BuildError as e:
+        steps.extract(root, [steps.Package("thief", os.path.join(d, "thief.deb"), {})])
+    except steps.UnpackError as e:
         expect("escapes" in str(e), str(e))
     else:
         msg = "a hard link to a file outside the tree was extracted"
@@ -2632,9 +2629,9 @@ def tool_extraction_rules(ctx: Ctx) -> None:
     with open(os.path.join(d, "corrupt.deb"), "wb") as f:
         f.write(whole[: len(whole) - 40])  # the data member cut short
     out = os.path.join(ctx.work, f"corrupt-{os.getpid()}.exclave")
-    rc, _o, e = run([*TOOL, "unpack", out, os.path.join(d, "corrupt.deb")])
+    rc, _o, e = run([*UNPACK, out, os.path.join(d, "corrupt.deb")])
     expect(
-        rc != 0 and e.startswith("exclave: ") and "Traceback" not in e,
+        rc != 0 and e.startswith("unpack: ") and "Traceback" not in e,
         f"a corrupt package: rc={rc} {e[-300:]!r}",
     )
     expect(not os.path.exists(out), "unpack left a partial exclave behind")
@@ -2654,15 +2651,15 @@ def tool_extraction_rules(ctx: Ctx) -> None:
     )
     root = os.path.join(ctx.work, "root-alias")
     try:
-        build.extract(
+        steps.extract(
             root,
             [
-                build.Package("a", os.path.join(d, "a.deb"), {}),
-                build.Package("b", os.path.join(d, "b.deb"), {}),
+                steps.Package("a", os.path.join(d, "a.deb"), {}),
+                steps.Package("b", os.path.join(d, "b.deb"), {}),
             ],
             log=lambda *_: None,
         )
-    except build.BuildError as e:
+    except steps.UnpackError as e:
         expect("both ship" in str(e), str(e))
     else:
         msg = "the merged-usr spellings of one file were not seen as a conflict"
@@ -2674,9 +2671,10 @@ def unpack_and_wrap(ctx: Ctx) -> None:
     """10.1 as files: unpack, wrap, unwrap and check on package files.
 
     Unpack takes package files and nothing else, records every input by hash, reports what the set's
-    own control files say it lacks, refuses two versions of one package; wrap wraps it and records
-    the manifest and tree hashes; unwrap, check and a second wrap keep the hashes file; a tree
-    assembled by hand becomes an exclave by wrap alone.
+    own control files say it lacks, strips the volatile directories, refuses two versions of one
+    package, and adds no launcher, manifest or placeholder; wrap adds them, wraps the tree and
+    records the manifest and tree hashes; unwrap, check and a second wrap keep the hashes file; a
+    tree assembled by hand becomes an exclave by wrap alone.
     """
     d = os.path.join(ctx.work, "updebs")
     os.makedirs(d, exist_ok=True)
@@ -2698,13 +2696,14 @@ def unpack_and_wrap(ctx: Ctx) -> None:
             ("./usr", "dir", None, 0o755),
             ("./usr/share", "dir", None, 0o755),
             ("./usr/share/foo", "file", b"data\n", 0o644),
+            ("./var", "dir", None, 0o755),
+            ("./var/tmp", "dir", None, 0o755),
+            ("./var/tmp/junk", "file", b"junk\n", 0o644),
         ],
         "Provides: virt\n",
     )
     out = os.path.join(ctx.work, "up.exclave")
-    rc, o, e = run(
-        [*TOOL, "unpack", out, os.path.join(d, "tool.deb"), os.path.join(d, "libfoo1.deb")]
-    )
+    rc, o, e = run([*UNPACK, out, os.path.join(d, "tool.deb"), os.path.join(d, "libfoo1.deb")])
     expect(rc == 0, "unpack: " + o + e)
     expect(
         "depends: tool needs absent-pkg, not in the set" in o,
@@ -2729,14 +2728,13 @@ def unpack_and_wrap(ctx: Ctx) -> None:
     )
     expect(not grammar.values(lock, "tree"), "an unwrapped exclave has no tree hash yet")
     expect(
-        os.path.exists(os.path.join(out, "tree", "opt"))
-        and os.path.exists(os.path.join(out, "tree", "etc", "passwd")),
-        "placeholders",
+        not os.path.lexists(os.path.join(out, "tree", "var", "tmp")),
+        "the volatile directories are stripped",
     )
     expect(
-        os.path.exists(os.path.join(out, ".exclave", "launcher"))
-        and not os.path.exists(os.path.join(out, ".exclave", "manifest")),
-        "an unwrapped exclave: launcher yes, manifest not yet",
+        os.listdir(os.path.join(out, ".exclave")) == ["hashes"]
+        and not os.path.lexists(os.path.join(out, "tree", "opt")),
+        "an unpacked tree: no launcher, manifest or placeholder yet",
     )
     # the exclave is a directory between the two steps: put an ELF in by hand, then wrap it
     with open(os.path.join(out, "tree", "usr", "bin", "t2"), "wb") as f:
@@ -2762,6 +2760,11 @@ def unpack_and_wrap(ctx: Ctx) -> None:
         read_bytes(os.path.join(out, ".exclave", "manifest")) == b"exclave 1\n",
         "the default manifest",
     )
+    expect(
+        os.path.isdir(os.path.join(out, "tree", "var", "tmp"))
+        and os.path.exists(os.path.join(out, "tree", "etc", "passwd")),
+        "wrap adds the placeholders",
+    )
     rc, o, e = run([*TOOL, "hash", out])
     expect(
         o.strip().encode() == grammar.values(lock, "tree")[0][0], "hash agrees with the hashes file"
@@ -2772,8 +2775,7 @@ def unpack_and_wrap(ctx: Ctx) -> None:
     )
     rc, o, e = run(
         [
-            *TOOL,
-            "unpack",
+            *UNPACK,
             os.path.join(ctx.work, "dup.exclave"),
             os.path.join(d, "tool.deb"),
             os.path.join(d, "tool.deb"),
@@ -2837,6 +2839,47 @@ def unpack_and_wrap(ctx: Ctx) -> None:
     shutil.copy2(os.path.join(out, ".exclave", "hashes"), lockcopy)
     rc, o, e = run([*TOOL, "format", "--check", lockcopy])
     expect(rc == 0, "format recognises a hashes file by its first record, not its name: " + o + e)
+
+
+@test
+def tree_by_hand(ctx: Ctx) -> str | None:
+    """10.1: a tree made from a package with ar and tar, as the design shows, becomes an exclave.
+
+    The package's data member is extracted by hand into tree/, and wrap alone makes the directory
+    an exclave: the tool needs no package reader. Skips where ar is missing.
+    """
+    if not shutil.which("ar"):
+        return "no ar"
+    d = os.path.join(ctx.work, "hand-debs")
+    os.makedirs(d, exist_ok=True)
+    make_deb(
+        os.path.join(d, "tool.deb"),
+        "tool",
+        [
+            ("./usr", "dir", None, 0o755),
+            ("./usr/bin", "dir", None, 0o755),
+            ("./usr/bin/tool", "file", b"#!/bin/sh\necho tool ok\n", 0o755),
+        ],
+    )
+    ex = os.path.join(ctx.work, f"by-hand-{os.getpid()}.exclave")
+    os.makedirs(os.path.join(ex, "tree"))
+    rc, o, e = run(
+        ["sh", "-c", 'ar p "$1" data.tar.gz | tar -xz -C "$2"', "sh", "tool.deb", ex + "/tree"],
+        cwd=d,
+    )
+    expect(rc == 0, "ar and tar: " + o + e)
+    rc, o, e = run([*TOOL, "wrap", ex])
+    expect(rc == 0 and f"{ex} is wrapped" in o, "wrap of a tree made by hand: " + o + e)
+    lock = grammar.load(os.path.join(ex, ".exclave", "hashes"), "hashes")
+    expect(
+        not grammar.values(lock, "pkg") and grammar.values(lock, "tree"),
+        f"no inputs and a tree hash: {[r.key for r in lock]!r}",
+    )
+    expect(
+        layout.is_wrapper(os.path.join(ex, "tree", "usr", "bin", "tool"), layout.launcher_of(ex)),
+        "the package's script was wrapped",
+    )
+    return None
 
 
 @test

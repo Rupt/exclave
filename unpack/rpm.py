@@ -17,8 +17,8 @@ rpm set needs more:
   (`libc.so.6(GLIBC_2.2.5)(64bit)`, `rtld(GNU_HASH)`), and file names. `rpmlib(...)` features and
   rich dependencies (`(a or b)`) are rpm's own and are skipped.
 - `alternatives --install` lines in %post are read in either spelling, the tree's own ldconfig runs
-  where it is static, and the identity files are placeholders. `setup` ships /etc/passwd, so nothing
-  is made for it.
+  where it is static, and the identity files are the placeholders wrap adds. `setup` ships
+  /etc/passwd, so nothing is made for it.
 - An `alternatives --install` line replaces a file or link already standing at the link path, as
   both implementations do. Fedora's binutils needs this: it ships gold at /usr/bin/ld and removes it
   in %post before installing ld.bfd as the alternative.
@@ -26,16 +26,16 @@ rpm set needs more:
   package ships at a path under which other packages ship files is made before anything is
   extracted, whatever the order of the packages, so those files land where the link points.
 - Fedora 42's `filesystem` package merges sbin into bin in its %posttrans, written in Lua: when
-  every entry of /usr/sbin is a link `../bin/<name>`, the directory becomes a link to bin. The tool
+  every entry of /usr/sbin is a link `../bin/<name>`, the directory becomes a link to bin. Unpack
   does the same when that script is present.
 - Red Hat's ld.so.conf says `include ld.so.conf.d/*.conf`, relative to /etc, which ldconfig refuses
-  under -r. The tool runs ldconfig on a temporary copy in the tree with the pattern spelt from /etc,
+  under -r. Unpack runs ldconfig on a temporary copy in the tree with the pattern spelt from /etc,
   and removes the copy afterwards.
 - Files shipped unreadable, such as Fedora's /etc/gshadow at mode 0, are made readable by their
   owner, since a tree its owner cannot read can be neither hashed nor copied. A tree that comes from
   outside with such a file is refused by `wrap`, naming the file (DESIGN.md 10.3).
 - Fedora's ca-certificates ships a p11-kit trust source and links every consumer path to the bundle
-  that update-ca-trust extracts in %post. The tool extracts it the same way, one PEM for each anchor
+  that update-ca-trust extracts in %post. Unpack extracts it the same way, one PEM for each anchor
   marked trusted and not distrusted, so that the Red Hat identity file of DESIGN.md 8.4 has a copy
   to fall back to.
 """
@@ -51,7 +51,7 @@ from compression import zstd
 from dataclasses import dataclass
 from typing import Any, BinaryIO, NamedTuple, Self
 
-from exclave.reader import Dep, PackageError
+from unpack.reader import Dep, PackageError
 
 # A header's values: bytes, int, str or a list of them. Each tag's type is fixed by rpm's tag table,
 # which the reader follows and a static type cannot express.

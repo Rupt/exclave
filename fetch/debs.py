@@ -18,9 +18,9 @@ files and by-hash indexes are cached, since their URLs name their content. The R
 an index the suite does not serve by hash, are fetched on every run unless the mirror is a
 snapshot, which never changes.
 
-The tool never fetches: `exclave unpack OUT DIR/*.deb` takes whatever directory of .deb files
-this fetcher, apt, a mirror or a person has made (DESIGN.md 10.1). The fetcher is not part of the
-tool's own exclave.
+Neither unpack nor the tool fetches: `scripts/unpack OUT DIR/*.deb` takes whatever directory of
+.deb files this fetcher, apt, a mirror or a person has made (DESIGN.md 10.1). The fetcher is not
+part of the tool's own exclave.
 """
 
 import argparse
@@ -34,7 +34,7 @@ import sys
 import urllib.request
 from typing import NoReturn
 
-from exclave import deb
+from unpack import deb
 
 DEFAULT_MIRROR = {
     "ubuntu": "http://archive.ubuntu.com/ubuntu",

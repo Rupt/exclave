@@ -3,13 +3,10 @@
 An exclave is a directory at every stage, and every command takes paths; `format --check` is the
 one flag.
 
-    exclave unpack OUT PKG...       Make the unwrapped exclave OUT from package files: extract,
-                                    synthesise what maintainer scripts would have done, add the
-                                    placeholders, record every input in OUT/.exclave/hashes, report
-                                    dependencies the set does not satisfy.
-    exclave wrap EXCLAVE            Wrap it: check the manifest (written as `exclave 1` if absent),
-                                    the wrappers and every ELF, then wrap every executable and write
-                                    the launcher, manifest and tree hashes to .exclave/hashes.
+    exclave wrap EXCLAVE            Wrap an exclave: add the launcher and the placeholders where
+                                    missing, check the manifest (written as `exclave 1` if absent),
+                                    the wrappers and every ELF, then wrap every executable and
+                                    write the launcher, manifest and tree hashes to .exclave/hashes.
                                     Idempotent; a bare directory holding tree/ becomes an exclave.
     exclave unwrap EXCLAVE          Unwrap it: move every original back over its wrapper.
     exclave check EXCLAVE [LOG...]  Wrappers, originals, the tree against its recorded hash and the
@@ -21,17 +18,17 @@ one flag.
     exclave hash EXCLAVE            The tree hash of 6.4.
     exclave relink EXCLAVE [LAUNCHER]  Replace the launcher and relink every wrapper.
 
-Unpack, wrap and relink also write EXCLAVE/README, which tells whoever finds the exclave what it
-is and how to run it, where the exclave has none.
+Every command but format takes an exclave, a directory holding tree/. Whatever made the tree is
+the step before the tool: the unpack package from package files, debootstrap, a container export
+or a person. Wrap and relink also write EXCLAVE/README, which tells whoever finds the exclave
+what it is and how to run it, where the exclave has none.
 
-The tool never opens a network connection: the files it is given are its inputs, whoever fetched
-them.
+The tool never opens a network connection.
 """
 
 import argparse
 import hashlib
 import os
-import platform
 import shutil
 import stat
 import sys
@@ -40,7 +37,6 @@ lazy from collections.abc import Iterable, Sequence
 from exclave import build, elfcheck, grammar, layout
 from exclave.build import BuildError
 from exclave.grammar import GrammarError, Record
-from exclave.reader import PackageError
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # The exclave's README (6.1), for whoever finds the directory without knowing the project.
@@ -194,37 +190,12 @@ def data_prefixes(ex: str) -> list[str]:
     return [d[0].decode("utf-8", "surrogateescape") for d in grammar.values(manifest(ex), "data")]
 
 
-# A package architecture's uname -m; None for architecture-independent packages.
-ARCH_MACHINE = {
-    "amd64": "x86_64",
-    "x86_64": "x86_64",
-    "arm64": "aarch64",
-    "aarch64": "aarch64",
-    "all": None,
-    "noarch": None,
-}
+def default_launcher() -> str:
+    """Return the launcher to install, this machine's.
 
-
-def default_launcher(arch: str | None = None) -> str:
-    """Return the launcher to install for packages of the given architecture.
-
-    For this machine's architecture, that is build/launcher in a checkout, or the launcher beside
-    this file in the tool's own exclave (10.5). For another, it is the cross-built
-    build/launcher-<machine> (7.1).
-
-    Raises:
-        BuildError: When the other architecture's launcher is not built.
+    That is build/launcher in a checkout, or the launcher beside this file in the tool's own
+    exclave (10.5): an exclave is wrapped on a machine of its architecture (10.1).
     """
-    machine = ARCH_MACHINE.get(arch, arch)
-    if machine and machine != platform.machine():
-        p = os.path.join(HERE, "..", "build", "launcher-" + machine)
-        if not os.path.isfile(p):
-            msg = (
-                f"no launcher for {machine} here: {p} is not built (make with the cross "
-                f"compiler), and this machine is {platform.machine()}"
-            )
-            raise BuildError(msg)
-        return p
     for p in (os.path.join(HERE, "..", "build", "launcher"), os.path.join(HERE, "launcher")):
         if os.path.isfile(p):
             return p
@@ -239,18 +210,12 @@ def write_readme(ex: str) -> None:
             f.write(README_TEXT)
 
 
-def install_launcher(ex: str, launcher: str | None = None, arch: str | None = None) -> None:
-    """Copy a launcher to EXCLAVE/.exclave/launcher, unless one is there already.
-
-    Args:
-        ex: The exclave.
-        launcher: The launcher to copy; by default, default_launcher's for arch.
-        arch: The packages' architecture, as their control fields spell it.
-    """
+def install_launcher(ex: str) -> None:
+    """Copy this machine's launcher to EXCLAVE/.exclave/launcher, unless one is there already."""
     dst = layout.launcher_path(ex)
     if os.path.exists(dst):
         return
-    launcher = launcher or default_launcher(arch)
+    launcher = default_launcher()
     if not os.path.isfile(launcher):
         msg = f"no launcher at {launcher} (run scripts/build)"
         raise BuildError(msg)
@@ -260,69 +225,6 @@ def install_launcher(ex: str, launcher: str | None = None, arch: str | None = No
 
 
 # ---------------------------------------------------------------- commands
-def cmd_unpack(out: str, paths: Sequence[str], log: build.Log = print) -> None:
-    """Make the unwrapped exclave out from package files (10.1).
-
-    The packages are extracted, what their maintainer scripts would have made is synthesised, the
-    placeholders and the launcher are added, each package file's hash is recorded, and unmet
-    dependencies are logged. On any failure, out is removed.
-
-    Raises:
-        BuildError: When out exists, or the packages mix formats, architectures or versions of one
-            package.
-    """
-    if os.path.exists(out):
-        msg = f"refusing: {out} exists"
-        raise BuildError(msg)
-    if not paths:
-        msg = "unpack needs at least one package file"
-        raise BuildError(msg)
-    formats = {build.package_format(p) for p in paths}
-    if len(formats) > 1:
-        msg = f"the package files mix formats {sorted(formats)}: one format per exclave"
-        raise BuildError(msg)
-    rd = build.reader(paths[0])
-    packages: list[build.Package] = []
-    seen: dict[str, str] = {}
-    for path in paths:
-        fields, _ = rd.control(path)
-        name = fields.get("Package")
-        if not name or not fields.get("Version"):
-            msg = f"{path}: no Package or Version in its control file"
-            raise BuildError(msg)
-        if name in seen:
-            msg = (
-                f"{seen[name]} and {path} both carry package {name}: "
-                "one version of a package per exclave"
-            )
-            raise BuildError(msg)
-        seen[name] = path
-        packages.append(build.Package(name, path, fields))
-    arches = {p.arch for p in packages if p.arch and p.arch != "all"}
-    if len(arches) > 1:
-        msg = f"the packages mix architectures {sorted(arches)}"
-        raise BuildError(msg)
-    os.makedirs(os.path.join(out, ".exclave"))
-    root = os.path.join(out, "tree")
-    try:
-        build.extract(root, packages, log=log)
-        build.synthesise(root, packages, log=log)
-        build.placeholders(root, log=log)
-        # after synthesis, so that a file dependency is asked of the finished tree
-        for line in build.dependency_report(packages, rd, root):
-            log("depends: " + line)
-        install_launcher(out, arch=next(iter(arches), None))
-        records = [
-            build.PkgRecord(p.name, p.version, p.arch, layout.b2_file(p.path)) for p in packages
-        ]
-        build.write_hashes(out, records)
-        write_readme(out)
-    except BaseException:
-        shutil.rmtree(out, ignore_errors=True)
-        raise
-    log(f"unpacked {len(packages)} packages into {out}")
-
-
 def wrapper_problems(ex: str, data: Sequence[str] = ()) -> list[str]:
     """Return the problems with the tree's wrappers and originals as it stands (6.1).
 
@@ -425,7 +327,7 @@ def cmd_wrap(ex: str, *, quiet: bool = False) -> int:
         msg = f"refusing: {ex} has no tree/ directory"
         raise BuildError(msg)
     install_launcher(ex)
-    build.placeholders(root, strip=False, log=lambda _: None)
+    build.placeholders(root, log=(lambda _: None) if quiet else print)
     mp = layout.manifest_path(ex)
     if not os.path.exists(mp):
         with open(mp, "wb") as f:
@@ -658,17 +560,14 @@ def require_exclave(ex: str, cmd: str) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="exclave",
-        description="Build exclaves from package files. An exclave is a directory at every "
-        "stage, and every command takes paths.",
+        description="Wrap a directory holding tree/ as an exclave, and check, prune or relink "
+        "one. An exclave is a directory at every stage, and every command takes paths.",
     )
     sub = parser.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
     def command(name: str, summary: str) -> argparse.ArgumentParser:
         return sub.add_parser(name, help=summary, description=summary)
 
-    p = command("unpack", "make the unwrapped exclave OUT from package files")
-    p.add_argument("out", metavar="OUT")
-    p.add_argument("packages", nargs="+", metavar="PACKAGE", help=".deb, .apk or .rpm files")
     p = command("wrap", "check an exclave and wrap every executable in it")
     p.add_argument("exclave", metavar="EXCLAVE")
     p = command("unwrap", "move every original back over its wrapper")
@@ -694,11 +593,9 @@ def main(argv: list[str] | None = None) -> int:
     """Run the command line, and return its exit status."""
     args = _parser().parse_args(argv)
     try:
-        if args.cmd not in ("unpack", "format"):
+        if args.cmd != "format":
             require_exclave(args.exclave, args.cmd)
         match args.cmd:
-            case "unpack":
-                cmd_unpack(args.out, args.packages)
             case "wrap":
                 return cmd_wrap(args.exclave)
             case "unwrap":
@@ -715,6 +612,6 @@ def main(argv: list[str] | None = None) -> int:
                 cmd_relink(args.exclave, args.launcher)
     except GrammarError as e:
         sys.exit(f"grammar: {e}")
-    except (BuildError, PackageError, OSError) as e:
+    except (BuildError, OSError) as e:
         sys.exit(f"exclave: {e}")
     return 0

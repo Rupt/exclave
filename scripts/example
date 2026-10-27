@@ -3,7 +3,7 @@
 # (README; DESIGN.md 9, 10). Everything it makes goes under DIR; the fetchers keep their caches under
 # ~/.cache, so a second run fetches nothing. The steps, each a command you can run by hand:
 #   1. scripts/build builds the launcher.
-#   2. scripts/fetch-debs downloads Ubuntu 24.04's gcc-13 closure; exclave unpack makes an unwrapped exclave from the files.
+#   2. scripts/fetch-debs downloads Ubuntu 24.04's gcc-13 closure; scripts/unpack makes an unwrapped exclave from the files.
 #   3. scripts/fetch-rpms downloads CentOS 7's glibc; unpacked into an exclave of its own, its tree is copied into the
 #      gcc exclave at /opt/sysroot-el7, and the manifest says `data "/opt/sysroot-el7"`: nothing there is wrapped,
 #      checked or executed. exclave wrap wraps the exclave, and a shortcut names its gcc.
@@ -22,6 +22,7 @@ mkdir -p "$1" && cd "$1"
 dir=$(pwd)
 rm -rf gcc.exclave sysroot.exclave hello.exclave hello.c hello hello-plain hello-pruned log && mkdir log # a rerun keeps only the fetched files
 exclave() { py -m exclave "$@"; }
+unpack() { py -m unpack "$@"; }
 run() {
     echo "+ $*" >&2
     "$@"
@@ -42,11 +43,11 @@ run "$here/scripts/build"
 
 echo "== 2. a gcc exclave from Ubuntu 24.04 packages"
 [ -n "$(ls debs 2>/dev/null)" ] || logged fetch-debs py "$here/fetch/debs.py" --out debs gcc-13 libc6-dev
-logged unpack exclave unpack gcc.exclave debs/*.deb
+logged unpack unpack gcc.exclave debs/*.deb
 
 echo "== 3. CentOS 7's glibc as a sysroot inside it"
 [ -n "$(ls el7 2>/dev/null)" ] || logged fetch-rpms py "$here/fetch/rpms.py" --repo https://vault.centos.org/7.9.2009/os/x86_64 --no-base --out el7 glibc glibc-devel glibc-headers kernel-headers libgcc
-logged unpack-el7 exclave unpack sysroot.exclave el7/*.rpm
+logged unpack-el7 unpack sysroot.exclave el7/*.rpm
 run cp -a sysroot.exclave/tree gcc.exclave/tree/opt/sysroot-el7
 printf '%s\n' "+ printf 'exclave 1\\n\\ndata \"/opt/sysroot-el7\"\\n' > gcc.exclave/.exclave/manifest" >&2
 printf 'exclave 1\n\ndata "/opt/sysroot-el7"\n' >gcc.exclave/.exclave/manifest

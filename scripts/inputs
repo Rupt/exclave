@@ -27,6 +27,7 @@ mkdir -p "$dir/log" "$dir/src" || exit 2
 fails=0
 
 exclave() { py -m exclave "$@"; }
+unpack() { py -m unpack "$@"; }
 
 fetch() { # fetch NAME FETCHER ARGS...: package files into DIR/NAME through the fetcher's cache
     name=$1
@@ -54,7 +55,7 @@ make_exclave() { # make_exclave NAME PKGDIR: unpack the package files into DIR/N
         return 0
     fi
     rm -rf "$dir/$name.exclave"
-    if exclave unpack "$dir/$name.exclave" "$dir/$pkgs"/* >"$dir/log/$name.exclave.log" 2>&1 && exclave wrap "$dir/$name.exclave" >>"$dir/log/$name.exclave.log" 2>&1; then
+    if unpack "$dir/$name.exclave" "$dir/$pkgs"/* >"$dir/log/$name.exclave.log" 2>&1 && exclave wrap "$dir/$name.exclave" >>"$dir/log/$name.exclave.log" 2>&1; then
         echo "$name.exclave: $(grep -c '^pkg ' "$dir/$name.exclave/.exclave/hashes") packages; $(tail -1 "$dir/log/$name.exclave.log")"
     else
         echo "$name.exclave: FAIL, see $dir/log/$name.exclave.log"

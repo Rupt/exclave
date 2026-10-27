@@ -4,18 +4,18 @@ An .apk is three gzip members back to back, each a tar stream: the signature, th
 (.PKGINFO and the install scripts, dot-files at the top level), and the data. Decompressed as one
 stream they read as one tar archive, since the first two streams carry no end-of-archive blocks.
 
-Alpine's formats differ from Debian's in ways the rest of the tool sees through this reader:
+Alpine's formats differ from Debian's in ways the rest of unpack sees through this reader:
 
 - `depend` and `provides` name packages, shared objects (`so:libc.musl-x86_64.so.1`), commands
   (`cmd:gcc`) and pkg-config modules (`pc:zlib`). There are no alternatives. A file dependency,
   such as `/bin/sh`, names something some package must ship.
 - Versions are ordered as apk-tools orders them: `_rc` before the release, `-r` revisions after.
 - Alpine's /bin, /sbin and /lib are directories of their own, not links into /usr.
-- busybox's post-install makes its applet links with `busybox --install`. The tool makes them
+- busybox's post-install makes its applet links with `busybox --install`. Unpack makes them
   instead from the paths busybox lists in /etc/busybox-paths.d, each a relative link to
   /bin/busybox, so that tree/bin/sh run from outside the exclave reaches the wrapper in the tree
   (DESIGN.md 13 item 37).
-- musl's loader reads no ld.so.cache, so the static check asks for none.
+- musl's loader reads no ld.so.cache, so the tool's static check asks for none.
 - A package's licence text comes only in its `-doc` package.
 """
 
@@ -26,7 +26,7 @@ import tarfile
 import zlib
 from typing import IO, Self
 
-from exclave.reader import Dep, PackageError
+from unpack.reader import Dep, PackageError
 
 
 class ApkError(PackageError):

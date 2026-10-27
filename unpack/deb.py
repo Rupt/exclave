@@ -15,7 +15,7 @@ import tarfile
 import zlib
 from compression import zstd
 
-from exclave.reader import Dep, PackageError
+from unpack.reader import Dep, PackageError
 
 # Debian and Ubuntu merge /bin, /sbin and /lib into /usr.
 MERGED_USR: bool = True

@@ -90,6 +90,7 @@ for path in $changed; do
         ;;
     scripts/gate) full=true ;; # the gate itself
     exclave/*) unit=true suite=true oracles=true dogfood=true ;;
+    unpack/*) suite=true random=true dogfood=true ;;
     test/run.py) suite=true random=true ;;
     test/progs/*) suite=true random=true oracles=true ;; # the probe and ro_matrix are programs there too
     test/tree.py) suite=true random=true oracles=true dogfood=true ;;

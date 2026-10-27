@@ -1,11 +1,11 @@
-"""Make the tool's own exclave, and make an exclave from inside it (DESIGN.md 10.5).
+"""Make the tool's own exclave, and wrap an exclave from inside it (DESIGN.md 10.5).
 
     scripts/dogfood --inputs DIR [--work DIR] [--keep]
 
 Takes two package sets scripts/inputs fetched into DIR, debs-base and debs-gcc13, and touches no
 network. It makes the tool's own exclave from Ubuntu's base system, the pinned Python running this
-script (copied in as /opt/python) and this checkout's exclave and launcher, then makes the same gcc
-exclave twice from the same files: once with the checkout's exclave on the host, once with the
+script (copied in as /opt/python) and this checkout's exclave and launcher. It unpacks the gcc set
+once and wraps two copies of the tree: one with the checkout's exclave on the host, one with the
 tool's own exclave's shortcut from inside it. The two hashes files must be identical, tree hash
 included. Exit status 0 on success.
 """
@@ -20,6 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 # the tool, as the pinned Python runs it: the exclave package's entry point
 TOOL = (sys.executable, "-m", "exclave")
+UNPACK = (sys.executable, "-m", "unpack")
 
 
 def run(cmd: list[str], cwd: str, *, check: bool = True) -> str:
@@ -52,7 +53,7 @@ def main() -> int:
     os.makedirs(work)
     print("building the tool's own exclave")
     tool_ex = os.path.join(work, "tool.exclave")
-    run([*TOOL, "unpack", tool_ex, *debs(tool_debs)], work)
+    run([*UNPACK, tool_ex, *debs(tool_debs)], work)
     # the pinned Python, the one running this, as a tree of its own: the base system's packages
     # give it a libc. Without Tcl/Tk, which the tool never imports and whose libraries search a
     # build directory the exclave does not own (/tools/deps/lib), so the static check would
@@ -70,7 +71,8 @@ def main() -> int:
     shutil.copytree(
         sys.base_prefix, os.path.join(tool_ex, "tree", "opt", "python"), symlinks=True, ignore=tk
     )
-    # the exclave package installed into that Python, as uv installs it anywhere, and the launcher
+    # the exclave package installed into that Python, as uv installs it anywhere (unpack, which
+    # the same project carries, comes with it and is not used), and the launcher
     # beside its modules, where the tool looks for one outside a checkout
     site = os.path.join(
         tool_ex,
@@ -99,20 +101,14 @@ def main() -> int:
         ],
         work,
     )
-    gcc_files = debs(gcc_debs)
-    print("building the gcc exclave on the host")
-    run([*TOOL, "unpack", os.path.join(work, "gcc-host.exclave"), *gcc_files], work)
+    print("unpacking the gcc set once")
+    unwrapped = os.path.join(work, "gcc-unwrapped")
+    run([*UNPACK, unwrapped, *debs(gcc_debs)], work)
+    for name in ("gcc-host.exclave", "gcc-inside.exclave"):
+        shutil.copytree(unwrapped, os.path.join(work, name), symlinks=True)
+    print("wrapping it on the host")
     run([*TOOL, "wrap", os.path.join(work, "gcc-host.exclave")], work)
-    print("building the gcc exclave inside the tool's own exclave")
-    run(
-        [
-            os.path.join(tool_ex, "exclave"),
-            "unpack",
-            os.path.join(work, "gcc-inside.exclave"),
-            *gcc_files,
-        ],
-        work,
-    )
+    print("wrapping it inside the tool's own exclave")
     run([os.path.join(tool_ex, "exclave"), "wrap", os.path.join(work, "gcc-inside.exclave")], work)
     with open(os.path.join(work, "gcc-host.exclave", ".exclave", "hashes"), "rb") as f:
         a_lock = f.read()

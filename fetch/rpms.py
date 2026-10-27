@@ -18,9 +18,9 @@ SHA-256 its index records. The metadata signature is not checked, so the mirror 
 Package files are cached, since their names carry their versions, and so is a primary index whose
 name carries its checksum; repomd.xml is fetched on every run.
 
-The tool never fetches: `exclave unpack OUT DIR/*.rpm` takes whatever directory of .rpm files this
-fetcher, dnf, a mirror or a person has made (DESIGN.md 10.1). The fetcher is not part of the
-tool's own exclave.
+Neither unpack nor the tool fetches: `scripts/unpack OUT DIR/*.rpm` takes whatever directory of
+.rpm files this fetcher, dnf, a mirror or a person has made (DESIGN.md 10.1). The fetcher is not
+part of the tool's own exclave.
 """
 
 import argparse
@@ -36,7 +36,7 @@ import xml.etree.ElementTree as ET
 from compression import zstd
 from typing import NoReturn, TypedDict
 
-from exclave import rpm
+from unpack import rpm
 
 BASE = ["setup", "filesystem", "basesystem", "bash"]
 NS = {

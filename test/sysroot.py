@@ -7,7 +7,7 @@ wherever that glibc's version is old enough.
                     [--prefix /opt/sysroot-el7]
 
 Makes a copy of the gcc exclave, unwraps it, unpacks the rpm files (a glibc, its headers, kernel
-headers, libgcc) into an exclave of their own with the tool, copies that tree into the copy at the
+headers, libgcc) into a tree of their own with unpack, copies that tree into the copy at the
 prefix, records the prefix as `data` in the manifest and wraps the copy: nothing under the prefix is
 wrapped, checked or executed. Then compiles a hello with `--sysroot=PREFIX -B PREFIX/usr/lib64/`
 inside, checks that it binds no glibc symbol version newer than the sysroot's, runs it inside and on
@@ -32,6 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 # the tool, as the pinned Python runs it: the exclave package's entry point
 TOOL = (sys.executable, "-m", "exclave")
+UNPACK = (sys.executable, "-m", "unpack")
 
 
 HELLO = (
@@ -71,7 +72,7 @@ def main() -> int:
     if rc:
         sys.exit("unwrap: " + out + err)
     rpms = sorted(glob.glob(os.path.join(args.rpms, "*.rpm")))
-    rc, out, err = run([*TOOL, "unpack", sysroot_ex, *rpms])
+    rc, out, err = run([*UNPACK, sysroot_ex, *rpms])
     if rc:
         sys.exit("unpack: " + out + err)
     dst = os.path.join(ex, "tree", args.prefix.lstrip("/"))

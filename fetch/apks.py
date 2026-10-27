@@ -14,9 +14,9 @@ its data against the datahash in its .PKGINFO. The index signature is not checke
 is trusted. Package files are cached, since their names carry their versions; APKINDEX is fetched
 on every run.
 
-The tool never fetches: `exclave unpack OUT DIR/*.apk` takes whatever directory of .apk files this
-fetcher, apk, a mirror or a person has made (DESIGN.md 10.1). The fetcher is not part of the
-tool's own exclave.
+Neither unpack nor the tool fetches: `scripts/unpack OUT DIR/*.apk` takes whatever directory of
+.apk files this fetcher, apk, a mirror or a person has made (DESIGN.md 10.1). The fetcher is not
+part of the tool's own exclave.
 """
 
 import argparse
@@ -32,7 +32,7 @@ import urllib.request
 import zlib
 from typing import NoReturn
 
-from exclave import apk
+from unpack import apk
 
 DEFAULT_MIRROR = "https://dl-cdn.alpinelinux.org/alpine"
 BASE = ["alpine-baselayout", "busybox"]
