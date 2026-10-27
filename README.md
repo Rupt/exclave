@@ -40,7 +40,7 @@ any filesystem tree.
   untested). One source builds both launchers.
 - **gdb** debugs a program in an exclave: the launcher carries the
   script gdb needs.
-- **Tested against the kernel.** A suite of 78 named tests, oracles that
+- **Tested against the kernel.** A suite of 79 named tests, oracles that
   compare the launcher's answers with the kernel's under a read-only
   bind mount, and a differential probe of 21 732 syscall cases pass on
   gcc, clang, Alpine and Fedora exclaves. An exclave also runs under
@@ -76,12 +76,12 @@ and logs are the tutorial and each command is one you can run by hand:
 1. `scripts/build` builds `build/launcher`, the freestanding binary every
    executable in an exclave is a hard link to.
 2. `fetch/debs.py` downloads Ubuntu 24.04's `gcc-13` closure, 94
-   packages, and `exclave unpack` makes an unwrapped exclave from the
+   packages, and `unpack` makes an unwrapped exclave from the
    files: the tree under `gcc.exclave/tree/`, the maintainer scripts'
    effects synthesised, every input recorded by hash in
    `gcc.exclave/.exclave/hashes`.
 3. `fetch/rpms.py` downloads CentOS 7's glibc, headers and
-   `libgcc`; unpacked into an exclave of their own, the tree is copied
+   `libgcc`; unpacked into a tree of their own, the tree is copied
    into the gcc exclave at `/opt/sysroot-el7`, and a two-line manifest
    says `data "/opt/sysroot-el7"`: nothing there is wrapped, checked or
    executed. `exclave wrap` wraps the exclave, and a shortcut, the
@@ -219,17 +219,18 @@ first user meets, with the rule behind each and what to do:
 
 ## Making your own exclave
 
-The `exclave` command takes files and never fetches. Whatever puts
-package files in a directory is the step before it: apt, a mirror, the
-three fetchers here. `unpack` reads each package's own control archive,
-reports dependencies the set does not satisfy, extracts in Python,
-synthesises what maintainer scripts would have done (alternatives,
-`ld.so.cache` with the exclave's own `ldconfig`, the CA bundle,
-`/etc/passwd`), adds the placeholders and records every input by hash in
-the hashes file. The result is a directory. `wrap` wraps every
-executable, runs the static check and records the manifest and tree
-hashes; `unwrap` moves the originals back; a bare directory holding a
-`tree/` becomes an exclave by `wrap` alone. Every exclave has a `README`
+The `exclave` command takes a directory holding `tree/` and never
+fetches. Whatever made the tree is the step before it, and for package
+files that is `scripts/unpack`, a program of its own beside the three
+fetchers here: it reads each package's own control archive, reports
+dependencies the set does not satisfy, extracts in Python, synthesises
+what maintainer scripts would have done (alternatives, `ld.so.cache`
+with the exclave's own `ldconfig`, the CA bundle, `/etc/passwd`) and
+records every input by hash in the hashes file. The result is a
+directory; `ar` and `tar`, `debootstrap` or a container export make
+others (DESIGN.md 10.1). `wrap` adds the launcher and the placeholders,
+wraps every executable, runs the static check and records the manifest
+and tree hashes; `unwrap` moves the originals back. Every exclave has a `README`
 at its top for whoever finds it without this repository: what it is, how
 to run its programs, what it touches and how to check it. The tool
 writes it where the exclave has none, so a maker's own stays.
@@ -238,7 +239,7 @@ writes it where the exclave has none, so a maker's own stays.
 scripts/fetch-debs --out debs gcc-13 libc6-dev make         # Ubuntu or Debian: the closure of the packages named, verified against the index
 scripts/fetch-apks --out apks gcc musl-dev binutils         # the same for Alpine
 scripts/fetch-rpms --repo URL --out rpms gcc glibc-devel    # and for Fedora, Rocky, CentOS: any repository with repodata/
-scripts/exclave unpack gcc.exclave debs/*.deb             # package files -> an unwrapped exclave, a directory you may edit; .apk and .rpm files likewise
+scripts/unpack gcc.exclave debs/*.deb                     # package files -> an unwrapped exclave, a directory you may edit; .apk and .rpm files likewise
 scripts/exclave wrap gcc.exclave                          # wrap every executable, static check, hashes into .exclave/hashes
 ln -s tree/usr/bin/gcc-13 gcc.exclave/gcc                    # a shortcut, if you want one
 gcc.exclave/gcc -O2 hello.c -o hello                         # any executable in tree/ runs by path
@@ -275,7 +276,7 @@ build system's own installer doing the building:
 
 ```
 gcc.exclave/tree/usr/bin/sh -c './configure --prefix=/usr/local && make && make install DESTDIR=$PWD/stage'
-scripts/exclave unpack tool.exclave runtime/*.deb         # libc6 and whatever else the result links against
+scripts/unpack tool.exclave runtime/*.deb                 # libc6 and whatever else the result links against
 cp -a stage/usr/local tool.exclave/tree/usr/
 scripts/exclave wrap tool.exclave                         # the static check says whether it all links inside
 ```
@@ -364,7 +365,7 @@ The repository's layout:
 
 ```
 scripts/install-uv   the pinned uv into .uv/, checked against a committed checksum per architecture; scripts/lib.sh what every script sources
-scripts/exclave      the exclave command; scripts/fetch-debs, fetch-apks and fetch-rpms the step before it
+scripts/exclave      the exclave command; scripts/unpack, fetch-debs, fetch-apks and fetch-rpms the steps before it
 scripts/example      the first run: from the build to a program built inside an exclave that runs on any glibc since 2.17, every command shown
 scripts/check        the code checks; scripts/gate the commit gate; scripts/inputs the development inputs; scripts/examples the example runs
 scripts/test         the suite; scripts/matrix, exercise, sysroot and dogfood the other test drivers
@@ -386,15 +387,17 @@ src/scratch.c        handler memory: mmap'd chunks with liveness reclamation (7.
 src/isa.c            the CPU check (7.7): x86-64 psABI levels by cpuid and XCR0, aarch64 levels by AT_HWCAP
 src/str.c            string helpers, arena, the shebang parser
 src/log.c            EXCLAVE_LOG and fatal messages
-exclave/cli.py       the command line: unpack, wrap, unwrap, check, prune, format, hash, relink; the package's entry point
+exclave/cli.py       the command line: wrap, unwrap, check, prune, format, hash, relink; the package's entry point
 exclave/grammar.py   the strict grammar of the manifest and the hashes file (6.2), and its canonical form
 exclave/layout.py    an exclave's files: wrappers and originals, the launcher, hashing, EXCLAVE_LOG lines
-exclave/reader.py    the interface every package reader provides
-exclave/deb.py       the Debian reader: ar, tar, compression, control stanzas, dependency fields, version order
-exclave/apk.py       the Alpine reader: gzip streams, .PKGINFO, apk's dependency and version syntax
-exclave/rpm.py       the rpm reader: lead and headers, the cpio payload, rpm's flags and version order
-exclave/build.py     extraction rules, synthesis, placeholders, dependency report, pruning, tree hash, hashes file, unwrap
+exclave/build.py     placeholders, pruning, tree hash, hashes file, unwrap
 exclave/elfcheck.py  the static and dynamic checks of 10.3, and the loader's library search they share with pruning
+unpack/cli.py        the step before the tool: package files -> an unwrapped exclave (10.1); imports nothing of exclave/
+unpack/steps.py      extraction rules, synthesis, the volatile directories, dependency report, the pkg records
+unpack/reader.py     the interface every package reader provides
+unpack/deb.py        the Debian reader: ar, tar, compression, control stanzas, dependency fields, version order
+unpack/apk.py        the Alpine reader: gzip streams, .PKGINFO, apk's dependency and version syntax
+unpack/rpm.py        the rpm reader: lead and headers, the cpio payload, rpm's flags and version order
 fetch/debs.py        resolve a closure from a Debian archive and download it, checked against the index; the Release signature is not verified, so prefer an https mirror
 fetch/apks.py        the same for an Alpine repository: each package's checksums as apk checks them; the index's signature is not verified
 fetch/rpms.py        the same for a yum or dnf repository, verified by the index's SHA-256

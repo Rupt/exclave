@@ -78,11 +78,12 @@ a read-only bind mount (8.2). The manifest can move a path to either
 side; anything the tree can say about itself the launcher reads from
 the tree, so the manifest holds little else (6.2, 6.3).
 
-The **`exclave` command** (10) is written in Python, takes files and
-never fetches anything, and runs as an exclave of itself (10.5). It
-unpacks `.deb`, `.apk` or `.rpm` packages into an unwrapped exclave, a
-plain directory that ordinary tools can edit, and `wrap` turns any such
-tree into a runnable exclave: it puts the wrappers in place, checks
+The **`exclave` command** (10) is written in Python, takes a directory
+and never fetches anything, and runs as an exclave of itself (10.5). Its
+input is an unwrapped exclave, a plain directory holding `tree/` that
+ordinary tools can edit; `unpack`, the step before it, makes one from
+`.deb`, `.apk` or `.rpm` packages, and `tar` or `debootstrap` make
+others (10.1). `wrap` turns any such tree into a runnable exclave: it puts the wrappers in place, checks
 statically that every ELF file resolves inside the exclave and names
 one loader, and records every input and the output by hash. It also
 checks an exclave against the logs of real runs and prunes it to what
@@ -127,7 +128,7 @@ What is built and tested:
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
 - **The tool as an exclave**, as a development check: `test/dogfood.py
   --keep` leaves the tool's own exclave in `build/dogfood-work/`, and a
-  gcc exclave built from inside it reproduces the host-built hashes
+  gcc exclave wrapped from inside it reproduces the host-wrapped hashes
   file byte for byte (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
   CentOS 7 sysroot keeps 227 of the gcc exclave's 9 567 files and
@@ -140,7 +141,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 78 named tests, most of them programs that
+- **The regression suite**: 79 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -296,7 +297,8 @@ the design. Where they are available they serve as the test oracle
 | **identity file** | One of eight files, such as `/etc/passwd` and `/etc/resolv.conf`, that describe the host and are the host's by default (8.1 rule 5, 8.4). |
 | **border** | Where a program passes from the host into the exclave, its launcher finding no inherited filter; the environment is set there (6.2). |
 | **data directory** | An exclave path that is never executed or loaded, named by a `data` record: a sysroot, headers, documentation (6.2). |
-| **`exclave`** (command) | The build tool: `unpack`, `wrap`, `unwrap`, `check`, `prune`, `hash`, `relink` and `format`. Takes files, fetches nothing (10). |
+| **`exclave`** (command) | The build tool: `wrap`, `unwrap`, `check`, `prune`, `hash`, `relink` and `format`. Takes a directory holding `tree/`, fetches nothing (10). |
+| **`unpack`** | The step before the tool: package files to an unwrapped exclave, run as `scripts/unpack` (10.1). |
 | **unwrapped** | An exclave before `wrap`: a plain tree, editable with ordinary tools. After `wrap` it is wrapped. |
 | **`EXCLAVE_LOG`** | The one run-time knob, which only logs (6.2). `EXCLAVE_EXEC`, `EXCLAVE_EXECFN` and `EXCLAVE_COMM` are the launcher's own protocol, never an interface; the test scripts' inputs are `EXCLAVE_TEST_…`. |
 | **syscall probe** | The differential test of 17 item 7: every trapped syscall, flag and path form, run under `bwrap` and under the launcher and compared case by case. "The probe" always means this one. |
@@ -385,7 +387,7 @@ by hand; it is a convention, recorded nowhere.
 
   Its text is the tool's, the same in every exclave, so it says nothing
   the tree or the hashes file could say and cannot go stale against
-  them. `unpack`, `wrap` and `relink` write it where the exclave has
+  them. `wrap` and `relink` write it where the exclave has
   none, and leave a maker's own, or a shortcut of that name, alone.
   Like the shortcuts it is not hashed, and the launcher never reads it.
   The launcher run with no arguments points to it; a launcher outside
@@ -628,7 +630,7 @@ output, not a way to obtain either.
 
 | Command | What it does to the hashes file |
 |---|---|
-| `unpack` | writes the `pkg` records, one per package file it was given, with the name, version and architecture from the file's own control data and the hash of the file |
+| `unpack` (10.1) | writes the file with only the `pkg` records, one per package file it was given, with the name, version and architecture from the file's own control data and the hash of the file |
 | `wrap` | adds the `launcher`, `manifest` and `tree` hashes |
 | `unwrap` | drops those three, since an unwrapped exclave has no output yet |
 | `prune`, `relink` | recompute the `launcher` and `tree` hashes from the exclave as it then stands and keep the `manifest` hash, which neither changes |
@@ -639,7 +641,7 @@ given to the same tool, and the hashes say whether the files were the
 same and whether the tree came out the same. A hash verifies; a name
 locates; and locating is the job of whatever fetched the files, whose
 record of origin, mirror, snapshot date or checkout, lives outside the
-exclave. An exclave wrapped from a hand-assembled tree has no `pkg`
+exclave. An exclave wrapped from a tree made otherwise has no `pkg`
 records and has a tree hash. A hashes file with no `tree` record marks
 an unwrapped exclave.
 
@@ -1782,26 +1784,30 @@ before a user does.
 
 ## 10. The `exclave` command
 
-The `exclave` command builds exclaves. It is a Python program, standard
-library only, run as `scripts/exclave` by the pinned Python: the uv that
-`scripts/install-uv` puts in `.uv/` installs the version `.python-version`
-names (3.15) into the checkout, and every script runs through it
-(`scripts/lib.sh`), so nothing the machine has installed decides which
-Python runs. The tool is the `exclave` package (`exclave/`, its command line
-`exclave.cli`), which `uv sync` installs into the checkout's `.venv` in
-editable form and which runs as `python -m exclave` or the `exclave`
-console script; the tests and the fetchers import it as a package. It
-is also shipped as an exclave of itself, with that Python inside
-(10.5).
+The `exclave` command makes an exclave of a directory, and checks,
+prunes and relinks it. It is a Python program, standard library only,
+run as `scripts/exclave` by the pinned Python: the uv that
+`scripts/install-uv` puts in `.uv/` installs the version
+`.python-version` names (3.15) into the checkout, and every script runs
+through it (`scripts/lib.sh`), so nothing the machine has installed
+decides which Python runs. The tool is the `exclave` package
+(`exclave/`, its command line `exclave.cli`), and `unpack` (10.1) is
+the `unpack` package beside it; `uv sync` installs both into the
+checkout's `.venv` in editable form, the tool runs as `python -m
+exclave` or the `exclave` console script, and the tests and the
+fetchers import them as packages. The tool is also shipped as an
+exclave of itself, with that Python inside (10.5).
 
-The tool takes files and writes directories. It never opens a network
-connection. The package files it is given are its inputs, whoever
+The tool's input is an unwrapped exclave, a directory holding `tree/`.
+What made the tree is the step before the tool: `unpack` from package
+files (10.1), a build's staging directory (10.2), `debootstrap`, a
+container export or `tar`. Neither the tool nor `unpack` opens a
+network connection: the files they are given are their inputs, whoever
 fetched them, and any record of where they came from is the fetcher's
 to keep. Every command takes paths, and `format --check` is the only
 flag:
 
 ```
-exclave unpack OUT PKG...           package files -> an unwrapped exclave
 exclave wrap EXCLAVE                wrap an exclave (idempotent; a bare directory holding tree/ becomes an exclave)
 exclave unwrap EXCLAVE              unwrap an exclave again
 exclave check EXCLAVE [LOG...]      wrappers, the tree against the hashes file, the static check, and with EXCLAVE_LOG files the dynamic check
@@ -1811,8 +1817,8 @@ exclave hash EXCLAVE                the tree hash of 6.4
 exclave relink EXCLAVE [LAUNCHER]   replace the launcher and relink every wrapper
 ```
 
-`unpack`, `wrap` and `relink` also write the exclave's `README` (6.1)
-where it has none. Every command except `unpack` and `format` refuses,
+`wrap` and `relink` also write the exclave's `README` (6.1) where it
+has none. Every command except `format` refuses,
 before reading or writing anything, a directory without `tree/`, and
 every command except `wrap` refuses one without `.exclave/`.
 
@@ -1820,14 +1826,18 @@ every command except `wrap` refuses one without `.exclave/`.
 
 ```
 scripts/fetch-debs --out debs gcc-13 libc6-dev       # or apt, a mirror, a hand-made directory
-exclave unpack gcc-13.exclave debs/*.deb
+scripts/unpack gcc-13.exclave debs/*.deb
 exclave wrap gcc-13.exclave
 ln -s tree/usr/bin/gcc-13 gcc-13.exclave/gcc
 ```
 
-**Unpack** reads `.deb`, `.apk` and `.rpm` files, each through a
-reader chosen by the file's suffix; the three share one interface, and a
-set that mixes formats is refused. From `.deb` files, in five steps:
+**Unpack** is the step before the tool, as fetching is the step before
+it: the `unpack` package beside the tool, run as `scripts/unpack OUT
+PKG...`, which shares with the tool only the layout of 6.1 and the
+hashes file of 6.4, and imports nothing of it. It reads `.deb`, `.apk`
+and `.rpm` files, each through a reader chosen by the file's suffix;
+the three share one interface, and a set that mixes formats is
+refused. From `.deb` files, in five steps:
 
 1. **Read** every file's control archive: name, version, architecture,
    dependencies, maintainer scripts. Two files carrying one package
@@ -1883,13 +1893,12 @@ set that mixes formats is refused. From `.deb` files, in five steps:
    and Python bytecode, which Python makes for itself where it can write
    and does without where it cannot. Failed opens in an `EXCLAVE_LOG`
    show what an exclave tried and could not find.
-4. **Strip** the volatile directories and replace them and the
-   conventional host names with empty placeholders (8.1), and ship the
-   eight identity files as empty placeholders where the tree lacks them
-   (8.4).
-5. **Record** every input in `.exclave/hashes` (6.4) and install the
-   launcher for the packages' architecture: this machine's, or the
-   cross-built `build/launcher-<machine>` for another (7.1).
+4. **Strip** the volatile directories (8.1). Their empty placeholders,
+   the conventional host names' and the eight identity files (8.4) are
+   added by `wrap` where the tree lacks them.
+5. **Record** every input as a `pkg` record of `.exclave/hashes` (6.4),
+   which is all that `unpack` writes outside `tree/`: the launcher, the
+   manifest and the `README` are `wrap`'s.
 
 `unpack` runs on any machine. A tree of another architecture gets no
 `ld.so.cache`, since its `ldconfig` cannot run here, and `unpack` says
@@ -1904,11 +1913,29 @@ Anything may be done to it before it is wrapped, with the tools one uses
 on directories: copy a built prefix in, add a manifest, delete
 documentation, add shortcuts.
 
+**By hand**, a tree needs no package reader. A `.deb`'s payload is a
+tar archive (`data.tar.zst` on Ubuntu, `data.tar.xz` on Debian):
+
+```
+mkdir -p hello.exclave/tree
+ar p hello.deb data.tar.xz | tar -xJ -C hello.exclave/tree
+exclave wrap hello.exclave
+```
+
+That is enough for a package that needs nothing beyond itself. A
+closure needs the rest of what `unpack` does: the merged-`/usr` links
+made before extraction (`ln -s usr/bin hello.exclave/tree/bin` and the
+rest), the links the maintainer scripts would make, and the cache made
+by the tree's own `ldconfig -r`, whose absence the static check reports
+(10.3). `rpm2cpio` and `cpio` extract an `.rpm`, and an `.apk` is a
+gzipped tar whose dot-files at the top are its control files. Such an exclave's hashes file has no `pkg` records (6.4);
+the suite makes one this way (17).
+
 **Wrap** wraps an exclave, in an order that leaves a refused exclave
 unwrapped:
 
 1. It installs this machine's launcher if none is there, adds the
-   placeholders the tree lacks, and writes `exclave 1` as the manifest
+   placeholders and identity files the tree lacks (8.1, 8.4), and writes `exclave 1` as the manifest
    if there is none. It refuses a manifest that is not in canonical form
    or that exceeds the launcher's tables (8.1).
 2. It checks the tree as it stands, and refuses, wrapping nothing, on any
@@ -1987,7 +2014,7 @@ result:
 
 ```
 gcc-13.exclave/tree/usr/bin/sh -c './configure --prefix=/usr/local && make && make install DESTDIR=$PWD/stage'
-exclave unpack tool.exclave runtime/*.deb          # libc6 and whatever else the result links against
+scripts/unpack tool.exclave runtime/*.deb          # libc6 and whatever else the result links against
 cp -a stage/usr/local tool.exclave/tree/usr/
 exclave wrap tool.exclave                          # the static check says whether it all links inside
 ```
@@ -2133,7 +2160,7 @@ run the whole workload, add back from an unpruned copy.
 
 ### 10.5 Dogfooding
 
-The tool's own exclave is built by `exclave unpack` from Ubuntu's base
+The tool's own exclave is unpacked by `unpack` from Ubuntu's base
 system, the closure of `libc6` and `libgcc-s1`. The pinned Python's own
 tree, the one running the build, is copied in at `/opt/python`, without
 Tcl/Tk, whose libraries search a directory of the machine they were
@@ -2146,14 +2173,14 @@ inside. Its shortcut is a shell script that runs
 `/opt/python/bin/python3 -m exclave`, which is one reason scripts are
 wrapped (6.1).
 
-A tool's exclave can build the next one. That is a cross-exclave
+A tool's exclave can wrap the next one. That is a cross-exclave
 invocation, with each exclave holding a launcher of its own, and
 `test/dogfood.py` tests it as one. `scripts/dogfood --inputs DIR` takes
 two package sets that `scripts/inputs DIR` fetched with
 `fetch/debs.py`, the tool's (`debs-base`) and the gcc 13 closure
 (`debs-gcc13`), and touches no network. It builds the tool's exclave,
-then builds the same gcc exclave twice from the same files: once with
-the checkout's tool on the host, and once with the tool's exclave from
+unpacks the gcc set once and wraps two copies of the tree: one with the
+checkout's tool on the host, and one with the tool's exclave from
 inside it. It requires the two hashes files, tree hash included, to be
 identical.
 
@@ -2169,8 +2196,8 @@ another exclave's location, and an answer to whether `getdents64`
 merges the two listings, which no choice gets right for every program.
 
 Composition happens at build time instead, which the unwrapped exclave
-of 10.1 makes easy: unpack two package sets into one exclave, or copy a
-sysroot into a data directory (9). The cost is disk space.
+of 10.1 makes easy: unpack two package sets as one, copy one tree into
+another, or copy a sysroot into a data directory (9). The cost is disk space.
 
 ## 12. Portability envelope
 
@@ -2194,7 +2221,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 78 named regressions and every oracle its kernel can run; 17
+suite's 79 named regressions and every oracle its kernel can run; 17
 describes the procedure. Measured October 2026:
 
 | Distribution | Kernel | Suite | Oracles | Notes |
@@ -2457,11 +2484,11 @@ and stay fixed.
     rpm repository's metadata's. The mirror is therefore trusted, and
     with `fetch/debs.py`'s default mirrors, which are plain `http://`,
     so is the network path; an `https` mirror or `--snapshot` leaves
-    only the mirror. The tool also runs two of the packages' binaries
-    on the host, outside any exclave: the tree's static `ldconfig`
-    during `unpack`, to make the cache (10.1), and the tree's loader
-    with `--list-diagnostics` during the static check, to learn its
-    search directories (10.3). A package one would not run is a package
+    only the mirror. Unpack and the tool also run two of the packages'
+    binaries on the host, outside any exclave: the tree's static
+    `ldconfig` during `unpack`, to make the cache (10.1), and the
+    tree's loader with `--list-diagnostics` during the static check, to
+    learn its search directories (10.3). A package one would not run is a package
     one should not unpack.
 
 33. **The launcher's tables are fixed in size** (8.1). A manifest or a
@@ -3497,7 +3524,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus the read-only matrix program (`test/progs/ro_matrix.c`) under `bwrap` against its own expectations |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: three properties on random byte strings (encoding is injective, decoding inverts it, `format` is idempotent); the Python and C parsers compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2 |
-| 4 | `test/run.py` with `test/progs/`: 78 named tests |
+| 4 | `test/run.py` with `test/progs/`: 79 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -3602,10 +3629,10 @@ about a minute. The steps run in parallel, each with its own log under
   report one;
 - when `EXCLAVE_TEST_INPUTS` names the directory `scripts/inputs`
   filled, the Docker profile run on every exclave, and dogfood:
-  `test/dogfood.py` makes the tool's own exclave, then makes the same
-  gcc exclave twice from the same packages, once with the tool on the
-  host and once from inside the tool's exclave, and requires the two
-  hashes files, tree hash included, to be identical (10.5).
+  `test/dogfood.py` makes the tool's own exclave, then wraps two copies
+  of one unpacked gcc tree, one with the tool on the host and one from
+  inside the tool's exclave, and requires the two hashes files, tree
+  hash included, to be identical (10.5).
 
 Every driver runs `build/launcher` on a copy of its own, so an exclave
 given to the gate is never run as it is nor written. The suite wraps a
@@ -3794,24 +3821,15 @@ few open questions.
    The tool that installs it is a Python package run through a pinned
    interpreter, and its own exclave (10.5) is a directory holding an
    Ubuntu base and that Python, so that the small executable is made by
-   a tool a thousand times its size, tied to a checkout. The plan
-   closes that gap in two steps, and the second is the larger.
+   a tool a thousand times its size, tied to a checkout.
 
-   First the boundary. The `exclave` command's input becomes a
-   directory holding `tree/`, which is what every command but `unpack`
-   takes already (10), and `unpack` moves to the step before the tool,
-   beside the fetchers (19.3), where package files become a tree; the
-   design then shows the ways to such a tree: the unpack script,
-   `debootstrap` or a container export, and `ar`, `tar` and
-   `ldconfig -r` by hand, with the alternatives one needs made by
-   `ln -s`. The hashes file already separates the two steps: the `pkg`
-   records are written by whoever made the tree, and `wrap` keeps them
-   and adds the launcher, manifest and tree records (6.4). Dogfooding
-   (10.5) shrinks to what it should test, a cross-exclave `wrap`
-   reproducing the hashes file.
+   The boundary is drawn: the tool's input is a directory holding
+   `tree/` (10), and `unpack`, which makes one from package files, is
+   the step before it, a package of its own that imports nothing of the
+   tool (10.1). What remains is the port.
 
-   Then the port. The directory commands, `wrap`, `unwrap`, `relink`,
-   `check`, `prune`, `hash` and `format`, are rewritten in C, linked
+   The directory commands, `wrap`, `unwrap`, `relink`, `check`,
+   `prune`, `hash` and `format`, are rewritten in C, linked
    statically and built for both architectures as the launcher is,
    with both launchers embedded as data and chosen by the tree's
    machine, so that one file installs and wraps on any tree; the
@@ -3963,6 +3981,10 @@ specified.
 
 - **The tool takes files and never fetches**: acquisition has its own
   trust argument; `fetch/` holds examples of that step (10).
+- **The tool's input is a directory holding `tree/`, and `unpack` is
+  the step before it**: what made the tree, package files, `tar` or a
+  build, is not the tool's concern, so `unpack` is a package of its
+  own that imports nothing of the tool (10, 10.1).
 - **Building software is the build system's job**: an exclave of built
   software is a staging directory plus runtime packages, with no
   recipes (10.2).
@@ -3972,8 +3994,8 @@ specified.
 - **Package readers share one interface and are chosen by the file**
   (10.1).
 - **The tool is Python and runs as an exclave of itself**: a gcc
-  exclave built from inside it must reproduce the host-built hashes
-  file (10.5).
+  exclave wrapped from inside it must reproduce the host-wrapped
+  hashes file (10.5).
 - **One pinned Python, never the machine's**: uv, pinned with a
   checksum per architecture in `scripts/install-uv`, installs the
   version `.python-version` names into the checkout, and every script,

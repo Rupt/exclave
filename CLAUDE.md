@@ -105,12 +105,15 @@ The loop that has served well, in the order it pays:
   kernel adds is trapped by the filter's ceiling and answered `ENOSYS`
   until it is classified in `test/syscalls.py` and, if it takes a path,
   handled in `src/handler.c` and listed in `src/filter.c`.
-- **The tool is Python**, shipped as an exclave, takes files and does not
-  open a network connection; `fetch/debs.py`,
-  `fetch/apks.py` and `fetch/rpms.py` are the step before
-  it. `curl` has not been needed. A package reader (`deb.py`, `apk.py`,
-  `rpm.py`) has one interface, `exclave/reader.py`'s `Reader`, and is
-  chosen by the file. A change to
+- **The tool is Python**, shipped as an exclave, takes a directory
+  holding `tree/` and does not open a network connection. The steps
+  before it are `unpack/` (`scripts/unpack`), which makes a tree from
+  package files and imports nothing of `exclave/`, and before that
+  `fetch/debs.py`, `fetch/apks.py` and `fetch/rpms.py`; roadmap item 1
+  of `docs/DESIGN.md` 18 is the tool's port to static C, which this
+  boundary prepares. `curl` has not been needed. A package reader
+  (`deb.py`, `apk.py`, `rpm.py`) has one interface,
+  `unpack/reader.py`'s `Reader`, and is chosen by the file. A change to
   the tool's output is checked by `test/dogfood.py`. `src/gdb.py` is
   data the launcher carries for gdb, not code it runs, and it runs on
   gdb's own Python (ruff targets 3.7 there).
@@ -119,10 +122,10 @@ The loop that has served well, in the order it pays:
   per architecture, checked against a committed checksum), uv installs
   the Python `.python-version` names (3.15) and the dev tools `uv.lock`
   pins, and every command is a POSIX `sh` wrapper in `scripts/` that
-  sources `scripts/lib.sh`. The tool is the `exclave` package, which
-  `uv sync` installs into `.venv` in editable form; everything imports
-  it as a package (`from exclave import build, cli`), never by editing
-  `sys.path`, and a test driver imports its helpers as a script's
+  sources `scripts/lib.sh`. The tool is the `exclave` package and the
+  step before it the `unpack` package, which `uv sync` installs into
+  `.venv` in editable form; everything imports them as packages (`from
+  exclave import build, cli`), never by editing `sys.path`, and a test driver imports its helpers as a script's
   siblings. Python files are programs the wrappers run, without
   shebangs or executable bits. The matrix carries the same
   Python into its VMs, and the tool's own exclave is built on it.
