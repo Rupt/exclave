@@ -78,12 +78,13 @@ a read-only bind mount (8.2). The manifest can move a path to either
 side; anything the tree can say about itself the launcher reads from
 the tree, so the manifest holds little else (6.2, 6.3).
 
-The **`exclave` command** (10) is written in Python, takes a directory
-and never fetches anything, and runs as an exclave of itself (10.5). Its
-input is an unwrapped exclave, a plain directory holding `tree/` that
-ordinary tools can edit; `unpack`, the step before it, makes one from
-`.deb`, `.apk` or `.rpm` packages, and `tar` or `debootstrap` make
-others (10.1). `wrap` turns any such tree into a runnable exclave: it puts the wrappers in place, checks
+The **`exclave` command** (10) is one static executable per
+architecture that carries its launcher (10.5), takes a directory and
+never fetches anything. Its input is an unwrapped exclave, a plain
+directory holding `tree/` that ordinary tools can edit; `unpack`, the
+step before it, makes one from `.deb`, `.apk` or `.rpm` packages, and
+`tar` or `debootstrap` make others (10.1). `wrap` turns any such tree
+into a runnable exclave: it puts the wrappers in place, checks
 statically that every ELF file resolves inside the exclave and names
 one loader, and records every input and the output by hash. It also
 checks an exclave against the logs of real runs and prunes it to what
@@ -126,10 +127,9 @@ What is built and tested:
   kernel matrix on a kernel with 4 KB pages (12.1, 13 item 43).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The tool as an exclave**, as a development check: `test/dogfood.py
-  --keep` leaves the tool's own exclave in `build/dogfood-work/`, and a
-  gcc exclave wrapped from inside it reproduces the host-wrapped hashes
-  file byte for byte (10.5).
+- **The command as one file**: `build/exclave`, 899 KB, statically
+  linked, carrying its launcher, wraps, checks and prunes an exclave
+  with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
   CentOS 7 sysroot keeps 227 of the gcc exclave's 9 567 files and
   symlinks, counted as `exclave prune` reports them, the
@@ -1785,18 +1785,15 @@ before a user does.
 ## 10. The `exclave` command
 
 The `exclave` command makes an exclave of a directory, and checks,
-prunes and relinks it. It is a Python program, standard library only,
-run as `scripts/exclave` by the pinned Python: the uv that
-`scripts/install-uv` puts in `.uv/` installs the version
-`.python-version` names (3.15) into the checkout, and every script runs
-through it (`scripts/lib.sh`), so nothing the machine has installed
-decides which Python runs. The tool is the `exclave` package
-(`exclave/`, its command line `exclave.cli`), and `unpack` (10.1) is
-the `unpack` package beside it; `uv sync` installs both into the
-checkout's `.venv` in editable form, the tool runs as `python -m
-exclave` or the `exclave` console script, and the tests and the
-fetchers import them as packages. The tool is also shipped as an
-exclave of itself, with that Python inside (10.5).
+prunes and relinks it. It is C, in `tool/`, built by `scripts/build` as
+one static file per architecture that carries its launcher (10.5), and
+run from a checkout as `build/exclave` or `scripts/exclave`. The tests
+judge it only through its commands. `unpack` (10.1), the step before
+it, is the Python package `unpack`, run like every Python program here
+by the pinned Python: the uv that `scripts/install-uv` puts in `.uv/`
+installs the version `.python-version` names (3.15) into the checkout,
+and every script runs through it (`scripts/lib.sh`), so nothing the
+machine has installed decides which Python runs.
 
 The tool's input is an unwrapped exclave, a directory holding `tree/`.
 What made the tree is the step before the tool: `unpack` from package
@@ -1832,9 +1829,9 @@ ln -s tree/usr/bin/gcc-13 gcc-13.exclave/gcc
 ```
 
 **Unpack** is the step before the tool, as fetching is the step before
-it: the `unpack` package beside the tool, run as `scripts/unpack OUT
-PKG...`, which shares with the tool only the layout of 6.1 and the
-hashes file of 6.4, and imports nothing of it. It reads `.deb`, `.apk`
+it: the Python package `unpack` beside the tool, run as `scripts/unpack
+OUT PKG...`, which shares with the tool only the layout of 6.1 and the
+hashes file of 6.4. It reads `.deb`, `.apk`
 and `.rpm` files, each through a reader chosen by the file's suffix;
 the three share one interface, and a set that mixes formats is
 refused. From `.deb` files, in five steps:
@@ -2158,31 +2155,29 @@ Failed opens in a later `EXCLAVE_LOG` show what pruning removed, by
 name, including a missing intermediate directory. The cycle is: prune,
 run the whole workload, add back from an unpruned copy.
 
-### 10.5 Dogfooding
+### 10.5 The command as one file
 
-The tool's own exclave is unpacked by `unpack` from Ubuntu's base
-system, the closure of `libc6` and `libgcc-s1`. The pinned Python's own
-tree, the one running the build, is copied in at `/opt/python`, without
-Tcl/Tk, whose libraries search a directory of the machine they were
-built on, which the static check rightly refuses. The tool and the
-launcher go in next: `uv pip install --target` installs the package into
-that Python's site-packages, and the launcher goes beside its modules,
-where the tool looks for one outside a checkout. `exclave wrap` then
-wraps it, its static check verifying that the Python's libraries resolve
-inside. Its shortcut is a shell script that runs
-`/opt/python/bin/python3 -m exclave`, which is one reason scripts are
-wrapped (6.1).
+The command is one statically linked executable for each architecture,
+`build/exclave` for the machine's own and `build/exclave-aarch64` from
+the cross compiler, 899 KB and 729 KB, with nothing beside it to run: no
+interpreter, no library, no file of the checkout. It carries its
+architecture's launcher and the text of every exclave's `README` as data
+(`tool/blobs.S`), so `wrap` installs the launcher it carries and
+`relink` uses it unless given another. An exclave is wrapped on a
+machine of its own architecture (10.1), so each file carries that
+architecture's launcher and no other.
 
-A tool's exclave can wrap the next one. That is a cross-exclave
-invocation, with each exclave holding a launcher of its own, and
-`test/dogfood.py` tests it as one. `scripts/dogfood --inputs DIR` takes
-two package sets that `scripts/inputs DIR` fetched with
-`fetch/debs.py`, the tool's (`debs-base`) and the gcc 13 closure
-(`debs-gcc13`), and touches no network. It builds the tool's exclave,
-unpacks the gcc set once and wraps two copies of the tree: one with the
-checkout's tool on the host, and one with the tool's exclave from
-inside it. It requires the two hashes files, tree hash included, to be
-identical.
+It is ordinary C on the C library, glibc linked statically, unlike the
+launcher, which is freestanding because it runs inside other programs'
+processes (7.1) and the command never does. The scripts build it with
+the same strict warnings as the launcher, and the gate runs a build
+under ASan and UBSan, `build/exclave-asan`. Its BLAKE2b is written from
+RFC 7693 and tested against the RFC's vector and Python's `hashlib`
+(17).
+
+The step before it, `unpack` (10.1), is a Python package run by the
+pinned Python, like the fetchers and the tests; nothing of it is in the
+command.
 
 ## 11. Layers
 
@@ -3396,6 +3391,12 @@ more; the compile-heavy builds nothing to a fifth more. Everything a
 build touched, `/tmp`, the source directory and the working directory,
 resolved without a manifest record being added.
 
+**The command.** On the gate's gcc exclave (159 MB, 709 ELF files), best
+of three, October 2026: `wrap` of the unwrapped tree 0.85 s, `check`
+0.77 s and `hash` 0.63 s, most of each the tree hash. The same listing
+hashed through Python's `hashlib`, whose BLAKE2b is vectorised, took
+0.53 s (18 item 6).
+
 ### 16.9 Reproducing
 
 - `test/bench.py --exclave EXCLAVE [--sqlite PATH] [--launcher
@@ -3523,7 +3524,7 @@ meaning items 4 and 7.
 |---|---|
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus the read-only matrix program (`test/progs/ro_matrix.c`) under `bwrap` against its own expectations |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
-| 3 | `test/manifest_test.c` and `test/grammar_test.py`: three properties on random byte strings (encoding is injective, decoding inverts it, `format` is idempotent); the Python and C parsers compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2 |
+| 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it); the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
 | 4 | `test/run.py` with `test/progs/`: 79 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
@@ -3549,8 +3550,9 @@ includes a bad pointer that must be `EFAULT` either way.
 it. It walks gcc's call graph from `on_sigsys` in both launchers' builds
 and enforces the handler's stack budget of 7.5.4.
 
-**Requirements.** The build needs gcc and make, and `scripts/install-uv`
-needs curl or wget. Every Python program, the tool and every driver,
+**Requirements.** The build needs gcc, and the static C library for the
+command (Ubuntu's `libc6-dev`), and `scripts/install-uv` needs curl or
+wget. Every Python program, `unpack`, the fetchers and every driver,
 runs on the pinned Python uv installs into the checkout, and the code
 checks' ruff, ty, shellcheck, shfmt and taplo come from `uv.lock` the
 same way; none is taken from the machine. The namespace oracle, the syscall probe, the
@@ -3559,7 +3561,7 @@ unprivileged user namespaces; the resolution oracle needs `openat2`
 (Linux 5.6). The suite uses `strace`, `gdb`, Go and `rustc`; a test
 whose tool is missing skips and names it. The gate's plain-label run
 needs AppArmor's `aa-exec` and is left out without it. Optionally,
-`aarch64-linux-gnu-gcc` builds the aarch64 launcher, and the matrix
+`aarch64-linux-gnu-gcc` builds the aarch64 launcher and command, and the matrix
 needs QEMU with KVM and `cloud-image-utils` (`qemu-system-arm` and the
 AAVMF firmware for the emulated row). Where `bwrap` cannot create a user namespace (Ubuntu
 23.10 and later from a plain terminal, most containers), an oracle or
@@ -3579,9 +3581,8 @@ EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave $D/alpine.exclave $D/f42.ex
 
 `scripts/inputs DIR` makes the gate's four exclaves: Ubuntu 24.04's
 gcc-13 closure, Alpine 3.21's gcc, Fedora 42's gcc, and Ubuntu 24.04's
-clang-18 closure. It also makes what dogfood and the example runs take:
-the base system the tool's own exclave is built on, the packages `test/realsoft.py` builds
-with, CentOS 7's glibc for the sysroot of 9, the arm64 gcc-13 closure,
+clang-18 closure. It also makes what the example runs take: the
+packages `test/realsoft.py` builds with, CentOS 7's glibc for the sysroot of 9, the arm64 gcc-13 closure,
 Docker's default seccomp profile, and the source tarballs of
 `test/realsoft.py` and `test/bench.py`. Packages come through the
 fetchers of `fetch/`, which verify each download against the repository
@@ -3590,30 +3591,33 @@ file is pinned by its BLAKE2b-256 in the script. An item `DIR` already
 has is skipped, and whatever is missing is fetched again. The
 repository holds no third-party input.
 
-**The gate** (`scripts/gate [--full] EXCLAVE...`) is the check run
+**The gate** (`scripts/gate [--full] [--jobs N] EXCLAVE...`) is the check run
 before a commit. It runs the steps below that the change can affect, the
 uncommitted paths or, in a clean tree, the last commit's: a launcher
 source, `scripts/build`, `scripts/lib.sh`, `LICENSE` or `.python-version` runs every step and
 says the matrix is due, and so does the matrix's own code; the gate
-itself runs every step; the tool runs the unit
-step, the suite in the given order, the oracles, the probe, the Docker
-profile run and dogfood; the suite or its programs add the random
+itself runs every step; the command, `tool/`, runs the unit step, the
+suite in both orders, the oracles, the probe and the Docker profile
+run, and says the matrix is due, since the VMs run it; `unpack/` runs
+the suite in both orders; the suite or its programs add the random
 order; a test or a helper runs the steps that use it; documents,
 scripts and settings run the code checks alone; and a path the rules do
-not know runs everything. `--full` runs every step whatever changed,
-about a minute. The steps run in parallel, each with its own log under
-`build/gate/`, one line each with its time, ok, SKIP or FAIL:
+not know runs everything. `--full` runs every step whatever changed.
+The steps run four at a time, or `--jobs N`, so that the machine stays
+usable, each with its own log under `build/gate/`, one line each with
+its time, ok, SKIP or FAIL:
 
 - the code checks, `scripts/check`: ruff, ty, shellcheck, shfmt and
   taplo over the Python, the shell scripts and the TOML; over the C,
   clang-format (`.clang-format`), gcc's strict warnings as errors (the
   flags `scripts/lib.sh` gives every C build: the launcher for each
-  architecture and as `build/launcher-old`, and the unit tests) and
-  clang-tidy with its static analyser on the launcher for each
-  architecture and on the unit tests (`.clang-tidy`);
+  architecture and as `build/launcher-old`, the command for each
+  architecture, and the unit tests) and clang-tidy with its static
+  analyser on the launcher for each architecture, on the command and on
+  the unit tests (`.clang-tidy`, `tool/.clang-tidy`);
 - the unit step: the manifest parser, the grammar comparison, the
-  filter test, `test/syscalls.py`, the scratch-pool test, the `#!` line test and the CPU
-  level test, each built from the current sources for the host under
+  filter test, `test/syscalls.py`, the scratch-pool test, the `#!` line
+  test, the CPU level test and the command's BLAKE2b test, each built from the current sources for the host under
   AddressSanitizer and UndefinedBehaviorSanitizer, where a finding
   exits 99, which no test answers;
 - the stack budget of both launchers (the aarch64 one when it is
@@ -3628,11 +3632,7 @@ about a minute. The steps run in parallel, each with its own log under
   each a trap instruction, since the launcher links no runtime to
   report one;
 - when `EXCLAVE_TEST_INPUTS` names the directory `scripts/inputs`
-  filled, the Docker profile run on every exclave, and dogfood:
-  `test/dogfood.py` makes the tool's own exclave, then wraps two copies
-  of one unpacked gcc tree, one with the tool on the host and one from
-  inside the tool's exclave, and requires the two hashes files, tree
-  hash included, to be identical (10.5).
+  filled, the Docker profile run on every exclave.
 
 Every driver runs `build/launcher` on a copy of its own, so an exclave
 given to the gate is never run as it is nor written. The suite wraps a
@@ -3642,8 +3642,8 @@ exclave carries the launcher it was wrapped with. Each test has a
 budget of 30 s, against a slowest test of about 2 s natively, so a test
 that crawls fails instead of stalling the gate. The exit status is the
 number of failed steps. On the reference machine the whole gate, on the
-four exclaves with their fixtures and with the Docker profile and
-dogfood, takes 47 s (measured October 2026).
+four exclaves with their fixtures and with the Docker profile, four
+steps at a time, takes 76 s (measured October 2026).
 
 **The suite** (`scripts/test --exclave EXCLAVE`, or `--tree DIR` for an
 unwrapped tree) makes an exclave under its work directory, compiles
@@ -3726,9 +3726,11 @@ kernels' answers as they were. Each VM
 boots its distribution's cloud image under QEMU with KVM behind a
 copy-on-write overlay; cloud-init installs strace and, where the
 distribution has it, bubblewrap. The exclave, the test tree, the
-checkout's launcher and the pinned Python are copied in, the checkout
-installed into that Python in editable form as `uv sync` installs it
-here (a `.pth` naming it), and the exclave is relinked there. The
+checkout's launcher and command and the pinned Python are copied in,
+`unpack` installed into that Python in editable form as `uv sync`
+installs it here (a `.pth` naming the checkout), and the exclave is
+relinked there by the command, which runs as it is on every kernel of
+the matrix, CentOS 7's 3.10 included. The
 Python is built for the VM's machine and libc and
 installed by the repository's uv: the glibc builds need only glibc 2.17,
 so CentOS 7 runs the same Python as Fedora 42, and Alpine takes the musl
@@ -3813,46 +3815,10 @@ stated here.
 ## 18. Roadmap
 
 The format, the launcher and the tool are complete for what section 3
-asks of them. What comes next is the tool's shape, use, releases and a
-few open questions.
+asks of them. What comes next is use, releases and a few open
+questions.
 
-1. **The tool as one static executable.** The launcher is a
-   freestanding executable of about 96 KB that every exclave carries.
-   The tool that installs it is a Python package run through a pinned
-   interpreter, and its own exclave (10.5) is a directory holding an
-   Ubuntu base and that Python, so that the small executable is made by
-   a tool a thousand times its size, tied to a checkout.
-
-   The boundary is drawn: the tool's input is a directory holding
-   `tree/` (10), and `unpack`, which makes one from package files, is
-   the step before it, a package of its own that imports nothing of the
-   tool (10.1). What remains is the port.
-
-   The directory commands, `wrap`, `unwrap`, `relink`, `check`,
-   `prune`, `hash` and `format`, are rewritten in C, linked
-   statically and built for both architectures as the launcher is,
-   with both launchers embedded as data and chosen by the tree's
-   machine, so that one file installs and wraps on any tree; the
-   launcher stays a separate, freestanding program (19.2), since it
-   runs inside other programs' processes and the tool never does, and
-   an exclave is still wrapped on a machine of its architecture (10.3).
-   The port goes one command at a time, with the Python answering until
-   the C does: `hash` must match `hashlib` byte for byte, `format` must
-   reproduce its own output on the test corpus, the static check must
-   report the same on the gate's exclaves, and the suite, which runs the
-   command and not the language, decides (17). The Python directory
-   side is removed when the last command is ported, not kept beside the
-   C.
-
-   `unpack` stays in Python: its four decompressors and its synthesis
-   table make it a different kind of program, and like fetching it is
-   the step before the tool. The suite, the matrix and the fetchers stay
-   Python on the pinned interpreter, which is a development dependency
-   and not a shipped one. What is shipped becomes one static `exclave`
-   for each architecture, and the unpack script for whoever wants it.
-   Two decisions of 19.3 move when the port lands: the tool is then C,
-   and its own exclave is a wrapped static executable.
-2. **Exclaves of real packaged software.** The exclaves built so far
+1. **Exclaves of real packaged software.** The exclaves built so far
    are compilers and the tool itself. The next exclaves are of real
    packaged software that people run, and they decide which of the
    tool's synthesis gaps close (10.1): `unpack` does not generate
@@ -3879,6 +3845,12 @@ few open questions.
    gVisor-based CI, WSL1 and SELinux `execmem` policies are listed as
    untested in the portability envelope (12); each is a matrix row to
    add, or a limitation to state.
+6. **The command's hashing.** `wrap`, `check` and `hash` spend most of
+   their time on the tree hash, and the command's BLAKE2b, written
+   plainly from RFC 7693, is slower than a vectorised one such as
+   Python's `hashlib` (16.8). A faster implementation keeps every
+   recorded hash; another hash function would be a change of the format
+   (6.4, 19.1).
 
 ## 19. Design decisions
 
@@ -3983,8 +3955,8 @@ specified.
   trust argument; `fetch/` holds examples of that step (10).
 - **The tool's input is a directory holding `tree/`, and `unpack` is
   the step before it**: what made the tree, package files, `tar` or a
-  build, is not the tool's concern, so `unpack` is a package of its
-  own that imports nothing of the tool (10, 10.1).
+  build, is not the tool's concern, so `unpack` is a Python package of
+  its own, apart from the C tool (10, 10.1).
 - **Building software is the build system's job**: an exclave of built
   software is a staging directory plus runtime packages, with no
   recipes (10.2).
@@ -3993,22 +3965,24 @@ specified.
   comes from outside and is wrapped (10.1).
 - **Package readers share one interface and are chosen by the file**
   (10.1).
-- **The tool is Python and runs as an exclave of itself**: a gcc
-  exclave wrapped from inside it must reproduce the host-wrapped
-  hashes file (10.5).
-- **One pinned Python, never the machine's**: uv, pinned with a
-  checksum per architecture in `scripts/install-uv`, installs the
-  version `.python-version` names into the checkout, and every script,
-  the matrix VMs and the tool's own exclave run that one (10, 10.5, 17).
+- **The tool is static C, one file per architecture carrying its
+  launcher**: it runs with nothing beside it, and ordinary C on the C
+  library is enough, since unlike the launcher it never runs inside
+  another program (10.5).
+- **One pinned Python, never the machine's**, for `unpack`, the
+  fetchers and the tests: uv, pinned with a checksum per architecture
+  in `scripts/install-uv`, installs the version `.python-version` names
+  into the checkout, and every script and the matrix VMs run that one
+  (10, 17).
 - **The Python is ruff- and ty-clean**: `scripts/check` runs ruff, ty,
   shellcheck, shfmt and taplo from `uv.lock`, and an ignored rule or a
   suppression carries its reason (17).
 - **The C is clang-formatted and clean under gcc's strict warnings and
-  clang-tidy**, the launcher for both architectures; clang-format and
-  clang-tidy come from `uv.lock`, gcc
-  is the one that builds the launcher, and the build itself does not
-  stop on a warning, since a newer gcc may find something new. A check
-  `.clang-tidy` turns off carries its reason (17).
+  clang-tidy**, the launcher and the command for both architectures;
+  clang-format and clang-tidy come from `uv.lock`, gcc is the one that
+  builds them, and the build itself does not stop on a warning, since a
+  newer gcc may find something new. A check `.clang-tidy` or
+  `tool/.clang-tidy` turns off carries its reason (17).
 - **`wrap` checks before it touches the tree**: a refused exclave is
   left unwrapped (10.1, 10.3).
 - **An exclave is wrapped on a machine of its architecture**: the static

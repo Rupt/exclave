@@ -105,30 +105,31 @@ The loop that has served well, in the order it pays:
   kernel adds is trapped by the filter's ceiling and answered `ENOSYS`
   until it is classified in `test/syscalls.py` and, if it takes a path,
   handled in `src/handler.c` and listed in `src/filter.c`.
-- **The tool is Python**, shipped as an exclave, takes a directory
-  holding `tree/` and does not open a network connection. The steps
-  before it are `unpack/` (`scripts/unpack`), which makes a tree from
-  package files and imports nothing of `exclave/`, and before that
-  `fetch/debs.py`, `fetch/apks.py` and `fetch/rpms.py`; roadmap item 1
-  of `docs/DESIGN.md` 18 is the tool's port to static C, which this
-  boundary prepares. `curl` has not been needed. A package reader
+- **The tool is static C**, in `tool/`: one file per architecture,
+  `build/exclave`, that carries its launcher and the exclave README
+  (`tool/blobs.S`), takes a directory holding `tree/` and does not open
+  a network connection. It is ordinary C on the C library, unlike the
+  launcher, since it never runs inside another program; paths are bytes
+  and every list it prints or hashes is in the order of their bytes.
+  The tests judge it only through its commands. The steps before it are
+  Python: `unpack/` (`scripts/unpack`), which makes a tree from package
+  files, and before that `fetch/debs.py`, `fetch/apks.py` and
+  `fetch/rpms.py`. `curl` has not been needed. A package reader
   (`deb.py`, `apk.py`, `rpm.py`) has one interface,
-  `unpack/reader.py`'s `Reader`, and is chosen by the file. A change to
-  the tool's output is checked by `test/dogfood.py`. `src/gdb.py` is
-  data the launcher carries for gdb, not code it runs, and it runs on
-  gdb's own Python (ruff targets 3.7 there).
+  `unpack/reader.py`'s `Reader`, and is chosen by the file. `src/gdb.py`
+  is data the launcher carries for gdb, not code it runs, and it runs
+  on gdb's own Python (ruff targets 3.7 there).
 - **Python runs only through the pinned uv**, never the machine's
   `python3`: `scripts/install-uv` puts uv in `.uv/` (a static musl build
   per architecture, checked against a committed checksum), uv installs
   the Python `.python-version` names (3.15) and the dev tools `uv.lock`
   pins, and every command is a POSIX `sh` wrapper in `scripts/` that
-  sources `scripts/lib.sh`. The tool is the `exclave` package and the
-  step before it the `unpack` package, which `uv sync` installs into
-  `.venv` in editable form; everything imports them as packages (`from
-  exclave import build, cli`), never by editing `sys.path`, and a test driver imports its helpers as a script's
-  siblings. Python files are programs the wrappers run, without
-  shebangs or executable bits. The matrix carries the same
-  Python into its VMs, and the tool's own exclave is built on it.
+  sources `scripts/lib.sh`. `unpack` is a package, which `uv sync`
+  installs into `.venv` in editable form; everything imports it as a
+  package (`from unpack import steps`), never by editing `sys.path`,
+  and a test driver imports its helpers as a script's siblings. Python
+  files are programs the wrappers run, without shebangs or executable
+  bits. The matrix carries the same Python into its VMs.
   Running Python by hand: `.uv/bin/uv run python FILE` with the
   environment `scripts/lib.sh` sets.
 - **The Python is ruff- and ty-clean**, as `scripts/check` checks
@@ -136,18 +137,20 @@ The loop that has served well, in the order it pays:
   modern types, a rule ignored in `pyproject.toml` only with its reason
   beside it, and a `# noqa` or `# ty: ignore[rule]` only where fixing
   would be wrong, with its reason on the line.
-- **The C is built by `scripts/build`**, with the flags `scripts/lib.sh`
-  gives every C build, and nothing is built when the launchers are up
-  to date; the gate runs it first.
+- **The C is built by `scripts/build`**, the launchers and the command,
+  with the flags `scripts/lib.sh` gives every C build, and nothing is
+  built when they are up to date; the gate runs it first.
 - **The C is clang-formatted and clean under gcc's strict warnings and
   clang-tidy**, as `scripts/check` checks (`.clang-format`,
-  `lib.sh`'s flags, `.clang-tidy`); `scripts/check --fix` formats. A trailing
+  `lib.sh`'s flags, `.clang-tidy` and `tool/.clang-tidy`);
+  `scripts/check --fix` formats. A trailing
   comment that does not fit in 120 columns goes above its statement,
   and a table stays one between `clang-format off` and `on`. A check is
   turned off in `.clang-tidy` with its reason, and a `NOLINT(check)`
   carries its reason on the line. The gate's unit step runs the unit
   tests under ASan and UBSan, and the gate runs the suite once on
-  `build/launcher-debug`, whose UBSan checks trap.
+  `build/launcher-debug`, whose UBSan checks trap; `build/exclave-asan`
+  is the command under both.
 - **Hashes are BLAKE2b-256.** Manifest and hashes file use the strict
   grammar of `docs/DESIGN.md` 6.2, and `format` output is the accepted spelling.
   There is no index: the launcher reads the manifest and the tree, and
@@ -157,13 +160,13 @@ The loop that has served well, in the order it pays:
   measures it again, and a number the current code has not produced is
   better left out than quoted.
 - **The gate.** `scripts/gate EXCLAVE...` (`EXCLAVE_TEST_INPUTS=DIR`,
-  the directory `scripts/inputs` filled, adds the Docker profile and
-  dogfood) runs, of the code checks, the unit tests, the stack budget,
+  the directory `scripts/inputs` filled, adds the Docker profile) runs,
+  of the code checks, the unit tests, the stack budget,
   the suite on every exclave in two orders and, for the first exclave,
   under the plain terminal's AppArmor label, the oracles and the syscall
   probe, the ones the changed paths can affect (`--full`: all of them,
-  about a minute), every step in parallel on copies with its time
-  printed, and a 30 s budget per test. Every driver runs `build/launcher`
+  about 80 s), four steps at a time (`--jobs N`; this laptop is in use
+  meanwhile) on copies with its time printed, and a 30 s budget per test. Every driver runs `build/launcher`
   on a copy of its own, the suite an exclave it wraps from the given
   exclave's tree and the others `tree.fresh_exclave`, a copy relinked
   with `build/launcher`, since the launcher an exclave carries is the
@@ -209,7 +212,7 @@ mirror configured on this machine is `http://gb.archive.ubuntu.com/ubuntu`;
 
 Every development input is made by `scripts/inputs DIR`, which holds the
 exact fetch commands: the gcc, Alpine, Fedora and clang exclaves of the
-gate, Docker's seccomp profile and dogfood's packages, the CentOS 7 rpms
+gate, Docker's seccomp profile, the CentOS 7 rpms
 for `test/sysroot.py`, the arm64 debs for the emulated row, and the
 sources of `test/realsoft.py` and `test/bench.py`. It is the one script
 that downloads: a test takes its inputs as paths and touches no

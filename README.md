@@ -54,8 +54,8 @@ kernel 7.0, glibc 2.39.
 
 ## First run
 
-You need an x86-64 or aarch64 Linux host with `gcc` and `curl`
-or `wget`, and the network: `scripts/install-uv` fetches a pinned,
+You need an x86-64 or aarch64 Linux host with `gcc` and its static C
+library (Ubuntu's `libc6-dev`), `curl` or `wget`, and the network: `scripts/install-uv` fetches a pinned,
 checksummed [uv](https://docs.astral.sh/uv/) into `.uv/`, which provides
 the pinned Python and everything else Python the project uses; the
 example then downloads Ubuntu's gcc packages and CentOS 7's glibc, 121
@@ -219,7 +219,9 @@ first user meets, with the rule behind each and what to do:
 
 ## Making your own exclave
 
-The `exclave` command takes a directory holding `tree/` and never
+The `exclave` command is `build/exclave`, one static file that carries
+its launcher and runs with nothing beside it; `scripts/exclave` runs it
+from the checkout. It takes a directory holding `tree/` and never
 fetches. Whatever made the tree is the step before it, and for package
 files that is `scripts/unpack`, a program of its own beside the three
 fetchers here: it reads each package's own control archive, reports
@@ -354,7 +356,7 @@ the design decisions a change is expected to respect.
 ```
 scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, clang-format and clang-tidy from uv.lock, and gcc's strict warnings; --fix lets them correct
 scripts/inputs ~/.cache/exclave-inputs   # the development inputs: the gate's four exclaves, Docker's seccomp profile, the examples' inputs; skips what is present
-D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # the commit gate: the steps the change can affect, of the code checks, unit tests, stack budget, the suite in two orders and under the plain terminal's label, the oracles, the syscall probe, the Docker profile and dogfood; --full runs all of them, about a minute
+D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # the commit gate: the steps the change can affect, of the code checks, unit tests, stack budget, the suite in two orders and under the plain terminal's label, the oracles, the syscall probe and the Docker profile, four at a time (--jobs N); --full runs all of them, about 80 s
 scripts/test --exclave gcc.exclave       # the suite alone; -k NAME, --order random
 scripts/matrix --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix, when the gate says a change reaches the VMs: cloud images under QEMU/KVM, one at a time (--jobs N), about eleven minutes
 scripts/exercise --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the launcher, side by side
@@ -368,9 +370,9 @@ scripts/install-uv   the pinned uv into .uv/, checked against a committed checks
 scripts/exclave      the exclave command; scripts/unpack, fetch-debs, fetch-apks and fetch-rpms the steps before it
 scripts/example      the first run: from the build to a program built inside an exclave that runs on any glibc since 2.17, every command shown
 scripts/check        the code checks; scripts/gate the commit gate; scripts/inputs the development inputs; scripts/examples the example runs
-scripts/test         the suite; scripts/matrix, exercise, sysroot and dogfood the other test drivers
-pyproject.toml       the Python project: no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python
-scripts/build        the launchers: build/launcher, build/launcher-old for the nesting regression, build/launcher-debug with UBSan's checks, and the aarch64 ones with a cross compiler; nothing when they are up to date
+scripts/test         the suite; scripts/matrix, exercise and sysroot the other test drivers
+pyproject.toml       the Python project, unpack: no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python
+scripts/build        the launchers, build/launcher, build/launcher-old for the nesting regression and build/launcher-debug with UBSan's checks; the command, build/exclave, and build/exclave-asan for the gate; the aarch64 ones with a cross compiler; nothing when they are up to date
 src/sys.h            syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
 src/elf.h            the ELF structures the loader needs
 src/common.h         constants, the run-time state (struct exclave), every module's interface
@@ -387,12 +389,18 @@ src/scratch.c        handler memory: mmap'd chunks with liveness reclamation (7.
 src/isa.c            the CPU check (7.7): x86-64 psABI levels by cpuid and XCR0, aarch64 levels by AT_HWCAP
 src/str.c            string helpers, arena, the shebang parser
 src/log.c            EXCLAVE_LOG and fatal messages
-exclave/cli.py       the command line: wrap, unwrap, check, prune, format, hash, relink; the package's entry point
-exclave/grammar.py   the strict grammar of the manifest and the hashes file (6.2), and its canonical form
-exclave/layout.py    an exclave's files: wrappers and originals, the launcher, hashing, EXCLAVE_LOG lines
-exclave/build.py     placeholders, pruning, tree hash, hashes file, unwrap
-exclave/elfcheck.py  the static and dynamic checks of 10.3, and the loader's library search they share with pruning
-unpack/cli.py        the step before the tool: package files -> an unwrapped exclave (10.1); imports nothing of exclave/
+tool/tool.h          the exclave command (10), static C on the C library: every module's interface
+tool/main.c          the command line, what every command shares, hash and format
+tool/grammar.c       the strict grammar of the manifest and the hashes file (6.2), and its canonical form
+tool/tree.c          the walks of a tree in the order of its names' bytes, and the tree hash (6.4)
+tool/layout.c        the launcher, the README and the hashes file; wrap, unwrap and relink
+tool/paths.c         virtual paths resolved in the tree, and the visibility rule's prefixes (8.1)
+tool/elf.c           the ELF headers, PT_INTERP, the dynamic section and ld.so.cache the checks read
+tool/check.c         the static and dynamic checks of 10.3, the loader's library search, check
+tool/prune.c         prune (10.4)
+tool/blake2b.c       BLAKE2b, from RFC 7693
+tool/blobs.S         the launcher and tool/README.txt, the README every exclave gets, carried as data
+unpack/cli.py        the step before the tool: package files -> an unwrapped exclave (10.1)
 unpack/steps.py      extraction rules, synthesis, the volatile directories, dependency report, the pkg records
 unpack/reader.py     the interface every package reader provides
 unpack/deb.py        the Debian reader: ar, tar, compression, control stanzas, dependency fields, version order
@@ -409,7 +417,6 @@ test/exercise.py     one program run under bwrap and under the launcher, the ans
 test/docker_profile.py   an exclave under Docker's default seccomp profile, which scripts/inputs fetches
 test/matrix.py       the kernel matrix in VMs, carrying the pinned Python for each; test/vm_run.py one VM
 test/sysroot.py      a glibc sysroot as a data directory and an output built against it, for the matrix to run natively
-test/dogfood.py      the tool's exclave building an exclave that must reproduce the host-built hashes file
 test/realsoft.py     real projects built inside and outside an exclave; test/bench.py the performance table
 test/syscalls.py     every kernel syscall classified; test/stackcheck.py the stack budget
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule
