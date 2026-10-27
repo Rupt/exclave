@@ -2320,7 +2320,9 @@ and stay fixed.
     a working directory so deep that the two together pass `PATH_MAX`
     answers `ENAMETOOLONG` too, where the kernel, walking relatively,
     succeeds, because the handler resolves in virtual space and
-    re-issues absolutely.
+    re-issues absolutely. So does an exec from inside of a path within
+    15 bytes of `PATH_MAX`, which the child launcher reads from
+    `EXCLAVE_EXECFN` and `EXCLAVE_EXEC` in its environment (7.4.5).
 
 14. **A concurrent `chdir` can race a relative path.** If another
     thread changes directory during a relative-path syscall, the

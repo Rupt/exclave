@@ -175,6 +175,7 @@ static long setxattr_args(struct scratch *S, const char *name, size_t size, int 
 static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int allow_empty)
 {
     S->magic_end = 0;
+    S->touched_exclave = 0;
     if (!a[pi] && allow_empty == 2) return 1;
     long r = copy_str_in(S->pid, S->b1, (const char *)a[pi]);
     if (r < 0) return r;
@@ -287,6 +288,9 @@ static long ro_delete(struct scratch *S, const char *v)
     return is_exclave_path(v) ? -EROFS : 0;
 }
 static void real_nofollow(struct scratch *S, int nofollow);
+/* The empty path or the NULL an AT_EMPTY_PATH call was given, for its re-issue: the kernel does not read the program's
+ * memory again, which another thread could have changed since the handler read it. */
+static long empty_as_given(long path) { return path ? (long)"" : 0; }
 /* A no-follow flag for a re-issue on the resolved real path, which names the object the walk found; none when the walk
  * ended on a magic link to an object with no path, which the kernel reaches only by following the link (canon). */
 static long nofollow(const struct scratch *S, long flag) { return S->magic_end ? 0 : flag; }
@@ -299,9 +303,9 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     long r = resolve(S, a, pi, di, follow, 0);
     /* a walk that never touched the exclave is the kernel's own to make, with every
      * resolve flag, on the host's own mounts (13 item 22); RESOLVE_CACHED dropped */
-    if (nr == NR_openat2 && r <= 0 && !S->touched_exclave) {
+    if (nr == NR_openat2 && r <= 0 && r != -EFAULT && r != -ENAMETOOLONG && !S->touched_exclave) {
         S->how0[2] &= ~(unsigned long)RESOLVE_CACHED;
-        return RE5(NR_openat2, a[0], a[1], S->how0, 24, 0);
+        return RE5(NR_openat2, a[0], S->b1, S->how0, 24, 0); /* the path the handler read */
     }
     if (r < 0) return r;
     int acc = (int)(flags & O_ACCMODE);
@@ -519,6 +523,11 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
                 continue;
             env[n++] = env[i];
         }
+    }
+    /* a name the child launcher would read cut short is refused, as a path too long to re-issue is (13 item 13) */
+    if (xstrlen(S->v2) + 15 >= PATH_MAX || (loader && xstrlen(v) + 13 >= PATH_MAX)) {
+        vector_free(big, envc + 4);
+        return -ENAMETOOLONG;
     }
     int k = loader ? 3 : 2;
     for (long i = n; i > 0; i--) env[i + k - 1] = env[i - 1];
@@ -964,7 +973,8 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
     if (r) return r;
     unsigned short fam;
     xmemcpy(&fam, S->extra, 2);
-    if (fam != AF_UNIX || len == 2 || S->extra[2] == 0) return RE5(nr, a[0], a[1], a[2], 0, 0);
+    /* re-issued from the handler's copy, as for every address read below */
+    if (fam != AF_UNIX || len == 2 || S->extra[2] == 0) return RE5(nr, a[0], S->extra, len, 0, 0);
     /* unix_mkname_bsd: the path ends at the length or at a NUL */
     size_t n = (size_t)len - 2;
     if (n > 108) n = 108;
@@ -982,7 +992,7 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
         /* a relative walk that stayed in the host's domain is the kernel's
          * own, as given: from a working directory of any depth, and getsockname answers the
          * program's own name */
-        if (!S->touched_exclave) return RE5(nr, a[0], a[1], a[2], 0, 0);
+        if (!S->touched_exclave) return RE5(nr, a[0], S->extra, len, 0, 0);
         /* otherwise the kernel gets the resolved real path, as for every other syscall, since an exclave symlink or a
          * rewritten magic link may have led here (oracle 17.7) */
         to_real(S->v, S->real, S->tmp);
@@ -1060,7 +1070,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if ((unsigned)a[3] & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_EMPTY_PATH | AT_STATX_SYNC_TYPE))
             return -EINVAL;
         if ((r = resolve(S, a, 1, 0, !(a[3] & AT_SYMLINK_NOFOLLOW), (a[3] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
-        if (r == 1) return RE5(nr, a[0], a[1], a[2], a[3], 0);
+        if (r == 1) return RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], 0);
         real_nofollow(S, (a[3] & AT_SYMLINK_NOFOLLOW) != 0);
         return RE5(nr, AT_FDCWD, S->real, a[2], a[3] | nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
     case NR_statx: {
@@ -1070,7 +1080,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
             (fl & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_EMPTY_PATH | AT_STATX_SYNC_TYPE)))
             return -EINVAL;
         if ((r = resolve(S, a, 1, 0, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
-        if (r == 1) return RE5(nr, a[0], a[1], a[2], a[3], a[4]);
+        if (r == 1) return RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4]);
         real_nofollow(S, (a[2] & AT_SYMLINK_NOFOLLOW) != 0);
         return RE5(nr, AT_FDCWD, S->real, a[2] | nofollow(S, AT_SYMLINK_NOFOLLOW), a[3], a[4]);
     }
@@ -1263,7 +1273,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
             return -EINVAL; /* do_fchownat: the flags first */
         if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
-        if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], a[1], a[2], a[3], a[4]);
+        if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4]);
         if ((r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);
         return RE5(NR_fchownat, AT_FDCWD, S->real, a[pi + 1], a[pi + 2], nofollow(S, AT_SYMLINK_NOFOLLOW));
@@ -1302,7 +1312,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         }
         if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
         if (r == 1) { /* AT_EMPTY_PATH: the descriptor itself (5.9+) */
-            if (!fd_exclave(S, (int)a[0])) return RE5(nr, a[0], a[1], a[2], a[3], 0);
+            if (!fd_exclave(S, (int)a[0])) return RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], 0);
             return badns ? -EINVAL : -EROFS;
         }
         /* the name's own error, then the times, then the write */
@@ -1320,14 +1330,15 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_setxattrat:
     case NR_removexattrat: /* (dfd, path, at_flags, name, [xattr_args, its size]) */
         if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
-        if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE6(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
+        if (r == 1)
+            return fd_exclave(S, (int)a[0]) ? -EROFS : RE6(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4], a[5]);
         if ((r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);
         return RE6(nr, AT_FDCWD, S->real, a[2] | nofollow(S, AT_SYMLINK_NOFOLLOW), a[3], a[4], a[5]);
     case NR_getxattrat:
     case NR_listxattrat:
         if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
-        if (r == 1) return RE6(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
+        if (r == 1) return RE6(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4], a[5]);
         to_real(S->v, S->real, S->tmp);
         return RE6(nr, AT_FDCWD, S->real, a[2] | nofollow(S, AT_SYMLINK_NOFOLLOW), a[3], a[4], a[5]);
     /* (dfd, path, attr, size, at_flags): the chattr ioctls as syscalls */
@@ -1335,7 +1346,9 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_file_setattr:
         if ((r = resolve(S, a, 1, 0, !(a[4] & AT_SYMLINK_NOFOLLOW), (a[4] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1)
-            return (nr == NR_file_setattr && fd_exclave(S, (int)a[0])) ? -EROFS : RE5(nr, a[0], a[1], a[2], a[3], a[4]);
+            return (nr == NR_file_setattr && fd_exclave(S, (int)a[0]))
+                       ? -EROFS
+                       : RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4]);
         if (nr == NR_file_setattr) {
             r = ro_attr(S, S->v);
             if (r) return r;
