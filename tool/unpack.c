@@ -2,9 +2,10 @@
  *
  * The step scripts/unpack takes in Python, for .apk files so far, and to the same result, which test/unpack_oracle.py
  * compares: each package's payload extracted into OUT/tree, what its install scripts would have made synthesised, what
- * it ships in the volatile directories removed, and each package file recorded in OUT/.exclave/hashes. The dependency
- * report is not here yet, nor the synthesis an Alpine set rarely needs (the ca-certificates bundles and an ELF
- * ldconfig); a set that would need one is refused, so that the tree is never other than scripts/unpack makes. On any
+ * it ships in the volatile directories removed, the dependencies the set does not satisfy reported, and each package
+ * file recorded in OUT/.exclave/hashes. The synthesis an Alpine set rarely needs (the ca-certificates bundles and an
+ * ELF ldconfig) is not here yet; a set that would need it is refused, so that the tree is never other than
+ * scripts/unpack makes. On any
  * failure OUT is removed. Paths are Python's spellings throughout: os.path.join, dirname, realpath and makedirs as
  * Python has them, so that a tree's symlinks lead both to the same place. */
 #include <errno.h>
@@ -271,7 +272,8 @@ static const char *const VOLATILE[] = {"/proc", "/dev", "/sys", "/tmp", "/var/tm
 
 struct pkg {
     const char *path;
-    char *name, *version, *arch, *replaces;
+    char *name, *version, *arch;
+    char *replaces, *depends, *provides; /* each field's lines, joined by spaces */
 };
 
 struct apk {
@@ -317,10 +319,11 @@ static char *stripped(const char *s, size_t n)
     return c;
 }
 
-/* .PKGINFO's pkgname, pkgver, arch and replaces, as the Python's control() gives them */
+/* .PKGINFO's pkgname, pkgver, arch, replaces, depend and provides, as the Python's control() gives them */
 static void control(const char *path, const struct apk *a, struct pkg *p)
 {
-    struct buf replaces = {0};
+    static const char *const joined[] = {"replaces", "depend", "provides"};
+    struct buf fields[3] = {{0}};
     char *name = NULL, *version = NULL, *arch = NULL;
     for (size_t i = 0; i < a->t.n; i++) {
         const struct tar_member *m = &a->t.m[i];
@@ -336,10 +339,12 @@ static void control(const char *path, const struct apk *a, struct pkg *p)
                                : !strcmp(key, "pkgver") ? &version
                                : !strcmp(key, "arch")   ? &arch
                                                         : NULL;
+                int j = 0;
+                while (j < 3 && strcmp(key, joined[j]) != 0) j++;
                 if (first && !*first) *first = v;
-                else if (!strcmp(key, "replaces")) {
-                    if (replaces.n) buf_add(&replaces, " ", 1);
-                    buf_str(&replaces, v);
+                else if (j < 3) {
+                    if (fields[j].n) buf_add(&fields[j], " ", 1);
+                    buf_str(&fields[j], v);
                     free(v);
                 } else free(v);
                 free(key);
@@ -352,31 +357,69 @@ static void control(const char *path, const struct apk *a, struct pkg *p)
         free(arch);
         arch = str_copy("all");
     }
-    buf_add(&replaces, "", 1);
-    *p = (struct pkg){path, name, version, arch, replaces.p};
+    for (int j = 0; j < 3; j++) buf_add(&fields[j], "", 1);
+    *p = (struct pkg){path, name, version, arch, fields[0].p, fields[1].p, fields[2].p};
 }
 
-/* the names a Replaces field gives, as apk's parse_deps reads its items: a ! item is a conflict, dropped */
-static void replaced(const struct pkg *p, struct strs *out)
+/* one item of a dependency field: a name, and an operator and version or neither */
+struct dep {
+    char *name, *op, *ver;
+};
+struct deps {
+    struct dep *d;
+    size_t n;
+};
+
+static char *span(const char *s, size_t n)
 {
-    for (const char *s = p->replaces; *s;) {
+    char *c = xrealloc(NULL, n + 1);
+    memcpy(c, s, n);
+    c[n] = 0;
+    return c;
+}
+
+/* apk's parse_deps: the items of a depend, provides or replaces field, apart at blanks, each a name up to its
+ * operator, then the operator and a version of at least one byte; a two-byte operator gives way to its first byte when
+ * nothing would follow it, as the Python's pattern backtracks. A ! item is a conflict, dropped. */
+static void parse_deps(const char *field, struct deps *out)
+{
+    static const char *const two[] = {"<=", ">=", "><"};
+    *out = (struct deps){0};
+    for (const char *s = field; *s;) {
         while (*s && py_space(*s)) s++;
         if (!*s) break;
         const char *end = s;
         while (*end && !py_space(*end)) end++;
         const char *name = s + (*s == '!'), *op = name;
         while (op < end && !strchr("<>=~", *op)) op++;
-        if (op == name || *name == '!' || (op < end && op + 1 == end))
-            fail("%s: cannot parse dependency '%.*s'", p->path, (int)(end - s), s);
+        size_t oplen = 0;
+        for (int i = 0; i < 3 && op < end; i++)
+            if (end - op > 2 && !strncmp(op, two[i], 2)) oplen = 2;
+        if (op < end && !oplen && end - op > 1) oplen = 1;
+        if (op == name || *name == '!' || (op < end && !oplen))
+            fail("cannot parse dependency '%.*s'", (int)(end - s), s);
         if (*s != '!') {
-            char *n = xrealloc(NULL, (size_t)(op - name) + 1);
-            memcpy(n, name, (size_t)(op - name));
-            n[op - name] = 0;
-            strs_add(out, n);
-            free(n);
+            out->d = xrealloc(out->d, (out->n + 1) * sizeof *out->d);
+            out->d[out->n++] = (struct dep){span(name, (size_t)(op - name)), op < end ? span(op, oplen) : NULL,
+                                            op < end ? span(op + oplen, (size_t)(end - op) - oplen) : NULL};
         }
         s = end;
     }
+}
+
+static void deps_free(struct deps *d)
+{
+    for (size_t i = 0; i < d->n; i++) free(d->d[i].name), free(d->d[i].op), free(d->d[i].ver);
+    free(d->d);
+}
+
+/* the names a Replaces field gives */
+static void replaced(const struct pkg *p, struct strs *out)
+{
+    struct deps d;
+    parse_deps(p->replaces, &d);
+    for (size_t i = 0; i < d.n; i++) strs_add(out, d.d[i].name);
+    deps_free(&d);
 }
 
 /* _safe_rel: a member's path relative to the tree, refusing .. and the reserved .real */
@@ -810,6 +853,217 @@ static void strip_volatile(const char *root)
     }
 }
 
+/* ---------------------------------------------------------------- the dependency report (10.1) */
+/* Python's int() of a run of digits, compared without its size: by length once leading zeros are gone */
+static int cmp_digits(const char *a, size_t na, const char *b, size_t nb)
+{
+    while (na > 1 && *a == '0') a++, na--;
+    while (nb > 1 && *b == '0') b++, nb--;
+    if (na != nb) return na < nb ? -1 : 1;
+    int c = memcmp(a, b, na);
+    return (c > 0) - (c < 0);
+}
+
+struct num {
+    const char *p;
+    size_t n;
+};
+/* a version as apk-tools compares it: numbers, a letter, suffixes by rank and number, the revision */
+struct apk_version {
+    struct num nums[64], sufnum[16], rev;
+    int nnums, nsufs, rank[16];
+    char letter;
+};
+
+static size_t digits(const char *s) { return strspn(s, "0123456789"); }
+
+/* 0, or -1 for a version apk would not accept, which compares as 0 */
+static int apk_version(const char *v, struct apk_version *k)
+{
+    static const char *const names[] = {"alpha", "beta", "pre", "rc", "cvs", "svn", "git", "hg", "p"};
+    static const int ranks[] = {-4, -3, -2, -1, 1, 2, 3, 4, 5};
+    static const char zero[] = "0";
+    *k = (struct apk_version){.rev = {zero, 1}};
+    const char *s = v;
+    for (;;) {
+        size_t d = digits(s);
+        if (!d || k->nnums == 64) return -1;
+        k->nums[k->nnums++] = (struct num){s, d};
+        s += d;
+        if (*s != '.' || !digits(s + 1)) break;
+        s++;
+    }
+    if (*s >= 'a' && *s <= 'z') k->letter = *s++;
+    while (*s == '_') {
+        int i = 0;
+        while (i < 9 && strncmp(s + 1, names[i], strlen(names[i])) != 0) i++;
+        if (i == 9 || k->nsufs == 16) return -1;
+        s += 1 + strlen(names[i]);
+        size_t d = digits(s);
+        k->rank[k->nsufs] = ranks[i];
+        k->sufnum[k->nsufs++] = d ? (struct num){s, d} : (struct num){zero, 1};
+        s += d;
+    }
+    if (s[0] == '-' && s[1] == 'r' && digits(s + 2)) {
+        k->rev = (struct num){s + 2, digits(s + 2)};
+        s += 2 + k->rev.n;
+    }
+    return *s ? -1 : 0;
+}
+
+/* apk's vercmp: -1, 0 or 1 */
+static int apk_vercmp(const char *a, const char *b)
+{
+    static const char zero[] = "0";
+    struct apk_version x, y;
+    if (apk_version(a, &x)) x = (struct apk_version){.nums = {{zero, 1}}, .nnums = 1, .rev = {zero, 1}};
+    if (apk_version(b, &y)) y = (struct apk_version){.nums = {{zero, 1}}, .nnums = 1, .rev = {zero, 1}};
+    for (int i = 0; i < x.nnums && i < y.nnums; i++) {
+        int c = cmp_digits(x.nums[i].p, x.nums[i].n, y.nums[i].p, y.nums[i].n);
+        if (c) return c;
+    }
+    if (x.nnums != y.nnums) return x.nnums < y.nnums ? -1 : 1;
+    if (x.letter != y.letter) return (unsigned char)x.letter < (unsigned char)y.letter ? -1 : 1;
+    /* no suffix compares as one of rank 0 */
+    if (!x.nsufs) x.nsufs = 1, x.rank[0] = 0, x.sufnum[0] = (struct num){zero, 1};
+    if (!y.nsufs) y.nsufs = 1, y.rank[0] = 0, y.sufnum[0] = (struct num){zero, 1};
+    for (int i = 0; i < x.nsufs && i < y.nsufs; i++) {
+        if (x.rank[i] != y.rank[i]) return x.rank[i] < y.rank[i] ? -1 : 1;
+        int c = cmp_digits(x.sufnum[i].p, x.sufnum[i].n, y.sufnum[i].p, y.sufnum[i].n);
+        if (c) return c;
+    }
+    if (x.nsufs != y.nsufs) return x.nsufs < y.nsufs ? -1 : 1;
+    return cmp_digits(x.rev.p, x.rev.n, y.rev.p, y.rev.n);
+}
+
+/* whether version meets `op want`; no operator always does, and ~ is a fuzzy match */
+static int satisfies(const char *version, const char *op, const char *want)
+{
+    if (!op) return 1;
+    if (!strcmp(op, "~")) {
+        size_t k = strlen(want);
+        return !strcmp(version, want) || (!strncmp(version, want, k) && (version[k] == '.' || version[k] == '-'));
+    }
+    int c = apk_vercmp(version, want);
+    if (!strcmp(op, "=")) return c == 0;
+    if (!strcmp(op, "<")) return c < 0;
+    if (!strcmp(op, ">")) return c > 0;
+    if (!strcmp(op, "<=")) return c <= 0;
+    if (!strcmp(op, ">=")) return c >= 0;
+    return 1;
+}
+
+/* whether want, a virtual path, names an entry in the tree, its symlinks resolved inside it, at most 40 of them */
+static int resolves(const char *root, const char *want)
+{
+    struct parts rest = {0};
+    size_t count = push_split(&rest, want, strlen(want)), hops = 0;
+    struct buf cur = {0};
+    set_path(&cur, "");
+    int found = 1;
+    while (count && found) {
+        char *comp = rest.p[--rest.n].s;
+        count--;
+        if (!*comp || !strcmp(comp, ".")) {
+            free(comp);
+            continue;
+        }
+        if (!strcmp(comp, "..")) {
+            char *last = strrchr(cur.p, '/');
+            cur.n = last ? (size_t)(last - cur.p) : 0;
+            cur.p[cur.n] = 0;
+            free(comp);
+            continue;
+        }
+        struct buf v = {0};
+        buf_str(&v, cur.p);
+        buf_add(&v, "/", 1);
+        buf_str(&v, comp);
+        buf_add(&v, "", 1);
+        char *real = vpath(root, v.p), target[4097];
+        struct stat st;
+        int there = !lstat(real, &st), link = there && S_ISLNK(st.st_mode);
+        ssize_t k = link && ++hops <= 40 ? readlink(real, target, sizeof target - 1) : -1;
+        if (there && !link) set_path(&cur, v.p);
+        else if (k < 0) found = 0; /* missing, or past the kernel's 40 links (ELOOP) */
+        else {
+            target[k] = 0;
+            count += push_split(&rest, target, (size_t)k);
+            if (target[0] == '/') set_path(&cur, "");
+        }
+        free(real), free(v.p), free(comp);
+    }
+    for (size_t i = 0; i < rest.n; i++) free(rest.p[i].s);
+    free(rest.p), free(cur.p);
+    return found;
+}
+
+static int by_name(const void *a, const void *b)
+{ return strcmp((*(const struct pkg *const *)a)->name, (*(const struct pkg *const *)b)->name); }
+
+/* a line for every dependency the set does not satisfy, by name, versioned provides and, for a path, the tree; a
+ * report, not a refusal: the set is the user's */
+static void dependency_report(const char *root, const struct pkg *pkgs, int n)
+{
+    struct map provides = {0}; /* each name's provided versions, NUL-separated, an empty one for an unversioned */
+    for (int i = 0; i < n; i++) {
+        struct deps d;
+        parse_deps(pkgs[i].provides, &d);
+        for (size_t j = 0; j < d.n; j++) {
+            struct map_entry *e = map_find(&provides, d.d[j].name);
+            struct buf *b = e ? e->v : NULL;
+            if (!b) {
+                b = xrealloc(NULL, sizeof *b);
+                *b = (struct buf){0};
+                map_put(&provides, d.d[j].name, b);
+            }
+            const char *ver = d.d[j].op && !strcmp(d.d[j].op, "=") ? d.d[j].ver : "";
+            buf_add(b, ver, strlen(ver) + 1);
+        }
+        deps_free(&d);
+    }
+    const struct pkg **sorted = xrealloc(NULL, (size_t)n * sizeof *sorted);
+    for (int i = 0; i < n; i++) sorted[i] = &pkgs[i];
+    qsort(sorted, (size_t)n, sizeof *sorted, by_name); /* names are unique, so the order is the Python's */
+    struct buf lines = {0};
+    for (int i = 0; i < n; i++) {
+        struct deps d;
+        parse_deps(sorted[i]->depends, &d);
+        for (size_t j = 0; j < d.n; j++) {
+            const struct dep *x = &d.d[j];
+            int ok = x->name[0] == '/' && resolves(root, x->name);
+            for (int k = 0; k < n && !ok; k++)
+                ok = !strcmp(pkgs[k].name, x->name) && satisfies(pkgs[k].version, x->op, x->ver);
+            const struct map_entry *e = map_find(&provides, x->name);
+            if (e && !ok) {
+                const struct buf *b = e->v;
+                for (const char *pv = b->p; pv < b->p + b->n && !ok; pv += strlen(pv) + 1)
+                    ok = !x->op || (*pv && satisfies(pv, x->op, x->ver));
+            }
+            if (ok) continue;
+            buf_str(&lines, "depends: ");
+            buf_str(&lines, sorted[i]->name);
+            buf_str(&lines, " needs ");
+            buf_str(&lines, x->name);
+            if (x->op) {
+                buf_str(&lines, " (");
+                buf_str(&lines, x->op);
+                buf_str(&lines, " ");
+                buf_str(&lines, x->ver);
+                buf_str(&lines, ")");
+            }
+            buf_str(&lines, ", not in the set\n");
+        }
+        deps_free(&d);
+    }
+    if (lines.n) fwrite(lines.p, 1, lines.n, stdout);
+    free(lines.p);
+    free(sorted);
+    for (size_t i = 0; i < provides.cap; i++)
+        if (provides.e[i].k) free(((struct buf *)provides.e[i].v)->p);
+    map_free(&provides, 1);
+}
+
 /* ---------------------------------------------------------------- the inputs (10.1 step 5, 6.4) */
 static int printable(const char *s)
 {
@@ -943,6 +1197,8 @@ int cmd_unpack(int argc, char **argv)
     extract(root, pkgs, n, &links, &parents);
     synthesise(root, pkgs, n);
     strip_volatile(root);
+    /* after synthesis, so that a file dependency is asked of the finished tree */
+    dependency_report(root, pkgs, n);
     write_records(out, pkgs, n);
     printf("unpacked %d packages into %s; exclave wrap %s makes it an exclave\n", n, out, out);
     free(made);
@@ -950,7 +1206,9 @@ int cmd_unpack(int argc, char **argv)
     free(root);
     map_free(&links, 1);
     map_free(&parents, 0);
-    for (int i = 0; i < n; i++) free(pkgs[i].name), free(pkgs[i].version), free(pkgs[i].arch), free(pkgs[i].replaces);
+    for (int i = 0; i < n; i++)
+        free(pkgs[i].name), free(pkgs[i].version), free(pkgs[i].arch), free(pkgs[i].replaces), free(pkgs[i].depends),
+            free(pkgs[i].provides);
     free(pkgs);
     return 0;
 }

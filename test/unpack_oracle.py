@@ -8,7 +8,8 @@ same: every entry's kind, mode, link text, contents and hard-link group, and a f
 time when it came from the archive (one the run made is only said to be new). DIR, the apks
 directory scripts/inputs fills, adds Alpine's own set; the generated sets cover the gzip and DEFLATE
 forms zlib accepts and refuses, hand-built where zlib would not write them, the tar forms tarfile
-reads, conflicts and Replaces, the synthesis an Alpine set reaches, and the refusals. A difference
+reads, conflicts and Replaces, the synthesis an Alpine set reaches, the dependency report with
+apk-tools' version order under every operator, and the refusals. A difference
 that is right goes into EXPECTED with the rule that makes it so. Prints one line per difference and
 a summary; exit status 1 when one is unexplained.
 """
@@ -483,6 +484,71 @@ def sets(d: str, rng: random.Random, *, non_utf8: bool) -> dict[str, list[str]]:
     deb = os.path.join(d, "mixed.deb")
     shutil.copyfile(out["basic"][0], deb)
     out["mixed-format"] = [out["basic"][0], deb]
+    # the dependency report
+    out["deps"] = [
+        apk(
+            os.path.join(d, "deps-tool.apk"),
+            pkginfo(
+                "tool",
+                extra="".join(
+                    f"depend = {x}\n"
+                    for x in [
+                        "so:libfoo.so.1",
+                        "so:libfoo.so.1>=1",
+                        "absent-pkg>=2",
+                        "/bin/sh",
+                        "/usr/bin/absent-file",
+                        "/usr/lib/via-abs",
+                        "/loop",
+                        "/usr/../usr/lib/libfoo.so.1",
+                        "libfoo>=1.0",
+                        "libfoo<1.0",
+                        "libfoo~1",
+                        "libfoo~1.0-r",
+                        "libfoo><9",
+                        "cmd:busybox",
+                        "!conflict",
+                        "pc:zlib>=1.2",
+                        "pc:zlib>2",
+                        "weird=<1",
+                        "libfoo<=",
+                    ]
+                ),
+            ),
+            [mem("usr/bin/tool", data=b"t", mode=0o755)],
+        ),
+        apk(
+            os.path.join(d, "deps-libfoo.apk"),
+            pkginfo(
+                "libfoo",
+                extra="provides = so:libfoo.so.1=1 cmd:busybox\nprovides = pc:zlib=1.3.1 weird\n",
+            ),
+            [
+                mem("bin", "d"),
+                mem("bin/sh", "l", link="/usr/bin/real-sh"),
+                mem("usr/bin/real-sh", data=b"s", mode=0o755),
+                mem("usr/lib/libfoo.so.1", data=b"l"),
+                mem("usr/lib/via-abs", "l", link="/usr/lib/libfoo.so.1"),
+                mem("loop", "l", link="loop"),
+            ],
+        ),
+    ]
+    versions = [
+        "1", "1.0", "1.0.0", "1.2", "1.10", "1.2a", "1.2b", "1.2_alpha", "1.2_alpha2", "1.2_beta",
+        "1.2_pre1", "1.2_rc1", "1.2_rc1_p1", "1.2_p1", "1.2_cvs", "1.2_svn", "1.2_git", "1.2_hg",
+        "1.2-r1", "1.2-r10", "1.2_rc-r1", "001.02", "2", "1.2.3.4.5", "x1", "1.2-r", "1.2_unknown",
+        "99999999999999999999999.1", "1.2a_p2-r3", "1.0_alpha_beta",
+    ]  # fmt: skip
+    ops = ["<", "<=", "=", ">=", ">", "~", "><"]
+    want = "".join(
+        f"depend = t{i}{op}{v}\n" for i in range(len(versions)) for op in ops for v in versions
+    )
+    out["versions"] = [apk(os.path.join(d, "versions.apk"), pkginfo("order", extra=want), [])] + [
+        apk(os.path.join(d, f"v{i}.apk"), pkginfo(f"t{i}", version=v), [])
+        for i, v in enumerate(versions)
+    ]
+    one("bad-depend", base_members(), info=pkginfo("bd", extra="depend = a<\n"))
+    one("bad-provides", base_members(), info=pkginfo("bp", extra="provides = !\n"))
     # synthesis
     bb = [
         mem("bin", "d"),

@@ -3645,7 +3645,8 @@ its time, ok, SKIP or FAIL:
   contents, hard-link group and, from the archive, modification time.
   The sets are generated (the gzip and DEFLATE forms zlib accepts and
   refuses, some built by hand; the tar forms; conflicts and `Replaces`;
-  the synthesis an Alpine set reaches; the refusals), and with
+  the synthesis an Alpine set reaches; the dependency report, with 30
+  versions against 30 under every operator; the refusals), and with
   `EXCLAVE_TEST_INPUTS` Alpine's own packages too; a set the command
   does not read or synthesise yet must be refused by it alone;
 - when `EXCLAVE_TEST_INPUTS` names the directory `scripts/inputs`
@@ -3873,10 +3874,10 @@ questions.
 7. **`unpack` in the command.** `exclave unpack OUT APK...` makes from
    Alpine package files the tree `scripts/unpack` makes, as the unpack
    oracle (17) compares on generated sets and on Alpine's own: the
-   extraction rules of 10.1, busybox's applet links, and the synthesis
-   rules a set of `.apk` files can reach. It does not report
-   dependencies yet, nor read `.deb` and `.rpm` files, whose zstd, xz,
-   `ar` and cpio it lacks; a set that needs the CA bundles or an
+   extraction rules of 10.1, busybox's applet links, the synthesis
+   rules a set of `.apk` files can reach, and the dependency report in
+   apk-tools' version order. It does not read `.deb` and `.rpm` files
+   yet, whose zstd, xz, `ar` and cpio it lacks; a set that needs the CA bundles or an
    `ld.so.cache` synthesised, a GNU long name or a global PAX header is
    refused rather than unpacked differently. Whether the command takes
    unpacking over, leaving Python to the fetchers and the tests, is
