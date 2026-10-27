@@ -266,7 +266,7 @@ def prune(ex: str, logs: Iterable[str], own: elfcheck.Ownership) -> Pruned:
                 keep.add("/" + os.path.relpath(os.path.join(_v(root, d), name), root))
     # the libraries every kept ELF needs, by the loader's own search (10.3)
     elfs = []
-    for v in sorted(keep):
+    for v in sorted(keep, key=os.fsencode):
         real = os.path.join(root, v.lstrip("/"))
         if os.path.isfile(real) and not os.path.islink(real) and "/.real/" not in v:
             with open(tree.payload(v), "rb") as f:
