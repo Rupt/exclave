@@ -1067,12 +1067,18 @@ to_real(v):   v host-owned (8.1) ? v : tree + v
 from_real(r): r under tree ? r without the prefix and a final .real/ : r
 ```
 
-An intermediate component must be a directory, so a textual `..` cannot
-hide a missing one; a procfs magic link to something with no path, a
-pipe, a socket or a deleted file, ends the walk. An `openat2` walk
-(7.4.3) carries a scope and its resolve flags: the scope replaces `/`
-for absolute paths and link targets and stops `..`, and each flag is
-checked at the component it concerns, in the order the kernel checks it.
+An intermediate component must be a directory, so a textual `..`
+cannot hide a missing one. A procfs magic link below `/proc/<pid>/` to
+an object with no path ends the walk: a pipe, a socket or an anonymous
+inode, whose link text is not a path, and an unlinked file, whose text
+ends ` (deleted)` and leads nowhere else; a file that is really named
+so is found by its name. A walk that ends there is re-issued on the
+link, followed, as the kernel follows it, so that `stat` of
+`/dev/stdin` finds the pipe and `linkat` with `AT_SYMLINK_FOLLOW`
+links an `O_TMPFILE` file. An `openat2` walk (7.4.3) carries a scope
+and its resolve flags: the scope replaces `/` for absolute paths and
+link targets and stops `..`, and each flag is checked at the component
+it concerns, in the order the kernel checks it.
 
 A symlink's target is a virtual path whoever created the link. A host
 link `/tmp/x -> /usr/bin/gcc` reaches the exclave's gcc, as it would
@@ -3416,7 +3422,8 @@ meaning items 4 and 7.
      (`adversarial`);
    - *paths and the border*: working directories on either side, host
      symlinks, the read-only matrix of 8.2, unix sockets, `PATH_MAX`,
-     `openat2`'s `resolve` flags, `/proc` magic links and the `*xattrat`
+     `openat2`'s `resolve` flags, `/proc` magic links, those to objects
+     with no path among them, and the `*xattrat`
      calls;
    - *programs that matter*: the loader, `dlopen`, locales and gconv,
      Rust and Go, built outputs run inside, a byte-for-byte comparison

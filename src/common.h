@@ -240,6 +240,7 @@ char *scpy(char *d, const char *s, size_t n);
 char *scat(char *d, const char *s, size_t n);
 const char *base_name(const char *p);
 void ltoa_(long v, char *b); /* decimal, buffer >= 24 */
+long fd_real_path(int fd, char *out);
 void xtoa_(unsigned long v, char *b); /* lowercase hex, buffer >= 20 */
 int starts_dir(const char *s, const char *pfx); /* s == pfx or s starts with pfx + "/" ; "/" matches all */
 /* bump allocator for the manifest's strings, the tables, the environment; never freed */
@@ -273,6 +274,7 @@ struct scratch {
     unsigned resolve; /* openat2's resolve flags for the walk (7.4.3); 0 for every other syscall */
     /* set by canon: the walk started at, passed through or ended in the exclave's domain, or rewrote a magic link */
     int touched_exclave;
+    int magic_end; /* the walk ended on a magic link to an object with no path, which a re-issue must follow */
     /* openat2's struct open_how as given, for a walk that never touched the exclave (7.4.3) */
     unsigned long how0[3];
 };

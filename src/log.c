@@ -8,15 +8,9 @@ static unsigned long log_dev, log_ino;
 /* Whether descriptor fd's file lies in the exclave's directory, by the real path /proc gives it. */
 static int in_exclave(long fd)
 {
-    static char link[32], real[PATH_MAX];
-    scpy(link, "/proc/self/fd/", sizeof link);
-    char n[24];
-    ltoa_(fd, n);
-    scat(link, n, sizeof link);
-    long len = sys_readlink(link, real, PATH_MAX - 1);
-    if (len < 0) return 0;                                     /* a pipe or a socket: no path, so not the exclave's */
-    real[len] = 0;
-    return starts_dir(real, C.dir);
+    static char real[PATH_MAX];
+    /* a pipe or a socket has no path, so is not the exclave's */
+    return fd_real_path((int)fd, real) >= 0 && starts_dir(real, C.dir);
 }
 
 /* Make the log at path, an absolute path the launcher has found no file at. It is made new (O_EXCL), so a symlink

@@ -130,6 +130,7 @@ static long copy_out(pid_t pid, void *dst, const void *src, size_t n)
  * EFAULT for NULL, AT_EMPTY_PATH or not (oracle 17.7) */
 static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int allow_empty)
 {
+    S->magic_end = 0;
     if (!a[pi] && allow_empty == 2) return 1;
     long r = copy_str_in(S->pid, S->b1, (const char *)a[pi]);
     if (r < 0) return r;
@@ -242,6 +243,9 @@ static long ro_delete(struct scratch *S, const char *v)
     return is_exclave_path(v) ? -EROFS : 0;
 }
 static void real_nofollow(struct scratch *S, int nofollow);
+/* A no-follow flag for a re-issue on the resolved real path, which names the object the walk found; none when the walk
+ * ended on a magic link to an object with no path, which the kernel reaches only by following the link (canon). */
+static long nofollow(const struct scratch *S, long flag) { return S->magic_end ? 0 : flag; }
 static int dfd_virtual(int fd, char *out);
 
 /* ---------- open ---------- */
@@ -1006,17 +1010,17 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_lstat:
         if ((r = resolve(S, a, 0, -1, nr == NR_stat, 0)) < 0) return r;
         real_nofollow(S, nr == NR_lstat);
-        return RE5(NR_newfstatat, AT_FDCWD, S->real, a[1], nr == NR_stat ? 0 : AT_SYMLINK_NOFOLLOW, 0);
+        return RE5(NR_newfstatat, AT_FDCWD, S->real, a[1], nr == NR_stat ? 0 : nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
     case NR_newfstatat:
         if ((r = resolve(S, a, 1, 0, !(a[3] & AT_SYMLINK_NOFOLLOW), (a[3] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1) return RE5(nr, a[0], a[1], a[2], a[3], 0);
         real_nofollow(S, (a[3] & AT_SYMLINK_NOFOLLOW) != 0);
-        return RE5(nr, AT_FDCWD, S->real, a[2], a[3] | AT_SYMLINK_NOFOLLOW, 0);
+        return RE5(nr, AT_FDCWD, S->real, a[2], a[3] | nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
     case NR_statx:
         if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1) return RE5(nr, a[0], a[1], a[2], a[3], a[4]);
         real_nofollow(S, (a[2] & AT_SYMLINK_NOFOLLOW) != 0);
-        return RE5(nr, AT_FDCWD, S->real, a[2] | AT_SYMLINK_NOFOLLOW, a[3], a[4]);
+        return RE5(nr, AT_FDCWD, S->real, a[2] | nofollow(S, AT_SYMLINK_NOFOLLOW), a[3], a[4]);
     case NR_access:
     case NR_faccessat:
     case NR_faccessat2: {
@@ -1148,6 +1152,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
          * a file */
         if (!exists_exclave(S, S->v2, &st)) return absent_errno(S);
         if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
+        /* an old name that is a magic link to a file with no path is followed, as the caller asked */
+        long old_follow = S->magic_end ? AT_SYMLINK_FOLLOW : 0;
         /* then the new name, in either domain (EEXIST, the name's own error), then the read-only rule for a
          * new name the exclave owns, then EXDEV for an old one it owns */
         scpy(S->cur, S->v, PATH_MAX);
@@ -1160,7 +1166,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if (is_exclave_path(S->v2)) return -EXDEV;
         to_real_exec(S->v2, S->b1);
         to_real_exec(S->v, S->real);
-        return RE5(NR_linkat, AT_FDCWD, S->b1, AT_FDCWD, S->real, fl & ~AT_SYMLINK_FOLLOW & ~AT_EMPTY_PATH);
+        return RE5(NR_linkat, AT_FDCWD, S->b1, AT_FDCWD, S->real,
+                   (fl & ~AT_SYMLINK_FOLLOW & ~AT_EMPTY_PATH) | old_follow);
     }
     case NR_chmod:
     case NR_fchmodat:
@@ -1170,7 +1177,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), 0)) < 0) return r;
         if ((r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);
-        if (nr == NR_fchmodat2) return RE5(nr, AT_FDCWD, S->real, a[2], fl | AT_SYMLINK_NOFOLLOW, 0);
+        if (nr == NR_fchmodat2) return RE5(nr, AT_FDCWD, S->real, a[2], fl | nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
         return RE5(NR_fchmodat, AT_FDCWD, S->real, a[pi + 1], 0, 0);
     }
     case NR_chown:
@@ -1182,7 +1189,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], a[1], a[2], a[3], a[4]);
         if ((r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);
-        return RE5(NR_fchownat, AT_FDCWD, S->real, a[pi + 1], a[pi + 2], AT_SYMLINK_NOFOLLOW);
+        return RE5(NR_fchownat, AT_FDCWD, S->real, a[pi + 1], a[pi + 2], nofollow(S, AT_SYMLINK_NOFOLLOW));
     }
     case NR_utime:
     case NR_utimes:
@@ -1231,7 +1238,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if (nr == NR_utime) return RE5(NR_utime, S->real, a[1], 0, 0, 0);
         if (nr == NR_utimes) return RE5(NR_utimes, S->real, a[1], 0, 0, 0);
         if (nr == NR_futimesat) return RE5(NR_futimesat, AT_FDCWD, S->real, a[2], 0, 0);
-        return RE5(NR_utimensat, AT_FDCWD, S->real, a[2], fl | AT_SYMLINK_NOFOLLOW, 0);
+        return RE5(NR_utimensat, AT_FDCWD, S->real, a[2], fl | nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
     }
     case NR_setxattrat:
     case NR_removexattrat: /* (dfd, path, at_flags, name, [xattr_args, its size]) */
@@ -1239,13 +1246,13 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE6(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
         if ((r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);
-        return RE6(nr, AT_FDCWD, S->real, a[2] | AT_SYMLINK_NOFOLLOW, a[3], a[4], a[5]);
+        return RE6(nr, AT_FDCWD, S->real, a[2] | nofollow(S, AT_SYMLINK_NOFOLLOW), a[3], a[4], a[5]);
     case NR_getxattrat:
     case NR_listxattrat:
         if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1) return RE6(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
         to_real(S->v, S->real, S->tmp);
-        return RE6(nr, AT_FDCWD, S->real, a[2] | AT_SYMLINK_NOFOLLOW, a[3], a[4], a[5]);
+        return RE6(nr, AT_FDCWD, S->real, a[2] | nofollow(S, AT_SYMLINK_NOFOLLOW), a[3], a[4], a[5]);
     /* (dfd, path, attr, size, at_flags): the chattr ioctls as syscalls */
     case NR_file_getattr:
     case NR_file_setattr:
@@ -1257,7 +1264,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
             if (r) return r;
         }
         to_real(S->v, S->real, S->tmp);
-        return RE5(nr, AT_FDCWD, S->real, a[2], a[3], a[4] | AT_SYMLINK_NOFOLLOW);
+        return RE5(nr, AT_FDCWD, S->real, a[2], a[3], a[4] | nofollow(S, AT_SYMLINK_NOFOLLOW));
     case NR_setxattr:
     case NR_lsetxattr:
     case NR_removexattr:
@@ -1284,12 +1291,12 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_inotify_add_watch:
         if ((r = resolve(S, a, 1, -1, !(a[2] & IN_DONT_FOLLOW), 0)) < 0) return r;
         to_real(S->v, S->real, S->tmp);
-        return RE5(nr, a[0], S->real, a[2] | IN_DONT_FOLLOW, 0, 0);
+        return RE5(nr, a[0], S->real, a[2] | nofollow(S, IN_DONT_FOLLOW), 0, 0);
     case NR_fanotify_mark:
         if (a[4] == 0) return RE5(nr, a[0], a[1], a[2], a[3], 0);
         if ((r = resolve(S, a, 4, 3, !(a[1] & FAN_MARK_DONT_FOLLOW), 0)) < 0) return r;
         to_real(S->v, S->real, S->tmp);
-        return RE5(nr, a[0], a[1] | FAN_MARK_DONT_FOLLOW, a[2], AT_FDCWD, S->real);
+        return RE5(nr, a[0], a[1] | nofollow(S, FAN_MARK_DONT_FOLLOW), a[2], AT_FDCWD, S->real);
     case NR_fchmod:
     case NR_fchown:
     case NR_fsetxattr:

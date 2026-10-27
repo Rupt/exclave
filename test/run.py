@@ -20,6 +20,7 @@ in any order, and `--order reverse` and `--order random` check that.
 
 import argparse
 import contextlib
+import errno
 import os
 import platform
 import re
@@ -494,6 +495,7 @@ def compile_progs(ctx: Ctx) -> None:
         "path_length",
         "spawn_threads",
         "adversarial",
+        "magic_links",
     ):
         rc, _out, err = run(
             [
@@ -1786,6 +1788,37 @@ def shebang_without_newline(ctx: Ctx) -> None:
     os.chmod(p, 0o755)
     rc, _out, err = inside(ctx, p)
     expect(rc == 0, f"no-newline shebang: rc={rc} {err!r}")
+
+
+@test
+def magic_links_to_pathless(ctx: Ctx) -> None:
+    """7.4.3: a magic link to an object with no path reaches the object, as the kernel's walk does.
+
+    stat, statx and faccessat2 through /proc/self/fd/N find the pipe, memfd, inotify descriptor or
+    unlinked file fstat finds, /dev/stdin is the caller's pipe, and an O_TMPFILE file is linked by
+    its magic link. A tree directory named "... (deleted)" is a path all the same: creating under a
+    descriptor on it is EROFS.
+    """
+    prog = os.path.join(ctx.progs, "magic_links")
+    rc, out, err = inside(ctx, prog, ["pathless", ctx.work], inp=b"piped\n")
+    bad = [line for line in out.splitlines() if not line.endswith((" ok", " n/a"))]
+    expect(rc == 0 and out and not bad, f"magic links: rc={rc} {bad!r} {err!r}")
+    ex2 = os.path.join(ctx.work, "deleted-name.exclave")
+    copy_exclave(ctx.exclave, ex2)
+    os.makedirs(os.path.join(ex2, "tree", "usr", "share", "x (deleted)"))
+    rc, out, err = run(
+        [os.path.join(ex2, ".exclave", "launcher"), prog, "deleted-name", "/usr/share/x (deleted)"],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    expect(
+        out == f"create {errno.EROFS}\nmkdir {errno.EROFS}\n",
+        f"a directory named ' (deleted)': rc={rc} {out!r} {err!r}",
+    )
+    expect(
+        not os.listdir(os.path.join(ex2, "tree", "usr", "share", "x (deleted)")),
+        "the tree was written through a descriptor on ' (deleted)'",
+    )
 
 
 @test

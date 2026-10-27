@@ -137,3 +137,15 @@ long shebang_argv(char *line, long n, char *script, char **argv, long argc, char
     nargv[k] = 0;
     return k;
 }
+
+/* The real path the kernel gives descriptor fd, its /proc/self/fd link's text, into out[PATH_MAX]: its length, or
+ * -errno (ENOENT for no such descriptor). */
+long fd_real_path(int fd, char *out)
+{
+    char link[32] = "/proc/self/fd/", n[24];
+    ltoa_(fd, n);
+    scat(link, n, sizeof link);
+    long r = sys_readlink(link, out, PATH_MAX - 1);
+    if (r >= 0) out[r] = 0;
+    return r;
+}

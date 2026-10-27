@@ -9,19 +9,35 @@
 
 static int in_tree(const char *r)
 { return C.rootlen && xstrncmp(r, C.root, (size_t)C.rootlen) == 0 && (r[C.rootlen] == '/' || r[C.rootlen] == 0); }
+/* Whether text, the real path a descriptor's or a procfs magic link's target is given by, leads to obj, the object
+ * behind the link. The kernel marks an unlinked file's path " (deleted)", but a file can be named so too: only a name
+ * that leads to the object itself is its path. */
+__attribute__((noinline)) static int names_object(const char *text, const struct kstat *obj)
+{
+    struct kstat st;
+    return sys_lstat(text, &st) == 0 && st.st_dev == obj->st_dev && st.st_ino == obj->st_ino;
+}
+/* Whether a magic link below /proc/<pid>/, at real path link with target text of length n, leads to an object with no
+ * path: a pipe, a socket or an anonymous inode, whose text is not a path at all, or an unlinked file. Both functions
+ * stay out of line, so that their stat buffers are not part of canon's frame (test/stackcheck.py). */
+__attribute__((noinline)) static int pathless(const char *link, const char *text, long n)
+{
+    if (text[0] != '/') return 1;
+    if (n <= 10 || xstrcmp(text + n - 10, " (deleted)") != 0) return 0;
+    struct kstat obj;
+    return sys_stat(link, &obj) < 0 || !names_object(text, &obj);
+}
 /* the virtual path of a descriptor or of the working directory; *tree, when asked, says whether the kernel's real path
- * lay in the tree */
+ * lay in the tree. -ENOENT: the descriptor's file has no path, and the caller passes the syscall through */
 static int fd_virtual_in(int fd, char *out, int *tree)
 {
-    char l[64] = "/proc/self/fd/";
-    char n[24];
-    ltoa_(fd, n);
-    scat(l, n, sizeof l);
     /* no such link: no such descriptor */
-    long r = sys_readlink(l, out, PATH_MAX - 1);
+    long r = fd_real_path(fd, out);
     if (r < 0) return r == -ENOENT ? -EBADF : (int)r;
-    out[r] = 0;
-    if (r > 10 && xstrcmp(out + r - 10, " (deleted)") == 0) return -ENOENT;   /* let the caller pass it through */
+    if (r > 10 && xstrcmp(out + r - 10, " (deleted)") == 0) {
+        struct kstat obj;
+        if (SC2(NR_fstat, fd, &obj) < 0 || !names_object(out, &obj)) return -ENOENT;
+    }
     if (tree) *tree = in_tree(out);
     from_real(out);
     return 0;
@@ -201,10 +217,7 @@ static int host_chain(struct scratch *S, char *cur, char **rpp)
     /* the kernel's name for what it reached must be the path itself: on a case-insensitive filesystem x.exclave/TREE is the
      * tree's root under another spelling on the same mount, and the tree's root, pinned by the program's own mappings,
      * keeps its own name; any other difference, an alias nobody foresaw, is the walk's too */
-    char l[32] = "/proc/self/fd/", nb[24];
-    ltoa_(fd, nb);
-    scat(l, nb, sizeof l);
-    long k = sys_readlink(l, S->tmp, PATH_MAX - 1);
+    long k = fd_real_path((int)fd, S->tmp);
     sys_close((int)fd);
     if (k != (long)n || xmemcmp(S->tmp, p, n) != 0) return -1;
     scpy(cur, p, PATH_MAX);
@@ -243,6 +256,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
     int dom = 1;
     /* a walk that stays in the host's domain is the kernel's own to make (7.4.3) */
     S->touched_exclave = 0;
+    S->magic_end = 0;
     if (path[0] == '/') {
         if (rf & RESOLVE_BENEATH) return -EXDEV;               /* nd_jump_root: an absolute path leaves the scope */
         S->touched_exclave = 1;                                 /* the root is the tree's */
@@ -410,18 +424,15 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
                 if (n < 0) return (int)n;
                 tmp[n] = 0;
                 kind = CK_LINK;
-                if (xstrncmp(cur, "/proc/", 6) == 0) {
-                    /* a link below /proc/<pid>/ is a magic link; one at /proc/ is not */
-                    if (nomagic && xstrchr(cur + 6, '/')) return -ELOOP;
-                    /* a procfs magic link to something that has no path (a pipe, a socket, an unlinked
-                     * file) is reachable only through the link itself: the walk ends here */
-                    /* pipe:[n], socket:[n], anon_inode:[x], a deleted file */
-                    if ((tmp[0] != '/' && xstrchr(tmp, ':') && xstrchr(tmp, '[')) ||
-                        (n > 10 && xstrcmp(tmp + n - 10, " (deleted)") == 0)) {
-                        if (!last) return -ENOTDIR;
-                        kind = CK_FILE;
-                    } else from_real(tmp); /* procfs links report real paths */
-                }
+                /* a link below /proc/<pid>/ is a magic link; one at /proc/ is not */
+                int magic = xstrncmp(cur, "/proc/", 6) == 0 && xstrchr(cur + 6, '/');
+                if (magic && nomagic) return -ELOOP;
+                if (magic && pathless(real, tmp, n)) {
+                    /* reachable only through the link itself: the walk ends here, and the re-issue follows it */
+                    if (!last) return -ENOTDIR;
+                    kind = CK_FILE;
+                    S->magic_end = 1;
+                } else if (xstrncmp(cur, "/proc/", 6) == 0) from_real(tmp); /* procfs links report real paths */
             }
             /* any spelling of the tree's root directory, through a bind mount or another link, is / */
             if (kind == CK_DIR && C.root_ino && st.st_dev == C.root_dev && st.st_ino == C.root_ino) {
