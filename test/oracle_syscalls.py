@@ -713,6 +713,15 @@ def generate(
             add("removexattrat", lab, d, p, I(AT_EMPTY_PATH), S("user.probe"))
             add("file_getattr", lab, d, p, B("raw", 32), I(32), I(AT_EMPTY_PATH))
             add("file_setattr", lab, d, p, B("raw", 32), I(32), I(AT_EMPTY_PATH))
+    # faccessat2 and fchmodat2 with AT_EMPTY_PATH name the descriptor's own file
+    for fn, d in (
+        ("fd", F(O_RDONLY, forms.file)),
+        ("pathfd", F(O_PATH, forms.file)),
+        ("hostfd", F(O_RDONLY, forms.host + "/hfile")),
+    ):
+        add("faccessat2", f"{fn}_empty/read", d, S(""), I(4), I(AT_EMPTY_PATH))
+        add("faccessat2", f"{fn}_empty/write", d, S(""), I(2), I(AT_EMPTY_PATH))
+        add("fchmodat2", f"{fn}_empty", d, S(""), I(0o644), I(AT_EMPTY_PATH))
     add("readlinkat", "proc_fd", I(AT_FDCWD), S("/proc/self/fd/0"), B("link", 4096), I(4096))
     add("execveat", "true_fd", F(O_RDONLY, forms.true), S(""), V("true"), V(), I(AT_EMPTY_PATH))
     add("execveat", "true_pathfd", F(O_PATH, forms.true), S(""), V("true"), V(), I(AT_EMPTY_PATH))

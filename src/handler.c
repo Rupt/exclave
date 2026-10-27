@@ -1026,15 +1026,19 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_faccessat2: {
         int pi = nr == NR_access ? 0 : 1, di = nr == NR_access ? -1 : 0;
         long mode = a[pi + 1], fl = nr == NR_faccessat2 ? a[3] : 0;
-        if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), 0)) < 0) return r;
-        to_real(S->v, S->real, S->tmp);
-        r = nr == NR_faccessat2 ? RE5(nr, AT_FDCWD, S->real, mode, fl | AT_SYMLINK_NOFOLLOW, 0)
-                                : RE5(NR_faccessat, AT_FDCWD, S->real, mode, 0, 0);
+        if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
+        int empty = r == 1; /* AT_EMPTY_PATH: the descriptor's own file */
+        if (empty) r = RE5(nr, a[0], "", mode, fl, 0);
+        else {
+            to_real(S->v, S->real, S->tmp);
+            r = nr == NR_faccessat2 ? RE5(nr, AT_FDCWD, S->real, mode, fl | nofollow(S, AT_SYMLINK_NOFOLLOW), 0)
+                                    : RE5(NR_faccessat, AT_FDCWD, S->real, mode, 0, 0);
+        }
         /* do_faccessat: the lookup's and the permission's own answers come first; then a write the permission allows on a
          * regular file, a directory or a symlink under a read-only mount is EROFS, and a special file never is */
-        if (r < 0 || !(mode & W_OK) || !is_exclave_path(S->v)) return r;
+        if (r < 0 || !(mode & W_OK) || !(empty ? fd_exclave(S, (int)a[0]) : is_exclave_path(S->v))) return r;
         struct kstat st;
-        if (sys_lstat(S->real, &st) < 0) return r;
+        if ((empty ? SC2(NR_fstat, a[0], &st) : sys_lstat(S->real, &st)) < 0) return r;
         unsigned m = st.st_mode & S_IFMT;
         return m == S_IFREG || m == S_IFDIR || m == S_IFLNK ? -EROFS : r;
     }
@@ -1148,12 +1152,12 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
             if (r < 0) return r;
         }
         scpy(S->v2, S->v, PATH_MAX); /* old */
+        /* an old name that is a magic link to a file with no path is followed, as the caller asked */
+        long old_follow = S->magic_end ? AT_SYMLINK_FOLLOW : 0;
         /* do_linkat: the old name is looked up before the new one is read at all: its own error, ENOTDIR for a slash on
          * a file */
         if (!exists_exclave(S, S->v2, &st)) return absent_errno(S);
         if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
-        /* an old name that is a magic link to a file with no path is followed, as the caller asked */
-        long old_follow = S->magic_end ? AT_SYMLINK_FOLLOW : 0;
         /* then the new name, in either domain (EEXIST, the name's own error), then the read-only rule for a
          * new name the exclave owns, then EXDEV for an old one it owns */
         scpy(S->cur, S->v, PATH_MAX);
@@ -1174,7 +1178,9 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_fchmodat2: {
         int pi = nr == NR_chmod ? 0 : 1, di = nr == NR_chmod ? -1 : 0;
         long fl = nr == NR_fchmodat2 ? a[3] : 0;
-        if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), 0)) < 0) return r;
+        if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
+        /* AT_EMPTY_PATH: the descriptor's own file, read-only if it is the exclave's */
+        if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], "", a[2], fl, 0);
         if ((r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);
         if (nr == NR_fchmodat2) return RE5(nr, AT_FDCWD, S->real, a[2], fl | nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
