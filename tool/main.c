@@ -7,8 +7,6 @@
  *     exclave hash EXCLAVE                The tree hash of 6.4.
  *     exclave prune EXCLAVE LOG...        Drop every file no logged workload touched (10.4).
  *     exclave relink EXCLAVE [LAUNCHER]   Replace the launcher and relink every wrapper.
- *     exclave unpack OUT APK...           The unwrapped exclave OUT from Alpine package files, as scripts/unpack makes
- *                                         it.
  *     exclave unwrap EXCLAVE              Move every original back over its wrapper.
  *     exclave wrap EXCLAVE                Wrap an exclave: add the launcher and the placeholders where missing, check
  *                                         the manifest, the wrappers and every ELF, then wrap every executable and
@@ -160,8 +158,8 @@ int main(int argc, char **argv)
         const char *name;
         int (*run)(int, char **);
     } commands[] = {
-        {"check", cmd_check},   {"format", cmd_format}, {"hash", cmd_hash},     {"prune", cmd_prune},
-        {"relink", cmd_relink}, {"unpack", cmd_unpack}, {"unwrap", cmd_unwrap}, {"wrap", cmd_wrap},
+        {"check", cmd_check},   {"format", cmd_format}, {"hash", cmd_hash}, {"prune", cmd_prune},
+        {"relink", cmd_relink}, {"unwrap", cmd_unwrap}, {"wrap", cmd_wrap},
     };
     if (argc < 2) usage("COMMAND ARGS...");
     for (size_t i = 0; i < sizeof commands / sizeof *commands; i++)

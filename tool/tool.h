@@ -200,33 +200,3 @@ char *read_file(const char *path, size_t *n);
 
 int cmd_hash(int argc, char **argv);
 int cmd_format(int argc, char **argv);
-
-/* gzip (RFC 1952) and DEFLATE (RFC 1951), decompression only: every member of a gzip file in turn, NUL bytes allowed
- * between them, into out. 0, or -1 with the reason in why. */
-#define INFLATE_WHY 96
-int gunzip(const uint8_t *in, size_t n, struct buf *out, char why[INFLATE_WHY]);
-uint32_t crc32_update(uint32_t crc, const void *data, size_t n);
-/* zstd and xz through the system's libraries, accepting what Python's decompress functions accept (tool/decompress.c);
- * 0, or -1 with the reason in why */
-int unzstd(const uint8_t *in, size_t n, struct buf *out, char why[INFLATE_WHY]);
-int unxz(const uint8_t *in, size_t n, struct buf *out, char why[INFLATE_WHY]);
-
-/* a tar archive's members, as Python's tarfile lists them, extended headers applied */
-struct tar_member {
-    char type;             /* the header's type flag: '5' for a directory, however it was spelt */
-    char *name, *linkname; /* as the archive spells them, a directory's without its trailing slashes */
-    int64_t size, mode, mtime;
-    int mtime_float; /* an extended header's mtime, which is a fraction: mtime_f instead of mtime */
-    double mtime_f;
-    size_t data; /* where its data begins in the archive */
-};
-struct tar {
-    struct tar_member *m;
-    size_t n;
-};
-#define TAR_WHY 96
-int tar_read(const uint8_t *p, size_t n, struct tar *out, char why[TAR_WHY]);
-void tar_free(struct tar *t);
-int tar_regular(char type);
-
-int cmd_unpack(int argc, char **argv);
