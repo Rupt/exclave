@@ -200,3 +200,9 @@ char *read_file(const char *path, size_t *n);
 
 int cmd_hash(int argc, char **argv);
 int cmd_format(int argc, char **argv);
+
+/* gzip (RFC 1952) and DEFLATE (RFC 1951), decompression only: every member of a gzip file in turn, NUL bytes allowed
+ * between them, into out. 0, or -1 with the reason in why. */
+#define INFLATE_WHY 96
+int gunzip(const uint8_t *in, size_t n, struct buf *out, char why[INFLATE_WHY]);
+uint32_t crc32_update(uint32_t crc, const void *data, size_t n);
