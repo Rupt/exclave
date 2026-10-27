@@ -79,6 +79,15 @@ launcher_cc() {
         -fPIC -fvisibility=hidden -fno-plt -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns "$@"
 }
 
+# tool_cc COMPILER ARGS...: the exclave command's compiler, ordinary C on the C
+# library; scripts/build links the command statically, so that the file runs
+# with nothing beside it (DESIGN.md 10).
+tool_cc() {
+    compiler=$1
+    shift
+    c_compile "$compiler" -O2 -g "$@"
+}
+
 # host_cc ARGS...: the unit tests' compiler, for the host on its libc, whose
 # string.h declares again what sys.h declares.
 host_cc() {

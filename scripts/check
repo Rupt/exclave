@@ -38,13 +38,13 @@ if $fix; then
     run "$UV" run --quiet ruff check --fix .
     run "$UV" run --quiet ruff format .
     run "$UV" run --quiet shfmt --indent 4 --posix --simplify --write "$@"
-    run "$UV" run --quiet clang-format -i src/*.[ch] test/*.c test/progs/*.c
+    run "$UV" run --quiet clang-format -i src/*.[ch] tool/*.[ch] test/*.c test/progs/*.c
     run env RUST_LOG=warn "$UV" run --quiet taplo fmt pyproject.toml
 else
     run "$UV" run --quiet ruff format --check --quiet .
     run "$UV" run --quiet ruff check --quiet .
     run "$UV" run --quiet shfmt --indent 4 --posix --simplify --diff "$@"
-    run "$UV" run --quiet clang-format --dry-run --Werror src/*.[ch] test/*.c test/progs/*.c
+    run "$UV" run --quiet clang-format --dry-run --Werror src/*.[ch] tool/*.[ch] test/*.c test/progs/*.c
     run env RUST_LOG=warn "$UV" run --quiet taplo fmt --check --diff pyproject.toml
 fi
 run "$UV" run --quiet shellcheck --severity=style --shell=sh \
@@ -78,6 +78,17 @@ for f in test/*_test.c test/sanitize.c src/manifest.c src/filter.c src/isa.c src
 done
 quiet host_cc -DSCRATCH_TEST src/scratch.c -Werror -c -o /dev/null &
 pids="$pids $!"
+# the exclave command, on the C library, for each architecture there is a compiler for
+for f in tool/*.c; do
+    for arch in $(c_arches); do
+        compiler=${CC:-gcc}
+        [ "$arch" = "$(uname -m)" ] || compiler=$arch-linux-gnu-gcc
+        quiet tool_cc "$compiler" "$f" -Werror -c -o /dev/null &
+        pids="$pids $!"
+    done
+    quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 &
+    pids="$pids $!"
+done
 # the test programs too, but for string literals in an exec's argv, its natural spelling
 for f in test/progs/*.c; do
     quiet host_cc -pthread -Wno-discarded-qualifiers "$f" -Werror -c -o /dev/null &
@@ -104,7 +115,7 @@ for pid in $pids; do wait "$pid" || status=1; done
 # clang-format leaves comments as written, so it does not hold them to it
 if awk '/clang-format off/ { off = 1 } /clang-format on/ { off = 0 }
     !off && length > 120 { print FILENAME ":" FNR ": over 120 columns"; bad = 1 } END { exit bad }' \
-    src/*.[ch] test/*.c test/progs/*.c; then :; else status=1; fi
+    src/*.[ch] tool/*.[ch] test/*.c test/progs/*.c; then :; else status=1; fi
 # a definition in a shared header that nothing uses, which no compiler reports
 run "$UV" run --quiet python test/c_unused.py
 

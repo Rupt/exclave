@@ -26,7 +26,7 @@ dir=$(mkdir -p "$1" && cd "$1" && pwd) || exit 2
 mkdir -p "$dir/log" "$dir/src" || exit 2
 fails=0
 
-exclave() { py -m exclave "$@"; }
+exclave() { py "$repo/test/exclave_cmd.py" "$@"; }
 unpack() { py -m unpack "$@"; }
 
 fetch() { # fetch NAME FETCHER ARGS...: package files into DIR/NAME through the fetcher's cache

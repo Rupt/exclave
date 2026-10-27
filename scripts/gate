@@ -10,7 +10,8 @@
 # The steps: the code checks (scripts/check), the unit tests under ASan and UBSan, the stack budget,
 # and for every exclave given the suite in the given and a random order (and, for the first
 # exclave, under the plain terminal's AppArmor label and on build/launcher-debug), the resolution
-# oracle, the namespace oracle and the syscall probe; when EXCLAVE_TEST_INPUTS names the directory
+# oracle, the namespace oracle and the syscall probe; the exclave command's C answers against its
+# Python ones while it is ported (test/tool_oracle.py); when EXCLAVE_TEST_INPUTS names the directory
 # scripts/inputs filled, the Docker profile run on its src/docker-seccomp.json and dogfood on its
 # package sets. No step touches the network. Every step runs in parallel; every driver runs
 # build/launcher on a copy of its own (the suite wraps one from the exclave's tree, the others take
@@ -45,8 +46,8 @@ step() { # step NAME CMD...: in the background, its status and log kept
     ) &
 }
 # shellcheck disable=SC2329  # run through step, by name
-# the parser, the filter, the scratch pool, the CPU check and the #! rules, just built for the host under ASan and
-# UBSan, a finding fatal (test/sanitize.c)
+# the parser, the filter, the scratch pool, the CPU check, the #! rules and the command's BLAKE2b, just built for the host
+# under ASan and UBSan, a finding fatal (test/sanitize.c)
 unit() {
     sanitized() { # sanitized OUT ARGS...
         o=$1
@@ -62,7 +63,9 @@ unit() {
         sanitized "$out/isa_test" -DHOST_TEST "$here/isa_test.c" "$repo/src/isa.c" "$repo/src/str.c" &&
         "$out/isa_test" &&
         sanitized "$out/str_test" -DHOST_TEST "$here/str_test.c" "$repo/src/str.c" &&
-        "$out/str_test"
+        "$out/str_test" &&
+        sanitized "$out/tool_test" "$here/tool_test.c" "$repo/tool/blake2b.c" &&
+        "$out/tool_test"
 }
 # shellcheck disable=SC2329  # run through step, by name
 debug_suite() { # debug_suite EXCLAVE NAME: the suite on the launcher with its undefined-behaviour checks
@@ -75,7 +78,7 @@ stack() {
 }
 
 # What the change can affect. Each flag names a group of steps; a path sets the ones it can affect.
-unit=false stack=false suite=false random=false plain=false oracles=false dogfood=false matrix=false
+unit=false stack=false suite=false random=false plain=false oracles=false dogfood=false matrix=false port=false
 changed=$(cd "$ROOT" && { git diff --name-only HEAD && git ls-files --others --exclude-standard; } | sort -u)
 what="uncommitted changes"
 if [ -z "$changed" ]; then
@@ -89,7 +92,11 @@ for path in $changed; do
         matrix=true
         ;;
     scripts/gate) full=true ;; # the gate itself
-    exclave/*) unit=true suite=true oracles=true dogfood=true ;;
+    exclave/*) unit=true suite=true oracles=true dogfood=true port=true ;;
+    tool/*) # the command in C, which the drivers and the VMs run for the commands it answers
+        unit=true suite=true port=true matrix=true
+        ;;
+    test/exclave_cmd.py | test/tool_oracle.py) suite=true port=true ;;
     unpack/*) suite=true random=true dogfood=true ;;
     test/run.py) suite=true random=true ;;
     test/progs/*) suite=true random=true oracles=true ;; # the probe and ro_matrix are programs there too
@@ -106,7 +113,7 @@ for path in $changed; do
     esac
 done
 if $full; then
-    unit=true stack=true suite=true random=true plain=true oracles=true dogfood=true
+    unit=true stack=true suite=true random=true plain=true oracles=true dogfood=true port=true
     echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
 else
     echo "gate: the steps $what can affect ($(echo "$changed" | wc -l) paths); --full runs every step"
@@ -132,6 +139,13 @@ for ex in "$@"; do
         step "docker-$n" py "$here/docker_profile.py" --exclave "$ex" --profile "$EXCLAVE_TEST_INPUTS/src/docker-seccomp.json" --work "$out/d-$n"
     fi
 done
+# the command's C answers against its Python ones, while it is ported (18 item 1)
+if $port; then
+    given=
+    for ex in "$@"; do given="$given --exclave $ex"; done
+    # shellcheck disable=SC2086  # one word per --exclave and path
+    step port py "$here/tool_oracle.py" $given --work "$out/port"
+fi
 if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
     $dogfood && step dogfood py "$here/dogfood.py" --inputs "$EXCLAVE_TEST_INPUTS" --work "$out/dogfood"
 else

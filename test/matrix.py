@@ -531,6 +531,7 @@ def main() -> int:
             if arch == "x86_64":
                 t.add(ex, arcname="ex")
                 t.add(os.path.join(REPO, "build", "launcher"), arcname="repo/build/launcher")
+                t.add(os.path.join(REPO, "build", "exclave"), arcname="repo/build/exclave")
                 if os.path.exists(os.path.join(REPO, "build", "launcher-old")):
                     t.add(
                         os.path.join(REPO, "build", "launcher-old"),
@@ -552,6 +553,7 @@ def main() -> int:
                 t.add(
                     os.path.join(REPO, "build", "launcher-aarch64"), arcname="repo/build/launcher"
                 )
+                t.add(os.path.join(REPO, "build", "exclave-aarch64"), arcname="repo/build/exclave")
                 if os.path.exists(os.path.join(REPO, "build", "launcher-old-aarch64")):
                     t.add(
                         os.path.join(REPO, "build", "launcher-old-aarch64"),
@@ -609,7 +611,7 @@ def main() -> int:
                 _rc, out = vm.ssh(
                     "cd m && $PWD/python/bin/python3 -m unpack ex debs/*.deb "
                     "2>&1 | tail -3 && "
-                    "$PWD/python/bin/python3 -m exclave wrap ex 2>&1 | tail -3",
+                    "$PWD/python/bin/python3 repo/test/exclave_cmd.py wrap ex 2>&1 | tail -3",
                     timeout=3600 * slow,
                 )
                 log(name, "exclave:", " | ".join(x.strip() for x in out.splitlines()[-3:]))
@@ -620,7 +622,7 @@ def main() -> int:
             else:
                 # the exclave given carries the launcher that made it: the row tests the checkout's
                 _rc, out = vm.ssh(
-                    "cd m && $PWD/python/bin/python3 -m exclave "
+                    "cd m && $PWD/python/bin/python3 repo/test/exclave_cmd.py "
                     "relink ex repo/build/launcher 2>&1 | tail -1",
                     timeout=600 * slow,
                 )

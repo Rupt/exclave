@@ -24,8 +24,8 @@ lazy from collections.abc import Iterator
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_LAUNCHER = os.path.join(REPO, "build", "launcher")
-# the exclave command, as every driver runs it
-TOOL = (sys.executable, "-m", "exclave")
+# the exclave command, as every driver runs it: each command by the implementation that answers it
+TOOL = (sys.executable, os.path.join(REPO, "test", "exclave_cmd.py"))
 # The host identity files (8.4), which an exclave ships empty and the host answers for.
 IDENTITY_FILES = (
     "/etc/passwd",

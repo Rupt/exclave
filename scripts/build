@@ -1,5 +1,6 @@
 #!/bin/sh
-# scripts/build — the launchers, from src/ (DESIGN.md 7.1).
+# scripts/build — the launchers, from src/ (DESIGN.md 7.1), and the exclave
+# command, from tool/ (10).
 #
 # The launcher is a freestanding ET_DYN object with no PT_INTERP: it runs as a
 # program (a wrapper, 6.1) and loads programs itself (7.3). For the machine's
@@ -17,11 +18,15 @@
 #                   one: a failed check kills the program with SIGILL, which
 #                   gdb places from launcher-debug.debug. The gate runs the
 #                   suite on it.
+#   exclave         the exclave command, linked statically, so that the file
+#                   runs with nothing beside it
+#   exclave-asan    the same under ASan and UBSan, linked dynamically, for the
+#                   gate
 #
-# and, on x86-64 with the cross compiler, launcher-aarch64 and
-# launcher-old-aarch64. Nothing is built when every launcher is there and no
-# source, LICENSE, this script or lib.sh is newer than the last build; a line
-# for each launcher built.
+# and, on x86-64 with the cross compiler, launcher-aarch64,
+# launcher-old-aarch64 and exclave-aarch64. Nothing is built when every output
+# is there and no source, LICENSE, this script or lib.sh is newer than the last
+# build; a line for each one built.
 set -u
 . "$(dirname -- "$0")/lib.sh"
 cd "$ROOT" || exit 2
@@ -31,13 +36,13 @@ native=$(uname -m)
 cross=$(c_arches | grep -vx "$native")
 
 fresh=true
-for f in "$stamp" build/launcher build/launcher-old build/launcher-debug; do
+for f in "$stamp" build/launcher build/launcher-old build/launcher-debug build/exclave build/exclave-asan; do
     [ -e "$f" ] || fresh=false
 done
 for arch in $cross; do
-    [ -e "build/launcher-$arch" ] && [ -e "build/launcher-old-$arch" ] || fresh=false
+    [ -e "build/launcher-$arch" ] && [ -e "build/launcher-old-$arch" ] && [ -e "build/exclave-$arch" ] || fresh=false
 done
-if $fresh && [ -z "$(find src LICENSE scripts/build scripts/lib.sh -newer "$stamp" | head -n 1)" ]; then
+if $fresh && [ -z "$(find src tool LICENSE scripts/build scripts/lib.sh -newer "$stamp" | head -n 1)" ]; then
     exit 0
 fi
 
@@ -91,6 +96,15 @@ launcher() {
     echo "built $out ($(stat -c %s "$out") bytes stripped, $arch)"
 }
 
+tool() { # tool ARCH OUT ARGS...: the exclave command for ARCH
+    arch=$1 out=$2
+    shift 2
+    compiler=${CC:-gcc}
+    [ "$arch" = "$native" ] || compiler=$arch-linux-gnu-gcc
+    tool_cc "$compiler" "$@" -o "$out" tool/*.c || return 1
+    echo "built $out ($(stat -c %s "$out") bytes, $arch)"
+}
+
 rm -f "$stamp" build/launcher*.debug-*.ci
 # the machine's own launcher first and alone, so that a compile error is told once
 launcher "$native" build/launcher -fcallgraph-info=su -dumpdir build/launcher.debug- || exit 1
@@ -99,10 +113,16 @@ launcher "$native" build/launcher-old -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD &
 pids="$pids $!"
 launcher "$native" build/launcher-debug -fsanitize=undefined -fsanitize-trap=undefined -fsanitize=bounds-strict &
 pids="$pids $!"
+tool "$native" build/exclave -static -s &
+pids="$pids $!"
+tool "$native" build/exclave-asan -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer &
+pids="$pids $!"
 for arch in $cross; do
     launcher "$arch" "build/launcher-$arch" -fcallgraph-info=su -dumpdir "build/launcher-$arch.debug-" &
     pids="$pids $!"
     launcher "$arch" "build/launcher-old-$arch" -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD &
+    pids="$pids $!"
+    tool "$arch" "build/exclave-$arch" -static -s &
     pids="$pids $!"
 done
 status=0
