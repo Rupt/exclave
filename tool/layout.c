@@ -314,3 +314,189 @@ int cmd_relink(int argc, char **argv)
     free(root);
     return 0;
 }
+
+/* ---------------------------------------------------------------- wrap */
+/* The conventional top-level names, shipped as empty directories (8.1, 6.1). */
+static const char *const PLACEHOLDERS[] = {"proc", "dev",  "sys", "tmp",   "run", "var/tmp", "home",
+                                           "root", "boot", "mnt", "media", "opt", "srv"};
+/* The host identity files (8.4): shipped empty, the host's at run time. */
+static const char *const IDENTITY_FILES[] = {
+    "/etc/passwd",
+    "/etc/group",
+    "/etc/nsswitch.conf",
+    "/etc/host.conf",
+    "/etc/resolv.conf",
+    "/etc/hosts",
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+};
+
+/* path as a directory, its missing parents with it; one that stands there already is enough */
+static void make_dirs(const char *path)
+{
+    struct buf p = {0};
+    buf_str(&p, path);
+    buf_add(&p, "", 1);
+    for (char *c = p.p + 1;; c++) {
+        if (*c != '/' && *c) continue;
+        char saved = *c;
+        *c = 0;
+        if (mkdir(p.p, 0777)) {
+            struct stat st;
+            if (errno != EEXIST || stat(p.p, &st) || !S_ISDIR(st.st_mode)) {
+                errno = EEXIST;
+                fail_errno(p.p);
+            }
+        }
+        *c = saved;
+        if (!saved) break;
+    }
+    free(p.p);
+}
+
+/* the conventional names as empty directories and the identity files as empty files, where the tree lacks them */
+static void placeholders(const char *root)
+{
+    for (size_t i = 0; i < sizeof PLACEHOLDERS / sizeof *PLACEHOLDERS; i++) {
+        char *p = path_join(root, PLACEHOLDERS[i]);
+        if (!lexists(p)) make_dirs(p);
+        free(p);
+    }
+    for (size_t i = 0; i < sizeof IDENTITY_FILES / sizeof *IDENTITY_FILES; i++) {
+        const char *f = IDENTITY_FILES[i];
+        char *d = dirname_of(f), *dreal = tree_real(root, d);
+        /* the directory as the tree resolves it: Fedora's /etc/ssl/certs is a link into /etc/pki */
+        char *rd = tree_resolve(root, d, 1, NULL);
+        struct stat st;
+        if (!rd && lstat(dreal, &st) == 0 && S_ISLNK(st.st_mode)) {
+            printf("identity file %s not placed: its directory is a dangling link in the tree\n", f);
+        } else {
+            char *dir = tree_real(root, rd ? rd : d), *p = path_join(dir, basename_of(f));
+            if (!lexists(p)) {
+                make_dirs(dir);
+                write_file(p, "", 0, 0666);
+            }
+            free(dir);
+            free(p);
+        }
+        free(rd);
+        free(d);
+        free(dreal);
+    }
+}
+
+struct wrapping {
+    const struct strs *data;
+    const char *launcher;
+    struct stat lst;
+    struct strs todo; /* the executables to wrap, real path and virtual path in turn */
+};
+
+static void to_wrap(const char *real, const char *v, const struct stat *st, void *ctx)
+{
+    struct wrapping *w = ctx;
+    if (!S_ISREG(st->st_mode) || !(st->st_mode & 0111) || under_any(v, w->data)) return;
+    if (st->st_dev == w->lst.st_dev && st->st_ino == w->lst.st_ino) return;
+    if (st->st_size == w->lst.st_size) { /* a copy of the launcher that has its original: a wrapper already */
+        char *orig = payload_path(real);
+        int wrapper = strcmp(orig, real) != 0;
+        free(orig);
+        if (wrapper) {
+            size_t na, nb;
+            char *a = read_file(real, &na), *b = read_file(w->launcher, &nb);
+            int same = na == nb && !memcmp(a, b, na);
+            free(a);
+            free(b);
+            if (same) return;
+        }
+    }
+    strs_add(&w->todo, real);
+    strs_add(&w->todo, v);
+}
+
+/* Wrap every executable in tree/ outside data directories: each original moves to .real/ beside it, and a hard link
+ * to the launcher takes its place (6.1). */
+static size_t wrap_files(const char *ex, const struct strs *data)
+{
+    char *root = path_join(ex, "tree"), *ld = path_join(ex, ".exclave/launcher");
+    struct wrapping w = {data, ld, {0}, {0}};
+    if (stat(ld, &w.lst)) fail_errno(ld);
+    walk_files(root, to_wrap, &w);
+    size_t n = 0;
+    for (size_t i = 0; i < w.todo.n; i += 2) {
+        const char *real = w.todo.s[i], *v = w.todo.s[i + 1];
+        char *dir = dirname_of(real), *rd = path_join(dir, ".real"), *orig = path_join(rd, basename_of(real));
+        if (lexists(orig)) fail("%s has an original in .real/ already: a stale wrapper; run exclave relink", v);
+        make_dirs(rd);
+        if (rename(real, orig)) fail_errno(real);
+        link_or_copy(ld, real);
+        n++;
+        free(dir);
+        free(rd);
+        free(orig);
+    }
+    strs_free(&w.todo);
+    free(root);
+    free(ld);
+    return n;
+}
+
+/* Wrap an exclave: the launcher, the placeholders and a manifest where missing; then the wrappers and the static check,
+ * any problem refusing the exclave before anything is wrapped; then every executable wrapped, and the hashes file given
+ * the launcher, manifest and tree hashes (10.1). */
+int cmd_wrap(int argc, char **argv)
+{
+    if (argc != 1) usage("wrap EXCLAVE");
+    const char *ex = argv[0];
+    require_exclave(ex, "wrap");
+    char *ld = path_join(ex, ".exclave/launcher"), *root = path_join(ex, "tree"),
+         *mp = path_join(ex, ".exclave/manifest");
+    struct stat st;
+    if (stat(ld, &st)) { /* this machine's launcher, the one this command carries */
+        char *dot = path_join(ex, ".exclave");
+        make_dirs(dot);
+        free(dot);
+        unlink(ld);
+        write_file(ld, launcher_blob, (size_t)launcher_size, 0755);
+        if (chmod(ld, 0755)) fail_errno(ld);
+    }
+    placeholders(root);
+    if (stat(mp, &st)) write_file(mp, "exclave 1\n", 10, 0666);
+    size_t n;
+    char *mdata = read_file(mp, &n), err[GRAMMAR_ERR];
+    struct records rs;
+    if (grammar_parse(mdata, n, KIND_MANIFEST, &rs, err)) fail_grammar(err);
+    struct buf canon = {0};
+    grammar_dump(&rs, KIND_MANIFEST, &canon);
+    records_free(&rs);
+    if (canon.n != n || memcmp(canon.p, mdata, n) != 0)
+        fail("refusing: %s is not canonical; run exclave format on it", mp);
+    free(canon.p);
+    /* the launcher's own table of top-level names (8.1): a placeholder takes no slot */
+    struct strs top = {0}, data = {0}, problems = {0};
+    owned_top(ex, &top);
+    if (top.n > 256) fail("tree/ has %zu top-level entries; the launcher holds 256", top.n);
+    strs_free(&top);
+    data_prefixes(ex, &data);
+    wrapper_problems(ex, &data, &problems);
+    located_links(ex, &problems);
+    for (size_t i = 0; i < problems.n; i++) printf("error: %s\n", problems.s[i]);
+    int errors = static_report(ex);
+    if (problems.n || errors) {
+        printf("refused: nothing was wrapped\n");
+        return 1;
+    }
+    printf("wrapped %zu executables\n", wrap_files(ex, &data));
+    write_readme(ex);
+    char manifest_hash[B2_TEXT];
+    hash_text(mdata, n, manifest_hash);
+    write_hashes(ex, manifest_hash, 1, 0);
+    printf("%s is wrapped\n", ex);
+    strs_free(&data);
+    strs_free(&problems);
+    free(mdata);
+    free(ld);
+    free(root);
+    free(mp);
+    return 0;
+}

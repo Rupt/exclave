@@ -96,6 +96,7 @@ void write_readme(const char *ex);
 void write_hashes(const char *ex, const char *manifest_hash, int tree, int keep);
 int has_tree_record(const char *ex);
 int cmd_unwrap(int argc, char **argv);
+int cmd_wrap(int argc, char **argv);
 int cmd_relink(int argc, char **argv);
 
 /* Every entry under root but a directory, a link to one included, as (real path, virtual path, lstat): each

@@ -12,7 +12,7 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # the commands build/exclave answers
-PORTED: tuple[str, ...] = ("hash", "format", "unwrap", "relink", "check")
+PORTED: tuple[str, ...] = ("hash", "format", "unwrap", "relink", "check", "wrap")
 
 
 def main() -> None:

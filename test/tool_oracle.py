@@ -326,6 +326,16 @@ def copy_of(src: str) -> Callable[[str], None]:
     return make
 
 
+def unwrapped_copy_of(src: str) -> Callable[[str], None]:
+    """Return what makes a copy of the exclave src at a path with its originals moved back."""
+
+    def make(at: str) -> None:
+        tree.copy_exclave(src, at)
+        tree.unwrap_tree(at)
+
+    return make
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -376,6 +386,12 @@ def main() -> int:
         cases += [(label, ["EX"], made) for label, made in inputs]
         if cmd == "format":
             cases = format_cases(rng, args.cases, [os.path.abspath(e) for e in args.exclave])
+        if cmd == "wrap":  # each exclave given, unwrapped, to wrap from the start
+            cases += [
+                (label + ", unwrapped", ["EX"], unwrapped_copy_of(m))
+                for label, m in inputs
+                if label.startswith("given") and isinstance(m, str)
+            ]
         if cmd == "check":  # with the log written beside the tree
             cases += [(label + ", log", ["EX", "EX/log"], m) for label, m in inputs if callable(m)]
         if cmd == "relink":  # with a launcher named, and with one that is not there

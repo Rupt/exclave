@@ -6,7 +6,10 @@
  *                                         only reports.
  *     exclave hash EXCLAVE                The tree hash of 6.4.
  *     exclave relink EXCLAVE [LAUNCHER]   Replace the launcher and relink every wrapper.
- *     exclave unwrap EXCLAVE              Move every original back over its wrapper. */
+ *     exclave unwrap EXCLAVE              Move every original back over its wrapper.
+ *     exclave wrap EXCLAVE                Wrap an exclave: add the launcher and the placeholders where missing, check
+ *                                         the manifest, the wrappers and every ELF, then wrap every executable and
+ *                                         write the launcher, manifest and tree hashes to .exclave/hashes. */
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -155,7 +158,7 @@ int main(int argc, char **argv)
         int (*run)(int, char **);
     } commands[] = {
         {"check", cmd_check},   {"format", cmd_format}, {"hash", cmd_hash},
-        {"relink", cmd_relink}, {"unwrap", cmd_unwrap},
+        {"relink", cmd_relink}, {"unwrap", cmd_unwrap}, {"wrap", cmd_wrap},
     };
     if (argc < 2) usage("COMMAND ARGS...");
     for (size_t i = 0; i < sizeof commands / sizeof *commands; i++)
