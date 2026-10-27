@@ -89,6 +89,12 @@ for target in x86_64 aarch64; do
         pids="$pids $!"
     done
 done
+# and build/launcher-old's variant of the two sources it changes
+for f in src/filter.c src/handler.c; do
+    quiet .venv/bin/clang-tidy --quiet "$f" -- --target=x86_64-linux-gnu -std=gnu11 -ffreestanding -fno-builtin -nostdlib \
+        -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD &
+    pids="$pids $!"
+done
 for f in test/*_test.c test/sanitize.c; do
     quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 &
     pids="$pids $!"

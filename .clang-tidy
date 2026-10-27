@@ -31,8 +31,8 @@ Checks:
   - -readability-identifier-length
   # Flags are ints or'd together, as the kernel's headers define them.
   - -bugprone-signed-bitwise
-  - -hicpp-signed-bitwise
-  # Numbers in the launcher are the kernel's (offsets, limits, page sizes), cited where they are used.
+  # Most of the launcher's numbers are the kernel's ABI (offsets, limits, page sizes), named where they recur;
+  # a check that asked for a name for each would name what is read once beside its citation.
   - -readability-magic-numbers
   # Style the code holds to on purpose: `if ((r = f()) < 0) return r;`, braces where they help,
   # several declarations on a line, parameters in the kernel's order.
