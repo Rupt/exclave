@@ -3580,7 +3580,7 @@ about a minute. The steps run in parallel, each with its own log under
   clang-tidy with its static analyser on the launcher for each
   architecture and on the unit tests (`.clang-tidy`);
 - the unit step: the manifest parser, the grammar comparison, the
-  filter test, `test/syscalls.py`, the scratch-pool test and the CPU
+  filter test, `test/syscalls.py`, the scratch-pool test, the `#!` line test and the CPU
   level test, each built from the current sources for the host under
   AddressSanitizer and UndefinedBehaviorSanitizer, where a finding
   exits 99, which no test answers;

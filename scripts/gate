@@ -45,7 +45,7 @@ step() { # step NAME CMD...: in the background, its status and log kept
     ) &
 }
 # shellcheck disable=SC2329  # run through step, by name
-# the parser, the filter, the scratch pool and the CPU check, just built for the host under ASan and
+# the parser, the filter, the scratch pool, the CPU check and the #! rules, just built for the host under ASan and
 # UBSan, a finding fatal (test/sanitize.c)
 unit() {
     sanitized() { # sanitized OUT ARGS...
@@ -60,7 +60,9 @@ unit() {
         sanitized "$out/scratch_test" -DSCRATCH_TEST "$here/scratch_test.c" "$repo/src/scratch.c" &&
         "$out/scratch_test" &&
         sanitized "$out/isa_test" -DHOST_TEST "$here/isa_test.c" "$repo/src/isa.c" "$repo/src/str.c" &&
-        "$out/isa_test"
+        "$out/isa_test" &&
+        sanitized "$out/str_test" -DHOST_TEST "$here/str_test.c" "$repo/src/str.c" &&
+        "$out/str_test"
 }
 # shellcheck disable=SC2329  # run through step, by name
 debug_suite() { # debug_suite EXCLAVE NAME: the suite on the launcher with its undefined-behaviour checks

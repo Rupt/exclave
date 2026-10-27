@@ -1869,6 +1869,8 @@ def shebang_buffer_rules(ctx: Ctx) -> None:
         ("long-interp", "#!/" + "x" * 300, "Exec format error", 126),
         ("newline-256", "#!/" + "x" * 252 + "\n", "No such file or directory", 127),
         ("long-blanks", "#!/bin/sh -e" + " " * 300, "", 0),
+        # an empty interpreter name, looked up as the working directory
+        ("blank-interp", "#!   ", "Permission denied", 126),
     )
     for name, text, want, entry_rc in cases:
         p = os.path.join(ctx.work, f"shebang-{name}")
