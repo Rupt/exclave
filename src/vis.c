@@ -462,15 +462,6 @@ int vis_walk_facts(const char *v, int *identity, int *leads, const char **real)
     return is_host_facts(v, &f, real);
 }
 
-/* 8.4: the directories on the way to a host identity file exist on the host whether or not the exclave ships
- * them; a path walk treats them as directories so that the file itself can be reached */
-int vis_leads_to_host_file(const char *v)
-{
-    struct facts f;
-    f.exact = rule_exact(v);
-    return leads_facts(v, &f);
-}
-
 int is_wrapper_real(const char *real, char *tmp)
 {
     struct kstat st;

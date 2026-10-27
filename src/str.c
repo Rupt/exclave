@@ -53,19 +53,6 @@ void ltoa_(long v, char *b)
     while (i) *b++ = t[--i];
     *b = 0;
 }
-void xtoa_(unsigned long v, char *b)
-{
-    char t[20];
-    int i = 0;
-    const char *h = "0123456789abcdef";
-    if (v == 0) t[i++] = '0';
-    while (v) {
-        t[i++] = h[v & 15];
-        v >>= 4;
-    }
-    while (i) *b++ = t[--i];
-    *b = 0;
-}
 int starts_dir(const char *s, const char *pfx)
 {
     if (pfx[0] == '/' && pfx[1] == 0) return s[0] == '/';

@@ -229,15 +229,14 @@ static void build(void)
     /* the second stage, the number in A: the arguments that can only allow, and the probe */
     for (int i = 0; i < njumps; i++) prog[jumps[i]].k = (uint32_t)(np - jumps[i] - 1);
     int page[16], npage = 0;
-    if (NR_ioctl >= 0) { /* only the two chattr requests are trapped (8.2) */
-        emit(JEQ_K, 0, 5, NR_ioctl);
-        emit(LD_ABS, 0, 0, OFF_ARG(1));
-        emit(JEQ_K, 2, 0, (uint32_t)FS_IOC_SETFLAGS);
-        emit(JEQ_K, 1, 0, (uint32_t)FS_IOC_FSSETXATTR);
-        ret(SECCOMP_RET_ALLOW);
-        page[npage++] = np;
-        emit(JA, 0, 0, 0);
-    }
+    /* only the two chattr requests are trapped (8.2) */
+    emit(JEQ_K, 0, 5, NR_ioctl);
+    emit(LD_ABS, 0, 0, OFF_ARG(1));
+    emit(JEQ_K, 2, 0, (uint32_t)FS_IOC_SETFLAGS);
+    emit(JEQ_K, 1, 0, (uint32_t)FS_IOC_FSSETXATTR);
+    ret(SECCOMP_RET_ALLOW);
+    page[npage++] = np;
+    emit(JA, 0, 0, 0);
     for (unsigned i = 0; i < sizeof arg_traps / sizeof arg_traps[0]; i++) {
         if (arg_traps[i][0] < 0) continue; /* not on this architecture */
         emit(JEQ_K, 0, 6, (uint32_t)arg_traps[i][0]);

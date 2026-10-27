@@ -55,23 +55,22 @@ static inline long __sc6_raw(long n, long a, long b, long c, long d, long e, lon
 /* the syscall numbers stay a table */
 /* clang-format off */
 enum {
-    NR_read = 0, NR_write = 1, NR_close = 3, NR_fstat = 5, NR_lseek = 8,
+    NR_read = 0, NR_write = 1, NR_close = 3, NR_fstat = 5,
     NR_mmap = 9, NR_munmap = 11, NR_ioctl = 16, NR_pread64 = 17,
-    NR_getpid = 39, NR_clone = 56, NR_execve = 59, NR_wait4 = 61,
-    NR_kill = 62, NR_fchdir = 81, NR_chdir = 80, NR_getcwd = 79,
-    NR_getuid = 102, NR_getgid = 104, NR_statfs = 137, NR_pivot_root = 155,
+    NR_getpid = 39, NR_execve = 59,
+    NR_kill = 62, NR_chdir = 80, NR_getcwd = 79,
+    NR_statfs = 137, NR_pivot_root = 155,
     NR_prctl = 157, NR_mount = 165, NR_umount2 = 166, NR_getdents64 = 217,
     NR_exit_group = 231, NR_openat = 257, NR_mkdirat = 258, NR_newfstatat = 262,
     NR_unlinkat = 263, NR_symlinkat = 266, NR_readlinkat = 267,
-    NR_faccessat = 269, NR_unshare = 272, NR_dup3 = 292,
+    NR_faccessat = 269,
     NR_mount_setattr = 442, NR_rt_sigaction = 13, NR_rt_sigprocmask = 14,
-    NR_ptrace = 101, NR_fork = 57,
     NR_uname = 63, NR_tgkill = 234, NR_gettid = 186, NR_process_vm_readv = 310, NR_fchmod = 91,
-    NR_fchown = 93, NR_ftruncate = 77, NR_fsetxattr = 190, NR_fremovexattr = 199, NR_fgetxattr = 193,
-    NR_rt_sigsuspend = 130, NR_ppoll = 271, NR_pselect6 = 270, NR_select = 23, NR_epoll_pwait = 281,
-    NR_epoll_pwait2 = 441, NR_epoll_wait = 232, NR_io_pgetevents = 333, NR_io_getevents = 208,
-    NR_io_uring_setup = 425, NR_seccomp = 317, NR_fstatfs = 138, NR_sigaltstack = 131, NR_exit = 60,
-    NR_rt_sigreturn = 15, NR_clone3 = 435, NR_mprotect = 10, NR_dup = 32, NR_fcntl = 72,
+    NR_fchown = 93, NR_fsetxattr = 190, NR_fremovexattr = 199,
+    NR_rt_sigsuspend = 130, NR_ppoll = 271, NR_pselect6 = 270, NR_epoll_pwait = 281,
+    NR_epoll_pwait2 = 441, NR_io_pgetevents = 333,
+    NR_io_uring_setup = 425, NR_seccomp = 317, NR_fstatfs = 138,
+    NR_clone3 = 435, NR_mprotect = 10, NR_fcntl = 72,
     NR_open = 2, NR_stat = 4, NR_lstat = 6, NR_access = 21, NR_truncate = 76, NR_rename = 82,
     NR_mkdir = 83, NR_rmdir = 84, NR_creat = 85, NR_link = 86, NR_unlink = 87, NR_symlink = 88,
     NR_readlink = 89, NR_chmod = 90, NR_chown = 92, NR_lchown = 94, NR_utime = 132, NR_mknod = 133,
@@ -81,7 +80,7 @@ enum {
     NR_mknodat = 259, NR_fchownat = 260, NR_futimesat = 261, NR_renameat = 264, NR_linkat = 265,
     NR_fchmodat = 268, NR_utimensat = 280, NR_name_to_handle_at = 303, NR_renameat2 = 316,
     NR_execveat = 322, NR_statx = 332, NR_openat2 = 437, NR_faccessat2 = 439, NR_fchmodat2 = 452,
-    NR_close_range = 436, NR_dup2 = 33, NR_fanotify_mark = 301, NR_writev = 20, NR_process_vm_writev = 311,
+    NR_fanotify_mark = 301, NR_writev = 20, NR_process_vm_writev = 311,
     NR_setxattrat = 463, NR_getxattrat = 464, NR_listxattrat = 465, NR_removexattrat = 466, NR_open_tree_attr = 467,
     NR_file_getattr = 468, NR_file_setattr = 469, NR_bind = 49, NR_connect = 42,
     NR_pipe2 = 293, NR_prlimit64 = 302,
@@ -127,23 +126,22 @@ static inline long __sc6_raw(long n, long a, long b, long c, long d, long e, lon
 }
 /* clang-format off */
 enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absent */
-    NR_read = 63, NR_write = 64, NR_close = 57, NR_fstat = 80, NR_lseek = 62,
+    NR_read = 63, NR_write = 64, NR_close = 57, NR_fstat = 80,
     NR_mmap = 222, NR_munmap = 215, NR_ioctl = 29, NR_pread64 = 67,
-    NR_getpid = 172, NR_clone = 220, NR_execve = 221, NR_wait4 = 260,
-    NR_kill = 129, NR_fchdir = 50, NR_chdir = 49, NR_getcwd = 17,
-    NR_getuid = 174, NR_getgid = 176, NR_statfs = 43, NR_pivot_root = 41,
+    NR_getpid = 172, NR_execve = 221,
+    NR_kill = 129, NR_chdir = 49, NR_getcwd = 17,
+    NR_statfs = 43, NR_pivot_root = 41,
     NR_prctl = 167, NR_mount = 40, NR_umount2 = 39, NR_getdents64 = 61,
     NR_exit_group = 94, NR_openat = 56, NR_mkdirat = 34, NR_newfstatat = 79,
     NR_unlinkat = 35, NR_symlinkat = 36, NR_readlinkat = 78,
-    NR_faccessat = 48, NR_unshare = 97, NR_dup3 = 24,
+    NR_faccessat = 48,
     NR_mount_setattr = 442, NR_rt_sigaction = 134, NR_rt_sigprocmask = 135,
-    NR_ptrace = 117, NR_fork = ABSENT(1),
     NR_uname = 160, NR_tgkill = 131, NR_gettid = 178, NR_process_vm_readv = 270, NR_fchmod = 52,
-    NR_fchown = 55, NR_ftruncate = 46, NR_fsetxattr = 7, NR_fremovexattr = 16, NR_fgetxattr = 10,
-    NR_rt_sigsuspend = 133, NR_ppoll = 73, NR_pselect6 = 72, NR_select = ABSENT(2), NR_epoll_pwait = 22,
-    NR_epoll_pwait2 = 441, NR_epoll_wait = ABSENT(3), NR_io_pgetevents = 292, NR_io_getevents = 4,
-    NR_io_uring_setup = 425, NR_seccomp = 277, NR_fstatfs = 44, NR_sigaltstack = 132, NR_exit = 93,
-    NR_rt_sigreturn = 139, NR_clone3 = 435, NR_mprotect = 226, NR_dup = 23, NR_fcntl = 25,
+    NR_fchown = 55, NR_fsetxattr = 7, NR_fremovexattr = 16,
+    NR_rt_sigsuspend = 133, NR_ppoll = 73, NR_pselect6 = 72, NR_epoll_pwait = 22,
+    NR_epoll_pwait2 = 441, NR_io_pgetevents = 292,
+    NR_io_uring_setup = 425, NR_seccomp = 277, NR_fstatfs = 44,
+    NR_clone3 = 435, NR_mprotect = 226, NR_fcntl = 25,
     NR_open = ABSENT(4), NR_stat = ABSENT(5), NR_lstat = ABSENT(6), NR_access = ABSENT(7), NR_truncate = 45, NR_rename = ABSENT(8),
     NR_mkdir = ABSENT(9), NR_rmdir = ABSENT(10), NR_creat = ABSENT(11), NR_link = ABSENT(12), NR_unlink = ABSENT(13), NR_symlink = ABSENT(14),
     NR_readlink = ABSENT(15), NR_chmod = ABSENT(16), NR_chown = ABSENT(17), NR_lchown = ABSENT(18), NR_utime = ABSENT(19), NR_mknod = ABSENT(20),
@@ -153,7 +151,7 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
     NR_mknodat = 33, NR_fchownat = 54, NR_futimesat = ABSENT(23), NR_renameat = 38, NR_linkat = 37,
     NR_fchmodat = 53, NR_utimensat = 88, NR_name_to_handle_at = 264, NR_renameat2 = 276,
     NR_execveat = 281, NR_statx = 291, NR_openat2 = 437, NR_faccessat2 = 439, NR_fchmodat2 = 452,
-    NR_close_range = 436, NR_dup2 = ABSENT(24), NR_fanotify_mark = 263, NR_writev = 66, NR_process_vm_writev = 271,
+    NR_fanotify_mark = 263, NR_writev = 66, NR_process_vm_writev = 271,
     NR_setxattrat = 463, NR_getxattrat = 464, NR_listxattrat = 465, NR_removexattrat = 466, NR_open_tree_attr = 467,
     NR_file_getattr = 468, NR_file_setattr = 469, NR_bind = 200, NR_connect = 203,
     NR_pipe2 = 59, NR_prlimit64 = 261,
@@ -191,7 +189,6 @@ long __sc6_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define AT_SYMLINK_NOFOLLOW 0x100
 #define AT_REMOVEDIR 0x200
 #define AT_EMPTY_PATH 0x1000
-#define AT_RECURSIVE 0x8000
 
 #define O_RDONLY 00
 #define O_WRONLY 01
@@ -204,7 +201,6 @@ long __sc6_opaque(long n, long a, long b, long c, long d, long e, long f);
 
 #define EPERM 1
 #define ENOENT 2
-#define EINTR 4
 #define EACCES 13
 #define EEXIST 17
 #define EADDRINUSE 98
@@ -226,46 +222,9 @@ long __sc6_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define S_IFBLK 0060000
 #define S_IFSOCK 0140000
 
-#define MS_RDONLY 1
-#define MS_NOSUID 2
-#define MS_NODEV 4
-#define MS_NOEXEC 8
-#define MS_SYNCHRONOUS 16
-#define MS_REMOUNT 32
-#define MS_MANDLOCK 64
-#define MS_NOATIME 1024
-#define MS_NODIRATIME 2048
-#define MS_BIND 4096
-#define MS_REC 16384
-#define MS_SILENT 32768
-#define MS_PRIVATE (1 << 18)
-#define MS_SLAVE (1 << 19)
-#define MS_RELATIME (1 << 21)
-#define MNT_DETACH 2
-
-/* statfs f_flags bits (ST_*); only ST_RDONLY is used, which equals MS_RDONLY */
-#define ST_RDONLY 1
-#define ST_NOSUID 2
-#define ST_NODEV 4
-#define ST_NOEXEC 8
-#define ST_SYNCHRONOUS 16
-#define ST_MANDLOCK 64
-#define ST_NOATIME 1024
-#define ST_NODIRATIME 2048
-#define ST_RELATIME 4096
-
-#define MOUNT_ATTR_RDONLY 0x1
-#define MOUNT_ATTR_NOSUID 0x2
-#define MOUNT_ATTR_NODEV 0x4
-#define MOUNT_ATTR_NOEXEC 0x8
-
-#define CLONE_NEWNS 0x00020000
-#define CLONE_NEWUSER 0x10000000
-#define SIGCHLD 17
-#define SIGKILL 9
+#define ST_RDONLY 1 /* statfs's f_flags bit for a read-only mount */
 
 #define PR_SET_NO_NEW_PRIVS 38
-#define PR_SET_PDEATHSIG 1
 
 #define AT_NULL 0
 #define AT_EXECFN 31
@@ -331,7 +290,6 @@ struct linux_dirent64 {
     char d_name[];
 };
 #define DT_DIR 4
-#define DT_REG 8
 #define DT_LNK 10
 
 /* ---------- thin wrappers ---------- */
@@ -346,50 +304,27 @@ static inline long sys_fstatat(int dfd, const char *p, struct kstat *st, int fl)
 static inline long sys_lstat(const char *p, struct kstat *st)
 { return sys_fstatat(AT_FDCWD, p, st, AT_SYMLINK_NOFOLLOW); }
 static inline long sys_stat(const char *p, struct kstat *st) { return sys_fstatat(AT_FDCWD, p, st, 0); }
-static inline long sys_mkdirat(int dfd, const char *p, int mode) { return SC3(NR_mkdirat, dfd, p, mode); }
-static inline long sys_mkdir(const char *p, int mode) { return sys_mkdirat(AT_FDCWD, p, mode); }
-static inline long sys_symlinkat(const char *t, int dfd, const char *p) { return SC3(NR_symlinkat, t, dfd, p); }
-static inline long sys_symlink(const char *t, const char *p) { return sys_symlinkat(t, AT_FDCWD, p); }
 static inline long sys_readlinkat(int dfd, const char *p, char *b, size_t n)
 { return SC4(NR_readlinkat, dfd, p, b, n); }
 static inline long sys_readlink(const char *p, char *b, size_t n) { return sys_readlinkat(AT_FDCWD, p, b, n); }
 static inline long sys_faccessat(int dfd, const char *p, int m) { return SC3(NR_faccessat, dfd, p, m); }
-static inline long sys_access(const char *p, int m) { return sys_faccessat(AT_FDCWD, p, m); }
-static inline long sys_chdir(const char *p) { return SC1(NR_chdir, p); }
-static inline long sys_fchdir(int fd) { return SC1(NR_fchdir, fd); }
 static inline long sys_getcwd(char *b, size_t n) { return SC2(NR_getcwd, b, n); }
-static inline long sys_mount(const char *s, const char *t, const char *fs, unsigned long fl, const void *d)
-{ return SC5(NR_mount, s, t, fs, fl, d); }
-static inline long sys_umount2(const char *t, int fl) { return SC2(NR_umount2, t, fl); }
-static inline long sys_pivot_root(const char *n, const char *o) { return SC2(NR_pivot_root, n, o); }
-static inline long sys_unshare(int fl) { return SC1(NR_unshare, fl); }
 static inline long sys_execve(const char *p, char *const *a, char *const *e) { return SC3(NR_execve, p, a, e); }
 static inline __attribute__((noreturn)) void sys_exit(int c)
 {
     for (;;) SC1(NR_exit_group, c);
 }
-static inline long sys_getuid(void) { return SC0(NR_getuid); }
-static inline long sys_getgid(void) { return SC0(NR_getgid); }
 static inline long sys_getpid(void) { return SC0(NR_getpid); }
 static inline long sys_getdents64(int fd, void *b, size_t n) { return SC3(NR_getdents64, fd, b, n); }
-static inline long sys_statfs(const char *p, struct kstatfs *s) { return SC2(NR_statfs, p, s); }
-static inline long sys_mount_setattr(int dfd, const char *p, unsigned fl, struct mount_attr *a, size_t sz)
-{ return SC5(NR_mount_setattr, dfd, p, fl, a, sz); }
-static inline long sys_wait4(pid_t p, int *st, int opt, void *ru) { return SC4(NR_wait4, p, st, opt, ru); }
 static inline long sys_prctl(int op, unsigned long a, unsigned long b, unsigned long c, unsigned long d)
 { return SC5(NR_prctl, op, a, b, c, d); }
 static inline long sys_kill(pid_t p, int s) { return SC2(NR_kill, p, s); }
-static inline long sys_dup3(int a, int b, int fl) { return SC3(NR_dup3, a, b, fl); }
 static inline long sys_mmap(void *a, size_t n, int prot, int fl, int fd, long off)
 { return SC6(NR_mmap, a, n, prot, fl, fd, off); }
 static inline long sys_pread(int fd, void *b, size_t n, long off) { return SC4(NR_pread64, fd, b, n, off); }
-static inline long sys_lseek(int fd, long off, int wh) { return SC3(NR_lseek, fd, off, wh); }
-static inline long sys_unlinkat(int dfd, const char *p, int fl) { return SC3(NR_unlinkat, dfd, p, fl); }
 
-static inline long sys_uname(void *buf) { return SC1(NR_uname, buf); }
 static inline long sys_gettid(void) { return SC0(NR_gettid); }
 static inline long sys_tgkill(pid_t tg, pid_t t, int s) { return SC3(NR_tgkill, tg, t, s); }
-static inline long sys_fstatfs(int fd, struct kstatfs *s) { return SC2(NR_fstatfs, fd, s); }
 static inline long sys_fcntl(int fd, int cmd, long arg) { return SC3(NR_fcntl, fd, cmd, arg); }
 static inline long sys_mprotect(void *a, size_t n, int prot) { return SC3(NR_mprotect, a, n, prot); }
 static inline long sys_rt_sigprocmask(int how, const void *set, void *old, size_t n)
@@ -406,16 +341,6 @@ static inline long sys_process_vm_readv(pid_t pid, const struct iovec *l, unsign
 static inline long sys_process_vm_writev(pid_t pid, const struct iovec *l, unsigned long ln, const struct iovec *r,
                                          unsigned long rn, unsigned long fl)
 { return SC6(NR_process_vm_writev, pid, l, ln, r, rn, fl); }
-
-/* fork(): x86_64 has a real fork; aarch64 clones. */
-static inline long sys_fork(void)
-{
-#if defined(__x86_64__)
-    return SC0(NR_fork);
-#else
-    return SC5(NR_clone, SIGCHLD, 0, 0, 0, 0);
-#endif
-}
 
 /* ---------- tiny libc subset ---------- */
 /* a pointer into a const argument handed back writable, as strchr does, or into a struct iovec for writing out */
@@ -495,19 +420,6 @@ static inline void outs(int fd, const char *s)
         s += r;
         n -= (size_t)r;
     }
-}
-static inline void outn(int fd, long v)
-{
-    char b[24];
-    int i = 23;
-    b[i] = 0;
-    unsigned long u = v < 0 ? (unsigned long)(-v) : (unsigned long)v;
-    do {
-        b[--i] = (char)('0' + u % 10);
-        u /= 10;
-    } while (u);
-    if (v < 0) b[--i] = '-';
-    outs(fd, b + i);
 }
 
 static inline const char *strerr(long e)

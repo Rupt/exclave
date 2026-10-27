@@ -89,6 +89,8 @@ for f in test/*_test.c test/sanitize.c; do
     pids="$pids $!"
 done
 for pid in $pids; do wait "$pid" || status=1; done
+# a definition in a shared header that nothing uses, which no compiler reports
+run "$UV" run --quiet python test/c_unused.py
 
 # A suppression says why on its line: `# noqa: RULE -- reason`.
 if grep -rnE '# (noqa: [A-Z0-9, ]+|ty: ignore\[[a-z0-9, -]+\])$' --include='*.py' exclave fetch test src; then

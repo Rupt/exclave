@@ -415,7 +415,7 @@ static long do_openat2(struct scratch *S, long *a)
 
 /* ---------- exec (7.4.5): scripts and host programs run inside the exclave's world ---------- */
 static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth,
-                        int cloexec, struct scratch **Sp);
+                        int cloexec);
 
 /* the first bytes of a file the exec must look at: the kernel needs no descriptor for its own exec, so a program at its
  * descriptor limit may still exec; the handler needs one and borrows it, the soft limit raised by one for the open when
@@ -553,7 +553,7 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
  * the script is passed by its virtual path. Kernel convention: argv = interp [arg] script args... */
 /* inlined into both callers: one frame per script level (7.5.4) */
 static inline __attribute__((always_inline)) long exec_script(struct scratch *S, const char *given, char **argv,
-                                                              char **envp, int depth, struct scratch **Sp)
+                                                              char **envp, int depth)
 {
     struct scratch *S2 = scratch_get(S->pid, S->tid, (unsigned long)__builtin_frame_address(0));
     if (!S2) return -ENOMEM;
@@ -584,7 +584,7 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
         if (k == -1) r = -ENOEXEC;
         else if (k == -2) r = -E2BIG;
         else if ((r = canon(S, nargv[0], AT_FDCWD, 1, S->v)) >= 0)
-            r = exec_target(S, S->v, nargv[0], nargv, envp, depth + 1, 0, Sp);
+            r = exec_target(S, S->v, nargv[0], nargv, envp, depth + 1, 0);
     }
     vector_free(big2, argc + 4);
     vector_free(big1, argc + 1);
@@ -595,7 +595,7 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
 /* cloexec: the script came through a close-on-exec descriptor, which its interpreter could not open: the kernel refuses
  * such an exec with ENOENT before it runs anything (fs/exec.c, BINPRM_FLAGS_PATH_INACCESSIBLE) */
 static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth,
-                        int cloexec, struct scratch **Sp)
+                        int cloexec)
 {
     /* binfmt_script: five interpreters may nest, the sixth is ELOOP (measured) */
     if (depth > 5) return -ELOOP;
@@ -627,7 +627,7 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
         return exec_env(S, S->real, argv, envp, v, 0); /* the kernel runs the launcher under the program's name */
     }
     /* not a wrapper: a host program, or an unwrapped exclave file */
-    if (script) return exec_script(S, given, argv, envp, depth, Sp);
+    if (script) return exec_script(S, given, argv, envp, depth);
     if (!elf) return -ENOEXEC;
     /* 7.4.5: a file carrying a launcher's note is another launcher: exec it as it is */
     int another;
@@ -666,7 +666,7 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
 #define F_GETFD 1
 #define FD_CLOEXEC 1
 #endif
-static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp, struct scratch **Sp)
+static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp)
 {
     /* buffers from the scratch (7.5.4): the number, the stat, the header */
     char *n = S->cur;
@@ -696,7 +696,7 @@ static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp,
         if (fl & FD_CLOEXEC) return -ENOENT;
         /* S->real is read; /dev/fd/N, the kernel's spelling, is what the interpreter gets */
         scpy(S->v, S->v2, PATH_MAX);
-        return exec_script(S, S->v, argv, envp, 0, Sp);
+        return exec_script(S, S->v, argv, envp, 0);
     }
     if (!(k == 4 && head[0] == 0x7f && head[1] == 'E' && head[2] == 'L' && head[3] == 'F')) return -ENOEXEC;
     /* inherited by the child launcher, which closes it after the mapping */
@@ -710,8 +710,7 @@ static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp,
     return r;
 }
 
-static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, char **argv, char **envp,
-                      struct scratch **Sp)
+static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, char **argv, char **envp)
 {
     long r = resolve(S, a, pi, di, !(flags & AT_SYMLINK_NOFOLLOW), (flags & AT_EMPTY_PATH) != 0);
     if (r < 0) return r;
@@ -747,7 +746,7 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
         }
         r = dfd_virtual(dfd, S->v);
         /* fd_virtual: the link ends " (deleted)": no path */
-        if (r == -ENOENT) return exec_descriptor(S, dfd, argv, envp, Sp);
+        if (r == -ENOENT) return exec_descriptor(S, dfd, argv, envp);
         if (r < 0) return r;
         /* through a descriptor, comm is the file's own name (fs/exec.c since 6.12) */
         scpy(S->comm, base_name(S->v), sizeof S->comm);
@@ -759,7 +758,7 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
         }
         scpy(S->comm, base_name(S->v2), sizeof S->comm); /* kbasename of the name as spelt */
     }
-    return exec_target(S, S->v, S->v2, argv, envp, 0, cloexec, Sp);
+    return exec_target(S, S->v, S->v2, argv, envp, 0, cloexec);
 }
 
 /* ---------- readlink: /proc links and identity files answer in virtual terms (8.4) ---------- */
@@ -959,9 +958,6 @@ static void real_nofollow(struct scratch *S, int nofollow)
  * abstract name, an unnamed address or another family is re-issued as given; a bad length is the kernel's EINVAL. */
 #ifndef EXCLAVE_TEST_OLD /* build/launcher-old does not trap bind or connect */
 #define AF_UNIX 1
-#ifndef W_OK
-#define W_OK 2
-#endif
 static long do_sockaddr(struct scratch *S, long *a, int nr)
 {
     /* addrlen is an int: the kernel truncates, and a length past the word must not
@@ -1046,7 +1042,7 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
 }
 #endif
 
-static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratch **Sp)
+static long dispatch(struct scratch *S, int nr, long *a, void *uc)
 {
     long r;
     switch (nr) {
@@ -1127,8 +1123,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
         to_real_exec(S->v, S->real);
         return RE5(NR_chdir, S->real, 0, 0, 0, 0);
-    case NR_execve: return do_execve(S, a, 0, -1, 0, (char **)a[1], (char **)a[2], Sp);
-    case NR_execveat: return do_execve(S, a, 1, 0, a[4], (char **)a[2], (char **)a[3], Sp);
+    case NR_execve: return do_execve(S, a, 0, -1, 0, (char **)a[1], (char **)a[2]);
+    case NR_execveat: return do_execve(S, a, 1, 0, a[4], (char **)a[2], (char **)a[3]);
     case NR_truncate:
         if (a[1] < 0) return -EINVAL; /* do_sys_truncate: the length first */
         if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
@@ -1195,7 +1191,6 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         /* do_renameat2: the flags first */
         if (fl & ~(unsigned)(RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT)) return -EINVAL;
         if ((fl & (RENAME_NOREPLACE | RENAME_WHITEOUT)) && (fl & RENAME_EXCHANGE)) return -EINVAL;
-        struct kstat st;
         if ((r = resolve(S, a, opi, odi, 0, 0)) < 0) return r;
         int osp = last_special(S->b1);
         scpy(S->v2, S->v, PATH_MAX); /* old */
@@ -1208,7 +1203,6 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         if (osp) return -EBUSY;
         if (nsp) return (fl & RENAME_NOREPLACE) ? -EEXIST : -EBUSY;
         if (oc && nc) return -EROFS;
-        (void)st;
         to_real_exec(S->v2, S->b1);
         to_real_exec(S->v, S->real);
         /* renameat2 is 3.15+ */
@@ -1542,12 +1536,14 @@ static void on_sigsys(int sig, void *info, void *uc)
         S->resolve = 0;
         S->v[0] = 0;
     }
-    long r = S ? dispatch(S, nr, a, uc, &S) : -ENOMEM;
+    long r = S ? dispatch(S, nr, a, uc) : -ENOMEM;
     if (C.logfd >= 0 && S) log_line(sysname(nr), r, S->v[0] ? S->v : 0);
     if (S) scratch_put(S);
     g[REG_RESULT] = r;
 }
 
+/* the restorer the kernel returns through after the handler: rt_sigreturn, 15 on x86-64 and 139 on aarch64, by a bare
+ * instruction, since a call to the syscall page would push onto the stack the kernel reads the frame from */
 #if defined(__x86_64__)
 __asm__(".text\n.globl sig_restorer\n.type sig_restorer,@function\nsig_restorer:\n mov $15, %eax\n syscall\n");
 #elif defined(__aarch64__)

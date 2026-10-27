@@ -7,7 +7,6 @@
 #pragma once
 #include "sys.h"
 
-#define LAUNCHER_VERSION "0.1"
 #ifndef FILTER_VERSION
 /* 7.4.2: versioned reuse; bumped whenever the trap set grows or the page moves (2: the *xattrat and file_*attr
  * syscalls; 3: openat2; 4: bind and connect; 5: FS_IOC_FSSETXATTR's right number; 6: the syscall page moved) */
@@ -23,8 +22,6 @@
 
 /* ---------- errno ---------- */
 #define EBADF 9
-#define ECHILD 10
-#define EAGAIN 11
 #define ENOMEM 12
 #define EFAULT 14
 #define EBUSY 16
@@ -32,21 +29,15 @@
 #define EISDIR 21
 #define ENFILE 23
 #define EMFILE 24
-#define ENOTTY 25
-#define ENOSPC 28
-#define ESPIPE 29
 #define ERANGE 34
 #define ELOOP 40
 #define ENOEXEC 8
 #define E2BIG 7
 #define ESRCH 3
-#define EIO 5
 #define ENOTEMPTY 39
-#define EOPNOTSUPP 95
 
 /* ---------- open / at flags ---------- */
 #define O_ACCMODE 03
-#define O_NOCTTY 0400
 #define O_APPEND 02000
 #define O_NONBLOCK 04000
 #define O_TMPFILE (020000000 | O_DIRECTORY)
@@ -66,16 +57,6 @@
 #define AT_STATX_SYNC_TYPE 0x6000
 
 /* ---------- signals ---------- */
-#define SIGHUP 1
-#define SIGINT 2
-#define SIGQUIT 3
-#define SIGILL 4
-#define SIGABRT 6
-#define SIGBUS 7
-#define SIGFPE 8
-#define SIGSEGV 11
-#define SIGTERM 15
-#define SIGSTOP 19
 #define SIGSYS 31
 #define SA_SIGINFO 4
 #define SA_ONSTACK 0x08000000
@@ -95,12 +76,9 @@
 #define SECCOMP_GET_ACTION_AVAIL 2
 #define SECCOMP_FILTER_FLAG_SPEC_ALLOW 4    /* 4.17 */
 #define SECCOMP_RET_KILL_PROCESS 0x80000000U
-#define SECCOMP_RET_KILL_THREAD 0x00000000U
 #define SECCOMP_RET_TRAP 0x00030000U
 #define SECCOMP_RET_ERRNO 0x00050000U
 #define SECCOMP_RET_ALLOW 0x7fff0000U
-#define AUDIT_ARCH_X86_64 0xC000003EU
-#define AUDIT_ARCH_AARCH64 0xC00000B7U
 #define X32_SYSCALL_BIT 0x40000000U
 
 /* ---------- mmap ---------- */
@@ -111,14 +89,12 @@
 #define MAP_FIXED 0x10
 #define MAP_ANONYMOUS 0x20
 #define MAP_FIXED_NOREPLACE 0x100000
-#define MAP_STACK 0x20000
 
 /* ---------- ioctl requests the filter traps (chattr) ---------- */
 #define FS_IOC_SETFLAGS 0x40086602UL
 #define FS_IOC_FSSETXATTR 0x401c5820UL /* _IOW('X', 32, struct fsxattr) */
 
 /* ---------- statfs flag ---------- */
-#define ST_RDONLY_BIT 1
 
 /* ---------- auxv ---------- */
 #define AT_PHDR 3
@@ -127,10 +103,7 @@
 #define AT_PAGESZ 6
 #define AT_BASE 7
 #define AT_ENTRY 9
-#define AT_RANDOM 25
 #define AT_HWCAP 16
-#define AT_HWCAP2 26
-#define AT_MINSIGSTKSZ 51
 
 /* ---------- the signal frame (rt_sigframe), by architecture ----------
  * x86-64: uc_mcontext.gregs at +40 from the ucontext, uc_sigmask at +296; verified against a real frame. The names index the argument registers of the syscall convention and the result register.
@@ -176,14 +149,11 @@ enum {
 #define REG_ARG4 4
 #define REG_ARG5 5
 #define REG_RESULT 0
-#define REG_SP 31
-#define REG_PC 32
 #endif
 /* siginfo: si_signo@0 si_errno@4 si_code@8; SIGSYS: _call_addr@16 _syscall@24 _arch@28 */
 #define SI_CODE_OFF 8
 #define SI_CALL_ADDR_OFF 16
 #define SI_SYSCALL_OFF 24
-#define SI_ARCH_OFF 28
 
 /* ---------- the exclave's run-time state (7.2), filled at startup ---------- */
 struct hostmap {
@@ -241,7 +211,6 @@ char *scat(char *d, const char *s, size_t n);
 const char *base_name(const char *p);
 void ltoa_(long v, char *b); /* decimal, buffer >= 24 */
 long fd_real_path(int fd, char *out);
-void xtoa_(unsigned long v, char *b); /* lowercase hex, buffer >= 20 */
 int starts_dir(const char *s, const char *pfx); /* s == pfx or s starts with pfx + "/" ; "/" matches all */
 /* bump allocator for the manifest's strings, the tables, the environment; never freed */
 void *arena_alloc(size_t n);
@@ -290,7 +259,6 @@ char *to_real(const char *v, char *out, char *tmp); /* v -> real, with wrapper r
 char *to_real_exec(const char *v, char *out); /* v -> real, no wrapper redirect */
 void from_real(char *r); /* in place, no buffer */
 int is_exclave_path(const char *v);
-int vis_leads_to_host_file(const char *v); /* v is a proper ancestor of a host-resolved file */
 /* the three in one pass: 1 if the host's */
 int vis_walk_facts(const char *v, int *identity, int *leads, const char **real);
 /* every prefix from that long the host's plainly: the one-step check may stand in */
