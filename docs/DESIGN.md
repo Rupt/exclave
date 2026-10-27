@@ -3786,10 +3786,55 @@ stated here.
 ## 18. Roadmap
 
 The format, the launcher and the tool are complete for what section 3
-asks of them. What comes next is use, releases and a few open
-questions.
+asks of them. What comes next is the tool's shape, use, releases and a
+few open questions.
 
-1. **Exclaves of real packaged software.** The exclaves built so far
+1. **The tool as one static executable.** The launcher is a
+   freestanding executable of about 96 KB that every exclave carries.
+   The tool that installs it is a Python package run through a pinned
+   interpreter, and its own exclave (10.5) is a directory holding an
+   Ubuntu base and that Python, so that the small executable is made by
+   a tool a thousand times its size, tied to a checkout. The plan
+   closes that gap in two steps, and the second is the larger.
+
+   First the boundary. The `exclave` command's input becomes a
+   directory holding `tree/`, which is what every command but `unpack`
+   takes already (10), and `unpack` moves to the step before the tool,
+   beside the fetchers (19.3), where package files become a tree; the
+   design then shows the ways to such a tree: the unpack script,
+   `debootstrap` or a container export, and `ar`, `tar` and
+   `ldconfig -r` by hand, with the alternatives one needs made by
+   `ln -s`. The hashes file already separates the two steps: the `pkg`
+   records are written by whoever made the tree, and `wrap` keeps them
+   and adds the launcher, manifest and tree records (6.4). Dogfooding
+   (10.5) shrinks to what it should test, a cross-exclave `wrap`
+   reproducing the hashes file.
+
+   Then the port. The directory commands, `wrap`, `unwrap`, `relink`,
+   `check`, `prune`, `hash` and `format`, are rewritten in C, linked
+   statically and built for both architectures as the launcher is,
+   with both launchers embedded as data and chosen by the tree's
+   machine, so that one file installs and wraps on any tree; the
+   launcher stays a separate, freestanding program (19.2), since it
+   runs inside other programs' processes and the tool never does, and
+   an exclave is still wrapped on a machine of its architecture (10.3).
+   The port goes one command at a time, with the Python answering until
+   the C does: `hash` must match `hashlib` byte for byte, `format` must
+   reproduce its own output on the test corpus, the static check must
+   report the same on the gate's exclaves, and the suite, which runs the
+   command and not the language, decides (17). The Python directory
+   side is removed when the last command is ported, not kept beside the
+   C.
+
+   `unpack` stays in Python: its four decompressors and its synthesis
+   table make it a different kind of program, and like fetching it is
+   the step before the tool. The suite, the matrix and the fetchers stay
+   Python on the pinned interpreter, which is a development dependency
+   and not a shipped one. What is shipped becomes one static `exclave`
+   for each architecture, and the unpack script for whoever wants it.
+   Two decisions of 19.3 move when the port lands: the tool is then C,
+   and its own exclave is a wrapped static executable.
+2. **Exclaves of real packaged software.** The exclaves built so far
    are compilers and the tool itself. The next exclaves are of real
    packaged software that people run, and they decide which of the
    tool's synthesis gaps close (10.1): `unpack` does not generate
