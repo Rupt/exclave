@@ -2845,8 +2845,8 @@ def wrap_refusals(ctx: Ctx) -> None:
 
     It refuses a stale wrapper of another launcher, a file its user cannot execute, an original
     without a wrapper, an ELF whose loader the tree lacks, a manifest or a tree beyond the
-    launcher's tables, which the launcher refuses too; executables in a data directory are left
-    alone.
+    launcher's tables, which the launcher refuses too, and a link naming the exclave's own location,
+    with the link that fixes it; executables in a data directory are left alone.
     """
 
     def hand(
@@ -3023,6 +3023,20 @@ def wrap_refusals(ctx: Ctx) -> None:
     expect(
         "Permission denied" in out + err and "rc=126" in out,
         f"a data directory is never executed: {out!r} {err!r}",
+    )
+    # a link whose text is the exclave's real location would break when the exclave moved
+    lk = hand("located.exclave", [("/usr/bin/hi", script, 0o755)])
+    os.symlink(
+        os.path.join(os.path.realpath(lk), "tree", "usr", "bin", "hi"),
+        os.path.join(lk, "tree", "usr", "bin", "lk"),
+    )
+    rc, o, e = run([*TOOL, "wrap", lk])
+    expect(
+        rc != 0
+        and "link naming the exclave's own location: /usr/bin/lk" in o + e
+        and "ln -sfn /usr/bin/hi" in o + e
+        and not os.path.exists(os.path.join(lk, "tree", "usr", "bin", ".real")),
+        f"a link naming the exclave's location must be refused: {rc} {(o + e)[-400:]}",
     )
 
 

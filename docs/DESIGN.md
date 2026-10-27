@@ -343,6 +343,9 @@ by hand; it is a convention, recorded nowhere.
 - Every file with an executable bit outside data directories is
   wrapped, ELF or script. The tool refuses to wrap a file its user
   could not execute, since the wrapper's mode is the launcher's.
+- A symlink in the tree whose text names the exclave's own location is
+  refused by `wrap` and `check`, with the `ln` that fixes it: moving
+  the exclave would break it (3, goal 2). Packages never make one.
 - `.real/` is a hidden sibling by convention only: `find`, `du`, `tar`
   and directory scanners see it. Hard links cost nothing; a copy that
   breaks them, `cp -r`, `git` or `zip -y`, makes each wrapper a copy of

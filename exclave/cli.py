@@ -387,6 +387,28 @@ def wrap_files(ex: str, data: Sequence[str] = (), *, quiet: bool = False) -> int
     return n
 
 
+def located_links(ex: str) -> list[str]:
+    """Return the tree's symlinks whose text names the exclave's own location (6.1).
+
+    Packages never make one; one added by hand would break when the exclave is moved or copied,
+    which nothing in an exclave may prevent, so wrap and check refuse it, naming the fix.
+    """
+    root = os.path.join(ex, "tree")
+    places = {os.path.abspath(ex), os.path.realpath(ex)}
+    problems = []
+    for real, v, st in layout.walk_files(root):
+        if not stat.S_ISLNK(st.st_mode):
+            continue
+        text = os.readlink(real)
+        place = next((p for p in places if layout.under(text, p)), None)
+        if place is None:
+            continue
+        inside = os.path.relpath(text, os.path.join(place, "tree"))
+        fix = f"; ln -sfn /{inside} {real}" if not inside.startswith("..") and inside != "." else ""
+        problems.append(f"link naming the exclave's own location: {v} -> {text}{fix}")
+    return problems
+
+
 def cmd_wrap(ex: str, *, quiet: bool = False) -> int:
     """Wrap an exclave, and return 0, or 1 when it is refused (10.1).
 
@@ -416,7 +438,7 @@ def cmd_wrap(ex: str, *, quiet: bool = False) -> int:
         raise BuildError(msg)
     check_limits(ex)
     data = data_prefixes(ex)
-    problems = wrapper_problems(ex, data)
+    problems = wrapper_problems(ex, data) + located_links(ex)
     for p in problems:
         print("error: " + p)
     rep = static_report(ex, quiet=quiet)
@@ -515,7 +537,7 @@ def cmd_check(ex: str, logs: Sequence[str] = ()) -> int:
     root = os.path.join(ex, "tree")
     data = data_prefixes(ex)
     launcher = layout.launcher_of(ex)
-    problems = wrapper_problems(ex, data)
+    problems = wrapper_problems(ex, data) + located_links(ex)
     for real, v, st in layout.walk_files(root):
         if (
             stat.S_ISREG(st.st_mode)
