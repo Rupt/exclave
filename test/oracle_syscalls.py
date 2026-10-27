@@ -20,10 +20,10 @@ page (e:), a null pointer (n:) or a pointer into an unmapped page (u:); a string
 xattr_args; an inotify descriptor, a unix socket (k:) or a sockaddr_un (A:); a struct open_how.
 execve runs in a forked child whose exit status is the answer.
 
-Cases. The table covers the trapped path syscalls and the descriptor-addressed ones (fchmod,
-fchown, fsetxattr, fremovexattr, fstatfs, and ioctl with FS_IOC_SETFLAGS and FS_IOC_FSSETXATTR),
-crossed with every flag that changes resolution and with the path forms of class Forms over a random
-maze:
+Cases. The table covers the trapped path syscalls and the descriptor-addressed ones (fchmod, fchown,
+fsetxattr, fremovexattr, fstatfs, and ioctl with FS_IOC_SETFLAGS and FS_IOC_FSSETXATTR), crossed
+with every flag that changes resolution, with the invalid arguments the kernel checks before the
+lookup, and with the path forms of class Forms over a random maze:
   - inside the exclave: a file, a directory and a symlink of every kind (loop, chained, dangling,
     absolute, relative), a wrapper, the shell's link, an identity file, a placeholder,
     /proc/self/exe, and an exclave link to a host file and to a host directory;
@@ -82,6 +82,7 @@ which no program could write whole, so a deeper work directory gives fewer cases
 """
 
 import argparse
+import errno
 import os
 import platform
 import random
@@ -518,6 +519,21 @@ def generate(
         add("lremovexattr", n, p, S("user.probe"))
         add("inotify_add_watch", n, "I:", p, I(IN_MODIFY))
         add("fanotify_mark", n, I(-1), I(0), I(0), I(AT_FDCWD), p)
+        # the arguments the kernel checks before the lookup (13 item 11)
+        if n != "proc_exe":
+            add("truncate", n + "/negative", p, I(-1))
+        add("mknod", n + "/dir_type", p, I(0o40755), I(0))
+        add("mknod", n + "/bad_type", p, I(0o170644), I(0))
+        add("symlink", n + "/empty_target", S(""), p)
+        add("symlink", n + "/null_target", "n:", p)
+        add("setxattr", n + "/empty_name", p, S(""), S("v"), I(1), I(0))
+        add("setxattr", n + "/bad_flags", p, S("user.probe"), S("v"), I(1), I(0x10))
+        add("setxattr", n + "/too_big", p, S("user.probe"), S("v"), I(65537), I(0))
+        add("getxattr", n + "/empty_name", p, S(""), B("xattr", 64), I(64))
+        add("removexattr", n + "/empty_name", p, S(""))
+        add("inotify_add_watch", n + "/bad_fd", I(-1), p, I(IN_MODIFY))
+        add("inotify_add_watch", n + "/no_events", "I:", p, I(0))
+        add("inotify_add_watch", n + "/not_inotify", F(O_RDONLY, forms.file), p, I(IN_MODIFY))
         add("execve", n, p, V("x"), V())
         raw = raw_of(p)
         if raw is not None and not unwritable(
@@ -580,6 +596,18 @@ def generate(
             add("statx", f"{n}/{fn}", d, p, I(fl), I(STATX_BASIC_STATS), B("statx", 256))
         add("unlinkat", n, d, p, I(0))
         add("unlinkat", n + "/rmdir", d, p, I(AT_REMOVEDIR))
+        # the arguments the kernel checks before the lookup (13 item 11)
+        add("unlinkat", n + "/bad_flags", d, p, I(1))
+        add("mknodat", n + "/dir_type", d, p, I(0o40755), I(0))
+        add("fchownat", n + "/bad_flags", d, p, I(uid), I(gid), I(1))
+        add("newfstatat", n + "/bad_flags", d, p, B("stat", 256), I(1))
+        add("statx", n + "/reserved_mask", d, p, I(0), I(0x80000000), B("statx", 256))
+        add("statx", n + "/both_syncs", d, p, I(0x6000), I(STATX_BASIC_STATS), B("statx", 256))
+        add("statx", n + "/bad_flags", d, p, I(1), I(STATX_BASIC_STATS), B("statx", 256))
+        add("faccessat", n + "/bad_mode", d, p, I(8))
+        add("faccessat2", n + "/bad_flags", d, p, I(4), I(1))
+        add("fchmodat2", n + "/bad_flags", d, p, I(0o644), I(1))
+        add("symlinkat", n + "/empty_target", S(""), d, p)
         add("symlinkat", n, S("/maze/f0"), d, p)
         add("readlinkat", n, d, p, B("link", 4096), I(4096))
         add("readlinkat", n + "/zero", d, p, B("link", 4), I(0))
@@ -748,8 +776,18 @@ def generate(
                 ("whiteout", RENAME_WHITEOUT),
             ):
                 add("renameat2", f"{lab}/{fn}", I(AT_FDCWD), p1, I(AT_FDCWD), p2, I(fl))
-            for fn, fl in (("plain", 0), ("follow", AT_SYMLINK_FOLLOW), ("empty", AT_EMPTY_PATH)):
+            for fn, fl in (
+                ("plain", 0),
+                ("follow", AT_SYMLINK_FOLLOW),
+                ("empty", AT_EMPTY_PATH),
+                ("bad_flags", 1),
+            ):
                 add("linkat", f"{lab}/{fn}", I(AT_FDCWD), p1, I(AT_FDCWD), p2, I(fl))
+            for fn, fl in (
+                ("bad_flags", 0x100),
+                ("exchange_noreplace", RENAME_EXCHANGE | RENAME_NOREPLACE),
+            ):
+                add("renameat2", f"{lab}/{fn}", I(AT_FDCWD), p1, I(AT_FDCWD), p2, I(fl))
     # a last component that is ".", ".." or the root, either side: do_renameat2 answers EBUSY
     # before the write check
     dots = [
@@ -808,12 +846,16 @@ def generate(
         add("fchown", n, f, I(uid), I(gid))
         add("fsetxattr", n, f, S("user.probe"), S("v"), I(1), I(0))
         add("fremovexattr", n, f, S("user.probe"))
+        add("fsetxattr", n + "/empty_name", f, S(""), S("v"), I(1), I(0))
+        add("fremovexattr", n + "/empty_name", f, S(""))
         add("fstatfs", n, f, B("raw", 256))
         # not on a host file: ext4 on 5.10 to 6.1 refuses to clear the extent flag of a file
         # recreated moments after its predecessor was deleted (13), which the reset does
         if not n.startswith("host"):
             add("ioctl", n + "/setflags", f, I(FS_IOC_SETFLAGS), B("raw", 8))
             add("ioctl", n + "/fssetxattr", f, I(FS_IOC_FSSETXATTR), B("raw", 28))
+            add("ioctl", n + "/setflags_null", f, I(FS_IOC_SETFLAGS), "n:")
+            add("ioctl", n + "/fssetxattr_null", f, I(FS_IOC_FSSETXATTR), "n:")
     # relative paths from a working directory the exclave owns
     rel = [
         "",
@@ -1147,6 +1189,24 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
         ),
     ),
 ]
+
+# Before 6.13 the xattr calls looked the path up, or took a descriptor's mount for writing, before
+# they read the name, the flags and the size; the handler answers as the newer kernels do.
+EXPECTED.extend(
+    (
+        call,
+        lambda label, b, o: (
+            KERNEL < (6, 13)
+            and label.endswith(("/empty_name", "/bad_flags", "/too_big"))
+            and errnos(b, o)[1] in (errno.E2BIG, errno.EINVAL, errno.ERANGE)
+        ),
+        (
+            "an xattr call's name, flags and size: read after the lookup until 6.13, before it "
+            "since; the handler answers as the newer kernels do"
+        ),
+    )
+    for call in ("setxattr", "getxattr", "removexattr", "fsetxattr", "fremovexattr")
+)
 
 
 def expected(name: str, label: str, b: str, o: str) -> str | None:

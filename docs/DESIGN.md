@@ -140,7 +140,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 74 named tests, most of them programs that
+- **The regression suite**: 77 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -149,7 +149,7 @@ How it is tested (17):
   and 2).
 - **The syscall probe**: every trapped path and descriptor syscall,
   with every flag and path form, run under `bwrap` and under the
-  launcher; 19 093 cases per exclave, each difference from the kernel
+  launcher; 21 732 cases per exclave, each difference from the kernel
   either fixed or accepted under a named reason (17 item 7).
 - **Docker's default seccomp profile**: a workload in each exclave runs
   under it, standing for a CI container where user namespaces are
@@ -1563,6 +1563,15 @@ the references for the kernel's order.
 - Where the kernel checks something before its write check, so does
   the handler, in the kernel's order, each case costing at most one
   `lstat` on the failing path.
+  - The arguments the kernel checks before any lookup come first: the
+    flags of `unlinkat`, `renameat2`, `linkat`, `fchmodat2`,
+    `fchownat`, `faccessat2`, `newfstatat` and `statx`, the mode of
+    `faccessat` and the mask of `statx`, a negative `truncate` length,
+    the file type `mknod` is asked for, the target of `symlink`, an
+    extended attribute's name, flags and size (`ERANGE` for an empty
+    name), an `inotify` watch's mask and descriptor, and a `chattr`
+    ioctl's argument. Where an older kernel looked the path up first,
+    the handler answers as the newer kernels do (12.1).
   - A create (`mkdir`, `mknod`, `symlink`, `link`, `open` with
     `O_CREAT`) looks the name up first: an existing name is `EEXIST`,
     which `mkdir -p`, `install -d` and every configure script rely on;
@@ -2180,7 +2189,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 74 named regressions and every oracle its kernel can run; 17
+suite's 77 named regressions and every oracle its kernel can run; 17
 describes the procedure. Measured October 2026:
 
 | Distribution | Kernel | Suite | Oracles | Notes |
@@ -3466,7 +3475,8 @@ meaning items 4 and 7.
 
 7. **The kernel as the oracle for every trapped path syscall.** A
    probe issues every trapped path syscall and every descriptor syscall,
-   plus the `chattr` ioctls, with every path form, under `bwrap` and
+   plus the `chattr` ioctls, with every path form and with the invalid
+   arguments the kernel checks before the lookup, under `bwrap` and
    under the launcher. It compares the answers case by case. A
    difference is either fixed in the handler, following the kernel's
    order of checks, or listed with the rule that makes it right. It is
@@ -3480,7 +3490,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus the read-only matrix program (`test/progs/ro_matrix.c`) under `bwrap` against its own expectations |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: three properties on random byte strings (encoding is injective, decoding inverts it, `format` is idempotent); the Python and C parsers compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2 |
-| 4 | `test/run.py` with `test/progs/`: 74 named tests |
+| 4 | `test/run.py` with `test/progs/`: 77 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -3648,7 +3658,7 @@ construction, a stated limitation (13 items 29 and 41), or what an
 older kernel lacks or decided differently, such as `truncate` checking
 the mount before the permission on 6.1 and earlier (6.14 checks the
 permission first). The handler answers as the newest kernel does. On
-the reference machine 19 093 cases run on each of the gate's four
+the reference machine 21 732 cases run on each of the gate's four
 exclaves and none differ; no matrix row has a difference either.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.

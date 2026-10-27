@@ -17,6 +17,17 @@
 #define SIGSYS_BIT (1UL << (SIGSYS - 1))
 #define STATFS_FLAGS_OFF 80
 #define RENAME_NOREPLACE 1
+#define RENAME_EXCHANGE 2
+#define RENAME_WHITEOUT 4
+#define AT_NO_AUTOMOUNT 0x800
+#define STATX__RESERVED 0x80000000U
+#define XATTR_CREATE 1
+#define XATTR_REPLACE 2
+#define XATTR_NAME_MAX 255
+#define XATTR_SIZE_MAX 65536
+#define IN_MASK_CREATE 0x10000000
+#define IN_MASK_ADD 0x20000000
+#define ALL_INOTIFY_BITS 0xf700efffU /* include/linux/inotify.h */
 #define F_GETFL 3
 #define UTIME_OMIT ((1L << 30) - 2)
 #define UTIME_NOW ((1L << 30) - 1)
@@ -121,6 +132,39 @@ static long copy_out(pid_t pid, void *dst, const void *src, size_t n)
     }
     long g = pipe_copy(dst, src, n);
     return g == (long)n ? 0 : g < 0 ? g : -EFAULT;
+}
+
+/* ---------- arguments the kernel checks before the lookup (13 item 11) ---------- */
+/* may_mknod (fs/namei.c): the file type mknod asks for */
+static long may_mknod(unsigned short mode)
+{
+    switch (mode & S_IFMT) {
+    case S_IFREG:
+    case S_IFCHR:
+    case S_IFBLK:
+    case S_IFIFO:
+    case S_IFSOCK:
+    case 0: return 0;
+    case S_IFDIR: return -EPERM;
+    default: return -EINVAL;
+    }
+}
+/* import_xattr_name (fs/xattr.c): the name, read before the path, ERANGE when empty or longer than XATTR_NAME_MAX */
+static long xattr_name(struct scratch *S, const char *name)
+{
+    long got = copy_in(S->pid, S->tmp, name, XATTR_NAME_MAX + 1);
+    if (got < 0) return got;
+    for (long i = 0; i < got; i++)
+        if (!S->tmp[i]) return i ? 0 : -ERANGE;
+    return got < XATTR_NAME_MAX + 1 ? -EFAULT : -ERANGE;
+}
+/* setxattr_copy (fs/xattr.c): the flags, the name and the size, in that order, before the path */
+static long setxattr_args(struct scratch *S, const char *name, size_t size, int flags)
+{
+    if (flags & ~(XATTR_CREATE | XATTR_REPLACE)) return -EINVAL;
+    long r = xattr_name(S, name);
+    if (r) return r;
+    return size > XATTR_SIZE_MAX ? -E2BIG : 0;
 }
 
 /* ---------- path resolution ---------- */
@@ -1012,20 +1056,32 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         real_nofollow(S, nr == NR_lstat);
         return RE5(NR_newfstatat, AT_FDCWD, S->real, a[1], nr == NR_stat ? 0 : nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
     case NR_newfstatat:
+        /* vfs_fstatat: the flags before the name */
+        if ((unsigned)a[3] & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_EMPTY_PATH | AT_STATX_SYNC_TYPE))
+            return -EINVAL;
         if ((r = resolve(S, a, 1, 0, !(a[3] & AT_SYMLINK_NOFOLLOW), (a[3] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1) return RE5(nr, a[0], a[1], a[2], a[3], 0);
         real_nofollow(S, (a[3] & AT_SYMLINK_NOFOLLOW) != 0);
         return RE5(nr, AT_FDCWD, S->real, a[2], a[3] | nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
-    case NR_statx:
-        if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
+    case NR_statx: {
+        /* statx: the mask, the two sync flags at once and any other flag, before the name */
+        unsigned fl = (unsigned)a[2];
+        if (((unsigned)a[3] & STATX__RESERVED) || (fl & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE ||
+            (fl & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_EMPTY_PATH | AT_STATX_SYNC_TYPE)))
+            return -EINVAL;
+        if ((r = resolve(S, a, 1, 0, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1) return RE5(nr, a[0], a[1], a[2], a[3], a[4]);
         real_nofollow(S, (a[2] & AT_SYMLINK_NOFOLLOW) != 0);
         return RE5(nr, AT_FDCWD, S->real, a[2] | nofollow(S, AT_SYMLINK_NOFOLLOW), a[3], a[4]);
+    }
     case NR_access:
     case NR_faccessat:
     case NR_faccessat2: {
         int pi = nr == NR_access ? 0 : 1, di = nr == NR_access ? -1 : 0;
         long mode = a[pi + 1], fl = nr == NR_faccessat2 ? a[3] : 0;
+        /* do_faccessat: the mode, then the flags */
+        if ((unsigned)mode & ~7U) return -EINVAL;
+        if ((unsigned)fl & ~(unsigned)(AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) return -EINVAL;
         if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
         int empty = r == 1; /* AT_EMPTY_PATH: the descriptor's own file */
         if (empty) r = RE5(nr, a[0], "", mode, fl, 0);
@@ -1064,6 +1120,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_execve: return do_execve(S, a, 0, -1, 0, (char **)a[1], (char **)a[2], Sp);
     case NR_execveat: return do_execve(S, a, 1, 0, a[4], (char **)a[2], (char **)a[3], Sp);
     case NR_truncate:
+        if (a[1] < 0) return -EINVAL; /* do_sys_truncate: the length first */
         if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
         if (C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;
         /* vfs_truncate: EISDIR and EINVAL for what cannot be truncated, then EROFS */
@@ -1091,6 +1148,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_mknod:
     case NR_mknodat: {
         int pi = nr == NR_mknod ? 0 : 1, di = nr == NR_mknod ? -1 : 0;
+        if ((r = may_mknod((unsigned short)a[pi + 1]))) return r;
         if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
         if ((r = ro_create(S, S->v, 0))) return r;
         return RE5(NR_mknodat, AT_FDCWD, S->real, a[pi + 1], a[pi + 2], 0);
@@ -1100,6 +1158,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_unlinkat: {
         int pi = nr == NR_unlinkat ? 1 : 0, di = nr == NR_unlinkat ? 0 : -1;
         long fl = nr == NR_rmdir ? AT_REMOVEDIR : nr == NR_unlinkat ? a[2] : 0;
+        if ((unsigned)fl & ~(unsigned)AT_REMOVEDIR) return -EINVAL;
         if ((r = resolve(S, a, pi, di, 0, 0)) < 0)
             return r == -ENAMETOOLONG ? delete_overlong(S, di < 0 ? AT_FDCWD : (int)a[di]) : r;
         int sp = last_special(S->b1); /* do_rmdir, do_unlinkat: answered before any lookup */
@@ -1110,16 +1169,22 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_symlink:
     case NR_symlinkat: {
         int pi = nr == NR_symlink ? 1 : 2, di = nr == NR_symlink ? -1 : 1;
+        /* do_symlinkat: the target is read before the new name */
+        if ((r = copy_str_in(S->pid, S->extra, (const char *)a[0])) < 0) return r;
+        if (S->extra[0] == 0) return -ENOENT;
         if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
         if ((r = ro_create(S, S->v, 0))) return r;
-        return RE5(NR_symlinkat, a[0], AT_FDCWD, S->real, 0, 0);
+        return RE5(NR_symlinkat, S->extra, AT_FDCWD, S->real, 0, 0);
     }
     case NR_rename:
     case NR_renameat:
     case NR_renameat2: {
         int opi = nr == NR_rename ? 0 : 1, odi = nr == NR_rename ? -1 : 0, npi = nr == NR_rename ? 1 : 3,
             ndi = nr == NR_rename ? -1 : 2;
-        long fl = nr == NR_renameat2 ? a[4] : 0;
+        unsigned fl = nr == NR_renameat2 ? (unsigned)a[4] : 0;
+        /* do_renameat2: the flags first */
+        if (fl & ~(unsigned)(RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT)) return -EINVAL;
+        if ((fl & (RENAME_NOREPLACE | RENAME_WHITEOUT)) && (fl & RENAME_EXCHANGE)) return -EINVAL;
         struct kstat st;
         if ((r = resolve(S, a, opi, odi, 0, 0)) < 0) return r;
         int osp = last_special(S->b1);
@@ -1145,6 +1210,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
         int opi = nr == NR_link ? 0 : 1, odi = nr == NR_link ? -1 : 0, npi = nr == NR_link ? 1 : 3,
             ndi = nr == NR_link ? -1 : 2;
         long fl = nr == NR_linkat ? a[4] : 0;
+        if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_FOLLOW | AT_EMPTY_PATH))
+            return -EINVAL; /* do_linkat: the flags first */
         struct kstat st;
         if ((r = resolve(S, a, opi, odi, (fl & AT_SYMLINK_FOLLOW) != 0, (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
         if (r == 1) {
@@ -1178,6 +1245,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_fchmodat2: {
         int pi = nr == NR_chmod ? 0 : 1, di = nr == NR_chmod ? -1 : 0;
         long fl = nr == NR_fchmodat2 ? a[3] : 0;
+        if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
+            return -EINVAL; /* do_fchmodat: the flags first */
         if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
         /* AT_EMPTY_PATH: the descriptor's own file, read-only if it is the exclave's */
         if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], "", a[2], fl, 0);
@@ -1191,6 +1260,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_fchownat: {
         int pi = nr == NR_fchownat ? 1 : 0, di = nr == NR_fchownat ? 0 : -1;
         long fl = nr == NR_fchownat ? a[4] : nr == NR_lchown ? AT_SYMLINK_NOFOLLOW : 0;
+        if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
+            return -EINVAL; /* do_fchownat: the flags first */
         if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
         if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], a[1], a[2], a[3], a[4]);
         if ((r = ro_attr(S, S->v))) return r;
@@ -1275,6 +1346,10 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_lsetxattr:
     case NR_removexattr:
     case NR_lremovexattr:
+        /* path_setxattrat, path_removexattrat: the name, and for a set its flags and size, before the path */
+        r = nr == NR_setxattr || nr == NR_lsetxattr ? setxattr_args(S, (const char *)a[1], (size_t)a[3], (int)a[4])
+                                                    : xattr_name(S, (const char *)a[1]);
+        if (r) return r;
         if ((r = resolve(S, a, 0, -1, nr == NR_setxattr || nr == NR_removexattr, 0)) < 0) return r;
         if ((r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);
@@ -1283,6 +1358,9 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_lgetxattr:
     case NR_listxattr:
     case NR_llistxattr:
+        /* path_getxattrat: the name before the path */
+        r = nr == NR_getxattr || nr == NR_lgetxattr ? xattr_name(S, (const char *)a[1]) : 0;
+        if (r) return r;
         if ((r = resolve(S, a, 0, -1, nr == NR_getxattr || nr == NR_listxattr, 0)) < 0) return r;
         to_real(S->v, S->real, S->tmp);
         return RE5(nr, S->real, a[1], a[2], a[3], 0);
@@ -1294,10 +1372,16 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_fstatfs:
         r = RE5(NR_fstatfs, a[0], a[1], 0, 0, 0);
         return r == 0 && fd_exclave(S, (int)a[0]) ? ro_flag(S, (char *)a[1] + STATFS_FLAGS_OFF) : r;
-    case NR_inotify_add_watch:
-        if ((r = resolve(S, a, 1, -1, !(a[2] & IN_DONT_FOLLOW), 0)) < 0) return r;
+    case NR_inotify_add_watch: {
+        /* the mask, then the descriptor, which must be an inotify instance, then the path */
+        unsigned mask = (unsigned)a[2];
+        if (!(mask & ALL_INOTIFY_BITS) || ((mask & IN_MASK_ADD) && (mask & IN_MASK_CREATE))) return -EINVAL;
+        if (fd_real_path((int)a[0], S->tmp) < 0) return -EBADF;
+        if (xstrcmp(S->tmp, "anon_inode:inotify") != 0) return -EINVAL;
+        if ((r = resolve(S, a, 1, -1, !(mask & IN_DONT_FOLLOW), 0)) < 0) return r;
         to_real(S->v, S->real, S->tmp);
         return RE5(nr, a[0], S->real, a[2] | nofollow(S, IN_DONT_FOLLOW), 0, 0);
+    }
     case NR_fanotify_mark:
         if (a[4] == 0) return RE5(nr, a[0], a[1], a[2], a[3], 0);
         if ((r = resolve(S, a, 4, 3, !(a[1] & FAN_MARK_DONT_FOLLOW), 0)) < 0) return r;
@@ -1308,12 +1392,24 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_fsetxattr:
     case NR_fremovexattr:
     case NR_ioctl:
+        /* fsetxattr, fremovexattr: the name, flags and size before the descriptor */
+        r = nr == NR_fsetxattr      ? setxattr_args(S, (const char *)a[1], (size_t)a[3], (int)a[4])
+            : nr == NR_fremovexattr ? xattr_name(S, (const char *)a[1])
+                                    : 0;
+        if (r) return r;
         r = sys_fcntl((int)a[0], F_GETFL, 0);
         if (r < 0) return r;
         /* an O_PATH descriptor cannot be used for these (open(2)) */
         if (r & O_PATH) return -EBADF;
-        if (fd_exclave(S, (int)a[0])) return -EROFS;
-        return RE5(nr, a[0], a[1], a[2], a[3], a[4]);
+        if (!fd_exclave(S, (int)a[0])) return RE5(nr, a[0], a[1], a[2], a[3], a[4]);
+        /* the exclave's file: the chattr ioctls read their argument before the mount's EROFS (ioctl_setflags,
+         * ioctl_fssetxattr) */
+        if (nr == NR_ioctl) {
+            r = copy_exact(S->pid, S->tmp, (const void *)a[2],
+                           (unsigned long)a[1] == FS_IOC_SETFLAGS ? sizeof(int) : 28);
+            if (r) return r;
+        }
+        return -EROFS;
     case NR_rt_sigaction: return do_sigaction(S, a);
     case NR_rt_sigprocmask: return do_sigprocmask(S, a, uc);
     case NR_rt_sigsuspend: return do_sigsuspend(S, a);
