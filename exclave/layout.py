@@ -50,11 +50,13 @@ def b2_file(path: str) -> str:
 def walk_files(root: str) -> Iterator[tuple[str, str, os.stat_result]]:
     """Yield (real path, virtual path, lstat) for every entry under root but a directory.
 
-    Symlinks to directories are included. The `.real/` directories of originals are skipped.
+    Symlinks to directories are included. The `.real/` directories of originals are skipped. Each
+    directory's entries come sorted by their bytes, before the directories below it.
     """
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d != ".real"]
-        for name in filenames + [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]:
+        dirnames[:] = sorted((d for d in dirnames if d != ".real"), key=os.fsencode)
+        links = [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]
+        for name in sorted(filenames + links, key=os.fsencode):
             real = os.path.join(dirpath, name)
             yield real, "/" + os.path.relpath(real, root).replace(os.sep, "/"), os.lstat(real)
 

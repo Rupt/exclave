@@ -249,7 +249,9 @@ def wrapper_problems(ex: str, data: Sequence[str] = ()) -> list[str]:
             )
         if w and layout.payload_path(real) == real:
             problems.append("wrapper without original: " + v)
-    for dirpath, _dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort(key=os.fsencode)
+        filenames.sort(key=os.fsencode)
         if os.path.basename(dirpath) == ".real":
             problems.extend(
                 f"original without wrapper: /{os.path.relpath(os.path.join(dirpath, n), root)} "
@@ -392,11 +394,12 @@ def cmd_relink(ex: str, launcher: str | None = None) -> None:
     shutil.copy2(launcher, new)
     os.chmod(new, 0o755)  # noqa: S103 -- the launcher runs as every program, for whoever runs it
     n, strays = 0, []
-    for dirpath, _dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort(key=os.fsencode)
         if os.path.basename(dirpath) != ".real":
             continue
         parent = os.path.dirname(dirpath)
-        for name in filenames:
+        for name in sorted(filenames, key=os.fsencode):
             w = os.path.join(parent, name)
             if not os.path.lexists(w):
                 strays.append("/" + os.path.relpath(os.path.join(dirpath, name), root))
