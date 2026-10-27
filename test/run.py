@@ -2652,6 +2652,47 @@ def tool_extraction_rules(ctx: Ctx) -> None:
 
 
 @test
+def busybox_links_stay_in_the_tree(ctx: Ctx) -> None:
+    """10.1: a path in /etc/busybox-paths.d is a member's path, refused when it leaves the tree.
+
+    By `..`, or through a symlink the set ships, such as one to /tmp: the applet link would land on
+    the host.
+    """
+    d = os.path.join(ctx.work, "busybox-escape")
+    os.makedirs(d, exist_ok=True)
+    escape = os.path.join(ctx.work, f"escaped-{os.getpid()}")
+    host = f"/tmp/exclave-escaped-{os.getpid()}"
+    for case, line in (
+        ("dotdot", f"../../{os.path.basename(escape)}"),
+        ("link", f"usr/hostdir/{os.path.basename(host)}"),
+    ):
+        pkg = os.path.join(d, f"{case}-1.0-r0.apk")
+        make_apk(
+            pkg,
+            "busybox",
+            [
+                ("bin", "dir", None, 0o755),
+                ("bin/busybox", "file", b"#!/bin/true\n", 0o755),
+                ("etc", "dir", None, 0o755),
+                ("etc/busybox-paths.d", "dir", None, 0o755),
+                ("etc/busybox-paths.d/busybox", "file", f"{line}\n".encode(), 0o644),
+                ("usr", "dir", None, 0o755),
+                ("usr/hostdir", "sym", "/tmp", 0o777),
+            ],
+        )
+        out = os.path.join(ctx.work, f"busybox-{case}.exclave")
+        rc, o, e = run([*UNPACK, out, pkg])
+        expect(
+            rc != 0 and "tree" in e,
+            f"{case}: a busybox path out of the tree was not refused: {o}{e}",
+        )
+        expect(
+            not os.path.lexists(escape) and not os.path.lexists(host) and not os.path.lexists(out),
+            f"{case}: an applet link was made outside the tree, or the output was kept",
+        )
+
+
+@test
 def unpack_and_wrap(ctx: Ctx) -> None:
     """10.1 as files: unpack, wrap, unwrap and check on package files.
 

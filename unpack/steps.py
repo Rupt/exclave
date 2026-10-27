@@ -297,20 +297,20 @@ def synthesise(root: str, packages: list[Package], log: Log = print) -> None:
     # /etc/busybox-paths.d, one path per line, each a link to /bin/busybox. The links are relative,
     # as the dash rule makes /usr/bin/sh, so that a link run from outside the exclave reaches the
     # wrapper in the tree and not a host file of the same name; inside, a relative link resolves in
-    # virtual space the same way.
+    # virtual space the same way. A path is a member's: it stays in the tree.
     bbd = _v(root, "/etc/busybox-paths.d")
     if os.path.isdir(bbd) and os.path.isfile(_v(root, "/bin/busybox")):
+        root_real = os.path.realpath(root)
         n = 0
         for f in sorted(os.listdir(bbd)):
             with open(os.path.join(bbd, f), encoding="utf-8", errors="replace") as lines:
                 for line in lines:
-                    rel = line.strip().lstrip("/")
-                    if rel and not os.path.lexists(_v(root, "/" + rel)):
-                        os.makedirs(os.path.dirname(_v(root, "/" + rel)), exist_ok=True)
-                        os.symlink(
-                            os.path.relpath("/bin/busybox", os.path.dirname("/" + rel)),
-                            _v(root, "/" + rel),
-                        )
+                    rel = _safe_rel(line.strip())
+                    dst = os.path.join(root, rel)
+                    if rel and not os.path.lexists(dst):
+                        _inside(root_real, dst)
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        os.symlink(os.path.relpath("/bin/busybox", os.path.dirname("/" + rel)), dst)
                         n += 1
         log(f"synthesised {n} busybox applet links from /etc/busybox-paths.d")
     # Fedora 42's filesystem: its %posttrans merges sbin into bin, replacing /usr/sbin and
