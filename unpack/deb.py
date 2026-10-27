@@ -15,7 +15,7 @@ import tarfile
 import zlib
 from compression import zstd
 
-from unpack.reader import Dep, PackageError
+from unpack.reader import Dep, PackageError, after_end
 
 # Debian and Ubuntu merge /bin, /sbin and /lib into /usr.
 MERGED_USR: bool = True
@@ -90,12 +90,17 @@ def open_tar(path: str, member: str) -> tarfile.TarFile:
         DebError: When the archive or the tar member cannot be read.
     """
     name, data = ar_read(path, member)
+    raw = decompress(name, data)
     try:
-        t = tarfile.open(fileobj=io.BytesIO(decompress(name, data)), mode="r:")  # noqa: SIM115 -- returned open
+        t = tarfile.open(fileobj=io.BytesIO(raw), mode="r:")  # noqa: SIM115 -- returned open
         t.getmembers()  # every header read now, so a corrupt one is refused here
     except tarfile.TarError as e:
         msg = f"{path}: corrupt {name}: {e}"
         raise DebError(msg) from e
+    if why := after_end(raw, t.offset):
+        t.close()
+        msg = f"{path}: corrupt {name}: {why}"
+        raise DebError(msg)
     return t
 
 

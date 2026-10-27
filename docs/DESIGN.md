@@ -1862,7 +1862,12 @@ refused. From `.deb` files, in five steps:
    refused, as is a hard link whose target does, and so is a member
    under the reserved name `.real` (6.1). A package file that cannot
    be read is refused in one line, and a failed unpack leaves no
-   output behind.
+   output behind. An archive ends where its format says: anything but
+   NUL padding after a tar archive's last member, where a header that
+   cannot be read stops the reader, or after a cpio payload's trailer
+   is refused, since another reader could extract members hidden
+   there; a cpio payload without its trailer, or with an entry running
+   past its end, was cut short and is refused too.
    `ar` and `tar` are read in Python, xz, gzip and bzip2 through the
    standard library, and zstd through its `compression.zstd`. Modes
    and modification times come from the archive, with setuid and setgid
@@ -3627,7 +3632,8 @@ its time, ok, SKIP or FAIL:
   `test/packages.py` (escapes by `..`, by symlinks relative and
   absolute and by hard links; `.real`; modes and special files;
   conflicts and `Replaces`; payloads cut short, flipped, empty or not
-  compressed; tar's long names and base-256 numbers). A refusal must be one line with nothing left behind,
+  compressed; tar's long names and base-256 numbers, and data after an
+  archive's end). A refusal must be one line with nothing left behind,
   and no case may change a directory beside the output that the
   packages aim at;
 - for every exclave given: the suite in the given order and in a

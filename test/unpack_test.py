@@ -674,7 +674,7 @@ def damaged_payloads(ctx: Ctx) -> None:
         cases = [("cut", good[: len(good) // 2]), ("flipped", bytes(flipped))]
         cases += [("plain", b"not compressed at all")]
         # an .apk without a data stream is a package without files, as Alpine's virtual ones are
-        cases += [("empty", b"")] if fmt == "deb" else []
+        cases += [("empty", b"")] if fmt != "apk" else []
         for case, data in cases:
             name = f"{fmt}{suffix.replace('.', '-')}-{case}"
             if fmt == "deb":
@@ -692,10 +692,11 @@ def damaged_payloads(ctx: Ctx) -> None:
 
 @test
 def tar_structure(ctx: Ctx) -> None:
-    """10.1: what tar spells long or large is read; a member cut short is refused.
+    """10.1: what tar spells long or large is read; an archive with anything after it is refused.
 
     GNU long names, PAX paths and link paths and base-256 times are read as tar defines them. A
-    member whose data runs past the end is refused.
+    member whose data runs past the end is refused, and so is any byte but NUL after the archive's
+    last member: a corrupt header or a part of one, behind which more members could hide.
     """
     long = "usr/share/" + "/".join(["d" * 40] * 4) + "/file"
     target = "/" + "t" * 150
@@ -720,6 +721,39 @@ def tar_structure(ctx: Ctx) -> None:
         root, _ = accepted(ctx, f"{fmt}-base256", [pkg("base256", base256)])
         expect(os.lstat(os.path.join(root, "usr", "early")).st_mtime == -1, f"{fmt}: base-256 time")
         refused(ctx, f"{fmt}-cut-data", [pkg("cut-data", head[: len(head) - 300])])
+        after = tar_bytes([("usr/hidden", "file", b"h", 0o644)])
+        refused(ctx, f"{fmt}-bad-header", [pkg("bad-header", head + b"x" * 512 + after)], "after")
+        refused(
+            ctx, f"{fmt}-part-header", [pkg("part-header", head + b"part of a header")], "after"
+        )
+
+
+@test
+def cpio_structure(ctx: Ctx) -> None:
+    """10.1: an rpm payload must end with cpio's trailer, every entry whole, and nothing after it.
+
+    The trailer is the end cpio defines, so an archive without it was cut short; an entry whose data
+    runs past the end is cut short; and any byte but NUL after the trailer is refused.
+    """
+    members: list[Member] = [("usr", "dir", None, 0o755), ("usr/f", "file", b"x" * 1000, 0o644)]
+    whole = cpio(members)
+    trailer = whole.index(b"TRAILER!!!") - 110
+    for case, raw in (
+        ("no-trailer", whole[:trailer]),
+        ("cut-entry", whole[: trailer - 600]),
+        ("after-trailer", whole + b"junk"),
+    ):
+        data = gzip.compress(raw, mtime=0)
+        refused(ctx, f"rpm-{case}", [package(ctx, "rpm", f"cpio-{case}", members, data=data)])
+    accepted(
+        ctx,
+        "rpm-padded",
+        [
+            package(
+                ctx, "rpm", "cpio-padded", members, data=gzip.compress(whole + b"\0" * 512, mtime=0)
+            )
+        ],
+    )
 
 
 # ---------------------------------------------------------------- the runner

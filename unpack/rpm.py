@@ -51,7 +51,7 @@ from compression import zstd
 from dataclasses import dataclass
 from typing import Any, BinaryIO, NamedTuple, Self
 
-from unpack.reader import Dep, PackageError
+from unpack.reader import Dep, PackageError, after_end
 
 # A header's values: bytes, int, str or a list of them. Each tag's type is fixed by rpm's tag table,
 # which the reader follows and a static type cannot express.
@@ -184,8 +184,11 @@ class _CpioEntry(NamedTuple):
 def _cpio_members(data: bytes) -> list[_CpioEntry]:
     """Return the entries of a newc or crc cpio archive.
 
+    The archive ends at its trailer, which must be there, every entry whole before it and nothing
+    but NUL padding after it (10.1).
+
     Raises:
-        RpmError: When a header is corrupt.
+        RpmError: When a header is corrupt, an entry or the trailer is missing, or data follows.
     """
     out: list[_CpioEntry] = []
     p = 0
@@ -216,12 +219,18 @@ def _cpio_members(data: bytes) -> list[_CpioEntry]:
         ) = fields
         name = data[p + 110 : p + 110 + namesize - 1].decode("utf-8", "surrogateescape")
         start = (p + 110 + namesize + 3) & ~3
+        if start + size > len(data):
+            msg = f"cpio entry {name!r} runs past the end of the payload"
+            raise RpmError(msg)
         if name == "TRAILER!!!":
-            break
+            if why := after_end(data, start + size):
+                raise RpmError(why)
+            return out
         content = data[start : start + size]
         out.append(_CpioEntry(name, mode, mtime, content, nlink, (devmaj, devmin, ino)))
         p = (start + size + 3) & ~3
-    return out
+    msg = "the cpio payload has no trailer: it is cut short"
+    raise RpmError(msg)
 
 
 @dataclass(slots=True)

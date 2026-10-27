@@ -26,7 +26,7 @@ import tarfile
 import zlib
 from typing import IO, Self
 
-from unpack.reader import Dep, PackageError
+from unpack.reader import Dep, PackageError, after_end
 
 
 class ApkError(PackageError):
@@ -85,6 +85,10 @@ def _open(path: str) -> tarfile.TarFile:
     except (tarfile.TarError, OSError, EOFError, zlib.error) as e:
         msg = f"{path}: not an apk: {e}"
         raise ApkError(msg) from e
+    if why := after_end(data, t.offset):
+        t.close()
+        msg = f"{path}: not an apk: {why}"
+        raise ApkError(msg)
     return t
 
 

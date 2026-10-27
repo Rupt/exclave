@@ -16,6 +16,18 @@ class PackageError(Exception):
     """A package file that cannot be read: truncated, corrupt, or not of its format."""
 
 
+def after_end(data: bytes, end: int) -> str | None:
+    """Name what follows an archive's end at offset end, unless it is nothing but NUL padding.
+
+    tarfile stops at a header it cannot read, and a cpio reader at its trailer; what lies past
+    either could hold members another reader would extract, so it is refused (10.1).
+    """
+    rest = data[end:]
+    if not rest.strip(b"\0"):
+        return None
+    return f"{len(rest)} bytes after the archive's end at byte {end}, not padding"
+
+
 class Member(Protocol):
     """One entry of a package's payload, as `tarfile.TarInfo` presents it."""
 
