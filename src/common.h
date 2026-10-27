@@ -114,7 +114,7 @@
 
 /* ---------- ioctl requests the filter traps (chattr) ---------- */
 #define FS_IOC_SETFLAGS 0x40086602UL
-#define FS_IOC_FSSETXATTR 0x401c5820UL /* _IOW('X', 32, struct fsxattr); versions 1 to 4 had 'X' 28 */
+#define FS_IOC_FSSETXATTR 0x401c5820UL /* _IOW('X', 32, struct fsxattr) */
 
 /* ---------- statfs flag ---------- */
 #define ST_RDONLY_BIT 1

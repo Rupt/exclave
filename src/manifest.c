@@ -3,8 +3,9 @@
  * No syscalls: takes a buffer, fills struct exclave, reports "line L col C: why".
  * Compiled into the launcher and, with HOST_TEST, into test/manifest_test.c.
  * The launcher enforces the lexical and typing rules, not the canonical order.
- * The manifest is the one file the launcher reads: a CPU level and the
- * visibility overrides; everything else it needs it observes in the tree.
+ * The manifest is the one file of settings the launcher reads: a CPU level
+ * and the visibility overrides; everything else it needs it observes in the
+ * tree.
  */
 #include "common.h"
 

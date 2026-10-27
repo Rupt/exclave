@@ -56,7 +56,7 @@ static void on_nr(int n, uint32_t action)
     emit(JEQ_K, 0, 1, (uint32_t)n);
     ret(action);
 }
-/* the path syscalls the handler translates (7.4.1) */
+/* the path syscalls the handler translates (7.4.3) */
 const int path_syscalls[] = {
     NR_open,
     NR_stat,

@@ -1,4 +1,4 @@
-/* launcher.c — entry point (DESIGN.md 7.2, 7.6, 9).
+/* launcher.c — entry point (DESIGN.md 7.2, 7.4.5, 7.6).
  *
  * The launcher is an ET_DYN object with no interpreter: it relocates itself,
  * finds its exclave from its own path, reads the manifest, decides whether it is at the

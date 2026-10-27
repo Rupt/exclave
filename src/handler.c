@@ -1002,7 +1002,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc, struct scratc
     case NR_openat: return do_open(S, a, 1, 0, a[2], a[3], NR_openat);
     case NR_openat2:
         return do_openat2(S, a);
-/* build/launcher-old: the previous version, which does not know them (17.4) */
+/* build/launcher-old, filter version 3, traps neither (17.4) */
 #ifndef EXCLAVE_TEST_OLD
     case NR_bind:
     case NR_connect: return do_sockaddr(S, a, nr);
