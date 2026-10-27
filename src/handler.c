@@ -769,7 +769,8 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
     return exec_target(S, S->v, S->v2, argv, envp, 0, cloexec);
 }
 
-/* ---------- readlink: /proc links and identity files answer in virtual terms (8.4) ---------- */
+/* ---------- readlink: /proc links and identity files answer in virtual terms (8.4); any other link's text is
+ * returned as stored, as the kernel returns it ---------- */
 static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, long bufsiz)
 {
     if (bufsiz <= 0) return -EINVAL; /* do_readlinkat: before the path is read at all */
@@ -781,7 +782,8 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         r = RE5(NR_readlinkat, a[di], "", S->tmp, PATH_MAX - 1, 0);
         if (r < 0) return r;
         S->tmp[r] = 0;
-        if (starts_dir(S->tmp, C.root)) from_real(S->tmp);
+        /* a descriptor on a /proc link reports a real path */
+        if (fd_real_path((int)a[di], S->b2) >= 0 && xstrncmp(S->b2, "/proc/", 6) == 0) from_real(S->tmp);
         ans = S->tmp;
     }
     if ((C.loader_mode || xstrcmp(C.exe, C.program) != 0) && is_self_exe(S->v, S->pid)) ans = C.exe;
@@ -795,7 +797,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         r = RE5(NR_readlinkat, AT_FDCWD, S->real, S->tmp, PATH_MAX - 1, 0);
         if (r < 0) return r;
         S->tmp[r] = 0;
-        if (xstrncmp(S->v, "/proc/", 6) == 0 || starts_dir(S->tmp, C.root)) from_real(S->tmp);
+        if (xstrncmp(S->v, "/proc/", 6) == 0) from_real(S->tmp); /* /proc links report real paths */
         ans = S->tmp;
         /* another process's exe link that names a wrapped script: that process runs the script's interpreter,
          * which is what the kernel would report natively */

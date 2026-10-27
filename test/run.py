@@ -1826,6 +1826,28 @@ def shebang_without_newline(ctx: Ctx) -> None:
 
 
 @test
+def readlink_as_stored(ctx: Ctx) -> None:
+    """7.4.3: a link's text is returned as stored, even when it names the tree's real location.
+
+    Only /proc links and identity files answer in virtual terms; a host link made from outside
+    toward the tree's real path reads as the kernel reads it, and still leads to the tree's file.
+    """
+    link = os.path.join(ctx.work, "to-tree-link")
+    if os.path.lexists(link):
+        os.remove(link)
+    target = os.path.join(os.path.realpath(ctx.root), "usr", "share", "exclave-test-marker")
+    os.symlink(target, link)
+    rc, out, err = run(
+        [wrapper(ctx, "sh"), "-c", f"readlink {link}; cat {link}"], cwd=ctx.work, env=ctx.env
+    )
+    os.remove(link)
+    expect(
+        rc == 0 and out == f"{target}\nmarker\n",
+        f"readlink of a host link into the tree: {out!r} {err!r}",
+    )
+
+
+@test
 def magic_links_to_pathless(ctx: Ctx) -> None:
     """7.4.3: a magic link to an object with no path reaches the object, as the kernel's walk does.
 

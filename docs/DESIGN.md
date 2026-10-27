@@ -140,7 +140,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 77 named tests, most of them programs that
+- **The regression suite**: 78 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -950,7 +950,7 @@ inside the current launcher.
 | Path, no follow | `readlinkat`, `unlinkat`, `mkdirat`, `mknodat`, `symlinkat` (the link's path; its target is stored verbatim), `renameat2`, `linkat` unless `AT_SYMLINK_FOLLOW`, `l*xattr`, `lchown`, `lstat`, `open` with `O_NOFOLLOW`, `open` with `O_CREAT\|O_EXCL` | translate all but the final component |
 | Descriptor-addressed | any of the above with an empty path and `AT_EMPTY_PATH`; a NULL path where the kernel accepts one (`fstatat` and `statx` since 6.11, the `*xattrat` family, `file_getattr` and `file_setattr` under `AT_EMPTY_PATH`, `utimensat(fd, NULL, ...)` behind `futimens`) and `EFAULT` elsewhere (the empty-path forms are behind Rust's `File::metadata` and `fexecve`); and `fchmod`, `fchown`, `fsetxattr`, `fremovexattr`, `fstatfs` and the `chattr` ioctls (`ftruncate` needs a writable descriptor, which an exclave file never has) | resolve the descriptor through `/proc/self/fd`, no component walk, no trailing-slash rule; `AT_FDCWD` is the working directory; apply the read-only rules; an `O_PATH` descriptor is `EBADF` for the five attribute calls, as natively; for `execveat` a descriptor on a symlink itself is `ELOOP`, and one on anything but a regular file, a pipe or a socket included, is `EACCES`; an original's descriptor given to `execveat` is mapped back to its wrapper |
 | A path inside a structure | `bind` and `connect` with an `AF_UNIX` address whose path is not abstract | below |
-| Reverse-translate results | `getcwd`; `readlinkat` of `/proc/self/{exe,cwd,fd/*}` and of the process's own pid; `readlinkat` of an identity file; `statfs` and `fstatfs` on exclave paths | strip the tree's prefix, and the `.real/` of an original, which then names its wrapper; answer the program's virtual path for `exe` on the loader path (7.6); answer the host's link text for an identity file (8.4); report `ST_RDONLY` |
+| Reverse-translate results | `getcwd`; `readlinkat` of `/proc/self/{exe,cwd,fd/*}` and of the process's own pid; `readlinkat` of an identity file; `statfs` and `fstatfs` on exclave paths | strip the tree's prefix, and the `.real/` of an original, which then names its wrapper; answer the program's virtual path for `exe` on the loader path (7.6); answer the host's link text for an identity file (8.4); report `ST_RDONLY`. Any other link's text is returned as stored, as the kernel returns it |
 | Self-defence | `rt_sigaction` with a new action; the mask-carrying calls above | scrub `SIGSYS` from the mask (7.5.1), with no canonicalisation |
 | Denied | `clone3`, `io_uring_setup`, `seccomp` except the availability query, `prctl(PR_SET_SECCOMP)`, `uselib`, the mount API (`open_tree`, `open_tree_attr`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr`) | `ENOSYS` |
 | Denied | `mount`, `umount2`, `pivot_root`, `chroot`, `acct` | `EPERM` |
@@ -2191,7 +2191,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 77 named regressions and every oracle its kernel can run; 17
+suite's 78 named regressions and every oracle its kernel can run; 17
 describes the procedure. Measured October 2026:
 
 | Distribution | Kernel | Suite | Oracles | Notes |
@@ -3448,7 +3448,7 @@ meaning items 4 and 7.
      with a host compile, gdb, and a `noexec` mount;
    - *ownership, the log and the tool*: ownership failing closed, the
      log's names and escapes, the log's path refused when relative or
-     inside the exclave, the three package readers, `wrap`'s
+     inside the exclave, a link's text read as stored, the three package readers, `wrap`'s
      refusals, pruning, `check`, and a directory in the pre-rename
      `.can/` layout refused by name by every command.
 
@@ -3494,7 +3494,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus the read-only matrix program (`test/progs/ro_matrix.c`) under `bwrap` against its own expectations |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: three properties on random byte strings (encoding is injective, decoding inverts it, `format` is idempotent); the Python and C parsers compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2 |
-| 4 | `test/run.py` with `test/progs/`: 77 named tests |
+| 4 | `test/run.py` with `test/progs/`: 78 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
