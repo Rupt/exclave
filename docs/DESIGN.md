@@ -768,17 +768,21 @@ these steps; shortcuts (6.1) point at wrappers and add nothing.
 **The positional entry.** `gcc.exclave/.exclave/launcher PROGRAM
 ARGS...` runs a program without a wrapper, a host tool or a built
 output, inside the exclave, from outside or inside. It re-execs itself
-once as a handler does for such a program (7.4.5), with `PROGRAM` taken
-as `execve` would take it, so that the program's `argv`, `cmdline` and
-`comm` are its own. The re-exec'd launcher resolves the target and
-makes an inside exec's checks in their order: a program in a data
-directory, a directory or a special file is refused, and the kernel's
-`X_OK` answer is final. The exit status is a shell's, 126 for a file
-that exists and cannot run, 127 for one that does not. A target that is
-a wrapper is exec'd as itself, by the name the caller spelt, so that
-the kernel gives the program its identity; only a program without a
-wrapper reaches the loader. Without an argument the launcher says what
-it is; it takes no other argument and no flag.
+once as a handler does for such a program (7.4.5), with `PROGRAM`
+taken as `execve` would take it, so that the program's `argv`,
+`cmdline` and `comm` are its own. The re-exec'd launcher resolves the
+target and makes an inside exec's checks in their order: a program in
+a data directory, a directory or a special file is refused, and the
+kernel's `X_OK` answer is final. The exit status is a shell's, 126 for
+a file that exists and cannot run, 127 for one that does not. A target
+that is a wrapper is exec'd as itself, by the name the caller spelt,
+so that the kernel gives the program its identity, when the kernel
+would reach that wrapper by that name. An absolute link of the tree on
+the way would lead the kernel to the host's file instead, so then the
+wrapper is exec'd by its resolved path, and `comm` is the name the
+link leads to. Only a program without a wrapper reaches the loader.
+Without an argument the launcher says what it is; it takes no other
+argument and no flag.
 
 ### 7.3 The loader
 

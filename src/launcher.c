@@ -263,18 +263,24 @@ static void loader_mode_check(char **argv, char **env2)
     if (vis_in_data(C.program)) die_status(126, "cannot execute", C.program, EACCES);
     to_real_exec(C.program, S->real);
     struct kstat st;
-    if (sys_stat(S->real, &st) < 0) die_status(127, "cannot execute", C.program, ENOENT);
+    long e = sys_stat(S->real, &st);
+    if (e < 0) die_status(e == -ENOENT ? 127 : 126, "cannot execute", C.program, e);
     if ((st.st_mode & S_IFMT) != S_IFREG) die_status(126, "cannot execute", C.program, EACCES);
     long ok = sys_faccessat(AT_FDCWD, S->real, X_OK);
     if (ok < 0) die_status(126, "cannot execute", C.program, ok);
-    /* a wrapper: the kernel runs the launcher under the program's name,
-     * exec'd by the name the caller spelt, /bin/sh, so that comm is the
-     * kernel's answer for that name; the kernel follows the last link */
+    /* a wrapper: the kernel runs the launcher under the program's name, exec'd by the name the caller spelt, /bin/sh,
+     * so that comm is the kernel's answer for that name, and the kernel follows the last link. It follows it on the
+     * host, though, where an absolute link of the tree leads to the host's file: the spelling is exec'd only when it
+     * reaches this wrapper, and the wrapper by its own path otherwise (13 item 39) */
     if (is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp)) {
         if (canon(S, S->b1, AT_FDCWD, 0, S->v2) < 0) scpy(S->v2, C.program, PATH_MAX);
         to_real_exec(S->v2, S->b2);
+        long fd = sys_open(S->b2, O_PATH | O_CLOEXEC, 0);
+        long n = fd < 0 ? fd : fd_real_path((int)fd, S->cur);
+        if (fd >= 0) sys_close((int)fd);
+        if (n < 0 || xstrcmp(S->cur, S->real) != 0) scpy(S->b2, S->real, PATH_MAX);
         unborrow();
-        long e = sys_execve(S->b2, argv, env2);
+        e = sys_execve(S->b2, argv, env2);
         die("cannot exec the wrapper", C.program, e);
     }
     scratch_put(S);

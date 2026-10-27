@@ -1264,6 +1264,31 @@ def positional_entry(ctx: Ctx) -> None:
         rc == 0 and out == "child ok argv0=progs/../progs/exec\n",
         f"argv[0] is the path as given: {out!r} {err!r}",
     )
+    # a wrapper named through an absolute link of the tree runs the tree's program, though the
+    # kernel would follow that link on the host, from outside and from inside alike
+    ex2 = os.path.join(ctx.work, "entry-link.exclave")
+    copy_exclave(ctx.exclave, ex2)
+    # named cat, as busybox picks its applet by the name
+    os.makedirs(os.path.join(ex2, "tree", "opt", "entry-link"))
+    os.symlink(ctx.vbin("cat"), os.path.join(ex2, "tree", "opt", "entry-link", "cat"))
+    tree2 = os.path.realpath(os.path.join(ex2, "tree"))
+    entry = os.path.join(ex2, ".exclave", "launcher")
+    for how, cmd in (
+        ("outside", [entry, "/opt/entry-link/cat", "/proc/self/maps"]),
+        (
+            "inside",
+            [
+                os.path.join(ex2, "tree", ctx.vbin("sh").lstrip("/")),
+                "-c",
+                f"{entry} /opt/entry-link/cat /proc/self/maps",
+            ],
+        ),
+    ):
+        rc, out, err = run(cmd, cwd=ctx.work, env=ctx.env)
+        expect(
+            rc == 0 and tree2 + "/" in out,
+            f"an absolute link through the entry, from {how}: rc={rc} {out[:300]!r} {err!r}",
+        )
     # the entry makes the checks an exec inside makes, with a shell's exit status
     nx = os.path.join(ctx.work, "exec644")
     shutil.copy2(os.path.join(ctx.progs, "exec"), nx)
