@@ -304,3 +304,28 @@ static void collect_strays(const char *dir, const char *rel, struct entry_info *
 }
 
 void strays(const char *root, struct buf *out) { walk_dirs(root, 0, collect_strays, out); }
+
+static void walk_files_at(const char *dir, const char *rel, file_fn fn, void *ctx)
+{
+    struct entry_info *e;
+    size_t n;
+    if (list_dir(dir, &e, &n)) return; /* unreadable: passed over with what is beneath it */
+    for (size_t i = 0; i < n; i++) {
+        if (e[i].is_dir && (!strcmp(e[i].name, ".real") || !S_ISLNK(e[i].st.st_mode))) continue;
+        char *real = path_join(dir, e[i].name), *r = rel_join(rel, e[i].name), *v = path_join("/", r);
+        fn(real, v, &e[i].st, ctx);
+        free(real);
+        free(r);
+        free(v);
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (!e[i].is_dir || S_ISLNK(e[i].st.st_mode) || !strcmp(e[i].name, ".real")) continue;
+        char *sub = path_join(dir, e[i].name), *r = rel_join(rel, e[i].name);
+        walk_files_at(sub, r, fn, ctx);
+        free(sub);
+        free(r);
+    }
+    free_list(e, n);
+}
+
+void walk_files(const char *root, file_fn fn, void *ctx) { walk_files_at(root, "", fn, ctx); }

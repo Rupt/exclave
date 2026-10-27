@@ -15,6 +15,12 @@ so. Prints one line per difference and a summary; exit status 1 when one is unex
 Format takes files instead: batches of manifests and hashes files, valid, reordered and malformed
 (test/grammar_test.py's), and the given exclaves' own, with and without --check.
 
+Check is given an EXCLAVE_LOG with each generated tree: library opens, working directories, and
+lines a careless reader would misread. A third of the generated trees hold an ELF world, this
+host's true, its loader and its libc where its PT_INTERP and the loader's directories put them,
+and every generated tree may hold an ELF file that is malformed in one of the ways the static
+check names.
+
 Generated trees hold names with spaces, newlines, non-UTF-8 bytes and the reserved .real; wrappers
 with their originals, originals without a wrapper, links that dangle, loop, climb out of the tree
 or name a directory; empty directories, executables, a pipe, and at most one entry no one can
@@ -81,6 +87,79 @@ def snapshot(ex: str) -> list[tuple[bytes, str, int, bytes]]:
     return sorted(out)
 
 
+def elf_bytes(rng: random.Random) -> bytes:
+    """Return an ELF file malformed in one of the ways the static check names, or a sound one."""
+    with open(os.path.realpath(shutil.which("true") or "/bin/true"), "rb") as f:
+        good = f.read()
+    return rng.choice(
+        [
+            good,
+            good[:12],  # not even a header
+            good[:40],  # a header cut short
+            good[:4] + b"\x01" + good[5:200],  # ELF32
+            good[:32]
+            + (len(good) + 64).to_bytes(8, "little")
+            + good[40:64],  # headers past the end
+            good[:18]
+            + (183 if good[18] == 62 else 62).to_bytes(2, "little")
+            + good[20:],  # foreign
+        ]
+    )
+
+
+def elf_world(root: bytes, rng: random.Random) -> None:
+    """Put this host's true, its loader and its libc in the tree where they are named.
+
+    The tree owns /etc, which holds this host's ld.so.cache whole, cut short or not at all.
+    """
+    os.makedirs(os.path.join(root, b"etc"), exist_ok=True)
+    with open(os.path.join(root, b"etc", b"hostname"), "w") as f:
+        f.write("x\n")
+    if os.path.exists("/etc/ld.so.cache") and rng.random() < 0.7:
+        with open("/etc/ld.so.cache", "rb") as f:
+            cache = f.read()
+        with open(os.path.join(root, b"etc", b"ld.so.cache"), "wb") as f:
+            f.write(cache if rng.random() < 0.6 else cache[: rng.randrange(len(cache))])
+    true = os.path.realpath(shutil.which("true") or "/bin/true")
+    interp = tree.interp(true)
+    if not interp:
+        return
+    for v, src in (
+        ("/usr/bin/true", true),
+        (interp, os.path.realpath(interp)),
+        ("/lib/x86_64-linux-gnu/libc.so.6", os.path.realpath("/lib/x86_64-linux-gnu/libc.so.6")),
+        ("/lib/aarch64-linux-gnu/libc.so.6", os.path.realpath("/lib/aarch64-linux-gnu/libc.so.6")),
+    ):
+        if os.path.exists(src):
+            dst = os.path.join(root, os.fsencode(v.lstrip("/")))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            if not os.path.lexists(dst):
+                shutil.copy2(src, os.fsdecode(dst))
+
+
+LOG_LINES = [
+    "open 3 /usr/lib/libx.so.1",
+    "open 4 /lib/x86_64-linux-gnu/libc.so.6",
+    "open -2 /usr/lib/libmissing.so",
+    "open 3 /home/u/build/libown.so.1.2",
+    "open 3 /home/u/plain.so.1a",
+    "open 3 /opt/odd\\nname.so",
+    "open 3 /opt/ends-in-newline.so\\n",
+    "open +5 /usr/lib/libplus.so",
+    "open 1_0 /usr/lib/libunderscore.so",
+    "open 3 /usr/lib/libcr.so\r",
+    "load 3 /lib/ld.so",
+    "exec 0 /usr/bin/true",
+    "launcher 0 cwd given to the host /home/u",
+    "launcher 0 cwd given to the host /",
+    "launcher 0 cwd /tmp/w",
+    "launcher 0 cwd /srv/x",
+    "garbage",
+    "",
+    "open  /double/space.so",
+]
+
+
 def make_tree(ex: str, rng: random.Random) -> None:
     """Fill ex with a random exclave-shaped directory: .exclave/ and a tree of odd entries."""
     os.makedirs(os.path.join(ex, ".exclave"))
@@ -126,6 +205,17 @@ def make_tree(ex: str, rng: random.Random) -> None:
             os.makedirs(p)
         else:
             os.mkfifo(p)
+    if rng.random() < 0.35:
+        elf_world(root, rng)
+    for _ in range(rng.randrange(0, 3)):
+        p = os.path.join(rng.choice(dirs), b"elf" + str(rng.randrange(99)).encode())
+        if not os.path.lexists(p):
+            with open(p, "wb") as f:
+                f.write(elf_bytes(rng))
+            os.chmod(p, 0o755)
+    with open(os.path.join(ex, "log"), "w", newline="") as f:
+        f.write("\n".join(rng.sample(LOG_LINES, rng.randrange(1, len(LOG_LINES)))))
+        f.write(rng.choice(["\n", ""]))
     if rng.random() < 0.25:  # one entry no one can read
         victim = rng.choice([p for p in dirs if p != root] or dirs)
         os.chmod(victim, 0)
@@ -286,6 +376,8 @@ def main() -> int:
         cases += [(label, ["EX"], made) for label, made in inputs]
         if cmd == "format":
             cases = format_cases(rng, args.cases, [os.path.abspath(e) for e in args.exclave])
+        if cmd == "check":  # with the log written beside the tree
+            cases += [(label + ", log", ["EX", "EX/log"], m) for label, m in inputs if callable(m)]
         if cmd == "relink":  # with a launcher named, and with one that is not there
             other = os.path.join(REPO, "build", "launcher-old")
             cases += [(label + ", launcher named", ["EX", other], m) for label, m in inputs[:8]]

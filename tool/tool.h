@@ -98,6 +98,80 @@ int has_tree_record(const char *ex);
 int cmd_unwrap(int argc, char **argv);
 int cmd_relink(int argc, char **argv);
 
+/* Every entry under root but a directory, a link to one included, as (real path, virtual path, lstat): each
+ * directory's entries in the order of their bytes, before the directories below it, .real/ directories aside. */
+typedef void (*file_fn)(const char *real, const char *v, const struct stat *st, void *ctx);
+void walk_files(const char *root, file_fn fn, void *ctx);
+
+/* a list of strings, each its own copy */
+struct strs {
+    char **s;
+    size_t n;
+};
+void strs_add(struct strs *l, const char *s);
+void strs_free(struct strs *l);
+int strs_has(const struct strs *l, const char *s);
+
+/* virtual paths in the tree (6.1, 8.1) */
+int under(const char *v, const char *prefix);
+int under_any(const char *v, const struct strs *prefixes);
+int volatile_path(const char *v);
+struct ownership {
+    struct strs own, host; /* the own prefixes, the manifest's own records and rule 1's top-level names; its hosts */
+};
+void ownership_of(const char *ex, struct ownership *o);
+void ownership_free(struct ownership *o);
+void owned_top(const char *ex, struct strs *out);
+void data_prefixes(const char *ex, struct strs *out);
+int host_owned(const char *v, const struct ownership *o);
+char *tree_real(const char *root, const char *vpath);
+char *tree_payload(const char *root, const char *vpath);
+char *payload_path(const char *real);
+char *tree_resolve(const char *root, const char *vpath, int follow_last, struct strs *links);
+char *normpath(const char *p);
+char *dirname_of(const char *p);
+const char *basename_of(const char *p);
+
+/* an ELF file's parts the checks read (10.3) */
+struct elf_load {
+    uint64_t vaddr, off, filesz;
+};
+struct elf {
+    int type, machine, debug_only; /* debug_only: a separate debug file, whose PT_INTERP is empty */
+    struct elf_load *loads;
+    size_t nloads, nneeded;
+    char *interp, **needed, *rpath, *runpath, *soname;
+};
+enum { ELF_OK, ELF_BAD, ELF_FOREIGN, ELF_OS };
+#define ELF_WHY 128
+/* ELF_OK; ELF_BAD or ELF_FOREIGN with the reason in why; ELF_OS with errno when the file cannot be opened */
+int elf_read(const char *path, struct elf *e, char why[ELF_WHY]);
+void elf_free(struct elf *e);
+struct cache_entry {
+    char *soname, *path;
+};
+struct cache {
+    struct cache_entry *e;
+    size_t n;
+};
+int read_cache(const char *root, struct cache *c);
+void cache_free(struct cache *c);
+int utf8_valid(const char *s, size_t n);
+
+/* the checks (10.3) */
+struct report {
+    struct strs errors, warnings, statics;
+    size_t seen, lines; /* the objects the static check followed; the log lines the dynamic check read */
+};
+void static_check(const char *ex, const struct ownership *own, const struct strs *data, struct report *rep);
+void dynamic_check(const char *ex, char **logs, int nlogs, const struct ownership *own, struct report *rep);
+void report_free(struct report *rep);
+void print_report(const struct report *rep);
+int static_report(const char *ex);
+void wrapper_problems(const char *ex, const struct strs *data, struct strs *out);
+void located_links(const char *ex, struct strs *out);
+int cmd_check(int argc, char **argv);
+
 char *read_file(const char *path, size_t *n);
 
 int cmd_hash(int argc, char **argv);

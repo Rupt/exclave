@@ -86,7 +86,7 @@ for f in tool/*.c; do
         quiet tool_cc "$compiler" "$f" -Werror -c -o /dev/null &
         pids="$pids $!"
     done
-    quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 &
+    quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 -D_GNU_SOURCE &
     pids="$pids $!"
 done
 # the test programs too, but for string literals in an exec's argv, its natural spelling

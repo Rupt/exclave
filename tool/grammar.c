@@ -70,6 +70,16 @@ static size_t utf8_len(const unsigned char *b, size_t i, size_t n)
     return 0;
 }
 
+int utf8_valid(const char *s, size_t n)
+{
+    for (size_t i = 0; i < n;) {
+        size_t k = utf8_len((const unsigned char *)s, i, n);
+        if (!k) return 0;
+        i += k;
+    }
+    return 1;
+}
+
 /* the code point of the well-formed sequence of length k at p */
 static unsigned code_point(const unsigned char *p, size_t k)
 {

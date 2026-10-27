@@ -1,5 +1,7 @@
 /* main.c — the exclave command's entry: its commands, and what every one shares (DESIGN.md 10).
  *
+ *     exclave check EXCLAVE [LOG...]      Wrappers, originals, the tree against its recorded hash and the static
+ *                                         check; with EXCLAVE_LOG files, the dynamic check of what a workload opened.
  *     exclave format [--check] FILE...    Parse with the strict grammar and rewrite in canonical form; --check
  *                                         only reports.
  *     exclave hash EXCLAVE                The tree hash of 6.4.
@@ -152,10 +154,8 @@ int main(int argc, char **argv)
         const char *name;
         int (*run)(int, char **);
     } commands[] = {
-        {"format", cmd_format},
-        {"hash", cmd_hash},
-        {"relink", cmd_relink},
-        {"unwrap", cmd_unwrap},
+        {"check", cmd_check},   {"format", cmd_format}, {"hash", cmd_hash},
+        {"relink", cmd_relink}, {"unwrap", cmd_unwrap},
     };
     if (argc < 2) usage("COMMAND ARGS...");
     for (size_t i = 0; i < sizeof commands / sizeof *commands; i++)
