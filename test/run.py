@@ -1394,6 +1394,16 @@ def cwd_rules(ctx: Ctx) -> str | None:
     expect(out == "42\n", f"built output run inside: {out!r} {err!r}")
     if not ctx.cwd_given:
         return "work dir under a volatile prefix; the cwd given to the host is not exercised"
+    # a directory on the way to the working directory is the host's in every spelling: a trailing
+    # slash names the same directory
+    top = "/" + ctx.work.split("/")[1]
+    rc, out, err = run(
+        [wrapper(ctx, "sh"), "-c", f"stat -L -c %i {top} {top}/ {top}/."], cwd=ctx.work, env=ctx.env
+    )
+    expect(
+        out.split() == [str(os.stat(top).st_ino)] * 3,
+        f"{top}, {top}/ and {top}/. on the way to the working directory: {out!r} {err!r}",
+    )
     # the launcher's line for rule 4 and the dynamic check's reading of it, both spellings at once:
     # a library the workload opened under that directory is its own output, a warning, where without
     # the line it would pass unseen

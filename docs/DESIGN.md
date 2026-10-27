@@ -1455,7 +1455,8 @@ decides which, and what the exclave answers for its own paths.
 ### 8.1 Ownership
 
 The rule has six parts. Code and other sections cite rule N of this
-list as 8.1.N.
+list as 8.1.N. A path with a trailing slash names the directory without
+it, and every part rules it as it rules that directory.
 
 1. **An exclave owns every top-level entry of its tree that is not an
    empty directory.** An empty directory is a placeholder, which the

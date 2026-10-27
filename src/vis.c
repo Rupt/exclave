@@ -312,16 +312,18 @@ static void rule_facts(const char *v, struct facts *f)
     unsigned long h = RULE_BASIS;
     for (unsigned i = 0;; i++) {
         char c = v[i];
+        /* a trailing slash names the directory without it, to which the same rules apply */
+        int end = c == 0 || (i > 0 && c == '/' && v[i + 1] == 0);
         if (i > 0 && (c == '/' || c == 0)) {
             struct rule *r = rule_find(v, i, h);
             if (r) {
                 if (r->flags & R_OWN) f->best_own = i;
                 if (r->flags & R_HOSTDIR) f->best_host = i;
                 if (r->flags & R_VOLATILE) f->vol = 1;
-                if (c == 0) f->exact = r;
+                if (end) f->exact = r;
             }
         }
-        if (c == 0) {
+        if (end) {
             f->len = i;
             break;
         }
@@ -494,7 +496,13 @@ int payload_of(const char *wrapper, char *payload)
 char *to_real_exec(const char *v, char *out)
 {
     const char *r;
-    if (vis_is_host(v, &r)) return scpy(out, r, PATH_MAX);
+    if (vis_is_host(v, &r)) {
+        scpy(out, r, PATH_MAX);
+        /* a trailing slash asks the kernel for a directory, whatever host path the rules map to */
+        size_t vl = xstrlen(v), ol = xstrlen(out);
+        if (vl > 1 && v[vl - 1] == '/' && ol > 0 && out[ol - 1] != '/') scat(out, "/", PATH_MAX);
+        return out;
+    }
     scpy(out, C.root, PATH_MAX);
     if (!(v[0] == '/' && v[1] == 0)) scat(out, v, PATH_MAX);
     return out;
