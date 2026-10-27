@@ -1,5 +1,9 @@
 #!/bin/sh
-# scripts/exclave: the exclave command (docs/DESIGN.md 10), run by the pinned Python (scripts/lib.sh).
+# scripts/exclave: the exclave command (docs/DESIGN.md 10), as scripts/build built it.
 set -eu
-. "$(dirname -- "$0")/lib.sh"
-exec "$UV" run --quiet --project "$ROOT" python "$ROOT/test/exclave_cmd.py" "$@"
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+[ -x "$root/build/exclave" ] || {
+    echo "no $root/build/exclave: run scripts/build" >&2
+    exit 1
+}
+exec "$root/build/exclave" "$@"

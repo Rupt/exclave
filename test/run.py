@@ -274,9 +274,9 @@ def fixture_keys(ex: str) -> tuple[str, str] | None:
         if f[-2:] in (".c", ".h")
     )
     files += sorted(
-        os.path.join(REPO, "exclave", f)
-        for f in os.listdir(os.path.join(REPO, "exclave"))
-        if f.endswith(".py")
+        os.path.join(REPO, "tool", f)
+        for f in os.listdir(os.path.join(REPO, "tool"))
+        if not f.startswith(".")
     )
     sources = hashlib.blake2b(digest_size=6)
     for f in files:
@@ -1482,7 +1482,7 @@ def cross_exclave_distinct_launchers(ctx: Ctx) -> None:
     """7.4.5: a program in another exclave is exec'd as that exclave's launcher.
 
     A program in another exclave, whose launcher is a different file, is exec'd as that launcher,
-    which then serves its own tree inside the first exclave's filter (the dogfooding case of 10.5).
+    which then serves its own tree inside the first exclave's filter.
     """
     ex2 = os.path.join(ctx.work, "exclave2")
     copy_exclave(ctx.exclave, ex2)

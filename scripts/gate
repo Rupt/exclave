@@ -10,10 +10,9 @@
 # The steps: the code checks (scripts/check), the unit tests under ASan and UBSan, the stack budget,
 # and for every exclave given the suite in the given and a random order (and, for the first
 # exclave, under the plain terminal's AppArmor label and on build/launcher-debug), the resolution
-# oracle, the namespace oracle and the syscall probe; the exclave command's C answers against its
-# Python ones while it is ported (test/tool_oracle.py); when EXCLAVE_TEST_INPUTS names the directory
-# scripts/inputs filled, the Docker profile run on its src/docker-seccomp.json and dogfood on its
-# package sets. No step touches the network. The steps run four at a time, or N with --jobs, so
+# oracle, the namespace oracle and the syscall probe; and when EXCLAVE_TEST_INPUTS names the
+# directory scripts/inputs filled, the Docker profile run on its src/docker-seccomp.json. No step
+# touches the network. The steps run four at a time, or N with --jobs, so
 # that the machine stays usable meanwhile; every driver runs
 # build/launcher on a copy of its own (the suite wraps one from the exclave's tree, the others take
 # test/tree.py's fresh_exclave), so the exclaves given are never run as they are nor written. One
@@ -90,7 +89,7 @@ stack() {
 }
 
 # What the change can affect. Each flag names a group of steps; a path sets the ones it can affect.
-unit=false stack=false suite=false random=false plain=false oracles=false dogfood=false matrix=false port=false
+unit=false stack=false suite=false random=false plain=false oracles=false matrix=false
 changed=$(cd "$ROOT" && { git diff --name-only HEAD && git ls-files --others --exclude-standard; } | sort -u)
 what="uncommitted changes"
 if [ -z "$changed" ]; then
@@ -103,21 +102,16 @@ for path in $changed; do
         full=true # the launcher and its build, which everything runs, or the Python everything runs on
         matrix=true
         ;;
-    scripts/gate) full=true ;; # the gate itself
-    exclave/*) unit=true suite=true oracles=true dogfood=true port=true ;;
-    tool/*) # the command in C, which the drivers and the VMs run for the commands it answers
-        unit=true suite=true port=true matrix=true
-        ;;
-    test/exclave_cmd.py | test/tool_oracle.py) suite=true port=true ;;
-    unpack/*) suite=true random=true dogfood=true ;;
+    scripts/gate) full=true ;;                                           # the gate itself
+    tool/*) unit=true suite=true random=true oracles=true matrix=true ;; # the command every driver and VM runs
+    unpack/*) suite=true random=true ;;
     test/run.py) suite=true random=true ;;
     test/progs/*) suite=true random=true oracles=true ;; # the probe and ro_matrix are programs there too
-    test/tree.py) suite=true random=true oracles=true dogfood=true ;;
+    test/tree.py) suite=true random=true oracles=true ;;
     test/oracle_*.py | test/docker_profile.py) oracles=true ;;
     test/syscalls.py) unit=true oracles=true ;;
     test/*_test.c | test/grammar_test.py) unit=true ;;
     test/stackcheck.py) stack=true ;;
-    test/dogfood.py) dogfood=true ;;
     test/matrix.py | test/vm_run.py) matrix=true ;;
     # scripts/check's alone: documents, settings, the fetchers, the other scripts and drivers
     *.md | docs/* | scripts/* | fetch/* | test/*.py | pyproject.toml | uv.lock | taplo.toml | .gitignore) ;;
@@ -125,7 +119,7 @@ for path in $changed; do
     esac
 done
 if $full; then
-    unit=true stack=true suite=true random=true plain=true oracles=true dogfood=true port=true
+    unit=true stack=true suite=true random=true plain=true oracles=true
     echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
 else
     echo "gate: the steps $what can affect ($(echo "$changed" | wc -l) paths); --full runs every step"
@@ -151,18 +145,7 @@ for ex in "$@"; do
         step "docker-$n" py "$here/docker_profile.py" --exclave "$ex" --profile "$EXCLAVE_TEST_INPUTS/src/docker-seccomp.json" --work "$out/d-$n"
     fi
 done
-# the command's C answers against its Python ones, while it is ported (18 item 1)
-if $port; then
-    given=
-    for ex in "$@"; do given="$given --exclave $ex"; done
-    # shellcheck disable=SC2086  # one word per --exclave and path
-    step port py "$here/tool_oracle.py" $given --work "$out/port"
-fi
-if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
-    $dogfood && step dogfood py "$here/dogfood.py" --inputs "$EXCLAVE_TEST_INPUTS" --work "$out/dogfood"
-else
-    echo "docker, dogfood: EXCLAVE_TEST_INPUTS not set; skipped"
-fi
+[ -n "${EXCLAVE_TEST_INPUTS:-}" ] || echo "docker: EXCLAVE_TEST_INPUTS not set; skipped"
 wait
 
 fails=0 skips=0

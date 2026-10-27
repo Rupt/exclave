@@ -5,25 +5,23 @@ description = "Relocatable, privilege-free Linux software: a directory that runs
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-# The pinned Python is .python-version; uv installs it, and every script runs
-# through it (scripts/lib.sh). The tool and the tests use the standard library
-# only, so there is nothing to depend on.
+# The exclave command is C (tool/, built by scripts/build). The Python here is
+# the step before it, unpack/, the fetchers and the tests, on the pinned Python
+# .python-version names, which uv installs and every script runs through
+# (scripts/lib.sh). They use the standard library only, so there is nothing to
+# depend on.
 requires-python = ">=3.15"
 dependencies = []
-
-[project.scripts]
-exclave = "exclave.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-# The packages are exclave/, the tool, and unpack/, the step before it, at the
-# top of the checkout beside src/, the launcher's C. uv sync installs them into
-# .venv in editable mode; the matrix's VMs and the tool's own exclave get them
-# with `uv pip install --target`.
-module-name = ["exclave", "unpack"]
+# The package is unpack/, at the top of the checkout beside src/ and tool/, the
+# C. uv sync installs it into .venv in editable mode; the matrix's VMs get it as
+# a .pth naming the checkout.
+module-name = "unpack"
 module-root = ""
 
 [tool.uv]
@@ -143,13 +141,13 @@ convention = "google"
 
 [tool.ty.environment]
 python-version = "3.15"
-# The import roots: the checkout, for the exclave and unpack packages, and
-# test/, whose drivers import their helpers (tree, syscalls, oracle_ns, ...) as
-# a script's siblings, from the directory Python puts first on a script's path.
+# The import roots: the checkout, for the unpack package, and test/, whose
+# drivers import their helpers (tree, syscalls, oracle_ns, ...) as a script's
+# siblings, from the directory Python puts first on a script's path.
 root = [".", "test"]
 
 [tool.ty.src]
-include = ["exclave", "unpack", "test", "fetch"]
+include = ["unpack", "test", "fetch"]
 
 [tool.ty.analysis]
 # A `type: ignore` suppresses nothing: only `ty: ignore[<rule>]` does, so every

@@ -509,16 +509,15 @@ def main() -> int:
         # packed afresh every run, so the VMs never test a stale tree
         log("packing the test tree for", arch)
         with tarfile.open(payload, "w:gz", compresslevel=1) as t:
-            # src: the filter model the suite builds in the VM (filter_model)
-            for d in ("test", "exclave", "unpack", "src"):
+            # src: the filter model the suite builds in the VM (filter_model); src and tool: the
+            # sources the suite's fixture is stamped with
+            for d in ("test", "unpack", "src", "tool"):
                 t.add(os.path.join(REPO, d), arcname="repo/" + d)
-            # the text the launcher carries, which exclave_readme compares, and the README the
-            # Python tool writes
+            # the text the launcher carries, which exclave_readme compares
             t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")
-            t.add(os.path.join(REPO, "tool", "README.txt"), arcname="repo/tool/README.txt")
             t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
-            # the exclave and unpack packages installed into that Python as uv sync installs them
-            # here, in editable form: a .pth naming the checkout, relative to site-packages
+            # the unpack package installed into that Python as uv sync installs it here, in
+            # editable form: a .pth naming the checkout, relative to site-packages
             pth = b"../../../../repo\n"
             info = tarfile.TarInfo(f"python/lib/{PYDIR}/site-packages/_exclave.pth")
             info.size = len(pth)
@@ -613,7 +612,7 @@ def main() -> int:
                 _rc, out = vm.ssh(
                     "cd m && $PWD/python/bin/python3 -m unpack ex debs/*.deb "
                     "2>&1 | tail -3 && "
-                    "$PWD/python/bin/python3 repo/test/exclave_cmd.py wrap ex 2>&1 | tail -3",
+                    "repo/build/exclave wrap ex 2>&1 | tail -3",
                     timeout=3600 * slow,
                 )
                 log(name, "exclave:", " | ".join(x.strip() for x in out.splitlines()[-3:]))
@@ -624,8 +623,7 @@ def main() -> int:
             else:
                 # the exclave given carries the launcher that made it: the row tests the checkout's
                 _rc, out = vm.ssh(
-                    "cd m && $PWD/python/bin/python3 repo/test/exclave_cmd.py "
-                    "relink ex repo/build/launcher 2>&1 | tail -1",
+                    "cd m && repo/build/exclave relink ex repo/build/launcher 2>&1 | tail -1",
                     timeout=600 * slow,
                 )
                 if "relinked" not in out:

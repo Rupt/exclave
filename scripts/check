@@ -120,17 +120,17 @@ if awk '/clang-format off/ { off = 1 } /clang-format on/ { off = 0 }
 run "$UV" run --quiet python test/c_unused.py
 
 # A suppression says why on its line: `# noqa: RULE -- reason`.
-if grep -rnE '# (noqa: [A-Z0-9, ]+|ty: ignore\[[a-z0-9, -]+\])$' --include='*.py' exclave unpack fetch test src; then
+if grep -rnE '# (noqa: [A-Z0-9, ]+|ty: ignore\[[a-z0-9, -]+\])$' --include='*.py' unpack fetch test src; then
     echo "check: a suppression above gives no reason" >&2
     status=1
 fi
 
-# Every hashes file records the tool's version, which is the package's, in Python and in C.
+# Every hashes file records the command's version, which is the project's.
 if ! "$UV" run --quiet python -c '
-import sys, tomllib, exclave
+import sys, tomllib
 want = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
-sys.exit(exclave.__version__ != want or f"#define TOOL_VERSION \"{want}\"" not in open("tool/tool.h").read())'; then
-    echo "check: exclave.__version__ or tool/tool.h's TOOL_VERSION differs from pyproject.toml's version" >&2
+sys.exit(f"#define TOOL_VERSION \"{want}\"" not in open("tool/tool.h").read())'; then
+    echo "check: tool/tool.h's TOOL_VERSION differs from pyproject.toml's version" >&2
     status=1
 fi
 exit $status

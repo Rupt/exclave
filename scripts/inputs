@@ -9,8 +9,8 @@
 # Alpine 3.21's gcc, Fedora 42's gcc, the noble gcc, g++, make and python3 that test/realsoft.py builds with,
 # CentOS 7's glibc for the sysroot of 9, the noble arm64 gcc-13 closure for the emulated row, and the four
 # projects of test/realsoft.py with the SQLite amalgamation of test/bench.py, and Docker's default seccomp profile
-# (moby/profiles, Apache-2.0), the version DESIGN.md 15.7 checked, for test/docker_profile.py; and the python3,
-# libgcc-s1 closure, the base system test/dogfood.py makes the tool's own exclave from with the pinned Python. The tests themselves touch no network.
+# (moby/profiles, Apache-2.0), the version DESIGN.md 15.7 checked, for test/docker_profile.py. The tests themselves
+# touch no network.
 set -u
 . "$(dirname -- "$0")/lib.sh"
 repo=$ROOT
@@ -18,15 +18,15 @@ repo=$ROOT
     echo "usage: scripts/inputs DIR" >&2
     exit 2
 }
-[ -x "$repo/build/launcher" ] || {
-    echo "build/launcher missing: run scripts/build" >&2
+[ -x "$repo/build/launcher" ] && [ -x "$repo/build/exclave" ] || {
+    echo "build/launcher or build/exclave missing: run scripts/build" >&2
     exit 2
 }
 dir=$(mkdir -p "$1" && cd "$1" && pwd) || exit 2
 mkdir -p "$dir/log" "$dir/src" || exit 2
 fails=0
 
-exclave() { py "$repo/test/exclave_cmd.py" "$@"; }
+exclave() { "$repo/build/exclave" "$@"; }
 unpack() { py -m unpack "$@"; }
 
 fetch() { # fetch NAME FETCHER ARGS...: package files into DIR/NAME through the fetcher's cache
@@ -87,7 +87,6 @@ file() { # file URL NAME HASH: one file into DIR/src, verified by its BLAKE2b-25
 fedora=https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/42/Everything/x86_64/os
 centos=https://vault.centos.org/7.9.2009/os/x86_64
 fetch debs-gcc13 debs.py gcc-13 libc6-dev && make_exclave gcc13 debs-gcc13
-fetch debs-base debs.py libc6 libgcc-s1
 fetch apks apks.py gcc musl-dev binutils make linux-headers && make_exclave alpine apks
 fetch rpms-f42 rpms.py --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make && make_exclave f42 rpms-f42
 fetch debs-clang debs.py clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils && make_exclave clang debs-clang
