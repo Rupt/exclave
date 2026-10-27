@@ -1,14 +1,11 @@
 /* handler.c — the SIGSYS handler (DESIGN.md 7.4.3, 7.5, 8.2).
  *
- * Runs in the program's thread on every trapped syscall. It canonicalises
- * the path in virtual space, decides host or exclave, applies the read-only rule
- * for the exclave, re-issues the syscall through the syscall page, and writes the result into
- * the frame. It uses at most 3 KB of the program's stack (7.5.4); everything larger
- * lives in scratch memory. It never blocks a signal, and it edits the
- * program's signal mask only through the frame the kernel restores. Its
- * own syscalls go through the syscall page (sys.h), so a signal handler
- * that interrupts one of them cannot inherit a marker that would let its
- * syscalls bypass translation.
+ * Runs in the program's thread on every trapped syscall. It canonicalises the path in virtual space, decides host or
+ * exclave, applies the read-only rule for the exclave, re-issues the syscall through the syscall page, and writes the
+ * result into the frame. It uses at most 3 KB of the program's stack (7.5.4); everything larger lives in scratch
+ * memory. It never blocks a signal, and it edits the program's signal mask only through the frame the kernel
+ * restores. Its own syscalls go through the syscall page (sys.h), so a signal handler that interrupts one of them
+ * cannot inherit a marker that would let its syscalls bypass translation.
  */
 #include "common.h"
 
@@ -38,13 +35,12 @@ static inline unsigned long *frame_mask(void *uc) { return (unsigned long *)((ch
 #define RE6(nr, a, b, c, d, e, f) __sc6((nr), (long)(a), (long)(b), (long)(c), (long)(d), (long)(e), (long)(f))
 
 /* ---------- copying from the program's memory with EFAULT fidelity (7.5.6) ---------- */
-/* process_vm_readv refused: copies go through a pipe (13) */
+/* process_vm_readv refused: copies go through a pipe (13 item 15) */
 static int no_readv;
-/* every copy names the pid of the trap it serves, recorded in the trap's own chunk: a process-wide value would be a vfork child's
- * while a thread of the parent is in its handler, and name the child's new image once it has exec'd (7.5.4) */
-/* where process_vm_readv is refused, EPERM under a seccomp profile that gates it on a capability, as Docker's does before
- * kernel 4.8, the copy goes through a pipe: write() from program memory and read() into it fault exactly as the syscall's
- * own copy would, EFAULT or short at the boundary; the pipe lives for the copy alone, a page a step (13) */
+/* Where process_vm_readv is refused, EPERM under a seccomp profile that gates it on a capability, as Docker's does
+ * before kernel 4.8, the copy goes through a pipe: write() from program memory and read() into it fault exactly as the
+ * syscall's own copy would, EFAULT or short at the boundary (13 item 15). The pipe lives for the copy alone, a page a
+ * step. Returns the bytes copied, or pipe2's -errno. */
 static long pipe_copy(void *dst, const void *src, size_t n)
 {
     int fds[2];
@@ -64,6 +60,10 @@ static long pipe_copy(void *dst, const void *src, size_t n)
     sys_close(fds[1]);
     return done;
 }
+/* Copies n bytes of program memory at src into dst; returns the bytes copied, short at a fault, -EFAULT when none can
+ * be, or pipe2's -errno. Every copy names the pid of the trap it serves, recorded in the trap's own chunk: a
+ * process-wide value would be a vfork child's while a thread of the parent is in its handler, and name the child's new
+ * image once it has exec'd (7.5.4). */
 static long copy_in(pid_t pid, void *dst, const void *src, size_t n)
 {
     unsigned long p = (unsigned long)src;
@@ -190,6 +190,8 @@ static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int 
     if (r < 0) scpy(S->v, S->b1, PATH_MAX);                    /* the log names what was asked for, as given */
     return r;
 }
+/* Sets S->real to v's real path; 1 when v exists, with st's type set (and only its type when the cache answers), 0
+ * when it does not. */
 static int exists_exclave(struct scratch *S, const char *v, struct kstat *st)
 {
     to_real_exec(v, S->real);
@@ -226,11 +228,10 @@ static int last_special(const char *p) /* 0: a name; 1: "."; 2: ".."; 3: the roo
     return 0;
 }
 
-/* 8.2: the kernel-matching answers for a read-only exclave, in the kernel's order (oracle 17.7); S->real is set
- * either way for the re-issue. A create (filename_create): the name is looked up first, so EEXIST for what
- * exists and the name's own error come before EROFS, and a trailing slash on something that is not a directory
- * being made is ENOENT. An attribute change: the file must exist. A delete: EROFS before the last component
- * is looked up at all. */
+/* 8.2: the kernel-matching answers for a read-only exclave, in the kernel's order (oracle 17.7). ro_create, ro_attr
+ * and ro_delete each return 0 to re-issue on S->real, which they set, or -errno. A create (filename_create) looks the
+ * name up first, so EEXIST for what exists and the name's own error come before EROFS, and a trailing slash on
+ * something that is not a directory being made is ENOENT. */
 static long ro_create(struct scratch *S, const char *v, int is_dir)
 {
     if (!is_exclave_path(v)) {
@@ -248,6 +249,7 @@ static long ro_create(struct scratch *S, const char *v, int is_dir)
     if (e != -ENOENT) return e;
     return slash && !is_dir ? -ENOENT : -EROFS;
 }
+/* an attribute change: the file must exist, so its absence answers before EROFS */
 static long ro_attr(struct scratch *S, const char *v)
 {
     struct kstat st;
@@ -255,8 +257,9 @@ static long ro_attr(struct scratch *S, const char *v)
     if (!is_exclave_path(v)) return 0;
     return ex ? -EROFS : absent_errno(S);
 }
-/* an overlong last component of a delete: do_unlinkat and do_rmdir take the write lock on the parent before they look the
- * name up, so an exclave parent answers EROFS first, where an overlong earlier component fails in the walk (oracle 17.7) */
+/* an overlong last component of a delete: do_unlinkat and do_rmdir take the write lock on the parent
+ * before they look the name up, so an exclave parent answers EROFS first, where an overlong earlier
+ * component fails in the walk (oracle 17.7) */
 static long delete_overlong(struct scratch *S, int dfd)
 {
     char *p = S->b1;
@@ -280,6 +283,7 @@ static long delete_overlong(struct scratch *S, int dfd)
     scpy(S->v, S->b1, PATH_MAX); /* the log names what was asked for */
     return r;
 }
+/* a delete: EROFS before the last component is looked up at all */
 static long ro_delete(struct scratch *S, const char *v)
 {
     to_real_exec(v, S->real);
@@ -295,6 +299,8 @@ static long nofollow(const struct scratch *S, long flag) { return S->magic_end ?
 static int dfd_virtual(int fd, char *out);
 
 /* ---------- open ---------- */
+/* open, creat, openat and openat2 of args[pi] relative to args[di], with the syscall's flags and mode: the read-only
+ * answers, then the re-issue on the real path. Returns the descriptor or -errno. */
 static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long mode, int nr)
 {
     int follow = !(flags & O_NOFOLLOW) && !((flags & O_CREAT) && (flags & O_EXCL));
@@ -313,7 +319,7 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     size_t vl = xstrlen(S->v);
     /* open_last_lookups: O_CREAT with a trailing slash, before any lookup */
     if (creat && vl > 1 && S->v[vl - 1] == '/') return -EISDIR;
-    /* the kernel protects a running program; the launcher protects the one it loaded (13) */
+    /* the kernel protects a running program; the launcher protects the one it loaded (13 items 29 and 40) */
     if (wr && (flags & O_TMPFILE) != O_TMPFILE && C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;
     /* an identity file that is a host symlink (8.4) */
     if ((flags & O_NOFOLLOW) && !(flags & O_PATH) && vis_readlink_identity(S->v, S->tmp) == 1) return -ELOOP;
@@ -329,9 +335,10 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
         if (wr) {
             if (!ex) return ae != -ENOENT ? ae : creat ? -EROFS : -ENOENT;
             if (dir) return -EISDIR;
-            /* do_open, may_open, do_dentry_open: a special file is opened as the kernel opens it, since the read-only mount does not
-             * protect it (ENXIO for a socket, a FIFO's own rules); on a regular file O_TRUNC wants the mount writable before anything,
-             * EROFS, and otherwise the permission comes first, EACCES, and the mount after it */
+            /* do_open, may_open, do_dentry_open: a special file is opened as the kernel opens it, since the
+             * read-only mount does not protect it (ENXIO for a socket, a FIFO's own rules); on a regular file
+             * O_TRUNC wants the mount writable before anything, EROFS, and otherwise the permission comes
+             * first, EACCES, and the mount after it */
             struct kstat rs;
             to_real(S->v, S->real, S->tmp);
             if (sys_lstat(S->real, &rs) < 0 || (rs.st_mode & S_IFMT) == S_IFREG) {
@@ -436,8 +443,8 @@ static long open_header(const char *real)
     return fd;
 }
 
-/* A pointer vector of n entries: a scratch region when it fits, an anonymous mapping otherwise:
- * vectors are sized from their counts. A mapping made by a vfork child stays in the parent, unused. */
+/* A pointer vector of n entries: a scratch region when it fits, an anonymous mapping otherwise, set in *big; NULL
+ * when the mapping fails. A mapping made by a vfork child stays in the parent, unused. */
 static char **vector(void *region, size_t region_size, long n, void **big)
 {
     *big = 0;
@@ -453,10 +460,11 @@ static void vector_free(void *big, long n)
     if (big) SC2(NR_munmap, big, ((size_t)n * sizeof(char *) + 0xfff) & ~(size_t)0xfff);
 }
 
-/* The program's argv or envp, read through copy_in as the paths are: a NULL vector is
- * empty, a bad pointer is EFAULT, an unterminated one is E2BIG. Returns the count; *out has count + extra + 1
- * slots, the entries first, then a NULL. S->tmp is the probe buffer. */
 #define VEC_MAX (1L << 20)
+/* The program's argv or envp, read through copy_in as the paths are: a NULL vector is empty, a bad pointer is EFAULT,
+ * one of more than VEC_MAX entries is E2BIG, and a vector that cannot be mapped is ENOMEM. Returns the count or
+ * -errno; *out has count + extra + 1 slots, the entries first, then a NULL, and *big is the mapping to free, if any.
+ * S->tmp is the probe buffer. */
 static long vec_read(struct scratch *S, void *region, size_t region_size, char **user, long extra, char ***out,
                      void **big)
 {
@@ -483,20 +491,21 @@ static long vec_read(struct scratch *S, void *region, size_t region_size, char *
     return n;
 }
 
-/* The exec of a wrapper, or of the launcher for a program on the loader path, with the identity the kernel would give
- * the program carried in the launcher's own variables (7.4.5, 7.6): EXCLAVE_EXEC names the loader-path target, EXCLAVE_EXECFN
- * the path the program is exec'd by as the kernel spells it, EXCLAVE_COMM the name the kernel would set as comm. S->v2
- * and S->comm hold the last two from do_execve; an inherited copy of any of the three is dropped, and every launcher
- * strips them before a program runs. The strings are the kernel's to validate. */
+/* The exec of a wrapper, or of the launcher for a program on the loader path, with the identity the kernel would
+ * give the program carried in the launcher's own variables (7.4.5, 7.6): EXCLAVE_EXEC names the loader-path
+ * target, EXCLAVE_EXECFN the path the program is exec'd by as the kernel spells it, EXCLAVE_COMM the name the
+ * kernel would set as comm. S->v2 and S->comm hold the last two from do_execve; an inherited copy of any of the
+ * three is dropped, and every launcher strips them before a program runs. The strings are the kernel's to
+ * validate. Returns execve's -errno when it fails. */
 static long exec_env(struct scratch *S, const char *path, char **argv, char **envp, const char *v, int loader)
 {
     void *big;
     char **env;
     long envc = vec_read(S, S->extra, sizeof S->extra, envp, 3, &env, &big);
     if (envc < 0) return envc;
-    /* the head of every variable, 16 bytes, room for EXCLAVE_EXECFN=, read in one process_vm_readv for up to 256 at a time rather than one call
-     * each (DESIGN.md 16.4); a variable the batch could not read whole, near the end of a mapping, is read on its own
-     * as before, and the batch resumes after it. tmp holds the heads, rest the iovecs: both free until the end */
+    /* the head of every variable, 16 bytes, room for EXCLAVE_EXECFN=, read in one process_vm_readv for up to 256 at a
+     * time rather than one call each (16.4); a variable the batch could not read whole, near the end of a mapping, is
+     * read on its own, and the batch resumes after it. tmp holds the heads, rest the iovecs: both free until the end */
     long n = 0;
     char head[16], *heads = S->tmp;
     struct iovec *riov = (struct iovec *)S->rest;
@@ -919,8 +928,9 @@ static long do_io_pgetevents(struct scratch *S, long *a)
 }
 
 /* ---------- descriptors that name exclave files ---------- */
-/* ST_RDONLY into the flag word of a statfs the kernel just filled (8.2), through the copies of 7.5.6 like every other write
- * into program memory: the kernel validated the buffer a moment ago, but another thread may have unmapped it since */
+/* ST_RDONLY into the flag word of a statfs the kernel just filled (8.2), through the copies of 7.5.6
+ * like every other write into program memory: the kernel validated the buffer a moment ago, but
+ * another thread may have unmapped it since */
 static long ro_flag(struct scratch *S, void *flags)
 {
     long f;
@@ -968,7 +978,7 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
     if (r) return r;
     unsigned short fam;
     xmemcpy(&fam, S->extra, 2);
-    /* re-issued from the handler's copy, as for every address read below */
+    /* re-issued from the handler's copy, as every address the handler reads is */
     if (fam != AF_UNIX || len == 2 || S->extra[2] == 0) return RE5(nr, a[0], S->extra, len, 0, 0);
     /* unix_mkname_bsd: the path ends at the length or at a NUL */
     size_t n = (size_t)len - 2;
@@ -984,9 +994,8 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
         return r;
     }
     if (!is_exclave_path(S->v)) {
-        /* a relative walk that stayed in the host's domain is the kernel's
-         * own, as given: from a working directory of any depth, and getsockname answers the
-         * program's own name */
+        /* a relative walk that stayed in the host's domain is the kernel's own, as given: from a working directory of
+         * any depth, and getsockname answers the program's own name */
         if (!S->touched_exclave) return RE5(nr, a[0], S->extra, len, 0, 0);
         /* otherwise the kernel gets the resolved real path, as for every other syscall, since an exclave symlink or a
          * rewritten magic link may have led here (oracle 17.7) */
@@ -1000,8 +1009,9 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
             S->extra[2 + rl + slash] = 0;
             return RE5(nr, a[0], S->extra, 2 + rl + slash + 1, 0, 0);
         }
-        /* sun_path holds 107 bytes and a real path can be longer than the program's own: the name is re-issued through a
-         * descriptor of its directory, /proc/self/fd/N/NAME, which the kernel walks as it walks the path (13 item 31) */
+        /* sun_path holds 107 bytes and a real path can be longer than the program's own: the name is
+         * re-issued through a descriptor of its directory, /proc/self/fd/N/NAME, which the kernel
+         * walks as it walks the path (13 item 31) */
         char *e = S->real + rl;
         while (e > S->real && e[-1] == '/') e--;
         char *b = e;
@@ -1095,8 +1105,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
             r = nr == NR_faccessat2 ? RE5(nr, AT_FDCWD, S->real, mode, fl | nofollow(S, AT_SYMLINK_NOFOLLOW), 0)
                                     : RE5(NR_faccessat, AT_FDCWD, S->real, mode, 0, 0);
         }
-        /* do_faccessat: the lookup's and the permission's own answers come first; then a write the permission allows on a
-         * regular file, a directory or a symlink under a read-only mount is EROFS, and a special file never is */
+        /* do_faccessat: the lookup's and the permission's own answers come first; then a write the permission allows on
+         * a regular file, a directory or a symlink under a read-only mount is EROFS, and a special file never is */
         if (r < 0 || !(mode & W_OK) || !(empty ? fd_exclave(S, (int)a[0]) : is_exclave_path(S->v))) return r;
         struct kstat st;
         if ((empty ? SC2(NR_fstat, a[0], &st) : sys_lstat(S->real, &st)) < 0) return r;

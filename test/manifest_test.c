@@ -1,4 +1,5 @@
-/* manifest_test.c — host-side tests for the strict manifest grammar (DESIGN.md 6.2). Built by scripts/gate's unit step. */
+/* manifest_test.c — host-side tests for the strict manifest grammar (DESIGN.md 6.2).
+ * Built by scripts/gate's unit step. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -1,20 +1,17 @@
 /* scratch.c — handler scratch memory (DESIGN.md 7.5.4).
  *
- * The handler may use only 3 KB of the program's stack (7.5.4), so its path
- * buffers live in chunks obtained with mmap on demand. A chunk records its
- * owner (pid, tid); it is released explicitly when the handler returns.
- * When nothing is free, chunks whose owner no longer exists are reclaimed
- * by liveness, never by another thread's stack position; a thread's own
- * chunks left by a longjmp are released by frame (nest_enter). Nothing here takes a lock: a
- * handler that interrupts a handler, or a fork while another thread is in
- * one, must never find a lock held by a frame that cannot release it.
+ * The handler may use only 3 KB of the program's stack (7.5.4), so its path buffers live in chunks obtained with
+ * mmap on demand. A chunk records its owner (pid, tid); it is released explicitly when the handler returns. When
+ * nothing is free, chunks whose owner no longer exists are reclaimed by liveness, never by another thread's stack
+ * position; a thread's own chunks left by a longjmp are released by frame (nest_enter). Nothing here takes a lock: a
+ * handler that interrupts a handler, or a fork while another thread is in one, must never find a lock held by a
+ * frame that cannot release it.
  *
- * Every claim and every release advances a chunk's sequence, and a sweep
- * releases a chunk only by moving the sequence it read: a sweep that saw a
- * dead owner, and was overtaken by another sweep's release and a new claim
- * before it acted, finds the sequence moved and leaves the new holder alone
- * (13 item 44; posix_spawn's vfork children leave chunks with dead owners,
- * and two sweeps had handed one chunk to two handlers).
+ * Every claim and every release advances a chunk's sequence, and a sweep releases a chunk only by moving the
+ * sequence it read: a sweep that saw a dead owner, and was overtaken by another sweep's release and a new claim
+ * before it acted, finds the sequence moved and leaves the new holder alone (13 item 44). Without the rule two sweeps
+ * could hand one chunk to two handlers, which posix_spawn's vfork children, leaving chunks with dead owners, make
+ * likely.
  */
 #include "common.h"
 
@@ -85,7 +82,7 @@ struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame)
         return &c->s;
     }
     /* sweep: reclaim chunks whose owner is gone (a thread that exited, a longjmp'd frame in a dead process, a vfork
-     * child that has exited; one that still runs keeps its chunk, 13) */
+     * child that has exited; one that still runs keeps its chunk, 13 item 26) */
     int n = slots();
     for (int i = 0; i < n; i++) {
         struct chunk *k = chunks[i];
@@ -109,7 +106,8 @@ struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame)
     }
     /* grow: reserve a slot, map the chunk already claimed, publish it; a mapping that fails leaves the slot empty */
     int i = __sync_fetch_and_add(&nchunks, 1);
-    if (i >= MAX_CHUNKS) return 0;                           /* the pool's ceiling (13) */
+    /* the pool's ceiling (13 item 26) */
+    if (i >= MAX_CHUNKS) return 0;
     size_t sz = (sizeof(struct chunk) + 0xfff) & ~(size_t)0xfff;
     long m = sys_mmap(0, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m < 0 && m > -4096) return 0;
@@ -140,10 +138,10 @@ void scratch_put(struct scratch *s)
     if (s) release((struct chunk *)s);
 }
 
-/* Nesting depth of this thread: the chunks it still holds, plus one. A chunk whose frame is at or below the
- * current frame cannot belong to a live ancestor on this stack: it was left by a longjmp out of a handler and
- * is released here, so a leak never counts as depth. Frames on another stack are
- * above or below only by accident; the rare handler that switches stacks between traps is accepted (13). */
+/* Nesting depth of this thread: the chunks it still holds, plus one. A chunk whose frame is at or below the current
+ * frame cannot belong to a live ancestor on this stack: it was left by a longjmp out of a handler and is released
+ * here, so a leak never counts as depth. Frames on another stack are above or below only by accident; the rare
+ * handler that switches stacks between traps is accepted (13 item 27). */
 int nest_enter(pid_t pid, pid_t tid, unsigned long frame)
 {
     int n = slots(), d = 1;

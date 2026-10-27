@@ -48,8 +48,8 @@ static void emit(uint16_t code, uint8_t jt, uint8_t jf, uint32_t k)
     np++;
 }
 static void ret(uint32_t action) { emit(RET_K, 0, 0, action); }
-/* "if nr == n then <action>" as a two-instruction pair; A must hold nr */
-/* n < 0: not on this architecture */
+/* "if nr == n then <action>" as a two-instruction pair; A must hold nr. An n below 0, a syscall this architecture
+ * lacks, emits nothing. */
 static void on_nr(int n, uint32_t action)
 {
     if (n < 0) return;
@@ -169,7 +169,7 @@ static int singled(int nr)
     return 0;
 }
 
-/* the first stage's intervals: from lo up to the next interval's lo, singled out or not; the last runs past the ceiling */
+/* the first stage's intervals: from lo to the next interval's lo, singled out or not; the last runs past the ceiling */
 static struct {
     uint32_t lo;
     int singled;
@@ -248,7 +248,7 @@ static void build(void)
         page[npage++] = np;
         emit(JA, 0, 0, 0);
     }
-    /* a program's own sandbox is refused (7.4.2): prctl(PR_SET_SECCOMP), and seccomp(2) except the availability query */
+    /* a program's own sandbox is refused (7.4.2): prctl(PR_SET_SECCOMP), and seccomp(2) but its availability query */
     emit(JEQ_K, 0, 4, NR_prctl);
     emit(LD_ABS, 0, 0, OFF_ARG(0));
     emit(JEQ_K, 1, 0, PR_SET_SECCOMP);
@@ -304,8 +304,8 @@ void filter_install(void)
     if (sys_prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) die("PR_SET_NO_NEW_PRIVS failed", 0, 0);
     /* SPEC_ALLOW: a filter installed without it switches the process and its descendants to Speculative Store Bypass
      * Disable, forced, wherever the kernel's default is spec_store_bypass_disable=seccomp (4.17 to 5.15 and the
-     * backports before), which slows compute-bound code by up to several times; an exclave is not a security boundary and
-     * its programs did not ask for it (DESIGN.md 16.5). A kernel without the flag answers EINVAL. */
+     * backports before), which slows compute-bound code by up to several times; an exclave is not a security boundary
+     * and its programs did not ask for it (DESIGN.md 16.5). A kernel without the flag answers EINVAL. */
     long r = SC3(NR_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_SPEC_ALLOW, &fp);
     if (r == -EINVAL) r = SC3(NR_seccomp, SECCOMP_SET_MODE_FILTER, 0, &fp);
     /* kernels before 3.17 */

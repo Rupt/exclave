@@ -77,8 +77,8 @@ int is_self_exe(const char *p, pid_t mypid)
  * directory reached without a link. The second needs no question where the tree's filesystem is mounted once and its
  * device is the tree's own: within one mount a directory has one path, and the rule has already refused the tree's own
  * name. Anything else, a link, a missing directory, a refusal, a second mount, a kernel without openat2, is the walk's.
- * The last component is always the walk's, so that its kind, its link and its error are found as before. */
-/* the tree's filesystem mounted once with its device: 0 not yet known, 1, -1 */
+ * The last component is always the walk's, so that the walk finds its kind, its link and its error. */
+/* the tree's filesystem mounted once with its device: 0 not yet known, 1 yes, -1 no or unknowable */
 static int tree_once;
 static int no_openat2;                                       /* the kernel predates openat2 (5.6) */
 
@@ -99,10 +99,11 @@ static long mount_prefix(const char *f, const char *fe)
     if (k == 1 && C.root[0] == '/') return 1;                 /* the root mount */
     return C.root[k] == '/' || C.root[k] == 0 ? k : -1;
 }
-/* one pass over /proc/self/mountinfo in buf (PATH_MAX): pass 0 finds the mount holding the tree, the longest mount point
- * that is a prefix of its path, the last of equals since a later mount covers an earlier; pass 1 counts the mounts of
- * that device. 1 when answered; 0 when no descriptor was free, to be asked again; -1 when it cannot be answered here: no
- * /proc, an unreadable file, a line longer than the buffer, no mount holding the tree, as in a chroot */
+/* one pass over /proc/self/mountinfo in buf (PATH_MAX): pass 0 finds the mount holding the tree, the
+ * longest mount point that is a prefix of its path, the last of equals since a later mount covers an
+ * earlier; pass 1 counts the mounts of that device. 1 when answered; 0 when no descriptor was free, to be
+ * asked again; -1 when it cannot be answered here: no /proc, an unreadable file, a line longer than the
+ * buffer, no mount holding the tree, as in a chroot */
 static long mounts(char *buf, int pass, unsigned long *dev, long *count)
 {
     long fd = sys_open("/proc/self/mountinfo", O_RDONLY | O_CLOEXEC, 0);
@@ -150,10 +151,11 @@ static long mounts(char *buf, int pass, unsigned long *dev, long *count)
         have -= l - buf;
         memmove(buf, l, (size_t)have + 1);
         if (n == 0) break;
+        /* a line longer than the buffer */
         if (have >= PATH_MAX - 1) {
             ok = 0;
             break;
-        }          /* a line longer than the buffer */
+        }
     }
     sys_close((int)fd);
     return ok && (pass == 1 || best > 0) ? 1 : -1;
@@ -209,14 +211,15 @@ static int host_chain(struct scratch *S, char *cur, char **rpp)
     if (tree_once <= 0) return 0;
     unsigned long how[3] = {O_PATH | O_DIRECTORY | O_CLOEXEC, 0, RESOLVE_NO_SYMLINKS};
     long fd = SC4(NR_openat2, AT_FDCWD, p, how, sizeof how);
+    /* a kernel before 5.6 */
     if (fd == -ENOSYS || fd == -E2BIG || fd == -EINVAL) {
         no_openat2 = 1;
         return 0;
-    }   /* before 5.6 */
+    }
     if (fd < 0) return -1;
-    /* the kernel's name for what it reached must be the path itself: on a case-insensitive filesystem x.exclave/TREE is the
-     * tree's root under another spelling on the same mount, and the tree's root, pinned by the program's own mappings,
-     * keeps its own name; any other difference, an alias nobody foresaw, is the walk's too */
+    /* the kernel's name for what it reached must be the path itself: on a case-insensitive filesystem x.exclave/TREE is
+     * the tree's root under another spelling on the same mount, and the tree's root, pinned by the program's own
+     * mappings, keeps its own name; any other difference, an alias nobody foresaw, is the walk's too */
     long k = fd_real_path((int)fd, S->tmp);
     sys_close((int)fd);
     if (k != (long)n || xmemcmp(S->tmp, p, n) != 0) return -1;
@@ -276,10 +279,9 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         }
     } else {
         int tree = 0, r = (dfd == AT_FDCWD) ? cwd_virtual_in(rest, &tree) : fd_virtual_in(dfd, rest, &tree);
-        /* a directory deleted under the program, which the kernel still walks from and
-         * the handler cannot name: the path is spelt through the magic link, a host
-         * path the kernel resolves itself; a walk from there into the exclave stays
-         * the host's (7.4.3) */
+        /* a directory deleted under the program, which the kernel still walks from and the handler cannot name: the
+         * path is spelt through the magic link, a host path the kernel resolves itself; a walk from there into the
+         * exclave stays the host's (7.4.3) */
         if (r == -ENOENT) {
             char *n = S->b2;
             if (dfd != AT_FDCWD) ltoa_(dfd, n);
@@ -350,12 +352,12 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         }
         while (*rp == '/') rp++;
         int last = (*rp == 0);
-        /* an exclave path is re-issued under the tree's root prefix: one that would not fit PATH_MAX there is refused here,
-         * ENAMETOOLONG, and never cut to a shorter name (13) */
+        /* an exclave path is re-issued under the tree's root prefix: one that would not fit PATH_MAX there is refused
+         * here, ENAMETOOLONG, and never cut to a shorter name (13 item 13) */
         if (C.rootlen + (long)(curl + 1 + cl) + (last ? trailing : 0) >= PATH_MAX && is_exclave_path(cur))
             return -ENAMETOOLONG;
-        /* the mount changes where the domain does; an identity symlink that is
-         * not followed is the tree's own entry, and its host target is not reached */
+        /* the mount changes where the domain does; an identity symlink that is not followed is the tree's own entry,
+         * and its host target is not reached */
         if (rf & RESOLVE_NO_XDEV) {
             int d = is_exclave_path(cur);
             if (d != dom && !(last && !follow_last && !trailing && vis_is_identity_file(cur) &&
@@ -365,8 +367,8 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         }
         /* a trailing slash means "a directory": the kernel follows */
         if (last && !follow_last && !trailing) break;
-        /* the process's own exe on the loader path names the program, not the launcher (7.6) */
-        /* loader path, or a script whose exe is its interpreter */
+        /* the process's own exe names the program, not the launcher (7.6), on the loader path and for a script whose
+         * exe is its interpreter */
         if ((C.loader_mode || xstrcmp(C.exe, C.program) != 0) && is_self_exe(cur, S->pid)) {
             if (nomagic) return -ELOOP; /* a magic link, refused by the resolve flags */
             if (++hops > 40) return -ELOOP;
@@ -393,9 +395,9 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
             if ((rf & RESOLVE_NO_SYMLINKS) && vis_readlink_identity(cur, tmp) == 1) return -ELOOP;
             kind = CK_FILE;
         } else if (leads) kind = CK_DIR; /* on the way to an identity file: a directory (8.4) */
-        /* 7.4.4: the exclave's components are remembered for the process's life */
         else if (!host) {
-            /* the real path only for a component not yet remembered */
+            /* 7.4.4: the exclave's components are remembered for the process's life, and the real path is made only for
+             * a component not yet remembered */
             kind = cache_get(cur, tmp);
             if (!kind) {
                 /* to_real_exec's answer for an exclave path; cur is never "/" here */

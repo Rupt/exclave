@@ -1,14 +1,14 @@
-/* adversarial.c — what a hostile program or a fuzzer would try (DESIGN.md 17.4): arguments with their upper 32 bits
- * set where the kernel takes an int, with the program's buffer checked past the count; the launcher's own variables set
- * before an exec; a working directory deleted under the program; an exec with no descriptor left; mounts and roots
- * from inside; SIGSYS ignored, handled or fed to a signalfd; magic links under /proc/1; interpreter loops and chains;
- * an empty executable, a loader that is a directory. A second batch (sections 9 to 15): an exec with 0, 1 and 2 closed;
- * a pipe, a socket or /dev/null handed to fexecve; a hard link across the border, symlink chains at the kernel's
- * limit and one past it, odd spellings of the self magic links; the read-only rule from mknod, ftruncate and a shared
+/* adversarial.c — what a hostile program or a fuzzer would try (DESIGN.md 17.4): arguments with their upper 32 bits set
+ * where the kernel takes an int, with the program's buffer checked past the count; the launcher's own variables set
+ * before an exec; a working directory deleted under the program; an exec with no descriptor left; mounts and roots from
+ * inside; SIGSYS ignored, handled or fed to a signalfd; magic links under /proc/1; interpreter loops and chains; an
+ * empty executable, a loader that is a directory. A second batch (sections 9 to 15): an exec with 0, 1 and 2 closed; a
+ * pipe, a socket or /dev/null handed to fexecve; a hard link across the border, symlink chains at the kernel's limit
+ * and one past it, odd spellings of the self magic links; the read-only rule from mknod, ftruncate and a shared
  * writable mapping; CLONE_FS, CLONE_FILES, not dumpable, PER_LINUX32, a vfork child and a handler on an alternate
  * stack; io_uring and clone3 refused; a saturated cache, a huge environment, bad pointers; execute-only files and
- * interpreters spelt oddly. usage: adversarial HOSTDIR [SHORTDIR], or "adversarial HOSTDIR --child"; SHORTDIR (default HOSTDIR) holds the
- * interpreter chains, whose #! lines a deep HOSTDIR would outgrow.
+ * interpreters spelt oddly. usage: adversarial HOSTDIR [SHORTDIR], or "adversarial HOSTDIR --child"; SHORTDIR (default
+ * HOSTDIR) holds the interpreter chains, whose #! lines a deep HOSTDIR would outgrow.
  * Prints one line per case, "<case>: <answer>", the same in every world where the kernel is the oracle, so the
  * exerciser shows what differs; the named regression asserts the kernel's answers, and for the cases the launcher
  * decides for itself (its variables stripped, mounts refused) the launcher's. Exit 0 always. */
@@ -37,8 +37,8 @@
 #include <unistd.h>
 
 extern char **environ;
-#define HI (1UL << 32)                                        /* a bit the kernel never sees in an int argument */
-/* the newest syscall numbers this test names, for an exclave whose headers predate them (the number is stable per arch) */
+#define HI (1UL << 32) /* a bit the kernel never sees in an int argument */
+/* the newest syscall numbers this test names, for an exclave whose headers predate them; each is stable per arch */
 #if defined(__x86_64__)
 #ifndef SYS_io_uring_setup
 #define SYS_io_uring_setup 425
@@ -570,7 +570,8 @@ int main(int argc, char **argv)
             close(dn);
         }
     }
-    /* 11. links: a hard link across the border is EXDEV, a symlink chain at the kernel's limit and one over it, the self magic links */
+    /* 11. links: a hard link across the border is EXDEV, a symlink chain at the kernel's limit and one over it, the
+     * self magic links */
     {
         int cf = open("/usr/share/exclave-test-marker", O_RDONLY);
         snprintf(q, sizeof q, "/proc/self/fd/%d", cf);
@@ -608,7 +609,8 @@ int main(int argc, char **argv)
         strcpy(slashes + 4000, "usr/share/exclave-test-marker");
         P("a path of 4000 slashes then an exclave file", stat(slashes, &st));
     }
-    /* 12. the read-only rule from other angles: a device node, a read-only descriptor asked to write, a shared writable mapping, O_PATH with a write mode */
+    /* 12. the read-only rule from other angles: a device node, a read-only descriptor asked to write, a shared writable
+     * mapping, O_PATH with a write mode */
     P("mknod a char device in the exclave", mknod("/usr/share/exclave-adv-dev", S_IFCHR | 0600, makedev(1, 3)));
     {
         int cf = open("/usr/share/exclave-test-marker", O_RDONLY);
@@ -623,7 +625,8 @@ int main(int argc, char **argv)
     }
     P("open an exclave file O_PATH with O_WRONLY", open("/usr/share/exclave-test-marker", O_PATH | O_WRONLY));
     P("truncate /dev/null", truncate("/dev/null", 0));
-    /* 13. the process's own shape changed: CLONE_FS, CLONE_FILES, not dumpable, PER_LINUX32, a vfork child that traps, an alternate stack */
+    /* 13. the process's own shape changed: CLONE_FS, CLONE_FILES, not dumpable, PER_LINUX32, a vfork child that traps,
+     * an alternate stack */
     {
         fflush(stdout);
         pid_t c = fork();
@@ -696,7 +699,8 @@ int main(int argc, char **argv)
         raise(SIGUSR1);
         printf("a trap from a handler on a 16 KB alternate stack: %s\n", program_handler_ran == 2 ? "ok" : "no");
     }
-    /* 14. the refusals of 7.4.2 by name, a descriptor on a renamed directory, the cache saturated, a huge environment, bad vectors */
+    /* 14. the refusals of 7.4.2 by name, a descriptor on a renamed directory, the cache saturated, a huge environment,
+     * bad vectors */
     /* 0 entries: EINVAL and no ring created; the filter answers ENOSYS either way */
     {
         unsigned char params[128];
@@ -769,7 +773,7 @@ int main(int argc, char **argv)
         P("readlink whose write crosses into an unmapped page", readlink(q, pg + 4090, 32));
         munmap(pg, 8192);
     }
-    /* 15. execute-only files the loader cannot read (limitation), the stated limitation 12, and interpreters spelt oddly */
+    /* 15. execute-only files the loader cannot read (13 item 12), and interpreters spelt oddly */
     snprintf(p, sizeof p, "%s/unreadable", hd);
     copy_self(p);
     chmod(p, 0111);

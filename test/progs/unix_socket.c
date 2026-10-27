@@ -1,9 +1,10 @@
 /* unix_socket.c — sockaddr_un paths under the visibility rule (DESIGN.md 13 item 31, 17.4): bind, connect and sendto
  * with a path of every class. usage: unix_socket HOSTDIR [EXDIR EXFILE EXSOCK [CWDDIR]]. Prints one line per case,
  * "<case>: ret=<r> errno=<e>", the same in every world, so that the kernel under bwrap is the oracle for the launcher.
- * EXDIR: a directory the exclave owns (default /usr/share); EXFILE: a regular file it owns (default $EXCLAVE_TEST_TRUE); EXSOCK: a
- * socket file in the tree, if the maker put one there; CWDDIR: the host working directory of the relative cases, of any
- * depth (default HOSTDIR), where HOSTDIR must be short enough for sun_path. Exit 0 always: the driver compares. */
+ * EXDIR: a directory the exclave owns (default /usr/share); EXFILE: a regular file it owns (default
+ * $EXCLAVE_TEST_TRUE); EXSOCK: a socket file in the tree, if the maker put one there; CWDDIR: the host working
+ * directory of the relative cases, of any depth (default HOSTDIR), where HOSTDIR must be short enough for sun_path.
+ * Exit 0 always: the driver compares. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <stddef.h>
@@ -114,7 +115,7 @@ int main(int argc, char **argv)
         perror(host);
         return 2;
     }
-    /* connect: a listener on the host, a host socket file without one, exclave files, an exclave socket, a missing name */
+    /* connect: a host listener, a host socket file without one, exclave files, an exclave socket, a missing name */
     snprintf(p, sizeof p, "%s/sock-listen", host);
     {
         int s = socket(AF_UNIX, SOCK_STREAM, 0);

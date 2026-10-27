@@ -7,8 +7,8 @@
 #include "common.h"
 
 static const char *volatile_dirs[] = {"/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run", 0};
-/* 8.1 rule 5: the host's by default; an own record naming one exactly removes it. The time zone is not
- * among them: inside an exclave it is UTC, set at the border (6.2). */
+/* 8.1.5: the host's by default; an own record naming one exactly removes it. The time zone is not among them: inside
+ * an exclave it is UTC, set at the border (6.2). */
 static const char *identity_files[] = {"/etc/passwd",
                                        "/etc/group",
                                        "/etc/nsswitch.conf",
@@ -56,9 +56,9 @@ static int dir_nonempty(const char *real)
     }
 }
 
-/* 8.1 rule 1: the exclave owns every top-level entry of its tree that is not an empty directory. Read from the
- * tree at startup, so an edited tree needs no index to be refreshed; the manifest's own records are added
- * by the parser before this runs. About one directory read per top-level entry. */
+/* 8.1.1: the exclave owns every top-level entry of its tree that is not an empty directory. Read from the tree at
+ * startup, so an edited tree needs no index to be refreshed; the manifest's own records are added by the parser before
+ * this runs. About one directory read per top-level entry. */
 static void own_from_tree(void)
 {
     static char buf[16384];
@@ -97,8 +97,8 @@ static void own_from_tree(void)
     sys_close((int)fd);
 }
 
-/* 8.1 rule 5: the identity files join the host table unless an own record names one; the table has
- * room for them after the manifest's 32 by construction */
+/* 8.1.5: the identity files join the host table unless an own record names one; the table has room for them after
+ * the manifest's records by construction */
 static void identity_defaults(void)
 {
     for (int i = 0; identity_files[i]; i++) {
@@ -125,8 +125,8 @@ int vis_in_data(const char *v)
 /* identity files: link text recorded at startup for readlink fidelity (8.4) */
 static const char *id_link[MAX_HOST_RECORDS + N_IDENTITY]; /* indexed as C.host */
 
-/* resolve a host path's symlink chain on the host; returns the final path in out, first link text in link */
-/* first: p's lstat, already made */
+/* resolves host path p's symlink chain on the host, first being p's lstat, already made: 1 with the final path in out
+ * and the first link's text in link, 0 when a link cannot be read or the chain is longer than 40 links */
 static int host_resolve(const char *p, const struct kstat *first, char *out, char *link)
 {
     char cur[PATH_MAX], t[PATH_MAX];
@@ -215,12 +215,12 @@ void vis_init(void)
     claim_cwd();
 }
 
-/* The rule compiled (DESIGN.md 16.2, 16.6 item 3). Every string the rule matches a path against, an owned path, a host
- * record, an identity file, a volatile directory, and every proper ancestor of an identity file, is an entry of one
- * table built at startup, with what it is. starts_dir(v, p) holds exactly when p is v cut at a '/' or at its end, so
- * the prefixes of v the rule can match are found by one pass over v, hashing as it goes and looking each cut up: a
- * path's answer costs its length rather than the forty comparisons per question the scans cost, which the walk asked
- * five to eight times per component. The table is written once before anything traps and only read afterwards. */
+/* The rule compiled (DESIGN.md 16.2, 16.6 item 3). Every string the rule matches a path against, an owned path,
+ * a host record, an identity file, a volatile directory, and every proper ancestor of an identity file, is an
+ * entry of one table built at startup, with what it is. starts_dir(v, p) holds exactly when p is v cut at a '/'
+ * or at its end, so the prefixes of v the rule can match are found by one pass over v, hashing as it goes and
+ * looking each cut up: a path's answer costs one pass over its length. The table is written once before
+ * anything traps and only read afterwards. */
 enum { R_OWN = 1, R_HOSTDIR = 2, R_HOSTFILE = 4, R_VOLATILE = 8, R_LEADS = 16 };
 #define RULE_SLOTS 2048
 /* host: the index of a file's record */
@@ -290,8 +290,8 @@ static void rule_build(void)
     }
 }
 
-/* what the rule's strings say of v: the identity file it is, the longest host record and owned path that are prefixes of it,
- * whether a volatile directory is */
+/* what the rule's strings say of v: the identity file it is, the longest host record and owned path that are prefixes
+ * of it, whether a volatile directory is */
 struct facts {
     struct rule *exact;
     long best_host, best_own;
@@ -329,7 +329,7 @@ static void rule_facts(const char *v, struct facts *f)
         h = rule_hash(h, c);
     }
 }
-/* starts_dir(v, p) || starts_dir(p, v), v of length vl and p of length pl, neither "/" (vis_is_host answers the root first) */
+/* starts_dir(v, p) || starts_dir(p, v), v of length vl and p of length pl, neither "/" (vis_is_host answers it) */
 static int on_the_way(const char *v, unsigned vl, const char *p, unsigned pl)
 {
     if (pl == 1 && p[0] == '/') return starts_dir(v, p) || starts_dir(p, v);
@@ -344,8 +344,8 @@ static struct rule *rule_exact(const char *v)
     return len ? rule_find(v, len, h) : 0;
 }
 
-/* 8.1 without the two subtrees given to the host: identity file > volatile > host records > own > default host; longest prefix wins.
- * The root directory itself is the tree's, so ls / lists the tree and its placeholders (8.3). */
+/* 8.1 without the two subtrees given to the host: identity file > volatile > host records > own > default host;
+ * longest prefix wins. The root directory itself is the tree's, so ls / lists the tree and its placeholders (8.3). */
 static int base_is_host_facts(const char *v, const struct facts *f, const char **real)
 {
     if (v[0] == '/' && v[1] == 0) return 0;
@@ -357,10 +357,11 @@ static int base_is_host_facts(const char *v, const struct facts *f, const char *
         *real = v;
         return 1;
     }
+    /* includes the default: nothing owns it */
     if (f->best_host >= f->best_own) {
         *real = v;
         return 1;
-    }  /* includes the default: nothing owns it */
+    }
     return 0;
 }
 static int base_is_host(const char *v, const char **real)
@@ -370,7 +371,7 @@ static int base_is_host(const char *v, const char **real)
     return base_is_host_facts(v, &f, real);
 }
 
-/* the full rule: the root, the identity files, then the two subtrees given to the host (8.1 rules 4 and 6), then the base rule */
+/* the full rule: the root, the identity files, the two subtrees given to the host (8.1.4, 8.1.6), then the base rule */
 static int is_host_facts(const char *v, const struct facts *fp, const char **real)
 {
     struct facts f = *fp;
@@ -386,9 +387,9 @@ static int is_host_facts(const char *v, const struct facts *fp, const char **rea
         *real = v;
         return 1;
     }
-    /* 8.1: the exclave's own directory is the host's as a subtree, and so are the directories on the way to it: a
-     * program that locates its files relative to its real executable path, as gcc does, must reach them
-     * wherever the exclave lives, including under a prefix its own tree owns */
+    /* 8.1.6: the exclave's own directory is the host's as a subtree, and so are the directories on the way to it: a
+     * program that locates its files relative to its real executable path, as gcc does, must reach them wherever the
+     * exclave lives, including under a prefix its own tree owns */
     if (on_the_way(v, f.len, C.dir, dir_len)) {
         *real = v;
         return 1;

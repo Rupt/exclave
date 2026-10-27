@@ -64,8 +64,8 @@ void log_open(char **envp)
     C.logfd = (int)fd;
 }
 
-/* the descriptor is inherited by the program, which may close it and reuse the number:
- * a line is written only when the descriptor still names the log file */
+/* the descriptor is inherited by the program, which may close it and reuse the number: a line is written only when
+ * the descriptor still names the log file */
 static int log_ok(void)
 {
     if (C.logfd < 0) return 0;
@@ -77,11 +77,11 @@ static int log_ok(void)
     return 1;
 }
 
-/* one line, one write: "<what> <result> <path>\n"; atomic under O_APPEND. A path may hold any byte: a newline is
- * written as \n and a backslash as \\, the two escapes the tool undoes when it reads a log; the
- * escaped pieces go out as iovecs, no buffer, since this runs on the handler's stack */
 static struct iovec iov(const void *p, size_t n) { return (struct iovec){unconst(p), n}; }
 
+/* one line, one write: "<what> <result> <path>\n"; atomic under O_APPEND. A path may hold any byte: a newline is
+ * written as \n and a backslash as \\, the two escapes the tool undoes when it reads a log; the escaped pieces go out
+ * as iovecs, no buffer, since this runs on the handler's stack */
 void log_line(const char *what, long result, const char *path)
 {
     if (!log_ok()) return;

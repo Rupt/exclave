@@ -8,13 +8,13 @@
 #include "sys.h"
 
 #ifndef FILTER_VERSION
-/* 7.4.2: versioned reuse; bumped whenever the trap set grows or the page moves (2: the *xattrat and file_*attr
- * syscalls; 3: openat2; 4: bind and connect; 5: FS_IOC_FSSETXATTR's right number; 6: the syscall page moved) */
+/* 7.4.2: versioned reuse; the version moves whenever the trap set grows or the syscall page moves. build/launcher-old
+ * is these sources at version 3, without bind and connect, which version 4 added (EXCLAVE_TEST_OLD). */
 #define FILTER_VERSION 6
 #endif
 /* an inherited filter older than this allows another page's syscalls and traps this launcher's */
 #define FILTER_PAGE_SINCE 6
-/* the word of the launcher's notes (launcher.c): 1 in launchers whose page was at 0x3f0000 */
+/* the word of the launcher's notes (launcher.c); 1 marks a launcher whose page is at 0x3f0000 */
 #define PAGE_GENERATION 2
 #define PATH_MAX 4096
 #define BINPRM_BUF_SIZE 256 /* the bytes of a file the kernel reads for its #! line (fs/binfmt_script.c) */
@@ -98,7 +98,8 @@
 #define AT_HWCAP 16
 
 /* ---------- the signal frame (rt_sigframe), by architecture ----------
- * x86-64: uc_mcontext.gregs at +40 from the ucontext, uc_sigmask at +296; verified against a real frame. The names index the argument registers of the syscall convention and the result register.
+ * x86-64: uc_mcontext.gregs at +40 from the ucontext, uc_sigmask at +296; verified against a real frame. The names
+ * index the argument registers of the syscall convention and the result register.
  * aarch64: the ucontext is uc_flags, uc_link, uc_stack (24), uc_sigmask (8) at +40, 120 unused bytes, then
  * struct sigcontext at +176: fault_address, regs[31] from +184, sp, pc, pstate. The arguments are x0 to x5, the
  * number x8, the result x0, which is also the first argument: the handler copies the arguments before it writes. */
@@ -148,11 +149,12 @@ enum {
 #define SI_SYSCALL_OFF 24
 
 /* ---------- the exclave's run-time state (7.2), filled at startup ---------- */
+/* a host record or an identity file: virtual path -> host real path */
 struct hostmap {
     const char *v;
     const char *r;
     int is_file;
-}; /* virtual path -> host real path */
+};
 
 struct exclave {
     char dir[PATH_MAX]; /* directory holding .exclave/ */

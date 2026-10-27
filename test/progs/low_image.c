@@ -1,7 +1,7 @@
 /* low_image.c — a program laid out as Go's aarch64 linker lays one out, text from 0x10000 and an image reaching past
- * 0x3f0000, where the syscall page lay in early versions (DESIGN.md 13 item 24). Built -no-pie with
- * -Wl,-Ttext-segment=0x10000. Prints where its text and bss lie, writes the bss across 0x3f0000, and makes a
- * trapped syscall; exit 0 when all of that worked. */
+ * 0x3f0000, the page address of launchers before filter version 6 (DESIGN.md 13 item 24). Built -no-pie with
+ * -Wl,-Ttext-segment=0x10000. Prints where its text and bss lie, writes the bss across 0x3f0000, and makes a trapped
+ * syscall; exit 0 when all of that worked. */
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>

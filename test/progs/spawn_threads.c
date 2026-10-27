@@ -94,7 +94,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < 4; i++) pthread_join(t[i], 0);
     printf("spawns beside trapping threads: %d spawned, %d failures\n", spawned, fails);
     for (int i = 0; i < fails && i < 8; i++) printf("  wrong answer: %s\n", seen[i]);
-    /* part 2: eight threads hold chunks in a FIFO open; a forked child traps with a 1 ms timer whose handler traps too */
+    /* part 2: eight threads hold chunks in a FIFO open; a forked child traps, and so does its 1 ms timer's handler */
     char fifo[4096];
     snprintf(fifo, sizeof fifo, "%s/fifo", host);
     unlink(fifo);

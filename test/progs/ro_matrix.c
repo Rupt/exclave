@@ -1,5 +1,6 @@
 /* ro_matrix.c — the read-only matrix of DESIGN.md 8.2 plus path-argument fidelity.
- * usage: ro_matrix HOSTDIR [WRAPPER]   (HOSTDIR: a writable host directory; WRAPPER: a wrapper whose redirect is checked). Prints FAIL lines; exit 1 on any. */
+ * usage: ro_matrix HOSTDIR [WRAPPER] (HOSTDIR: a writable host directory; WRAPPER: a wrapper whose redirect is
+ * checked). Prints FAIL lines; exit 1 on any. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -111,7 +112,7 @@ int main(int argc, char **argv)
         int fl = 0;
         CHECK(ioctl(fd, FS_IOC_SETFLAGS, &fl), EROFS);
     }
-    /* the filter had the wrong number until version 5 */
+    /* FS_IOC_FSSETXATTR by its own number, _IOW('X', 32), which filters before version 5 do not trap */
     {
         struct fsxattr x;
         memset(&x, 0, sizeof x);

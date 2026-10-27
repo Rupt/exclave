@@ -1,7 +1,7 @@
-/* path_length.c — the answers for long paths (DESIGN.md 13 item 13, 17.4): each argument is stat'ed and opened, and
- * the errors named, so that an exclave path whose real spelling would not fit PATH_MAX is seen to be refused with
- * ENAMETOOLONG and never cut to a shorter name; "cd:DIR" changes the working directory first, for a relative path from a
- * deep one. usage: path_length [cd:DIR] PATH...; prints "<n>: stat=<e> open=<e>" per path. Exit 0 always. */
+/* path_length.c — the answers for long paths (DESIGN.md 13 item 13, 17.4): each argument is stat'ed and opened, and the
+ * errors named, so that an exclave path whose real spelling would not fit PATH_MAX is seen to be refused with
+ * ENAMETOOLONG and never cut to a shorter name; "cd:DIR" changes the working directory first, for a relative path from
+ * a deep one. usage: path_length [cd:DIR] PATH...; prints "<n>: stat=<e> open=<e>" per path. Exit 0 always. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>

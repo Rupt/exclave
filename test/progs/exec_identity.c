@@ -1,10 +1,10 @@
 /* exec_identity.c — the identity a program exec'd from inside gets (DESIGN.md 7.4.5, 7.6, 17.4): comm, AT_EXECFN and a
- * script's $0 as the kernel spells them, for a host ELF exec'd by an absolute and by a relative path with argv[0] renamed,
- * a host script exec'd relative to a descriptor and through a descriptor alone (/dev/fd/N/name and /dev/fd/N), a host ELF
- * through a descriptor, and execve's own answers for a close-on-exec script descriptor, a header the loader cannot load
- * and a loader the exclave lacks. usage: exec_identity HOSTDIR, or "exec_identity HOSTDIR --child LABEL" as the program it
- * copies and re-executes. Prints one line per case, "<case>: <answer>", the same in every world, so the kernel under
- * bwrap is the oracle; a descriptor number is printed as N. Exit 0 always. */
+ * script's $0 as the kernel spells them, for a host ELF exec'd by an absolute and by a relative path with argv[0]
+ * renamed, a host script exec'd relative to a descriptor and through a descriptor alone (/dev/fd/N/name and /dev/fd/N),
+ * a host ELF through a descriptor, and execve's own answers for a close-on-exec script descriptor, a header the loader
+ * cannot load and a loader the exclave lacks. usage: exec_identity HOSTDIR, or "exec_identity HOSTDIR --child LABEL" as
+ * the program it copies and re-executes. Prints one line per case, "<case>: <answer>", the same in every world, so the
+ * kernel under bwrap is the oracle; a descriptor number is printed as N. Exit 0 always. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -32,7 +32,7 @@ static const char *en(int e)
     }
 }
 
-/* run the child's exec, print its lines with descriptor numbers normalised, then "<tag>: <exec's error>" when it returned */
+/* run the child's exec, print its lines with descriptor numbers normalised, then "<tag>: <exec's error>" if it fails */
 static void child_lines(const char *tag, int dfd, const char *path, char *const *av, int flags)
 {
     int p[2];
@@ -172,7 +172,7 @@ int main(int argc, char **argv)
     setenv("L", "dfd script", 1);
     char *const s_av[] = {"s.sh", 0};
     child_lines("dfd script", hfd, "s.sh", s_av, 0);
-    /* the script through a descriptor alone: /dev/fd/N, comm the file's own name; close-on-exec refused before anything runs */
+    /* the script through /dev/fd/N alone: comm the file's own name; close-on-exec refused before anything runs */
     int sfd = open(p, O_RDONLY | O_CLOEXEC);
     child_lines("cloexec script", sfd, "", s_av, AT_EMPTY_PATH);
     close(sfd);

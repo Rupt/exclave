@@ -154,8 +154,8 @@ static int parse_token(struct cur *c, char *err, size_t errn, struct field *f)
     return 0;
 }
 
-/* an absolute path in its one spelling: no NUL, no empty component, none that is "." or "..", no trailing slash but on "/"
- * itself, so that a record names what the visibility rule will match and never one it silently cannot (6.2) */
+/* an absolute path in its one spelling: no NUL, no empty component, none that is "." or "..", no trailing slash but on
+ * "/" itself, so that a record names what the visibility rule will match and never one it silently cannot (6.2) */
 static int valid_abs_path(const char *s, size_t n)
 {
     if (n == 0 || s[0] != '/') return 0;
@@ -195,11 +195,12 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
 
     while (K->p < K->end) {
         K->col = 1;
+        /* blank line */
         if (*K->p == '\n') {
             K->p++;
             K->line++;
             continue;
-        }            /* blank line */
+        }
         if (*K->p == '#') {                                              /* comment line */
             while (*K->p != '\n') K->p++;
             K->p++;

@@ -1,11 +1,10 @@
 /* launcher.c — entry point (DESIGN.md 7.2, 7.4.5, 7.6).
  *
- * The launcher is an ET_DYN object with no interpreter: it relocates itself,
- * finds its exclave from its own path, reads the manifest, decides whether it is at the
- * border (no filter inherited) and prepares the environment
- * accordingly, installs the handler and, unless one of this version or newer is inherited, the filter, then
- * loads the program it stands for: the original of the wrapper it was run as,
- * or the EXCLAVE_EXEC target when re-exec'd in loader mode, by a handler or by its own positional entry.
+ * The launcher is an ET_DYN object with no interpreter: it relocates itself, finds its exclave from its own path, reads
+ * the manifest, decides whether it is at the border (no filter inherited) and prepares the environment accordingly,
+ * installs the handler and, unless one of this version or newer is inherited, the filter, then loads the program it
+ * stands for: the original of the wrapper it was run as, or the EXCLAVE_EXEC target when re-exec'd in loader mode, by
+ * a handler or by its own positional entry.
  */
 #include "common.h"
 
@@ -19,8 +18,9 @@ __asm__(".text\n.globl _start\n.type _start,@function\n_start:\n"
 __asm__(".text\n.globl _start\n.type _start,%function\n_start:\n"
         " mov x0, sp\n bl start_c\n brk #0\n");
 #endif
-/* 7, 7.4.5: the notes by which a launcher recognises another in a file; their word is PAGE_GENERATION (7.4.2). The second,
- * named cont, is the one a launcher from before the rename, an "opener", looks for, so that each runs the other as another launcher */
+/* 7, 7.4.5: the notes by which a launcher recognises another in a file; their word is
+ * PAGE_GENERATION (7.4.2). The second, cont, is the name pre-rename launchers, "openers", look for,
+ * so that each runs the other as another launcher */
 #define NOTE_WORD_(g) #g
 #define NOTE_WORD(g) NOTE_WORD_(g)
 /* clang-format off */
@@ -29,8 +29,8 @@ __asm__(".section .note.exclave,\"a\"\n .balign 4\n"
         " .long 5\n .long 4\n .long 1\n .asciz \"cont\"\n .balign 4\n .long " NOTE_WORD(PAGE_GENERATION) "\n .text\n");
 /* clang-format on */
 
-/* the launcher is the part of exclave every exclave holds, so it carries the licence's text, which the MIT licence asks to go
- * with every copy; not loaded, and kept by the strip (scripts/build). readelf -p .exclave.license shows it */
+/* the launcher is the part of exclave every exclave holds, so it carries the licence's text, which the MIT licence asks
+ * to go with every copy; not loaded, and kept by the strip (scripts/build). readelf -p .exclave.license shows it */
 __asm__(".pushsection .exclave.license,\"\",@progbits\n"
         " .incbin \"LICENSE\"\n"
         " .byte 0\n"
@@ -101,19 +101,20 @@ static const char *find_env(char **envp, const char *name)
     return 0;
 }
 
-/* 6.2: at the border the host's environment passes through minus the variables that would rebind the
- * loader, the libc or the compiler to the host, and minus four that name what the exclave decides for itself:
- * the search path, the locale, the time zone and the shell. Those four are set to the same values in every
- * exclave on every host, what a reproducible build fixes by hand; what an exclave wants on PATH lives in its own
- * /usr/local/bin, and an exclave that wants another locale or zone ships the data and a wrapper script. */
+/* 6.2: at the border the host's environment passes through minus the variables that would rebind the loader, the libc
+ * or the compiler to the host, and minus four that name what the exclave decides for itself: the search path, the
+ * locale, the time zone and the shell. Those four are set to the same values in every exclave on every host, what a
+ * reproducible build fixes by hand; what an exclave wants on PATH lives in its own /usr/local/bin, and an exclave that
+ * wants another locale or zone ships the data and a wrapper script. */
 static const char *denied[] = {"GLIBC_TUNABLES",   "GCONV_PATH",   "LOCPATH", "NLSPATH",
                                "RESOLV_HOST_CONF", "HOSTALIASES",  "TZDIR",   "GCC_EXEC_PREFIX",
                                "COMPILER_PATH",    "LIBRARY_PATH", "PATH",    "LANG",
                                "LANGUAGE",         "TZ",           "SHELL",   0};
 static const char *fixed[] = {"PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "TZ=UTC0", "SHELL=/bin/sh", 0};
-/* the launcher's protocol with itself (7.4.5): EXCLAVE_EXEC names a loader-path target, EXCLAVE_EXECFN and EXCLAVE_COMM the identity the
- * kernel would give the program; set by a handler or the positional entry, read by the launcher they exec, removed from the environment a program is given (the kernel's copy in
- * /proc/<pid>/environ keeps them, 13 item 46) */
+/* the launcher's protocol with itself (7.4.5): EXCLAVE_EXEC names a loader-path target, EXCLAVE_EXECFN and
+ * EXCLAVE_COMM the identity the kernel would give the program; set by a handler or the positional entry, read by the
+ * launcher they exec, removed from the environment a program is given (the kernel's copy in /proc/<pid>/environ keeps
+ * them, 13 item 46) */
 static int internal_var(const char *e)
 { return xstarts(e, "EXCLAVE_EXEC=") || xstarts(e, "EXCLAVE_EXECFN=") || xstarts(e, "EXCLAVE_COMM="); }
 static int env_denied(const char *e)
@@ -142,7 +143,8 @@ static char **env_prepare(char **envp, int boundary)
     return out;
 }
 
-/* the descriptor room borrowed at startup (7.4.5), given back before the launcher execs another launcher, which borrows for itself */
+/* the descriptor room borrowed at startup (7.4.5), given back before the launcher execs another launcher, which
+ * borrows for itself */
 static void unborrow(void)
 {
     if (C.borrowed) {
@@ -206,10 +208,10 @@ static void read_manifest(unsigned long *auxv)
 }
 
 /* 7.2: the launcher run as a program rather than as a wrapper, `.exclave/launcher PROGRAM ARGS...`, takes the program
- * as its first argument and re-execs itself once the way a handler does for a program on the loader path
- * (7.4.5): the target carried in EXCLAVE_EXEC, which is the launcher's own protocol and is removed from the program's environment, and
- * argv shifted, so that the program's argv, cmdline and comm are its own. A relative program path is taken
- * from the working directory as execve would take it. */
+ * as its first argument and re-execs itself once the way a handler does for a program on the loader path (7.4.5): the
+ * target carried in EXCLAVE_EXEC, which is the launcher's own protocol and is removed from the program's environment,
+ * and argv shifted, so that the program's argv, cmdline and comm are its own. A relative program path is taken from
+ * the working directory as execve would take it. */
 static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **envp)
 {
     if (argc < 2)
@@ -246,16 +248,16 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
     die("cannot re-exec the launcher", C.launcher, r);
 }
 
-/* 7.4.5 for a target that arrived by EXCLAVE_EXEC, the positional entry's or a handler's: the checks exec_target makes before
- * loading anything, in its order, so that the entry refuses what an exec inside refuses: the target is
- * resolved as an exec resolves it, a data directory is EACCES, a directory or a special file EACCES, the kernel's own answer
- * to X_OK is final, and a wrapper is exec'd as itself so that the kernel gives the program its identity. The exit
- * status is a shell's: 126 for a file that exists and cannot run, 127 for one that does not. */
+/* 7.4.5 for a target that arrived by EXCLAVE_EXEC, the positional entry's or a handler's: the checks exec_target makes
+ * before loading anything, in its order, so that the entry refuses what an exec inside refuses: the target is resolved
+ * as an exec resolves it, a data directory is EACCES, a directory or a special file EACCES, the kernel's own answer to
+ * X_OK is final, and a wrapper is exec'd as itself so that the kernel gives the program its identity. The exit status
+ * is a shell's: 126 for a file that exists and cannot run, 127 for one that does not. */
 static void loader_mode_check(char **argv, char **env2)
 {
     struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0);
     if (!S) die("out of memory", 0, ENOMEM);
-    scpy(S->b1, C.program, PATH_MAX);                         /* the target as given, for the wrapper exec below */
+    scpy(S->b1, C.program, PATH_MAX);                         /* the target as given, for the wrapper's exec */
     long r = canon(S, C.program, AT_FDCWD, 1, S->v);
     if (r < 0) die_status(r == -ENOENT ? 127 : 126, "cannot execute", C.program, r);
     scpy(C.program, S->v, PATH_MAX);
@@ -326,13 +328,14 @@ static __attribute__((noreturn)) void run(const char *v, const char *given, long
     run(iv, nargv[0], k, nargv, envp, auxv, depth + 1);
 }
 
-__attribute__((used)) static void start_c(unsigned long *sp)   /* called by _start, above */
+__attribute__((used)) static void start_c(unsigned long *sp) /* called by _start */
 {
     page_init();
     reloc_self();
-    /* 7.4.2: the probe comes before any syscall an inherited filter could trap. A filter from before the page moved allows
-     * a launcher's syscalls from the old page only and would trap every one of this launcher's, so it is refused by name */
-    /* a filter inherited: exec'd from inside an exclave, by a handler or a program */
+    /* 7.4.2: the probe comes before any syscall an inherited filter could trap. have is the inherited
+     * filter's version, nonzero when exec'd from inside an exclave, by a handler or a program. A filter older
+     * than FILTER_PAGE_SINCE allows a launcher's syscalls from another page only and would trap every one of
+     * this launcher's, so it is refused by name */
     int have = filter_probe();
     if (have && have < FILTER_PAGE_SINCE) {
         static const char old[] =
@@ -354,9 +357,9 @@ __attribute__((used)) static void start_c(unsigned long *sp)   /* called by _sta
 
     unsigned long m = SIGSYS_BIT;                    /* 7.5.2: SIGSYS must never be blocked */
     sys_rt_sigprocmask(SIG_UNBLOCK, &m, 0, 8);
-    /* a program at its descriptor limit may still exec, since the kernel's exec needs no descriptor (7.4.5): the launcher's
-     * own opens, the manifest, the tree's top level, the program and its loader, borrow two under the hard limit, given
-     * back in loader_run before the program runs */
+    /* a program at its descriptor limit may still exec, since the kernel's exec needs no descriptor (7.4.5): the
+     * launcher's own opens, the manifest, the tree's top level, the program and its loader, borrow two under the hard
+     * limit, given back in loader_run before the program runs */
     if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, C.rlim) == 0 && C.rlim[0] < 16 && C.rlim[0] < C.rlim[1]) {
         unsigned long more[2] = {C.rlim[0] + 2 < C.rlim[1] ? C.rlim[0] + 2 : C.rlim[1], C.rlim[1]};
         C.borrowed = SC4(NR_prlimit64, 0, RLIMIT_NOFILE, more, 0) == 0;
@@ -371,14 +374,14 @@ __attribute__((used)) static void start_c(unsigned long *sp)   /* called by _sta
 
     const char *target, *fn, *cm;
     C.descfd = -1;
-    /* a wrapper: the kernel ran the launcher under the program's name. Decided first,
-     * so that EXCLAVE_EXEC in anyone's environment is inert for the whole tree */
+    /* a wrapper: the kernel ran the launcher under the program's name. Decided first, so that EXCLAVE_EXEC in anyone's
+     * environment is inert for the whole tree */
     if (starts_dir(exe, C.root)) {
         scpy(C.program, exe, PATH_MAX);
         from_real(C.program);
-        /* the identity the kernel would have given the program (7.6): the name a handler exec'd this wrapper by, as the kernel spells it,
-         * carried in EXCLAVE_EXECFN and EXCLAVE_COMM by that handler, which only a launcher sets; from the host, the kernel's own AT_EXECFN, a
-         * real path, and its last component */
+        /* the identity the kernel would have given the program (7.6): the name a handler exec'd this wrapper by, as the
+         * kernel spells it, carried in EXCLAVE_EXECFN and EXCLAVE_COMM by that handler, which only a launcher sets;
+         * from the host, the kernel's own AT_EXECFN, a real path, and its last component */
         fn = have ? find_env(envp, "EXCLAVE_EXECFN") : 0;
         cm = have ? find_env(envp, "EXCLAVE_COMM") : 0;
         if (fn) scpy(C.execfn, fn, PATH_MAX);
@@ -390,7 +393,7 @@ __attribute__((used)) static void start_c(unsigned long *sp)   /* called by _sta
         }
         scpy(C.comm, cm ? cm : base_name(C.execfn), sizeof C.comm);
     } else if ((target = find_env(envp, "EXCLAVE_EXEC"))) {
-        /* the internal protocol of 7.4.5: re-exec'd by a handler, or by entry_exec below */
+        /* the internal protocol of 7.4.5: re-exec'd by a handler, or by entry_exec */
         if (target[0] != '/') die("EXCLAVE_EXEC must be an absolute path", target, 0);
         C.loader_mode = 1;
         scpy(C.program, target, PATH_MAX);
@@ -399,8 +402,8 @@ __attribute__((used)) static void start_c(unsigned long *sp)   /* called by _sta
         cm = find_env(envp, "EXCLAVE_COMM");
         scpy(C.execfn, fn ? fn : target, PATH_MAX);
         scpy(C.comm, cm ? cm : base_name(C.execfn), sizeof C.comm);
-        /* a descriptor with no path (13 item 25): the kernel's identity for the
-         * program is the link's text; the dup is closed once the segments are mapped */
+        /* a descriptor with no path (13 item 25): the kernel's identity for the program is the link's text; the dup is
+         * closed once the segments are mapped */
         if (xstarts(target, "/proc/self/fd/")) {
             long len = sys_readlink(target, C.exe, PATH_MAX - 1);
             if (len > 0) {

@@ -31,6 +31,8 @@ __asm__(".pushsection .debug_gdb_scripts,\"MS\",@progbits,1\n"
         " .byte 0\n"
         ".popsection\n");
 
+/* Opens real and reads its ELF header into eh and its program headers, at most maxph, into ph; returns the descriptor,
+ * and exits with a message on any failure. */
 static int open_elf(const char *real, Ehdr *eh, Phdr *ph, int maxph)
 {
     long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
@@ -45,7 +47,8 @@ static int open_elf(const char *real, Ehdr *eh, Phdr *ph, int maxph)
     return (int)fd;
 }
 
-/* map every PT_LOAD; returns the load bias; fills entry, phdr address, interp string */
+/* Maps every PT_LOAD of fd as the kernel would; returns the load bias, and sets *entry, the program headers' address
+ * and, when the file names an interpreter, its path in interp. Exits with a message naming name on any failure. */
 static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned long *entry, unsigned long *phdr_va,
                              int *has_interp, char *interp, const char *name)
 {
@@ -112,9 +115,8 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
     return bias;
 }
 
-/* 1: dynamic (interp filled), 0: static, <0: error. is_launcher: the page generation a launcher's note carries, 0 without one. */
-/* a PT_NOTE segment's launcher note, exclave or the earlier cont, read from fd into nb (512 bytes): its page generation, 1 for a note without one
- * (a launcher from before the word was added), 0 for no note of ours; the last such note counts */
+/* a PT_NOTE segment's launcher note, exclave or cont, read from fd into nb (512 bytes): its page generation, 1 for a
+ * note without a word, 0 for no note of ours; the last such note counts */
 static int note_gen(int fd, const Phdr *p, unsigned char *nb)
 {
     long n = sys_pread(fd, nb, p->p_filesz, (long)p->p_offset), o = 0;
@@ -130,6 +132,7 @@ static int note_gen(int fd, const Phdr *p, unsigned char *nb)
     return g;
 }
 
+/* 1: dynamic (interp filled), 0: static, <0: error; is_launcher: a launcher note's page generation, 0 without one */
 int elf_probe(const char *real, char *interp, int *is_launcher, void *buf)
 {
     *is_launcher = 0;
@@ -174,9 +177,9 @@ int elf_probe(const char *real, char *interp, int *is_launcher, void *buf)
     return ret;
 }
 
-/* The kernel makes the initial stack executable when the program's PT_GNU_STACK asks for it (nested
- * functions, old assembly); the loader must do the same or the program dies on its first trampoline
- *. The stack is found in /proc/self/maps. */
+/* The kernel makes the initial stack executable when the program's PT_GNU_STACK asks for it (nested functions, old
+ * assembly); the loader must do the same or the program dies on its first trampoline. The stack is found in
+ * /proc/self/maps. */
 static int wants_exec_stack(const Phdr *ph, int n)
 {
     for (int i = 0; i < n; i++)
@@ -216,7 +219,7 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
     int has_interp;
     char interp_v[PATH_MAX];
     int fd = open_elf(real, &eh, ph_main, 128);
-    /* another exclave's launcher from before the page moved, which a handler sends here (7.4.2) */
+    /* another exclave's launcher of an older page generation, which a handler sends here (7.4.2) */
     static unsigned char nb[512];
     int gen = 0;
     for (int i = 0; i < eh.e_phnum; i++)

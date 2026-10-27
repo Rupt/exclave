@@ -60,7 +60,7 @@ int starts_dir(const char *s, const char *pfx)
     return xstrncmp(s, pfx, l) == 0 && (s[l] == '/' || s[l] == 0);
 }
 
-/* arena: the manifest's strings, the ownership and host tables, the environment and the entry's buffers, for the process's life */
+/* arena: the manifest's strings, the ownership and host tables, the environment, the entry's buffers; never freed */
 static char arena[512 * 1024];
 static size_t arena_used;
 void *arena_alloc(size_t n)

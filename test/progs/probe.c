@@ -1,4 +1,4 @@
-/* probe.c — the interpreter of the differential syscall probe (DESIGN.md 17, item 7).
+/* probe.c — the interpreter of the differential syscall probe (DESIGN.md 17.7).
  *
  * Reads cases from stdin, one per line: an id, a syscall number, then up to six encoded arguments. Each case
  * is issued through syscall(2), so that no libc wrapper stands between the case and the kernel (or the
@@ -19,8 +19,9 @@
  *   v:<hex>,<hex>,...    a NULL-terminated vector of strings (execve's argv and envp); v: is the empty vector
  *   x:<hex>:<flags>      a struct xattr_args whose value is the bytes (setxattrat, getxattrat)
  *   I:                   a descriptor from inotify_init1(0), closed after the call
- *   k:<type>            a unix socket of that type, opened before the call (-1 when it fails)
- *   A:<hex>             a struct sockaddr_un, AF_UNIX, whose sun_path holds those bytes (at most 108, unterminated at 108)
+ *   k:<type>             a unix socket of that type, opened before the call (-1 when it fails)
+ *   A:<hex>              a struct sockaddr_un, AF_UNIX, whose sun_path holds those bytes (at most 108, unterminated
+ *                        at 108)
  *   h:<flags>:<mode>:<resolve>[:<size>[:<tail>]]   a struct open_how (openat2), in a buffer of <size> bytes (24 by
  *                        default) whose byte 24 is <tail> when given: the extensible-struct rules
  *
@@ -303,9 +304,9 @@ int main(void)
         } else {
             errno = 0;
             ret = syscall(nr, args[0].v, args[1].v, args[2].v, args[3].v, args[4].v, args[5].v);
-            /* openat2(2): a scoped walk (RESOLVE_BENEATH, RESOLVE_IN_ROOT) answers EAGAIN when a rename or a mount anywhere on
-             * the system raced it, and tells the caller to retry; this caller does, so the kernel's answer is the retry's.
-             * RESOLVE_CACHED's EAGAIN is not a race and is not retried. */
+            /* openat2(2): a scoped walk (RESOLVE_BENEATH, RESOLVE_IN_ROOT) answers EAGAIN when a rename or a mount
+             * anywhere on the system raced it, and tells the caller to retry; this caller does, so the kernel's answer
+             * is the retry's. RESOLVE_CACHED's EAGAIN is not a race and is not retried. */
             for (int tries = 0;
                  nr == SYS_openat2 && ret < 0 && errno == EAGAIN && tries < 1000 && scoped_uncached(&args[2]);
                  tries++) {

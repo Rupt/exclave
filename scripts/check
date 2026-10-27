@@ -100,6 +100,11 @@ for f in test/*_test.c test/sanitize.c; do
     pids="$pids $!"
 done
 for pid in $pids; do wait "$pid" || status=1; done
+# no C line over 120 columns, a table between clang-format off and on aside:
+# clang-format leaves comments as written, so it does not hold them to it
+if awk '/clang-format off/ { off = 1 } /clang-format on/ { off = 0 }
+    !off && length > 120 { print FILENAME ":" FNR ": over 120 columns"; bad = 1 } END { exit bad }' \
+    src/*.[ch] test/*.c test/progs/*.c; then :; else status=1; fi
 # a definition in a shared header that nothing uses, which no compiler reports
 run "$UV" run --quiet python test/c_unused.py
 

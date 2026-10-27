@@ -17,12 +17,13 @@ typedef unsigned int mode_t;
 
 /* ---------- architecture: syscall instruction + numbers ---------- */
 /* The syscall page (DESIGN.md 7.4.2): one page at a fixed address holding the syscall instruction and a return.
- * Every syscall the launcher makes goes through it, and the filter allows a syscall by that instruction address
- * alone. The address is the same in every process, so one filter serves the whole tree. The page is mapped by
- * page_init() before anything else runs; only the bootstrap, the filter probe (7.4.2) and the signal restorer use a raw instruction. It
- * lies high in the low 2 GB, above program images, which every linker starts low and grows upward (Go's on aarch64 from
- * 0x10000, 13 item 24), and below 0x7fff8000, where ASan's shadow begins on x86-64; 64K-aligned for kernels with 64K
- * pages. Until filter version 6 it was 0x3f0000. */
+ * Every syscall the launcher makes goes through it, and the filter allows a syscall by that instruction address alone.
+ * The address is the same in every process, so one filter serves the whole tree. The page is mapped by page_init()
+ * before anything else runs; only the bootstrap, the filter probe (7.4.2) and the signal restorer use a raw
+ * instruction. It lies high in the low 2 GB, above program images, which every linker starts low and grows upward
+ * (Go's on aarch64 from 0x10000, 13 item 24), and below 0x7fff8000, where ASan's shadow begins on x86-64; 64K-aligned
+ * for kernels with 64K pages. Filters before version 6 allow a page at 0x3f0000 instead, so neither launcher runs
+ * under the other's filter (FILTER_PAGE_SINCE). */
 #define SC_PAGE 0x7fe00000UL
 /* A syscall the architecture lacks gets a sentinel below zero, unique so that the handler's switch compiles, and
  * the filter skips it (a legacy form the kernel of the other architecture has: open, stat, fork, ...). */
@@ -52,7 +53,7 @@ static inline long __sc6_raw(long n, long a, long b, long c, long d, long e, lon
                      : "rcx", "r11", "memory");
     return ret;
 }
-/* the syscall numbers stay a table */
+/* the syscall numbers, laid out as a table, which test/syscalls.py checks against the kernel's */
 /* clang-format off */
 enum {
     NR_read = 0, NR_write = 1, NR_close = 3, NR_fstat = 5,
