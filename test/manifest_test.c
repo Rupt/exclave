@@ -81,10 +81,10 @@ int main(int argc, char **argv)
     BAD("dup cpu", "exclave 1\ncpu \"x86-64\"\ncpu \"x86-64\"\n", "duplicate");
     BAD("cpu with a NUL", "exclave 1\ncpu \"x86-64\\x00junk\"\n", "NUL");
     BAD("unknown key", "exclave 1\nfoo \"x\"\n", "unknown key");
-    BAD("old index key", "exclave 1\ninterp \"/lib64/ld-linux-x86-64.so.2\"\n", "unknown key");
-    BAD("old env key", "exclave 1\nenv \"CC\" \"gcc\"\n", "unknown key");
-    BAD("old entry key", "exclave 1\nentry \"gcc\" \"/usr/bin/gcc\"\n", "unknown key");
-    BAD("old use key", "exclave 1\nuse \"../other\"\n", "unknown key");
+    BAD("unknown key interp", "exclave 1\ninterp \"/lib64/ld-linux-x86-64.so.2\"\n", "unknown key");
+    BAD("unknown key env", "exclave 1\nenv \"CC\" \"gcc\"\n", "unknown key");
+    BAD("unknown key entry", "exclave 1\nentry \"gcc\" \"/usr/bin/gcc\"\n", "unknown key");
+    BAD("unknown key use", "exclave 1\nuse \"../other\"\n", "unknown key");
     BAD("uppercase key", "exclave 1\nOwn \"/a\"\n", "lowercase key");
     BAD("arity", "exclave 1\nown \"/a\" \"/b\"\n", "field count");
     BAD("type", "exclave 1\nown a\n", "field type");
