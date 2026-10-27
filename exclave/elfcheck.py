@@ -102,20 +102,23 @@ def glibc_version(tree: Tree, machine: Machine) -> tuple[int, int] | None:
     return None
 
 
-def loader_dirs(tree: Tree, interp: str | None, machine: Machine) -> list[str]:
-    """Return the default search directories of the tree's loader.
+def loader_dirs(tree: Tree, interp: str | None, machine: Machine) -> tuple[list[str], str | None]:
+    """Return the default search directories of the tree's loader, and why they were assumed.
 
     glibc 2.33 and later prints them with --list-diagnostics; musl's are fixed; an older glibc is
-    taken to search Debian's and Fedora's defaults.
+    taken to search Debian's and Fedora's defaults, and the second value says so. The loader run
+    is the file PT_INTERP names in the tree, its links resolved there, never a host file an
+    absolute link would name.
     """
     if interp is None:
-        return machine.default_dirs
+        return machine.default_dirs, None
     if "musl" in os.path.basename(interp):
-        return list(MUSL_DIRS)
+        return list(MUSL_DIRS), None
+    loader = tree.payload(tree.resolve(interp) or interp)
     try:
         # the tree's own loader, run on this host, as wrapping requires (10.1)
         out = subprocess.run(  # noqa: S603 -- an argument vector, no shell
-            [tree.payload(interp), "--list-diagnostics"],
+            [loader, "--list-diagnostics"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=20,
@@ -123,10 +126,13 @@ def loader_dirs(tree: Tree, interp: str | None, machine: Machine) -> list[str]:
         ).stdout.decode(errors="replace")
         dirs = re.findall(r'^path\.system_dirs\[0x[0-9a-f]+\]="([^"]+)"', out, re.MULTILINE)
         if dirs:
-            return [d.rstrip("/") for d in dirs]
+            return [d.rstrip("/") for d in dirs], None
     except OSError, subprocess.SubprocessError:
         pass
-    return machine.default_dirs
+    return machine.default_dirs, (
+        f"the loader {interp} lists no search directories (glibc before 2.33, or it cannot run "
+        f"here): {':'.join(machine.default_dirs)} assumed"
+    )
 
 
 class ForeignElfError(ValueError):
@@ -601,7 +607,9 @@ def static_check(ex: str, own: Ownership, data_prefixes: Sequence[str] = ()) -> 
     interp = next(iter(interps.values()))[0] if interps else None
     musl = bool(interp) and "musl" in os.path.basename(interp or "")
     libc_soname = machine.musl_soname if musl else GLIBC_SONAME
-    default_dirs = loader_dirs(tree, interp, machine)
+    default_dirs, assumed = loader_dirs(tree, interp, machine)
+    if assumed:
+        rep.warnings.append(assumed)
     # 6.2: the locale inside an exclave is C.UTF-8, built into glibc 2.35 and later and into musl;
     # an older glibc needs the C.utf8 directory or every program runs in the plain C locale, and
     # bash and perl say so
@@ -694,7 +702,7 @@ def needed_closure(tree: Tree, vpaths: Sequence[str], machine: Machine) -> set[s
     for v in vpaths:
         with contextlib.suppress(ValueError, OSError):
             interp = interp or Elf(tree.payload(v)).interp
-    default_dirs = loader_dirs(tree, interp, machine)
+    default_dirs, _assumed = loader_dirs(tree, interp, machine)
 
     def visit(vpath: str, e: Elf, rpaths: list[str]) -> None:
         key = (vpath, tuple(rpaths))

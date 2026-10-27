@@ -3497,7 +3497,9 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
     DT_RPATH is inherited down the chain, ld.so.cache is read, a search directory the exclave does
     not own is refused; a hand-made glibc layout is wrapped, a truncated ELF is an error by name, a
     host record is applied as the launcher applies it, a library a workload built in its own
-    directory is a note; a separate debug file, whose segments carry no bytes, is not a program; a
+    directory is a note; the loader asked for its directories is the tree's own file behind an
+    absolute link in the tree, and a link is judged in the tree though the host has a directory
+    where it points; a separate debug file, whose segments carry no bytes, is not a program; a
     DT_NEEDED that is a path through $ORIGIN resolves where glibc's loader expands it, and not under
     musl's, which does not.
     """
@@ -3633,6 +3635,20 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
     )
     shutil.copy2(ctx.payload(ctx.libc), os.path.join(hand2, "tree", libdir, "libc.so.6"))
     shutil.copy2(ctx.payload("true"), os.path.join(hand2, "tree", "usr", "bin", "true"))
+    # the loader asked for its directories is the tree's own behind an absolute link in the tree,
+    # never a host file the link's text names
+    hand3 = os.path.join(ctx.work, f"hand3-{os.getpid()}.exclave")
+    shutil.rmtree(hand3, ignore_errors=True)
+    shutil.copytree(os.path.join(hand2, "tree"), os.path.join(hand3, "tree"), symlinks=True)
+    ld3 = os.path.join(hand3, "tree", "usr", ctx.ldso_dir, ctx.ldso_name)
+    os.makedirs(os.path.join(hand3, "tree", "opt", "exclave-ld"))
+    os.rename(ld3, os.path.join(hand3, "tree", "opt", "exclave-ld", "ld.so"))
+    os.symlink("/opt/exclave-ld/ld.so", ld3)
+    rc, out, err = run([*TOOL, "wrap", hand3])
+    expect(
+        rc == 0 and "lists no search directories" not in out,
+        f"the loader behind an absolute link must list its own directories: {out[-600:]!r}",
+    )
     rc, out, err = run([*TOOL, "wrap", hand2])
     expect(rc == 0, "a tree with the loader in /usr/lib64 and no cache must wrap: " + out[-500:])
     rc, out, err = run(
@@ -3658,6 +3674,15 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
         any("/etc is the host's" in e_ for e_ in errors),
         f"a tree without /etc would read the host's ld.so.cache: {errors[:3]!r}",
     )
+    # a link is judged in the tree, though the host has a directory where its text points
+    dangling = os.path.join(hand2, "tree", "usr", "bin", "exclave-dangling")
+    os.symlink("/usr/sbin", dangling)
+    _errors, warnings, _out = check(hand2)
+    expect(
+        "dangling symlink /usr/bin/exclave-dangling -> /usr/sbin" in warnings,
+        f"a link dangling in the tree, to a host directory: {warnings[:4]!r}",
+    )
+    os.remove(dangling)
     # a truncated ELF is an error by name, not a traceback
     bad = os.path.join(hand2, "tree", "usr", "bin", "broken")
     with open(bad, "wb") as f:
@@ -3674,15 +3699,6 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
     with open(os.path.join(hand2, ".exclave", "manifest"), "w") as f:
         f.write(f'exclave 1\n\nhost "/usr/{ctx.ldso_dir}"\n')
     errors, _warnings, _out = check(hand2)
-    # a link is judged in the tree, though the host has a directory where its text points
-    dangling = os.path.join(hand2, "tree", "usr", "bin", "exclave-dangling")
-    os.symlink("/usr/sbin", dangling)
-    _errors, warnings, _out = check(hand2)
-    expect(
-        "dangling symlink /usr/bin/exclave-dangling -> /usr/sbin" in warnings,
-        f"a link dangling in the tree, to a host directory: {warnings[:4]!r}",
-    )
-    os.remove(dangling)
     expect(
         any("/usr/bin/true wants interpreter" in e_ and "does not own" in e_ for e_ in errors),
         f"a host record over the loader: {errors[:3]!r}",
