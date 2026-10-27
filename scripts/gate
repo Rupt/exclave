@@ -1,5 +1,5 @@
 #!/bin/sh
-# scripts/gate [--full] EXCLAVE... — the commit gate (DESIGN.md 17), run on the change at hand.
+# scripts/gate [--full] [--jobs N] EXCLAVE... — the commit gate (DESIGN.md 17), run on the change at hand.
 #
 # It builds the launchers first (scripts/build), which takes no time when they are up to date. Then
 # by default it runs the steps the changed paths can affect: the uncommitted changes, or, in a clean
@@ -13,7 +13,8 @@
 # oracle, the namespace oracle and the syscall probe; the exclave command's C answers against its
 # Python ones while it is ported (test/tool_oracle.py); when EXCLAVE_TEST_INPUTS names the directory
 # scripts/inputs filled, the Docker profile run on its src/docker-seccomp.json and dogfood on its
-# package sets. No step touches the network. Every step runs in parallel; every driver runs
+# package sets. No step touches the network. The steps run four at a time, or N with --jobs, so
+# that the machine stays usable meanwhile; every driver runs
 # build/launcher on a copy of its own (the suite wraps one from the exclave's tree, the others take
 # test/tree.py's fresh_exclave), so the exclaves given are never run as they are nor written. One
 # line per step with its time, SKIP for an oracle that could not run here; logs under build/gate/.
@@ -23,22 +24,33 @@ set -u
 here=$ROOT/test
 repo=$ROOT
 out=$repo/build/gate
-full=false
-if [ "${1-}" = --full ]; then
-    full=true
+full=false jobs=4
+while :; do
+    case ${1-} in
+    --full) full=true ;;
+    --jobs)
+        jobs=${2-}
+        shift
+        ;;
+    *) break ;;
+    esac
     shift
-fi
-[ $# -ge 1 ] || {
-    echo "usage: scripts/gate [--full] EXCLAVE..." >&2
+done
+case $jobs in '' | *[!0-9]* | 0) jobs=0 ;; esac
+[ $# -ge 1 ] && [ "$jobs" -gt 0 ] || {
+    echo "usage: scripts/gate [--full] [--jobs N] EXCLAVE..." >&2
     exit 2
 }
 "$ROOT/scripts/build" || exit 2 # the launchers, unless they are up to date
 rm -rf "$out" && mkdir -p "$out" || exit 2
 start=$(date +%s)
 
-step() { # step NAME CMD...: in the background, its status and log kept
+started=0
+step() { # step NAME CMD...: in the background once fewer than $jobs run, its status and log kept
     name=$1
     shift
+    while [ $((started - $(find "$out" -maxdepth 1 -name '*.rc' | wc -l))) -ge "$jobs" ]; do sleep 1; done
+    started=$((started + 1))
     (
         t=$(date +%s)
         "$@" >"$out/$name.log" 2>&1
