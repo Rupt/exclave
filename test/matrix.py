@@ -8,9 +8,10 @@ with KVM behind a copy-on-write overlay and a cloud-init seed that installs stra
 where it exists), the exclave, the pinned Python built for the VM's machine and libc, and this
 repository's test tree and launcher are copied in over SSH, and the regression suite runs there;
 the oracles, the syscall probe and, given the profile, the Docker-profile run follow where
-bubblewrap works. Three VMs at a time (--jobs), 1 GB each, 2 GB for the emulated row. Results go to
-build/matrix-results.md. The exit status is 1 when any row failed: its image could not be fetched,
-its VM did not boot, or its suite, its sysroot check or one of its oracles failed.
+bubblewrap works. One VM at a time, or --jobs N, 1 GB each, 2 GB for the emulated row, so that the
+machine stays usable. Results go to build/matrix-results.md. The exit status is 1 when any row
+failed: its image could not be fetched, its VM did not boot, or its suite, its sysroot check or one
+of its oracles failed.
 """
 
 import argparse
@@ -468,7 +469,7 @@ def main() -> int:
     )
     ap.add_argument("--memory", type=int, default=1024)
     ap.add_argument(
-        "--jobs", type=int, default=3, help="VMs at a time (default 3: 1 GB each, 2 GB emulated)"
+        "--jobs", type=int, default=1, help="VMs at a time (default 1: 1 GB each, 2 GB emulated)"
     )
     ap.add_argument(
         "--arm64",

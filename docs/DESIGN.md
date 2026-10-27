@@ -3718,11 +3718,11 @@ natively from the harness, as `openat2_xdev` does.
 
 **The kernel matrix** (`scripts/matrix --exclave EXCLAVE
 [--docker-profile FILE]`) runs one gcc exclave, built on the reference
-machine, in virtual machines, three at a time with 1 GB each
-(`--jobs`), all nine x86-64 rows in about five minutes. It runs when the
-gate says a change reaches the VMs: a launcher source, the pinned
-Python, or the matrix's own code; other changes leave the kernels'
-answers as they were. Each VM
+machine, in virtual machines, one at a time with 1 GB each (`--jobs N`
+for more), all nine x86-64 rows in about eleven minutes. It runs when the
+gate says a change reaches the VMs: a launcher source, the command, the
+pinned Python, or the matrix's own code; other changes leave the
+kernels' answers as they were. Each VM
 boots its distribution's cloud image under QEMU with KVM behind a
 copy-on-write overlay; cloud-init installs strace and, where the
 distribution has it, bubblewrap. The exclave, the test tree, the

@@ -356,7 +356,7 @@ scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, c
 scripts/inputs ~/.cache/exclave-inputs   # the development inputs: the gate's four exclaves, Docker's seccomp profile, the examples' inputs; skips what is present
 D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # the commit gate: the steps the change can affect, of the code checks, unit tests, stack budget, the suite in two orders and under the plain terminal's label, the oracles, the syscall probe, the Docker profile and dogfood; --full runs all of them, about a minute
 scripts/test --exclave gcc.exclave       # the suite alone; -k NAME, --order random
-scripts/matrix --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix, when the gate says a change reaches the VMs: cloud images under QEMU/KVM, three at a time, about five minutes
+scripts/matrix --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix, when the gate says a change reaches the VMs: cloud images under QEMU/KVM, one at a time (--jobs N), about eleven minutes
 scripts/exercise --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the launcher, side by side
 scripts/examples ~/.cache/exclave-inputs/realsoft.exclave   # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_DEBS_ARM64 (the emulated aarch64 row), EXCLAVE_TEST_DOCKER (its Docker profile run)
 ```
