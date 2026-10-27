@@ -592,7 +592,9 @@ def static_check(ex: str, own: Ownership, data_prefixes: Sequence[str] = ()) -> 
             )
     # one loader, and so one libc, per exclave (7.3): read from the ELF files, not declared anywhere
     if len(interps) > 1:
-        mixed = ", ".join(f"{i} ({v})" for _, (i, v) in sorted(interps.items()))
+        mixed = ", ".join(
+            f"{i} ({v})" for _, (i, v) in sorted(interps.items(), key=lambda x: os.fsencode(x[0]))
+        )
         rep.errors.append(f"the tree mixes loaders {mixed} (one world inside an exclave, 7.3)")
     interp = next(iter(interps.values()))[0] if interps else None
     musl = bool(interp) and "musl" in os.path.basename(interp or "")
@@ -755,7 +757,7 @@ def dynamic_check(ex: str, logs: Iterable[str], own: Ownership) -> Report:
                 cwds.add(c)
         if what == "open" and r >= 0 and re.search(r"\.so(\.\d+)*$", path):
             libs.add(path)
-    for lib in sorted(libs):
+    for lib in sorted(libs, key=os.fsencode):
         # the workload's own build directory: the host's by 8.1 rule 4, whatever prefix it lies
         # under
         if any(lib.startswith(c.rstrip("/") + "/") for c in cwds):

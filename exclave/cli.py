@@ -296,7 +296,7 @@ def located_links(ex: str) -> list[str]:
     which nothing in an exclave may prevent, so wrap and check refuse it, naming the fix.
     """
     root = os.path.join(ex, "tree")
-    places = {os.path.abspath(ex), os.path.realpath(ex)}
+    places = dict.fromkeys((os.path.abspath(ex), os.path.realpath(ex)))
     problems = []
     for real, v, st in layout.walk_files(root):
         if not stat.S_ISLNK(st.st_mode):
@@ -612,6 +612,8 @@ def main(argv: list[str] | None = None) -> int:
                 cmd_relink(args.exclave, args.launcher)
     except GrammarError as e:
         sys.exit(f"grammar: {e}")
-    except (BuildError, OSError) as e:
+    except OSError as e:  # the file and the system's word for what went wrong
+        sys.exit(f"exclave: {e.filename}: {e.strerror}" if e.filename else f"exclave: {e.strerror}")
+    except BuildError as e:
         sys.exit(f"exclave: {e}")
     return 0
