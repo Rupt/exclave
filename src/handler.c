@@ -516,15 +516,14 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
         return -ENOMEM;
     }
     long fd = open_header(S->real);
-    long n = fd < 0 ? fd : sys_read((int)fd, line, 255);
+    long n = fd < 0 ? fd : sys_read((int)fd, line, BINPRM_BUF_SIZE);
     if (fd >= 0) sys_close((int)fd);
     long r = -ENOEXEC;
     if (n < 0) r = n;
     else {
-        line[n < 0 ? 0 : n] = 0;
         /* the script's path as the caller spelt it, as the kernel passes it (7.4.5) */
         scpy(vcopy, given, PATH_MAX);
-        long k = shebang_argv(line, vcopy, av, argc, nargv, argc + 4);
+        long k = shebang_argv(line, n, vcopy, av, argc, nargv, argc + 4);
         if (k == -1) r = -ENOEXEC;
         else if (k == -2) r = -E2BIG;
         else if ((r = canon(S, nargv[0], AT_FDCWD, 1, S->v)) >= 0)
@@ -742,16 +741,11 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
             to_real_exec(S->v2, S->real);
             if (is_wrapper_real(S->real, S->b2) && payload_of(S->real, S->b2)) {
                 long fd = sys_open(S->b2, O_RDONLY | O_CLOEXEC, 0);
-                long n = fd < 0 ? -1 : sys_read((int)fd, S->b2, 255);
+                long n = fd < 0 ? -1 : sys_read((int)fd, S->b2, BINPRM_BUF_SIZE);
                 if (fd >= 0) sys_close((int)fd);
-                if (n > 2 && S->b2[0] == '#' && S->b2[1] == '!') {
-                    S->b2[n] = 0;
-                    char *p = S->b2 + 2;
-                    while (*p == ' ' || *p == '\t') p++;
-                    char *e = p;
-                    while (*e && *e != ' ' && *e != '\t' && *e != '\n') e++;
-                    *e = 0;
-                    scpy(S->b1, p, PATH_MAX);
+                char *nargv[4];                              /* the interpreter as exec reads it */
+                if (n > 0 && shebang_argv(S->b2, n, S->b2, 0, 1, nargv, 4) > 0) {
+                    scpy(S->b1, nargv[0], PATH_MAX);
                     if (canon(S, S->b1, AT_FDCWD, 1, S->v) == 0) {
                         scpy(S->tmp, S->v, PATH_MAX);
                         ans = S->tmp;

@@ -1144,7 +1144,9 @@ kernel's own `X_OK` answer); `ENOEXEC` for a file that is neither ELF
 nor `#!`; `ENOENT` and `ELOOP` from resolution. It parses `#!` as the
 kernel does (interpreter, optional argument, the script's path as
 given, the remaining arguments; five nested interpreters, the sixth
-`ELOOP`), and then:
+`ELOOP`), from the same 256 bytes: with no newline among them, an
+interpreter path that no blank ends within the first 255 is `ENOEXEC`,
+never a shorter path. Then:
 
 - **A target in a data directory** is `EACCES`, never executed (6.2).
 - **A wrapper** is `execve`d: the kernel runs the launcher under the
@@ -3404,7 +3406,8 @@ meaning items 4 and 7.
      (`test/scratch_test.c`);
    - *spawning and exec*: 100 000 `posix_spawn`s with RSS measured (16),
      `fexecve`, `memfd`
-     and unlinked files, scripts with and without `#!`, `PATH` search,
+     and unlinked files, scripts with and without `#!` and with `#!` lines
+     the kernel's buffer cuts, `PATH` search,
      faulty argument vectors, unusual images, and the identity a program
      exec'd from inside gets;
    - *the launcher and its filter*: a blocked or sent `SIGSYS`, older

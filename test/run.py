@@ -1789,6 +1789,33 @@ def shebang_without_newline(ctx: Ctx) -> None:
 
 
 @test
+def shebang_buffer_rules(ctx: Ctx) -> None:
+    """A #! line is read as the kernel's load_script reads it, from its 256-byte buffer.
+
+    With no newline in the buffer, an interpreter path that runs past the first 255 bytes is
+    ENOEXEC, never a shorter path; an argument may be cut, and trailing blanks go. A newline in the
+    256th byte still ends the line. Both the handler's exec and the launcher's own entry hold.
+    """
+    exe = os.path.join(ctx.progs, "exec")
+    cases = (
+        ("long-interp", "#!/" + "x" * 300, "Exec format error", 126),
+        ("newline-256", "#!/" + "x" * 252 + "\n", "No such file or directory", 127),
+        ("long-blanks", "#!/bin/sh -e" + " " * 300, "", 0),
+    )
+    for name, text, want, entry_rc in cases:
+        p = os.path.join(ctx.work, f"shebang-{name}")
+        with open(p, "w") as f:
+            f.write(text)
+        os.chmod(p, 0o755)
+        rc, out, err = inside(ctx, exe, ["script", p])
+        expect(
+            want in err if want else rc == 0, f"{name} exec'd from inside: rc={rc} {out!r} {err!r}"
+        )
+        rc, out, err = inside(ctx, p)
+        expect(rc == entry_rc, f"{name} run by the launcher: rc={rc}, wanted {entry_rc}: {err!r}")
+
+
+@test
 def identity_link_consistency(ctx: Ctx) -> str | None:
     """lstat, readlink and the link's target agree for an identity file that is a host symlink."""
     link = next(

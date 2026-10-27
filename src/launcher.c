@@ -291,15 +291,14 @@ static __attribute__((noreturn)) void run(const char *v, const char *given, long
     if (is_wrapper_real(real, payload) && payload_of(real, payload)) scpy(real, payload, PATH_MAX);
     long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
     if (fd < 0) die("cannot open program", v, fd);
-    char *line = arena_alloc(256);
-    long n = sys_read((int)fd, line, 255);
+    char *line = arena_alloc(BINPRM_BUF_SIZE + 1);
+    long n = sys_read((int)fd, line, BINPRM_BUF_SIZE);
     sys_close((int)fd);
     if (n >= 4 && line[0] == 0x7f && line[1] == 'E' && line[2] == 'L' && line[3] == 'F') {
         if (!C.exe_fixed) scpy(C.exe, v, PATH_MAX);
         loader_run(v, real, argc, argv, envp, auxv);
     }
     if (n < 0) n = 0;
-    line[n] = 0;
     /* a script: the kernel's argv convention, with buffers that outlive this level of the interpreter chain */
     long cap = argc + 4;
     long m = sys_mmap(0, ((size_t)cap * sizeof(char *) + 0xfff) & ~(size_t)0xfff, PROT_READ | PROT_WRITE,
@@ -310,7 +309,7 @@ static __attribute__((noreturn)) void run(const char *v, const char *given, long
     char *script = arena_alloc(PATH_MAX);
     /* the script's path as it was spelt, as the kernel passes it (7.4.5) */
     scpy(script, given, PATH_MAX);
-    long k = shebang_argv(line, script, argv, argc, nargv, cap);
+    long k = shebang_argv(line, n, script, argv, argc, nargv, cap);
     if (k == -1) die_status(126, "not an executable", v, ENOEXEC);
     if (k == -2) die_status(126, "argument list too long", v, E2BIG);
     struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0);

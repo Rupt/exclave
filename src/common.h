@@ -18,6 +18,7 @@
 /* the word of the launcher's notes (launcher.c): 1 in launchers whose page was at 0x3f0000 */
 #define PAGE_GENERATION 2
 #define PATH_MAX 4096
+#define BINPRM_BUF_SIZE 256 /* the bytes of a file the kernel reads for its #! line (fs/binfmt_script.c) */
 #define NAME_MAX 255
 
 /* ---------- errno ---------- */
@@ -244,7 +245,7 @@ int starts_dir(const char *s, const char *pfx); /* s == pfx or s starts with pfx
 /* bump allocator for the manifest's strings, the tables, the environment; never freed */
 void *arena_alloc(size_t n);
 char *arena_str(const char *s, size_t n);
-long shebang_argv(char *line, char *script, char **argv, long argc, char **nargv, long cap);
+long shebang_argv(char *line, long n, char *script, char **argv, long argc, char **nargv, long cap);
 
 /* ---------- logging (log.c) ---------- */
 void log_open(char **envp);

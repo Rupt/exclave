@@ -92,34 +92,45 @@ char *arena_str(const char *s, size_t n)
     return p;
 }
 
-/* Parse a "#!" line (NUL-terminated, first 255 bytes of the file) and build the
- * kernel's argv for it: interp [arg] script args... Returns the new argc, -1 if
- * the line is not a shebang, -2 if nargv (cap entries) is too small. The line
- * buffer is modified in place and must outlive nargv. */
-long shebang_argv(char *line, char *script, char **argv, long argc, char **nargv, long cap)
+static int blank(char c) { return c == ' ' || c == '\t'; }
+
+/* Build the kernel's argv for a "#!" script, interp [arg] script args..., as fs/binfmt_script.c's load_script does
+ * from the first n bytes of the file (n at most BINPRM_BUF_SIZE). line holds them and one byte more, is modified in
+ * place and must outlive nargv. With no newline in the buffer, the line is its first BINPRM_BUF_SIZE - 1 bytes, and
+ * an interpreter path that no blank or NUL ends within them is refused rather than cut short; the argument may be
+ * cut. Returns the new argc, -1 for ENOEXEC (not a #! line, no interpreter, or one the buffer cuts), or -2 if nargv
+ * (cap entries) is too small. */
+long shebang_argv(char *line, long n, char *script, char **argv, long argc, char **nargv, long cap)
 {
-    if (line[0] != '#' || line[1] != '!') return -1;
-    /* no newline within the buffer: the kernel uses what it has (5.1+) */
-    char *e = xstrchr(line, '\n');
-    if (e) *e = 0;
-    char *p = line + 2;
-    while (*p == ' ' || *p == '\t') p++;
-    if (!*p) return -1;
-    char *interp = p;
-    while (*p && *p != ' ' && *p != '\t') p++;
-    char *arg = 0;
-    if (*p) {
-        *p++ = 0;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p) {
-            arg = p;
-            char *q = p + xstrlen(p);
-            while (q > p && (q[-1] == ' ' || q[-1] == '\t')) *--q = 0;
-        }
+    if (n < 2 || line[0] != '#' || line[1] != '!') return -1;
+    for (long i = n; i <= BINPRM_BUF_SIZE; i++) line[i] = 0;   /* the kernel's buffer is padded with NULs */
+    char *end = 0;
+    for (long i = 0; i < BINPRM_BUF_SIZE && !end; i++)
+        if (line[i] == '\n') end = line + i;
+    if (!end) {
+        char *buf_end = line + BINPRM_BUF_SIZE - 1, *p = line + 2;
+        while (p < buf_end && blank(*p)) p++;
+        if (p == buf_end) return -1;
+        while (p < buf_end && *p && !blank(*p)) p++;
+        if (p == buf_end) return -1;                         /* the interpreter's path runs past the buffer */
+        end = buf_end;
     }
+    while (blank(end[-1])) end--;
+    char *name = line + 2;
+    while (name < end && blank(*name)) name++;
+    if (name == end) return -1;
+    char *sep = name, *arg = 0;
+    while (sep < end && *sep && !blank(*sep)) sep++;
+    if (sep < end && *sep) {
+        arg = sep;
+        while (arg < end && blank(*arg)) arg++;
+        if (arg == end) arg = 0;
+    }
+    *end = 0;
+    if (sep < end) *sep = 0;
     if (argc + 3 > cap) return -2;
     long k = 0;
-    nargv[k++] = interp;
+    nargv[k++] = name;
     if (arg) nargv[k++] = arg;
     nargv[k++] = script;
     for (long i = 1; i < argc; i++) nargv[k++] = argv[i];
