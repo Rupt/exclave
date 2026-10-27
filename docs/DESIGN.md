@@ -127,7 +127,7 @@ What is built and tested:
   kernel matrix on a kernel with 4 KB pages (12.1, 13 item 43).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The command as one file**: `build/exclave`, 899 KB, statically
+- **The command as one file**: `build/exclave`, 973 KB, statically
   linked, carrying its launcher, wraps, checks and prunes an exclave
   with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
@@ -1812,10 +1812,12 @@ exclave prune EXCLAVE LOG...        drop what no logged workload touched
 exclave format [--check] FILE...    canonical form of a manifest or hashes file; --check only reports
 exclave hash EXCLAVE                the tree hash of 6.4
 exclave relink EXCLAVE [LAUNCHER]   replace the launcher and relink every wrapper
+exclave unpack OUT APK...           an unwrapped exclave from Alpine package files, as scripts/unpack makes it (18 item 7)
 ```
 
 `wrap` and `relink` also write the exclave's `README` (6.1) where it
-has none. Every command except `format` refuses,
+has none. Every command except `format` and `unpack`, which makes the
+directory it is given, refuses,
 before reading or writing anything, a directory without `tree/`, and
 every command except `wrap` refuses one without `.exclave/`.
 
@@ -2159,7 +2161,7 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, 899 KB and 729 KB, with nothing beside it to run: no
+the cross compiler, 973 KB and 795 KB, with nothing beside it to run: no
 interpreter, no library, no file of the checkout. It carries its
 architecture's launcher and the text of every exclave's `README` as data
 (`tool/blobs.S`), so `wrap` installs the launcher it carries and
@@ -2176,8 +2178,10 @@ RFC 7693 and tested against the RFC's vector and Python's `hashlib`
 (17).
 
 The step before it, `unpack` (10.1), is a Python package run by the
-pinned Python, like the fetchers and the tests; nothing of it is in the
-command.
+pinned Python, like the fetchers and the tests. The command's own
+`unpack` makes the same tree from `.apk` files alone, with gzip and
+DEFLATE written from RFC 1951 and RFC 1952 and a tar reader that reads
+what Python's `tarfile` reads (18 item 7).
 
 ## 11. Layers
 
@@ -3597,9 +3601,9 @@ uncommitted paths or, in a clean tree, the last commit's: a launcher
 source, `scripts/build`, `scripts/lib.sh`, `LICENSE` or `.python-version` runs every step and
 says the matrix is due, and so does the matrix's own code; the gate
 itself runs every step; the command, `tool/`, runs the unit step, the
-suite in both orders, the oracles, the probe and the Docker profile
-run, and says the matrix is due, since the VMs run it; `unpack/` runs
-the suite in both orders; the suite or its programs add the random
+suite in both orders, the oracles, the probe, the unpack oracle and the
+Docker profile run, and says the matrix is due, since the VMs run it;
+`unpack/` runs the suite in both orders and the unpack oracle; the suite or its programs add the random
 order; a test or a helper runs the steps that use it; documents,
 scripts and settings run the code checks alone; and a path the rules do
 not know runs everything. `--full` runs every step whatever changed.
@@ -3631,6 +3635,16 @@ its time, ok, SKIP or FAIL:
   the launcher with gcc's undefined-behaviour checks,
   each a trap instruction, since the launcher links no runtime to
   report one;
+- the unpack oracle, `test/unpack_oracle.py`: `build/exclave-asan
+  unpack` and `scripts/unpack` given the same `.apk` files, each into
+  an output of its own, and compared by exit status, standard output
+  and the directory each leaves: every entry's kind, mode, link text,
+  contents, hard-link group and, from the archive, modification time.
+  The sets are generated (the gzip and DEFLATE forms zlib accepts and
+  refuses, some built by hand; the tar forms; conflicts and `Replaces`;
+  the synthesis an Alpine set reaches; the refusals), and with
+  `EXCLAVE_TEST_INPUTS` Alpine's own packages too; a set the command
+  does not read or synthesise yet must be refused by it alone;
 - when `EXCLAVE_TEST_INPUTS` names the directory `scripts/inputs`
   filled, the Docker profile run on every exclave.
 
@@ -3851,6 +3865,18 @@ questions.
    Python's `hashlib` (16.8). A faster implementation keeps every
    recorded hash; another hash function would be a change of the format
    (6.4, 19.1).
+7. **`unpack` in the command.** `exclave unpack OUT APK...` makes from
+   Alpine package files the tree `scripts/unpack` makes, as the unpack
+   oracle (17) compares on generated sets and on Alpine's own: the
+   extraction rules of 10.1, busybox's applet links, and the synthesis
+   rules a set of `.apk` files can reach. It does not report
+   dependencies yet, nor read `.deb` and `.rpm` files, whose zstd, xz,
+   `ar` and cpio it lacks; a set that needs the CA bundles or an
+   `ld.so.cache` synthesised, a GNU long name or a global PAX header is
+   refused rather than unpacked differently. Whether the command takes
+   unpacking over, leaving Python to the fetchers and the tests, is
+   open; zstd and xz would come from libraries or from their
+   specifications, RFC 8878 and the xz format.
 
 ## 19. Design decisions
 

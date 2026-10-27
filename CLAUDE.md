@@ -108,7 +108,9 @@ The loop that has served well, in the order it pays:
 - **The tool is static C**, in `tool/`: one file per architecture,
   `build/exclave`, that carries its launcher and the exclave README
   (`tool/blobs.S`), takes a directory holding `tree/` and does not open
-  a network connection. It is ordinary C on the C library, unlike the
+  a network connection. Its `unpack` makes from `.apk` files the tree
+  `scripts/unpack` makes, and `test/unpack_oracle.py` holds the two to
+  the same answer. It is ordinary C on the C library, unlike the
   launcher, since it never runs inside another program; paths are bytes
   and every list it prints or hashes is in the order of their bytes.
   The tests judge it only through its commands. The steps before it are

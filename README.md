@@ -256,6 +256,7 @@ scripts/exclave unwrap gcc.exclave                        # the originals back o
 scripts/exclave relink gcc.exclave build/launcher         # swap the launcher after rebuilding it; the wrappers are relinked
 scripts/exclave hash gcc.exclave                          # the tree hash the hashes file records
 scripts/exclave format gcc.exclave/.exclave/manifest      # the canonical spelling of a manifest or hashes file; --check only reports
+scripts/exclave unpack alpine.exclave apks/*.apk          # scripts/unpack's tree, made by the command: .apk files so far
 ```
 
 Between `unpack` and `wrap` the unwrapped exclave is yours: copy a
@@ -400,6 +401,9 @@ tool/elf.c           the ELF headers, PT_INTERP, the dynamic section and ld.so.c
 tool/check.c         the static and dynamic checks of 10.3, the loader's library search, check
 tool/prune.c         prune (10.4)
 tool/blake2b.c       BLAKE2b, from RFC 7693
+tool/unpack.c        unpack for .apk files: extraction, synthesis, the pkg records, as scripts/unpack does them
+tool/inflate.c       gzip and DEFLATE, from RFC 1951 and RFC 1952, decompression only
+tool/tar.c           the members of a tar archive, as Python's tarfile reads them
 tool/blobs.S         the launcher and tool/README.txt, the README every exclave gets, carried as data
 unpack/cli.py        the step before the tool: package files -> an unwrapped exclave (10.1)
 unpack/steps.py      extraction rules, synthesis, the volatile directories, dependency report, the pkg records
@@ -413,6 +417,7 @@ fetch/rpms.py        the same for a yum or dnf repository, verified by the index
 test/run.py          the regression suite; test/progs/ its C, Rust and Go programs
 test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
 test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the openat2 oracle
+test/unpack_oracle.py  exclave unpack against scripts/unpack on the same .apk files
 test/oracle_syscalls.py  the differential syscall probe: every trapped path and descriptor syscall with every path form under bwrap and under the launcher; test/progs/probe.c its interpreter
 test/exercise.py     one program run under bwrap and under the launcher, the answers side by side: how a limitation is measured before it is fixed
 test/docker_profile.py   an exclave under Docker's default seccomp profile, which scripts/inputs fetches
