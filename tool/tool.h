@@ -206,3 +206,21 @@ int cmd_format(int argc, char **argv);
 #define INFLATE_WHY 96
 int gunzip(const uint8_t *in, size_t n, struct buf *out, char why[INFLATE_WHY]);
 uint32_t crc32_update(uint32_t crc, const void *data, size_t n);
+
+/* a tar archive's members, as Python's tarfile lists them, extended headers applied */
+struct tar_member {
+    char type;             /* the header's type flag: '5' for a directory, however it was spelt */
+    char *name, *linkname; /* as the archive spells them, a directory's without its trailing slashes */
+    int64_t size, mode, mtime;
+    int mtime_float; /* an extended header's mtime, which is a fraction: mtime_f instead of mtime */
+    double mtime_f;
+    size_t data; /* where its data begins in the archive */
+};
+struct tar {
+    struct tar_member *m;
+    size_t n;
+};
+#define TAR_WHY 96
+int tar_read(const uint8_t *p, size_t n, struct tar *out, char why[TAR_WHY]);
+void tar_free(struct tar *t);
+int tar_regular(char type);
