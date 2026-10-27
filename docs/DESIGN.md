@@ -544,15 +544,23 @@ through untouched, so `ldd`, libtool wrappers, `fakeroot` and sanitizer
 runtimes that set `LD_*` for their children work. `EXCLAVE_LOG` passes
 through everywhere and is visible to the program.
 
-**`EXCLAVE_LOG=<file>`** is the one run-time knob. The launcher appends
-its decisions, as lines beginning `launcher 0`, and every translated
-syscall as `<syscall> <result> <virtual path>`: one line, in one write
-unless the path needs more than two escapes. A syscall whose path could
-not be resolved is logged with the path as the program gave it. A
-newline in a path is written as `\n` and a backslash as `\\`, the only
-two escapes, which the tool undoes when it reads a log (10.3, 10.4;
-13 item 34). The launcher at the border also logs the working directory
-it started in. The log changes nothing else.
+**`EXCLAVE_LOG=<file>`** is the one run-time knob. It names a host
+file by its absolute path. Every launcher of a run opens it for
+itself, untranslated, so a relative path would be read against each
+process's working directory, often inside the tree: a launcher refuses
+one by name. It refuses by name a log inside its exclave too, whether
+the path names the tree or `.exclave/` or a symlink leads there, and
+makes a new log only where no symlink stands, so the log leaves the
+exclave as it was. A log that cannot be opened is not kept, and the
+run goes on. The launcher appends its decisions, as lines beginning
+`launcher 0`, and every translated syscall as `<syscall> <result>
+<virtual path>`: one line, in one write unless the path needs more
+than two escapes. A syscall whose path could not be resolved is logged
+with the path as the program gave it. A newline in a path is written
+as `\n` and a backslash as `\\`, the only two escapes, which the tool
+undoes when it reads a log (10.3, 10.4; 13 item 34). The launcher at
+the border also logs the working directory it started in. The log
+changes nothing else.
 
 ### 6.3 What the launcher reads
 
@@ -3411,7 +3419,8 @@ meaning items 4 and 7.
      Rust and Go, built outputs run inside, a byte-for-byte comparison
      with a host compile, gdb, and a `noexec` mount;
    - *ownership, the log and the tool*: ownership failing closed, the
-     log's names and escapes, the three package readers, `wrap`'s
+     log's names and escapes, the log's path refused when relative or
+     inside the exclave, the three package readers, `wrap`'s
      refusals, pruning, `check`, and a directory in the pre-rename
      `.can/` layout refused by name by every command.
 
@@ -3839,7 +3848,8 @@ specified.
   variables that name host files, with four constants set at the
   border**: locale data is bound to its libc, the time zone is not a
   host fact, and an allowlist would stop a user passing `CC` (6.2).
-- **One run-time knob, `EXCLAVE_LOG`**; `EXCLAVE_EXEC`,
+- **One run-time knob, `EXCLAVE_LOG`, an absolute host path outside the
+  exclave**; `EXCLAVE_EXEC`,
   `EXCLAVE_EXECFN` and `EXCLAVE_COMM` are the launcher's own protocol,
   honoured by a wrapper only under an inherited filter (6.2, 7.4.5).
 - **What the launcher derives from the tree fails closed and loud**: a

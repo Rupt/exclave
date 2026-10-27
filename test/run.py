@@ -3020,6 +3020,73 @@ def root_listing_is_the_tree(ctx: Ctx) -> None:
 
 
 @test
+def log_path_rules(ctx: Ctx) -> None:
+    """6.2: EXCLAVE_LOG names a host file by its absolute path, never one inside the exclave.
+
+    A relative value is refused by name, since each launcher would read it against the program's
+    working directory, often inside the tree. A log in the exclave, made new, already there, under
+    .exclave/ or reached through a symlink, is never written. An absolute log outside takes every
+    launcher's lines, and /dev/stderr works as a log.
+    """
+    ex2 = os.path.join(ctx.work, "logpath.exclave")
+    copy_exclave(ctx.exclave, ex2)
+    sh = os.path.join(ex2, "tree", ctx.vbin("sh").lstrip("/"))
+    share = os.path.join(ex2, "tree", "usr", "share")
+    script = f"cd /usr/share && {ctx.vbin('true')}"
+
+    def with_log(value: str) -> tuple[int, str, str]:
+        return run([sh, "-c", script], cwd=ctx.work, env=dict(ctx.env, EXCLAVE_LOG=value))
+
+    rc, _, err = with_log("rel.log")
+    expect(
+        rc == 127 and "EXCLAVE_LOG must be an absolute path" in err,
+        f"a relative log: rc={rc} {err!r}",
+    )
+    expect(
+        not os.path.exists(os.path.join(ctx.work, "rel.log"))
+        and not os.path.exists(os.path.join(share, "rel.log")),
+        "a refused relative log was made",
+    )
+    marker = os.path.join(share, "exclave-test-marker")
+    before = read_text(marker)
+    for value in (os.path.join(share, "new.log"), marker, os.path.join(ex2, ".exclave", "x.log")):
+        rc, _, err = with_log(value)
+        expect(
+            rc == 127 and "EXCLAVE_LOG is inside the exclave" in err,
+            f"a log in the exclave, {value}: rc={rc} {err!r}",
+        )
+    expect(
+        not os.path.exists(os.path.join(share, "new.log"))
+        and not os.path.exists(os.path.join(ex2, ".exclave", "x.log"))
+        and read_text(marker) == before,
+        "a log in the exclave was written",
+    )
+    # not named .log: the fixture is pruned from every .log in the work directory
+    link = os.path.join(ctx.work, "logpath-link")
+    if os.path.lexists(link):
+        os.remove(link)
+    os.symlink(os.path.join(share, "via.log"), link)
+    with_log(link)
+    os.remove(link)
+    expect(
+        not os.path.exists(os.path.join(share, "via.log")), "a symlink led the log into the tree"
+    )
+    log = os.path.join(ctx.work, "logpath.log")
+    if os.path.exists(log):
+        os.remove(log)
+    rc, _, err = with_log(log)
+    text = read_text(log) if os.path.exists(log) else ""
+    expect(
+        rc == 0 and "launcher 0 border" in text and "launcher 0 inside" in text,
+        f"one log for every launcher: rc={rc} {err!r} {text[-300:]!r}",
+    )
+    rc, _, err = with_log("/dev/stderr")
+    expect(
+        rc == 0 and "launcher 0 border" in err, f"/dev/stderr as the log: rc={rc} {err[-300:]!r}"
+    )
+
+
+@test
 def log_names_and_escapes(ctx: Ctx) -> None:
     """6.2: a failed resolution logs the path as given.
 

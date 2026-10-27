@@ -109,7 +109,7 @@ What it prints on the reference machine, abridged; `exclave` in it is
 + cp -a sysroot.exclave/tree gcc.exclave/tree/opt/sysroot-el7
   gcc.exclave is wrapped (46 warnings; log/wrap.log)
 == 4. a program built inside, run on this host and inside the exclave
-+ env EXCLAVE_LOG=log/hello.log gcc.exclave/gcc --sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/ -o hello hello.c
++ env EXCLAVE_LOG=/home/me/exclave/build/example/log/hello.log gcc.exclave/gcc --sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/ -o hello hello.c
   log/hello.log: 1220 lines, one per trapped syscall; the first:
     launcher 0 host path absent, using the exclave's /etc/pki/tls/certs/ca-bundle.crt
     launcher 0 cwd /home/me/exclave/build/example
@@ -286,17 +286,19 @@ library resolves inside the exclave.
 
 ## The log and the checks
 
-`EXCLAVE_LOG=<file>` is the launcher's one knob. It appends one line per
-trapped syscall, `<syscall> <result> <virtual path>`, the result being
-the return value or the negative errno: `open 3 /etc/ld.so.cache` is
-descriptor 3, `access -2 /etc/ld.so.preload` is `ENOENT`, which is what
-a search looks like and is not a fault. Lines that begin `launcher`
+`EXCLAVE_LOG=<file>` is the launcher's one knob. The file is a host file
+named by its absolute path, outside the exclave; a launcher refuses a
+relative path or a log inside its exclave by name. It appends one line
+per trapped syscall, `<syscall> <result> <virtual path>`, the result
+being the return value or the negative errno: `open 3 /etc/ld.so.cache`
+is descriptor 3, `access -2 /etc/ld.so.preload` is `ENOENT`, which is
+what a search looks like and is not a fault. Lines that begin `launcher`
 are the launcher's own decisions: the working directory it started in
-and, when that lies under an exclave path, the subtree it gave the
-host; the border program; an identity file the host lacks, answered
-from the exclave's copy. Every process a workload spawns appends to the
-same file, so a `make` writes one log. A newline in a path is written
-`\n` and a backslash `\\`; nothing else is escaped.
+and, when that lies under an exclave path, the subtree it gave the host;
+the border program; an identity file the host lacks, answered from the
+exclave's copy. Every process a workload spawns appends to the same
+file, so a `make` writes one log. A newline in a path is written `\n`
+and a backslash `\\`; nothing else is escaped.
 
 `exclave check EXCLAVE [LOG...]` first verifies the wrappers and their
 originals and compares the tree with the hash the hashes file records,

@@ -356,13 +356,12 @@ __attribute__((used)) static void start_c(unsigned long *sp)   /* called by _sta
         unsigned long more[2] = {C.rlim[0] + 2 < C.rlim[1] ? C.rlim[0] + 2 : C.rlim[1], C.rlim[1]};
         C.borrowed = SC4(NR_prlimit64, 0, RLIMIT_NOFILE, more, 0) == 0;
     }
-    log_open(envp);
-
     static char exe[PATH_MAX];
     long n = sys_readlink("/proc/self/exe", exe, PATH_MAX - 1);
     if (n < 0) die("cannot read /proc/self/exe", 0, n);
     exe[n] = 0;
     find_exclave(exe);
+    log_open(envp);
     read_manifest(auxv);
 
     const char *target, *fn, *cm;

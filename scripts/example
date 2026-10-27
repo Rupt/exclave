@@ -58,8 +58,8 @@ cat >hello.c <<'HELLO'
 #include <stdio.h>
 int main(void) { printf("hello from an exclave\n"); return 0; }
 HELLO
-run env EXCLAVE_LOG=log/plain.log gcc.exclave/gcc -o hello-plain hello.c
-run env EXCLAVE_LOG=log/hello.log gcc.exclave/gcc "$sysroot" "$sysroot_b" -o hello hello.c
+run env EXCLAVE_LOG="$dir/log/plain.log" gcc.exclave/gcc -o hello-plain hello.c
+run env EXCLAVE_LOG="$dir/log/hello.log" gcc.exclave/gcc "$sysroot" "$sysroot_b" -o hello hello.c
 echo "  log/hello.log: $(wc -l <log/hello.log) lines, one per trapped syscall; the first:"
 head -6 log/hello.log | sed "s/^/    /"
 versions() { gcc.exclave/tree/usr/bin/objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -u | tr '\n' ' '; }
@@ -70,7 +70,7 @@ run gcc.exclave/.exclave/launcher "$dir/hello"
 echo "== 5. the exclave pruned to what the compile touched, and the checks on it"
 run cp -a gcc.exclave hello.exclave
 run exclave prune hello.exclave log/hello.log
-run env EXCLAVE_LOG=log/pruned.log hello.exclave/gcc "$sysroot" "$sysroot_b" -o hello-pruned hello.c
+run env EXCLAVE_LOG="$dir/log/pruned.log" hello.exclave/gcc "$sysroot" "$sysroot_b" -o hello-pruned hello.c
 run exclave check hello.exclave log/pruned.log
 run ./hello-pruned
 count() { find "$1/tree" -type f -o -type l | wc -l; }
