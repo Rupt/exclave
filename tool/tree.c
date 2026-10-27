@@ -113,7 +113,7 @@ static void add_entry(struct entries *all, const char *rel, const char *real, co
     all->e[all->n++] = (struct entry){b.p, b.n};
 }
 
-static char *rel_join(const char *rel, const char *name)
+char *rel_join(const char *rel, const char *name)
 {
     struct buf b = {0};
     if (*rel) {
@@ -204,3 +204,103 @@ void tree_hash(const char *root, char out[B2_TEXT])
     b2_final(&s, d);
     b2_text(d, out);
 }
+/* ---------------------------------------------------------------- walks */
+static int name_order(const void *a, const void *b)
+{ return strcmp(((const struct entry_info *)a)->name, ((const struct entry_info *)b)->name); }
+
+int list_dir(const char *path, struct entry_info **out, size_t *n)
+{
+    DIR *d = opendir(path);
+    *out = NULL;
+    *n = 0;
+    if (!d) return -1;
+    size_t cap = 0;
+    for (;;) {
+        errno = 0;
+        const struct dirent *de = readdir(d);
+        if (!de) break;
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        if (*n == cap) {
+            cap = cap ? 2 * cap : 32;
+            *out = xrealloc(*out, cap * sizeof **out);
+        }
+        struct entry_info *e = &(*out)[(*n)++];
+        size_t k = strlen(de->d_name);
+        e->name = xrealloc(NULL, k + 1);
+        memcpy(e->name, de->d_name, k + 1);
+        char *p = path_join(path, e->name);
+        struct stat st;
+        if (lstat(p, &e->st)) memset(&e->st, 0, sizeof e->st);
+        e->is_dir = S_ISDIR(e->st.st_mode) || (S_ISLNK(e->st.st_mode) && !stat(p, &st) && S_ISDIR(st.st_mode));
+        free(p);
+    }
+    int saved = errno;
+    closedir(d);
+    if (saved) {
+        free_list(*out, *n);
+        errno = saved;
+        return -1;
+    }
+    if (*n) qsort(*out, *n, sizeof **out, name_order);
+    return 0;
+}
+
+void free_list(struct entry_info *e, size_t n)
+{
+    for (size_t i = 0; i < n; i++) free(e[i].name);
+    free(e);
+}
+
+static void walk_dirs_at(const char *dir, const char *rel, int bottom_up, walk_fn fn, void *ctx)
+{
+    struct entry_info *e;
+    size_t n;
+    if (list_dir(dir, &e, &n)) return; /* unreadable: skipped with what is beneath it */
+    if (!bottom_up) fn(dir, rel, e, n, ctx);
+    for (size_t i = 0; i < n; i++)
+        if (e[i].is_dir && !S_ISLNK(e[i].st.st_mode)) {
+            char *sub = path_join(dir, e[i].name), *r = rel_join(rel, e[i].name);
+            walk_dirs_at(sub, r, bottom_up, fn, ctx);
+            free(sub);
+            free(r);
+        }
+    if (bottom_up) {
+        /* the listing again: what the walk below moved has changed it */
+        free_list(e, n);
+        if (list_dir(dir, &e, &n)) return;
+        fn(dir, rel, e, n, ctx);
+    }
+    free_list(e, n);
+}
+
+void walk_dirs(const char *root, int bottom_up, walk_fn fn, void *ctx) { walk_dirs_at(root, "", bottom_up, fn, ctx); }
+
+int is_real_dir(const char *dir)
+{
+    const char *slash = strrchr(dir, '/');
+    return !strcmp(slash ? slash + 1 : dir, ".real");
+}
+
+static void collect_strays(const char *dir, const char *rel, struct entry_info *e, size_t n, void *ctx)
+{
+    if (!is_real_dir(dir)) return;
+    const char *slash = strrchr(dir, '/');
+    char *parent = xrealloc(NULL, (size_t)(slash - dir) + 1);
+    memcpy(parent, dir, (size_t)(slash - dir));
+    parent[slash - dir] = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (e[i].is_dir) continue;
+        char *beside = path_join(parent, e[i].name);
+        struct stat st;
+        if (lstat(beside, &st)) {
+            char *r = rel_join(rel, e[i].name);
+            buf_add(ctx, "/", 1);
+            buf_add(ctx, r, strlen(r) + 1);
+            free(r);
+        }
+        free(beside);
+    }
+    free(parent);
+}
+
+void strays(const char *root, struct buf *out) { walk_dirs(root, 0, collect_strays, out); }

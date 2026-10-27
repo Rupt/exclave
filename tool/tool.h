@@ -6,6 +6,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/stat.h>
 
 /* BLAKE2b (RFC 7693), unkeyed, with the digest length given to b2_init: 32 for every hash the exclave format records
  * (6.4). */
@@ -24,6 +25,10 @@ void b2_text(const uint8_t digest[32], char out[B2_TEXT]);
 /* failures */
 _Noreturn void fail(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 _Noreturn void fail_errno(const char *path);
+/* a manifest or hashes file the grammar refuses: "grammar: " and where */
+_Noreturn void fail_grammar(const char *err);
+/* "usage: exclave LINE", exit 2 */
+_Noreturn void usage(const char *line);
 void *xrealloc(void *p, size_t n);
 
 /* a byte string that grows */
@@ -65,6 +70,33 @@ const char *kind_name(enum kind kind);
 /* the exclave on disk (6.1) */
 void require_exclave(const char *ex, const char *cmd);
 void tree_hash(const char *root, char out[B2_TEXT]);
+
+/* A directory's entries, sorted by their bytes: each its name, its lstat, and whether it is a directory as a walk
+ * counts one, a link to a directory included. -1 with errno when it cannot be read. */
+struct entry_info {
+    char *name;
+    struct stat st;
+    int is_dir;
+};
+int list_dir(const char *path, struct entry_info **out, size_t *n);
+void free_list(struct entry_info *e, size_t n);
+/* Every directory under root, its own entries sorted, top-down or bottom-up: a link to a directory is listed and not
+ * descended, and a directory that cannot be read is passed over with everything beneath it. rel is the directory's
+ * path from root, "" for root itself. */
+typedef void (*walk_fn)(const char *dir, const char *rel, struct entry_info *e, size_t n, void *ctx);
+void walk_dirs(const char *root, int bottom_up, walk_fn fn, void *ctx);
+int is_real_dir(const char *dir);
+/* every file in a .real/ directory with no wrapper beside it, as /PATH from root, each NUL-terminated (6.1) */
+void strays(const char *root, struct buf *out);
+char *rel_join(const char *rel, const char *name);
+
+/* an exclave's other files (6.1, 6.4) */
+#define TOOL_VERSION "0.1.0"
+void write_readme(const char *ex);
+void write_hashes(const char *ex, const char *manifest_hash, int tree, int keep);
+int has_tree_record(const char *ex);
+int cmd_unwrap(int argc, char **argv);
+int cmd_relink(int argc, char **argv);
 
 char *read_file(const char *path, size_t *n);
 

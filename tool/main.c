@@ -2,7 +2,9 @@
  *
  *     exclave format [--check] FILE...    Parse with the strict grammar and rewrite in canonical form; --check
  *                                         only reports.
- *     exclave hash EXCLAVE                The tree hash of 6.4. */
+ *     exclave hash EXCLAVE                The tree hash of 6.4.
+ *     exclave relink EXCLAVE [LAUNCHER]   Replace the launcher and relink every wrapper.
+ *     exclave unwrap EXCLAVE              Move every original back over its wrapper. */
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -24,6 +26,12 @@ _Noreturn void fail(const char *fmt, ...)
 }
 
 _Noreturn void fail_errno(const char *path) { fail("%s: %s", path, strerror(errno)); }
+
+_Noreturn void fail_grammar(const char *err)
+{
+    fprintf(stderr, "grammar: %s\n", err);
+    exit(1);
+}
 
 void *xrealloc(void *p, size_t n)
 {
@@ -73,7 +81,7 @@ char *read_file(const char *path, size_t *n)
     return b.p;
 }
 
-static _Noreturn void usage(const char *line)
+_Noreturn void usage(const char *line)
 {
     fprintf(stderr, "usage: exclave %s\n", line);
     exit(2);
@@ -146,6 +154,8 @@ int main(int argc, char **argv)
     } commands[] = {
         {"format", cmd_format},
         {"hash", cmd_hash},
+        {"relink", cmd_relink},
+        {"unwrap", cmd_unwrap},
     };
     if (argc < 2) usage("COMMAND ARGS...");
     for (size_t i = 0; i < sizeof commands / sizeof *commands; i++)

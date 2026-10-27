@@ -72,7 +72,7 @@ def main() -> int:
         sys.base_prefix, os.path.join(tool_ex, "tree", "opt", "python"), symlinks=True, ignore=tk
     )
     # the exclave package installed into that Python, as uv installs it anywhere (unpack, which
-    # the same project carries, comes with it and is not used), and the launcher
+    # the same project carries, comes with it and is not used), and the launcher and the README
     # beside its modules, where the tool looks for one outside a checkout
     site = os.path.join(
         tool_ex,
@@ -86,6 +86,9 @@ def main() -> int:
     uv = os.path.join(REPO, ".uv", "bin", "uv")
     run([uv, "pip", "install", "--quiet", "--no-deps", "--target", site, REPO], work)
     shutil.copy2(os.path.join(REPO, "build", "launcher"), os.path.join(site, "exclave", "launcher"))
+    shutil.copy2(
+        os.path.join(REPO, "tool", "README.txt"), os.path.join(site, "exclave", "README.txt")
+    )
     entry = os.path.join(tool_ex, "tree", "usr", "bin", "exclave")
     with open(entry, "w") as f:
         f.write('#!/bin/sh\nexec /opt/python/bin/python3 -m exclave "$@"\n')

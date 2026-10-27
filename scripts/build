@@ -19,7 +19,8 @@
 #                   gdb places from launcher-debug.debug. The gate runs the
 #                   suite on it.
 #   exclave         the exclave command, linked statically, so that the file
-#                   runs with nothing beside it
+#                   runs with nothing beside it; it carries the launcher, and
+#                   is built after it
 #   exclave-asan    the same under ASan and UBSan, linked dynamically, for the
 #                   gate
 #
@@ -101,7 +102,9 @@ tool() { # tool ARCH OUT ARGS...: the exclave command for ARCH
     shift 2
     compiler=${CC:-gcc}
     [ "$arch" = "$native" ] || compiler=$arch-linux-gnu-gcc
-    tool_cc "$compiler" "$@" -o "$out" tool/*.c || return 1
+    launcher=build/launcher
+    [ "$arch" = "$native" ] || launcher=build/launcher-$arch
+    tool_cc "$compiler" "-DLAUNCHER=\"$launcher\"" "$@" -o "$out" tool/*.c tool/blobs.S || return 1
     echo "built $out ($(stat -c %s "$out") bytes, $arch)"
 }
 
@@ -118,11 +121,11 @@ pids="$pids $!"
 tool "$native" build/exclave-asan -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer &
 pids="$pids $!"
 for arch in $cross; do
-    launcher "$arch" "build/launcher-$arch" -fcallgraph-info=su -dumpdir "build/launcher-$arch.debug-" &
+    # the command carries the launcher, so is built after it
+    { launcher "$arch" "build/launcher-$arch" -fcallgraph-info=su -dumpdir "build/launcher-$arch.debug-" &&
+        tool "$arch" "build/exclave-$arch" -static -s; } &
     pids="$pids $!"
     launcher "$arch" "build/launcher-old-$arch" -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD &
-    pids="$pids $!"
-    tool "$arch" "build/exclave-$arch" -static -s &
     pids="$pids $!"
 done
 status=0

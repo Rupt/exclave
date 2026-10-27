@@ -512,8 +512,10 @@ def main() -> int:
             # src: the filter model the suite builds in the VM (filter_model)
             for d in ("test", "exclave", "unpack", "src"):
                 t.add(os.path.join(REPO, d), arcname="repo/" + d)
-            # the text the launcher carries, which exclave_readme compares
+            # the text the launcher carries, which exclave_readme compares, and the README the
+            # Python tool writes
             t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")
+            t.add(os.path.join(REPO, "tool", "README.txt"), arcname="repo/tool/README.txt")
             t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
             # the exclave and unpack packages installed into that Python as uv sync installs them
             # here, in editable form: a .pth naming the checkout, relative to site-packages

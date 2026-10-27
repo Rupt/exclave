@@ -224,6 +224,18 @@ def format_cases(
     return cases
 
 
+def copy_of(src: str) -> Callable[[str], None]:
+    """Return what makes a copy of the exclave src at a path.
+
+    Its tree is hard-linked, since no command here writes into a file of the tree.
+    """
+
+    def make(at: str) -> None:
+        tree.copy_exclave(src, at)
+
+    return make
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -274,10 +286,14 @@ def main() -> int:
         cases += [(label, ["EX"], made) for label, made in inputs]
         if cmd == "format":
             cases = format_cases(rng, args.cases, [os.path.abspath(e) for e in args.exclave])
+        if cmd == "relink":  # with a launcher named, and with one that is not there
+            other = os.path.join(REPO, "build", "launcher-old")
+            cases += [(label + ", launcher named", ["EX", other], m) for label, m in inputs[:8]]
+            cases.append(("absent launcher", ["EX", other + "-absent"], inputs[-6][1]))
         for i, (label, argv, given) in enumerate(cases):
             made = given
             if isinstance(given, str) and cmd in WRITES and label.startswith("given"):
-                made = lambda at, src=given: shutil.copytree(src, at, symlinks=True)  # noqa: E731 -- a maker, as the generated inputs have
+                made = copy_of(given)
             results = []
             for impl, tool_cmd in (("py", [*PYTHON, cmd]), ("c", [args.tool, cmd])):
                 at = os.path.join(work, f"{impl}-{cmd}-{i}")
