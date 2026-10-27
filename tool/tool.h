@@ -206,6 +206,10 @@ int cmd_format(int argc, char **argv);
 #define INFLATE_WHY 96
 int gunzip(const uint8_t *in, size_t n, struct buf *out, char why[INFLATE_WHY]);
 uint32_t crc32_update(uint32_t crc, const void *data, size_t n);
+/* zstd and xz through the system's libraries, accepting what Python's decompress functions accept (tool/decompress.c);
+ * 0, or -1 with the reason in why */
+int unzstd(const uint8_t *in, size_t n, struct buf *out, char why[INFLATE_WHY]);
+int unxz(const uint8_t *in, size_t n, struct buf *out, char why[INFLATE_WHY]);
 
 /* a tar archive's members, as Python's tarfile lists them, extended headers applied */
 struct tar_member {

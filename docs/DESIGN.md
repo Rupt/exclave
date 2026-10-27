@@ -127,7 +127,7 @@ What is built and tested:
   kernel matrix on a kernel with 4 KB pages (12.1, 13 item 43).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The command as one file**: `build/exclave`, 973 KB, statically
+- **The command as one file**: `build/exclave`, 1 276 KB, statically
   linked, carrying its launcher, wraps, checks and prunes an exclave
   with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
@@ -2161,7 +2161,7 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, 973 KB and 795 KB, with nothing beside it to run: no
+the cross compiler, 1 276 KB and 795 KB, with nothing beside it to run: no
 interpreter, no library, no file of the checkout. It carries its
 architecture's launcher and the text of every exclave's `README` as data
 (`tool/blobs.S`), so `wrap` installs the launcher it carries and
@@ -2171,7 +2171,10 @@ architecture's launcher and no other.
 
 It is ordinary C on the C library, glibc linked statically, unlike the
 launcher, which is freestanding because it runs inside other programs'
-processes (7.1) and the command never does. The scripts build it with
+processes (7.1) and the command never does. It links the machine's
+libzstd and liblzma statically too, for the zstd and xz that `unpack`
+reads; the aarch64 build has them only where the cross compiler finds
+static copies, and this machine has none (13 item 48). The scripts build it with
 the same strict warnings as the launcher, and the gate runs a build
 under ASan and UBSan, `build/exclave-asan`. Its BLAKE2b is written from
 RFC 7693 and tested against the RFC's vector and Python's `hashlib`
@@ -2608,6 +2611,13 @@ and stay fixed.
     does not copy. Whoever passes an Alpine exclave on adds the `-doc`
     packages, whose texts land in `usr/share/licenses/` and survive
     pruning (10.4).
+48. **The aarch64 command reads no zstd or xz.** It is built where the
+    cross compiler finds static copies of libzstd and liblzma, and the
+    reference machine has none for aarch64, so its `unpack` refuses a
+    package file compressed with either, naming the lack, and `wrap`,
+    `check` and the other commands are unaffected (10.5). An arm64
+    machine's own build, or arm64 copies of `libzstd-dev` and
+    `liblzma-dev` for the cross compiler, would close it.
 
 ### 13.1 Debugging and profiling recipe
 
@@ -3624,7 +3634,11 @@ its time, ok, SKIP or FAIL:
   the unit tests (`.clang-tidy`, `tool/.clang-tidy`);
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py`, the scratch-pool test, the `#!` line
-  test, the CPU level test and the command's BLAKE2b test, each built from the current sources for the host under
+  test, the CPU level test, the command's BLAKE2b test and its decoder
+  test (`test/decompress_test.py`: zstd, xz and gzip given the same
+  bytes as Python's decoders, frames and streams whole, back to back,
+  cut short, flipped and followed by junk, decompressed alike or refused
+  by both), each built from the current sources for the host under
   AddressSanitizer and UndefinedBehaviorSanitizer, where a finding
   exits 99, which no test answers;
 - the stack budget of both launchers (the aarch64 one when it is
@@ -3877,12 +3891,13 @@ questions.
    extraction rules of 10.1, busybox's applet links, the synthesis
    rules a set of `.apk` files can reach, and the dependency report in
    apk-tools' version order. It does not read `.deb` and `.rpm` files
-   yet, whose zstd, xz, `ar` and cpio it lacks; a set that needs the CA bundles or an
+   yet: zstd and xz come from libzstd and liblzma (10.5), and `ar`,
+   cpio and the formats' own rules are still to write; a set that needs the CA bundles or an
    `ld.so.cache` synthesised, a GNU long name or a global PAX header is
    refused rather than unpacked differently. Whether the command takes
    unpacking over, leaving Python to the fetchers and the tests, is
-   open; zstd and xz would come from libraries or from their
-   specifications, RFC 8878 and the xz format.
+   open, as is whether the libraries give way one day to decoders
+   written from RFC 8878 and the xz format, as DEFLATE's was.
 
 ## 19. Design decisions
 

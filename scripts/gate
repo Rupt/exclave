@@ -58,7 +58,8 @@ step() { # step NAME CMD...: in the background once fewer than $jobs run, its st
     ) &
 }
 # shellcheck disable=SC2329  # run through step, by name
-# the parser, the filter, the scratch pool, the CPU check, the #! rules and the command's BLAKE2b, just built for the host
+# the parser, the filter, the scratch pool, the CPU check, the #! rules, the command's BLAKE2b and its decoders (against
+# Python's), just built for the host
 # under ASan and UBSan, a finding fatal (test/sanitize.c)
 unit() {
     sanitized() { # sanitized OUT ARGS...
@@ -77,7 +78,9 @@ unit() {
         sanitized "$out/str_test" -DHOST_TEST "$here/str_test.c" "$repo/src/str.c" &&
         "$out/str_test" &&
         sanitized "$out/tool_test" "$here/tool_test.c" "$repo/tool/blake2b.c" &&
-        "$out/tool_test"
+        "$out/tool_test" &&
+        sanitized "$out/decompress_test" "$here/decompress_test.c" "$repo/tool/decompress.c" "$repo/tool/inflate.c" \
+            -lzstd -llzma && py "$here/decompress_test.py" --c-decoder "$out/decompress_test"
 }
 # shellcheck disable=SC2329  # run through step, by name
 debug_suite() { # debug_suite EXCLAVE NAME: the suite on the launcher with its undefined-behaviour checks
@@ -104,7 +107,8 @@ for path in $changed; do
         matrix=true
         ;;
     scripts/gate) full=true ;;                                                          # the gate itself
-    tool/unpack.c | tool/inflate.c | tool/tar.c) unpacking=true ;;                      # only exclave unpack, which no VM runs
+    tool/decompress.c | tool/inflate.c) unit=true unpacking=true ;;                     # unpack's decoders, which the unit step tests
+    tool/unpack.c | tool/tar.c) unpacking=true ;;                                       # only exclave unpack, which no VM runs
     tool/*) unit=true suite=true random=true oracles=true matrix=true unpacking=true ;; # the command every driver and VM runs
     unpack/* | test/unpack_oracle.py) suite=true random=true unpacking=true ;;
     test/run.py) suite=true random=true ;;
@@ -112,7 +116,7 @@ for path in $changed; do
     test/tree.py) suite=true random=true oracles=true ;;
     test/oracle_*.py | test/docker_profile.py) oracles=true ;;
     test/syscalls.py) unit=true oracles=true ;;
-    test/*_test.c | test/grammar_test.py) unit=true ;;
+    test/*_test.c | test/grammar_test.py | test/decompress_test.py) unit=true ;;
     test/stackcheck.py) stack=true ;;
     test/matrix.py | test/vm_run.py) matrix=true ;;
     # scripts/check's alone: documents, settings, the fetchers, the other scripts and drivers

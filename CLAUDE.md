@@ -113,7 +113,10 @@ The loop that has served well, in the order it pays:
   (`tool/blobs.S`), takes a directory holding `tree/` and does not open
   a network connection. Its `unpack` makes from `.apk` files the tree
   `scripts/unpack` makes, and `test/unpack_oracle.py` holds the two to
-  the same answer. No VM runs `unpack`, so a file only it uses goes into
+  the same answer; its zstd and xz are the system's libzstd and
+  liblzma (`tool/decompress.c`), and `test/decompress_test.py` holds
+  them and the hand-written DEFLATE to Python's decoders. No VM runs
+  `unpack`, so a file only it uses goes into
   the gate's list of them, which runs the unpack oracle and does not
   call the matrix due. It is ordinary C on the C library, unlike the
   launcher, since it never runs inside another program; paths are bytes
@@ -202,7 +205,9 @@ The loop that has served well, in the order it pays:
 
 ## Reference machine facts
 
-Ubuntu 24.04, kernel 7.0, x86-64, glibc 2.39; `gcc-aarch64-linux-gnu`,
+Ubuntu 24.04, kernel 7.0, x86-64, glibc 2.39; `libzstd-dev` and
+`liblzma-dev`, which the command links (none for aarch64, so its
+`unpack` reads no zstd or xz: DESIGN 13 item 48); `gcc-aarch64-linux-gnu`,
 `qemu-system-arm` and `qemu-efi-aarch64` are installed for the arm64
 row, which runs under TCG at a tenth of native speed; `golang-go`
 (Go 1.22) for the Go regression, and rustc from rustup for the Rust

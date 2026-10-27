@@ -104,7 +104,17 @@ tool() { # tool ARCH OUT ARGS...: the exclave command for ARCH
     [ "$arch" = "$native" ] || compiler=$arch-linux-gnu-gcc
     launcher=build/launcher
     [ "$arch" = "$native" ] || launcher=build/launcher-$arch
-    tool_cc "$compiler" "-DLAUNCHER=\"$launcher\"" "$@" -o "$out" tool/*.c tool/blobs.S || return 1
+    # unpack's zstd and xz, from the machine's libzstd-dev and liblzma-dev; a cross compiler without static copies
+    # of them builds a command whose unpack refuses what needs them (DESIGN.md 13 item 48)
+    if printf 'int main(void) { return 0; }\n' | "$compiler" -x c - -static -lzstd -llzma -o /dev/null 2>/dev/null; then
+        set -- "$@" -lzstd -llzma
+    elif [ "$arch" = "$native" ]; then
+        echo "scripts/build: no static libzstd and liblzma for $arch: install libzstd-dev and liblzma-dev" >&2
+        return 1
+    else
+        set -- "$@" -DNO_ZSTD_XZ
+    fi
+    tool_cc "$compiler" "-DLAUNCHER=\"$launcher\"" -o "$out" tool/*.c tool/blobs.S "$@" || return 1
     echo "built $out ($(stat -c %s "$out") bytes, $arch)"
 }
 

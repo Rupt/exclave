@@ -341,7 +341,8 @@ neither the caller's shell nor what the machine has installed.
 
 Requirements beyond the first run's: `bubblewrap` and unprivileged user
 namespaces for the kernel oracles and the syscall probe; `strace`,
-`gdb`, Go and `rustc` for the suite's regressions; optionally
+`gdb`, Go and `rustc` for the suite's regressions; `libzstd-dev` and
+`liblzma-dev`, which the command links for `unpack`; optionally
 `aarch64-linux-gnu-gcc` for the aarch64 launcher, and QEMU with KVM and
 `cloud-image-utils` for the kernel matrix (`qemu-system-arm` and
 `qemu-efi-aarch64` for its arm64 row). Where `bwrap` cannot create a
@@ -460,4 +461,7 @@ which the MIT licence asks to go with every copy; `readelf -p
 writes says so. The software in an exclave's tree keeps its packages'
 own licences, and an exclave passed on passes their terms on with it:
 `exclave prune` keeps their texts, and an Alpine exclave has them only
-if the packages' `-doc` packages went in.
+if the packages' `-doc` packages went in. The command, `build/exclave`,
+links two libraries statically: zstd's libzstd, under its BSD licence,
+whose notice goes with a copy of the command, and liblzma, in the
+public domain.
