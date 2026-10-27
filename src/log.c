@@ -51,7 +51,7 @@ void log_open(char **envp)
     if (fd < 0) return;
     if (in_exclave(fd)) die("EXCLAVE_LOG is inside the exclave", path, 0);
     /* out of the way of the program's own descriptors */
-    long hi = sys_fcntl((int)fd, 1030 /* F_DUPFD_CLOEXEC */, 900);
+    long hi = sys_fcntl((int)fd, F_DUPFD_CLOEXEC, 900);
     if (hi >= 0) {
         sys_close((int)fd);
         fd = hi;
@@ -117,6 +117,29 @@ void log_msg(const char *a, const char *b)
                           iov(b ? b : "", b ? xstrlen(b) : 0), iov("\n", 1)};
     /* one write, no buffer: this runs on the handler's stack too */
     SC3(NR_writev, C.logfd, io, 5);
+}
+
+/* the message the C library would give for errno e, for the errors the launcher reports */
+static const char *strerr(long e)
+{
+    switch (e < 0 ? -e : e) {
+    case EPERM: return "Operation not permitted";
+    case ENOENT: return "No such file or directory";
+    case EACCES: return "Permission denied";
+    case ENOEXEC: return "Exec format error";
+    case EEXIST: return "File exists";
+    case ENOTDIR: return "Not a directory";
+    case EINVAL: return "Invalid argument";
+    case EROFS: return "Read-only file system";
+    case ENOSYS: return "Function not implemented";
+    case ENAMETOOLONG: return "File name too long";
+    case ENOMEM: return "Cannot allocate memory";
+    case EBUSY: return "Device or resource busy";
+    case EISDIR: return "Is a directory";
+    case EMFILE: return "Too many open files";
+    case ELOOP: return "Too many levels of symbolic links";
+    default: return "error";
+    }
 }
 
 void die_status(int status, const char *what, const char *detail, long err)

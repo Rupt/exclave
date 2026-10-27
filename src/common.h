@@ -19,22 +19,13 @@
 #define PATH_MAX 4096
 #define BINPRM_BUF_SIZE 256 /* the bytes of a file the kernel reads for its #! line (fs/binfmt_script.c) */
 #define NAME_MAX 255
-
-/* ---------- errno ---------- */
-#define EBADF 9
-#define ENOMEM 12
-#define EFAULT 14
-#define EBUSY 16
-#define EXDEV 18
-#define EISDIR 21
-#define ENFILE 23
-#define EMFILE 24
-#define ERANGE 34
-#define ELOOP 40
-#define ENOEXEC 8
-#define E2BIG 7
-#define ESRCH 3
-#define ENOTEMPTY 39
+/* the launcher's tables (8.1.1): the manifest's records, the tree's top-level entries and the identity files (8.1.5);
+ * exclave wrap refuses an exclave beyond them, with the same numbers */
+#define MAX_OWN_RECORDS 256
+#define MAX_HOST_RECORDS 32
+#define MAX_DATA_RECORDS 32
+#define MAX_TOP_LEVEL 256
+#define N_IDENTITY 8
 
 /* ---------- open / at flags ---------- */
 #define O_ACCMODE 03
@@ -58,6 +49,7 @@
 
 /* ---------- signals ---------- */
 #define SIGSYS 31
+#define SIGSYS_BIT (1UL << (SIGSYS - 1))
 #define SA_SIGINFO 4
 #define SA_ONSTACK 0x08000000
 #define SA_RESTORER 0x04000000
@@ -184,11 +176,11 @@ struct exclave {
     /* the manifest (6.2) and what the tree says (8.1); the limits are stated in 8.1 and enforced by exclave wrap */
     char cpu[32];
     /* the manifest's own records (at most 256), then every non-empty top-level entry of the tree (at most 256) */
-    const char *own[512];
+    const char *own[MAX_OWN_RECORDS + MAX_TOP_LEVEL];
     int nown;
-    struct hostmap host[128];
+    struct hostmap host[MAX_HOST_RECORDS + N_IDENTITY];
     int nhost; /* the manifest's host records (at most 32), then the identity files (8.4) */
-    const char *data[32];
+    const char *data[MAX_DATA_RECORDS];
     int ndata; /* data directories: never executed, never a loader (6.2) */
     /* cwd rule (8.1.4) */
     char cwdclaim[PATH_MAX];

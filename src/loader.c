@@ -177,7 +177,6 @@ int elf_probe(const char *real, char *interp, int *is_launcher, void *buf)
 /* The kernel makes the initial stack executable when the program's PT_GNU_STACK asks for it (nested
  * functions, old assembly); the loader must do the same or the program dies on its first trampoline
  *. The stack is found in /proc/self/maps. */
-#define PT_GNU_STACK 0x6474e551U
 static int wants_exec_stack(const Phdr *ph, int n)
 {
     for (int i = 0; i < n; i++)

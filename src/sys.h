@@ -201,17 +201,30 @@ long __sc6_opaque(long n, long a, long b, long c, long d, long e, long f);
 
 #define EPERM 1
 #define ENOENT 2
+#define ESRCH 3
+#define E2BIG 7
+#define ENOEXEC 8
+#define EBADF 9
+#define ENOMEM 12
 #define EACCES 13
+#define EFAULT 14
+#define EBUSY 16
 #define EEXIST 17
-#define EADDRINUSE 98
-#define ECONNREFUSED 111
+#define EXDEV 18
 #define ENOTDIR 20
+#define EISDIR 21
 #define EINVAL 22
+#define ENFILE 23
+#define EMFILE 24
 #define ETXTBSY 26
 #define EROFS 30
-#define ENOTEMPTY 39
-#define ENOSYS 38
+#define ERANGE 34
 #define ENAMETOOLONG 36
+#define ENOSYS 38
+#define ENOTEMPTY 39
+#define ELOOP 40
+#define EADDRINUSE 98
+#define ECONNREFUSED 111
 
 #define S_IFMT 0170000
 #define S_IFDIR 0040000
@@ -223,6 +236,12 @@ long __sc6_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define S_IFSOCK 0140000
 
 #define ST_RDONLY 1 /* statfs's f_flags bit for a read-only mount */
+
+#define F_DUPFD 0
+#define F_GETFD 1
+#define F_GETFL 3
+#define F_DUPFD_CLOEXEC 1030
+#define FD_CLOEXEC 1
 
 #define PR_SET_NO_NEW_PRIVS 38
 
@@ -289,7 +308,9 @@ struct linux_dirent64 {
     unsigned char d_type;
     char d_name[];
 };
+#define DT_UNKNOWN 0
 #define DT_DIR 4
+#define DT_REG 8
 #define DT_LNK 10
 
 /* ---------- thin wrappers ---------- */
@@ -419,27 +440,5 @@ static inline void outs(int fd, const char *s)
         if (r <= 0) return;
         s += r;
         n -= (size_t)r;
-    }
-}
-
-static inline const char *strerr(long e)
-{
-    switch (e < 0 ? -e : e) {
-    case EPERM: return "Operation not permitted";
-    case ENOENT: return "No such file or directory";
-    case EACCES: return "Permission denied";
-    case 8: return "Exec format error";
-    case EEXIST: return "File exists";
-    case ENOTDIR: return "Not a directory";
-    case EINVAL: return "Invalid argument";
-    case EROFS: return "Read-only file system";
-    case ENOSYS: return "Function not implemented";
-    case ENAMETOOLONG: return "File name too long";
-    case 12: return "Cannot allocate memory";
-    case 16: return "Device or resource busy";
-    case 21: return "Is a directory";
-    case 24: return "Too many open files";
-    case 40: return "Too many levels of symbolic links";
-    default: return "error";
     }
 }

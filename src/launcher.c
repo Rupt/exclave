@@ -352,7 +352,7 @@ __attribute__((used)) static void start_c(unsigned long *sp)   /* called by _sta
         if (auxv[i * 2] == AT_PAGESZ && auxv[i * 2 + 1] >= 4096 && !(auxv[i * 2 + 1] & (auxv[i * 2 + 1] - 1)))
             C.pagesz = auxv[i * 2 + 1];
 
-    unsigned long m = 1UL << (SIGSYS - 1);                    /* 7.5.2: SIGSYS must never be blocked */
+    unsigned long m = SIGSYS_BIT;                    /* 7.5.2: SIGSYS must never be blocked */
     sys_rt_sigprocmask(SIG_UNBLOCK, &m, 0, 8);
     /* a program at its descriptor limit may still exec, since the kernel's exec needs no descriptor (7.4.5): the launcher's
      * own opens, the manifest, the tree's top level, the program and its loader, borrow two under the hard limit, given

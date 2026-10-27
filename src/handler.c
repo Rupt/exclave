@@ -14,8 +14,7 @@
 
 #define IN_DONT_FOLLOW 0x02000000
 #define FAN_MARK_DONT_FOLLOW 0x4
-#define SIGSYS_BIT (1UL << (SIGSYS - 1))
-#define STATFS_FLAGS_OFF 80
+#define STATFS_FLAGS_OFF offsetof(struct kstatfs, f_flags)
 #define RENAME_NOREPLACE 1
 #define RENAME_EXCHANGE 2
 #define RENAME_WHITEOUT 4
@@ -28,7 +27,6 @@
 #define IN_MASK_CREATE 0x10000000
 #define IN_MASK_ADD 0x20000000
 #define ALL_INOTIFY_BITS 0xf700efffU /* include/linux/inotify.h */
-#define F_GETFL 3
 #define UTIME_OMIT ((1L << 30) - 2)
 #define UTIME_NOW ((1L << 30) - 1)
 /* fs/utimes.c */
@@ -661,11 +659,6 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
  * close-on-exec that the child launcher closes once the segments are mapped, and the child answers the link's text for
  * /proc/self/exe as the kernel does. A script goes to its interpreter as /dev/fd/N, the kernel's spelling, and a
  * close-on-exec script is ENOENT, since the interpreter could not open it (execveat(2)) */
-#ifndef F_DUPFD
-#define F_DUPFD 0
-#define F_GETFD 1
-#define FD_CLOEXEC 1
-#endif
 static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp)
 {
     /* buffers from the scratch (7.5.4): the number, the stat, the header */

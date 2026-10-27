@@ -23,6 +23,7 @@ typedef struct {
 #define PT_INTERP 3
 #define PT_NOTE 4
 #define PT_PHDR 6
+#define PT_GNU_STACK 0x6474e551U
 #define PF_X 1
 #define PF_W 2
 #define PF_R 4

@@ -18,6 +18,8 @@ static const char *identity_files[] = {"/etc/passwd",
                                        "/etc/ssl/certs/ca-certificates.crt",
                                        "/etc/pki/tls/certs/ca-bundle.crt",
                                        0};
+_Static_assert(sizeof identity_files / sizeof identity_files[0] == N_IDENTITY + 1,
+               "N_IDENTITY counts the identity files");
 
 struct dirent64 {
     unsigned long d_ino;
@@ -26,9 +28,6 @@ struct dirent64 {
     unsigned char d_type;
     char d_name[];
 };
-#define DT_UNKNOWN 0
-#define DT_DIR 4
-#define DT_LNK 10
 
 /* one getdents64: does the directory hold anything but . and ..? A directory that cannot be listed is not a
  * placeholder: it counts as the exclave's, and a failure that is not the directory's own, no
@@ -83,11 +82,11 @@ static void own_from_tree(void)
             if (type == DT_UNKNOWN) {
                 struct kstat st;
                 if (sys_lstat(real, &st) < 0) continue;
-                type = (st.st_mode & S_IFMT) == S_IFDIR ? DT_DIR : (st.st_mode & S_IFMT) == S_IFLNK ? DT_LNK : 8;
+                type = (st.st_mode & S_IFMT) == S_IFDIR ? DT_DIR : (st.st_mode & S_IFMT) == S_IFLNK ? DT_LNK : DT_REG;
             }
             /* a placeholder: ls / shows it, the host owns it */
             if (type == DT_DIR && !dir_nonempty(real)) continue;
-            if (C.nown - first >= 256) die("more than 256 top-level entries in tree/", C.root, 0);
+            if (C.nown - first >= MAX_TOP_LEVEL) die("more than 256 top-level entries in tree/", C.root, 0);
             size_t l = xstrlen(d->d_name);
             char *v = arena_alloc(l + 2);
             v[0] = '/';
@@ -124,7 +123,7 @@ int vis_in_data(const char *v)
 }
 
 /* identity files: link text recorded at startup for readlink fidelity (8.4) */
-static const char *id_link[64];
+static const char *id_link[MAX_HOST_RECORDS + N_IDENTITY]; /* indexed as C.host */
 
 /* resolve a host path's symlink chain on the host; returns the final path in out, first link text in link */
 /* first: p's lstat, already made */

@@ -70,8 +70,6 @@ static int is_token_char(unsigned char c)
 
 /* field kinds */
 enum { F_STR = 1, F_TOK = 2 };
-#define MANIFEST_MAX_OWN 256
-#define MANIFEST_MAX_HOST 32
 struct field {
     int kind;
     const char *s;
@@ -267,12 +265,12 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
         } else if (xstrcmp(key, "own") == 0) {
             WANT(1, F_STR);
             if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "own must be a normalised absolute path");
-            if (c->nown >= MANIFEST_MAX_OWN) return fail(err, errn, K, "more than 256 own records");
+            if (c->nown >= MAX_OWN_RECORDS) return fail(err, errn, K, "more than 256 own records");
             c->own[c->nown++] = f[0].s;
         } else if (xstrcmp(key, "host") == 0) {
             WANT(1, F_STR);
             if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "host must be a normalised absolute path");
-            if (c->nhost >= MANIFEST_MAX_HOST) return fail(err, errn, K, "more than 32 host records");
+            if (c->nhost >= MAX_HOST_RECORDS) return fail(err, errn, K, "more than 32 host records");
             c->host[c->nhost].v = f[0].s;
             c->host[c->nhost].r = f[0].s;
             c->host[c->nhost].is_file = 0;
@@ -280,8 +278,7 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
         } else if (xstrcmp(key, "data") == 0) {
             WANT(1, F_STR);
             if (!valid_abs_path(f[0].s, f[0].n)) return fail(err, errn, K, "data must be a normalised absolute path");
-            if (c->ndata >= (int)(sizeof c->data / sizeof c->data[0]))
-                return fail(err, errn, K, "more than 32 data records");
+            if (c->ndata >= MAX_DATA_RECORDS) return fail(err, errn, K, "more than 32 data records");
             /* never executed, never a loader (6.2); enforced in the handler and the loader */
             c->data[c->ndata++] = f[0].s;
         } else {
