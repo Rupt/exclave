@@ -36,8 +36,37 @@ void buf_str(struct buf *b, const char *s);
 /* a, then a slash unless a ends in one, then b: os.path.join's spelling, which the messages use */
 char *path_join(const char *a, const char *b);
 
+/* the manifest and the hashes file (6.2, 6.4): records of a key and fields, each a string (s) or a bare token (t);
+ * a value is followed by a NUL it does not count, and a string's value may hold NULs of its own */
+enum kind { KIND_MANIFEST, KIND_HASHES };
+struct field {
+    char type;
+    char *v;
+    size_t n;
+};
+struct record {
+    char *key;
+    struct field *f;
+    int nf, line;
+    struct buf comments; /* the comment lines above it, without their #: each its length, a size_t, then its bytes */
+};
+struct records {
+    struct record *r;
+    size_t n;
+};
+/* room for a grammar error: "line L col C: why" */
+#define GRAMMAR_ERR 160
+int grammar_parse(const char *text, size_t n, enum kind kind, struct records *out, char err[GRAMMAR_ERR]);
+void grammar_dump(const struct records *rs, enum kind kind, struct buf *out);
+void grammar_quote(struct buf *out, const char *v, size_t n);
+void records_free(struct records *rs);
+const char *kind_name(enum kind kind);
+
 /* the exclave on disk (6.1) */
 void require_exclave(const char *ex, const char *cmd);
 void tree_hash(const char *root, char out[B2_TEXT]);
 
+char *read_file(const char *path, size_t *n);
+
 int cmd_hash(int argc, char **argv);
+int cmd_format(int argc, char **argv);

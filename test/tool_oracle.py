@@ -12,6 +12,9 @@ text is each
 argument parser's own. A difference that is right goes into EXPECTED with the rule that makes it
 so. Prints one line per difference and a summary; exit status 1 when one is unexplained.
 
+Format takes files instead: batches of manifests and hashes files, valid, reordered and malformed
+(test/grammar_test.py's), and the given exclaves' own, with and without --check.
+
 Generated trees hold names with spaces, newlines, non-UTF-8 bytes and the reserved .real; wrappers
 with their originals, originals without a wrapper, links that dangle, loop, climb out of the tree
 or name a directory; empty directories, executables, a pipe, and at most one entry no one can
@@ -29,6 +32,7 @@ import subprocess
 import sys
 lazy from collections.abc import Callable
 
+import grammar_test
 import tree
 from exclave_cmd import PORTED
 
@@ -139,15 +143,85 @@ def restore_modes(path: str) -> None:
 def answer(cmd: list[str], args: list[str], make: Callable[[str], None] | None, at: str) -> tuple:
     """Run one implementation on its own copy of the input; return what it answered and left.
 
-    make puts the input at the path given, which args name as EX; None runs args as they are.
+    make puts the input at the path given, which args name as EX, or EX/NAME for a file in it; None
+    runs args as they are.
     """
     if make is not None:
         make(at)
-    target = [at if a == "EX" else a for a in args]
-    p = subprocess.run([*cmd, *target], capture_output=True, check=False, timeout=600)
+    target = [at + a[2:] if a == "EX" or a.startswith("EX/") else a for a in args]
+    # the command holds what it allocated when it exits, refusing or not: a leak is no finding
+    env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0")
+    p = subprocess.run([*cmd, *target], capture_output=True, check=False, timeout=600, env=env)
     out, err = (x.replace(os.fsencode(at), b"EX") for x in (p.stdout, p.stderr))
     left = snapshot(at) if make is not None and os.path.isdir(at) else []
     return p.returncode, out, err if p.returncode != 2 else b"", left
+
+
+def grammar_file(rng: random.Random) -> bytes:
+    """Return a manifest or a hashes file: valid, reordered or malformed."""
+    if rng.random() < 0.3:
+        recs = [
+            b"hashes 1",
+            b'tool "0.1.0"',
+            b"pkg "
+            + grammar_test.quote(grammar_test.rand_bytes(rng)).encode()
+            + b' "1" "a" "b2:0"',
+            b'pkg "a" "2" "all" "b2:1"',
+            b'tree "b2:2"',
+        ]
+        rest = recs[1:]
+        rng.shuffle(rest)
+        sep = b"\n\n" if rng.random() < 0.7 else b"\n"
+        text = sep.join([recs[0], *rest]) + b"\n"
+        return rng.choice(grammar_test.MUTATIONS)(text, rng) if rng.random() < 0.3 else text
+    text = grammar_test.near_manifest(rng)
+    if rng.random() < 0.3:  # the same records in another order
+        lines = text.split(b"\n")
+        middle = lines[1:-1]
+        rng.shuffle(middle)
+        text = b"\n".join([lines[0], *middle, lines[-1]])
+    return text
+
+
+def make_files(at: str, texts: list[bytes]) -> None:
+    os.makedirs(at)
+    for i, t in enumerate(texts):
+        with open(os.path.join(at, f"f{i}"), "wb") as f:
+            f.write(t)
+
+
+def format_cases(
+    rng: random.Random, batches: int, given: list[str]
+) -> list[tuple[str, list[str], Callable[[str], None] | str | None]]:
+    """Return format's cases: generated files in batches, the given exclaves' own, and usage."""
+    cases: list[tuple[str, list[str], Callable[[str], None] | str | None]] = [
+        ("usage", [], None),
+        ("usage", ["--check"], None),
+        ("usage", ["--bogus", "x"], None),
+    ]
+    for i in range(batches):
+        texts = [grammar_file(rng) for _ in range(20)]
+        names = [f"EX/f{j}" for j in range(len(texts))]
+        cases += [
+            (f"batch {i}", [*check, *names], lambda at, t=texts: make_files(at, t))
+            for check in ([], ["--check"])
+        ]
+    for e in given:
+        texts = []
+        for f in ("manifest", "hashes"):
+            with open(os.path.join(e, ".exclave", f), "rb") as fh:
+                texts.append(fh.read())
+        cases.append(
+            (
+                f"given {os.path.basename(e)}",
+                ["--ch", "EX/f0", "EX/f1"],
+                lambda at, t=texts: make_files(at, t),
+            )
+        )
+    # a file that is not there, and a directory, after one that is
+    cases.append(("absent", ["EX/f0", "EX/absent"], lambda at: make_files(at, [b"exclave 1\n"])))
+    cases.append(("directory", ["--", "EX"], lambda at: make_files(at, [])))
+    return cases
 
 
 def main() -> int:
@@ -198,6 +272,8 @@ def main() -> int:
             ("usage", ["a", "b"], None),
         ]
         cases += [(label, ["EX"], made) for label, made in inputs]
+        if cmd == "format":
+            cases = format_cases(rng, args.cases, [os.path.abspath(e) for e in args.exclave])
         for i, (label, argv, given) in enumerate(cases):
             made = given
             if isinstance(given, str) and cmd in WRITES and label.startswith("given"):
@@ -207,7 +283,7 @@ def main() -> int:
                 at = os.path.join(work, f"{impl}-{cmd}-{i}")
                 if isinstance(made, str):
                     results.append(
-                        answer(tool_cmd, [made if a == "EX" else a for a in argv], None, at)
+                        answer(tool_cmd, [made if a == "EX" else a for a in argv], None, made)
                     )
                 else:
                     results.append(answer(tool_cmd, argv, made, at))

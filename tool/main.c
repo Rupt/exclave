@@ -1,11 +1,15 @@
 /* main.c — the exclave command's entry: its commands, and what every one shares (DESIGN.md 10).
  *
- *     exclave hash EXCLAVE    The tree hash of 6.4. */
+ *     exclave format [--check] FILE...    Parse with the strict grammar and rewrite in canonical form; --check
+ *                                         only reports.
+ *     exclave hash EXCLAVE                The tree hash of 6.4. */
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "tool.h"
 
 _Noreturn void fail(const char *fmt, ...)
@@ -51,6 +55,24 @@ char *path_join(const char *a, const char *b)
     return p.p;
 }
 
+char *read_file(const char *path, size_t *n)
+{
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) fail_errno(path);
+    struct buf b = {0};
+    char chunk[1 << 16];
+    for (;;) {
+        ssize_t k = read(fd, chunk, sizeof chunk);
+        if (k < 0) fail_errno(path);
+        if (k == 0) break;
+        buf_add(&b, chunk, (size_t)k);
+    }
+    close(fd);
+    *n = b.n;
+    buf_add(&b, "", 1);
+    return b.p;
+}
+
 static _Noreturn void usage(const char *line)
 {
     fprintf(stderr, "usage: exclave %s\n", line);
@@ -68,12 +90,61 @@ int cmd_hash(int argc, char **argv)
     return 0;
 }
 
+/* Each file is a manifest or a hashes file by its first record, not its name (6.5). */
+int cmd_format(int argc, char **argv)
+{
+    int check = 0, files = 0, options = 1;
+    for (int i = 0; i < argc; i++) {
+        size_t k = strlen(argv[i]);
+        if (options && !strcmp(argv[i], "--")) options = 0;
+        else if (options && k > 2 && !strncmp(argv[i], "--check", k)) /* any prefix, as argparse takes one */ check = 1;
+        else if (options && argv[i][0] == '-' && argv[i][1]) usage("format [--check] FILE...");
+        else argv[files++] = argv[i];
+    }
+    if (!files) usage("format [--check] FILE...");
+    int rc = 0;
+    for (int i = 0; i < files; i++) {
+        size_t n;
+        char *data = read_file(argv[i], &n), err[GRAMMAR_ERR];
+        const char *first = data; /* the first line that is neither empty nor a comment */
+        while (first < data + n && (*first == '\n' || *first == '#')) {
+            const char *lf = memchr(first, '\n', (size_t)(data + n - first));
+            first = lf ? lf + 1 : data + n;
+        }
+        enum kind kind = !strncmp(first, "hashes ", 7) ? KIND_HASHES : KIND_MANIFEST;
+        struct records rs;
+        if (grammar_parse(data, n, kind, &rs, err)) {
+            printf("%s: %s\n", argv[i], err);
+            rc = 1;
+            free(data);
+            continue;
+        }
+        struct buf canon = {0};
+        grammar_dump(&rs, kind, &canon);
+        records_free(&rs);
+        if (canon.n != n || memcmp(canon.p, data, n) != 0) {
+            if (check) {
+                printf("%s: not canonical\n", argv[i]);
+                rc = 1;
+            } else {
+                FILE *f = fopen(argv[i], "wb");
+                if (!f || fwrite(canon.p, 1, canon.n, f) != canon.n || fclose(f)) fail_errno(argv[i]);
+                printf("%s: rewritten\n", argv[i]);
+            }
+        }
+        free(canon.p);
+        free(data);
+    }
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
     static const struct {
         const char *name;
         int (*run)(int, char **);
     } commands[] = {
+        {"format", cmd_format},
         {"hash", cmd_hash},
     };
     if (argc < 2) usage("COMMAND ARGS...");
