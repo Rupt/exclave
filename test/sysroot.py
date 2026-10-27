@@ -18,6 +18,7 @@ CentOS 7 at glibc 2.17 included.
 import argparse
 import glob
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -25,13 +26,9 @@ import sys
 
 import tree
 
-from exclave import grammar, layout
-lazy from exclave import elfcheck
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-# the tool, as the pinned Python runs it: the exclave package's entry point
-TOOL = (sys.executable, "-m", "exclave")
+TOOL = tree.TOOL
 UNPACK = (sys.executable, "-m", "unpack")
 
 
@@ -77,18 +74,10 @@ def main() -> int:
         sys.exit("unpack: " + out + err)
     dst = os.path.join(ex, "tree", args.prefix.lstrip("/"))
     shutil.copytree(
-        os.path.join(sysroot_ex, "tree"), dst, symlinks=True, copy_function=layout.link_or_copy
+        os.path.join(sysroot_ex, "tree"), dst, symlinks=True, copy_function=tree.link_or_copy
     )
     with open(os.path.join(ex, ".exclave", "manifest"), "wb") as f:
-        f.write(
-            grammar.dump(
-                [
-                    grammar.Record("exclave", [("t", b"1")]),
-                    grammar.Record("data", [("s", args.prefix.encode())]),
-                ],
-                "exclave",
-            )
-        )
+        f.write(f'exclave 1\n\ndata "{args.prefix}"\n'.encode())
     rc, out, err = run([*TOOL, "wrap", ex])
     if rc:
         sys.exit("wrap: " + out + err)
@@ -124,9 +113,7 @@ def main() -> int:
         set(re.findall(r"GLIBC_([0-9.]+)", out)), key=lambda v: [int(x) for x in v.split(".")]
     )
     # the banner in libc.so.6, any glibc
-    gv = elfcheck.glibc_version(
-        elfcheck.Tree(os.path.join(sysroot_ex, "tree")), elfcheck.machine_for(sysroot_ex)
-    )
+    gv = tree.glibc_version(os.path.join(sysroot_ex, "tree"), platform.machine())
     if gv is None:
         sys.exit("cannot read the sysroot's glibc version from its libc.so.6")
     have = f"{gv[0]:d}.{gv[1]:d}"

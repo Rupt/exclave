@@ -20,13 +20,11 @@ lazy from collections.abc import Iterable
 
 import tree
 
-from exclave import build, layout
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
 # the identity files the launcher answers from the host (8.4)
-IDENTITY = build.IDENTITY_FILES
+IDENTITY = tree.IDENTITY_FILES
 
 
 @dataclasses.dataclass(frozen=True)
@@ -249,10 +247,8 @@ def main() -> int:
     # an unwrapped copy of the tree for bwrap: hard links, then the originals moved back over the
     # wrappers
     root = os.path.join(work, "bare", "tree")
-    shutil.copytree(
-        os.path.join(ex, "tree"), root, symlinks=True, copy_function=layout.link_or_copy
-    )
-    build.unwrap(os.path.join(work, "bare"), log=lambda *_: None)
+    shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=tree.link_or_copy)
+    tree.unwrap_tree(os.path.join(work, "bare"))
     with open(os.path.join(root, "usr", "share", "exclave-test-marker"), "w") as f:
         f.write("marker\n")
     # an identity file that is a host symlink: a bind of the host's file would hide its link text,

@@ -96,8 +96,6 @@ import tree
 from oracle_resolve import make_maze
 from syscalls import kernel_table
 
-from exclave import build, layout
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
@@ -133,7 +131,7 @@ FS_IOC_FSSETXATTR = 0x401C5820  # _IOW('X', 32, struct fsxattr), the same on bot
 IN_MODIFY = 2
 STATX_BASIC_STATS = 0x7FF
 # the identity files the launcher answers from the host (8.4)
-IDENTITY = build.IDENTITY_FILES
+IDENTITY = tree.IDENTITY_FILES
 
 
 def hx(s: str | bytes) -> str:
@@ -1262,9 +1260,9 @@ def main() -> int:
     # same maze in both
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(
-        os.path.join(given, "tree"), root, symlinks=True, copy_function=layout.link_or_copy
+        os.path.join(given, "tree"), root, symlinks=True, copy_function=tree.link_or_copy
     )
-    build.unwrap(os.path.join(work, "bare"), log=lambda *_: None)
+    tree.unwrap_tree(os.path.join(work, "bare"))
     # the launcher's world: a copy relinked with the build (17)
     ex = tree.fresh_exclave(given, os.path.join(work, "exclave"))
     dirs, files, links = make_maze(root, rng)
