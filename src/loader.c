@@ -308,14 +308,20 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
     sys_prctl(PR_SET_NAME, (unsigned long)C.comm, 0, 0, 0);
     log_line("load", 0, vpath);
     debug_hook();                                             /* 7.6: gdb, if present, learns the mappings here */
+    /* the program's start: its stack, no rtld_fini in rdx (x0), as the kernel gives, and no frame to return to. The
+     * inputs are pinned to registers the jump never writes: neither may share one with rdx, rbp, x0, x29 or x30 */
 #if defined(__x86_64__)
     __asm__ volatile("mov %0, %%rsp\n xor %%rdx, %%rdx\n xor %%rbp, %%rbp\n jmp *%1\n"
                      :
-                     : "r"(sp), "r"(jump)
+                     : "S"(sp), "c"(jump)
                      : "memory");
 #elif defined(__aarch64__)
-    /* x0: no rtld_fini, as the kernel gives */
-    __asm__ volatile("mov sp, %0\n mov x0, #0\n mov x29, #0\n mov x30, #0\n br %1\n" : : "r"(sp), "r"(jump) : "memory");
+    register unsigned long *start_sp __asm__("x1") = sp;
+    register unsigned long start_pc __asm__("x2") = jump;
+    __asm__ volatile("mov sp, %0\n mov x0, #0\n mov x29, #0\n mov x30, #0\n br %1\n"
+                     :
+                     : "r"(start_sp), "r"(start_pc)
+                     : "memory");
 #endif
     __builtin_unreachable();
 }
