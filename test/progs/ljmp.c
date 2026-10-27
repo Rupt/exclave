@@ -11,7 +11,11 @@
 #include <sys/time.h>
 #include <unistd.h>
 static sigjmp_buf env;
-static void h(int s) { siglongjmp(env, 1); }
+static void h(int s)
+{
+    (void)s;
+    siglongjmp(env, 1);
+}
 int main(int argc, char **argv)
 {
     if (argc < 3) return 2;

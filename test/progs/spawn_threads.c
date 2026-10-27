@@ -73,7 +73,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: spawn_threads HOSTDIR PROGRAM\n");
         return 2;
     }
-    const char *host = argv[1], *prog = argv[2];
+    const char *host = argv[1];
+    char *const prog = argv[2];
     long n = readlink("/proc/self/exe", exe, sizeof exe - 1);
     exe[n > 0 ? n : 0] = 0;
     /* part 1: four threads trapping throughout 200 spawns from the main thread */
@@ -82,7 +83,7 @@ int main(int argc, char **argv)
     int spawned = 0;
     for (int i = 0; i < 200; i++) {
         pid_t pid;
-        char *av[] = {(char *)prog, 0};
+        char *av[] = {prog, 0};
         if (posix_spawn(&pid, prog, 0, 0, av, environ) == 0) {
             int st;
             waitpid(pid, &st, 0);

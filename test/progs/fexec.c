@@ -117,7 +117,7 @@ int main(int argc, char **argv)
         snprintf(p, sizeof p, "%s/unlinked-prog", host);
         int w = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0755);
         if (w >= 0) {
-            write(w, elf, n);
+            if (write(w, elf, n) != (ssize_t)n) perror(p);
             close(w);
         }
         int fd = open(p, O_RDONLY);
@@ -141,7 +141,7 @@ int main(int argc, char **argv)
         snprintf(p, sizeof p, "%s/unlinked-script", host);
         int w = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0755);
         if (w >= 0) {
-            write(w, script, sizeof script - 1);
+            if (write(w, script, sizeof script - 1) != (ssize_t)(sizeof script - 1)) perror(p);
             close(w);
         }
         int fd = open(p, O_RDONLY);
@@ -154,7 +154,7 @@ int main(int argc, char **argv)
         snprintf(p, sizeof p, "%s/linked-prog", host);
         int w = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0755);
         if (w >= 0) {
-            write(w, elf, n);
+            if (write(w, elf, n) != (ssize_t)n) perror(p);
             close(w);
         }
         int fd = open(p, O_RDONLY);

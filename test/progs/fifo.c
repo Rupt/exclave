@@ -17,6 +17,7 @@ static volatile int hits;
 static void h(int s)
 {
     struct stat st;
+    (void)s;
     if (stat("/usr/share", &st) == 0 && unlink(tmpf) == 0) hits++;
 }
 static void *intr(void *a)

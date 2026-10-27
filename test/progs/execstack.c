@@ -4,6 +4,7 @@
 static int apply(int (*f)(int), int x) { return f(x); }
 int main(int argc, char **argv)
 {
+    (void)argv;
     int k = argc + 6;
     int add(int x) { return x + k; }
     printf("result %d\n", apply(add, 5));

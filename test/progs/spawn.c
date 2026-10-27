@@ -34,6 +34,7 @@ static int spawn_true(void)
 }
 static void *w(void *a)
 {
+    (void)a;
     for (int i = 0; i < 25; i++) {
         int r = spawn_true();
         if (r) return (void *)(long)r;

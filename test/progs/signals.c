@@ -28,11 +28,13 @@ static unsigned long sigblk(void)
 static void h_stat(int s)
 {
     struct stat st;
+    (void)s;
     if (stat("/usr/share/exclave-test-marker", &st) == 0) hits++;
 }
 static void h_exe(int s)
 {
     char b[256];
+    (void)s;
     if (readlink("/proc/self/exe", b, 255) > 0) hits++;
 }
 

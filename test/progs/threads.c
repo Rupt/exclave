@@ -18,16 +18,17 @@ static void *fp(void *a)
     double s = 0;
     struct stat st;
     for (int i = 1; i <= 1000; i++) {
-        s += sqrt((double)i * n);
+        s += sqrt((double)i * (double)n);
         if (i % 100 == 0 && stat("/usr/share/exclave-test-marker", &st)) return (void *)1;
     }
     double want = 0;
-    for (int i = 1; i <= 1000; i++) want += sqrt((double)i * n);
+    for (int i = 1; i <= 1000; i++) want += sqrt((double)i * (double)n);
     tl += (int)n;
     return (s == want && tl == 5 + (int)n) ? 0 : (void *)2;
 }
 static void *many(void *a)
 {
+    (void)a;
     struct stat st;
     for (int i = 0; i < 2000; i++)
         if (stat(i & 1 ? "/usr/share" : "/usr/share/exclave-test-marker", &st)) return (void *)1;

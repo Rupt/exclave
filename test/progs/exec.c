@@ -140,7 +140,6 @@ int main(int argc, char **argv)
     }
     if (!strcmp(mode, "vectors")) { /* NULL and bad vectors behave as the kernel makes them */
         int fails = 0;
-        extern char **environ;
         for (int t = 2; t < argc; t++) {
             struct {
                 const char *name;
@@ -184,11 +183,17 @@ int main(int argc, char **argv)
     if (!strcmp(mode, "closefds")) {
         for (int fd = 3; fd < 1024; fd++) close(fd);
         int fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        write(fd, "line one\n", 9);
+        if (write(fd, "line one\n", 9) != 9) {
+            perror(argv[2]);
+            return 1;
+        }
         struct stat st;
         stat("/usr/share", &st);
         stat(getenv("EXCLAVE_TEST_SH") ? getenv("EXCLAVE_TEST_SH") : "/usr/bin/sh", &st);
-        write(fd, "line two\n", 9);
+        if (write(fd, "line two\n", 9) != 9) {
+            perror(argv[2]);
+            return 1;
+        }
         close(fd);
         printf("closefds done fd=%d\n", fd);
         return 0;

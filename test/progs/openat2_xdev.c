@@ -58,7 +58,10 @@ int main(int argc, char **argv)
     }
     snprintf(p, sizeof p, "%s/lnk", host);
     unlink(p);
-    symlink("file", p);
+    if (symlink("file", p) != 0) {
+        perror("symlink");
+        return 2;
+    }
     snprintf(p, sizeof p, "%s/sub", host);
     mkdir(p, 0755);
     int dev = open("/dev", O_PATH | O_DIRECTORY), proc = open("/proc", O_PATH | O_DIRECTORY),

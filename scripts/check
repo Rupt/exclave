@@ -78,6 +78,11 @@ for f in test/*_test.c test/sanitize.c src/manifest.c src/filter.c src/isa.c src
 done
 quiet host_cc -DSCRATCH_TEST src/scratch.c -Werror -c -o /dev/null &
 pids="$pids $!"
+# the test programs too, but for string literals in an exec's argv, its natural spelling
+for f in test/progs/*.c; do
+    quiet host_cc -pthread -Wno-discarded-qualifiers "$f" -Werror -c -o /dev/null &
+    pids="$pids $!"
+done
 for target in x86_64 aarch64; do
     for f in src/*.c; do
         quiet .venv/bin/clang-tidy --quiet "$f" -- --target=$target-linux-gnu -std=gnu11 -ffreestanding -fno-builtin -nostdlib &

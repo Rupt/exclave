@@ -96,8 +96,10 @@ static const char *exec_answer(struct ex *x)
 {
     static char b[200];
     int p[2], e[2];
-    pipe2(p, O_CLOEXEC);
-    pipe(e);
+    if (pipe2(p, O_CLOEXEC) != 0 || pipe(e) != 0) {
+        perror("pipe");
+        exit(2);
+    }
     fflush(stdout);
     pid_t c = fork();
     if (c == 0) {
@@ -123,7 +125,7 @@ static const char *exec_answer(struct ex *x)
         }
         execve(x->path, x->argv, x->envp ? x->envp : environ);
         int err = errno;
-        write(x->nofds == 1 || x->nofds == 2 ? 3 : p[1], &err, sizeof err);
+        if (write(x->nofds == 1 || x->nofds == 2 ? 3 : p[1], &err, sizeof err) < 0) perror("exec answer");
         _exit(1);
     }
     close(p[1]);
@@ -173,7 +175,11 @@ static void copy_self(const char *to)
     }
     char b[65536];
     ssize_t n;
-    while ((n = read(i, b, sizeof b)) > 0) write(o, b, (size_t)n);
+    while ((n = read(i, b, sizeof b)) > 0)
+        if (write(o, b, (size_t)n) != n) {
+            perror("copy self");
+            exit(2);
+        }
     close(i);
     close(o);
 }
@@ -203,7 +209,10 @@ static int interp_to_dir(const char *path, const char *dir)
         if (type == 3 && filesz > strlen(dir) + 1) {
             char *z = calloc(1, filesz);
             memcpy(z, dir, strlen(dir));
-            pwrite(fd, z, filesz, (off_t)off);
+            if (pwrite(fd, z, filesz, (off_t)off) != (ssize_t)filesz) {
+                perror("interp to dir");
+                exit(2);
+            }
             free(z);
             close(fd);
             return 0;
@@ -244,11 +253,18 @@ int main(int argc, char **argv)
     snprintf(p, sizeof p, "%s/f", hd);
     {
         int c = open(p, O_WRONLY | O_CREAT, 0644);
-        write(c, "f\n", 2);
+        if (write(c, "f\n", 2) != 2) {
+            perror(p);
+            return 2;
+        }
         close(c);
     }
     snprintf(q, sizeof q, "%s/hl", hd);
-    symlink("f", q); /* a host symlink of one byte of text */
+    /* a host symlink of one byte of text */
+    if (symlink("f", q) != 0) {
+        perror(q);
+        return 2;
+    }
     int hfd = open(hd, O_RDONLY | O_DIRECTORY);
     struct stat st;
     struct timespec ts[2] = {{1000, 0}, {2000, 0}};
@@ -313,8 +329,8 @@ int main(int argc, char **argv)
     snprintf(p, sizeof p, "%s/self", hd);
     copy_self(p);
     {
-        char *const av[] = {(char *)p, (char *)hd, "--child", 0};
-        struct ex x = {p, av, 0};
+        char *const av[] = {(char *)p, argv[1], "--child", 0};
+        struct ex x = {p, av, 0, 0, 0};
         printf("exec of a host ELF with EXCLAVE_* set: %s\n", exec_answer(&x));
     }
     {
@@ -323,7 +339,7 @@ int main(int argc, char **argv)
             "read c < /proc/self/comm; echo \"wrapper with EXCLAVE_* set: comm=$c EXCLAVE_EXEC=${EXCLAVE_EXEC:-unset} "
             "EXCLAVE_EXECFN=${EXCLAVE_EXECFN:-unset} EXCLAVE_COMM=${EXCLAVE_COMM:-unset}\"",
             0};
-        struct ex x = {sh, av, 0};
+        struct ex x = {sh, av, 0, 0, 0};
         const char *ans = exec_answer(&x);
         if (strncmp(ans, "ran, exit 0", 11)) printf("wrapper with EXCLAVE_* set: %s\n", ans);
     }
@@ -342,7 +358,10 @@ int main(int argc, char **argv)
         P("deleted cwd: stat ../f", stat("../f", &st));
         P("deleted cwd: mkdir x", mkdir("x", 0755));
         P("deleted cwd: open x O_CREAT", open("x", O_WRONLY | O_CREAT, 0644));
-        chdir(hd);
+        if (chdir(hd) != 0) {
+            perror(hd);
+            return 2;
+        }
     }
 
     /* 4. an exec with no descriptor left: the kernel needs none */
@@ -365,15 +384,15 @@ int main(int argc, char **argv)
         cases[1].path = ep;
         cases[2].path = sp;
         char *const av_true[] = {"true", 0};
-        char *const av_self[] = {ep, (char *)hd, "--child", 0};
+        char *const av_self[] = {ep, argv[1], "--child", 0};
         char *const av_sh[] = {"s.sh", 0};
         char *const *avs[] = {av_true, av_self, av_sh};
         for (int i = 0; i < 3; i++) {
-            struct ex x = {cases[i].path, avs[i], 1};
+            struct ex x = {cases[i].path, avs[i], 1, 0, 0};
             printf("%s: %s\n", cases[i].name, exec_answer(&x));
         }
         {
-            struct ex x = {tp, av_true, 2};
+            struct ex x = {tp, av_true, 2, 0, 0};
             printf("no fd left, hard limit too: exec exclave true: %s\n", exec_answer(&x));
         }
     }
@@ -429,11 +448,14 @@ int main(int argc, char **argv)
 
     /* 8. interpreters: a loop, a chain, an empty line, a missing one; an empty file; a loader that is a directory */
     snprintf(p, sizeof p, "%s/loop.sh", sd);
-    snprintf(q, sizeof q, "#!%s\n", p);
+    if (snprintf(q, sizeof q, "#!%s\n", p) >= (int)sizeof q) {
+        fprintf(stderr, "%s: too long for a #! line\n", p);
+        return 2;
+    }
     script(p, q);
     {
         char *const av[] = {"loop.sh", 0};
-        struct ex x = {p, av, 0};
+        struct ex x = {p, av, 0, 0, 0};
         printf("exec of a script that is its own interpreter: %s\n", exec_answer(&x));
     }
     for (int n = 3; n <= 6; n++) {
@@ -445,28 +467,28 @@ int main(int argc, char **argv)
         }
         snprintf(p, sizeof p, "%s/c%d_1.sh", sd, n);
         char *const av[] = {"c", 0};
-        struct ex x = {p, av, 0};
+        struct ex x = {p, av, 0, 0, 0};
         printf("exec of a chain of %d scripts: %s\n", n, exec_answer(&x));
     }
     snprintf(p, sizeof p, "%s/bare.sh", hd);
     script(p, "#!   \n");
     {
         char *const av[] = {"bare.sh", 0};
-        struct ex x = {p, av, 0};
+        struct ex x = {p, av, 0, 0, 0};
         printf("exec of a script with an empty #! line: %s\n", exec_answer(&x));
     }
     snprintf(p, sizeof p, "%s/empty", hd);
     script(p, "");
     {
         char *const av[] = {"empty", 0};
-        struct ex x = {p, av, 0};
+        struct ex x = {p, av, 0, 0, 0};
         printf("exec of an empty executable: %s\n", exec_answer(&x));
     }
     snprintf(p, sizeof p, "%s/dirinterp", hd);
     copy_self(p);
     if (interp_to_dir(p, "/usr/bin") == 0) {
         char *const av[] = {"dirinterp", 0};
-        struct ex x = {p, av, 0};
+        struct ex x = {p, av, 0, 0, 0};
         printf("exec of an ELF whose loader is a directory: %s\n", exec_answer(&x));
     } else printf("exec of an ELF whose loader is a directory: static (no PT_INTERP)\n");
 
@@ -488,7 +510,7 @@ int main(int argc, char **argv)
             close(2);
             int r0 = stat("/usr/share/exclave-test-marker", &st);
             int r1 = open("/usr/share/exclave-test-marker", O_RDONLY);
-            int r2 = readlink("/proc/self/exe", buf, sizeof buf);
+            long r2 = readlink("/proc/self/exe", buf, sizeof buf);
             dup2(keep, 1);
             close(keep);
             if (r1 >= 0) close(r1);
@@ -498,7 +520,10 @@ int main(int argc, char **argv)
         /* 10. descriptors that name no file, given to exec; a device; /proc/self/exe by its own magic link */
         {
             int pp[2];
-            pipe(pp);
+            if (pipe(pp) != 0) {
+                perror("pipe");
+                return 2;
+            }
             char *const av2[] = {"x", 0};
             snprintf(q, sizeof q, "/proc/self/fd/%d", pp[0]);
             fflush(stdout);
@@ -556,10 +581,11 @@ int main(int argc, char **argv)
         close(cf);
         for (int i = 41; i >= 1; i--) {
             snprintf(p, sizeof p, "%s/l%d", hd, i);
-            if (i == 41) symlink("f", p);
-            else {
-                snprintf(q, sizeof q, "l%d", i + 1);
-                symlink(q, p);
+            if (i == 41) snprintf(q, sizeof q, "f");
+            else snprintf(q, sizeof q, "l%d", i + 1);
+            if (symlink(q, p) != 0) {
+                perror(p);
+                return 2;
             }
         }
         snprintf(p, sizeof p, "%s/l2", hd);
@@ -715,7 +741,8 @@ int main(int argc, char **argv)
         static char *big[50002];
         static char strs[50000][12];
         for (int i = 0; i < 50000; i++) {
-            snprintf(strs[i], 12, "V%d=%d", i, i);
+            /* from V10000 on, the value is one digit short, as twelve bytes hold */
+            snprintf(strs[i], sizeof strs[i], "V%d=%d", i, i < 10000 ? i : i / 10);
             big[i] = strs[i];
         }
         big[50000] = 0;
@@ -735,7 +762,10 @@ int main(int argc, char **argv)
         char *pg = mmap(0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         mprotect(pg + 4096, 4096, PROT_NONE);
         snprintf(q, sizeof q, "%s/hl_long", hd);
-        symlink("0123456789abcdef0123456789abcdef", q);
+        if (symlink("0123456789abcdef0123456789abcdef", q) != 0) {
+            perror(q);
+            return 2;
+        }
         P("readlink whose write crosses into an unmapped page", readlink(q, pg + 4090, 32));
         munmap(pg, 8192);
     }
@@ -744,7 +774,7 @@ int main(int argc, char **argv)
     copy_self(p);
     chmod(p, 0111);
     {
-        char *const av[] = {"u", (char *)hd, "--child", 0};
+        char *const av[] = {"u", argv[1], "--child", 0};
         struct ex x = {p, av, 0, 0, 0};
         printf("exec of an ELF with mode 0111: %s\n", exec_answer(&x));
     }

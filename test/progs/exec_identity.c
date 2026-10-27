@@ -49,13 +49,13 @@ static void child_lines(const char *tag, int dfd, const char *path, char *const 
         syscall(SYS_execveat, dfd, path, av, environ, flags);
         char line[128];
         int n = snprintf(line, sizeof line, "%s: %s\n", tag, en(errno));
-        write(1, line, (size_t)n);
+        if (write(1, line, (size_t)n) < 0) perror(tag);
         _exit(1);
     }
     close(p[1]);
     char buf[8192];
     int n = 0, r;
-    while ((r = (int)read(p[0], buf + n, sizeof buf - 1 - n)) > 0) n += r;
+    while ((r = (int)read(p[0], buf + n, sizeof buf - 1 - (size_t)n)) > 0) n += r;
     buf[n] = 0;
     close(p[0]);
     waitpid(c, 0, 0);
@@ -77,7 +77,11 @@ static void copy_self(const char *to)
     }
     char b[65536];
     ssize_t n;
-    while ((n = read(i, b, sizeof b)) > 0) write(o, b, (size_t)n);
+    while ((n = read(i, b, sizeof b)) > 0)
+        if (write(o, b, (size_t)n) != n) {
+            perror("copy self");
+            exit(2);
+        }
     close(i);
     close(o);
 }
@@ -108,7 +112,10 @@ static int break_interp(const char *path)
         /* the byte before the NUL */
         if (type == 3 && filesz >= 2) {
             char q = 'q';
-            pwrite(fd, &q, 1, (off_t)(off + filesz - 2));
+            if (pwrite(fd, &q, 1, (off_t)(off + filesz - 2)) != 1) {
+                perror("break interp");
+                exit(2);
+            }
             close(fd);
             return 0;
         }
@@ -123,7 +130,8 @@ int main(int argc, char **argv)
         char c[64] = {0};
         int fd = open("/proc/self/comm", O_RDONLY);
         if (fd >= 0) {
-            read(fd, c, 63);
+            /* an unreadable comm leaves the line's answer empty */
+            if (read(fd, c, 63) < 0) c[0] = 0;
             close(fd);
         }
         c[strcspn(c, "\n")] = 0;
@@ -135,7 +143,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: exec_identity HOSTDIR\n");
         return 2;
     }
-    const char *hd = argv[1];
+    char *const hd = argv[1];
     char p[4096];
     int hfd = open(hd, O_RDONLY | O_DIRECTORY);
     if (hfd < 0) {
@@ -145,13 +153,13 @@ int main(int argc, char **argv)
     /* a host ELF by an absolute path and by a relative one, argv[0] renamed: comm and AT_EXECFN are the path's */
     snprintf(p, sizeof p, "%s/prog2", hd);
     copy_self(p);
-    char *const abs_av[] = {"renamed", (char *)hd, "--child", "abs", 0};
+    char *const abs_av[] = {"renamed", hd, "--child", "abs", 0};
     child_lines("abs", AT_FDCWD, p, abs_av, 0);
     if (chdir(hd)) {
         perror("chdir");
         return 2;
     }
-    char *const rel_av[] = {"renamed", (char *)hd, "--child", "rel", 0};
+    char *const rel_av[] = {"renamed", hd, "--child", "rel", 0};
     child_lines("rel", AT_FDCWD, "prog2", rel_av, 0);
     /* a host script relative to a descriptor: the interpreter gets /dev/fd/N/name, comm is the name */
     snprintf(p, sizeof p, "%s/s.sh", hd);
@@ -175,17 +183,20 @@ int main(int argc, char **argv)
     /* a host ELF through a descriptor: comm the file's own name, AT_EXECFN /dev/fd/N */
     snprintf(p, sizeof p, "%s/prog2", hd);
     int efd = open(p, O_RDONLY);
-    char *const fd_av[] = {"renamed", (char *)hd, "--child", "fd elf", 0};
+    char *const fd_av[] = {"renamed", hd, "--child", "fd elf", 0};
     child_lines("fd elf", efd, "", fd_av, AT_EMPTY_PATH);
     close(efd);
     /* what execve itself answers: a 32-bit header the loader cannot load, and a loader the exclave lacks */
     snprintf(p, sizeof p, "%s/elf32", hd);
     {
         int o = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0755);
-        write(o,
-              "\x7f"
-              "ELF\x01\x01\x01\0\0\0\0\0\0\0\0\0\x02\0\x03\0\x01\0\0\0",
-              24);
+        if (write(o,
+                  "\x7f"
+                  "ELF\x01\x01\x01\0\0\0\0\0\0\0\0\0\x02\0\x03\0\x01\0\0\0",
+                  24) != 24) {
+            perror(p);
+            return 2;
+        }
         close(o);
     }
     char *const b_av[] = {"elf32", 0};

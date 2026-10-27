@@ -91,7 +91,7 @@ int main(int argc, char **argv)
         /* one name per process: suites run side by side */
         int n = snprintf(a.sun_path + 1, sizeof a.sun_path - 1, "exclave-abstract-%d", (int)getpid());
         show("bind abstract",
-             bind(s, (struct sockaddr *)&a, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + n)));
+             bind(s, (struct sockaddr *)&a, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + (size_t)n)));
         close(s);
     }
     if (chdir(cwdd) == 0) {
@@ -110,7 +110,10 @@ int main(int argc, char **argv)
         unlink("sock-magic");
     }
     if (chdir(exdir) == 0) bind_at("bind relative in exclave cwd", "sock-rel", SOCK_STREAM);
-    chdir(host);
+    if (chdir(host) != 0) {
+        perror(host);
+        return 2;
+    }
     /* connect: a listener on the host, a host socket file without one, exclave files, an exclave socket, a missing name */
     snprintf(p, sizeof p, "%s/sock-listen", host);
     {
