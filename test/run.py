@@ -3674,6 +3674,15 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
     with open(os.path.join(hand2, ".exclave", "manifest"), "w") as f:
         f.write(f'exclave 1\n\nhost "/usr/{ctx.ldso_dir}"\n')
     errors, _warnings, _out = check(hand2)
+    # a link is judged in the tree, though the host has a directory where its text points
+    dangling = os.path.join(hand2, "tree", "usr", "bin", "exclave-dangling")
+    os.symlink("/usr/sbin", dangling)
+    _errors, warnings, _out = check(hand2)
+    expect(
+        "dangling symlink /usr/bin/exclave-dangling -> /usr/sbin" in warnings,
+        f"a link dangling in the tree, to a host directory: {warnings[:4]!r}",
+    )
+    os.remove(dangling)
     expect(
         any("/usr/bin/true wants interpreter" in e_ and "does not own" in e_ for e_ in errors),
         f"a host record over the loader: {errors[:3]!r}",

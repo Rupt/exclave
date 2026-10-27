@@ -528,8 +528,10 @@ def static_check(ex: str, own: Ownership, data_prefixes: Sequence[str] = ()) -> 
         if layout.under_any(rel, data_prefixes):
             dirnames[:] = []
             continue
-        dirnames[:] = [d for d in dirnames if d != ".real"]
-        for name in filenames:
+        # a link the host would take for a directory is a link here, judged in the tree
+        links = [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]
+        dirnames[:] = [d for d in dirnames if d != ".real" and d not in links]
+        for name in filenames + links:
             vpath = rel + "/" + name
             real = os.path.join(dirpath, name)
             st = os.lstat(real)
@@ -609,7 +611,7 @@ def static_check(ex: str, own: Ownership, data_prefixes: Sequence[str] = ()) -> 
             ver
             and ver < (2, 35)
             and not any(
-                os.path.isdir(tree.real(d))
+                (r := tree.resolve(d)) is not None and os.path.isdir(tree.real(r))
                 for d in ("/usr/lib/locale/C.utf8", "/usr/lib/locale/C.UTF-8")
             )
         ):
