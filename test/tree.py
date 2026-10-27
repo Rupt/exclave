@@ -20,7 +20,6 @@ import stat
 import struct
 import subprocess
 import sys
-import tomllib
 lazy from collections.abc import Iterator
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -316,7 +315,7 @@ def wrap_unchecked(ex: str, manifest: bytes) -> None:
 
     The suite's own wrap of the tree it is given, which need not pass the static check: each
     original moves to .real/ beside a hard link to .exclave/launcher, and the hashes file records
-    the launcher, the manifest and the tree.
+    the launcher, the manifest and the tree, and no tool, since no tool wrote it.
     """
     ld = os.path.join(ex, ".exclave", "launcher")
     root = os.path.join(ex, "tree")
@@ -332,11 +331,9 @@ def wrap_unchecked(ex: str, manifest: bytes) -> None:
         f.write(manifest)
     with open(ld, "rb") as f:
         launcher = f.read()
-    with open(os.path.join(REPO, "pyproject.toml"), "rb") as f:
-        version = tomllib.load(f)["project"]["version"]
     with open(os.path.join(ex, ".exclave", "hashes"), "w") as f:
         f.write(
-            f'hashes 1\n\ntool "{version}"\n\nlauncher "{b2(launcher)}"\n\n'
+            f'hashes 1\n\nlauncher "{b2(launcher)}"\n\n'
             f'manifest "{b2(manifest)}"\n\ntree "{tree_hash(root)}"\n'
         )
 
