@@ -224,3 +224,5 @@ struct tar {
 int tar_read(const uint8_t *p, size_t n, struct tar *out, char why[TAR_WHY]);
 void tar_free(struct tar *t);
 int tar_regular(char type);
+
+int cmd_unpack(int argc, char **argv);
