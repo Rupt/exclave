@@ -96,10 +96,17 @@ def tree_hash(root: str) -> str:
     original without a wrapper is listed under its own path, so that no file goes unhashed.
 
     Raises:
-        BuildError: When a file cannot be read.
+        BuildError: When a file or a directory cannot be read.
     """
+
+    def unreadable(e: OSError) -> None:
+        if isinstance(e, PermissionError):
+            msg = f"cannot read {e.filename}: the tree hash needs every file readable"
+            raise BuildError(msg) from e
+        raise e
+
     entries: list[bytes] = []
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root, onerror=unreadable):
         dirnames[:] = sorted(d for d in dirnames if d != ".real")
         strays = []
         if os.path.isdir(os.path.join(dirpath, ".real")):

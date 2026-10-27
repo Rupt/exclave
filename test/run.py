@@ -2659,7 +2659,8 @@ def unpack_and_wrap(ctx: Ctx) -> None:
     own control files say it lacks, strips the volatile directories, refuses two versions of one
     package, and adds no launcher, manifest or placeholder; wrap adds them, wraps the tree and
     records the manifest and tree hashes; unwrap, check and a second wrap keep the hashes file; a
-    tree assembled by hand becomes an exclave by wrap alone.
+    tree assembled by hand becomes an exclave by wrap alone; the tree hash refuses a directory it
+    cannot read, as it does a file.
     """
     d = os.path.join(ctx.work, "updebs")
     os.makedirs(d, exist_ok=True)
@@ -2815,6 +2816,15 @@ def unpack_and_wrap(ctx: Ctx) -> None:
     )
     rc, o, e = run([*TOOL, "hash", os.path.join(ctx.work, "not-an-exclave")])
     expect(rc != 0 and "no tree" in e, "hash of a non-exclave is refused")
+    locked = os.path.join(out, "tree", "usr", "share", "locked")
+    os.makedirs(locked)
+    os.chmod(locked, 0)
+    rc, o, e = run([*TOOL, "hash", out])
+    os.rmdir(locked)
+    expect(
+        rc == 1 and f"cannot read {locked}: the tree hash needs every file readable" in e,
+        f"an unreadable directory must refuse the hash, as an unreadable file does: {o} {e}",
+    )
     lockcopy = os.path.join(ctx.work, "some.hashes.txt")
     shutil.copy2(os.path.join(out, ".exclave", "hashes"), lockcopy)
     rc, o, e = run([*TOOL, "format", "--check", lockcopy])
