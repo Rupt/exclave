@@ -71,7 +71,8 @@ sanitized() { # sanitized OUT ARGS...: a host program built under ASan and UBSan
     host_cc -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -o "$o" "$@" "$here/sanitize.c"
 }
 # shellcheck disable=SC2329  # run through step, by name
-# the parser, the filter, the scratch pool, the CPU check, the #! rules and the command's BLAKE2b, just built for the host
+# the parser, the filter, the scratch pool, the cache's lock, the CPU check, the #! rules and the command's BLAKE2b,
+# just built for the host
 # under the sanitisers
 unit() {
     sanitized "$out/manifest_test" -DHOST_TEST "$here/manifest_test.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
@@ -80,6 +81,8 @@ unit() {
         "$out/filter_test" && py "$here/syscalls.py" && py "$here/tables_test.py" &&
         sanitized "$out/scratch_test" -DSCRATCH_TEST "$here/scratch_test.c" "$repo/src/scratch.c" &&
         "$out/scratch_test" &&
+        sanitized "$out/cache_test" -DHOST_TEST "$here/cache_test.c" "$repo/src/cache.c" "$repo/src/str.c" &&
+        "$out/cache_test" &&
         sanitized "$out/isa_test" -DHOST_TEST "$here/isa_test.c" "$repo/src/isa.c" "$repo/src/str.c" &&
         "$out/isa_test" &&
         sanitized "$out/str_test" -DHOST_TEST "$here/str_test.c" "$repo/src/str.c" &&

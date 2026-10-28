@@ -422,6 +422,7 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
     C.boundary = have == 0;
     char **env2 = env_prepare(envp, C.boundary);
     vis_init();
+    cache_init();
     if (C.loader_mode) loader_mode_check(argv, env2);
     C.text_lo = (unsigned long)__ehdr_start;
     C.text_hi = (unsigned long)_etext;

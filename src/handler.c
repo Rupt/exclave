@@ -792,9 +792,15 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
     }
     if (!ans) {
         to_real_exec(S->v, S->real);
-        r = RE5(NR_readlinkat, AT_FDCWD, S->real, S->tmp, PATH_MAX - 1, 0);
-        if (r < 0) return r;
-        S->tmp[r] = 0;
+        /* 16.6 item 8: the walk remembered an exclave path's kind (7.4.4), so a directory or a file answers EINVAL and
+         * a link its text without asking the kernel again; what is not remembered, absent above all, is asked */
+        int k = is_exclave_path(S->v) ? cache_get(S->v, S->tmp) : 0;
+        if (k == CK_DIR || k == CK_FILE || k == CK_WRAPPER) return -EINVAL;
+        if (k != CK_LINK) {
+            r = RE5(NR_readlinkat, AT_FDCWD, S->real, S->tmp, PATH_MAX - 1, 0);
+            if (r < 0) return r;
+            S->tmp[r] = 0;
+        }
         if (xstrncmp(S->v, "/proc/", 6) == 0) from_real(S->tmp); /* /proc links report real paths */
         ans = S->tmp;
         /* another process's exe link that names a wrapped script: that process runs the script's interpreter,

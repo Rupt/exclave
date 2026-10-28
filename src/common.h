@@ -80,6 +80,7 @@
 #define MAP_PRIVATE 2
 #define MAP_FIXED 0x10
 #define MAP_ANONYMOUS 0x20
+#define MADV_WIPEONFORK 18 /* 4.14+: the range reads as zero in a fork child; a vfork child shares it */
 #define MAP_FIXED_NOREPLACE 0x100000
 
 /* ---------- ioctl requests the filter traps (chattr) ---------- */
@@ -259,6 +260,7 @@ int nest_enter(pid_t pid, pid_t tid, unsigned long frame);
 
 /* ---------- visibility (vis.c) ---------- */
 void vis_init(void);
+void cache_init(void);
 int vis_is_host(const char *v, const char **real); /* 1 if host-owned; *real = host path */
 char *to_real(const char *v, char *out, char *tmp); /* v -> real, with wrapper redirect; tmp PATH_MAX */
 char *to_real_exec(const char *v, char *out); /* v -> real, no wrapper redirect */

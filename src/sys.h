@@ -67,7 +67,7 @@ enum {
     NR_read = 0, NR_write = 1, NR_close = 3, NR_fstat = 5,
     NR_mmap = 9, NR_munmap = 11, NR_ioctl = 16, NR_pread64 = 17,
     NR_getpid = 39, NR_execve = 59,
-    NR_kill = 62, NR_chdir = 80, NR_getcwd = 79,
+    NR_kill = 62, NR_chdir = 80, NR_getcwd = 79, NR_madvise = 28,
     NR_statfs = 137, NR_pivot_root = 155,
     NR_prctl = 157, NR_mount = 165, NR_umount2 = 166, NR_getdents64 = 217,
     NR_exit_group = 231, NR_openat = 257, NR_mkdirat = 258, NR_newfstatat = 262,
@@ -140,7 +140,7 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
     NR_read = 63, NR_write = 64, NR_close = 57, NR_fstat = 80,
     NR_mmap = 222, NR_munmap = 215, NR_ioctl = 29, NR_pread64 = 67,
     NR_getpid = 172, NR_execve = 221,
-    NR_kill = 129, NR_chdir = 49, NR_getcwd = 17,
+    NR_kill = 129, NR_chdir = 49, NR_getcwd = 17, NR_madvise = 233,
     NR_statfs = 43, NR_pivot_root = 41,
     NR_prctl = 167, NR_mount = 40, NR_umount2 = 39, NR_getdents64 = 61,
     NR_exit_group = 94, NR_openat = 56, NR_mkdirat = 34, NR_newfstatat = 79,
@@ -353,6 +353,7 @@ static inline long sys_prctl(int op, unsigned long a, unsigned long b, unsigned 
 static inline long sys_kill(pid_t p, int s) { return SC2(NR_kill, p, s); }
 static inline long sys_mmap(void *a, size_t n, int prot, int fl, int fd, long off)
 { return SC6(NR_mmap, a, n, prot, fl, fd, off); }
+static inline long sys_madvise(void *a, size_t n, int advice) { return SC3(NR_madvise, a, n, advice); }
 static inline long sys_pread(int fd, void *b, size_t n, long off) { return SC4(NR_pread64, fd, b, n, off); }
 
 static inline long sys_gettid(void) { return SC0(NR_gettid); }

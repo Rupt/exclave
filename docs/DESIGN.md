@@ -1121,7 +1121,12 @@ a per-process table of what each is (absent, a directory, a symlink and
 its text, a file, a wrapper) never needs invalidation, and warm
 translations cost hash lookups and no `lstat` walk. Readers never lock,
 and an insert that finds the lock held is skipped, so a nested handler
-cannot deadlock on it. Host-owned paths are never cached. The assumption
+cannot deadlock on it. The lock lives on a page the kernel wipes at
+`fork` (`MADV_WIPEONFORK`, 4.14+), so a child forked while another
+thread held it starts with it free, where an inherited copy would be
+held for the child's life and every insert there skipped; a `vfork`
+child shares the page, and the parent's release reaches it. Host-owned
+paths are never cached. The assumption
 is stated: nothing outside the exclave modifies the tree while an
 exclave process runs.
 
@@ -3348,6 +3353,15 @@ as a whole.
    `real_root_is_the_tree`, with that spelling and its relative and
    doubled-slash forms.
 
+8. **`readlink` of an exclave path answered from the cache.** The walk
+   has classified the path's last component (item 3), so a directory, a
+   file or a wrapper answers `EINVAL` and a symlink its remembered text
+   without the re-issue; a path the cache does not hold, an absent one
+   above all, is asked of the kernel. glibc's `realpath` reads every
+   component of a path with `readlink`, 746 of a small compile's 1 250
+   traps (16.2), each now one trap and no syscall. Check: the probe's
+   `readlink` groups, and `realpath` in 16.8.
+
 Items 4 and 7 are shortcuts past the walk, and a shortcut drops every
 question the walk asked, the ones nobody wrote down included. Each
 therefore asks the kernel what it actually reached: item 4 reads back
@@ -3495,8 +3509,9 @@ meaning items 4 and 7.
    - *signals and threads*: `SA_ONSTACK` handlers that trap, a FIFO
      `open` interrupted by `SIGINT` or left by `siglongjmp`, Go's
      goroutines, 64 threads trapping at once and threads trapping while
-     another spawns, and the scratch pool under contention
-     (`test/scratch_test.c`);
+     another spawns, the scratch pool under contention
+     (`test/scratch_test.c`), and the cache's lock across `fork`
+     (`test/cache_test.c`);
    - *spawning and exec*: 100 000 `posix_spawn`s with RSS measured (16),
      `fexecve`, `memfd`
      and unlinked files, scripts with and without `#!` and with `#!` lines
@@ -3670,7 +3685,8 @@ its time, ok, SKIP or FAIL:
   command's size, compared with the documents by `test/figures.py`,
   which `scripts/figures` prints;
 - the unit step: the manifest parser, the grammar comparison, the
-  filter test, `test/syscalls.py`, the scratch-pool test, the `#!` line
+  filter test, `test/syscalls.py`, the scratch-pool test, the cache's
+  lock across `fork` (`test/cache_test.c`), the `#!` line
   test, the CPU level test and the command's BLAKE2b test, each built from the current sources for the host under
   AddressSanitizer and UndefinedBehaviorSanitizer, where a finding
   exits 99, which no test answers; and `test/tables_test.py`, which
