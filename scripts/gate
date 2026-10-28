@@ -77,7 +77,7 @@ unit() {
     sanitized "$out/manifest_test" -DHOST_TEST "$here/manifest_test.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
         "$out/manifest_test" && py "$here/grammar_test.py" --c-parser "$out/manifest_test" &&
         sanitized "$out/filter_test" -DHOST_TEST "$here/filter_test.c" "$repo/src/filter.c" "$repo/src/str.c" &&
-        "$out/filter_test" && py "$here/syscalls.py" &&
+        "$out/filter_test" && py "$here/syscalls.py" && py "$here/tables_test.py" &&
         sanitized "$out/scratch_test" -DSCRATCH_TEST "$here/scratch_test.c" "$repo/src/scratch.c" &&
         "$out/scratch_test" &&
         sanitized "$out/isa_test" -DHOST_TEST "$here/isa_test.c" "$repo/src/isa.c" "$repo/src/str.c" &&

@@ -274,6 +274,50 @@ def without_tk(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
     )
 
 
+def boot(
+    row: VmRow,
+    images: str,
+    work: str,
+    pubkey: str,
+    *,
+    memory: int,
+    lock: threading.Lock | None = None,
+) -> tuple[VM | None, str]:
+    """The row's VM, booted and answering ssh, or None and why not.
+
+    The image is fetched into `images` if it is not there, seeded with the key, and started under
+    `lock` where several rows start at once; an aarch64 row under emulation is given ten times the
+    wait. The caller stops the VM.
+    """
+    name = row.name
+    image = os.path.join(images, name + ".qcow2")
+    if not any(fetch(u, image) for u in row.urls):
+        return None, "image not available"
+    seed = os.path.join(work, name + "-seed.iso")
+    with open(os.path.join(work, name + "-user-data"), "w") as f:
+        f.write(user_data(row.family, pubkey))
+    with open(os.path.join(work, name + "-meta-data"), "w") as f:
+        f.write(f"instance-id: exclave-{name}\nlocal-hostname: {name}\n")
+    subprocess.run(
+        [
+            "cloud-localds",
+            seed,
+            os.path.join(work, name + "-user-data"),
+            os.path.join(work, name + "-meta-data"),
+        ],
+        check=True,
+    )
+    with lock or contextlib.nullcontext():
+        port = free_port()
+        log("booting", name)
+        vm = VM(name, image, work, row.user, port, memory=memory, arch=row.arch)
+    slow = 10 if row.arch != "x86_64" else 1
+    if not vm.wait(deadline=600 * slow):
+        vm.stop()
+        return None, f"did not come up (see {name}-console.log)"
+    return vm, ""
+
+
 def user_data(family: str, pubkey: str) -> str:
     pk = PACKAGES[family]
     if family == "centos7":
@@ -571,34 +615,14 @@ def main() -> int:
         name, arch, notes = row.name, row.arch, row.notes
         slow = 10 if arch != "x86_64" else 1
         payload = payload_for(arch, "musl" if row.family == "apk" else "gnu")
-        image = os.path.join(args.images, name + ".qcow2")
 
         def failure(kernel: str, why: str) -> Row:
             return Row(name, kernel, why, "", notes, failed=True)
 
-        if not any(fetch(u, image) for u in row.urls):
-            return failure(row.kernel, "image not available")
-        seed = os.path.join(work, name + "-seed.iso")
-        with open(os.path.join(work, name + "-user-data"), "w") as f:
-            f.write(user_data(row.family, pubkey))
-        with open(os.path.join(work, name + "-meta-data"), "w") as f:
-            f.write(f"instance-id: exclave-{name}\nlocal-hostname: {name}\n")
-        subprocess.run(
-            [
-                "cloud-localds",
-                seed,
-                os.path.join(work, name + "-user-data"),
-                os.path.join(work, name + "-meta-data"),
-            ],
-            check=True,
-        )
-        with start_lock:
-            port = free_port()
-            log("booting", name)
-            vm = VM(name, image, work, row.user, port, memory=args.memory, arch=arch)
+        vm, why = boot(row, args.images, work, pubkey, memory=args.memory, lock=start_lock)
+        if vm is None:
+            return failure(row.kernel, why)
         try:
-            if not vm.wait(deadline=600 * slow):
-                return failure(row.kernel, f"did not come up (see {name}-console.log)")
             _rc, uname = vm.ssh("uname -r")
             uname = uname.strip()
             log(name, "kernel", uname)

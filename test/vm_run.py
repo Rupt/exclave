@@ -45,33 +45,12 @@ def main() -> int:
         name = row.name
         if row.arch != "x86_64" or (args.only and name not in args.only.split(",")):
             continue
-        image = os.path.join(args.images, name + ".qcow2")
-        if not any(matrix.fetch(u, image) for u in row.urls):
-            rows.append((name, "image not available"))
+        vm, why = matrix.boot(row, args.images, work, pubkey, memory=args.memory)
+        if vm is None:
+            rows.append((name, why))
             fails += 1
             continue
-        with open(os.path.join(work, name + "-user-data"), "w") as f:
-            f.write(matrix.user_data(row.family, pubkey))
-        with open(os.path.join(work, name + "-meta-data"), "w") as f:
-            f.write(f"instance-id: exclave-{name}\nlocal-hostname: {name}\n")
-        subprocess.run(
-            [
-                "cloud-localds",
-                os.path.join(work, name + "-seed.iso"),
-                os.path.join(work, name + "-user-data"),
-                os.path.join(work, name + "-meta-data"),
-            ],
-            check=True,
-        )
-        matrix.log("booting", name)
-        vm = matrix.VM(
-            name, image, work, row.user, matrix.free_port(), memory=args.memory, arch=row.arch
-        )
         try:
-            if not vm.wait(deadline=600):
-                rows.append((name, f"did not come up (see {name}-console.log)"))
-                fails += 1
-                continue
             uname = vm.ssh("uname -r")[1].strip()
             for p in [*args.files, args.script]:
                 vm.scp(p, os.path.basename(p))

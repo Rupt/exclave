@@ -1480,6 +1480,8 @@ static const char *sysname(int nr)
     case NR_getcwd: return "getcwd";
     case NR_mkdir:
     case NR_mkdirat: return "mkdir";
+    case NR_mknod:
+    case NR_mknodat: return "mknod";
     case NR_unlink:
     case NR_unlinkat:
     case NR_rmdir: return "unlink";

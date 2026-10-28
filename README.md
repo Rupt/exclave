@@ -427,6 +427,7 @@ test/sysroot.py      a glibc sysroot as a data directory and an output built aga
 test/realsoft.py     real projects built inside and outside an exclave; test/bench.py the performance table
 test/syscalls.py     every kernel syscall classified; test/stackcheck.py the stack budget
 test/affected.py     the gate's steps a change reaches, derived from what each step runs; test/figures.py the figures the documents quote, checked against the tree
+test/tables_test.py  the tables the launcher, the command, unpack and the tests each carry, read from every source and compared
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule
 test/scratch_test.c  the scratch pool's sweep under the interleaving that once shared a chunk
 test/isa_test.c      the CPU level check against made-up cpuid and XCR0 values and against gcc's own answer

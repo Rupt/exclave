@@ -3669,7 +3669,11 @@ its time, ok, SKIP or FAIL:
   filter test, `test/syscalls.py`, the scratch-pool test, the `#!` line
   test, the CPU level test and the command's BLAKE2b test, each built from the current sources for the host under
   AddressSanitizer and UndefinedBehaviorSanitizer, where a finding
-  exits 99, which no test answers;
+  exits 99, which no test answers; and `test/tables_test.py`, which
+  reads the tables more than one part carries, the identity files
+  (8.4), the volatile directories (8.1) and the names the launcher
+  logs for the syscalls the filter traps, from each source and fails
+  when they differ;
 - the fuzz step (`test/fuzz.py`): the parsers under mutation of the
   first exclave's own files, each harness built under the same
   sanitisers and run for ten seconds. `test/fuzz.c` is the driver;
