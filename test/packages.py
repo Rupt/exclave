@@ -121,21 +121,32 @@ def make_apk(
 
 
 def cpio(entries: Sequence[Member]) -> bytes:
-    """A newc cpio archive of the members, its trailer and padding to 512 bytes."""
+    """A newc cpio archive of the members, its trailer and padding to 512 bytes.
+
+    A hard link is an entry of its target's inode with no data: the target, written first here,
+    carries the content, and each link counts in both entries' link count.
+    """
     out, ino = b"", 1
+    inodes: dict[str, int] = {}
+    links = {n: 1 + sum(1 for _, k, v, _ in entries if k == "hard" and v == n) for n, *_ in entries}
     for n, kind, val, mode in entries:
         body = b""
+        number, nlink = ino, links[n]
         if kind == "dir":
             m = 0o040000 | mode
         elif kind == "sym":
             assert isinstance(val, str)
             m, body = 0o120000 | mode, val.encode()
+        elif kind == "hard":
+            assert isinstance(val, str)
+            m, number, nlink = 0o100000 | mode, inodes[val], links[val]
         else:
             assert isinstance(val, bytes)
             m, body = 0o100000 | mode, val
+        inodes[n] = number
         nm = ("./" + n).encode() + b"\0"
         h = b"070701" + b"".join(
-            b"%08x" % v for v in (ino, m, 0, 0, 1, MTIME, len(body), 0, 0, 0, 0, len(nm), 0)
+            b"%08x" % v for v in (number, m, 0, 0, nlink, MTIME, len(body), 0, 0, 0, 0, len(nm), 0)
         )
         rec = h + nm
         rec += b"\0" * (-len(rec) % 4) + body

@@ -181,7 +181,7 @@ class Repo:
         try:
             signature = self._get(f"{url}/repodata/repomd.xml.asc", mutable=True)
         except urllib.error.HTTPError as e:
-            if e.code != 404:
+            if e.code not in (403, 404):  # an object-store mirror answers 403 for a missing file
                 raise
             signature = None
         except urllib.error.URLError as e:  # a file:// repository without one

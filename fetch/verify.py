@@ -74,7 +74,16 @@ class Keyrings:
             raise VerifyError(msg)
 
     def _gpgv(self, args: Sequence[str]) -> None:
-        cmd = ["gpgv", "--quiet"]
+        """Run gpgv on args and apply apt's rule to what it reports: one good signature, no bad one.
+
+        A Release file is signed by several keys, and a keyring need hold only one of them, so
+        gpgv's exit status, which fails on any signature it cannot check, is not the verdict; its
+        status lines are. A signature by a key the keyring lacks (ERRSIG) is ignored beside a good
+        one; a signature that does not verify (BADSIG) refuses the file whatever else it carries;
+        and a signature gpgv reports as other than good, by an expired or revoked key where it
+        knows one to be, does not count as good.
+        """
+        cmd = ["gpgv", "--quiet", "--status-fd", "1"]
         for path in self.paths:
             cmd += ["--keyring", path]
         try:
@@ -84,9 +93,20 @@ class Keyrings:
         except FileNotFoundError as e:
             msg = "gpgv is not installed, so no signature can be checked"
             raise VerifyError(msg) from e
-        if p.returncode:
+        status = [
+            ln.split()[1:]
+            for ln in p.stdout.decode("utf-8", "replace").splitlines()
+            if ln.startswith("[GNUPG:] ") and len(ln.split()) > 1
+        ]
+        kinds = [s[0] for s in status]
+        if "BADSIG" in kinds:
+            bad = next(s for s in status if s[0] == "BADSIG")
+            msg = f"BAD signature by key {bad[1]}" if len(bad) > 1 else "BAD signature"
+            raise VerifyError(msg)
+        if "GOODSIG" not in kinds:
             lines = [ln for ln in p.stderr.decode("utf-8", "replace").splitlines() if ln.strip()]
-            msg = (lines[-1] if lines else "gpgv failed").removeprefix("gpgv: ")
+            why = (lines[-1] if lines else "gpgv reported no signature").removeprefix("gpgv: ")
+            msg = f"no good signature by a key in the keyring: {why}"
             raise VerifyError(msg)
 
     def clearsigned(self, data: bytes) -> bytes:
@@ -96,8 +116,12 @@ class Keyrings:
             with open(signed, "wb") as f:
                 f.write(data)
             self._gpgv(["--output", out, "--", signed])
-            with open(out, "rb") as f:
-                return f.read()
+            try:
+                with open(out, "rb") as f:
+                    return f.read()
+            except FileNotFoundError as e:
+                msg = "gpgv verified the file but wrote no output"
+                raise VerifyError(msg) from e
 
     def detached(self, data: bytes, signature: bytes) -> None:
         """Check a detached signature, armoured or binary, over data."""

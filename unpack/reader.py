@@ -90,10 +90,13 @@ class Window(io.RawIOBase):
         while self.pos > self.end:  # a seek forward: what lies between is read and dropped
             if not self._more(min(self.pos - self.end, 1 << 20)):
                 return b""
-        want = size if size >= 0 else 1 << 62
-        while self.end - self.pos < want and self._more(max(want - (self.end - self.pos), 1 << 16)):
+        if size < 0:  # to the end, a chunk at a time
+            while self._more(1 << 16):
+                pass
+            size = self.end - self.pos
+        while self.end - self.pos < size and self._more(max(size - (self.end - self.pos), 1 << 16)):
             pass
-        out = bytes(self.kept[self.pos - self.start : self.pos - self.start + want])
+        out = bytes(self.kept[self.pos - self.start : self.pos - self.start + size])
         self.pos += len(out)
         return out
 
@@ -177,6 +180,8 @@ class Member(Protocol):
     def mode(self) -> int: ...
     @property
     def mtime(self) -> float: ...
+    @property
+    def size(self) -> int: ...
     def isdir(self) -> bool: ...
     def isfile(self) -> bool: ...
     def issym(self) -> bool: ...

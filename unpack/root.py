@@ -236,12 +236,19 @@ class Root:
     def link(self, src: str, dst: str) -> None:
         """A hard link at dst to the entry src names, which is not followed."""
         try:
-            sfd, sname = self._at(src, follow=False, create=False)
-            dfd, dname = self._parent(dst)
-            os.link(sname, dname, src_dir_fd=sfd, dst_dir_fd=dfd, follow_symlinks=False)
+            cached, sname = self._at(src, follow=False, create=False)
         except _Missing, FileNotFoundError:
             msg = f"the hard link /{dst.lstrip('/')} names {src}, which the tree does not hold"
             raise RootError(msg) from None
+        sfd = os.dup(cached)  # the walk to dst may evict the cached descriptor and close it
+        try:
+            dfd, dname = self._parent(dst)
+            os.link(sname, dname, src_dir_fd=sfd, dst_dir_fd=dfd, follow_symlinks=False)
+        except FileNotFoundError:
+            msg = f"the hard link /{dst.lstrip('/')} names {src}, which the tree does not hold"
+            raise RootError(msg) from None
+        finally:
+            os.close(sfd)
 
     def remove(self, vpath: str) -> None:
         self._forget()  # before the walk, whose descriptor the call uses
@@ -257,6 +264,9 @@ class Root:
         """Remove the directory at vpath and everything in it, following no symlink."""
         self._forget()  # before the walk, whose descriptor the call uses
         dfd, name = self._at(vpath, follow=False, create=False)
+        if stat.S_ISLNK(os.lstat(name, dir_fd=dfd).st_mode):
+            msg = f"{vpath} is a symlink, not a directory to remove"
+            raise RootError(msg)
         shutil.rmtree(name, dir_fd=dfd)
 
     def chmod_dir(self, vpath: str, mode: int) -> None:

@@ -353,16 +353,29 @@ def accepted(name: str, result: tuple[int, str, list[str]], file: str, note: str
 def debs_check_inrelease(work: str) -> None:
     """10: fetch-debs takes a suite only from an InRelease the keyring signed.
 
-    Signed: fetched, with a binary keyring or one in ASCII armour. Signed by another key, altered
-    after signing, or with a Release file alone: refused, nothing fetched.
+    Signed: fetched, with a binary keyring or one in ASCII armour, and when the file carries two
+    signatures, as the archives' do, with a keyring holding either key. Signed by another key,
+    altered after signing, or with a Release file alone: refused, nothing fetched.
     """
-    right, wrong = PgpKey(work, "right"), PgpKey(work, "wrong")
+    right, wrong, second = PgpKey(work, "right"), PgpKey(work, "wrong"), PgpKey(work, "second")
     keyring = right.export(work, "right.gpg")
     armoured = right.export(work, "right.asc", armor=True)
     deb = f"x_1_{DEB_ARCH}.deb"
     good = deb_mirror(os.path.join(work, "good"), right.clearsign)
     accepted("signed", fetch_debs(work, good, keyring, "signed"), deb, "signature verified")
     accepted("armoured", fetch_debs(work, good, armoured, "armoured"), deb, "signature verified")
+
+    def twice(data: bytes) -> bytes:
+        """Clearsigned by right and by second: the two signatures one after the other."""
+        one, two = right.clearsign(data), second.clearsign(data)
+        return one + two[two.index(b"-----BEGIN PGP SIGNATURE-----") :]
+
+    both = deb_mirror(os.path.join(work, "both"), twice)
+    accepted("two keys, first", fetch_debs(work, both, keyring, "both1"), deb, "verified")
+    second_ring = second.export(work, "second.gpg")
+    accepted("two keys, second", fetch_debs(work, both, second_ring, "both2"), deb, "verified")
+    wrong_ring = wrong.export(work, "wrong.gpg")
+    refused("two keys, neither", fetch_debs(work, both, wrong_ring, "both3"), "no good signature")
     other = deb_mirror(os.path.join(work, "other"), wrong.clearsign)
     refused("other key", fetch_debs(work, other, keyring, "other"), "signature does not verify")
     altered = deb_mirror(os.path.join(work, "altered"), right.clearsign, tamper=True)

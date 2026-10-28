@@ -2022,11 +2022,15 @@ are locators; the tool does not, because a hash is not a locator.
   payload, or a signature over header and payload together.
 
 The signatures are checked by `gpgv` and, for Alpine's RSA, `openssl`
-(`fetch/verify.py`); the keys are the caller's, the machine's own
-keyrings or the key files `scripts/inputs` pins by hash, and the
-fetchers never fetch one. What remains trusted is the keys' provenance,
-an unsigned `repomd.xml` for which versions a repository offers, and
-SHA-1 in the signatures Alpine makes (13 item 32).
+(`fetch/verify.py`), by apt's rule for a file signed by several keys,
+as the archives' `InRelease` files are: one good signature by a key of
+the keyring, and no bad one. The keys are the caller's, the machine's
+own keyrings or the key files `scripts/inputs` pins by hash, and the
+fetchers never fetch one; `gpgv` takes every key in a keyring as valid,
+checking neither expiry nor revocation, so the keyring is the whole
+statement of trust. What remains trusted is the keys' provenance, an
+unsigned `repomd.xml` for which versions a repository offers, and SHA-1
+in the signatures Alpine makes (13 item 32).
 
 ### 10.2 Built software
 
@@ -2504,7 +2508,8 @@ and stay fixed.
     (10): the `InRelease` file's, the `APKINDEX`'s, and every rpm's own,
     with `repomd.xml`'s where the repository signs it. The keys are
     given, never fetched, so a wrong key file is trusted as a right one
-    would be; `scripts/inputs` pins each by its hash. A repository that
+    would be, and `gpgv` checks neither a key's expiry nor its
+    revocation; `scripts/inputs` pins each by its hash. A repository that
     does not sign `repomd.xml`, as Fedora's do not, leaves which
     versions it offers to the mirror, every package still verified.
     Alpine signs its indexes with RSA over SHA-1, so an Alpine index is

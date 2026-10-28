@@ -593,7 +593,8 @@ def modes_and_types(ctx: Ctx) -> None:
     """10.1: modes from the archive, setuid and setgid dropped, every file readable by its owner.
 
     A directory stays traversable and writable by its owner; a hard link is to the member it names,
-    a symlink included; device files and pipes are skipped with a note; times are the archive's.
+    a symlink included, and an empty file's hard link to it; device files and pipes are skipped
+    with a note; times are the archive's.
     """
     common: list[Member] = [
         ("usr", "dir", None, 0o755),
@@ -603,9 +604,11 @@ def modes_and_types(ctx: Ctx) -> None:
         ("usr/locked", "dir", None, 0o500),
         ("usr/locked/f", "file", b"f", 0o640),
         ("usr/link", "sym", "suid", 0o777),
+        ("usr/hard", "hard", "usr/suid", 0o4755),
+        ("usr/empty", "file", b"", 0o644),
+        ("usr/empty2", "hard", "usr/empty", 0o644),
     ]
     tar_only: list[Member] = [
-        ("usr/hard", "hard", "usr/suid", 0o4755),
         ("usr/hard-to-link", "hard", "usr/link", 0o777),
         ("usr/char", "chr", None, 0o644),
         ("usr/pipe", "fifo", None, 0o644),
@@ -628,11 +631,16 @@ def modes_and_types(ctx: Ctx) -> None:
             int(os.stat(os.path.join(u, "suid")).st_mtime) == MTIME,
             f"{fmt}: not the archive's time",
         )
+        same = os.stat(os.path.join(u, "hard")).st_ino == os.stat(os.path.join(u, "suid")).st_ino
+        expect(same, f"{fmt}: the hard link is not to its member")
+        empty = os.stat(os.path.join(u, "empty")), os.stat(os.path.join(u, "empty2"))
+        expect(
+            empty[0].st_ino == empty[1].st_ino and empty[0].st_size == 0,
+            f"{fmt}: the empty file's hard link is not to it, or it is not empty",
+        )
         if fmt == "rpm":
             continue
-        same = os.stat(os.path.join(u, "hard")).st_ino == os.stat(os.path.join(u, "suid")).st_ino
         to_link = os.lstat(os.path.join(u, "hard-to-link"))
-        expect(same, f"{fmt}: the hard link is not to its member")
         expect(
             stat.S_ISLNK(to_link.st_mode)
             and to_link.st_ino == os.lstat(os.path.join(u, "link")).st_ino,

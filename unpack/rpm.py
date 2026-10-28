@@ -280,11 +280,13 @@ class _Payload:
             data_at = w.tell()
             if name == "TRAILER!!!":
                 self._exact(size, f"cpio entry {name!r} runs past the end of the payload")
-                for group in held.values():  # hard links whose inode carried no content
+                for group in held.values():  # hard links whose inode carried no content: empty
                     first, *rest = group
                     first.kind = "file"
+                    self.current = _Contents(w, 0, first.name)
                     yield first
                     yield from (_Member(m.name, m.mode, m.mtime, "lnk", first.name) for m in rest)
+                self.current = None
                 if why := w.after_end(w.tell()):
                     msg = f"{self.label}: {why}"
                     raise RpmError(msg)

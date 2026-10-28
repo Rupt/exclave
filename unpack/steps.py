@@ -122,7 +122,9 @@ def _extract(r: Root, packages: list[Package], log: Log) -> dict[str, str]:
     # files under its own link count too.
     links: dict[str, str] = {}
     parents: set[str] = set()
-    total = 0  # the files' declared sizes: a set that cannot fit is refused before it is written
+    # the files' declared sizes: a set that cannot fit is refused before it is written, the free
+    # space asked once per package and whenever the total has grown by 64 MiB since it was asked
+    total = asked = 0
     for pkg in packages:
         with reader(pkg.path).open_data(pkg.path) as t:
             for m in t:
@@ -131,12 +133,16 @@ def _extract(r: Root, packages: list[Package], log: Log) -> dict[str, str]:
                     continue
                 if m.isfile():
                     total += m.size
-                    r.room(total, f"the files up to /{rel} in {pkg.name} declare")
+                    if total - asked >= 64 << 20:
+                        r.room(total, f"the files up to /{rel} in {pkg.name} declare")
+                        asked = total
                 if m.issym():
                     links[rel] = m.linkname
                 elif not m.isdir():
                     parts = rel.split("/")
                     parents.update("/".join(parts[:i]) for i in range(1, len(parts)))
+        r.room(total, f"the files of the packages up to {pkg.name} declare")
+        asked = total
     merged = {"usr/" + d for d in MERGED_USR}
     # Debian's and Fedora's merged /usr; Alpine's directories are its own
     if all(reader(p.path).MERGED_USR for p in packages):
@@ -471,7 +477,7 @@ def _synthesise(r: Root, packages: list[Package], log: Log) -> None:
                 r.remove(tmp)
         # records inodes and mtimes: never reproducible, never needed
         aux = "/var/cache/ldconfig"
-        if r.isdir(aux):
+        if r.isdir(aux) and not r.islink(aux):
             r.rmtree(aux)
     elif "libc-bin" in names:
         log("libc-bin present but no static ldconfig found; no ld.so.cache")
