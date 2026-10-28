@@ -257,7 +257,7 @@ static void loader_mode_check(char **argv, char **env2)
 {
     struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0);
     if (!S) die("out of memory", 0, ENOMEM);
-    scpy(S->b1, C.program, PATH_MAX);                         /* the target as given, for the wrapper's exec */
+    scpy(S->arg, C.program, PATH_MAX);                        /* the target as given, for the wrapper's exec */
     long r = canon(S, C.program, AT_FDCWD, 1, S->v);
     if (r < 0) die_status(r == -ENOENT ? 127 : 126, "cannot execute", C.program, r);
     scpy(C.program, S->v, PATH_MAX);
@@ -275,14 +275,14 @@ static void loader_mode_check(char **argv, char **env2)
      * host, though, where an absolute link of the tree leads to the host's file: the spelling is exec'd only when it
      * reaches this wrapper, and the wrapper by its own path otherwise (13 item 39) */
     if (is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp)) {
-        if (canon(S, S->b1, AT_FDCWD, 0, S->v2) < 0) scpy(S->v2, C.program, PATH_MAX);
-        to_real_exec(S->v2, S->b2);
-        long fd = sys_open(S->b2, O_PATH | O_CLOEXEC, 0);
+        if (canon(S, S->arg, AT_FDCWD, 0, S->v2) < 0) scpy(S->v2, C.program, PATH_MAX);
+        to_real_exec(S->v2, S->real2);
+        long fd = sys_open(S->real2, O_PATH | O_CLOEXEC, 0);
         long n = fd < 0 ? fd : fd_real_path((int)fd, S->cur);
         if (fd >= 0) sys_close((int)fd);
-        if (n < 0 || xstrcmp(S->cur, S->real) != 0) scpy(S->b2, S->real, PATH_MAX);
+        if (n < 0 || xstrcmp(S->cur, S->real) != 0) scpy(S->real2, S->real, PATH_MAX);
         unborrow();
-        e = sys_execve(S->b2, argv, env2);
+        e = sys_execve(S->real2, argv, env2);
         die("cannot exec the wrapper", C.program, e);
     }
     scratch_put(S);

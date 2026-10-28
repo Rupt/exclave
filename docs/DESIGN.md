@@ -1325,7 +1325,11 @@ under 64 threads when tried. A chunk records its owner's `(pid, tid)`
 and the frame that claimed it, and is released when the handler
 returns. Every copy from or into program memory names the pid recorded
 in the trap's own chunk, never a process-wide value, which a `vfork`
-child's handler, sharing the parent's memory, could overwrite.
+child's handler, sharing the parent's memory, could overwrite. Each
+buffer of a chunk has one role and is named for it: the path as the
+program gave it, the walk's working buffers, the real path of a second
+name, the `stat` the kernel's order asks for; none is cast to another
+use, so no site depends on which buffer another is finished with.
 
 Two ways of leaving a chunk busy are expected. A `vfork` child that
 replaces its image from inside the handler leaves its chunk busy in the

@@ -283,7 +283,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
          * path is spelt through the magic link, a host path the kernel resolves itself; a walk from there into the
          * exclave stays the host's (7.4.3) */
         if (r == -ENOENT) {
-            char *n = S->b2;
+            char *n = S->comp;
             if (dfd != AT_FDCWD) ltoa_(dfd, n);
             scpy(out, dfd == AT_FDCWD ? "/proc/self/cwd" : "/proc/self/fd/", PATH_MAX);
             if (dfd != AT_FDCWD) scat(out, n, PATH_MAX);
@@ -315,7 +315,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         while (*e && *e != '/') e++;
         size_t cl = (size_t)(e - rp);
         if (cl > NAME_MAX) return -ENAMETOOLONG;
-        char *comp = S->b2;
+        char *comp = S->comp;
         xmemcpy(comp, rp, cl);
         comp[cl] = 0;
         rp = e;

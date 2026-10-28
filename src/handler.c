@@ -175,19 +175,19 @@ static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int 
     S->magic_end = 0;
     S->touched_exclave = 0;
     if (!a[pi] && allow_empty == 2) return 1;
-    long r = copy_str_in(S->pid, S->b1, (const char *)a[pi]);
+    long r = copy_str_in(S->pid, S->given, (const char *)a[pi]);
     if (r < 0) return r;
-    if (S->b1[0] == 0) return allow_empty ? 1 : -ENOENT;
+    if (S->given[0] == 0) return allow_empty ? 1 : -ENOENT;
     int dfd = di < 0 ? AT_FDCWD : (int)a[di];
     /* a relative path starts with the kernel's search check on the directory it
      * starts from (link_path_walk): EACCES, ENOTDIR or EBADF before any lookup,
      * which the absolute re-issue would otherwise skip (oracle 17.7) */
-    if (S->b1[0] != '/') {
+    if (S->given[0] != '/') {
         r = sys_faccessat(dfd, ".", X_OK);
         if (r < 0) return r;
     }
-    r = canon(S, S->b1, dfd, follow, S->v);
-    if (r < 0) scpy(S->v, S->b1, PATH_MAX);                    /* the log names what was asked for, as given */
+    r = canon(S, S->given, dfd, follow, S->v);
+    if (r < 0) scpy(S->v, S->given, PATH_MAX);                    /* the log names what was asked for, as given */
     return r;
 }
 /* Sets S->real to v's real path; 1 when v exists, with st's type set (and only its type when the cache answers), 0
@@ -210,8 +210,7 @@ static int exists_exclave(struct scratch *S, const char *v, struct kstat *st)
  * ENOTDIR for a trailing slash on a file, EILSEQ from a filesystem that refuses the name, ENOENT otherwise */
 static long absent_errno(struct scratch *S)
 {
-    /* b2: canon's component buffer, free once the path is resolved */
-    long r = sys_lstat(S->real, (struct kstat *)S->b2);
+    long r = sys_lstat(S->real, &S->st);
     return r < 0 && r != -ENOENT ? r : -ENOENT;
 }
 /* the kernel classifies a path's last component before it looks it up (fs/namei.c): "." and ".." are never
@@ -243,7 +242,7 @@ static long ro_create(struct scratch *S, const char *v, int is_dir)
     int slash = l > 1 && S->cur[l - 1] == '/';
     /* the lookup is of the name; the slash only says "a directory" */
     if (slash) S->cur[l - 1] = 0;
-    int ex = exists_exclave(S, S->cur, (struct kstat *)S->b2);
+    int ex = exists_exclave(S, S->cur, &S->st);
     if (ex) return -EEXIST;
     long e = absent_errno(S);
     if (e != -ENOENT) return e;
@@ -262,8 +261,8 @@ static long ro_attr(struct scratch *S, const char *v)
  * component fails in the walk (oracle 17.7) */
 static long delete_overlong(struct scratch *S, int dfd)
 {
-    char *p = S->b1;
-    size_t n = 0; /* the path as given, from resolve */
+    char *p = S->given;
+    size_t n = 0;
     while (n < PATH_MAX && p[n]) n++;
     if (n >= PATH_MAX) return -ENAMETOOLONG; /* getname's own answer: no NUL within PATH_MAX */
     while (n > 1 && p[n - 1] == '/') n--; /* a trailing slash names the same component */
@@ -280,7 +279,7 @@ static long delete_overlong(struct scratch *S, int dfd)
     long r = canon(S, s ? p : ".", dfd, 1, S->v);
     p[s] = c;
     r = r < 0 ? -ENAMETOOLONG : is_exclave_path(S->v) ? -EROFS : -ENAMETOOLONG;
-    scpy(S->v, S->b1, PATH_MAX); /* the log names what was asked for */
+    scpy(S->v, S->given, PATH_MAX); /* the log names what was asked for */
     return r;
 }
 /* a delete: EROFS before the last component is looked up at all */
@@ -309,7 +308,7 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
      * resolve flag, on the host's own mounts (13 item 22); RESOLVE_CACHED dropped */
     if (nr == NR_openat2 && r <= 0 && r != -EFAULT && r != -ENAMETOOLONG && !S->touched_exclave) {
         S->how0[2] &= ~(unsigned long)RESOLVE_CACHED;
-        return RE5(NR_openat2, a[0], S->b1, S->how0, 24, 0); /* the path the handler read */
+        return RE5(NR_openat2, a[0], S->given, S->how0, 24, 0); /* the path the handler read */
     }
     if (r < 0) return r;
     int acc = (int)(flags & O_ACCMODE);
@@ -355,7 +354,7 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     if (!follow) flags |= O_NOFOLLOW;
     /* re-issued as itself, so a kernel without it answers ENOSYS as it would natively */
     if (nr == NR_openat2) {
-        unsigned long *how = (unsigned long *)S->b2;
+        unsigned long *how = S->how;
         how[0] = (unsigned long)flags;
         how[2] = 0;
         /* build_open_flags: a mode only with a create */
@@ -401,11 +400,11 @@ static long do_openat2(struct scratch *S, long *a)
     if (rf & (RESOLVE_IN_ROOT | RESOLVE_BENEATH)) {
         int dfd = (int)a[0];
         /* getname first: EFAULT, ENAMETOOLONG */
-        if ((r = copy_str_in(S->pid, S->b1, (const char *)a[1])) < 0) return r;
-        if (S->b1[0] == 0) return -ENOENT; /* an empty path, before the descriptor is looked at */
-        if ((rf & RESOLVE_BENEATH) && S->b1[0] == '/') return -EXDEV; /* nd_jump_root: an absolute path, likewise */
+        if ((r = copy_str_in(S->pid, S->given, (const char *)a[1])) < 0) return r;
+        if (S->given[0] == 0) return -ENOENT; /* an empty path, before the descriptor is looked at */
+        if ((rf & RESOLVE_BENEATH) && S->given[0] == '/') return -EXDEV; /* nd_jump_root: an absolute path, likewise */
         if (dfd != AT_FDCWD) {
-            struct kstat *st = (struct kstat *)S->b2;
+            struct kstat *st = &S->st;
             if ((r = SC2(NR_fstat, dfd, st)) < 0) return r;
             if ((st->st_mode & S_IFMT) != S_IFDIR && (rf & RESOLVE_IN_ROOT)) return -ENOTDIR;
         }
@@ -547,9 +546,9 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
     scpy(S->rest, "EXCLAVE_COMM=", PATH_MAX);
     scat(S->rest, S->comm, PATH_MAX);
     if (loader) {
-        scpy(S->b1, "EXCLAVE_EXEC=", PATH_MAX);
-        scat(S->b1, v, PATH_MAX);
-        env[0] = S->b1;
+        scpy(S->tmp, "EXCLAVE_EXEC=", PATH_MAX); /* tmp's heads are read by now */
+        scat(S->tmp, v, PATH_MAX);
+        env[0] = S->tmp;
     }
     env[k - 2] = S->cur;
     env[k - 1] = S->rest;
@@ -568,7 +567,7 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
 {
     struct scratch *S2 = scratch_get(S->pid, S->tid, (unsigned long)__builtin_frame_address(0));
     if (!S2) return -ENOMEM;
-    char *line = S2->b1, *vcopy = S2->b2;
+    char *line = S2->extra, *vcopy = S2->given; /* the #! line and the script's path, in the vectors' chunk */
     void *big1, *big2;
     char **av, **nargv;
     long argc = vec_read(S, S->extra, sizeof S->extra, argv, 0, &av, &big1);
@@ -615,7 +614,7 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     if (vis_in_data(v)) return -EACCES; /* 6.2: a data directory is never executed */
     to_real_exec(v, S->real);
     /* in the scratch, not the frame: six of these frames may nest (7.5.4) */
-    struct kstat *st = (struct kstat *)S->b2;
+    struct kstat *st = &S->st;
     long e;
     /* ENOENT, ENOTDIR for a trailing slash, the name's own error */
     if ((e = sys_stat(S->real, st)) < 0) return e;
@@ -657,11 +656,10 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
      * is ENOENT here, as the kernel's open_exec answers; one that exists but is not the exclave's own
      * file, a host path or a data directory, is left to the child launcher, which refuses it by name */
     if (pr == 1) {
-        scpy(S->b1, S->tmp, PATH_MAX);
-        if ((e = canon(S, S->b1, AT_FDCWD, 1, S->tmp)) < 0) return e;
+        scpy(S->arg, S->tmp, PATH_MAX);
+        if ((e = canon(S, S->arg, AT_FDCWD, 1, S->tmp)) < 0) return e;
         if (is_exclave_path(S->tmp) && !vis_in_data(S->tmp)) {
-            /* to_real is done with b2 before the stat fills it */
-            if ((e = sys_stat(to_real(S->tmp, S->real, S->b2), st)) < 0) return e;
+            if ((e = sys_stat(to_real(S->tmp, S->real, S->cur), st)) < 0) return e;
             /* do_open_execat: a loader that is not a regular file */
             if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
         }
@@ -681,7 +679,7 @@ static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp)
     ltoa_(fd, n);
     scpy(S->real, "/proc/self/fd/", PATH_MAX);
     scat(S->real, n, PATH_MAX);
-    struct kstat *st = (struct kstat *)S->b2;
+    struct kstat *st = &S->st;
     long e;
     if ((e = sys_stat(S->real, st)) < 0) return e;
     if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
@@ -725,17 +723,17 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
     int dfd = di < 0 ? AT_FDCWD : (int)a[di], byfd = r == 1, cloexec = 0;
     /* the name the program is exec'd by, spelt as the kernel spells it (fs/exec.c, alloc_bprm): the path as given, or
      * through a descriptor /dev/fd/N and /dev/fd/N/rel; a script's $0, AT_EXECFN and comm come from it (7.6) */
-    if (dfd != AT_FDCWD && (byfd || S->b1[0] != '/')) {
+    if (dfd != AT_FDCWD && (byfd || S->given[0] != '/')) {
         char *num = S->tmp;
         ltoa_(dfd, num);
         scpy(S->v2, "/dev/fd/", PATH_MAX);
         scat(S->v2, num, PATH_MAX);
         if (!byfd) {
-            if (xstrlen(S->v2) + 1 + xstrlen(S->b1) >= PATH_MAX) return -ENAMETOOLONG;
+            if (xstrlen(S->v2) + 1 + xstrlen(S->given) >= PATH_MAX) return -ENAMETOOLONG;
             scat(S->v2, "/", PATH_MAX);
-            scat(S->v2, S->b1, PATH_MAX);
+            scat(S->v2, S->given, PATH_MAX);
         }
-    } else scpy(S->v2, S->b1, PATH_MAX);
+    } else scpy(S->v2, S->given, PATH_MAX);
     if (byfd) {
         /* a descriptor on a symlink itself (O_PATH|O_NOFOLLOW) cannot be run (fs/exec.c) */
         struct kstat st;
@@ -783,7 +781,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         if (r < 0) return r;
         S->tmp[r] = 0;
         /* a descriptor on a /proc link reports a real path */
-        if (fd_real_path((int)a[di], S->b2) >= 0 && xstrncmp(S->b2, "/proc/", 6) == 0) from_real(S->tmp);
+        if (fd_real_path((int)a[di], S->real2) >= 0 && xstrncmp(S->real2, "/proc/", 6) == 0) from_real(S->tmp);
         ans = S->tmp;
     }
     if ((C.loader_mode || xstrcmp(C.exe, C.program) != 0) && is_self_exe(S->v, S->pid)) ans = C.exe;
@@ -805,14 +803,15 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
             is_exclave_path(ans)) {
             scpy(S->v2, ans, PATH_MAX);
             to_real_exec(S->v2, S->real);
-            if (is_wrapper_real(S->real, S->b2) && payload_of(S->real, S->b2)) {
-                long fd = sys_open(S->b2, O_RDONLY | O_CLOEXEC, 0);
-                long n = fd < 0 ? -1 : sys_read((int)fd, S->b2, BINPRM_BUF_SIZE);
+            if (is_wrapper_real(S->real, S->real2) && payload_of(S->real, S->real2)) {
+                long fd = sys_open(S->real2, O_RDONLY | O_CLOEXEC, 0);
+                char *line = S->extra; /* the #! line, as exec reads it */
+                long n = fd < 0 ? -1 : sys_read((int)fd, line, BINPRM_BUF_SIZE);
                 if (fd >= 0) sys_close((int)fd);
-                char *nargv[4];                              /* the interpreter as exec reads it */
-                if (n > 0 && shebang_argv(S->b2, n, S->b2, 0, 1, nargv, 4) > 0) {
-                    scpy(S->b1, nargv[0], PATH_MAX);
-                    if (canon(S, S->b1, AT_FDCWD, 1, S->v) == 0) {
+                char *nargv[4]; /* the interpreter as exec reads it */
+                if (n > 0 && shebang_argv(line, n, S->real2, 0, 1, nargv, 4) > 0) {
+                    scpy(S->arg, nargv[0], PATH_MAX);
+                    if (canon(S, S->arg, AT_FDCWD, 1, S->v) == 0) {
                         scpy(S->tmp, S->v, PATH_MAX);
                         ans = S->tmp;
                     }
@@ -985,14 +984,14 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
     /* unix_mkname_bsd: the path ends at the length or at a NUL */
     size_t n = (size_t)len - 2;
     if (n > 108) n = 108;
-    xmemcpy(S->b1, S->extra + 2, n);
-    S->b1[n] = 0;
-    if (S->b1[0] != '/') {
+    xmemcpy(S->given, S->extra + 2, n);
+    S->given[n] = 0;
+    if (S->given[0] != '/') {
         r = sys_faccessat(AT_FDCWD, ".", X_OK);
         if (r < 0) return r;
     }
-    if ((r = canon(S, S->b1, AT_FDCWD, nr == NR_connect, S->v)) < 0) {
-        scpy(S->v, S->b1, PATH_MAX);
+    if ((r = canon(S, S->given, AT_FDCWD, nr == NR_connect, S->v)) < 0) {
+        scpy(S->v, S->given, PATH_MAX);
         return r;
     }
     if (!is_exclave_path(S->v)) {
@@ -1002,9 +1001,9 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
         /* otherwise the kernel gets the resolved real path, as for every other syscall, since an exclave symlink or a
          * rewritten magic link may have led here (oracle 17.7) */
         to_real(S->v, S->real, S->tmp);
-        size_t rl = xstrlen(S->real), gl = xstrlen(S->b1);
+        size_t rl = xstrlen(S->real), gl = xstrlen(S->given);
         /* a trailing slash is the kernel's to judge (filename_create) */
-        size_t slash = gl > 1 && S->b1[gl - 1] == '/' && S->real[rl - 1] != '/';
+        size_t slash = gl > 1 && S->given[gl - 1] == '/' && S->real[rl - 1] != '/';
         if (rl + slash <= 107) {
             xmemcpy(S->extra + 2, S->real, rl);
             if (slash) S->extra[2 + rl] = '/';
@@ -1046,7 +1045,7 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
         r = ro_create(S, S->v, 0);
         return r == -EEXIST ? -EADDRINUSE : r;
     }
-    if (!exists_exclave(S, S->v, (struct kstat *)S->b2)) return absent_errno(S);
+    if (!exists_exclave(S, S->v, &S->st)) return absent_errno(S);
     r = sys_faccessat(AT_FDCWD, S->real, W_OK);
     if (r < 0) return r;
     return -ECONNREFUSED;
@@ -1142,7 +1141,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if (C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;
         /* vfs_truncate: EISDIR and EINVAL for what cannot be truncated, then EROFS */
         if (is_exclave_path(S->v)) {
-            struct kstat *st = (struct kstat *)S->b2;
+            struct kstat *st = &S->st;
             int ex = exists_exclave(S, S->v, st);
             if (!ex) return absent_errno(S);
             if ((st->st_mode & S_IFMT) == S_IFDIR) return -EISDIR;
@@ -1178,7 +1177,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if ((unsigned)fl & ~(unsigned)AT_REMOVEDIR) return -EINVAL;
         if ((r = resolve(S, a, pi, di, 0, 0)) < 0)
             return r == -ENAMETOOLONG ? delete_overlong(S, di < 0 ? AT_FDCWD : (int)a[di]) : r;
-        int sp = last_special(S->b1); /* do_rmdir, do_unlinkat: answered before any lookup */
+        int sp = last_special(S->given); /* do_rmdir, do_unlinkat: answered before any lookup */
         if (sp) return (fl & AT_REMOVEDIR) ? (sp == 1 ? -EINVAL : sp == 2 ? -ENOTEMPTY : -EBUSY) : -EISDIR;
         if ((r = ro_delete(S, S->v))) return r;
         return RE5(NR_unlinkat, AT_FDCWD, S->real, fl, 0, 0);
@@ -1203,10 +1202,10 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if (fl & ~(unsigned)(RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT)) return -EINVAL;
         if ((fl & (RENAME_NOREPLACE | RENAME_WHITEOUT)) && (fl & RENAME_EXCHANGE)) return -EINVAL;
         if ((r = resolve(S, a, opi, odi, 0, 0)) < 0) return r;
-        int osp = last_special(S->b1);
+        int osp = last_special(S->given);
         scpy(S->v2, S->v, PATH_MAX); /* old */
         if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
-        int nsp = last_special(S->b1);
+        int nsp = last_special(S->given);
         /* the kernel's order (do_renameat2, oracles 17.1 and 17.7): different mounts first, then a last component
          * that is "." or "..", then the write check, then the lookups */
         int oc = is_exclave_path(S->v2), nc = is_exclave_path(S->v);
@@ -1214,11 +1213,11 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if (osp) return -EBUSY;
         if (nsp) return (fl & RENAME_NOREPLACE) ? -EEXIST : -EBUSY;
         if (oc && nc) return -EROFS;
-        to_real_exec(S->v2, S->b1);
+        to_real_exec(S->v2, S->real2);
         to_real_exec(S->v, S->real);
         /* renameat2 is 3.15+ */
-        if (nr != NR_renameat2 && fl == 0) return RE5(NR_renameat, AT_FDCWD, S->b1, AT_FDCWD, S->real, 0);
-        return RE5(NR_renameat2, AT_FDCWD, S->b1, AT_FDCWD, S->real, fl);
+        if (nr != NR_renameat2 && fl == 0) return RE5(NR_renameat, AT_FDCWD, S->real2, AT_FDCWD, S->real, 0);
+        return RE5(NR_renameat2, AT_FDCWD, S->real2, AT_FDCWD, S->real, fl);
     }
     case NR_link:
     case NR_linkat: {
@@ -1250,9 +1249,9 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if (exists_exclave(S, S->cur, &st)) return -EEXIST;
         if ((r = ro_create(S, S->v, 0))) return r;
         if (is_exclave_path(S->v2)) return -EXDEV;
-        to_real_exec(S->v2, S->b1);
+        to_real_exec(S->v2, S->real2);
         to_real_exec(S->v, S->real);
-        return RE5(NR_linkat, AT_FDCWD, S->b1, AT_FDCWD, S->real,
+        return RE5(NR_linkat, AT_FDCWD, S->real2, AT_FDCWD, S->real,
                    (fl & ~AT_SYMLINK_FOLLOW & ~AT_EMPTY_PATH) | old_follow);
     }
     case NR_chmod:

@@ -223,16 +223,27 @@ __attribute__((noreturn)) void die_status(int status, const char *what, const ch
 int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, size_t errn);
 
 /* ---------- scratch (scratch.c) ---------- */
+/* Each buffer has one role, named here, so that no site reads a buffer another has reused (7.5.4). */
 struct scratch {
-    char b1[PATH_MAX], b2[PATH_MAX];
-    /* the walk's remaining path: a directory and a relative path, or a link's text and the rest, each under PATH_MAX */
+    /* canon's working buffers: the walk's remaining path (a directory and a relative path, or a link's text and the
+     * rest, each under PATH_MAX), the directory so far, its real path and a link's text; real and v are what canon
+     * leaves for the re-issue. rest, cur and tmp are dead once canon returns, so a caller may use them until it calls
+     * canon again (exec_env builds its variables there) */
     char rest[2 * PATH_MAX];
     char cur[PATH_MAX], real[PATH_MAX], tmp[PATH_MAX], v[PATH_MAX];
+    char comp[PATH_MAX]; /* canon's own: the component in hand, or a descriptor's number for a magic link */
+    char given[PATH_MAX]; /* the path as the program gave it (resolve), read by the checks the kernel makes on it */
     /* the first path of a two-path syscall, the directory a scoped openat2 walk may not leave, or the
      * name an exec'd program is exec'd by as the kernel spells it (7.4.5); canon never writes it */
     char v2[PATH_MAX];
+    char real2[PATH_MAX]; /* a second real path: of v2 for the re-issue, of a wrapper's payload, of a descriptor */
+    /* a path copied out of canon's output buffer to be canon's next input: a loader's or an interpreter's name, the
+     * entry's target */
+    char arg[PATH_MAX];
+    struct kstat st; /* the stat the kernel's order asks for, in the scratch rather than the frame (7.5.4) */
+    unsigned long how[3]; /* the open_how an openat2 is re-issued with */
     char comm[NAME_MAX + 1]; /* the comm the kernel would set for an exec'd program (7.6) */
-    char extra[8192]; /* argv and envp vectors, ELF headers, an extended open_how, a sockaddr */
+    char extra[8192]; /* argv and envp vectors, ELF headers, a #! line, an extended open_how, a sockaddr */
     pid_t pid, tid; /* the owner, looked up once per trap */
     unsigned resolve; /* openat2's resolve flags for the walk (7.4.3); 0 for every other syscall */
     /* set by canon: the walk started at, passed through or ended in the exclave's domain, or rewrote a magic link */
