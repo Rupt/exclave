@@ -179,6 +179,7 @@ static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int 
     if (r < 0) return r;
     if (S->given[0] == 0) return allow_empty ? 1 : -ENOENT;
     int dfd = di < 0 ? AT_FDCWD : (int)a[di];
+    S->dfd = dfd;
     /* a relative path starts with the kernel's search check on the directory it
      * starts from (link_path_walk): EACCES, ENOTDIR or EBADF before any lookup,
      * which the absolute re-issue would otherwise skip (oracle 17.7) */
@@ -295,6 +296,16 @@ static long empty_as_given(long path) { return path ? (long)"" : 0; }
 /* A no-follow flag for a re-issue on the resolved real path, which names the object the walk found; none when the walk
  * ended on a magic link to an object with no path, which the kernel reaches only by following the link (canon). */
 static long nofollow(const struct scratch *S, long flag) { return S->magic_end ? 0 : flag; }
+/* The re-issue of a resolved path (7.4.3): the real path from the root, or, for a walk relative to a descriptor that
+ * never touched the exclave, the path as given relative to that descriptor, which the kernel then resolves from the
+ * directory itself, immune to a rename of the directory's ancestors, with no flag the handler adds. A path relative to
+ * the working directory is re-issued as its real path: the working directory can change under the walk (13 item 14),
+ * and a re-issue as given after such a change could write into the tree. */
+static int as_given(const struct scratch *S) { return !S->touched_exclave && S->dfd != AT_FDCWD; }
+#define RE_DFD(S) (as_given(S) ? (S)->dfd : AT_FDCWD)
+#define RE_PATH(S) (as_given(S) ? (S)->given : (S)->real)
+/* a no-follow flag the handler adds to a re-issue on the real path, which names what the walk found */
+static long re_flag(const struct scratch *S, long flag) { return as_given(S) ? 0 : nofollow(S, flag); }
 static int dfd_virtual(int fd, char *out);
 
 /* ---------- open ---------- */
@@ -351,7 +362,7 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     }
     /* O_PATH|O_NOFOLLOW on an identity symlink opens the host's link itself */
     real_nofollow(S, !follow);
-    if (!follow) flags |= O_NOFOLLOW;
+    if (!follow && !as_given(S)) flags |= O_NOFOLLOW;
     /* re-issued as itself, so a kernel without it answers ENOSYS as it would natively */
     if (nr == NR_openat2) {
         unsigned long *how = S->how;
@@ -359,9 +370,9 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
         how[2] = 0;
         /* build_open_flags: a mode only with a create */
         how[1] = (flags & O_CREAT) || (flags & O_TMPFILE) == O_TMPFILE ? (unsigned long)mode : 0;
-        return RE5(NR_openat2, AT_FDCWD, S->real, how, 24, 0);
+        return RE5(NR_openat2, RE_DFD(S), RE_PATH(S), how, 24, 0);
     }
-    return RE5(NR_openat, AT_FDCWD, S->real, flags, mode, 0);
+    return RE5(NR_openat, RE_DFD(S), RE_PATH(S), flags, mode, 0);
 }
 
 /* openat2 (7.4.3): the kernel's checks on struct open_how first, in its order (build_open_flags), then the
@@ -797,7 +808,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         int k = is_exclave_path(S->v) ? cache_get(S->v, S->tmp) : 0;
         if (k == CK_DIR || k == CK_FILE || k == CK_WRAPPER) return -EINVAL;
         if (k != CK_LINK) {
-            r = RE5(NR_readlinkat, AT_FDCWD, S->real, S->tmp, PATH_MAX - 1, 0);
+            r = RE5(NR_readlinkat, RE_DFD(S), RE_PATH(S), S->tmp, PATH_MAX - 1, 0);
             if (r < 0) return r;
             S->tmp[r] = 0;
         }
@@ -1084,7 +1095,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if ((r = resolve(S, a, 1, 0, !(a[3] & AT_SYMLINK_NOFOLLOW), (a[3] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1) return RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], 0);
         real_nofollow(S, (a[3] & AT_SYMLINK_NOFOLLOW) != 0);
-        return RE5(nr, AT_FDCWD, S->real, a[2], a[3] | nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
+        return RE5(nr, RE_DFD(S), RE_PATH(S), a[2], a[3] | re_flag(S, AT_SYMLINK_NOFOLLOW), 0);
     case NR_statx: {
         /* statx: the mask, the two sync flags at once and any other flag, before the name */
         unsigned fl = (unsigned)a[2];
@@ -1094,7 +1105,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if ((r = resolve(S, a, 1, 0, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1) return RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4]);
         real_nofollow(S, (a[2] & AT_SYMLINK_NOFOLLOW) != 0);
-        return RE5(nr, AT_FDCWD, S->real, a[2] | nofollow(S, AT_SYMLINK_NOFOLLOW), a[3], a[4]);
+        return RE5(nr, RE_DFD(S), RE_PATH(S), a[2] | re_flag(S, AT_SYMLINK_NOFOLLOW), a[3], a[4]);
     }
     case NR_access:
     case NR_faccessat:
@@ -1109,8 +1120,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if (empty) r = RE5(nr, a[0], "", mode, fl, 0);
         else {
             to_real(S->v, S->real, S->tmp);
-            r = nr == NR_faccessat2 ? RE5(nr, AT_FDCWD, S->real, mode, fl | nofollow(S, AT_SYMLINK_NOFOLLOW), 0)
-                                    : RE5(NR_faccessat, AT_FDCWD, S->real, mode, 0, 0);
+            r = nr == NR_faccessat2 ? RE5(nr, RE_DFD(S), RE_PATH(S), mode, fl | re_flag(S, AT_SYMLINK_NOFOLLOW), 0)
+                                    : RE5(NR_faccessat, RE_DFD(S), RE_PATH(S), mode, 0, 0);
         }
         /* do_faccessat: the lookup's and the permission's own answers come first; then a write the permission allows on
          * a regular file, a directory or a symlink under a read-only mount is EROFS, and a special file never is */
@@ -1165,7 +1176,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         int pi = nr == NR_mkdir ? 0 : 1, di = nr == NR_mkdir ? -1 : 0;
         if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
         if ((r = ro_create(S, S->v, 1))) return r;
-        return RE5(NR_mkdirat, AT_FDCWD, S->real, a[pi + 1], 0, 0);
+        return RE5(NR_mkdirat, RE_DFD(S), RE_PATH(S), a[pi + 1], 0, 0);
     }
     case NR_mknod:
     case NR_mknodat: {
@@ -1173,7 +1184,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if ((r = may_mknod((unsigned short)a[pi + 1]))) return r;
         if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
         if ((r = ro_create(S, S->v, 0))) return r;
-        return RE5(NR_mknodat, AT_FDCWD, S->real, a[pi + 1], a[pi + 2], 0);
+        return RE5(NR_mknodat, RE_DFD(S), RE_PATH(S), a[pi + 1], a[pi + 2], 0);
     }
     case NR_rmdir:
     case NR_unlink:
@@ -1186,7 +1197,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         int sp = last_special(S->given); /* do_rmdir, do_unlinkat: answered before any lookup */
         if (sp) return (fl & AT_REMOVEDIR) ? (sp == 1 ? -EINVAL : sp == 2 ? -ENOTEMPTY : -EBUSY) : -EISDIR;
         if ((r = ro_delete(S, S->v))) return r;
-        return RE5(NR_unlinkat, AT_FDCWD, S->real, fl, 0, 0);
+        return RE5(NR_unlinkat, RE_DFD(S), RE_PATH(S), fl, 0, 0);
     }
     case NR_symlink:
     case NR_symlinkat: {
@@ -1196,7 +1207,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if (S->extra[0] == 0) return -ENOENT;
         if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
         if ((r = ro_create(S, S->v, 0))) return r;
-        return RE5(NR_symlinkat, S->extra, AT_FDCWD, S->real, 0, 0);
+        return RE5(NR_symlinkat, S->extra, RE_DFD(S), RE_PATH(S), 0, 0);
     }
     case NR_rename:
     case NR_renameat:
@@ -1210,6 +1221,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if ((r = resolve(S, a, opi, odi, 0, 0)) < 0) return r;
         int osp = last_special(S->given);
         scpy(S->v2, S->v, PATH_MAX); /* old */
+        scpy(S->given2, S->given, PATH_MAX);
+        int old_given = as_given(S), odfd = S->dfd;
         if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
         int nsp = last_special(S->given);
         /* the kernel's order (do_renameat2, oracles 17.1 and 17.7): different mounts first, then a last component
@@ -1221,9 +1234,11 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if (oc && nc) return -EROFS;
         to_real_exec(S->v2, S->real2);
         to_real_exec(S->v, S->real);
+        const char *old = old_given ? S->given2 : S->real2;
+        int od = old_given ? odfd : AT_FDCWD;
         /* renameat2 is 3.15+ */
-        if (nr != NR_renameat2 && fl == 0) return RE5(NR_renameat, AT_FDCWD, S->real2, AT_FDCWD, S->real, 0);
-        return RE5(NR_renameat2, AT_FDCWD, S->real2, AT_FDCWD, S->real, fl);
+        if (nr != NR_renameat2 && fl == 0) return RE5(NR_renameat, od, old, RE_DFD(S), RE_PATH(S), 0);
+        return RE5(NR_renameat2, od, old, RE_DFD(S), RE_PATH(S), fl);
     }
     case NR_link:
     case NR_linkat: {
@@ -1239,6 +1254,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
             if (r < 0) return r;
         }
         scpy(S->v2, S->v, PATH_MAX); /* old */
+        scpy(S->given2, S->given, PATH_MAX);
+        int old_given = as_given(S), odfd = S->dfd;
         /* an old name that is a magic link to a file with no path is followed, as the caller asked */
         long old_follow = S->magic_end ? AT_SYMLINK_FOLLOW : 0;
         /* do_linkat: the old name is looked up before the new one is read at all: its own error, ENOTDIR for a slash on
@@ -1257,7 +1274,9 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if (is_exclave_path(S->v2)) return -EXDEV;
         to_real_exec(S->v2, S->real2);
         to_real_exec(S->v, S->real);
-        return RE5(NR_linkat, AT_FDCWD, S->real2, AT_FDCWD, S->real,
+        /* an old name as given keeps its own flags; a resolved one names what the walk found */
+        if (old_given) return RE5(NR_linkat, odfd, S->given2, RE_DFD(S), RE_PATH(S), fl);
+        return RE5(NR_linkat, AT_FDCWD, S->real2, RE_DFD(S), RE_PATH(S),
                    (fl & ~AT_SYMLINK_FOLLOW & ~AT_EMPTY_PATH) | old_follow);
     }
     case NR_chmod:
@@ -1272,8 +1291,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], "", a[2], fl, 0);
         if ((r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);
-        if (nr == NR_fchmodat2) return RE5(nr, AT_FDCWD, S->real, a[2], fl | nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
-        return RE5(NR_fchmodat, AT_FDCWD, S->real, a[pi + 1], 0, 0);
+        if (nr == NR_fchmodat2) return RE5(nr, RE_DFD(S), RE_PATH(S), a[2], fl | re_flag(S, AT_SYMLINK_NOFOLLOW), 0);
+        return RE5(NR_fchmodat, RE_DFD(S), RE_PATH(S), a[pi + 1], 0, 0);
     }
     case NR_chown:
     case NR_lchown:
@@ -1286,6 +1305,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4]);
         if ((r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);
+        if (as_given(S)) return RE5(NR_fchownat, S->dfd, S->given, a[pi + 1], a[pi + 2], fl);
         return RE5(NR_fchownat, AT_FDCWD, S->real, a[pi + 1], a[pi + 2], nofollow(S, AT_SYMLINK_NOFOLLOW));
     }
     case NR_utime:
@@ -1334,8 +1354,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         to_real(S->v, S->real, S->tmp);
         if (nr == NR_utime) return RE5(NR_utime, S->real, a[1], 0, 0, 0);
         if (nr == NR_utimes) return RE5(NR_utimes, S->real, a[1], 0, 0, 0);
-        if (nr == NR_futimesat) return RE5(NR_futimesat, AT_FDCWD, S->real, a[2], 0, 0);
-        return RE5(NR_utimensat, AT_FDCWD, S->real, a[2], fl | nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
+        if (nr == NR_futimesat) return RE5(NR_futimesat, RE_DFD(S), RE_PATH(S), a[2], 0, 0);
+        return RE5(NR_utimensat, RE_DFD(S), RE_PATH(S), a[2], fl | re_flag(S, AT_SYMLINK_NOFOLLOW), 0);
     }
     case NR_setxattrat:
     case NR_removexattrat: /* (dfd, path, at_flags, name, [xattr_args, its size]) */
@@ -1344,13 +1364,13 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
             return fd_exclave(S, (int)a[0]) ? -EROFS : RE6(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4], a[5]);
         if ((r = ro_attr(S, S->v))) return r;
         to_real(S->v, S->real, S->tmp);
-        return RE6(nr, AT_FDCWD, S->real, a[2] | nofollow(S, AT_SYMLINK_NOFOLLOW), a[3], a[4], a[5]);
+        return RE6(nr, RE_DFD(S), RE_PATH(S), a[2] | re_flag(S, AT_SYMLINK_NOFOLLOW), a[3], a[4], a[5]);
     case NR_getxattrat:
     case NR_listxattrat:
         if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
         if (r == 1) return RE6(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4], a[5]);
         to_real(S->v, S->real, S->tmp);
-        return RE6(nr, AT_FDCWD, S->real, a[2] | nofollow(S, AT_SYMLINK_NOFOLLOW), a[3], a[4], a[5]);
+        return RE6(nr, RE_DFD(S), RE_PATH(S), a[2] | re_flag(S, AT_SYMLINK_NOFOLLOW), a[3], a[4], a[5]);
     /* (dfd, path, attr, size, at_flags): the chattr ioctls as syscalls */
     case NR_file_getattr:
     case NR_file_setattr:
@@ -1364,7 +1384,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
             if (r) return r;
         }
         to_real(S->v, S->real, S->tmp);
-        return RE5(nr, AT_FDCWD, S->real, a[2], a[3], a[4] | nofollow(S, AT_SYMLINK_NOFOLLOW));
+        return RE5(nr, RE_DFD(S), RE_PATH(S), a[2], a[3], a[4] | re_flag(S, AT_SYMLINK_NOFOLLOW));
     case NR_setxattr:
     case NR_lsetxattr:
     case NR_removexattr:
@@ -1409,7 +1429,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if (a[4] == 0) return RE5(nr, a[0], a[1], a[2], a[3], 0);
         if ((r = resolve(S, a, 4, 3, !(a[1] & FAN_MARK_DONT_FOLLOW), 0)) < 0) return r;
         to_real(S->v, S->real, S->tmp);
-        return RE5(nr, a[0], a[1] | nofollow(S, FAN_MARK_DONT_FOLLOW), a[2], AT_FDCWD, S->real);
+        return RE5(nr, a[0], a[1] | re_flag(S, FAN_MARK_DONT_FOLLOW), a[2], RE_DFD(S), RE_PATH(S));
     case NR_fchmod:
     case NR_fchown:
     case NR_fsetxattr:

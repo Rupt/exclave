@@ -495,6 +495,7 @@ def compile_progs(ctx: Ctx) -> None:
         "spawn_threads",
         "adversarial",
         "magic_links",
+        "rename_race",
     ):
         rc, _out, err = run(
             [
@@ -741,6 +742,15 @@ def signals(ctx: Ctx) -> None:
 @test
 def threads(ctx: Ctx) -> None:
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "threads"))
+    expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
+def relative_to_a_renamed_directory(ctx: Ctx) -> None:
+    """A descriptor-relative host path resolves while the directory's parent is renamed (7.4.3)."""
+    d = os.path.join(ctx.work, f"hostdir-race-{os.getpid()}")
+    os.makedirs(d, exist_ok=True)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "rename_race"), [d], timeout=120)
     expect(rc == 0 and "FAIL" not in out, out + err)
 
 

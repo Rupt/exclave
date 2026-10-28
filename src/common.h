@@ -234,6 +234,8 @@ struct scratch {
     char cur[PATH_MAX], real[PATH_MAX], tmp[PATH_MAX], v[PATH_MAX];
     char comp[PATH_MAX]; /* canon's own: the component in hand, or a descriptor's number for a magic link */
     char given[PATH_MAX]; /* the path as the program gave it (resolve), read by the checks the kernel makes on it */
+    char given2[PATH_MAX]; /* the first path of a two-path syscall as given, for its re-issue as given */
+    int dfd; /* the descriptor the path was given relative to, AT_FDCWD for the working directory (resolve) */
     /* the first path of a two-path syscall, the directory a scoped openat2 walk may not leave, or the
      * name an exec'd program is exec'd by as the kernel spells it (7.4.5); canon never writes it */
     char v2[PATH_MAX];

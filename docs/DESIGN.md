@@ -127,7 +127,7 @@ What is built and tested:
   kernel matrix on a kernel with 4 KB pages (12.1, 13 item 43).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The command as one file**: `build/exclave`, 903 KB, statically
+- **The command as one file**: `build/exclave`, 907 KB, statically
   linked, carrying its launcher, wraps, checks and prunes an exclave
   with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
@@ -141,7 +141,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 76 named tests, most of them programs that
+- **The regression suite**: 77 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1043,7 +1043,14 @@ lookup, `ENOENT` or `ENOTDIR`, then `EACCES` without write permission,
 and `ECONNREFUSED` for what exists, since nothing can bind there. A host
 path whose walk never touched the exclave, a relative one from a host
 directory of any depth included, is re-issued as given, so
-`getsockname` answers the program's own name. Any other host path,
+`getsockname` answers the program's own name. The same rule serves
+every path syscall: a path relative to a descriptor whose walk never
+touched the exclave is re-issued as given, relative to that descriptor,
+so the kernel resolves it from the directory itself and a rename of
+the directory's ancestors meanwhile changes nothing, as it would not
+natively; a path relative to the working directory is re-issued as its
+real path, since the working directory can change under the walk (13
+item 14). Any other host path,
 reached through an exclave symlink or a magic link, is re-issued as its
 real path in a rebuilt structure, and a real path past `sun_path`'s 107
 bytes as `/proc/self/fd/N/NAME` through an `O_PATH` descriptor of its
@@ -2198,7 +2205,7 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, 903 KB and 729 KB, with nothing beside it to run: no
+the cross compiler, 907 KB and 729 KB, with nothing beside it to run: no
 interpreter, no library, no file of the checkout. It carries its
 architecture's launcher and the text of every exclave's `README` as data
 (`tool/blobs.S`), so `wrap` installs the launcher it carries and
@@ -2255,7 +2262,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 76 named regressions and every oracle its kernel can run; 17
+suite's 77 named regressions and every oracle its kernel can run; 17
 describes the procedure. Measured October 2026:
 
 | Distribution | Kernel | Suite | Oracles | Notes |
@@ -2392,8 +2399,13 @@ and stay fixed.
 
 14. **A concurrent `chdir` can race a relative path.** If another
     thread changes directory during a relative-path syscall, the
-    syscall can resolve against the older directory. `..` above a
-    working directory that was handed to the host stays in the exclave.
+    syscall can resolve against the older directory, and a rename of
+    an ancestor of the working directory meanwhile can make it fail
+    where the kernel, resolving from the directory itself, would not.
+    A path relative to a descriptor has neither problem: one whose walk
+    never touched the exclave is re-issued as given (7.4.3). `..` above
+    a working directory that was handed to the host stays in the
+    exclave.
 
 15. **Without `process_vm_readv`, copies go through a pipe.** Where it
     is refused, `EPERM` under a seccomp profile that gates it on a
@@ -3509,7 +3521,8 @@ meaning items 4 and 7.
    - *signals and threads*: `SA_ONSTACK` handlers that trap, a FIFO
      `open` interrupted by `SIGINT` or left by `siglongjmp`, Go's
      goroutines, 64 threads trapping at once and threads trapping while
-     another spawns, the scratch pool under contention
+     another spawns, a descriptor-relative path looked up while its
+     directory's parent is renamed, the scratch pool under contention
      (`test/scratch_test.c`), and the cache's lock across `fork`
      (`test/cache_test.c`);
    - *spawning and exec*: 100 000 `posix_spawn`s with RSS measured (16),
@@ -3578,7 +3591,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus the read-only matrix program (`test/progs/ro_matrix.c`) under `bwrap` against its own expectations |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it); the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/progs/`: 76 named tests |
+| 4 | `test/run.py` with `test/progs/`: 77 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
