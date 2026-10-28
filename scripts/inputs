@@ -9,7 +9,8 @@
 # Alpine 3.21's gcc, Fedora 42's gcc, the noble gcc, g++, make and python3 that test/realsoft.py builds with,
 # CentOS 7's glibc for the sysroot of 9, the noble arm64 gcc-13 closure for the emulated row, and the four
 # projects of test/realsoft.py with the SQLite amalgamation of test/bench.py, and Docker's default seccomp profile
-# (moby/profiles, Apache-2.0), the version DESIGN.md 15.7 checked, for test/docker_profile.py. The tests themselves
+# (moby/profiles, Apache-2.0), the version DESIGN.md 15.7 checked, for test/docker_profile.py; and the archives'
+# signing keys the fetchers check every index and package against (10), pinned here by hash. The tests themselves
 # touch no network.
 set -u
 . "$(dirname -- "$0")/lib.sh"
@@ -86,13 +87,21 @@ file() { # file URL NAME HASH: one file into DIR/src, verified by its BLAKE2b-25
 
 fedora=https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/42/Everything/x86_64/os
 centos=https://vault.centos.org/7.9.2009/os/x86_64
-fetch debs-gcc13 debs.py gcc-13 libc6-dev && make_exclave gcc13 debs-gcc13
-fetch apks apks.py gcc musl-dev binutils make linux-headers && make_exclave alpine apks
-fetch rpms-f42 rpms.py --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make && make_exclave f42 rpms-f42
-fetch debs-clang debs.py clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils && make_exclave clang debs-clang
-fetch debs-realsoft debs.py gcc g++ make libc6-dev python3 && make_exclave realsoft debs-realsoft
-fetch el7 rpms.py --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
-fetch debs-arm64 debs.py --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev
+# the archives' signing keys, which the fetchers check every index and package against (10); each pinned here by
+# its BLAKE2b-256, so that the key is this file's and not the network's
+file https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg ubuntu-archive-keyring.gpg a216df0d4d5bbe223c5349283b2661d2e0a321fe4c8910eecdbcf7c12ae8fba5
+file https://src.fedoraproject.org/rpms/fedora-repos/raw/f42/f/RPM-GPG-KEY-fedora-42-primary RPM-GPG-KEY-fedora-42-primary 25bae133be1906e21720637fa4ece7d816b5f3946304166d98e954663d56dc33
+file https://vault.centos.org/7.9.2009/os/x86_64/RPM-GPG-KEY-CentOS-7 RPM-GPG-KEY-CentOS-7 4a088ee35b0355b8a9cc8b611b72ca76280cb34c4b90346ff08abb30fe0b82a0
+file https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub 7022bd8ba8209c32fad8211dfe5e69d66d7eb9424ea90990a28333f3b7318508
+ubuntu=$dir/src/ubuntu-archive-keyring.gpg
+alpine=$dir/src/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub
+fetch debs-gcc13 debs.py --keyring "$ubuntu" gcc-13 libc6-dev && make_exclave gcc13 debs-gcc13
+fetch apks apks.py --key "$alpine" gcc musl-dev binutils make linux-headers && make_exclave alpine apks
+fetch rpms-f42 rpms.py --keyring "$dir/src/RPM-GPG-KEY-fedora-42-primary" --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make && make_exclave f42 rpms-f42
+fetch debs-clang debs.py --keyring "$ubuntu" clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils && make_exclave clang debs-clang
+fetch debs-realsoft debs.py --keyring "$ubuntu" gcc g++ make libc6-dev python3 && make_exclave realsoft debs-realsoft
+fetch el7 rpms.py --keyring "$dir/src/RPM-GPG-KEY-CentOS-7" --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
+fetch debs-arm64 debs.py --keyring "$ubuntu" --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev
 file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json 3d005310d39ca085839ee4d23373c37c5eaeee073951d1fed335c2553559b846
 file https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz ac034b9c7bbd9f8cc38953efaac07145ce0c8993107a1594d5cedd08fdf2a2bc
 file https://www.lua.org/ftp/lua-5.4.7.tar.gz lua-5.4.7.tar.gz 7a37bca67359c6917fd330eee4e5d9f50852c27a2f5bce4e40b2b3b02ce18830

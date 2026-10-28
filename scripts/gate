@@ -11,7 +11,7 @@
 # and for every exclave given the suite in the given and a random order (and, for the first
 # exclave, under the plain terminal's AppArmor label and on build/launcher-debug), the resolution
 # oracle, the namespace oracle and the syscall probe; unpack's tests on hostile package files
-# (test/unpack_test.py); and when EXCLAVE_TEST_INPUTS names the
+# (test/unpack_test.py); the fetchers' signature checks (test/fetch_test.py); and when EXCLAVE_TEST_INPUTS names the
 # directory scripts/inputs filled, the Docker profile run on its src/docker-seccomp.json. No step
 # touches the network. The steps run four at a time, or N with --jobs, so
 # that the machine stays usable meanwhile; every driver runs
@@ -90,7 +90,7 @@ stack() {
 }
 
 # What the change can affect. Each flag names a group of steps; a path sets the ones it can affect.
-unit=false stack=false suite=false random=false plain=false oracles=false matrix=false unpacking=false
+unit=false stack=false suite=false random=false plain=false oracles=false matrix=false unpacking=false fetching=false
 changed=$(cd "$ROOT" && { git diff --name-only HEAD && git ls-files --others --exclude-standard; } | sort -u)
 what="uncommitted changes"
 if [ -z "$changed" ]; then
@@ -105,9 +105,10 @@ for path in $changed; do
         ;;
     scripts/gate) full=true ;;                                           # the gate itself
     tool/*) unit=true suite=true random=true oracles=true matrix=true ;; # the command every driver and VM runs
-    unpack/*) suite=true random=true unpacking=true ;;
+    unpack/*) suite=true random=true unpacking=true fetching=true ;;     # the fetchers read packages through it
     test/unpack_test.py) unpacking=true ;;
-    test/packages.py) suite=true random=true unpacking=true ;;
+    test/packages.py) suite=true random=true unpacking=true fetching=true ;;
+    fetch/* | test/fetch_test.py) fetching=true ;;
     test/run.py) suite=true random=true ;;
     test/progs/*) suite=true random=true oracles=true ;; # the probe and ro_matrix are programs there too
     test/tree.py) suite=true random=true oracles=true ;;
@@ -117,12 +118,12 @@ for path in $changed; do
     test/stackcheck.py) stack=true ;;
     test/matrix.py | test/vm_run.py) matrix=true ;;
     # scripts/check's alone: documents, settings, the fetchers, the other scripts and drivers
-    *.md | docs/* | scripts/* | fetch/* | test/*.py | pyproject.toml | uv.lock | taplo.toml | .gitignore) ;;
+    *.md | docs/* | scripts/* | test/*.py | pyproject.toml | uv.lock | taplo.toml | .gitignore) ;;
     *) full=true ;;
     esac
 done
 if $full; then
-    unit=true stack=true suite=true random=true plain=true oracles=true unpacking=true
+    unit=true stack=true suite=true random=true plain=true oracles=true unpacking=true fetching=true
     echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
 else
     echo "gate: the steps $what can affect ($(echo "$changed" | wc -l) paths); --full runs every step"
@@ -133,6 +134,7 @@ step check "$ROOT/scripts/check" # ruff, ty, shellcheck, shfmt and taplo, silent
 $unit && step unit unit
 $stack && step stack stack
 $unpacking && step unpack py "$here/unpack_test.py" --work "$out/unpack" # unpack's rules on hostile package files
+$fetching && step fetch py "$here/fetch_test.py" --work "$out/fetch"     # the fetchers' signature checks
 for ex in "$@"; do
     n=$(basename "$ex" .exclave)
     $suite && step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"

@@ -48,7 +48,7 @@ import re
 import struct
 from compression import zstd
 from dataclasses import dataclass
-from typing import IO, Any, BinaryIO, Self
+from typing import IO, Any, BinaryIO, NamedTuple, Self
 lazy from collections.abc import Callable, Iterator
 
 from unpack.reader import Dep, PackageError, Readable, Window
@@ -126,8 +126,17 @@ def _header(f: BinaryIO) -> Header:
     return out
 
 
-def _sections(path: str) -> tuple[Header, int, str]:
-    """Return an rpm file's header, the offset of its payload, and the payload's compressor.
+class Sections(NamedTuple):
+    """An rpm file's parts as its signatures cover them (DESIGN.md 10)."""
+
+    signature: Header  # the signature header: the header's signatures and digests
+    header: Header
+    header_bytes: bytes  # the header section whole, from its magic, which a header signature covers
+    payload: int  # where the payload begins
+
+
+def sections(path: str) -> Sections:
+    """Read an rpm file's signature header and header.
 
     Raises:
         RpmError: When the file is not an rpm or a header is truncated or corrupt.
@@ -138,15 +147,23 @@ def _sections(path: str) -> tuple[Header, int, str]:
             msg = f"{path}: not an rpm"
             raise RpmError(msg)
         try:
-            _header(f)  # the signature header, then padding to 8 bytes
+            sig = _header(f)  # the signature header, then padding to 8 bytes
             f.seek((f.tell() + 7) & ~7)
+            start = f.tell()
             h = _header(f)
+            payload = f.tell()
+            f.seek(start)
+            header_bytes = f.read(payload - start)
         except (struct.error, ValueError, IndexError) as e:
             msg = f"{path}: corrupt header: {e}"
             raise RpmError(msg) from e
-        payload = f.tell()
-    comp = h.get(RPMTAG["PAYLOADCOMPRESSOR"], "gzip")
-    return h, payload, comp
+    return Sections(sig, h, header_bytes, payload)
+
+
+def _sections(path: str) -> tuple[Header, int, str]:
+    """Return an rpm file's header, the offset of its payload, and the payload's compressor."""
+    s = sections(path)
+    return s.header, s.payload, s.header.get(RPMTAG["PAYLOADCOMPRESSOR"], "gzip")
 
 
 # each payload compressor's stream

@@ -1,0 +1,467 @@
+"""The fetchers' signature checks, against signed repositories made here (DESIGN.md 10, 17).
+
+    test/fetch_test.py [--work DIR] [-k NAME|SUBSTRING]
+
+Each test makes a repository of one package under its work directory, signed with keys made here
+(an OpenPGP key from gpg, an RSA key from openssl), and runs a fetcher on it through a file:// URL,
+as scripts/fetch-debs, fetch-rpms and fetch-apks run it. The signed repository must yield its
+package; the same repository signed by another key, with its signed text altered, with the
+package altered, or without its signature, must be refused in one line with nothing fetched.
+Needs gpg, gpgv and openssl, and says so and exits 0 without them. Prints one line per test; the
+exit status is the number of failures, at most 255.
+"""
+
+import argparse
+import base64
+import gzip
+import hashlib
+import os
+import shutil
+import subprocess
+import sys
+import time
+import zlib
+from typing import Protocol
+lazy from collections.abc import Callable, Sequence
+
+from packages import DEB_ARCH, MACHINE, make_apk, make_deb, make_rpm, tar_bytes
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+FETCH = os.path.join(REPO, "fetch")
+
+
+class Test(Protocol):
+    """A test: given its work directory, it raises AssertionError when a rule does not hold."""
+
+    __name__: str
+
+    def __call__(self, work: str, /) -> None: ...
+
+
+TESTS: list[Test] = []
+
+
+def test(f: Test) -> Test:
+    """Register a test."""
+    TESTS.append(f)
+    return f
+
+
+def expect(cond: object, msg: str) -> None:
+    """Fail the test with msg unless cond holds."""
+    if not cond:
+        raise AssertionError(msg)
+
+
+def run(cmd: Sequence[str], inp: bytes = b"", env: dict[str, str] | None = None) -> bytes:
+    p = subprocess.run(cmd, input=inp, capture_output=True, check=False, env=env, timeout=120)
+    if p.returncode:
+        msg = f"{cmd[0]} failed: {p.stderr.decode(errors='replace')[-400:]}"
+        raise AssertionError(msg)
+    return p.stdout
+
+
+# ---------------------------------------------------------------- keys
+class PgpKey:
+    """An OpenPGP signing key of its own, in a GNUPGHOME under d."""
+
+    def __init__(self, d: str, name: str) -> None:
+        self.home = os.path.join(d, f"gnupg-{name}")
+        os.makedirs(self.home, mode=0o700)
+        self.env = dict(os.environ, GNUPGHOME=self.home)
+        run(
+            [
+                "gpg",
+                "--batch",
+                "--quiet",
+                "--passphrase",
+                "",
+                "--quick-gen-key",
+                f"exclave test {name} <{name}@test>",
+                "ed25519",
+                "sign",
+                "0",
+            ],
+            env=self.env,
+        )
+
+    def _gpg(self, *args: str, inp: bytes = b"") -> bytes:
+        return run(["gpg", "--batch", "--quiet", *args], inp=inp, env=self.env)
+
+    def export(self, d: str, name: str, *, armor: bool = False) -> str:
+        """Write the public key as a binary keyring, or in ASCII armour, and return its path."""
+        path = os.path.join(d, name)
+        with open(path, "wb") as f:
+            f.write(self._gpg("--export", *(["--armor"] if armor else [])))
+        return path
+
+    def clearsign(self, data: bytes) -> bytes:
+        return self._gpg("--clearsign", inp=data)
+
+    def detach(self, data: bytes, *, armor: bool = False) -> bytes:
+        return self._gpg("--detach-sign", *(["--armor"] if armor else []), inp=data)
+
+
+class RsaKey:
+    """An RSA key pair of its own, made by openssl, its public key named as apk names keys."""
+
+    def __init__(self, d: str, name: str) -> None:
+        self.private = os.path.join(d, f"{name}.pem")
+        self.public = os.path.join(d, name)
+        run(["openssl", "genrsa", "-out", self.private, "2048"])
+        run(["openssl", "rsa", "-in", self.private, "-pubout", "-out", self.public])
+
+    def sign(self, data: bytes, digest: str = "sha1") -> bytes:
+        return run(["openssl", "dgst", f"-{digest}", "-sign", self.private], inp=data)
+
+
+# ---------------------------------------------------------------- repositories
+def write(path: str, data: bytes) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def deb_mirror(d: str, sign: Callable[[bytes], bytes] | None, *, tamper: bool = False) -> str:
+    """A Debian-style archive of one package, its InRelease signed by sign, or unsigned."""
+    pkg = os.path.join(d, "pool", f"x_1_{DEB_ARCH}.deb")
+    os.makedirs(os.path.dirname(pkg), exist_ok=True)
+    make_deb(pkg, "x", [("./usr", "dir", None, 0o755), ("./usr/x", "file", b"x\n", 0o644)])
+    with open(pkg, "rb") as f:
+        deb = f.read()
+    packages = gzip.compress(
+        f"Package: x\nVersion: 1\nArchitecture: {DEB_ARCH}\nFilename: pool/x_1_{DEB_ARCH}.deb\n"
+        f"Size: {len(deb)}\nSHA256: {hashlib.sha256(deb).hexdigest()}\n\n".encode(),
+        mtime=0,
+    )
+    write(os.path.join(d, "dists", "noble", "main", f"binary-{DEB_ARCH}", "Packages.gz"), packages)
+    release = (
+        "Suite: noble\nCodename: noble\nAcquire-By-Hash: no\nSHA256:\n"
+        f" {hashlib.sha256(packages).hexdigest()} {len(packages)}"
+        f" main/binary-{DEB_ARCH}/Packages.gz\n"
+    ).encode()
+    if sign is None:
+        write(os.path.join(d, "dists", "noble", "Release"), release)
+        return d
+    signed = sign(release)
+    if tamper:
+        signed = signed.replace(b"Codename: noble", b"Codename: nobel")
+    write(os.path.join(d, "dists", "noble", "InRelease"), signed)
+    return d
+
+
+def fetch_debs(work: str, mirror: str, keyring: str, name: str) -> tuple[int, str, list[str]]:
+    """Run the deb fetcher on the mirror; return its status, stderr and what it fetched."""
+    out = os.path.join(work, f"out-{name}")
+    p = subprocess.run(
+        [
+            sys.executable,
+            os.path.join(FETCH, "debs.py"),
+            "--out",
+            out,
+            "--keyring",
+            keyring,
+            "--mirror",
+            "file://" + mirror,
+            "--suite",
+            "noble",
+            "--components",
+            "main",
+            "--no-essential",
+            "--cache",
+            os.path.join(work, f"cache-{name}"),
+            "x",
+        ],
+        capture_output=True,
+        check=False,
+        timeout=120,
+    )
+    got = sorted(os.listdir(out)) if os.path.isdir(out) else []
+    return p.returncode, p.stderr.decode("utf-8", "replace"), got
+
+
+def rpm_mirror(
+    d: str,
+    sign: Callable[[bytes], bytes] | None,
+    *,
+    sign_payload: bool = False,
+    flip: bool = False,
+    repomd_sign: Callable[[bytes], bytes] | None = None,
+) -> str:
+    """A yum-style repository of one package, signed as rpm signs, its repomd.xml signed or not."""
+    pkg = os.path.join(d, "Packages", f"x-1.0-1.{MACHINE}.rpm")
+    os.makedirs(os.path.dirname(pkg), exist_ok=True)
+    make_rpm(
+        pkg,
+        "x",
+        [("usr", "dir", None, 0o755), ("usr/x", "file", b"x" * 4000, 0o644)],
+        sign=sign,
+        sign_payload=sign_payload,
+    )
+    if flip:
+        with open(pkg, "r+b") as f:
+            f.seek(-100, os.SEEK_END)
+            byte = f.read(1)
+            f.seek(-100, os.SEEK_END)
+            f.write(bytes([byte[0] ^ 1]))
+    with open(pkg, "rb") as f:
+        rpm = f.read()
+    primary = gzip.compress(
+        (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<metadata xmlns="http://linux.duke.edu/metadata/common" '
+            'xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="1">\n'
+            f'<package type="rpm"><name>x</name><arch>{MACHINE}</arch>'
+            '<version epoch="0" ver="1.0" rel="1"/>'
+            f'<checksum type="sha256" pkgid="YES">{hashlib.sha256(rpm).hexdigest()}</checksum>'
+            f'<size package="{len(rpm)}" installed="4000" archive="4096"/>'
+            f'<location href="Packages/x-1.0-1.{MACHINE}.rpm"/>'
+            '<format><rpm:provides><rpm:entry name="x"/></rpm:provides></format>'
+            "</package>\n</metadata>\n"
+        ).encode(),
+        mtime=0,
+    )
+    write(os.path.join(d, "repodata", "primary.xml.gz"), primary)
+    repomd = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<repomd xmlns="http://linux.duke.edu/metadata/repo">\n'
+        f'<data type="primary"><checksum type="sha256">{hashlib.sha256(primary).hexdigest()}'
+        '</checksum><location href="repodata/primary.xml.gz"/></data>\n</repomd>\n'
+    ).encode()
+    write(os.path.join(d, "repodata", "repomd.xml"), repomd)
+    if repomd_sign is not None:
+        write(os.path.join(d, "repodata", "repomd.xml.asc"), repomd_sign(repomd))
+    return d
+
+
+def fetch_rpms(work: str, repo: str, keyring: str, name: str) -> tuple[int, str, list[str]]:
+    out = os.path.join(work, f"out-{name}")
+    p = subprocess.run(
+        [
+            sys.executable,
+            os.path.join(FETCH, "rpms.py"),
+            "--out",
+            out,
+            "--keyring",
+            keyring,
+            "--repo",
+            "file://" + repo,
+            "--arch",
+            MACHINE,
+            "--no-base",
+            "--cache",
+            os.path.join(work, f"cache-{name}"),
+            "x",
+        ],
+        capture_output=True,
+        check=False,
+        timeout=120,
+    )
+    got = sorted(os.listdir(out)) if os.path.isdir(out) else []
+    return p.returncode, p.stderr.decode("utf-8", "replace"), got
+
+
+def first_gzip_member(data: bytes) -> bytes:
+    """The bytes of the first gzip member of a concatenated stream."""
+    stream = zlib.decompressobj(31)
+    stream.decompress(data)
+    return data[: len(data) - len(stream.unused_data)]
+
+
+def apk_mirror(d: str, key: RsaKey, signer: str, *, kind: str = "RSA", tamper: bool = False) -> str:
+    """An Alpine repository of one package, its index signed by key under the name signer."""
+    rel = os.path.join("v3.21", "main", MACHINE)
+    pkg = os.path.join(d, rel, "x-1.0-r0.apk")
+    os.makedirs(os.path.dirname(pkg), exist_ok=True)
+    members = [("usr", "dir", None, 0o755), ("usr/x", "file", b"x\n", 0o644)]
+    data = gzip.compress(tar_bytes(members), mtime=0)
+    make_apk(pkg, "x", members, f"datahash = {hashlib.sha256(data).hexdigest()}\n", data=data)
+    with open(pkg, "rb") as f:
+        apk = f.read()
+    control_sha1 = hashlib.sha1(first_gzip_member(apk)).digest()  # noqa: S324 -- apk's own checksum
+    index = (
+        f"C:Q1{base64.b64encode(control_sha1).decode()}\nP:x\nV:1.0-r0\nA:{MACHINE}\n"
+        f"S:{len(apk)}\nI:4096\nT:x\nU:x\nL:MIT\nD:\n\n"
+    ).encode()
+    rest = gzip.compress(
+        tar_bytes(
+            [("DESCRIPTION", "file", b"main 1\n", 0o644), ("APKINDEX", "file", index, 0o644)]
+        ),
+        mtime=0,
+    )
+    digest = {"RSA": "sha1", "RSA256": "sha256", "RSA512": "sha512"}[kind]
+    signature = key.sign(rest, digest)
+    if tamper:
+        rest = bytearray(rest)
+        rest[len(rest) // 2] ^= 1
+        rest = bytes(rest)
+    sig_tar = tar_bytes([(f".SIGN.{kind}.{signer}", "file", signature, 0o644)], trailer=False)
+    write(os.path.join(d, rel, "APKINDEX.tar.gz"), gzip.compress(sig_tar, mtime=0) + rest)
+    return d
+
+
+def fetch_apks(work: str, mirror: str, key: str, name: str) -> tuple[int, str, list[str]]:
+    out = os.path.join(work, f"out-{name}")
+    p = subprocess.run(
+        [
+            sys.executable,
+            os.path.join(FETCH, "apks.py"),
+            "--out",
+            out,
+            "--key",
+            key,
+            "--mirror",
+            "file://" + mirror,
+            "--branch",
+            "v3.21",
+            "--repos",
+            "main",
+            "--arch",
+            MACHINE,
+            "--no-base",
+            "--cache",
+            os.path.join(work, f"cache-{name}"),
+            "x",
+        ],
+        capture_output=True,
+        check=False,
+        timeout=120,
+    )
+    got = sorted(os.listdir(out)) if os.path.isdir(out) else []
+    return p.returncode, p.stderr.decode("utf-8", "replace"), got
+
+
+def refused(name: str, result: tuple[int, str, list[str]], why: str) -> None:
+    rc, err, got = result
+    last = err.strip().splitlines()[-1] if err.strip() else ""
+    expect(
+        rc == 1 and why in err and "Traceback" not in err and last.startswith("fetch-"),
+        f"{name}: wanted a one-line refusal naming {why!r}: rc={rc} {err[-500:]!r}",
+    )
+    expect(not got, f"{name}: fetched {got} although refused")
+
+
+def accepted(name: str, result: tuple[int, str, list[str]], file: str, note: str) -> None:
+    rc, err, got = result
+    expect(rc == 0 and got == [file], f"{name}: rc={rc} fetched {got}: {err[-500:]!r}")
+    expect(note in err, f"{name}: the log does not say {note!r}: {err[-500:]!r}")
+
+
+# ---------------------------------------------------------------- the tests
+@test
+def debs_check_inrelease(work: str) -> None:
+    """10: fetch-debs takes a suite only from an InRelease the keyring signed.
+
+    Signed: fetched, with a binary keyring or one in ASCII armour. Signed by another key, altered
+    after signing, or with a Release file alone: refused, nothing fetched.
+    """
+    right, wrong = PgpKey(work, "right"), PgpKey(work, "wrong")
+    keyring = right.export(work, "right.gpg")
+    armoured = right.export(work, "right.asc", armor=True)
+    deb = f"x_1_{DEB_ARCH}.deb"
+    good = deb_mirror(os.path.join(work, "good"), right.clearsign)
+    accepted("signed", fetch_debs(work, good, keyring, "signed"), deb, "signature verified")
+    accepted("armoured", fetch_debs(work, good, armoured, "armoured"), deb, "signature verified")
+    other = deb_mirror(os.path.join(work, "other"), wrong.clearsign)
+    refused("other key", fetch_debs(work, other, keyring, "other"), "signature does not verify")
+    altered = deb_mirror(os.path.join(work, "altered"), right.clearsign, tamper=True)
+    refused("altered", fetch_debs(work, altered, keyring, "altered"), "signature does not verify")
+    unsigned = deb_mirror(os.path.join(work, "unsigned"), None)
+    refused("unsigned", fetch_debs(work, unsigned, keyring, "unsigned"), "InRelease")
+
+
+@test
+def rpms_check_packages_and_repomd(work: str) -> None:
+    """10: fetch-rpms takes a package only when its own signature verifies, and repomd.xml's too.
+
+    A header signature with the payload's digest, or a signature over header and payload: fetched.
+    Unsigned, signed by another key, or altered after signing: refused. repomd.xml.asc signed by
+    another key: refused; absent: fetched, and the log says the index is the mirror's.
+    """
+    right, wrong = PgpKey(work, "right"), PgpKey(work, "wrong")
+    keyring = right.export(work, "RPM-GPG-KEY-right", armor=True)
+    rpm = f"x-1.0-1.{MACHINE}.rpm"
+
+    def armoured(data: bytes) -> bytes:
+        return right.detach(data, armor=True)
+
+    good = rpm_mirror(os.path.join(work, "good"), right.detach, repomd_sign=armoured)
+    accepted(
+        "signed", fetch_rpms(work, good, keyring, "signed"), rpm, "repomd.xml signature verified"
+    )
+    whole = rpm_mirror(os.path.join(work, "whole"), right.detach, sign_payload=True)
+    accepted(
+        "whole", fetch_rpms(work, whole, keyring, "whole"), rpm, "not signed by this repository"
+    )
+    cases: list[tuple[str, Callable[[bytes], bytes] | None, bool, bool]] = [
+        ("unsigned", None, False, False),
+        ("other", wrong.detach, False, False),
+        ("flipped", right.detach, False, True),
+        ("whole-flipped", right.detach, True, True),
+    ]
+    for name, sign, sign_payload, flip in cases:
+        mirror = rpm_mirror(os.path.join(work, name), sign, sign_payload=sign_payload, flip=flip)
+        refused(name, fetch_rpms(work, mirror, keyring, name), rpm + ":")
+    bad_md = rpm_mirror(
+        os.path.join(work, "bad-md"),
+        right.detach,
+        repomd_sign=lambda d: wrong.detach(d, armor=True),
+    )
+    refused("bad repomd", fetch_rpms(work, bad_md, keyring, "bad-md"), "repomd.xml's signature")
+
+
+@test
+def apks_check_index(work: str) -> None:
+    """10: fetch-apks takes an index only when the key its signature names verifies it.
+
+    Signed by the key given, SHA-1 as Alpine signs or SHA-256: fetched. Signed under a name no
+    --key has, by another key under the same name, or altered after signing: refused.
+    """
+    right, wrong = RsaKey(work, "right.rsa.pub"), RsaKey(work, "wrong.rsa.pub")
+    apk = "x-1.0-r0.apk"
+    good = apk_mirror(os.path.join(work, "good"), right, "right.rsa.pub")
+    accepted("signed", fetch_apks(work, good, right.public, "signed"), apk, "signature verified")
+    sha256 = apk_mirror(os.path.join(work, "sha256"), right, "right.rsa.pub", kind="RSA256")
+    accepted("sha256", fetch_apks(work, sha256, right.public, "sha256"), apk, "signature verified")
+    unknown = apk_mirror(os.path.join(work, "unknown"), right, "other.rsa.pub")
+    refused("unknown", fetch_apks(work, unknown, right.public, "unknown"), "which no --key gives")
+    other = apk_mirror(os.path.join(work, "other"), wrong, "right.rsa.pub")
+    refused("other key", fetch_apks(work, other, right.public, "other"), "does not verify")
+    altered = apk_mirror(os.path.join(work, "altered"), right, "right.rsa.pub", tamper=True)
+    refused("altered", fetch_apks(work, altered, right.public, "altered"), "does not verify")
+
+
+# ---------------------------------------------------------------- the runner
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("--work", default=os.path.join(REPO, "build", "fetch-test"))
+    ap.add_argument("-k", dest="select", default="")
+    args = ap.parse_args()
+    missing = [t for t in ("gpg", "gpgv", "openssl") if not shutil.which(t)]
+    if missing:
+        print(f"SKIP: {', '.join(missing)} not installed; the fetchers' checks cannot be tested")
+        return 0
+    work = os.path.abspath(args.work)
+    shutil.rmtree(work, ignore_errors=True)
+    failures = 0
+    chosen = [t for t in TESTS if args.select in t.__name__]
+    for t in chosen:
+        d = os.path.join(work, t.__name__)
+        os.makedirs(d)
+        start = time.monotonic()
+        try:
+            t(d)
+        except (AssertionError, OSError) as e:
+            failures += 1
+            print(f"FAIL {t.__name__:<34} {time.monotonic() - start:5.1f}s {str(e)[:700]}")
+            continue
+        print(f"PASS {t.__name__:<34} {time.monotonic() - start:5.1f}s")
+    print(f"{len(chosen)} tests, {failures} failures")
+    return min(failures, 255)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

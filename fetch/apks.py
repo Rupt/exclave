@@ -1,7 +1,7 @@
 """Resolve a package closure from an Alpine repository and download its .apk files.
 
-    scripts/fetch-apks [--branch v3.21] [--repos main,community] [--arch x86_64] [--mirror URL]
-                       [--cache DIR] [--no-base] --out DIR PACKAGE...
+    scripts/fetch-apks --key FILE... [--branch v3.21] [--repos main,community] [--arch x86_64]
+                       [--mirror URL] [--cache DIR] [--no-base] --out DIR PACKAGE...
 
 The fetcher reads each repository's APKINDEX and follows the `D:` dependencies from the requested
 packages, adding the base set (alpine-baselayout, busybox) unless --no-base is given. A `so:`,
@@ -9,10 +9,14 @@ packages, adding the base set (alpine-baselayout, busybox) unless --no-base is g
 one of highest `k:` priority, else the first by name. When several repositories list a package,
 the first repository given wins.
 
-Each package is checked against the checksum its index records (the SHA-1 apk-tools uses), and
-its data against the datahash in its .PKGINFO. The index signature is not checked, so the mirror
-is trusted. Package files are cached, since their names carry their versions; APKINDEX is fetched
-on every run.
+Each APKINDEX is checked against the key its signature names, as apk checks it against
+/etc/apk/keys: a --key is a PEM public key whose file name is the key's, such as
+alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub from https://alpinelinux.org/keys/, and the
+signature is RSA over the index's bytes (SHA-1 for the signatures Alpine makes, which the
+design records). Each package is then checked against the checksum its index records (the SHA-1
+apk-tools uses), and its data against the datahash in its .PKGINFO, so the chain from the key to
+every file is checked and the mirror is trusted for nothing but availability. Package files are
+cached, since their names carry their versions; APKINDEX is fetched on every run.
 
 Neither unpack nor the tool fetches: `scripts/unpack OUT DIR/*.apk` takes whatever directory of
 .apk files this fetcher, apk, a mirror or a person has made (DESIGN.md 10.1). The fetcher is not
@@ -31,6 +35,8 @@ import tarfile
 import urllib.request
 import zlib
 from typing import NoReturn
+
+import verify
 
 from unpack import apk
 
@@ -54,12 +60,15 @@ def log(*parts: object) -> None:
 class Repo:
     """The APKINDEX of each repository of an Alpine branch, and the resolver that reads them."""
 
-    def __init__(self, mirror: str, branch: str, repos: list[str], arch: str, cache: str) -> None:
+    def __init__(
+        self, mirror: str, branch: str, repos: list[str], arch: str, cache: str, *, keys: list[str]
+    ) -> None:
         self.mirror = mirror.rstrip("/")
         self.branch = branch
         self.repos = repos
         self.arch = arch
         self.cache = cache
+        self.keys = {os.path.basename(k): k for k in keys}  # as apk names them in /etc/apk/keys
         # Each package, from the first repository that lists it.
         self.index: dict[str, Stanza] = {}
         # The packages that provide each name, with the version they provide, if any.
@@ -102,11 +111,44 @@ class Repo:
             msg += f"; removed {path} from the cache"
         raise RepoError(msg)
 
+    def _signed_index(self, url: str) -> bytes:
+        """Return the index archive's bytes after its signature, once that verifies.
+
+        The archive's first gzip member holds the signature, .SIGN.RSA*.KEYNAME, over every byte
+        that follows it; the key is the one of that name among those given.
+        """
+        data = self._get(url, mutable=True)
+        try:  # the first member alone: the rest is decompressed once its signature verifies
+            stream = zlib.decompressobj(31)
+            plain = stream.decompress(data)
+            first = data[: len(data) - len(stream.unused_data)]
+        except zlib.error as e:
+            self._reject(url, f"{url}: not an index archive: {e}")
+        with tarfile.open(fileobj=io.BytesIO(plain + b"\0" * 1024), mode="r:") as tar:
+            signatures = [m for m in tar.getmembers() if m.name.startswith(".SIGN.")]
+            if len(signatures) != 1:
+                self._reject(url, f"{url}: the index archive carries {len(signatures)} signatures")
+            kind, _, keyname = signatures[0].name.removeprefix(".SIGN.").partition(".")
+            if kind not in verify.APK_DIGESTS:
+                self._reject(url, f"{url}: a signature of an unknown kind, .SIGN.{kind}")
+            if keyname not in self.keys:
+                self._reject(url, f"{url}: signed by {keyname}, which no --key gives")
+            member = tar.extractfile(signatures[0])
+            if member is None:
+                self._reject(url, f"{url}: the signature is not a file")
+            signature = member.read()
+        try:
+            verify.rsa(data[len(first) :], signature, self.keys[keyname], verify.APK_DIGESTS[kind])
+        except verify.VerifyError as e:
+            self._reject(url, f"{url}: {e}")
+        log(f"{url}: signature verified against {keyname}")
+        return data[len(first) :]
+
     def load_index(self) -> None:
-        """Read the APKINDEX of every repository."""
+        """Read the APKINDEX of every repository, once its signature verifies."""
         for repo in self.repos:
             url = f"{self.mirror}/{self.branch}/{repo}/{self.arch}/APKINDEX.tar.gz"
-            with tarfile.open(fileobj=io.BytesIO(self._get(url, mutable=True)), mode="r:gz") as tar:
+            with tarfile.open(fileobj=io.BytesIO(self._signed_index(url)), mode="r:gz") as tar:
                 member = tar.extractfile("APKINDEX")
                 if member is None:
                     msg = f"{self.branch}/{repo}: APKINDEX in the index archive is not a file"
@@ -242,6 +284,13 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("packages", nargs="+")
     parser.add_argument("--out", required=True, help="directory to fill with .apk files")
+    parser.add_argument(
+        "--key",
+        action="append",
+        required=True,
+        metavar="FILE",
+        help="a PEM public key an index may be signed by, named as apk names it",
+    )
     parser.add_argument("--branch", default="v3.21")
     parser.add_argument("--repos", default="main,community")
     parser.add_argument("--arch", default="x86_64")
@@ -251,7 +300,9 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--no-base", action="store_true")
     args = parser.parse_args(argv)
-    repo = Repo(args.mirror, args.branch, args.repos.split(","), args.arch, args.cache)
+    repo = Repo(
+        args.mirror, args.branch, args.repos.split(","), args.arch, args.cache, keys=args.key
+    )
     try:
         repo.load_index()
         selected = repo.resolve(args.packages, base=not args.no_base)
@@ -261,7 +312,7 @@ def main(argv: list[str]) -> int:
             with open(os.path.join(args.out, filename), "wb") as f:
                 f.write(data)
         log(f"{len(selected)} packages in {args.out}")
-    except (RepoError, apk.ApkError, OSError, tarfile.TarError) as e:
+    except (RepoError, apk.ApkError, verify.VerifyError, OSError, tarfile.TarError) as e:
         sys.exit(f"fetch-apks: {e}")
     return 0
 

@@ -239,9 +239,9 @@ to run its programs, what it touches and how to check it. The tool
 writes it where the exclave has none, so a maker's own stays.
 
 ```
-scripts/fetch-debs --out debs gcc-13 libc6-dev make         # Ubuntu or Debian: the closure of the packages named, verified against the index
-scripts/fetch-apks --out apks gcc musl-dev binutils         # the same for Alpine
-scripts/fetch-rpms --repo URL --out rpms gcc glibc-devel    # and for Fedora, Rocky, CentOS: any repository with repodata/
+scripts/fetch-debs --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --out debs gcc-13 libc6-dev make   # Ubuntu or Debian: the closure of the packages named, InRelease checked against the keyring, every file against the index
+scripts/fetch-apks --key alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub --out apks gcc musl-dev binutils  # the same for Alpine: the index checked against the key its signature names (https://alpinelinux.org/keys/)
+scripts/fetch-rpms --keyring RPM-GPG-KEY-fedora-42-primary --repo URL --out rpms gcc glibc-devel   # and for Fedora, Rocky, CentOS: any repository with repodata/; every rpm checked against the key, repomd.xml where signed
 scripts/unpack gcc.exclave debs/*.deb                     # package files -> an unwrapped exclave, a directory you may edit; .apk and .rpm files likewise
 scripts/exclave wrap gcc.exclave                          # wrap every executable, static check, hashes into .exclave/hashes
 ln -s tree/usr/bin/gcc-13 gcc.exclave/gcc                    # a shortcut, if you want one
@@ -340,7 +340,8 @@ neither the caller's shell nor what the machine has installed.
 
 Requirements beyond the first run's: `bubblewrap` and unprivileged user
 namespaces for the kernel oracles and the syscall probe; `strace`,
-`gdb`, Go and `rustc` for the suite's regressions; optionally
+`gdb`, Go and `rustc` for the suite's regressions; `gpgv` and `openssl`
+for the fetchers' signature checks, and `gpg` for their tests; optionally
 `aarch64-linux-gnu-gcc` for the aarch64 launcher, and QEMU with KVM and
 `cloud-image-utils` for the kernel matrix (`qemu-system-arm` and
 `qemu-efi-aarch64` for its arm64 row). Where `bwrap` cannot create a
@@ -408,11 +409,13 @@ unpack/root.py       the tree as a root: every path resolved inside it, every wr
 unpack/deb.py        the Debian reader: ar, tar, compression, control stanzas, dependency fields, version order
 unpack/apk.py        the Alpine reader: gzip streams, .PKGINFO, apk's dependency and version syntax
 unpack/rpm.py        the rpm reader: lead and headers, the cpio payload, rpm's flags and version order
-fetch/debs.py        resolve a closure from a Debian archive and download it, checked against the index; the Release signature is not verified, so prefer an https mirror
-fetch/apks.py        the same for an Alpine repository: each package's checksums as apk checks them; the index's signature is not verified
-fetch/rpms.py        the same for a yum or dnf repository, verified by the index's SHA-256
+fetch/debs.py        resolve a closure from a Debian archive and download it: InRelease against the keyring, every file against the index
+fetch/apks.py        the same for an Alpine repository: the index against the key its signature names, each package's checksums as apk checks them
+fetch/rpms.py        the same for a yum or dnf repository: every rpm's own signatures as rpm checks them, repomd.xml's where the repository signs it
+fetch/verify.py      the signature checks the fetchers share: gpgv for OpenPGP, openssl for Alpine's RSA, armoured keys decoded
 test/run.py          the regression suite; test/progs/ its C, Rust and Go programs
 test/unpack_test.py  unpack's rules on hostile .deb, .apk and .rpm files; test/packages.py builds them
+test/fetch_test.py   the fetchers' signature checks, on repositories made and signed there
 test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
 test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the openat2 oracle
 test/oracle_syscalls.py  the differential syscall probe: every trapped path and descriptor syscall with every path form under bwrap and under the launcher; test/progs/probe.c its interpreter

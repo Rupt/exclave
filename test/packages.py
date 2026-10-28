@@ -6,13 +6,14 @@ builder can carry payload bytes given whole instead, for a damaged package.
 """
 
 import gzip
+import hashlib
 import io
 import lzma
 import platform
 import struct
 import tarfile
 from compression import zstd
-lazy from collections.abc import Sequence
+lazy from collections.abc import Callable, Sequence
 
 MACHINE = platform.machine()
 DEB_ARCH = {"x86_64": "amd64", "aarch64": "arm64"}.get(MACHINE, MACHINE)
@@ -156,16 +157,21 @@ def make_rpm(
     provides: Sequence[tuple[str, int, str]] = (),
     postin: str = "",
     payload: bytes | None = None,
+    sign: Callable[[bytes], bytes] | None = None,
+    sign_payload: bool = False,
 ) -> None:
     """A minimal binary rpm.
 
     Lead, a signature header, a header with the tags the reader uses, a gzip newc cpio payload.
     members as for make_deb; requires and provides are (name, flags, version) triples; payload, the
-    gzip bytes to carry instead, for a damaged package.
+    gzip bytes to carry instead, for a damaged package. With sign, an OpenPGP signature of the bytes
+    given, the package is signed as rpm signs it: a header signature over the header section, with
+    the payload's SHA-256 in the header (RPMTAG_PAYLOADDIGEST), or with sign_payload a signature
+    over header and payload together, as rpm before 4.14 did, and no digest.
     """
 
-    def header(entries: Sequence[tuple[int, int, Sequence[int | str]]]) -> bytes:
-        """Pack a header of (tag, type, values) entries: type 4 int32, 6 string, 8 string array."""
+    def header(entries: Sequence[tuple[int, int, Sequence[int | str] | bytes]]) -> bytes:
+        """Pack (tag, type, values) entries: type 4 int32, 6 string, 7 binary, 8 string array."""
         index, data = b"", b""
         for tag, typ, vals in entries:
             if typ == 4:
@@ -173,6 +179,11 @@ def make_rpm(
                 off = len(data)
                 data += b"".join(struct.pack(">i", v) for v in vals)
                 index += struct.pack(">IIII", tag, 4, off, len(vals))
+            elif typ == 7:
+                assert isinstance(vals, bytes)
+                off = len(data)
+                data += vals
+                index += struct.pack(">IIII", tag, 7, off, len(vals))
             else:
                 off = len(data)
                 data += b"".join(str(v).encode() + b"\0" for v in vals)
@@ -187,7 +198,7 @@ def make_rpm(
 
     if payload is None:
         payload = gzip.compress(cpio(members), mtime=0)
-    entries: list[tuple[int, int, Sequence[int | str]]] = [
+    entries: list[tuple[int, int, Sequence[int | str] | bytes]] = [
         (1000, 6, [name]),
         (1001, 6, ["1.0"]),
         (1002, 6, ["1"]),
@@ -209,7 +220,15 @@ def make_rpm(
         ]
     if postin:
         entries += [(1024, 6, [postin])]
-    sig = header([(1000, 4, [len(payload)])])
+    if sign and not sign_payload:
+        entries += [(5092, 8, [hashlib.sha256(payload).hexdigest()]), (5093, 4, [8])]
+    main = header(entries)
+    signatures: list[tuple[int, int, Sequence[int | str] | bytes]] = [(1000, 4, [len(payload)])]
+    if sign:
+        signatures += [
+            (1002 if sign_payload else 268, 7, sign(main + payload if sign_payload else main))
+        ]
+    sig = header(signatures)
     lead = (
         b"\xed\xab\xee\xdb"
         + bytes([3, 0])
@@ -219,4 +238,4 @@ def make_rpm(
         + b"\0" * 16
     )
     with open(path, "wb") as f:
-        f.write(lead + sig + b"\0" * (-len(sig) % 8) + header(entries) + payload)
+        f.write(lead + sig + b"\0" * (-len(sig) % 8) + main + payload)

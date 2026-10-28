@@ -1,6 +1,6 @@
 """Resolve a package closure from a Debian or Ubuntu archive and download its .deb files.
 
-    scripts/fetch-debs [--distro ubuntu|debian] [--suite S]... [--arch amd64]
+    scripts/fetch-debs --keyring FILE... [--distro ubuntu|debian] [--suite S]... [--arch amd64]
                        [--components main,universe] [--mirror URL | --snapshot DATE]
                        [--cache DIR] [--no-essential] [--choose VIRTUAL=PKG]...
                        --out DIR PACKAGE...
@@ -12,11 +12,13 @@ index can meet. A virtual package is met by a provider already selected, and oth
 provider of highest Priority. --choose names the package to use for a virtual package or an
 alternative instead.
 
-Each Packages index is checked against the suite's Release file, and each package against the
-SHA256 its index records. The Release signature is not checked, so the mirror is trusted. Package
-files and by-hash indexes are cached, since their URLs name their content. The Release file, and
-an index the suite does not serve by hash, are fetched on every run unless the mirror is a
-snapshot, which never changes.
+Each suite's InRelease file is checked against the keyrings given (the archive's signing keys,
+such as /usr/share/keyrings/ubuntu-archive-keyring.gpg, or a key file in ASCII armour), each
+Packages index against the Release file it carries, and each package against the SHA256 its index
+records, so the chain from the keyring to every file is checked and the mirror is trusted for
+nothing but availability. Package files and by-hash indexes are cached, since their URLs name
+their content. The InRelease file, and an index the suite does not serve by hash, are fetched on
+every run unless the mirror is a snapshot, which never changes.
 
 Neither unpack nor the tool fetches: `scripts/unpack OUT DIR/*.deb` takes whatever directory of
 .deb files this fetcher, apt, a mirror or a person has made (DESIGN.md 10.1). The fetcher is not
@@ -33,6 +35,8 @@ import shutil
 import sys
 import urllib.request
 from typing import NoReturn
+
+import verify
 
 from unpack import deb
 
@@ -77,6 +81,7 @@ class Repo:
         components: list[str],
         cache: str,
         *,
+        keyrings: verify.Keyrings,
         mirror: str | None = None,
         snapshot: str | None = None,
     ) -> None:
@@ -89,6 +94,7 @@ class Repo:
         self.arch = arch
         self.components = components
         self.cache = cache
+        self.keyrings = keyrings
         # Every version of each package, highest first.
         self.index: dict[str, list[Stanza]] = {}
         # The packages that provide each virtual name, with the version they provide, if any.
@@ -134,13 +140,19 @@ class Repo:
         raise RepoError(msg)
 
     def _release(self, suite: str) -> tuple[dict[str, tuple[str, int]], bool]:
-        """Read a suite's Release file.
+        """Read a suite's InRelease file, once its signature verifies against the keyrings.
 
         Returns:
             The SHA256 digest and size of each file it lists, by path, and whether the suite
             serves its indexes by hash.
         """
-        text = self._get(f"{self.mirror}/dists/{suite}/Release", mutable=True)
+        url = f"{self.mirror}/dists/{suite}/InRelease"
+        signed = self._get(url, mutable=True)
+        try:
+            text = self.keyrings.clearsigned(signed)
+        except verify.VerifyError as e:
+            self._reject(url, f"{suite}/InRelease: its signature does not verify: {e}")
+        log(f"{suite}/InRelease: signature verified")
         fields = deb.parse_stanzas(text.decode("utf-8", "replace"))[0]
         digests: dict[str, tuple[str, int]] = {}
         for line in fields.get("SHA256", "").split("\n"):
@@ -326,6 +338,13 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("packages", nargs="+")
     parser.add_argument("--out", required=True, help="directory to fill with .deb files")
+    parser.add_argument(
+        "--keyring",
+        action="append",
+        required=True,
+        metavar="FILE",
+        help="a keyring InRelease must be signed by: binary, or a key file in ASCII armour",
+    )
     parser.add_argument("--distro", default="ubuntu", choices=["ubuntu", "debian"])
     parser.add_argument("--suite", action="append", default=[])
     parser.add_argument("--arch", default="amd64")
@@ -340,16 +359,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--choose", action="append", default=[], metavar="VIRTUAL=PKG")
     args = parser.parse_args(argv)
     suites = [s for arg in args.suite for s in arg.split(",")] or DEFAULT_SUITES[args.distro]
-    repo = Repo(
-        args.distro,
-        suites,
-        args.arch,
-        args.components.split(","),
-        args.cache,
-        mirror=args.mirror,
-        snapshot=args.snapshot,
-    )
     try:
+        repo = Repo(
+            args.distro,
+            suites,
+            args.arch,
+            args.components.split(","),
+            args.cache,
+            keyrings=verify.Keyrings(args.keyring),
+            mirror=args.mirror,
+            snapshot=args.snapshot,
+        )
         repo.load_index()
         choose = dict(c.split("=", 1) for c in args.choose)
         selected = repo.resolve(args.packages, essential=not args.no_essential, choose=choose)
@@ -364,7 +384,7 @@ def main(argv: list[str]) -> int:
             except OSError:
                 shutil.copy2(src, dst)
         log(f"{len(selected)} packages in {args.out}")
-    except (RepoError, deb.DebError, OSError) as e:
+    except (RepoError, deb.DebError, verify.VerifyError, OSError) as e:
         sys.exit(f"fetch-debs: {e}")
     return 0
 

@@ -1,7 +1,7 @@
 """Resolve a package closure from yum/dnf repositories and download its .rpm files.
 
-    scripts/fetch-rpms --repo URL [--repo URL]... [--arch x86_64] [--cache DIR]
-                       [--choose VIRTUAL=PKG]... [--no-base] --out DIR PACKAGE...
+    scripts/fetch-rpms --keyring FILE... --repo URL [--repo URL]... [--arch x86_64]
+                       [--cache DIR] [--choose VIRTUAL=PKG]... [--no-base] --out DIR PACKAGE...
 
 Each --repo is a repository root holding repodata/repomd.xml, such as Fedora's
 Everything/x86_64/os, Rocky's BaseOS and AppStream, or CentOS 7's os on vault.centos.org. The
@@ -13,10 +13,16 @@ primary.xml lists. Rich dependencies and rpmlib() features are skipped. A name n
 met by the package --choose names for it, else a provider already selected, else a provider named
 like the dependency, else the first provider by name.
 
-The primary index is checked against the checksum in repomd.xml, and each package against the
-SHA-256 its index records. The metadata signature is not checked, so the mirror is trusted.
-Package files are cached, since their names carry their versions, and so is a primary index whose
-name carries its checksum; repomd.xml is fetched on every run.
+Every rpm's own signature is checked against the keyrings given (the distribution's
+RPM-GPG-KEY file, or a binary keyring) as rpm checks it: the header signature over the header
+section, and the payload against the digest the header records, or, for a package signed before
+rpm 4.14 recorded one, a signature over header and payload together. A repository that signs its
+metadata, repomd.xml.asc beside repomd.xml, as CentOS does and Fedora does not, has that signature
+checked too, which holds the index itself to the key; without it the index is the mirror's, and
+the fetcher says so. The primary index is checked against the checksum in repomd.xml, and each
+package against the SHA-256 its index records. Package files are cached, since their names carry
+their versions, and so is a primary index whose name carries its checksum; repomd.xml is fetched
+on every run.
 
 Neither unpack nor the tool fetches: `scripts/unpack OUT DIR/*.rpm` takes whatever directory of
 .rpm files this fetcher, dnf, a mirror or a person has made (DESIGN.md 10.1). The fetcher is not
@@ -31,10 +37,13 @@ import lzma
 import os
 import re
 import sys
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from compression import zstd
 from typing import NoReturn, TypedDict
+
+import verify
 
 from unpack import rpm
 
@@ -117,10 +126,11 @@ def _evr(el: ET.Element) -> str:
 class Repo:
     """The primary indexes of yum/dnf repositories, and the resolver that reads them."""
 
-    def __init__(self, urls: list[str], arch: str, cache: str) -> None:
+    def __init__(self, urls: list[str], arch: str, cache: str, keyrings: verify.Keyrings) -> None:
         self.urls = [u.rstrip("/") for u in urls]
         self.arch = arch
         self.cache = cache
+        self.keyrings = keyrings
         # The highest version of each package across the repositories.
         self.index: dict[str, Package] = {}
         # The packages that provide each capability, with the version they provide, if any.
@@ -165,9 +175,34 @@ class Repo:
             msg += f"; removed {path} from the cache"
         raise RepoError(msg)
 
+    def _repomd(self, url: str) -> bytes:
+        """Fetch a repository's repomd.xml, checked against its signature where there is one."""
+        data = self._get(f"{url}/repodata/repomd.xml", mutable=True)
+        try:
+            signature = self._get(f"{url}/repodata/repomd.xml.asc", mutable=True)
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+            signature = None
+        except urllib.error.URLError as e:  # a file:// repository without one
+            if not isinstance(e.reason, FileNotFoundError):
+                raise
+            signature = None
+        if signature is None:
+            log(f"{url}: repomd.xml is not signed by this repository: the index is the mirror's")
+            return data
+        try:
+            self.keyrings.detached(data, signature)
+        except verify.VerifyError as e:
+            self._reject(
+                f"{url}/repodata/repomd.xml", f"{url}: repomd.xml's signature does not verify: {e}"
+            )
+        log(f"{url}: repomd.xml signature verified")
+        return data
+
     def _primary(self, url: str) -> bytes:
         """Fetch a repository's primary index, check it against repomd.xml and decompress it."""
-        repomd = ET.fromstring(self._get(f"{url}/repodata/repomd.xml", mutable=True))
+        repomd = ET.fromstring(self._repomd(url))
         entries = [d for d in repomd.findall("m:data", NS) if d.get("type") == "primary"]
         if not entries:
             msg = f"{url}: no primary index in repomd.xml"
@@ -328,7 +363,46 @@ class Repo:
             self._reject(url, f"{name}: SHA-256 does not match the index")
         if len(data) != st["size"]:
             self._reject(url, f"{name}: size does not match the index")
+        try:
+            self._verify_package(self._path(url), data)
+        except (verify.VerifyError, rpm.RpmError) as e:
+            self._reject(url, f"{name}: {e}")
         return name, data
+
+    def _verify_package(self, path: str, data: bytes) -> None:
+        """Check a package's signatures as rpm does (fetch/verify.py).
+
+        A header signature (RPMSIGTAG_RSA or _DSA) covers the header section, whose
+        RPMTAG_PAYLOADDIGEST covers the payload; a signature over header and payload together
+        (RPMSIGTAG_PGP or _GPG), which rpm made before 4.14 recorded a digest, covers both. Every
+        signature the package carries must verify, and one of the two must cover the payload.
+
+        Raises:
+            VerifyError: When a signature does not verify or the package has none that covers it.
+        """
+        parts = rpm.sections(path)
+        payload = data[parts.payload :]
+        header_sig = parts.signature.get(268, parts.signature.get(267))
+        whole_sig = parts.signature.get(1002, parts.signature.get(1005))
+        if isinstance(header_sig, bytes):
+            self.keyrings.detached(parts.header_bytes, header_sig)
+        if isinstance(whole_sig, bytes):
+            self.keyrings.detached(parts.header_bytes + payload, whole_sig)
+            return
+        if not isinstance(header_sig, bytes):
+            msg = "the package carries no signature"
+            raise verify.VerifyError(msg)
+        digests, algo = parts.header.get(5092), parts.header.get(5093, 8)
+        if digests is None:
+            msg = "the signed header records no payload digest, and no signature covers the payload"
+            raise verify.VerifyError(msg)
+        if algo != 8:  # PGPHASHALGO_SHA256, the one rpm writes
+            msg = f"the payload digest uses algorithm {algo}, not SHA-256"
+            raise verify.VerifyError(msg)
+        want = digests[0] if isinstance(digests, list) else digests
+        if hashlib.sha256(payload).hexdigest() != want:
+            msg = "the payload does not match the digest in the signed header"
+            raise verify.VerifyError(msg)
 
 
 def main(argv: list[str]) -> int:
@@ -337,6 +411,13 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("packages", nargs="+")
     parser.add_argument("--out", required=True, help="directory to fill with .rpm files")
+    parser.add_argument(
+        "--keyring",
+        action="append",
+        required=True,
+        metavar="FILE",
+        help="a keyring the packages must be signed by: an RPM-GPG-KEY file, or a binary keyring",
+    )
     parser.add_argument(
         "--repo", action="append", required=True, help="repository root holding repodata/"
     )
@@ -348,8 +429,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--no-base", action="store_true")
     args = parser.parse_args(argv)
     choose = dict(c.split("=", 1) for c in args.choose)
-    repo = Repo(args.repo, args.arch, args.cache)
     try:
+        repo = Repo(args.repo, args.arch, args.cache, verify.Keyrings(args.keyring))
         repo.load_index()
         selected, notes = repo.resolve(args.packages, base=not args.no_base, choose=choose)
         for note in notes:
@@ -360,7 +441,15 @@ def main(argv: list[str]) -> int:
             with open(os.path.join(args.out, filename), "wb") as f:
                 f.write(data)
         log(f"{len(selected)} packages in {args.out}")
-    except (RepoError, rpm.RpmError, OSError, ET.ParseError, lzma.LZMAError, zstd.ZstdError) as e:
+    except (
+        RepoError,
+        rpm.RpmError,
+        verify.VerifyError,
+        OSError,
+        ET.ParseError,
+        lzma.LZMAError,
+        zstd.ZstdError,
+    ) as e:
         sys.exit(f"fetch-rpms: {e}")
     return 0
 

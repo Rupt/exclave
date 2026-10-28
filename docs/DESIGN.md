@@ -2002,20 +2002,31 @@ directory. They know about mirrors and snapshot services because those
 are locators; the tool does not, because a hash is not a locator.
 
 - `fetch/debs.py` resolves `Depends` and `Pre-Depends` from an
-  archive's `Packages` index, adds the Essential set, and checks the
-  index against the suite's `Release` digests.
+  archive's `Packages` index, adds the Essential set, checks the
+  suite's `InRelease` signature against the keyrings it is given
+  (`--keyring`, the archive's signing keys), and the index against the
+  digests that signed file lists.
 - `fetch/apks.py` resolves `D:` dependencies through the index's
-  `p:` provides and checks each package's checksums as apk does: the
+  `p:` provides, checks the `APKINDEX` signature against the public key
+  its signature names (`--key`, a file named as apk names it in
+  `/etc/apk/keys`), and checks each package's checksums as apk does: the
   index's checksum against the control section, and `.PKGINFO`'s
   `datahash` against the data section.
 - `fetch/rpms.py` reads a yum or dnf repository's `repomd.xml` and
-  `primary.xml` and resolves `Requires` through `Provides` and the files
-  the index lists.
+  `primary.xml`, resolves `Requires` through `Provides` and the files
+  the index lists, checks `repomd.xml`'s signature where the repository
+  serves one (`repomd.xml.asc`; CentOS does, Fedora does not, and the
+  fetcher says which), and checks every rpm's own signatures against
+  the keyrings given (`--keyring`, an `RPM-GPG-KEY` file) as rpm does:
+  the header signature over the header, whose payload digest covers the
+  payload, or a signature over header and payload together.
 
-None verifies a signature, the `Release` file's, the apk index's or the
-rpm metadata's, so the mirror is trusted (13 item 32). `fetch/debs.py`'s
-default mirrors are plain `http://`, so with them the network path is
-trusted too; an `https` mirror or `--snapshot` leaves only the mirror.
+The signatures are checked by `gpgv` and, for Alpine's RSA, `openssl`
+(`fetch/verify.py`); the keys are the caller's, the machine's own
+keyrings or the key files `scripts/inputs` pins by hash, and the
+fetchers never fetch one. What remains trusted is the keys' provenance,
+an unsigned `repomd.xml` for which versions a repository offers, and
+SHA-1 in the signatures Alpine makes (13 item 32).
 
 ### 10.2 Built software
 
@@ -2485,16 +2496,19 @@ and stay fixed.
     file in the tree bound by a listener outside the exclave answers
     `ECONNREFUSED`.
 
-32. **The tool trusts its input files, and the fetchers trust the
-    mirror.** The tool records its inputs' hashes and checks nothing
+32. **The tool trusts its input files, and the fetchers trust their
+    keys.** The tool records its inputs' hashes and checks nothing
     about their origin, which it cannot know. `fetch/debs.py`,
-    `fetch/apks.py` and `fetch/rpms.py` verify every
-    download against its index's digest, but none verifies a signature:
-    not a Debian or Ubuntu `Release` file's, not the apk index's, not an
-    rpm repository's metadata's. The mirror is therefore trusted, and
-    with `fetch/debs.py`'s default mirrors, which are plain `http://`,
-    so is the network path; an `https` mirror or `--snapshot` leaves
-    only the mirror. Unpack and the tool also run two of the packages'
+    `fetch/apks.py` and `fetch/rpms.py` verify every download against
+    its index's digest and the index against the archive's signature
+    (10): the `InRelease` file's, the `APKINDEX`'s, and every rpm's own,
+    with `repomd.xml`'s where the repository signs it. The keys are
+    given, never fetched, so a wrong key file is trusted as a right one
+    would be; `scripts/inputs` pins each by its hash. A repository that
+    does not sign `repomd.xml`, as Fedora's do not, leaves which
+    versions it offers to the mirror, every package still verified.
+    Alpine signs its indexes with RSA over SHA-1, so an Alpine index is
+    held to a weaker digest than the others. Unpack and the tool also run two of the packages'
     binaries on the host, outside any exclave: the tree's static
     `ldconfig` during `unpack`, to make the cache (10.1), and the
     tree's loader with `--list-diagnostics` during the static check, to
@@ -3614,7 +3628,8 @@ says the matrix is due, and so does the matrix's own code; the gate
 itself runs every step; the command, `tool/`, runs the unit step, the
 suite in both orders, the oracles, the probe and the Docker profile
 run, and says the matrix is due, since the VMs run it; `unpack/` runs
-the suite in both orders and unpack's tests; the suite or its programs add the random
+the suite in both orders, unpack's tests and the fetchers'; `fetch/`
+runs the fetchers' tests; the suite or its programs add the random
 order; a test or a helper runs the steps that use it; documents,
 scripts and settings run the code checks alone; and a path the rules do
 not know runs everything. `--full` runs every step whatever changed.
@@ -3648,6 +3663,12 @@ its time, ok, SKIP or FAIL:
   and data after an archive's end). A refusal must be one line with nothing left behind,
   and no case may change a directory beside the output that the
   packages aim at;
+- the fetchers' tests (`test/fetch_test.py`), which need gpg, gpgv and
+  openssl and say so without them: each fetcher run through a `file://`
+  URL on a repository of one package made and signed there, with keys
+  made there; the signed repository yields its package, and one signed
+  by another key, altered after signing, with its package altered, or
+  unsigned is refused in one line with nothing fetched;
 - for every exclave given: the suite in the given order and in a
   random order, the resolution oracle, the namespace oracle and the
   syscall probe;
