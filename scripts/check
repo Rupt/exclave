@@ -52,8 +52,9 @@ run "$UV" run --quiet shellcheck --severity=style --shell=sh \
 run "$UV" run --quiet ty check --quiet
 
 # The C, formatted above (.clang-format), checked a process to a file. First
-# gcc's warnings as errors, nothing kept: the launcher's sources for each
-# architecture there is a compiler for and as build/launcher-old, and the unit
+# gcc's warnings as errors and its analyser, nothing kept: the launcher's
+# sources for each architecture there is a compiler for and as
+# build/launcher-old, the command's for each architecture, and the unit
 # tests' for the host (lib.sh's flags). Then clang-tidy (.clang-tidy) on the
 # launcher for each architecture and on the unit tests. A file's output is
 # shown only for a finding, since clang counts aloud the warnings it suppressed.
@@ -63,28 +64,34 @@ quiet() { # quiet CMD...: CMD's output only when it fails
         return 1
     }
 }
+# compiled CC ARGS... FILE: FILE compiled with CC's flags and ARGS as a check, twice in the background: once as
+# built, for the warnings, and once at -O0 under gcc's analyser, which follows the paths of the code as written
+# (null and uninitialised uses, memory and descriptors freed twice or never, writes past a bound), since
+# optimisation folds some of them away first. gcc 14 defines __ANALYZER__ under the analyser; gcc 13 is given
+# it, and sys.h makes the syscalls opaque calls under it, as the analyser cannot see what the kernel writes.
 pids=
+compiled() {
+    quiet "$@" -Werror -c -o /dev/null &
+    pids="$pids $!"
+    quiet "$@" -O0 -fanalyzer -D__ANALYZER__ -Werror -c -o /dev/null &
+    pids="$pids $!"
+}
 for f in src/*.c; do
     for arch in $(c_arches); do
-        quiet launcher_cc "$arch" "$f" -Werror -c -o /dev/null &
-        pids="$pids $!"
+        compiled launcher_cc "$arch" "$f"
     done
-    quiet launcher_cc "$(uname -m)" -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD "$f" -Werror -c -o /dev/null &
-    pids="$pids $!"
+    compiled launcher_cc "$(uname -m)" -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD "$f"
 done
 for f in test/*_test.c test/sanitize.c src/manifest.c src/filter.c src/isa.c src/str.c; do
-    quiet host_cc -DHOST_TEST "$f" -Werror -c -o /dev/null &
-    pids="$pids $!"
+    compiled host_cc -DHOST_TEST "$f"
 done
-quiet host_cc -DSCRATCH_TEST src/scratch.c -Werror -c -o /dev/null &
-pids="$pids $!"
+compiled host_cc -DSCRATCH_TEST src/scratch.c
 # the exclave command, on the C library, for each architecture there is a compiler for
 for f in tool/*.c; do
     for arch in $(c_arches); do
         compiler=${CC:-gcc}
         [ "$arch" = "$(uname -m)" ] || compiler=$arch-linux-gnu-gcc
-        quiet tool_cc "$compiler" "$f" -Werror -c -o /dev/null &
-        pids="$pids $!"
+        compiled tool_cc "$compiler" "$f"
     done
     quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 -D_GNU_SOURCE &
     pids="$pids $!"

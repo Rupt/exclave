@@ -28,7 +28,14 @@ typedef unsigned int mode_t;
 /* A syscall the architecture lacks gets a sentinel below zero, unique so that the handler's switch compiles, and
  * the filter skips it (a legacy form the kernel of the other architecture has: open, stat, fork, ...). */
 #define ABSENT(k) (-1000 - (k))
+#ifdef __ANALYZER__
+/* Under gcc's analyser (scripts/check) a syscall is an opaque call: the analyser cannot see what the kernel writes
+ * through the pointers an asm statement passes, and would otherwise read every stat buffer as uninitialised. */
+long __sc6(long n, long a, long b, long c, long d, long e, long f);
+long __sc6_raw(long n, long a, long b, long c, long d, long e, long f);
+#endif
 #if defined(__x86_64__)
+#ifndef __ANALYZER__
 static inline long __sc6(long n, long a, long b, long c, long d, long e, long f)
 {
     long ret;
@@ -53,6 +60,7 @@ static inline long __sc6_raw(long n, long a, long b, long c, long d, long e, lon
                      : "rcx", "r11", "memory");
     return ret;
 }
+#endif
 /* the syscall numbers, laid out as a table, which test/syscalls.py checks against the kernel's */
 /* clang-format off */
 enum {
@@ -97,6 +105,7 @@ enum {
 #elif defined(__aarch64__)
 /* svc #0 with the number in x8 and the arguments in x0 to x5; the result in x0. Through the page: a branch with
  * link to the page, whose svc executes with the program counter inside it, which is what the filter checks. */
+#ifndef __ANALYZER__
 static inline long __sc6(long n, long a, long b, long c, long d, long e, long f)
 {
     register long x8 __asm__("x8") = n;
@@ -125,6 +134,7 @@ static inline long __sc6_raw(long n, long a, long b, long c, long d, long e, lon
     __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5) : "memory");
     return x0;
 }
+#endif
 /* clang-format off */
 enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absent */
     NR_read = 63, NR_write = 64, NR_close = 57, NR_fstat = 80,

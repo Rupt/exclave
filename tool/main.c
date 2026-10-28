@@ -49,7 +49,7 @@ void *xrealloc(void *p, size_t n)
 void buf_add(struct buf *b, const void *data, size_t n)
 {
     if (!n) return;
-    if (b->n + n > b->cap) {
+    if (!b->p || n > b->cap - b->n) { /* a buffer without memory grows, whatever its counts say */
         b->cap = b->n + n > 2 * b->cap ? b->n + n + 64 : 2 * b->cap;
         b->p = xrealloc(b->p, b->cap);
     }

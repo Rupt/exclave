@@ -3647,9 +3647,13 @@ its time, ok, SKIP or FAIL:
   clang-format (`.clang-format`), gcc's strict warnings as errors (the
   flags `scripts/lib.sh` gives every C build: the launcher for each
   architecture and as `build/launcher-old`, the command for each
-  architecture, and the unit tests) and clang-tidy with its static
-  analyser on the launcher for each architecture, on the command and on
-  the unit tests (`.clang-tidy`, `tool/.clang-tidy`);
+  architecture, and the unit tests), gcc's analyser (`-fanalyzer`) on
+  the same sources compiled at -O0, where it follows the paths of the
+  code as written (null and uninitialised uses, memory freed twice or
+  never, writes past a bound; the syscalls are opaque calls to it,
+  since it cannot see what the kernel writes), and clang-tidy with its
+  static analyser on the launcher for each architecture, on the command
+  and on the unit tests (`.clang-tidy`, `tool/.clang-tidy`);
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py`, the scratch-pool test, the `#!` line
   test, the CPU level test and the command's BLAKE2b test, each built from the current sources for the host under
