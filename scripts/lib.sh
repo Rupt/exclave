@@ -82,10 +82,12 @@ launcher_cc() {
 # tool_cc COMPILER ARGS...: the exclave command's compiler, ordinary C on the C
 # library with its GNU extensions (memmem, pipe2); scripts/build links the
 # command statically, so that the file runs with nothing beside it (DESIGN.md 10).
+# Its automatic variables start as zero, so that a read of one before a write
+# is the same wrong answer on every run, rather than whatever the stack held.
 tool_cc() {
     compiler=$1
     shift
-    c_compile "$compiler" -O2 -g -D_GNU_SOURCE "$@"
+    c_compile "$compiler" -O2 -g -D_GNU_SOURCE -ftrivial-auto-var-init=zero "$@"
 }
 
 # host_cc ARGS...: the unit tests' compiler, for the host on its libc, whose

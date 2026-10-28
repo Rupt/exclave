@@ -127,7 +127,7 @@ What is built and tested:
   kernel matrix on a kernel with 4 KB pages (12.1, 13 item 43).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The command as one file**: `build/exclave`, 899 KB, statically
+- **The command as one file**: `build/exclave`, 903 KB, statically
   linked, carrying its launcher, wraps, checks and prunes an exclave
   with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
@@ -2189,7 +2189,7 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, 899 KB and 729 KB, with nothing beside it to run: no
+the cross compiler, 903 KB and 729 KB, with nothing beside it to run: no
 interpreter, no library, no file of the checkout. It carries its
 architecture's launcher and the text of every exclave's `README` as data
 (`tool/blobs.S`), so `wrap` installs the launcher it carries and
