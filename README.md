@@ -40,7 +40,7 @@ any filesystem tree.
   untested). One source builds both launchers.
 - **gdb** debugs a program in an exclave: the launcher carries the
   script gdb needs.
-- **Tested against the kernel.** A suite of 79 named tests, oracles that
+- **Tested against the kernel.** A suite of 76 named tests, oracles that
   compare the launcher's answers with the kernel's under a read-only
   bind mount, and a differential probe of 21 732 syscall cases pass on
   gcc, clang, Alpine and Fedora exclaves. An exclave also runs under
@@ -426,6 +426,7 @@ test/matrix.py       the kernel matrix in VMs, carrying the pinned Python for ea
 test/sysroot.py      a glibc sysroot as a data directory and an output built against it, for the matrix to run natively
 test/realsoft.py     real projects built inside and outside an exclave; test/bench.py the performance table
 test/syscalls.py     every kernel syscall classified; test/stackcheck.py the stack budget
+test/affected.py     the gate's steps a change reaches, derived from what each step runs; test/figures.py the figures the documents quote, checked against the tree
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule
 test/scratch_test.c  the scratch pool's sweep under the interleaving that once shared a chunk
 test/isa_test.c      the CPU level check against made-up cpuid and XCR0 values and against gcc's own answer

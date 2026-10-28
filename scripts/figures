@@ -1,0 +1,5 @@
+#!/bin/sh
+# scripts/figures [--check]: the figures the documents quote that the tree can produce (test/figures.py).
+set -eu
+. "$(dirname -- "$0")/lib.sh"
+exec "$UV" run --quiet --project "$ROOT" python "$ROOT/test/figures.py" "$@"

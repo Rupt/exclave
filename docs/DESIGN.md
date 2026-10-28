@@ -141,7 +141,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 79 named tests, most of them programs that
+- **The regression suite**: 76 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -2246,22 +2246,22 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 79 named regressions and every oracle its kernel can run; 17
+suite's 76 named regressions and every oracle its kernel can run; 17
 describes the procedure. Measured October 2026:
 
 | Distribution | Kernel | Suite | Oracles | Notes |
 |---|---|---|---|---|
-| CentOS 7 | 3.10 | 74 of 74 | none: no user namespaces | `seccomp(2)` absent, so the `prctl` form is used; `renameat`, not `renameat2` |
-| Ubuntu 18.04 | 4.15 | 74 of 74 | namespace, probe and Docker profile pass; no `openat2` | bwrap 0.2 |
-| Rocky Linux 8 | 4.18 | 74 of 74 | all pass | |
-| Ubuntu 20.04 | 5.4 | 74 of 74 | namespace, probe and Docker profile pass; no `openat2` | |
-| Debian 11 | 5.10 | 74 of 74 | all pass | the security suite lists a `bubblewrap` it does not serve; the matrix installs the release's |
-| Ubuntu 22.04 | 5.15 | 74 of 74 | all pass | |
-| Debian 12 | 6.1 | 74 of 74 | all pass | |
-| Alpine 3.20 | 6.6 | 74 of 74 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
-| Fedora 42 | 6.14 | 74 of 74 | all pass | SELinux enforcing |
+| CentOS 7 | 3.10 | 76 of 76 | none: no user namespaces | `seccomp(2)` absent, so the `prctl` form is used; `renameat`, not `renameat2` |
+| Ubuntu 18.04 | 4.15 | 76 of 76 | namespace, probe and Docker profile pass; no `openat2` | bwrap 0.2 |
+| Rocky Linux 8 | 4.18 | 76 of 76 | all pass | |
+| Ubuntu 20.04 | 5.4 | 76 of 76 | namespace, probe and Docker profile pass; no `openat2` | |
+| Debian 11 | 5.10 | 76 of 76 | all pass | the security suite lists a `bubblewrap` it does not serve; the matrix installs the release's |
+| Ubuntu 22.04 | 5.15 | 76 of 76 | all pass | |
+| Debian 12 | 6.1 | 76 of 76 | all pass | |
+| Alpine 3.20 | 6.6 | 76 of 76 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
+| Fedora 42 | 6.14 | 76 of 76 | all pass | SELinux enforcing |
 | Ubuntu 24.04 arm64 | 6.8 | 74 of 74 | all pass | aarch64 under TCG, `-cpu max`, 4 vCPUs, at about a tenth of native speed: the suite takes 55 minutes, the row 81; the exclave is made inside the VM (10.1) |
-| reference machine | 7.0 | 74 of 74 | all pass | Ubuntu 24.04, AppArmor |
+| reference machine | 7.0 | 76 of 76 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
 run passes. Two checks outside the suite run natively on each row:
@@ -3559,7 +3559,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus the read-only matrix program (`test/progs/ro_matrix.c`) under `bwrap` against its own expectations |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it); the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/progs/`: 79 named tests |
+| 4 | `test/run.py` with `test/progs/`: 76 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -3625,9 +3625,11 @@ file is pinned by its BLAKE2b-256 in the script. An item `DIR` already
 has is skipped, and whatever is missing is fetched again. The
 repository holds no third-party input.
 
-**The gate** (`scripts/gate [--full] [--jobs N] EXCLAVE...`) is the check run
+**The gate** (`scripts/gate [--full] [--since REV] [--jobs N] EXCLAVE...`) is the check run
 before a commit. It runs the steps below that the change can affect, the
-uncommitted paths or, in a clean tree, the last commit's.
+uncommitted paths or, in a clean tree, the last commit's, and with
+`--since REV` the commits after `REV` as well, so that a series is gated
+once before it is pushed.
 `test/affected.py` derives them from what each step runs: its drivers
 and the sources it builds, each Python driver followed through the
 sibling modules it imports, the `unpack` package, and the repository
@@ -3658,7 +3660,11 @@ its time, ok, SKIP or FAIL:
   never, writes past a bound; the syscalls are opaque calls to it,
   since it cannot see what the kernel writes), and clang-tidy with its
   static analyser on the launcher for each architecture, on the command
-  and on the unit tests (`.clang-tidy`, `tool/.clang-tidy`);
+  and on the unit tests (`.clang-tidy`, `tool/.clang-tidy`); and the
+  figures the documents quote that the tree itself can produce, the
+  suite's count of named tests, the resolution oracle's paths and the
+  command's size, compared with the documents by `test/figures.py`,
+  which `scripts/figures` prints;
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py`, the scratch-pool test, the `#!` line
   test, the CPU level test and the command's BLAKE2b test, each built from the current sources for the host under

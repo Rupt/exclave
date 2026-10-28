@@ -140,4 +140,10 @@ sys.exit(f"#define TOOL_VERSION \"{want}\"" not in open("tool/tool.h").read())';
     echo "check: tool/tool.h's TOOL_VERSION differs from pyproject.toml's version" >&2
     status=1
 fi
+
+# Every figure a document quotes that the tree can produce is the tree's (test/figures.py).
+if ! "$UV" run --quiet python test/figures.py --check; then
+    echo "check: a document quotes a figure the tree does not give" >&2
+    status=1
+fi
 exit $status
