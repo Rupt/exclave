@@ -3,9 +3,10 @@
 #
 # It builds the launchers first (scripts/build), which takes no time when they are up to date. Then
 # by default it runs the steps the changed paths can affect: the uncommitted changes, or, in a clean
-# tree, the last commit. A launcher source or its build runs everything; the tool, a test or a helper
-# runs the steps that exercise it; documents, scripts and settings run the code checks alone; a path
-# the rules below do not know runs everything. --full runs every step, whatever changed.
+# tree, the last commit. test/affected.py derives them from what each step runs, through the drivers'
+# imports and the paths they name: a launcher source or its build runs everything; the tool, a test
+# or a helper runs the steps that use it; documents, scripts and settings run the code checks alone;
+# a path nothing names runs everything. --full runs every step, whatever changed.
 #
 # The steps: the code checks (scripts/check), the unit tests under ASan and UBSan, the stack budget,
 # and for every exclave given the suite in the given and a random order (and, for the first
@@ -103,63 +104,42 @@ stack() {
     if ls "$repo"/build/launcher-aarch64.debug-*.ci >/dev/null 2>&1; then py "$here/stackcheck.py" "$repo"/build/launcher-aarch64.debug-*.ci; fi
 }
 
-# What the change can affect. Each flag names a group of steps; a path sets the ones it can affect.
-unit=false stack=false suite=false random=false plain=false oracles=false matrix=false unpacking=false fetching=false fuzzing=false
+# The steps the change can affect, derived by test/affected.py from what each step runs.
 changed=$(cd "$ROOT" && { git diff --name-only HEAD && git ls-files --others --exclude-standard; } | sort -u)
 what="uncommitted changes"
 if [ -z "$changed" ]; then
     changed=$(cd "$ROOT" && git diff --name-only HEAD~1 HEAD)
     what="the last commit"
 fi
-for path in $changed; do
-    case $path in
-    src/* | scripts/build | scripts/lib.sh | LICENSE | .python-version)
-        full=true # the launcher and its build, which everything runs, or the Python everything runs on
-        matrix=true
-        ;;
-    scripts/gate) full=true ;;                                                        # the gate itself
-    tool/*) unit=true suite=true random=true oracles=true fuzzing=true matrix=true ;; # the command every driver and VM runs
-    unpack/*) suite=true random=true unpacking=true fetching=true ;;                  # the fetchers read packages through it
-    test/unpack_test.py) unpacking=true ;;
-    test/packages.py) suite=true random=true unpacking=true fetching=true ;;
-    fetch/* | test/fetch_test.py) fetching=true ;;
-    test/run.py) suite=true random=true ;;
-    test/progs/*) suite=true random=true oracles=true ;; # the probe and ro_matrix are programs there too
-    test/tree.py) suite=true random=true oracles=true ;;
-    test/oracle_*.py | test/docker_profile.py) oracles=true ;;
-    test/syscalls.py) unit=true oracles=true ;;
-    test/*_test.c | test/grammar_test.py) unit=true ;;
-    test/fuzz.c | test/fuzz.h | test/*_fuzz.c | test/fuzz.py) fuzzing=true ;;
-    test/stackcheck.py) stack=true ;;
-    test/matrix.py | test/vm_run.py) matrix=true ;;
-    # scripts/check's alone: documents, settings, the fetchers, the other scripts and drivers
-    *.md | docs/* | scripts/* | test/*.py | pyproject.toml | uv.lock | taplo.toml | .gitignore) ;;
-    *) full=true ;;
-    esac
-done
-if $full; then
-    unit=true stack=true suite=true random=true plain=true oracles=true unpacking=true fetching=true fuzzing=true
+# shellcheck disable=SC2086  # the changed paths, one word each
+steps=$(py "$here/affected.py" $changed | tr '\n' ' ') || exit 2
+has() {
+    case " $steps " in *" $1 "*) return 0 ;; esac
+    return 1
+} # has STEP: whether the change reaches it
+if $full || has plain; then
+    steps="unit stack fuzz unpack fetch suite random oracles plain $steps"
     echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
 else
     echo "gate: the steps $what can affect ($(echo "$changed" | wc -l) paths); --full runs every step"
 fi
-$matrix && echo "gate: the change reaches the VMs: scripts/matrix is due, and runs when approved"
+has matrix && echo "gate: the change reaches the VMs: scripts/matrix is due, and runs when approved"
 
 step check "$ROOT/scripts/check" # ruff, ty, shellcheck, shfmt and taplo, silent when clean
-$unit && step unit unit
-$stack && step stack stack
-$fuzzing && step fuzz fuzz "$1"                                          # the parsers under mutation of the first exclave's files
-$unpacking && step unpack py "$here/unpack_test.py" --work "$out/unpack" # unpack's rules on hostile package files
-$fetching && step fetch py "$here/fetch_test.py" --work "$out/fetch"     # the fetchers' signature checks
+has unit && step unit unit
+has stack && step stack stack
+has fuzz && step fuzz fuzz "$1"                                          # the parsers under mutation of the first exclave's files
+has unpack && step unpack py "$here/unpack_test.py" --work "$out/unpack" # unpack's rules on hostile package files
+has fetch && step fetch py "$here/fetch_test.py" --work "$out/fetch"     # the fetchers' signature checks
 for ex in "$@"; do
     n=$(basename "$ex" .exclave)
-    $suite && step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"
-    $random && step "suite-$n-random" py "$here/run.py" --exclave "$ex" --work "$out/w-$n-random" --order random
-    if $plain && [ "$ex" = "$1" ] && command -v aa-exec >/dev/null 2>&1 && aa-exec -p unconfined true 2>/dev/null; then                                # the plain terminal's
+    has suite && step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"
+    has random && step "suite-$n-random" py "$here/run.py" --exclave "$ex" --work "$out/w-$n-random" --order random
+    if has plain && [ "$ex" = "$1" ] && command -v aa-exec >/dev/null 2>&1 && aa-exec -p unconfined true 2>/dev/null; then                             # the plain terminal's
         step "suite-$n-plain" aa-exec -p unconfined "$UV" run --quiet --project "$ROOT" python "$here/run.py" --exclave "$ex" --work "$out/w-$n-plain" # AppArmor label (12), once
     fi
-    if $plain && [ "$ex" = "$1" ]; then step "suite-$n-debug" debug_suite "$ex" "$n"; fi
-    $oracles || continue
+    if has plain && [ "$ex" = "$1" ]; then step "suite-$n-debug" debug_suite "$ex" "$n"; fi
+    has oracles || continue
     step "resolve-$n" py "$here/oracle_resolve.py" --exclave "$ex" --work "$out/r-$n"
     step "ns-$n" py "$here/oracle_ns.py" --exclave "$ex" --work "$out/n-$n"
     step "syscalls-$n" py "$here/oracle_syscalls.py" --exclave "$ex" --work "$out/s-$n"

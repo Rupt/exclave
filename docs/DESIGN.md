@@ -3627,17 +3627,22 @@ repository holds no third-party input.
 
 **The gate** (`scripts/gate [--full] [--jobs N] EXCLAVE...`) is the check run
 before a commit. It runs the steps below that the change can affect, the
-uncommitted paths or, in a clean tree, the last commit's: a launcher
-source, `scripts/build`, `scripts/lib.sh`, `LICENSE` or `.python-version` runs every step and
-says the matrix is due, and so does the matrix's own code; the gate
-itself runs every step; the command, `tool/`, runs the unit step, the
-fuzz step, the suite in both orders, the oracles, the probe and the
-Docker profile run, and says the matrix is due, since the VMs run it; `unpack/` runs
-the suite in both orders, unpack's tests and the fetchers'; `fetch/`
-runs the fetchers' tests; the suite or its programs add the random
-order; a test or a helper runs the steps that use it; documents,
-scripts and settings run the code checks alone; and a path the rules do
-not know runs everything. `--full` runs every step whatever changed.
+uncommitted paths or, in a clean tree, the last commit's.
+`test/affected.py` derives them from what each step runs: its drivers
+and the sources it builds, each Python driver followed through the
+sibling modules it imports, the `unpack` package, and the repository
+paths it names (`build/exclave` is the command, so `tool/`;
+`build/launcher` the launcher, so `src/`; `test/progs/probe.c` the
+probe's program). So the command reaches every step whose driver runs
+it, unpack's tests among them; `unpack/` reaches its tests and the
+fetchers'; a program reaches the suite, or the one oracle that compiles
+it; a helper reaches whatever imports it. A launcher source,
+`scripts/build`, `scripts/lib.sh`, `LICENSE`, `.python-version`, the
+gate and the derivation itself run every step, and the first five say
+the matrix is due, as do the command and the matrix's own code, since
+the VMs run them; documents, scripts and settings run the code checks
+alone; and a path nothing names runs everything. `--full` runs every
+step whatever changed.
 The steps run four at a time, or `--jobs N`, so that the machine stays
 usable, each with its own log under `build/gate/`, one line each with
 its time, ok, SKIP or FAIL:
