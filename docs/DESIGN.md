@@ -3631,8 +3631,8 @@ uncommitted paths or, in a clean tree, the last commit's: a launcher
 source, `scripts/build`, `scripts/lib.sh`, `LICENSE` or `.python-version` runs every step and
 says the matrix is due, and so does the matrix's own code; the gate
 itself runs every step; the command, `tool/`, runs the unit step, the
-suite in both orders, the oracles, the probe and the Docker profile
-run, and says the matrix is due, since the VMs run it; `unpack/` runs
+fuzz step, the suite in both orders, the oracles, the probe and the
+Docker profile run, and says the matrix is due, since the VMs run it; `unpack/` runs
 the suite in both orders, unpack's tests and the fetchers'; `fetch/`
 runs the fetchers' tests; the suite or its programs add the random
 order; a test or a helper runs the steps that use it; documents,
@@ -3659,6 +3659,22 @@ its time, ok, SKIP or FAIL:
   test, the CPU level test and the command's BLAKE2b test, each built from the current sources for the host under
   AddressSanitizer and UndefinedBehaviorSanitizer, where a finding
   exits 99, which no test answers;
+- the fuzz step (`test/fuzz.py`): the parsers under mutation of the
+  first exclave's own files, each harness built under the same
+  sanitisers and run for ten seconds. `test/fuzz.c` is the driver;
+  with `test/tool_fuzz.c` its target is the command's parsers, the
+  grammar of the manifest and the hashes file, the ELF reader, the
+  ld.so.cache reader and the log reader, and with
+  `test/launcher_fuzz.c` the launcher's, the manifest parser and the
+  `#!` line. The seeds are the manifest, the hashes file, the launcher,
+  a few small ELF files of the tree, the tree's ld.so.cache and a log
+  and `#!` lines the step writes. Each seed is run as it is and then
+  mutated, bits and bytes, runs inserted, deleted and copied, integers
+  set to boundaries, cuts and splices, the input in a block of exactly
+  its size, so that a read past it is the sanitiser's to report. A
+  parser answers every input: a refusal is an answer, and a
+  sanitiser's finding, a signal or an exit is not, and then the input
+  is kept with the number that remakes it;
 - the stack budget of both launchers (the aarch64 one when it is
   built);
 - unpack's tests (`test/unpack_test.py`), which need no exclave: each

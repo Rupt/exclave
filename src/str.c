@@ -78,6 +78,11 @@ char *arena_str(const char *s, size_t n)
     p[n] = 0;
     return p;
 }
+#ifdef HOST_TEST
+/* test/launcher_fuzz.c parses one manifest after another in a process */
+void arena_reset(void);
+void arena_reset(void) { arena_used = 0; }
+#endif
 
 static int blank(char c) { return c == ' ' || c == '\t'; }
 

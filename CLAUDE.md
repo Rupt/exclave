@@ -143,9 +143,19 @@ The loop that has served well, in the order it pays:
 - **The C is built by `scripts/build`**, the launchers and the command,
   with the flags `scripts/lib.sh` gives every C build, and nothing is
   built when they are up to date; the gate runs it first.
-- **The C is clang-formatted and clean under gcc's strict warnings and
-  clang-tidy**, as `scripts/check` checks (`.clang-format`,
-  `lib.sh`'s flags, `.clang-tidy` and `tool/.clang-tidy`);
+- **A parser takes a pointer and a length** and reads through one
+  checked bound, so the bound lives in one place, and it answers every
+  input: a refusal is an answer, an exit or a crash is not. An invariant
+  of the code's own, as opposed to an input, is asserted and allowed to
+  fail loudly, never checked and papered over, since a quiet wrong
+  answer hides the next defect. The gate's fuzz step (`test/fuzz.c`)
+  mutates the gate's inputs through every parser under the sanitisers,
+  and a new parser gets a line in its target (`test/tool_fuzz.c`,
+  `test/launcher_fuzz.c`).
+- **The C is clang-formatted and clean under gcc's strict warnings,
+  gcc's analyser and clang-tidy**, as `scripts/check` checks
+  (`.clang-format`, `lib.sh`'s flags, `-fanalyzer` at -O0 with the
+  syscalls opaque to it, `.clang-tidy` and `tool/.clang-tidy`);
   `scripts/check --fix` formats. A trailing
   comment that does not fit in 120 columns goes above its statement,
   and a table stays one between `clang-format off` and `on`. A check is

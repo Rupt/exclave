@@ -10,9 +10,10 @@
 # The steps: the code checks (scripts/check), the unit tests under ASan and UBSan, the stack budget,
 # and for every exclave given the suite in the given and a random order (and, for the first
 # exclave, under the plain terminal's AppArmor label and on build/launcher-debug), the resolution
-# oracle, the namespace oracle and the syscall probe; unpack's tests on hostile package files
-# (test/unpack_test.py); the fetchers' signature checks (test/fetch_test.py); and when EXCLAVE_TEST_INPUTS names the
-# directory scripts/inputs filled, the Docker profile run on its src/docker-seccomp.json. No step
+# oracle, the namespace oracle and the syscall probe; the parsers fuzzed from the first exclave's own files under
+# the sanitisers (test/fuzz.py); unpack's tests on hostile package files (test/unpack_test.py); the fetchers'
+# signature checks (test/fetch_test.py); and when EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled,
+# the Docker profile run on its src/docker-seccomp.json. No step
 # touches the network. The steps run four at a time, or N with --jobs, so
 # that the machine stays usable meanwhile; every driver runs
 # build/launcher on a copy of its own (the suite wraps one from the exclave's tree, the others take
@@ -57,15 +58,16 @@ step() { # step NAME CMD...: in the background once fewer than $jobs run, its st
         echo "$? $(($(date +%s) - t))" >"$out/$name.rc"
     ) &
 }
+# shellcheck disable=SC2329  # run by unit and fuzz, which run through step
+sanitized() { # sanitized OUT ARGS...: a host program built under ASan and UBSan, a finding fatal (test/sanitize.c)
+    o=$1
+    shift
+    host_cc -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -o "$o" "$@" "$here/sanitize.c"
+}
 # shellcheck disable=SC2329  # run through step, by name
 # the parser, the filter, the scratch pool, the CPU check, the #! rules and the command's BLAKE2b, just built for the host
-# under ASan and UBSan, a finding fatal (test/sanitize.c)
+# under the sanitisers
 unit() {
-    sanitized() { # sanitized OUT ARGS...
-        o=$1
-        shift
-        host_cc -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -o "$o" "$@" "$here/sanitize.c"
-    }
     sanitized "$out/manifest_test" -DHOST_TEST "$here/manifest_test.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
         "$out/manifest_test" && py "$here/grammar_test.py" --c-parser "$out/manifest_test" &&
         sanitized "$out/filter_test" -DHOST_TEST "$here/filter_test.c" "$repo/src/filter.c" "$repo/src/str.c" &&
@@ -80,6 +82,18 @@ unit() {
         "$out/tool_test"
 }
 # shellcheck disable=SC2329  # run through step, by name
+# the parsers of the command (every module but its entry, with the files it carries) and of the launcher, each built
+# with test/fuzz.c under the sanitisers, under mutation of EXCLAVE's own files
+fuzz() { # fuzz EXCLAVE
+    ex=$1
+    set --
+    for f in "$repo"/tool/*.c; do [ "$f" = "$repo/tool/main.c" ] || set -- "$@" "$f"; done
+    (cd "$repo" && sanitized "$out/tool_fuzz" -D_GNU_SOURCE "-DLAUNCHER=\"$repo/build/launcher\"" "$here/fuzz.c" \
+        "$here/tool_fuzz.c" "$@" "$repo/tool/blobs.S") &&
+        sanitized "$out/launcher_fuzz" -DHOST_TEST "$here/fuzz.c" "$here/launcher_fuzz.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
+        py "$here/fuzz.py" --exclave "$ex" --work "$out/fuzz" --tool "$out/tool_fuzz" --launcher "$out/launcher_fuzz"
+}
+# shellcheck disable=SC2329  # run through step, by name
 debug_suite() { # debug_suite EXCLAVE NAME: the suite on the launcher with its undefined-behaviour checks
     py "$here/run.py" --exclave "$1" --work "$out/w-$2-debug" --launcher "$repo/build/launcher-debug"
 }
@@ -90,7 +104,7 @@ stack() {
 }
 
 # What the change can affect. Each flag names a group of steps; a path sets the ones it can affect.
-unit=false stack=false suite=false random=false plain=false oracles=false matrix=false unpacking=false fetching=false
+unit=false stack=false suite=false random=false plain=false oracles=false matrix=false unpacking=false fetching=false fuzzing=false
 changed=$(cd "$ROOT" && { git diff --name-only HEAD && git ls-files --others --exclude-standard; } | sort -u)
 what="uncommitted changes"
 if [ -z "$changed" ]; then
@@ -103,9 +117,9 @@ for path in $changed; do
         full=true # the launcher and its build, which everything runs, or the Python everything runs on
         matrix=true
         ;;
-    scripts/gate) full=true ;;                                           # the gate itself
-    tool/*) unit=true suite=true random=true oracles=true matrix=true ;; # the command every driver and VM runs
-    unpack/*) suite=true random=true unpacking=true fetching=true ;;     # the fetchers read packages through it
+    scripts/gate) full=true ;;                                                        # the gate itself
+    tool/*) unit=true suite=true random=true oracles=true fuzzing=true matrix=true ;; # the command every driver and VM runs
+    unpack/*) suite=true random=true unpacking=true fetching=true ;;                  # the fetchers read packages through it
     test/unpack_test.py) unpacking=true ;;
     test/packages.py) suite=true random=true unpacking=true fetching=true ;;
     fetch/* | test/fetch_test.py) fetching=true ;;
@@ -115,6 +129,7 @@ for path in $changed; do
     test/oracle_*.py | test/docker_profile.py) oracles=true ;;
     test/syscalls.py) unit=true oracles=true ;;
     test/*_test.c | test/grammar_test.py) unit=true ;;
+    test/fuzz.c | test/fuzz.h | test/*_fuzz.c | test/fuzz.py) fuzzing=true ;;
     test/stackcheck.py) stack=true ;;
     test/matrix.py | test/vm_run.py) matrix=true ;;
     # scripts/check's alone: documents, settings, the fetchers, the other scripts and drivers
@@ -123,7 +138,7 @@ for path in $changed; do
     esac
 done
 if $full; then
-    unit=true stack=true suite=true random=true plain=true oracles=true unpacking=true fetching=true
+    unit=true stack=true suite=true random=true plain=true oracles=true unpacking=true fetching=true fuzzing=true
     echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
 else
     echo "gate: the steps $what can affect ($(echo "$changed" | wc -l) paths); --full runs every step"
@@ -133,6 +148,7 @@ $matrix && echo "gate: the change reaches the VMs: scripts/matrix is due, and ru
 step check "$ROOT/scripts/check" # ruff, ty, shellcheck, shfmt and taplo, silent when clean
 $unit && step unit unit
 $stack && step stack stack
+$fuzzing && step fuzz fuzz "$1"                                          # the parsers under mutation of the first exclave's files
 $unpacking && step unpack py "$here/unpack_test.py" --work "$out/unpack" # unpack's rules on hostile package files
 $fetching && step fetch py "$here/fetch_test.py" --work "$out/fetch"     # the fetchers' signature checks
 for ex in "$@"; do

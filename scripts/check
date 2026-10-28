@@ -82,7 +82,7 @@ for f in src/*.c; do
     done
     compiled launcher_cc "$(uname -m)" -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD "$f"
 done
-for f in test/*_test.c test/sanitize.c src/manifest.c src/filter.c src/isa.c src/str.c; do
+for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c src/manifest.c src/filter.c src/isa.c src/str.c; do
     compiled host_cc -DHOST_TEST "$f"
 done
 compiled host_cc -DSCRATCH_TEST src/scratch.c
@@ -113,7 +113,7 @@ for f in src/filter.c src/handler.c; do
         -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD &
     pids="$pids $!"
 done
-for f in test/*_test.c test/sanitize.c; do
+for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c; do
     quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 &
     pids="$pids $!"
 done

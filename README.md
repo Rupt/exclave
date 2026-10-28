@@ -392,7 +392,8 @@ src/isa.c            the CPU check (7.7): x86-64 psABI levels by cpuid and XCR0,
 src/str.c            string helpers, arena, the shebang parser
 src/log.c            EXCLAVE_LOG and fatal messages
 tool/tool.h          the exclave command (10), static C on the C library: every module's interface
-tool/main.c          the command line, what every command shares, hash and format
+tool/main.c          the command line, hash and format
+tool/util.c          what every command shares: refusals, memory, byte strings, files
 tool/grammar.c       the strict grammar of the manifest and the hashes file (6.2), and its canonical form
 tool/tree.c          the walks of a tree in the order of its names' bytes, and the tree hash (6.4)
 tool/layout.c        the launcher, the README and the hashes file; wrap, unwrap and relink
@@ -428,6 +429,7 @@ test/syscalls.py     every kernel syscall classified; test/stackcheck.py the sta
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule
 test/scratch_test.c  the scratch pool's sweep under the interleaving that once shared a chunk
 test/isa_test.c      the CPU level check against made-up cpuid and XCR0 values and against gcc's own answer
+test/fuzz.c          mutation fuzzing of the parsers; test/tool_fuzz.c and test/launcher_fuzz.c its targets, test/fuzz.py the gate's step
 LICENSE              the MIT licence; the launcher carries its text
 docs/DESIGN.md       the design and specification
 CLAUDE.md            working notes for contributors and coding agents
