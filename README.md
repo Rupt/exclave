@@ -422,12 +422,14 @@ src/log.c            EXCLAVE_LOG and fatal messages
 tool/tool.h          the exclave command (10), static C on the C library: every module's interface
 tool/main.c          the command line, hash and format
 tool/util.c          what every command shares: refusals, memory, byte strings, files
+tool/strs.c          lists of strings, a set of byte strings, and a list of distinct strings with the set as its index
 tool/grammar.c       the strict grammar of the manifest and the hashes file (6.2), and its canonical form
-tool/tree.c          the walks of a tree in the order of its names' bytes, and the tree hash (6.4)
+tool/tree.c          the walks of a tree in the order of its names' bytes, and the tree hash (6.4), its files hashed on threads
 tool/layout.c        the launcher, the README and the hashes file; wrap, unwrap and relink
-tool/paths.c         virtual paths resolved in the tree, and the visibility rule's prefixes (8.1)
+tool/paths.c         virtual paths resolved in the tree and spelt as posixpath does, the manifest's ownership (8.1)
 tool/elf.c           the ELF headers, PT_INTERP, the dynamic section and ld.so.cache the checks read
-tool/check.c         the static and dynamic checks of 10.3, the loader's library search, check
+tool/search.c        the loader's library search (10.3), the machines the command knows, a tree's glibc by its banner
+tool/check.c         the static and dynamic checks of 10.3, the wrappers and located links, check
 tool/prune.c         prune (10.4)
 tool/blake2b.c       BLAKE2b, from RFC 7693
 tool/blobs.S         the launcher and tool/README.txt, the README every exclave gets, carried as data

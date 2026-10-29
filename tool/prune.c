@@ -86,7 +86,8 @@ static void find_shares(const char *dir, const char *rel, struct strs *out)
 /* ---------------------------------------------------------------- the libraries kept ELF files need */
 struct closure {
     const struct search *s;
-    struct strs seen, *out;
+    struct set seen;
+    struct uniq *out;
 };
 
 static void visit(struct closure *c, const char *vpath, const struct elf *e, const struct strs *rpaths)
@@ -97,18 +98,17 @@ static void visit(struct closure *c, const char *vpath, const struct elf *e, con
         buf_add(&key, "\n\x01", 2);
         buf_str(&key, rpaths->s[i]);
     }
-    buf_add(&key, "", 1);
-    if (strs_has(&c->seen, key.p)) return free(key.p);
-    strs_add(&c->seen, key.p);
+    int fresh = set_add(&c->seen, key.p, key.n);
     free(key.p);
-    if (e->interp && !strs_has(c->out, e->interp)) strs_add(c->out, e->interp);
+    if (!fresh) return;
+    if (e->interp) uniq_add(c->out, e->interp);
     struct strs below = {0};
     if (!e->runpath && e->rpath) strs_add(&below, e->rpath);
     for (size_t i = 0; i < rpaths->n; i++) strs_add(&below, rpaths->s[i]);
     for (size_t i = 0; i < e->nneeded; i++) {
         char *found = find_library(c->s, e->needed[i], e, vpath, rpaths);
         if (!found) continue;
-        if (!strs_has(c->out, found)) strs_add(c->out, found);
+        uniq_add(c->out, found);
         char *pay = tree_payload(c->s->root, found), why[ELF_WHY];
         struct elf fe;
         if (elf_read(pay, &fe, why) == ELF_OK) {
@@ -123,7 +123,7 @@ static void visit(struct closure *c, const char *vpath, const struct elf *e, con
 
 /* Every library the given ELF files reach through DT_NEEDED, each found by the loader's search with RPATHs inherited
  * down the chain, and each loader the files name, since the launcher loads it and no logged call does (10.4). */
-static void needed_closure(const char *root, const struct strs *elfs, struct strs *out)
+static void needed_closure(const char *root, const struct strs *elfs, struct uniq *out)
 {
     struct cache cache;
     int has_cache = read_cache(root, &cache);
@@ -152,7 +152,7 @@ static void needed_closure(const char *root, const struct strs *elfs, struct str
         }
         free(pay);
     }
-    strs_free(&c.seen);
+    set_free(&c.seen);
     strs_free(&defaults);
     elf_free(&first);
     cache_free(&cache);
@@ -163,7 +163,7 @@ static int bytes_order(const void *a, const void *b) { return strcmp(*(char *con
 
 struct keeping {
     const char *root;
-    struct strs *keep;
+    struct uniq *keep;
 };
 
 /* every symlink that reaches a kept file, or a directory, stays with its chain */
@@ -171,20 +171,19 @@ static void keep_link(const char *real, const char *v, const struct stat *st, vo
 {
     (void)real;
     struct keeping *k = ctx;
-    if (!S_ISLNK(st->st_mode) || strs_has(k->keep, v)) return;
+    if (!S_ISLNK(st->st_mode) || uniq_has(k->keep, v)) return;
     struct strs chain = {0};
     char *final = tree_resolve(k->root, v, 1, &chain);
     int keep = 0;
     if (final) {
         char *fr = tree_real(k->root, final);
         struct stat fst;
-        keep = strs_has(k->keep, final) || (stat(fr, &fst) == 0 && S_ISDIR(fst.st_mode));
+        keep = uniq_has(k->keep, final) || (stat(fr, &fst) == 0 && S_ISDIR(fst.st_mode));
         free(fr);
     }
     if (keep) {
-        for (size_t i = 0; i < chain.n; i++)
-            if (!strs_has(k->keep, chain.s[i])) strs_add(k->keep, chain.s[i]);
-        strs_add(k->keep, v);
+        for (size_t i = 0; i < chain.n; i++) uniq_add(k->keep, chain.s[i]);
+        uniq_add(k->keep, v);
     }
     strs_free(&chain);
     free(final);
@@ -192,7 +191,7 @@ static void keep_link(const char *real, const char *v, const struct stat *st, vo
 
 struct removal {
     const char *root;
-    const struct strs *keep;
+    const struct uniq *keep;
     size_t kept, removed;
     unsigned long long freed;
 };
@@ -206,7 +205,7 @@ static void remove_dir(const char *dir, const char *rel, struct entry_info *e, s
         if (e[i].is_dir && !S_ISLNK(e[i].st.st_mode)) continue;
         char *real = path_join(dir, e[i].name), *wr = rel_join(in_real ? parent_rel : rel, e[i].name),
              *w = path_join("/", wr);
-        if (strs_has(r->keep, w)) {
+        if (uniq_has(r->keep, w)) {
             r->kept++;
         } else {
             /* originals and plain files; a wrapper is a link to the launcher */
@@ -226,11 +225,6 @@ static void remove_dir(const char *dir, const char *rel, struct entry_info *e, s
     free(parent_rel);
 }
 
-static void keep_path(struct strs *keep, const char *v)
-{
-    if (!strs_has(keep, v)) strs_add(keep, v);
-}
-
 /* Prune the tree to what the logged workloads touched: the files they touched, the entries of directories they opened,
  * the symlink chains that reach kept files, the libraries kept ELF files need, the identity files and the licence
  * texts. Directories are never removed, so ownership and ls do not change. Then the static check runs on what is
@@ -243,7 +237,7 @@ int cmd_prune(int argc, char **argv)
     struct ownership own;
     ownership_of(ex, &own);
     char *root = path_join(ex, "tree");
-    struct strs keep = {0}, whole = {0};
+    struct uniq keep = {0}, whole = {0};
     size_t programs = 0;
     for (int l = 1; l < argc; l++) {
         struct log_line *lines;
@@ -254,15 +248,15 @@ int cmd_prune(int argc, char **argv)
                 continue;
             struct strs links = {0};
             char *final = tree_resolve(root, x->path, 1, &links);
-            for (size_t k = 0; k < links.n; k++) keep_path(&keep, links.s[k]);
+            for (size_t k = 0; k < links.n; k++) uniq_add(&keep, links.s[k]);
             strs_free(&links);
             if (!final) continue;
             char *real = tree_real(root, final);
             struct stat st;
             if (stat(real, &st) == 0 && S_ISDIR(st.st_mode)) {
-                if (!strcmp(x->what, "open")) keep_path(&whole, final); /* a directory opened may be listed */
+                if (!strcmp(x->what, "open")) uniq_add(&whole, final); /* a directory opened may be listed */
             } else {
-                keep_path(&keep, final);
+                uniq_add(&keep, final);
                 if (!strcmp(x->what, "exec") || !strcmp(x->what, "load")) programs++;
             }
             free(real);
@@ -275,7 +269,7 @@ int cmd_prune(int argc, char **argv)
         const char *f = i < N_IDENTITY_FILES ? IDENTITY_FILES[i] : "/etc/ld.so.cache";
         char *p = tree_real(root, f);
         struct stat st;
-        if (lstat(p, &st) == 0) keep_path(&keep, f);
+        if (lstat(p, &st) == 0) uniq_add(&keep, f);
         free(p);
     }
     struct strs licences = {0}; /* the packages' licence texts go with every copy */
@@ -283,29 +277,30 @@ int cmd_prune(int argc, char **argv)
     for (size_t i = 0; i < licences.n; i++) {
         struct strs links = {0};
         char *final = tree_resolve(root, licences.s[i], 1, &links);
-        for (size_t k = 0; k < links.n; k++) keep_path(&keep, links.s[k]);
-        if (final) keep_path(&keep, final);
+        for (size_t k = 0; k < links.n; k++) uniq_add(&keep, links.s[k]);
+        if (final) uniq_add(&keep, final);
         strs_free(&links);
         free(final);
     }
     strs_free(&licences);
-    for (size_t i = 0; i < whole.n; i++) { /* its own entries: a getdents shows names, nothing below them */
-        char *d = tree_real(root, whole.s[i]);
+    for (size_t i = 0; i < whole.list.n; i++) { /* its own entries: a getdents shows names, nothing below them */
+        char *d = tree_real(root, whole.list.s[i]);
         struct entry_info *e;
         size_t n;
         if (list_dir(d, &e, &n)) fail_errno(d);
         for (size_t j = 0; j < n; j++)
             if (!e[j].is_dir || S_ISLNK(e[j].st.st_mode)) {
-                char *v = path_join(whole.s[i], e[j].name);
-                keep_path(&keep, v);
+                char *v = path_join(whole.list.s[i], e[j].name);
+                uniq_add(&keep, v);
                 free(v);
             }
         free_list(e, n);
         free(d);
     }
     /* the libraries every kept ELF needs, by the loader's own search (10.3) */
-    struct strs sorted = {0}, elfs = {0}, closure = {0};
-    for (size_t i = 0; i < keep.n; i++) strs_add(&sorted, keep.s[i]);
+    struct strs sorted = {0}, elfs = {0};
+    struct uniq closure = {0};
+    for (size_t i = 0; i < keep.list.n; i++) strs_add(&sorted, keep.list.s[i]);
     if (sorted.n) qsort(sorted.s, sorted.n, sizeof *sorted.s, bytes_order);
     for (size_t i = 0; i < sorted.n; i++) {
         char *real = tree_real(root, sorted.s[i]);
@@ -325,11 +320,11 @@ int cmd_prune(int argc, char **argv)
         free(real);
     }
     needed_closure(root, &elfs, &closure);
-    for (size_t i = 0; i < closure.n; i++) { /* the chain of links, then the file they reach */
+    for (size_t i = 0; i < closure.list.n; i++) { /* the chain of links, then the file they reach */
         struct strs links = {0};
-        char *final = tree_resolve(root, closure.s[i], 1, &links);
-        for (size_t k = 0; k < links.n; k++) keep_path(&keep, links.s[k]);
-        if (final) keep_path(&keep, final);
+        char *final = tree_resolve(root, closure.list.s[i], 1, &links);
+        for (size_t k = 0; k < links.n; k++) uniq_add(&keep, links.s[k]);
+        if (final) uniq_add(&keep, final);
         strs_free(&links);
         free(final);
     }
@@ -343,9 +338,9 @@ int cmd_prune(int argc, char **argv)
     int errors = static_report(ex);
     strs_free(&sorted);
     strs_free(&elfs);
-    strs_free(&closure);
-    strs_free(&keep);
-    strs_free(&whole);
+    uniq_free(&closure);
+    uniq_free(&keep);
+    uniq_free(&whole);
     ownership_free(&own);
     free(root);
     return errors ? 1 : 0;

@@ -110,13 +110,29 @@ typedef void (*file_fn)(const char *real, const char *v, const struct stat *st, 
 void walk_files(const char *root, file_fn fn, void *ctx);
 
 /* a list of strings, each its own copy */
+/* collections of strings (strs.c) */
 struct strs {
     char **s;
-    size_t n;
+    size_t n, cap;
 };
 void strs_add(struct strs *l, const char *s);
 void strs_free(struct strs *l);
 int strs_has(const struct strs *l, const char *s);
+struct set {
+    struct buf *k;
+    size_t n, cap;
+};
+int set_add(struct set *s, const char *p, size_t n);
+int set_has(const struct set *s, const char *p, size_t n);
+void set_free(struct set *s);
+/* distinct strings in the order added, with an index */
+struct uniq {
+    struct strs list;
+    struct set index;
+};
+int uniq_add(struct uniq *u, const char *s);
+int uniq_has(const struct uniq *u, const char *s);
+void uniq_free(struct uniq *u);
 
 /* virtual paths in the tree (6.1, 8.1) */
 int under(const char *v, const char *prefix);
@@ -177,6 +193,21 @@ int static_report(const char *ex);
 void wrapper_problems(const char *ex, const struct strs *data, struct strs *out);
 void located_links(const char *ex, struct strs *out);
 int cmd_check(int argc, char **argv);
+/* machines (7.1): the table of those the command knows, and the one it was built for */
+struct machine {
+    int e_machine;
+    const char *uname, *triplet; /* uname -m, which glibc's loader substitutes for $PLATFORM; the multiarch triplet */
+    const char *hwcaps[3];       /* the glibc-hwcaps subdirectories searched first, best first */
+    int nhwcaps;
+};
+extern const struct machine MACHINES[2];
+extern const struct machine *const NATIVE;
+#define GLIBC_SONAME "libc.so.6"
+const char *uname_machine(void);
+void default_dirs(struct strs *out);
+int is_payload_file(const char *root, const char *v);
+int glibc_version(const char *root, int *major, int *minor);
+char *relpath(const char *path, const char *base);
 /* the loader's search (10.3) */
 struct search {
     const char *root;

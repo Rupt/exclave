@@ -3,6 +3,8 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -36,9 +38,17 @@ struct entry {
     char *p;
     size_t n;
 };
+/* a file's contents to hash, its hash text to be written at entry e's offset off */
+struct job {
+    char *path;
+    size_t e, off;
+    int err; /* the errno of a read that failed, 0 */
+};
 struct entries {
     struct entry *e;
     size_t n, cap;
+    struct job *j;
+    size_t nj, capj;
 };
 
 static int entry_order(const void *a, const void *b)
@@ -54,17 +64,20 @@ static _Noreturn void unreadable(const char *path)
     fail_errno(path);
 }
 
-/* the BLAKE2b-256 of a file's contents, as lowercase hex */
-static void hash_file(const char *path, struct buf *out)
+/* the BLAKE2b-256 of a file's contents as lowercase hex, 64 characters at out; 0, or the errno of a failed read */
+static int hash_file(const char *path, char *out, char *chunk, size_t chunk_size)
 {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) unreadable(path);
+    if (fd < 0) return errno;
     struct blake2b s;
     b2_init(&s, 32);
-    static char chunk[1 << 16];
     for (;;) {
-        ssize_t k = read(fd, chunk, sizeof chunk);
-        if (k < 0) unreadable(path);
+        ssize_t k = read(fd, chunk, chunk_size);
+        if (k < 0) {
+            int e = errno;
+            close(fd);
+            return e;
+        }
         if (k == 0) break;
         b2_update(&s, chunk, (size_t)k);
     }
@@ -73,7 +86,51 @@ static void hash_file(const char *path, struct buf *out)
     char text[B2_TEXT];
     b2_final(&s, d);
     b2_text(d, text);
-    buf_str(out, text + 3);
+    memcpy(out, text + 3, 64);
+    return 0;
+}
+
+/* the files' contents are hashed on several threads, each taking the next job, after the walk has listed them in
+ * order; each writes only its own entry's text, so the listing, and the hash of it, are the walk's alone */
+struct hashing {
+    struct entries *all;
+    atomic_size_t next;
+};
+
+static void *hash_jobs(void *arg)
+{
+    struct hashing *h = arg;
+    char *chunk = xrealloc(NULL, 1 << 16);
+    for (;;) {
+        size_t i = atomic_fetch_add(&h->next, 1);
+        if (i >= h->all->nj) break;
+        struct job *j = &h->all->j[i];
+        j->err = hash_file(j->path, h->all->e[j->e].p + j->off, chunk, 1 << 16);
+    }
+    free(chunk);
+    return NULL;
+}
+
+static void hash_all(struct entries *all)
+{
+    struct hashing h = {all, 0};
+    long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    size_t n = cpus < 1 ? 1 : cpus > 8 ? 8 : (size_t)cpus;
+    if (n > all->nj) n = all->nj ? all->nj : 1;
+    pthread_t t[8];
+    size_t started = 0;
+    for (; started + 1 < n; started++)
+        if (pthread_create(&t[started], NULL, hash_jobs, &h)) break;
+    hash_jobs(&h); /* this thread too, and alone where no other could start */
+    for (size_t i = 0; i < started; i++) pthread_join(t[i], NULL);
+    /* the first file the walk listed that could not be read, as a serial hash would name it */
+    for (size_t i = 0; i < all->nj; i++)
+        if (all->j[i].err) {
+            errno = all->j[i].err;
+            unreadable(all->j[i].path);
+        }
+    for (size_t i = 0; i < all->nj; i++) free(all->j[i].path);
+    free(all->j);
 }
 
 /* One entry of the listing: path, NUL, kind, NUL, what the kind records, NUL. A regular file stands for its original
@@ -99,8 +156,21 @@ static void add_entry(struct entries *all, const char *rel, const char *real, co
         buf_str(&original, slash ? slash + 1 : real);
         buf_add(&original, "", 1);
         struct stat ost;
-        hash_file(stat(original.p, &ost) == 0 ? original.p : real, &b);
-        free(original.p);
+        if (all->nj == all->capj) {
+            all->capj = all->capj ? 2 * all->capj : 1024;
+            all->j = xrealloc(all->j, all->capj * sizeof *all->j);
+        }
+        char *path = original.p;
+        if (stat(original.p, &ost)) {
+            free(original.p);
+            struct buf r = {0};
+            buf_str(&r, real);
+            buf_add(&r, "", 1);
+            path = r.p;
+        }
+        /* the hash's 64 characters, written by hash_all */
+        all->j[all->nj++] = (struct job){path, all->n, b.n, 0};
+        buf_add(&b, "................................................................", 64);
     } else {
         free(b.p); /* sockets, pipes and devices are not in the hash */
         return;
@@ -192,6 +262,7 @@ void tree_hash(const char *root, char out[B2_TEXT])
 {
     struct entries all = {0};
     walk(&all, root, "");
+    hash_all(&all);
     if (all.n) qsort(all.e, all.n, sizeof *all.e, entry_order);
     struct blake2b s;
     b2_init(&s, 32);

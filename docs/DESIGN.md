@@ -127,7 +127,7 @@ What is built and tested:
   kernel matrix on a kernel with 4 KB pages (12.1, 13 item 43).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The command as one file**: `build/exclave`, 907 KB, statically
+- **The command as one file**: `build/exclave`, 1 023 KB, statically
   linked, carrying its launcher, wraps, checks and prunes an exclave
   with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
@@ -2253,7 +2253,7 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, 907 KB and 729 KB, with nothing beside it to run: no
+the cross compiler, 1 023 KB and 860 KB, with nothing beside it to run: no
 interpreter, no library, no file of the checkout. It carries its
 architecture's launcher and the text of every exclave's `README` as data
 (`tool/blobs.S`), so `wrap` installs the launcher it carries and
@@ -2267,7 +2267,10 @@ processes (7.1) and the command never does. The scripts build it with
 the same strict warnings as the launcher, and the gate runs a build
 under ASan and UBSan, `build/exclave-asan`. Its BLAKE2b is written from
 RFC 7693 and tested against the RFC's vector and Python's `hashlib`
-(17).
+(17). The tree hash (6.4) walks the tree in order and then hashes the
+files' contents on up to eight threads, each writing only its own
+entry of the listing, so the hash is the walk's whatever the threads
+do; a file it cannot read is named as the walk listed it.
 
 **A release.** `scripts/release KEY DIR EXCLAVE...` puts under `DIR`
 each exclave as `NAME.exclave.tar.xz`, an archive that keeps the hard
@@ -3572,10 +3575,12 @@ build touched, `/tmp`, the source directory and the working directory,
 resolved without a manifest record being added.
 
 **The command.** On the gate's gcc exclave (159 MB, 709 ELF files), best
-of three, October 2026: `wrap` of the unwrapped tree 0.85 s, `check`
-0.77 s and `hash` 0.63 s, most of each the tree hash. The same listing
-hashed through Python's `hashlib`, whose BLAKE2b is vectorised, took
-0.53 s (18 item 6).
+of three, October 2026, on this machine's 16 threads: `wrap` of the
+unwrapped tree 0.39 s, `check` 0.29 s and `hash` 0.17 s, the tree
+hash on eight threads (10.5). On a tree of 109 020 files, the gcc
+exclave with 100 000 small files added, `hash` takes 0.52 s, and
+`prune` to a log naming half of the added files 5.3 s, of which 0.3 s
+is the command's own and the rest the kernel's unlinks and stats.
 
 ### 16.9 Reproducing
 
@@ -4104,11 +4109,11 @@ questions.
    untested in the portability envelope (12); each is a matrix row to
    add, or a limitation to state.
 6. **The command's hashing.** `wrap`, `check` and `hash` spend most of
-   their time on the tree hash, and the command's BLAKE2b, written
-   plainly from RFC 7693, is slower than a vectorised one such as
-   Python's `hashlib` (16.8). A faster implementation keeps every
-   recorded hash; another hash function would be a change of the format
-   (6.4, 19.1).
+   their time on the tree hash, which runs on up to eight threads
+   (10.5), and the command's BLAKE2b, written plainly from RFC 7693, is
+   slower per byte than a vectorised one such as Python's `hashlib`. A
+   faster implementation keeps every recorded hash; another hash
+   function would be a change of the format (6.4, 19.1).
 
 ## 19. Design decisions
 
