@@ -86,16 +86,25 @@ def package(
     *,
     replaces: str = "",
     data: bytes | None = None,
+    control_files: Sequence[tuple[str, str]] = (),
 ) -> str:
     """Write the package name in the format fmt, with a Replaces field; return its path.
 
     data: the payload as given: a .deb's data member, an .apk's data stream, an .rpm's payload.
+    control_files: a .deb's further control members, a postinst or a triggers file, by name.
     """
     d = os.path.join(ctx.work, "pkgs")
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, f"{name}.{fmt}")
     if fmt == "deb":
-        make_deb(path, name, members, f"Replaces: {replaces}\n" if replaces else "", data=data)
+        make_deb(
+            path,
+            name,
+            members,
+            f"Replaces: {replaces}\n" if replaces else "",
+            data=data,
+            control_files=control_files,
+        )
     elif fmt == "apk":
         make_apk(path, name, members, f"replaces = {replaces}\n" if replaces else "", data=data)
     else:
@@ -538,6 +547,76 @@ def escapes_stay_in_the_tree(ctx: Ctx) -> None:
         ):
             refused(ctx, f"{fmt}-{name}", [package(ctx, fmt, f"{fmt}-{name}", members)], why)
     expect(os.stat(secret).st_nlink == 1, "a hard link to the host's file was made")
+
+
+@test
+def synthesis_rules_and_notes(ctx: Ctx) -> None:
+    """10.1: the rules are a table, named in the log as they apply; --set picks the alternative.
+
+    A postinst that builds its update-alternatives lines from variables is noted, since its
+    alternatives are not made, and a trigger interest the tree lacks a cache for is noted by name.
+    """
+    alt = package(
+        ctx,
+        "deb",
+        "alt",
+        [
+            ("usr/bin/x-1", "file", b"#!/bin/sh\n", 0o755),
+            ("usr/bin/x-2", "file", b"#!/bin/sh\n", 0o755),
+        ],
+        control_files=[
+            (
+                "postinst",
+                (
+                    "#!/bin/sh\nupdate-alternatives --install /usr/bin/x x /usr/bin/x-1 10\n"
+                    "update-alternatives --install /usr/bin/x x /usr/bin/x-2 20\n"
+                    "update-alternatives --set x /usr/bin/x-1\n"
+                ),
+            )
+        ],
+    )
+    loopy = package(
+        ctx,
+        "deb",
+        "loopy",
+        [("usr/lib/j1", "file", b"#!/bin/sh\n", 0o755)],
+        control_files=[
+            (
+                "postinst",
+                (
+                    "#!/bin/sh\nfor v in 1; do update-alternatives --install /usr/bin/j$v j$v "
+                    "/usr/lib/j$v 1; done\n"
+                ),
+            )
+        ],
+    )
+    py = package(
+        ctx,
+        "deb",
+        "py",
+        [("usr/lib/python3.12/os.py", "file", b"pass\n", 0o644)],
+        control_files=[("triggers", "interest-noawait /usr/lib/python3.12\n")],
+    )
+    root, out = accepted(ctx, "rules", [alt, loopy, py])
+    expect(
+        os.readlink(os.path.join(root, "etc", "alternatives", "x")) == "/usr/bin/x-1",
+        "--set did not choose the alternative: " + out[-400:],
+    )
+    expect(
+        "synthesis rules applied: alternatives\n" in out, "the applied rules are not named: " + out
+    )
+    expect(
+        "note: loopy's postinst calls update-alternatives in a form the alternatives rule does not"
+        in out,
+        "a postinst with variables is not noted: " + out,
+    )
+    expect(
+        "note: py triggers on /usr/lib/python3.12: Python bytecode" in out,
+        "a trigger interest the tree lacks a cache for is not noted: " + out,
+    )
+    expect(
+        not os.path.lexists(os.path.join(root, "usr", "bin", "j1")), "a loop's alternative was made"
+    )
 
 
 @test

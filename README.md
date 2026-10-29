@@ -433,6 +433,7 @@ tool/blake2b.c       BLAKE2b, from RFC 7693
 tool/blobs.S         the launcher and tool/README.txt, the README every exclave gets, carried as data
 unpack/cli.py        the step before the tool: package files -> an unwrapped exclave (10.1)
 unpack/steps.py      extraction rules, synthesis, the volatile directories, dependency report, the pkg records
+unpack/rules.py      the synthesis rules as a table, named in the log as they apply, and the notes on what no rule makes; unpack/package.py a package file and its reader
 unpack/reader.py     the interface every package reader provides, and the streams they read as they decompress
 unpack/root.py       the tree as a root: every path resolved inside it, every write through a directory descriptor
 unpack/deb.py        the Debian reader: ar, tar, compression, control stanzas, dependency fields, version order

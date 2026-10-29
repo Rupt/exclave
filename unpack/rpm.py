@@ -392,6 +392,11 @@ def control(path: str) -> tuple[dict[str, str], dict[str, str]]:
     return fields, scripts
 
 
+def interests(path: str) -> list[str]:  # noqa: ARG001 -- the interface's argument; nothing to read
+    """None: rpm's file triggers are in other packages' headers, which this reader does not read."""
+    return []
+
+
 _TOKEN = re.compile(r"^([^\s<>=]+)(?:(<=|>=|<|>|=)([^\s<>=]+))?$")
 
 

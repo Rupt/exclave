@@ -156,9 +156,20 @@ def control(path: str) -> tuple[dict[str, str], dict[str, str]]:
             if n == "control":
                 stanzas = parse_stanzas(data.decode("utf-8", "replace"))
                 fields = stanzas[0] if stanzas else {}
-            elif n in ("preinst", "postinst", "prerm", "postrm", "config"):
+            elif n in ("preinst", "postinst", "prerm", "postrm", "config", "triggers"):
                 scripts[n] = data.decode("utf-8", "replace")
     return fields, scripts
+
+
+def interests(path: str) -> list[str]:
+    """The package's trigger interests: the `interest` lines of its control file `triggers`."""
+    _fields, scripts = control(path)
+    out: list[str] = []
+    for line in scripts.get("triggers", "").split("\n"):
+        words = line.split()
+        if len(words) == 2 and words[0] in ("interest", "interest-await", "interest-noawait"):
+            out.append(words[1])
+    return out
 
 
 # ---------------------------------------------------------------- indexes

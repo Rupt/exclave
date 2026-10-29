@@ -75,18 +75,22 @@ def make_deb(
     *,
     suffix: str = ".gz",
     data: bytes | None = None,
+    control_files: Sequence[tuple[str, str]] = (),
 ) -> None:
     """A minimal .deb: ar(debian-binary, control.tar.gz, data.tar.SUFFIX).
 
-    data: the data member's bytes as given, instead of the members compressed.
+    data: the data member's bytes as given, instead of the members compressed. control_files: more
+    members of control.tar by name and text, a postinst or a triggers file.
     """
     control = (
         f"Package: {name}\nVersion: 1\nArchitecture: {DEB_ARCH}\nMaintainer: t\n"
         f"Description: t\n{control_extra}"
     ).encode()
+    cmembers: list[Member] = [("./control", "file", control, 0o644)]
+    cmembers += [("./" + n, "file", text.encode(), 0o755) for n, text in control_files]
     parts = [
         ("debian-binary", b"2.0\n"),
-        ("control.tar.gz", compress(tar_bytes([("./control", "file", control, 0o644)]), ".gz")),
+        ("control.tar.gz", compress(tar_bytes(cmembers), ".gz")),
         ("data.tar" + suffix, data if data is not None else compress(tar_bytes(members), suffix)),
     ]
     with open(path, "wb") as f:

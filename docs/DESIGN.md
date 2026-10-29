@@ -1910,26 +1910,41 @@ refused. From `.deb` files, in five steps:
    file made readable by its owner; special files are skipped with a
    note.
 3. **Synthesise** the effects of maintainer scripts; the scripts are
-   never run. The rules, keyed by package, approximate dpkg's configure
-   step for the case without privilege; a tree whose scripts must really
-   run comes from `debootstrap`, a container export or a chroot, and
-   `wrap` makes an exclave of it. The rules:
-   every `update-alternatives --install` line in a `postinst`, with
-   its slaves, the highest priority winning, which yields `awk`,
-   `which`, `pager`, `cc` and the rest without a per-package list;
-   dash's `/bin/sh`; `/etc/passwd` and `/etc/group` from base-passwd's
-   masters; `ca-certificates.crt`, concatenated from the certificates
-   `ca-certificates.conf` enables; OpenSSL's compiled-in trust paths
-   when a libssl is present, so that the host's bundle at the identity
-   path (8.4) is consulted; and `ld.so.cache`, by `ldconfig -r` with the
+   never run. The rules are a table, `unpack/rules.py`, each named,
+   applied in order when the packages ask for it, and named in the log
+   when it applied; they approximate dpkg's configure step for the case
+   without privilege, and a tree whose scripts must really run comes
+   from `debootstrap`, a container export or a chroot, and `wrap` makes
+   an exclave of it. The rules: `alternatives`, every
+   `update-alternatives --install` line in a `postinst`, with its
+   slaves, the highest priority winning unless a `--set` names one,
+   which yields `awk`, `which`, `pager`, `cc` and the rest without a
+   per-package list; `busybox-applets`, Alpine's applet links from
+   `/etc/busybox-paths.d`; `sbin-merge`, Fedora's `/usr/sbin` as a link
+   to `bin`; `dash-sh`; `ca-certificates`, `ca-certificates.crt`
+   concatenated from the certificates `ca-certificates.conf` enables;
+   `ca-trust`, Fedora's bundle from the p11-kit trust source;
+   `ssl-paths`, OpenSSL's compiled-in trust paths when a libssl is
+   present, so that the host's bundle at the identity path (8.4) is
+   consulted; `base-passwd`, `/etc/passwd` and `/etc/group` from its
+   masters; and `ldconfig`, `ld.so.cache` by `ldconfig -r` with the
    exclave's own static `ldconfig`, before wrapping so that the cache
    never indexes the launcher, its `aux-cache` removed since it records
-   inodes and modification times.
+   inodes and modification times. A new effect is a new rule in the
+   table, never an option.
 
-   Not synthesised: `locale-gen`, GLib schemas, MIME and font caches,
-   and Python bytecode, which Python makes for itself where it can write
-   and does without where it cannot. Failed opens in an `EXCLAVE_LOG`
-   show what an exclave tried and could not find.
+   What no rule makes is noted at unpack time. `unpack` reads each
+   package's trigger interests, dpkg's `triggers` file and apk's
+   `triggers` field, the paths whose caches and indexes a maintainer
+   script would have built, and names what the tree lacks: Python
+   bytecode (Python compiles each module on import where it cannot
+   write), GSettings schemas, the MIME database, font and icon caches,
+   the desktop database, GIO and gdk-pixbuf module caches, TeX's index
+   and formats; an interest nothing needs, a manual-page index, is
+   passed over. A `postinst` that calls `update-alternatives` in a form
+   the rule cannot read, from shell variables or in a loop, is noted
+   too, since its alternatives are not made. Failed opens in an
+   `EXCLAVE_LOG` then show what an exclave tried and could not find.
 4. **Strip** the volatile directories (8.1). Their empty placeholders,
    the conventional host names' and the eight identity files (8.4) are
    added by `wrap` where the tree lacks them.
@@ -3974,8 +3989,9 @@ questions.
    tool's synthesis gaps close (10.1): `unpack` does not generate
    locales, GLib schemas, MIME or font caches, or Python bytecode, and a
    gap closes when a real exclave needs it, as a rule in the synthesis
-   table rather than an option. Failed opens in an `EXCLAVE_LOG` show
-   where an exclave lacks one.
+   table rather than an option. `unpack`'s notes name the caches a tree
+   lacks from the packages' trigger interests, and failed opens in an
+   `EXCLAVE_LOG` show where an exclave misses one (10.1).
 2. **Releases.** There is no public release or continuous integration
    yet. A release has its shape, `scripts/release` (10.5), and every
    build is named by the project's version and its commit (7, 10);

@@ -216,6 +216,14 @@ class Reader(Protocol):
         """Return the package's control fields and its maintainer scripts by name."""
         ...
 
+    def interests(self, path: str) -> list[str]:
+        """Return the paths, or named triggers, the package's maintainer scripts are run for.
+
+        A trigger interest is where a package keeps a cache or an index another package's files
+        feed, which unpack does not build (10.1); a format without them returns none.
+        """
+        ...
+
     def open_data(self, path: str) -> Archive[Any]:
         """Return the package's payload, the files it installs."""
         ...

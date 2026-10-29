@@ -68,6 +68,8 @@ def unpack(out: str, paths: Sequence[str], log: steps.Log = print) -> None:
     try:
         steps.extract(root, packages, log=log)
         steps.synthesise(root, packages, log=log)
+        for line in steps.notes(packages):
+            log(line)
         steps.strip_volatile(root)
         # after synthesis, so that a file dependency is asked of the finished tree
         for line in steps.dependency_report(packages, rd, root):

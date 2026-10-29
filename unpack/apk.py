@@ -110,7 +110,15 @@ def control(path: str) -> tuple[dict[str, str], dict[str, str]]:
     ):
         if src in raw:
             fields[dst] = " ".join(raw[src])
+    if "triggers" in raw:
+        fields["Triggers"] = " ".join(raw["triggers"])
     return fields, scripts
+
+
+def interests(path: str) -> list[str]:
+    """The package's trigger interests: the directories .PKGINFO's `triggers` names."""
+    fields, _scripts = control(path)
+    return fields.get("Triggers", "").split()
 
 
 # a name is anything up to an operator: cmd:[ and so:libstdc++.so.6 are names

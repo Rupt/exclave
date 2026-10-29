@@ -5,18 +5,15 @@ stripped, the dependency report, and the hashes file's pkg records.
 """
 
 import contextlib
-import fnmatch
 import functools
 import hashlib
 import os
 import re
 import shutil
-import subprocess
-from dataclasses import dataclass
-from typing import NamedTuple
 lazy from collections.abc import Callable
 
-from unpack import apk, deb, rpm
+from unpack import rules
+from unpack.package import READERS, Log, Package, UnpackError, package_format, reader, safe_rel
 from unpack.root import Root, RootError
 lazy from unpack.reader import Reader
 
@@ -24,55 +21,10 @@ MERGED_USR = ["bin", "sbin", "lib", "lib32", "lib64", "libx32"]
 # The host's volatile directories (8.1): always the host's at run time, never shipped.
 VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")  # noqa: S108 -- prefixes, not files
 
-type Log = Callable[[str], object]
-
-
-@dataclass(frozen=True, slots=True)
-class Package:
-    """A package file to unpack, with the control fields its reader gave."""
-
-    name: str
-    path: str
-    fields: dict[str, str]
-
-    @property
-    def version(self) -> str:
-        return self.fields.get("Version", "")
-
-    @property
-    def arch(self) -> str:
-        return self.fields.get("Architecture", "")
-
-
-class UnpackError(Exception):
-    """A refusal: package files unpack will not make a tree from, or a step that cannot be done."""
-
-
-# ---------------------------------------------------------------- extraction (step 2)
-def _safe_rel(name: str) -> str:
-    """Return a member's path relative to the tree, refusing `..` and the reserved `.real`."""
-    parts = [p for p in name.split("/") if p not in ("", ".")]
-    if any(p == ".." for p in parts):
-        raise UnpackError("path escapes the tree: " + name)
-    if ".real" in parts:
-        raise UnpackError("the reserved name .real is shipped at " + name)
-    return "/".join(parts)
+__all__ = ["READERS", "Log", "Package", "UnpackError", "package_format", "reader"]
 
 
 _ALIAS = re.compile(r"^(bin|sbin|lib|lib32|lib64|libx32)(/|$)")
-
-
-READERS: dict[str, Reader] = {"deb": deb, "apk": apk, "rpm": rpm}
-
-
-def package_format(path: str) -> str:
-    """Return a package file's format, by its name: "apk", "rpm", or else "deb"."""
-    return os.path.splitext(path)[1].removeprefix(".") if path.endswith((".apk", ".rpm")) else "deb"
-
-
-def reader(path: str) -> Reader:
-    """Return the reader for a package file, chosen by its name (10.1)."""
-    return READERS[package_format(path)]
 
 
 def _refusing[**P, R](f: Callable[P, R]) -> Callable[P, R]:
@@ -128,7 +80,7 @@ def _extract(r: Root, packages: list[Package], log: Log) -> dict[str, str]:
     for pkg in packages:
         with reader(pkg.path).open_data(pkg.path) as t:
             for m in t:
-                rel = _safe_rel(m.name)
+                rel = safe_rel(m.name)
                 if not rel:
                     continue
                 if m.isfile():
@@ -190,7 +142,7 @@ def _extract(r: Root, packages: list[Package], log: Log) -> dict[str, str]:
         }
         with rd.open_data(pkg.path) as t:
             for m in t:
-                rel = _safe_rel(m.name)
+                rel = safe_rel(m.name)
                 if not rel:
                     continue
                 key = _ALIAS.sub(r"usr/\1\2", rel)  # /lib/x and /usr/lib/x are one file
@@ -224,7 +176,7 @@ def _extract(r: Root, packages: list[Package], log: Log) -> dict[str, str]:
                 if m.issym():
                     r.symlink(m.linkname, rel)
                 elif m.islnk():
-                    hardlinks_pending.append((_safe_rel(m.linkname), rel))
+                    hardlinks_pending.append((safe_rel(m.linkname), rel))
                 elif m.isfile():
                     content = t.extractfile(m)
                     assert content is not None  # a regular file always has its content
@@ -248,239 +200,22 @@ def _extract(r: Root, packages: list[Package], log: Log) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------- synthesis (step 3)
-# Debian's and rpm's spellings
-_UA = re.compile(
-    r"(?:update-)?alternatives\s+(?:--(?:quiet|verbose|force)\s+)*--install\s+"
-    r"(\S+)\s+(\S+)\s+(\S+)\s+(\d+)((?:\s+--slave\s+\S+\s+\S+\s+\S+)*)"
-)
-_SLAVE = re.compile(r"--slave\s+(\S+)\s+(\S+)\s+(\S+)")
-
-
-def _link(r: Root, link: str, target: str, log: Log, *, replace: bool = False) -> None:
-    """Make a symlink at a virtual path, unless something stands there.
-
-    With replace, as alternatives --install does, a file or link standing there gives way; a
-    directory never does. Fedora's binutils needs this: it ships gold at /usr/bin/ld and removes it
-    in %post before installing the alternative.
-    """
-    if r.lexists(link):
-        if not replace or (r.isdir(link) and not r.islink(link)):
-            return
-        if r.islink(link) and r.readlink(link) == target:
-            return
-        r.remove(link)
-    r.symlink(target, link)
-    log(f"synthesised {link} -> {target}")
-
-
-class _Alternative(NamedTuple):
-    """One `alternatives --install` line: its priority first, so max() picks the winner."""
-
-    priority: int
-    link: str
-    target: str
-    slaves: list[tuple[str, str, str]]  # (link, name, target)
-
-
 @_refusing
 def synthesise(root: str, packages: list[Package], log: Log = print) -> None:
     """Make what the packages' maintainer scripts would have made, without running them (10.1).
 
-    Runs before wrapping, so that the tree's own ldconfig can run unwrapped. Every path it reads or
-    writes resolves with the tree as its root.
+    The rules are the table in unpack/rules.py, run in order, each logging what it made; the names
+    of those that applied are logged last. Runs before wrapping, so that the tree's own ldconfig can
+    run unwrapped. Every path a rule reads or writes resolves with the tree as its root.
     """
     with Root(root) as r:
-        _synthesise(r, packages, log)
+        applied = [rule.name for rule in rules.RULES if rule.apply(r, packages, log)]
+    log("synthesis rules applied: " + (", ".join(applied) or "none"))
 
 
-def _lines(text: str) -> list[str]:
-    """The lines of text as a file iterates them, each with its newline."""
-    return re.findall(r"[^\n]*\n|[^\n]+\Z", text)
-
-
-def _synthesise(r: Root, packages: list[Package], log: Log) -> None:
-    names = {p.name for p in packages}
-    # update-alternatives: every --install line in a postinst; the highest priority wins, and its
-    # slaves follow it
-    groups: dict[str, list[_Alternative]] = {}
-    for pkg in packages:
-        _fields, scripts = reader(pkg.path).control(pkg.path)
-        for m in _UA.finditer(scripts.get("postinst", "").replace("\\\n", " ")):
-            link, gname, target, prio = m.group(1), m.group(2), m.group(3), int(m.group(4))
-            if not r.lexists(target):
-                continue
-            slaves = _SLAVE.findall(m.group(5))
-            groups.setdefault(gname, []).append(_Alternative(prio, link, target, slaves))
-    for gname, cands in groups.items():
-        _prio, link, target, slaves = max(cands)
-        _link(r, "/etc/alternatives/" + gname, target, log, replace=True)
-        _link(r, link, "/etc/alternatives/" + gname, log, replace=True)
-        for slink, sname, starget in slaves:
-            if r.lexists(starget):
-                _link(r, "/etc/alternatives/" + sname, starget, log, replace=True)
-                _link(r, slink, "/etc/alternatives/" + sname, log, replace=True)
-    # busybox (Alpine): the applet links are made by its post-install from the paths it ships in
-    # /etc/busybox-paths.d, one path per line, each a link to /bin/busybox. The links are relative,
-    # as the dash rule makes /usr/bin/sh, so that a link run from outside the exclave reaches the
-    # wrapper in the tree and not a host file of the same name; inside, a relative link resolves in
-    # virtual space the same way. A path is a member's: `..` and .real are refused.
-    bbd = "/etc/busybox-paths.d"
-    if r.isdir(bbd) and r.isfile("/bin/busybox"):
-        n = 0
-        for f in r.listdir(bbd):
-            for line in r.read_text(f"{bbd}/{f}").split("\n"):
-                rel = _safe_rel(line.strip())
-                if rel and not r.lexists(rel):
-                    r.symlink(os.path.relpath("/bin/busybox", os.path.dirname("/" + rel)), rel)
-                    n += 1
-        log(f"synthesised {n} busybox applet links from /etc/busybox-paths.d")
-    # Fedora 42's filesystem: its %posttrans merges sbin into bin, replacing /usr/sbin and
-    # /usr/local/sbin by a link to bin when every entry there is a link ../bin/<name>; the script
-    # says so in Lua, and this is its effect
-    for pkg in packages:
-        if pkg.name != "filesystem":
-            continue
-        _fields, scripts = reader(pkg.path).control(pkg.path)
-        if 'posix.symlink("bin", path)' not in scripts.get("posttrans", ""):
-            continue
-        for sb in ("/usr/sbin", "/usr/local/sbin"):
-            if not r.isdir(sb) or r.islink(sb):
-                continue
-            entries = r.listdir(sb)
-            if all(
-                r.islink(f"{sb}/{e}") and r.readlink(f"{sb}/{e}") == "../bin/" + e for e in entries
-            ):
-                for e in entries:
-                    r.remove(f"{sb}/{e}")
-                r.rmdir(sb)
-                r.symlink("bin", sb)
-                log(f"synthesised {sb} -> bin as filesystem's %posttrans does")
-    # dash: /bin/sh is made by its postinst, not shipped
-    if "dash" in names and r.lexists("/usr/bin/dash"):
-        _link(r, "/usr/bin/sh", "dash", log)
-    # ca-certificates: the bundle is generated by update-ca-certificates
-    conf = "/etc/ca-certificates.conf"
-    if "ca-certificates" in names and r.exists(conf):
-        pems: list[bytes] = []
-        for raw in _lines(r.read_text(conf)):
-            line = raw.strip()
-            if line and not line.startswith("#") and not line.startswith("!"):
-                cert = "/usr/share/ca-certificates/" + line
-                if r.exists(cert):
-                    pems.append(r.read_bytes(cert).rstrip(b"\n") + b"\n")
-        r.makedirs("/etc/ssl/certs")
-        r.write_bytes("/etc/ssl/certs/ca-certificates.crt", b"".join(pems))
-        log(f"synthesised /etc/ssl/certs/ca-certificates.crt from {len(pems)} certificates")
-    # ca-certificates (Fedora, RHEL): the consumers' paths are links to
-    # /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem, which update-ca-trust extracts in %post
-    # from the p11-kit trust source; the CA anchors trusted there are concatenated the same way. The
-    # bundle is an identity file (8.4): the host's where it has one.
-    extracted = "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
-    sources = sorted(
-        [
-            f"{d}/{n}"
-            for d, pattern in (
-                ("/usr/share/pki/ca-trust-source", "*.p11-kit"),
-                ("/etc/pki/ca-trust/source/anchors", "*"),
-            )
-            for n in r.listdir(d)
-            if not n.startswith(".") and fnmatch.fnmatchcase(n, pattern)
-        ]
-    )
-    if sources and not r.lexists(extracted):
-        certs: list[str] = []
-        for src in sources:
-            text = r.read_text(src)
-            if "[p11-kit-object-v1]" not in text:
-                if "-----BEGIN CERTIFICATE-----" in text:
-                    certs.append(text.strip() + "\n")
-                continue
-            # a certificate object: trust attributes, then its PEM
-            for obj in text.split("[p11-kit-object-v1]")[1:]:
-                head = obj.split("-----BEGIN", 1)[0]
-                if "trusted: true" not in head or "x-distrusted: true" in head:
-                    continue
-                m = re.search(
-                    r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", obj, re.DOTALL
-                )
-                # one object per purpose in the source: one PEM in the bundle
-                if m and m.group(0) + "\n" not in certs:
-                    certs.append(m.group(0) + "\n")
-        r.makedirs(os.path.dirname(extracted))
-        r.write_bytes(extracted, "".join(certs).encode())
-        log(
-            "synthesised /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem "
-            f"from {len(certs)} trusted certificates"
-        )
-    # libssl: OpenSSL's compiled-in trust paths are /usr/lib/ssl/cert.pem and /usr/lib/ssl/certs,
-    # symlinks the openssl and ca-certificates packages ship and a library's closure lacks; without
-    # them the host's bundle at the identity path (8.4) is never consulted
-    if any(n.startswith("libssl") for n in names):
-        _link(r, "/usr/lib/ssl/certs", "/etc/ssl/certs", log)
-        _link(r, "/usr/lib/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt", log)
-    # base-passwd: /etc/passwd and /etc/group come from update-passwd, not the package; the host's
-    # are used unless an own record names them (8.4), but the files must exist for tools that list
-    # /etc
-    for name_, master in (("passwd", "passwd.master"), ("group", "group.master")):
-        src, dst = "/usr/share/base-passwd/" + master, "/etc/" + name_
-        if "base-passwd" in names and r.exists(src) and not r.lexists(dst):
-            r.write_bytes(dst, r.read_bytes(src))
-            log(f"synthesised /etc/{name_} from base-passwd")
-    # ldconfig: the exclave's own, static, before wrapping so the cache never indexes the launcher;
-    # Fedora 42 has merged sbin into bin
-    ld = None
-    for cand in (
-        "/usr/sbin/ldconfig.real",
-        "/sbin/ldconfig.real",
-        "/usr/sbin/ldconfig",
-        "/sbin/ldconfig",
-        "/usr/bin/ldconfig",
-    ):
-        if r.isfile(cand) and r.read_bytes(cand, 4) == b"\x7fELF":
-            ld = cand
-            break
-    if ld:
-        conf, tmp = "/etc/ld.so.conf", None
-        # ldconfig -r refuses a relative include, which Red Hat's ld.so.conf has:
-        # a copy with the pattern spelt from /etc is written in the tree for the run
-        if r.isfile(conf):
-            lines_out: list[str] = []
-            changed = False
-            for line in _lines(r.read_text(conf)):
-                m = re.match(r"^(\s*include\s+)([^/\s][^\s]*)(.*)$", line)
-                if m:
-                    lines_out.append(m.group(1) + "/etc/" + m.group(2) + m.group(3) + "\n")
-                    changed = True
-                else:
-                    lines_out.append(line)
-            if changed:
-                tmp = "/etc/ld.so.conf.exclave"
-                r.write_bytes(tmp, "".join(lines_out).encode())
-        try:
-            # the tree's own ldconfig, run on this host, as wrapping requires (10.1)
-            res = subprocess.run(  # noqa: S603 -- an argument vector, no shell
-                [r.real(ld), "-r", r.path, "-f", tmp or "/etc/ld.so.conf"],
-                capture_output=True,
-                check=False,
-            )
-            if res.returncode:
-                log("ldconfig failed: " + res.stderr.decode(errors="replace").strip())
-            else:
-                log("synthesised /etc/ld.so.cache with the exclave's ldconfig")
-        except OSError as e:  # the tree's ldconfig is of another architecture: no cache here (10.1)
-            log(
-                f"the tree's ldconfig cannot run on this machine ({e.strerror}): no ld.so.cache; "
-                "wrap the exclave on a machine of its architecture"
-            )
-        finally:
-            if tmp:
-                r.remove(tmp)
-        # records inodes and mtimes: never reproducible, never needed
-        aux = "/var/cache/ldconfig"
-        if r.isdir(aux) and not r.islink(aux):
-            r.rmtree(aux)
-    elif "libc-bin" in names:
-        log("libc-bin present but no static ldconfig found; no ld.so.cache")
+def notes(packages: list[Package]) -> list[str]:
+    """What the packages' trigger interests say the tree lacks, which no rule makes (10.1)."""
+    return rules.notes(packages)
 
 
 # ---------------------------------------------------------------- the volatile directories (step 4)
