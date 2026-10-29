@@ -925,7 +925,13 @@ requires without privilege (13 item 3), and falls back to
   programs read as "no sandbox available, continue" than `EPERM`;
   `seccomp(SECCOMP_GET_ACTION_AVAIL)` is allowed as a harmless query. A
   program that insists on its own sandbox fails visibly at install
-  time.
+  time. A program's filter cannot be honoured: where it and the
+  launcher's both answer a call, the kernel takes the action of higher
+  precedence, and a trap outranks an error, so the launcher would make
+  a trapped call the program's own filter refuses. To honour it, the
+  handler would run the program's filter itself on every trapped call,
+  keep it per thread and carry it across `exec`; a refusal instead tells
+  the program at once that it has no sandbox.
 - The rest are in the table of 7.4.3.
 
 **Argument checks.** `rt_sigaction` traps only when a new action is
@@ -2469,12 +2475,14 @@ and stay fixed.
 
 5. **`io_uring`, `clone3` and a program's own seccomp filter are
    refused.** `io_uring_setup` and `clone3` answer `ENOSYS` (libcs fall
-   back to `clone`), and installing a filter is refused (7.4.2), since
-   either would let a program act past the translator. Programs that
-   depend on them, container runtimes, browsers' sandboxes, `rr`,
-   `qemu -sandbox`, are out of scope. `strace` inside an exclave works
-   but shows a `SIGSYS` for every translated call. `valgrind` is
-   untested.
+   back to `clone`), since either would let a program act past the
+   translator, and installing a filter is refused, since the launcher's
+   trap would outrank the filter's refusal of a translated call, leaving
+   the program's sandbox silently weaker (7.4.2). Programs that depend on
+   them, container runtimes, browsers' sandboxes, `rr`, `qemu -sandbox`,
+   are out of scope. `strace` inside an exclave works but shows a
+   `SIGSYS` for every translated call. `valgrind`'s memcheck runs, its
+   report the same as the kernel's (17).
 
 6. **Listings differ from the host's.** A directory listing omits
    host-owned files inside exclave-owned directories, and shows
@@ -4294,6 +4302,12 @@ specified.
   kernel's frame layout on both architectures, to save a few traps per
   spawn (7.5.5). A flag only `clone3` offers, which a library came to
   need and so dropped its fallback to `clone`, would reopen it.
+- **A program's own seccomp filter is refused with `ENOSYS`**: the
+  launcher's trap outranks the filter's refusal, so honouring the filter
+  means running it in the handler on every trapped call, per thread and
+  across `exec`, in the code least able to afford a mistake, for
+  sandboxes an exclave does not promise (7.4.2, 13 item 5). A program
+  people need inside an exclave that stops when refused would reopen it.
 - **A program's `rt_sigaction` install traps; its queries do not**
   (7.5.2).
 - **Handler memory comes from scratch chunks reclaimed by liveness,
