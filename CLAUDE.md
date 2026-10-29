@@ -46,7 +46,7 @@ The loop that has served well, in the order it pays:
    affect, in seconds for a document or a script, and says when the
    change reaches the VMs (a launcher source, the command, the pinned
    Python or the matrix itself). The matrix, `scripts/matrix --exclave
-   EXCLAVE`, costs this laptop about eleven minutes, so it runs only when
+   EXCLAVE`, costs this laptop about sixteen minutes, so it runs only when
    the user approves it, usually once before a series is pushed; a
    commit does not wait for it, and asking names the commits it has not
    seen. `--full` runs every gate step, worth it before a series of

@@ -186,8 +186,8 @@ How it is tested (17):
   minute; an oracle that cannot run on the machine, for want of `bwrap`
   or user namespaces, is reported as SKIP, not as passing (17).
 - **The kernel matrix**: the gcc exclave passes the suite in QEMU
-  virtual machines of nine distributions, from CentOS 7 at kernel 3.10
-  to Fedora 42 at 6.14, Alpine 3.20's musl userland and Fedora's
+  virtual machines of ten distributions, from CentOS 7 at kernel 3.10
+  to Ubuntu 26.10 at 7.3, Alpine 3.20's musl userland and Fedora's
   enforcing SELinux among them; an arm64 gcc exclave passes it in an
   emulated arm64 Ubuntu 24.04. Every oracle a row's kernel can run
   passes; CentOS 7, without user namespaces, runs none (12.1).
@@ -2377,7 +2377,7 @@ another, or copy a sysroot into a data directory (9). The cost is disk space.
 
 | Dimension | Requirement or behaviour |
 |---|---|
-| Kernel | A seccomp filter with `SECCOMP_RET_TRAP` (Linux 3.5), installed with `seccomp(2)` or `prctl(PR_SET_SECCOMP)`. `SECCOMP_RET_KILL_PROCESS` (Linux 4.14) degrades to killing the thread on older kernels. `/proc` mounted. `process_vm_readv` for speed, with a pipe keeping `EFAULT` fidelity where it is refused (7.5.6). Measured from 3.10 to 7.0 (12.1) |
+| Kernel | A seccomp filter with `SECCOMP_RET_TRAP` (Linux 3.5), installed with `seccomp(2)` or `prctl(PR_SET_SECCOMP)`. `SECCOMP_RET_KILL_PROCESS` (Linux 4.14) degrades to killing the thread on older kernels. `/proc` mounted. `process_vm_readv` for speed, with a pipe keeping `EFAULT` fidelity where it is refused (7.5.6). Measured from 3.10 to 7.3 (12.1) |
 | Ubuntu 23.10+ desktops, Docker and CI default profiles, RHEL 7, HPC, hardened kernels | Designed to work: no privilege, user namespace or mount is needed. Docker's default seccomp profile was checked syscall by syscall, and a workload runs under it, twice: as assembled for the running kernel and as Docker installs it before Linux 4.8, where `process_vm_readv` is refused (17) |
 | Read-only media, NFS, FUSE homes | Work: nothing is written |
 | `noexec` media, including a `noexec` `/tmp` in CI | Not supported: neither `execve` nor `mmap(PROT_EXEC)` of a file is allowed there |
@@ -2404,17 +2404,18 @@ October 2026:
 
 | Distribution | Kernel | Suite | Oracles | Notes |
 |---|---|---|---|---|
-| CentOS 7 | 3.10 | 79 of 79 | none: no user namespaces | `seccomp(2)` absent, so the `prctl` form is used; `renameat`, not `renameat2` |
-| Ubuntu 18.04 | 4.15 | 79 of 79 | namespace, probe and Docker profile pass; no `openat2` | bwrap 0.2 |
-| Rocky Linux 8 | 4.18 | 79 of 79 | all pass | |
-| Ubuntu 20.04 | 5.4 | 79 of 79 | namespace, probe and Docker profile pass; no `openat2` | |
-| Debian 11 | 5.10 | 79 of 79 | all pass | the security suite lists a `bubblewrap` it does not serve; the matrix installs the release's |
-| Ubuntu 22.04 | 5.15 | 79 of 79 | all pass | |
-| Debian 12 | 6.1 | 79 of 79 | all pass | |
-| Alpine 3.20 | 6.6 | 79 of 79 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
-| Fedora 42 | 6.14 | 79 of 79 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
-| Ubuntu 24.04 arm64 | 6.8 | 74 of 74 | all pass | aarch64 under TCG, `-cpu max`, 4 vCPUs, at about a tenth of native speed: the suite takes 55 minutes, the row 81; the exclave is made inside the VM (10.1) |
-| reference machine | 7.0 | 79 of 79 | all pass | Ubuntu 24.04, AppArmor |
+| CentOS 7 | 3.10 | 80 of 80 | none: no user namespaces | `seccomp(2)` absent, so the `prctl` form is used; `renameat`, not `renameat2` |
+| Ubuntu 18.04 | 4.15 | 80 of 80 | namespace, probe and Docker profile pass; no `openat2` | bwrap 0.2 |
+| Rocky Linux 8 | 4.18 | 80 of 80 | all pass | |
+| Ubuntu 20.04 | 5.4 | 80 of 80 | namespace, probe and Docker profile pass; no `openat2` | |
+| Debian 11 | 5.10 | 80 of 80 | all pass | the security suite lists a `bubblewrap` it does not serve; the matrix installs the release's |
+| Ubuntu 22.04 | 5.15 | 80 of 80 | all pass | |
+| Debian 12 | 6.1 | 80 of 80 | all pass | |
+| Alpine 3.20 | 6.6 | 80 of 80 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
+| Fedora 42 | 6.14 | 80 of 80 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
+| Ubuntu 26.10 | 7.3 | 80 of 80 | all pass | glibc 2.44 |
+| Ubuntu 24.04 arm64 | 6.8 | 80 of 80 | all pass | aarch64 under TCG, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed: the suite takes 17 minutes, the row 36; the exclave is made inside the VM (10.1) |
+| reference machine | 7.0 | 80 of 80 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
 run passes. Two checks outside the suite run natively on each row:
@@ -2427,8 +2428,8 @@ run passes. Two checks outside the suite run natively on each row:
 - **A sysroot build.** The output of `test/sysroot.py`, a hello program
   linked inside the Ubuntu 24.04 gcc exclave against the CentOS 7
   sysroot (9), runs natively. Measured October 2026, it prints its line
-  with status 0 on the eight glibc VMs, from CentOS 7's glibc 2.17 to
-  Fedora 42's 2.41. On Alpine's musl it has no loader, which the step
+  with status 0 on the nine glibc VMs, from CentOS 7's glibc 2.17 to
+  Ubuntu 26.10's 2.44. On Alpine's musl it has no loader, which the step
   records as the musl host's answer rather than a failure.
 
 Hosts differ in ways the matrix exposes, and the rules account for
@@ -3765,7 +3766,7 @@ meaning items 4 and 7.
    which the unpack tests share.
 5. **Kernel matrix.** Docker's default seccomp profile stands for the
    environment where user namespaces are blocked. VMs run kernels 3.10,
-   4.15, 4.18, 5.4, 5.10, 5.15, 6.1, 6.6 and 6.14, and an emulated
+   4.15, 4.18, 5.4, 5.10, 5.15, 6.1, 6.6, 6.14 and 7.3, and an emulated
    aarch64 row runs 6.8; the results are in 12.1. The kernel source a
    rule follows is cited beside the handler code that follows it, so a
    breakage can be diagnosed. The path-syscall list is checked against
@@ -4059,7 +4060,7 @@ natively from the harness, as `openat2_xdev` does.
 **The kernel matrix** (`scripts/matrix --exclave EXCLAVE
 [--docker-profile FILE]`) runs one gcc exclave, built on the reference
 machine, in virtual machines, one at a time with 1 GB each (`--jobs N`
-for more), all nine x86-64 rows in about eleven minutes. It is due when
+for more), all ten x86-64 rows in about sixteen minutes. It is due when
 the gate says a change reaches the VMs: a launcher source, the command,
 the pinned Python, or the matrix's own code; other changes leave the
 kernels' answers as they were. Being the costliest check, it runs when
