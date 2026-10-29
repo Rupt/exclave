@@ -546,6 +546,28 @@ def main() -> int:
     # launchers under the suite's names: the exclave is unpacked and wrapped in the VM, on its own
     # architecture (10.1).
     payloads: dict[tuple[str, str], str] = {}
+    # 10.5: the launcher and the command built inside the exclave here, which each x86-64 VM builds
+    # again inside its copy and must match byte for byte
+    p = subprocess.run(
+        [os.path.join(REPO, "scripts", "reproduce"), ex, os.path.join(work, "reproduce")],
+        capture_output=True,
+        check=False,
+    )
+    reproduced = p.stdout.decode().split() if p.returncode == 0 else []
+    if not reproduced:
+        log(
+            "scripts/reproduce failed here; the rows do not compare builds:",
+            p.stderr.decode()[-200:],
+        )
+    commit = (
+        subprocess.run(
+            ["git", "-C", REPO, "describe", "--always", "--dirty", "--exclude=*"],
+            capture_output=True,
+            check=False,
+        )
+        .stdout.decode()
+        .strip()
+    )
 
     def payload_for(arch: str, libc: str) -> str:
         if (arch, libc) in payloads:
@@ -560,6 +582,12 @@ def main() -> int:
                 t.add(os.path.join(REPO, d), arcname="repo/" + d)
             # the text the launcher carries, which exclave_readme compares
             t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")
+            # what scripts/reproduce copies and runs, and the commit it names, without a checkout
+            for f in ("scripts/build", "scripts/lib.sh", "scripts/reproduce", "pyproject.toml"):
+                t.add(os.path.join(REPO, f), arcname="repo/" + f)
+            info = tarfile.TarInfo("repo/COMMIT")
+            info.size = len(commit) + 1
+            t.addfile(info, io.BytesIO(commit.encode() + b"\n"))
             t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
             # the unpack package installed into that Python as uv sync installs it here, in
             # editable form: a .pth naming the checkout, relative to site-packages
@@ -710,6 +738,17 @@ def main() -> int:
             notes += "; sysroot: " + sysroot + ("" if ok else " FAIL")
             if not ok:
                 fails.append("FAIL sysroot output did not run natively: " + sysroot)
+            if arch == "x86_64" and reproduced:
+                # 10.5: the exclave's own toolchain builds the same bytes on this kernel's host
+                _rc, out = vm.ssh(
+                    "cd m && sh repo/scripts/reproduce $PWD/ex $PWD/repro 2>&1 | tail -2",
+                    timeout=600 * slow,
+                )
+                same = out.split() == reproduced
+                log(name, "reproduced:", "the same bytes" if same else "DIFFER " + out[-200:])
+                notes += "; reproduced" if same else "; reproduce DIFFERS"
+                if not same:
+                    fails.append("FAIL the build inside the exclave differs: " + out[-200:])
             oracle, oracle_failed = "", False
             # Ubuntu 24.04 images deny unprivileged user namespaces through AppArmor
             # (kernel.apparmor_restrict_unprivileged_userns); the VM is the matrix's own, so it

@@ -336,10 +336,16 @@ exclaves pruned this way.
 
 An exclave is a directory, and `tar` makes it one file; `scripts/release`
 makes a release of one or more, signed, with the `exclave` command
-beside them so that whoever takes it needs nothing of this checkout:
+beside them so that whoever takes it needs nothing of this checkout.
+The command and the launcher a release ships are built inside a gcc
+exclave, the toolchain argument, so that anyone with that exclave
+builds the same bytes (`scripts/reproduce`); an exclave to release is
+wrapped with that launcher, which the command built there carries:
 
 ```bash
-scripts/release ~/.ssh/id_ed25519 release gcc.exclave    # release/: gcc.exclave.tar.xz, exclave, SHA256SUMS, B2SUMS, SHA256SUMS.sig
+scripts/reproduce gcc.exclave build/reproduce               # build/reproduce/build/{launcher,exclave}, and their BLAKE2b
+build/reproduce/build/exclave relink app.exclave           # app.exclave wrapped with the reproducible launcher
+scripts/release ~/.ssh/id_ed25519 release gcc.exclave app.exclave    # release/: app.exclave.tar.xz, exclave, SHA256SUMS, B2SUMS, SHA256SUMS.sig
 ```
 
 Taking one: with the release's files in a directory, and the releaser's
@@ -400,6 +406,7 @@ scripts/exclave      the exclave command; scripts/unpack, fetch-debs, fetch-apks
 scripts/example      the first run: from the build to a program built inside an exclave that runs on any glibc since 2.17, every command shown
 scripts/check        the code checks; scripts/gate the commit gate; scripts/inputs the development inputs; scripts/examples the example runs
 scripts/release      a signed release of exclaves with the command beside them; test/release_test.py takes one as a consumer would
+scripts/reproduce    the launcher and the command built inside a gcc exclave, the same bytes wherever it runs
 scripts/test         the suite; scripts/matrix, exercise and sysroot the other test drivers
 pyproject.toml       the Python project, unpack: no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python
 scripts/build        the launchers, build/launcher, build/launcher-old for the nesting regression and build/launcher-debug with UBSan's checks; the command, build/exclave, and build/exclave-asan for the gate; the aarch64 ones with a cross compiler; nothing when they are up to date

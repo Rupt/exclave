@@ -2,8 +2,10 @@
 
     test/release_test.py --exclave EXCLAVE [--work DIR]
 
-scripts/release makes a release of a copy of the exclave under WORK, wrapped again by the current
-command, since a release is of what the command makes, and signed with a key made here.
+The exclave is a gcc exclave, and the release's toolchain too: scripts/reproduce builds the command
+and the launcher inside it, and scripts/release makes a release of a copy of the exclave under
+WORK, wrapped again by that command, since a release is of what the command makes, signed with a
+key made here. A copy wrapped with another launcher is refused.
 Then, in a directory that holds nothing but the release's files, the README's recipe runs: the
 signature is verified against the key, the sums are checked, the archive is unpacked, the release's
 own `exclave` checks the exclave, its tree hash is the one the hashes file records, and a program in
@@ -45,16 +47,37 @@ def main() -> int:
     work = os.path.abspath(args.work)
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
-    ex = tree.fresh_exclave(os.path.abspath(args.exclave), os.path.join(work, "src", "one.exclave"))
+    toolchain = os.path.abspath(args.exclave)
+    ex = tree.fresh_exclave(toolchain, os.path.join(work, "src", "one.exclave"))
     name = os.path.basename(ex)
+    # the command a release ships: built inside the gcc exclave (scripts/reproduce), and wrapping
+    # the copy with the launcher it carries
+    built = os.path.join(work, "reproduce")
+    rc, out = run([os.path.join(REPO, "scripts", "reproduce"), toolchain, built], work)
+    if rc:
+        sys.exit(f"scripts/reproduce: {out[-400:]}")
+    command = os.path.join(built, "build", "exclave")
     for cmd in ("unwrap", "wrap"):
-        rc, out = run([*tree.TOOL, cmd, ex], work)
+        rc, out = run([command, cmd, ex], work)
         if rc:
             sys.exit(f"{cmd} {ex}: {out[-400:]}")
+        if cmd == "unwrap":  # wrap installs the launcher it carries where there is none
+            os.remove(os.path.join(ex, ".exclave", "launcher"))
     key = os.path.join(work, "key")
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
     release = os.path.join(work, "release")
-    rc, out = run([os.path.join(REPO, "scripts", "release"), key, release, ex], work)
+    # an exclave wrapped with another launcher is refused, the files the release would ship being
+    # another build's
+    other = tree.fresh_exclave(
+        toolchain,
+        os.path.join(work, "src", "two.exclave"),
+        os.path.join(REPO, "build", "launcher-old"),
+    )
+    rc, out = run(
+        [os.path.join(REPO, "scripts", "release"), key, release + "-other", toolchain, other], work
+    )
+    step("an exclave wrapped with another launcher is refused", rc and "relink" in out, out[-300:])
+    rc, out = run([os.path.join(REPO, "scripts", "release"), key, release, toolchain, ex], work)
     step("scripts/release", rc == 0, out[-500:])
     if rc:
         return len(fails)

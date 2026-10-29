@@ -2276,12 +2276,26 @@ files' contents on up to eight threads, each writing only its own
 entry of the listing, so the hash is the walk's whatever the threads
 do; a file it cannot read is named as the walk listed it.
 
-**A release.** `scripts/release KEY DIR EXCLAVE...` puts under `DIR`
-each exclave as `NAME.exclave.tar.xz`, an archive that keeps the hard
-links, sorted and without owners, made only after the exclave passes
-`check`; the command itself as `exclave`, and `exclave-aarch64` where
-the cross build exists; `SHA256SUMS` and `B2SUMS` over every file
-there; and `SHA256SUMS.sig`, the sums signed with the ssh key `KEY`
+**A reproducible build.** `scripts/reproduce EXCLAVE DIR` builds the
+launcher and the command inside a gcc exclave, from a copy of the
+sources under `DIR`, with the exclave's compiler, binutils, static C
+library and shell alone on `PATH`: nothing of the machine takes part,
+so the two files are the same bytes wherever the exclave runs. The
+build was already free of its checkout's path and of time; what the
+machine supplied was its toolchain and its `libc.a`, and a host's
+`libc.a` a point release apart from the exclave's gives another
+command, though the freestanding launcher is the same. On the
+reference machine it takes 4.4 s, and every x86-64 row of the kernel
+matrix builds both again inside its copy of the gate's gcc exclave and
+compares them with the reference machine's (12.1).
+
+**A release.** `scripts/release KEY DIR TOOLCHAIN EXCLAVE...` builds
+the command and the launcher inside `TOOLCHAIN`, a gcc exclave, by
+`scripts/reproduce`, and puts under `DIR` each exclave as
+`NAME.exclave.tar.xz`, an archive that keeps the hard links, sorted
+and without owners, made only after the exclave passes `check` and
+only if it is wrapped with that launcher; the command itself as
+`exclave`; `SHA256SUMS` and `B2SUMS` over every file there; and `SHA256SUMS.sig`, the sums signed with the ssh key `KEY`
 (`ssh-keygen -Y`, namespace `exclave`). A consumer needs nothing of the
 checkout: the signature is verified against the releaser's public key,
 obtained through a channel the consumer trusts; the sums are checked;
@@ -2334,7 +2348,11 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
 suite's 80 named regressions and every oracle its kernel can run; 17
-describes the procedure. Measured October 2026:
+describes the procedure. Each x86-64 row also builds the launcher and
+the command inside its copy of the exclave (`scripts/reproduce`,
+10.5) and compares their bytes with the reference machine's build;
+a row whose notes say "reproduced" built the same bytes. Measured
+October 2026:
 
 | Distribution | Kernel | Suite | Oracles | Notes |
 |---|---|---|---|---|
@@ -4106,8 +4124,10 @@ questions.
    lacks from the packages' trigger interests, and failed opens in an
    `EXCLAVE_LOG` show where an exclave misses one (10.1).
 2. **Releases.** There is no public release or continuous integration
-   yet. A release has its shape, `scripts/release` (10.5), and every
-   build is named by the project's version and its commit (7, 10);
+   yet. A release has its shape, `scripts/release` (10.5), its
+   binaries built reproducibly inside a gcc exclave, and every build is
+   named by the project's version and its commit (7, 10); an aarch64
+   release is made on an aarch64 machine, as its exclaves are (10.1);
    until a release is made, the commit gate (17) and the kernel matrix
    (12.1) run on the reference machine, and nothing promises
    compatibility between commits (2).

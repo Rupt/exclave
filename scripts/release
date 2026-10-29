@@ -1,22 +1,26 @@
 #!/bin/sh
-# scripts/release KEY DIR EXCLAVE... — a release of the exclaves named (docs/DESIGN.md 10.5): under DIR, each as
-# NAME.exclave.tar.xz, the command itself as `exclave` (and `exclave-aarch64` when the cross build is there), SHA256SUMS
-# and B2SUMS over every file there, and SHA256SUMS.sig, the sums signed with the ssh private key KEY (ssh-keygen -Y, in
-# the namespace "exclave"). Each exclave passes `exclave check` first. The README says how a consumer verifies, unpacks
-# and checks one with nothing but the release's own files; test/release_test.py runs that recipe.
+# scripts/release KEY DIR TOOLCHAIN EXCLAVE... — a release of the exclaves named (docs/DESIGN.md 10.5): under DIR, each
+# as NAME.exclave.tar.xz, the command itself as `exclave`, SHA256SUMS and B2SUMS over every file there, and
+# SHA256SUMS.sig, the sums signed with the ssh private key KEY (ssh-keygen -Y, in the namespace "exclave"). The command
+# and the launcher are built inside TOOLCHAIN, a gcc exclave, by scripts/reproduce, so that anyone can build the same
+# bytes; each exclave must be wrapped with that launcher, and passes `exclave check` first. The README says how a
+# consumer verifies, unpacks and checks one with nothing but the release's own files; test/release_test.py runs that
+# recipe.
 set -eu
 . "$(dirname -- "$0")/lib.sh"
-[ $# -ge 3 ] || {
-    echo "usage: scripts/release KEY DIR EXCLAVE..." >&2
+[ $# -ge 4 ] || {
+    echo "usage: scripts/release KEY DIR TOOLCHAIN EXCLAVE..." >&2
     exit 2
 }
-key=$1 dir=$2
-shift 2
+key=$1 dir=$2 toolchain=$3
+shift 3
 [ -r "$key" ] || {
     echo "release: cannot read the key $key" >&2
     exit 2
 }
-"$ROOT/scripts/build"
+built=$ROOT/build/reproduce
+"$ROOT/scripts/reproduce" "$toolchain" "$built"
+command=$built/build/exclave
 mkdir -p "$dir"
 for ex; do
     ex=${ex%/}
@@ -32,7 +36,12 @@ for ex; do
         echo "release: $ex is not wrapped" >&2
         exit 2
     }
-    "$ROOT/build/exclave" check "$ex" >/dev/null || {
+    cmp -s "$ex/.exclave/launcher" "$built/build/launcher" || {
+        echo "release: $ex is wrapped with another launcher than the one built from $toolchain; relink it with the" >&2
+        echo "release: command built there: $command relink $ex" >&2
+        exit 1
+    }
+    "$command" check "$ex" >/dev/null || {
         echo "release: $ex does not pass exclave check" >&2
         exit 1
     }
@@ -42,8 +51,7 @@ for ex; do
         xz -T0 >"$dir/$name.tar.xz"
     echo "release: $name ($(stat -c %s "$dir/$name.tar.xz") bytes)"
 done
-cp "$ROOT/build/exclave" "$dir/exclave"
-[ -e "$ROOT/build/exclave-aarch64" ] && cp "$ROOT/build/exclave-aarch64" "$dir/exclave-aarch64"
+cp "$command" "$dir/exclave"
 cd "$dir"
 rm -f SHA256SUMS B2SUMS SHA256SUMS.sig
 set -- *
