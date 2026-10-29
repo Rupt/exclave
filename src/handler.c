@@ -1074,20 +1074,11 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
 }
 #endif
 
-static long dispatch(struct scratch *S, int nr, long *a, void *uc)
+/* stat, lstat, newfstatat and statx: the flags the kernel checks first, then the re-issue of the resolved path */
+static long do_stat(struct scratch *S, int nr, long *a)
 {
     long r;
     switch (nr) {
-    case NR_open: return do_open(S, a, 0, -1, a[1], a[2], NR_openat);
-    case NR_openat: return do_open(S, a, 1, 0, a[2], a[3], NR_openat);
-    case NR_openat2:
-        return do_openat2(S, a);
-/* build/launcher-old, filter version 3, traps neither (17.4) */
-#ifndef EXCLAVE_TEST_OLD
-    case NR_bind:
-    case NR_connect: return do_sockaddr(S, a, nr);
-#endif
-    case NR_creat: return do_open(S, a, 0, -1, O_CREAT | O_WRONLY | O_TRUNC, a[1], NR_openat);
     case NR_stat:
     case NR_lstat:
         if ((r = resolve(S, a, 0, -1, nr == NR_stat, 0)) < 0) return r;
@@ -1112,256 +1103,256 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         real_nofollow(S, (a[2] & AT_SYMLINK_NOFOLLOW) != 0);
         return RE5(nr, RE_DFD(S), RE_PATH(S), a[2] | re_flag(S, AT_SYMLINK_NOFOLLOW), a[3], a[4]);
     }
-    case NR_access:
-    case NR_faccessat:
-    case NR_faccessat2: {
-        int pi = nr == NR_access ? 0 : 1, di = nr == NR_access ? -1 : 0;
-        long mode = a[pi + 1], fl = nr == NR_faccessat2 ? a[3] : 0;
-        /* do_faccessat: the mode, then the flags */
-        if ((unsigned)mode & ~7U) return -EINVAL;
-        if ((unsigned)fl & ~(unsigned)(AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) return -EINVAL;
-        if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
-        int empty = r == 1; /* AT_EMPTY_PATH: the descriptor's own file */
-        if (empty) r = RE5(nr, a[0], "", mode, fl, 0);
-        else {
-            to_real(S->v, S->real, S->tmp);
-            r = nr == NR_faccessat2 ? RE5(nr, RE_DFD(S), RE_PATH(S), mode, fl | re_flag(S, AT_SYMLINK_NOFOLLOW), 0)
-                                    : RE5(NR_faccessat, RE_DFD(S), RE_PATH(S), mode, 0, 0);
-        }
-        /* do_faccessat: the lookup's and the permission's own answers come first; then a write the permission allows on
-         * a regular file, a directory or a symlink under a read-only mount is EROFS, and a special file never is */
-        if (r < 0 || !(mode & W_OK) || !(empty ? fd_exclave(S, (int)a[0]) : is_exclave_path(S->v))) return r;
-        struct kstat st;
-        if ((empty ? SC2(NR_fstat, a[0], &st) : sys_lstat(S->real, &st)) < 0) return r;
-        unsigned m = st.st_mode & S_IFMT;
-        return m == S_IFREG || m == S_IFDIR || m == S_IFLNK ? -EROFS : r;
+    default: __builtin_trap(); /* dispatch sends only the syscalls above */
     }
-    /* bufsiz is an int: the kernel truncates, so must the copy's bound */
-    case NR_readlink: return do_readlink(S, a, 0, -1, (char *)a[1], (int)a[2]);
-    case NR_readlinkat: return do_readlink(S, a, 1, 0, (char *)a[2], (int)a[3]);
-    case NR_getcwd:
-        r = RE5(NR_getcwd, S->tmp, PATH_MAX, 0, 0, 0);
-        if (r <= 0) return r;
-        if (starts_dir(S->tmp, C.root)) from_real(S->tmp);
-        r = (long)xstrlen(S->tmp) + 1;
-        /* size is unsigned: all ones is a large buffer, not a negative one */
-        if ((unsigned long)r > (unsigned long)a[1]) return -ERANGE;
-        {
-            long e = copy_out(S->pid, (void *)a[0], S->tmp, (size_t)r);
-            if (e) return e;
-        }
-        return r;
-    case NR_chdir:
-        if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
-        to_real_exec(S->v, S->real);
-        return RE5(NR_chdir, S->real, 0, 0, 0, 0);
-    case NR_execve: return do_execve(S, a, 0, -1, 0, (char **)a[1], (char **)a[2]);
-    case NR_execveat: return do_execve(S, a, 1, 0, a[4], (char **)a[2], (char **)a[3]);
-    case NR_truncate:
-        if (a[1] < 0) return -EINVAL; /* do_sys_truncate: the length first */
-        if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
-        if (C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;
-        /* vfs_truncate: EISDIR and EINVAL for what cannot be truncated, then EROFS */
-        if (is_exclave_path(S->v)) {
-            struct kstat *st = &S->st;
-            int ex = exists_exclave(S, S->v, st);
-            if (!ex) return absent_errno(S);
-            if ((st->st_mode & S_IFMT) == S_IFDIR) return -EISDIR;
-            if (sys_lstat(S->real, st) == 0 && (st->st_mode & S_IFMT) != S_IFREG) return -EINVAL;
-            /* vfs_truncate: the permission, EACCES, before the mount, EROFS */
-            to_real(S->v, S->real, S->tmp);
-            r = sys_faccessat(AT_FDCWD, S->real, W_OK);
-            if (r < 0) return r;
-            return -EROFS;
-        }
-        to_real_exec(S->v, S->real);
-        return RE5(nr, S->real, a[1], 0, 0, 0);
-    case NR_mkdir:
-    case NR_mkdirat: {
-        int pi = nr == NR_mkdir ? 0 : 1, di = nr == NR_mkdir ? -1 : 0;
-        if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
-        if ((r = ro_create(S, S->v, 1))) return r;
-        return RE5(NR_mkdirat, RE_DFD(S), RE_PATH(S), a[pi + 1], 0, 0);
-    }
-    case NR_mknod:
-    case NR_mknodat: {
-        int pi = nr == NR_mknod ? 0 : 1, di = nr == NR_mknod ? -1 : 0;
-        if ((r = may_mknod((unsigned short)a[pi + 1]))) return r;
-        if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
-        if ((r = ro_create(S, S->v, 0))) return r;
-        return RE5(NR_mknodat, RE_DFD(S), RE_PATH(S), a[pi + 1], a[pi + 2], 0);
-    }
-    case NR_rmdir:
-    case NR_unlink:
-    case NR_unlinkat: {
-        int pi = nr == NR_unlinkat ? 1 : 0, di = nr == NR_unlinkat ? 0 : -1;
-        long fl = nr == NR_rmdir ? AT_REMOVEDIR : nr == NR_unlinkat ? a[2] : 0;
-        if ((unsigned)fl & ~(unsigned)AT_REMOVEDIR) return -EINVAL;
-        if ((r = resolve(S, a, pi, di, 0, 0)) < 0)
-            return r == -ENAMETOOLONG ? delete_overlong(S, di < 0 ? AT_FDCWD : (int)a[di]) : r;
-        int sp = last_special(S->given); /* do_rmdir, do_unlinkat: answered before any lookup */
-        if (sp) return (fl & AT_REMOVEDIR) ? (sp == 1 ? -EINVAL : sp == 2 ? -ENOTEMPTY : -EBUSY) : -EISDIR;
-        if ((r = ro_delete(S, S->v))) return r;
-        return RE5(NR_unlinkat, RE_DFD(S), RE_PATH(S), fl, 0, 0);
-    }
-    case NR_symlink:
-    case NR_symlinkat: {
-        int pi = nr == NR_symlink ? 1 : 2, di = nr == NR_symlink ? -1 : 1;
-        /* do_symlinkat: the target is read before the new name */
-        if ((r = copy_str_in(S->pid, S->extra, (const char *)a[0])) < 0) return r;
-        if (S->extra[0] == 0) return -ENOENT;
-        if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
-        if ((r = ro_create(S, S->v, 0))) return r;
-        return RE5(NR_symlinkat, S->extra, RE_DFD(S), RE_PATH(S), 0, 0);
-    }
-    case NR_rename:
-    case NR_renameat:
-    case NR_renameat2: {
-        int opi = nr == NR_rename ? 0 : 1, odi = nr == NR_rename ? -1 : 0, npi = nr == NR_rename ? 1 : 3,
-            ndi = nr == NR_rename ? -1 : 2;
-        unsigned fl = nr == NR_renameat2 ? (unsigned)a[4] : 0;
-        /* do_renameat2: the flags first */
-        if (fl & ~(unsigned)(RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT)) return -EINVAL;
-        if ((fl & (RENAME_NOREPLACE | RENAME_WHITEOUT)) && (fl & RENAME_EXCHANGE)) return -EINVAL;
-        if ((r = resolve(S, a, opi, odi, 0, 0)) < 0) return r;
-        int osp = last_special(S->given);
-        scpy(S->v2, S->v, PATH_MAX); /* old */
-        scpy(S->given2, S->given, PATH_MAX);
-        int old_given = as_given(S), odfd = S->dfd;
-        if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
-        int nsp = last_special(S->given);
-        /* the kernel's order (do_renameat2, oracles 17.1 and 17.7): different mounts first, then a last component
-         * that is "." or "..", then the write check, then the lookups */
-        int oc = is_exclave_path(S->v2), nc = is_exclave_path(S->v);
-        if (oc != nc) return -EXDEV;
-        if (osp) return -EBUSY;
-        if (nsp) return (fl & RENAME_NOREPLACE) ? -EEXIST : -EBUSY;
-        if (oc && nc) return -EROFS;
-        to_real_exec(S->v2, S->real2);
-        to_real_exec(S->v, S->real);
-        const char *old = old_given ? S->given2 : S->real2;
-        int od = old_given ? odfd : AT_FDCWD;
-        /* renameat2 is 3.15+ */
-        if (nr != NR_renameat2 && fl == 0) return RE5(NR_renameat, od, old, RE_DFD(S), RE_PATH(S), 0);
-        return RE5(NR_renameat2, od, old, RE_DFD(S), RE_PATH(S), fl);
-    }
-    case NR_link:
-    case NR_linkat: {
-        int opi = nr == NR_link ? 0 : 1, odi = nr == NR_link ? -1 : 0, npi = nr == NR_link ? 1 : 3,
-            ndi = nr == NR_link ? -1 : 2;
-        long fl = nr == NR_linkat ? a[4] : 0;
-        if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_FOLLOW | AT_EMPTY_PATH))
-            return -EINVAL; /* do_linkat: the flags first */
-        struct kstat st;
-        if ((r = resolve(S, a, opi, odi, (fl & AT_SYMLINK_FOLLOW) != 0, (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
-        if (r == 1) {
-            r = dfd_virtual((int)a[odi], S->v);
-            if (r < 0) return r;
-        }
-        scpy(S->v2, S->v, PATH_MAX); /* old */
-        scpy(S->given2, S->given, PATH_MAX);
-        int old_given = as_given(S), odfd = S->dfd;
-        /* an old name that is a magic link to a file with no path is followed, as the caller asked */
-        long old_follow = S->magic_end ? AT_SYMLINK_FOLLOW : 0;
-        /* do_linkat: the old name is looked up before the new one is read at all: its own error, ENOTDIR for a slash on
-         * a file */
-        if (!exists_exclave(S, S->v2, &st)) return absent_errno(S);
-        if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
-        /* then the new name, in either domain (EEXIST, the name's own error), then the read-only rule for a
-         * new name the exclave owns, then EXDEV for an old one it owns */
-        scpy(S->cur, S->v, PATH_MAX);
-        {
-            size_t l = xstrlen(S->cur);
-            if (l > 1 && S->cur[l - 1] == '/') S->cur[l - 1] = 0;
-        }
-        if (exists_exclave(S, S->cur, &st)) return -EEXIST;
-        if ((r = ro_create(S, S->v, 0))) return r;
-        if (is_exclave_path(S->v2)) return -EXDEV;
-        to_real_exec(S->v2, S->real2);
-        to_real_exec(S->v, S->real);
-        /* an old name as given keeps its own flags; a resolved one names what the walk found */
-        if (old_given) return RE5(NR_linkat, odfd, S->given2, RE_DFD(S), RE_PATH(S), fl);
-        return RE5(NR_linkat, AT_FDCWD, S->real2, RE_DFD(S), RE_PATH(S),
-                   (fl & ~AT_SYMLINK_FOLLOW & ~AT_EMPTY_PATH) | old_follow);
-    }
-    case NR_chmod:
-    case NR_fchmodat:
-    case NR_fchmodat2: {
-        int pi = nr == NR_chmod ? 0 : 1, di = nr == NR_chmod ? -1 : 0;
-        long fl = nr == NR_fchmodat2 ? a[3] : 0;
-        if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
-            return -EINVAL; /* do_fchmodat: the flags first */
-        if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
-        /* AT_EMPTY_PATH: the descriptor's own file, read-only if it is the exclave's */
-        if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], "", a[2], fl, 0);
-        if ((r = ro_attr(S, S->v))) return r;
+}
+
+/* access, faccessat and faccessat2: the kernel's answers, then a write the permission allows on the exclave's file is
+ * EROFS */
+static long do_access(struct scratch *S, int nr, long *a)
+{
+    long r;
+    int pi = nr == NR_access ? 0 : 1, di = nr == NR_access ? -1 : 0;
+    long mode = a[pi + 1], fl = nr == NR_faccessat2 ? a[3] : 0;
+    /* do_faccessat: the mode, then the flags */
+    if ((unsigned)mode & ~7U) return -EINVAL;
+    if ((unsigned)fl & ~(unsigned)(AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) return -EINVAL;
+    if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
+    int empty = r == 1; /* AT_EMPTY_PATH: the descriptor's own file */
+    if (empty) r = RE5(nr, a[0], "", mode, fl, 0);
+    else {
         to_real(S->v, S->real, S->tmp);
-        if (nr == NR_fchmodat2) return RE5(nr, RE_DFD(S), RE_PATH(S), a[2], fl | re_flag(S, AT_SYMLINK_NOFOLLOW), 0);
-        return RE5(NR_fchmodat, RE_DFD(S), RE_PATH(S), a[pi + 1], 0, 0);
+        r = nr == NR_faccessat2 ? RE5(nr, RE_DFD(S), RE_PATH(S), mode, fl | re_flag(S, AT_SYMLINK_NOFOLLOW), 0)
+                                : RE5(NR_faccessat, RE_DFD(S), RE_PATH(S), mode, 0, 0);
     }
-    case NR_chown:
-    case NR_lchown:
-    case NR_fchownat: {
-        int pi = nr == NR_fchownat ? 1 : 0, di = nr == NR_fchownat ? 0 : -1;
-        long fl = nr == NR_fchownat ? a[4] : nr == NR_lchown ? AT_SYMLINK_NOFOLLOW : 0;
-        if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
-            return -EINVAL; /* do_fchownat: the flags first */
-        if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
-        if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4]);
-        if ((r = ro_attr(S, S->v))) return r;
+    /* do_faccessat: the lookup's and the permission's own answers come first; then a write the permission allows on
+     * a regular file, a directory or a symlink under a read-only mount is EROFS, and a special file never is */
+    if (r < 0 || !(mode & W_OK) || !(empty ? fd_exclave(S, (int)a[0]) : is_exclave_path(S->v))) return r;
+    struct kstat st;
+    if ((empty ? SC2(NR_fstat, a[0], &st) : sys_lstat(S->real, &st)) < 0) return r;
+    unsigned m = st.st_mode & S_IFMT;
+    return m == S_IFREG || m == S_IFDIR || m == S_IFLNK ? -EROFS : r;
+}
+
+/* getcwd: the working directory in virtual terms */
+static long do_getcwd(struct scratch *S, long *a)
+{
+    long r;
+    r = RE5(NR_getcwd, S->tmp, PATH_MAX, 0, 0, 0);
+    if (r <= 0) return r;
+    if (starts_dir(S->tmp, C.root)) from_real(S->tmp);
+    r = (long)xstrlen(S->tmp) + 1;
+    /* size is unsigned: all ones is a large buffer, not a negative one */
+    if ((unsigned long)r > (unsigned long)a[1]) return -ERANGE;
+    {
+        long e = copy_out(S->pid, (void *)a[0], S->tmp, (size_t)r);
+        if (e) return e;
+    }
+    return r;
+}
+
+/* truncate: the length, then vfs_truncate's answers for the exclave's file */
+static long do_truncate(struct scratch *S, int nr, long *a)
+{
+    long r;
+    if (a[1] < 0) return -EINVAL; /* do_sys_truncate: the length first */
+    if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
+    if (C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;
+    /* vfs_truncate: EISDIR and EINVAL for what cannot be truncated, then EROFS */
+    if (is_exclave_path(S->v)) {
+        struct kstat *st = &S->st;
+        int ex = exists_exclave(S, S->v, st);
+        if (!ex) return absent_errno(S);
+        if ((st->st_mode & S_IFMT) == S_IFDIR) return -EISDIR;
+        if (sys_lstat(S->real, st) == 0 && (st->st_mode & S_IFMT) != S_IFREG) return -EINVAL;
+        /* vfs_truncate: the permission, EACCES, before the mount, EROFS */
         to_real(S->v, S->real, S->tmp);
-        if (as_given(S)) return RE5(NR_fchownat, S->dfd, S->given, a[pi + 1], a[pi + 2], fl);
-        return RE5(NR_fchownat, AT_FDCWD, S->real, a[pi + 1], a[pi + 2], nofollow(S, AT_SYMLINK_NOFOLLOW));
+        r = sys_faccessat(AT_FDCWD, S->real, W_OK);
+        if (r < 0) return r;
+        return -EROFS;
     }
-    case NR_utime:
-    case NR_utimes:
-    case NR_futimesat:
-    case NR_utimensat: {
-        int pi = nr == NR_utime || nr == NR_utimes ? 0 : 1, di = nr == NR_utime || nr == NR_utimes ? -1 : 0;
-        long fl = nr == NR_utimensat ? (int)a[3] : 0; /* an int: bits above the word are not flags */
-        long ts[4] = {0, 0, 0, 0};
-        int badns = 0;
-        /* the kernel's order (fs/utimes.c): the times read, two UTIME_OMITs a no-op, the flags,
-         * then the lookup or the descriptor, then vfs_utimes, where a nanosecond out of range is
-         * EINVAL before the mount's EROFS */
-        if (nr == NR_utimensat) {
-            if (a[2]) {
-                if ((r = copy_exact(S->pid, ts, (const void *)a[2], sizeof ts))) return r;
-                if (ts[1] == UTIME_OMIT && ts[3] == UTIME_OMIT) return 0;
-                badns = !nsec_valid(ts[1]) || !nsec_valid(ts[3]);
-            }
-            if (fl & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) return -EINVAL;
-            /* a NULL path names the descriptor, with no flag allowed; with AT_FDCWD it is getname's EFAULT */
-            if (a[1] == 0) {
-                /* the descriptor is an int in the register: glibc's syscall() zero-extends it */
-                if ((int)a[0] == AT_FDCWD) return -EFAULT;
-                if (fl) return -EINVAL;
-                if (!fd_exclave(S, (int)a[0])) return RE5(nr, a[0], 0, a[2], a[3], 0);
-                return badns ? -EINVAL : -EROFS;
-            }
-        } else if ((nr == NR_utimes || nr == NR_futimesat) && a[pi + 1]) {
-            /* do_futimesat: a microsecond out of range is EINVAL before the lookup */
-            long tv[4];
-            if ((r = copy_exact(S->pid, tv, (const void *)a[pi + 1], sizeof tv))) return r;
-            if (tv[1] < 0 || tv[1] >= 1000000 || tv[3] < 0 || tv[3] >= 1000000) return -EINVAL;
+    to_real_exec(S->v, S->real);
+    return RE5(nr, S->real, a[1], 0, 0, 0);
+}
+
+/* rmdir, unlink and unlinkat */
+static long do_unlink(struct scratch *S, int nr, long *a)
+{
+    long r;
+    int pi = nr == NR_unlinkat ? 1 : 0, di = nr == NR_unlinkat ? 0 : -1;
+    long fl = nr == NR_rmdir ? AT_REMOVEDIR : nr == NR_unlinkat ? a[2] : 0;
+    if ((unsigned)fl & ~(unsigned)AT_REMOVEDIR) return -EINVAL;
+    if ((r = resolve(S, a, pi, di, 0, 0)) < 0)
+        return r == -ENAMETOOLONG ? delete_overlong(S, di < 0 ? AT_FDCWD : (int)a[di]) : r;
+    int sp = last_special(S->given); /* do_rmdir, do_unlinkat: answered before any lookup */
+    if (sp) return (fl & AT_REMOVEDIR) ? (sp == 1 ? -EINVAL : sp == 2 ? -ENOTEMPTY : -EBUSY) : -EISDIR;
+    if ((r = ro_delete(S, S->v))) return r;
+    return RE5(NR_unlinkat, RE_DFD(S), RE_PATH(S), fl, 0, 0);
+}
+
+/* rename, renameat and renameat2, in do_renameat2's order */
+static long do_rename(struct scratch *S, int nr, long *a)
+{
+    long r;
+    int opi = nr == NR_rename ? 0 : 1, odi = nr == NR_rename ? -1 : 0, npi = nr == NR_rename ? 1 : 3,
+        ndi = nr == NR_rename ? -1 : 2;
+    unsigned fl = nr == NR_renameat2 ? (unsigned)a[4] : 0;
+    /* do_renameat2: the flags first */
+    if (fl & ~(unsigned)(RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT)) return -EINVAL;
+    if ((fl & (RENAME_NOREPLACE | RENAME_WHITEOUT)) && (fl & RENAME_EXCHANGE)) return -EINVAL;
+    if ((r = resolve(S, a, opi, odi, 0, 0)) < 0) return r;
+    int osp = last_special(S->given);
+    scpy(S->v2, S->v, PATH_MAX); /* old */
+    scpy(S->given2, S->given, PATH_MAX);
+    int old_given = as_given(S), odfd = S->dfd;
+    if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
+    int nsp = last_special(S->given);
+    /* the kernel's order (do_renameat2, oracles 17.1 and 17.7): different mounts first, then a last component
+     * that is "." or "..", then the write check, then the lookups */
+    int oc = is_exclave_path(S->v2), nc = is_exclave_path(S->v);
+    if (oc != nc) return -EXDEV;
+    if (osp) return -EBUSY;
+    if (nsp) return (fl & RENAME_NOREPLACE) ? -EEXIST : -EBUSY;
+    if (oc && nc) return -EROFS;
+    to_real_exec(S->v2, S->real2);
+    to_real_exec(S->v, S->real);
+    const char *old = old_given ? S->given2 : S->real2;
+    int od = old_given ? odfd : AT_FDCWD;
+    /* renameat2 is 3.15+ */
+    if (nr != NR_renameat2 && fl == 0) return RE5(NR_renameat, od, old, RE_DFD(S), RE_PATH(S), 0);
+    return RE5(NR_renameat2, od, old, RE_DFD(S), RE_PATH(S), fl);
+}
+
+/* link and linkat, in do_linkat's order */
+static long do_link(struct scratch *S, int nr, long *a)
+{
+    long r;
+    int opi = nr == NR_link ? 0 : 1, odi = nr == NR_link ? -1 : 0, npi = nr == NR_link ? 1 : 3,
+        ndi = nr == NR_link ? -1 : 2;
+    long fl = nr == NR_linkat ? a[4] : 0;
+    if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_FOLLOW | AT_EMPTY_PATH)) return -EINVAL; /* do_linkat: the flags first */
+    struct kstat st;
+    if ((r = resolve(S, a, opi, odi, (fl & AT_SYMLINK_FOLLOW) != 0, (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
+    if (r == 1) {
+        r = dfd_virtual((int)a[odi], S->v);
+        if (r < 0) return r;
+    }
+    scpy(S->v2, S->v, PATH_MAX); /* old */
+    scpy(S->given2, S->given, PATH_MAX);
+    int old_given = as_given(S), odfd = S->dfd;
+    /* an old name that is a magic link to a file with no path is followed, as the caller asked */
+    long old_follow = S->magic_end ? AT_SYMLINK_FOLLOW : 0;
+    /* do_linkat: the old name is looked up before the new one is read at all: its own error, ENOTDIR for a slash on
+     * a file */
+    if (!exists_exclave(S, S->v2, &st)) return absent_errno(S);
+    if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
+    /* then the new name, in either domain (EEXIST, the name's own error), then the read-only rule for a
+     * new name the exclave owns, then EXDEV for an old one it owns */
+    scpy(S->cur, S->v, PATH_MAX);
+    {
+        size_t l = xstrlen(S->cur);
+        if (l > 1 && S->cur[l - 1] == '/') S->cur[l - 1] = 0;
+    }
+    if (exists_exclave(S, S->cur, &st)) return -EEXIST;
+    if ((r = ro_create(S, S->v, 0))) return r;
+    if (is_exclave_path(S->v2)) return -EXDEV;
+    to_real_exec(S->v2, S->real2);
+    to_real_exec(S->v, S->real);
+    /* an old name as given keeps its own flags; a resolved one names what the walk found */
+    if (old_given) return RE5(NR_linkat, odfd, S->given2, RE_DFD(S), RE_PATH(S), fl);
+    return RE5(NR_linkat, AT_FDCWD, S->real2, RE_DFD(S), RE_PATH(S),
+               (fl & ~AT_SYMLINK_FOLLOW & ~AT_EMPTY_PATH) | old_follow);
+}
+
+/* chmod, fchmodat and fchmodat2 */
+static long do_chmod(struct scratch *S, int nr, long *a)
+{
+    long r;
+    int pi = nr == NR_chmod ? 0 : 1, di = nr == NR_chmod ? -1 : 0;
+    long fl = nr == NR_fchmodat2 ? a[3] : 0;
+    if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
+        return -EINVAL; /* do_fchmodat: the flags first */
+    if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
+    /* AT_EMPTY_PATH: the descriptor's own file, read-only if it is the exclave's */
+    if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], "", a[2], fl, 0);
+    if ((r = ro_attr(S, S->v))) return r;
+    to_real(S->v, S->real, S->tmp);
+    if (nr == NR_fchmodat2) return RE5(nr, RE_DFD(S), RE_PATH(S), a[2], fl | re_flag(S, AT_SYMLINK_NOFOLLOW), 0);
+    return RE5(NR_fchmodat, RE_DFD(S), RE_PATH(S), a[pi + 1], 0, 0);
+}
+
+/* chown, lchown and fchownat */
+static long do_chown(struct scratch *S, int nr, long *a)
+{
+    long r;
+    int pi = nr == NR_fchownat ? 1 : 0, di = nr == NR_fchownat ? 0 : -1;
+    long fl = nr == NR_fchownat ? a[4] : nr == NR_lchown ? AT_SYMLINK_NOFOLLOW : 0;
+    if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
+        return -EINVAL; /* do_fchownat: the flags first */
+    if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
+    if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4]);
+    if ((r = ro_attr(S, S->v))) return r;
+    to_real(S->v, S->real, S->tmp);
+    if (as_given(S)) return RE5(NR_fchownat, S->dfd, S->given, a[pi + 1], a[pi + 2], fl);
+    return RE5(NR_fchownat, AT_FDCWD, S->real, a[pi + 1], a[pi + 2], nofollow(S, AT_SYMLINK_NOFOLLOW));
+}
+
+/* utime, utimes, futimesat and utimensat, in fs/utimes.c's order */
+static long do_times(struct scratch *S, int nr, long *a)
+{
+    long r;
+    int pi = nr == NR_utime || nr == NR_utimes ? 0 : 1, di = nr == NR_utime || nr == NR_utimes ? -1 : 0;
+    long fl = nr == NR_utimensat ? (int)a[3] : 0; /* an int: bits above the word are not flags */
+    long ts[4] = {0, 0, 0, 0};
+    int badns = 0;
+    /* the kernel's order (fs/utimes.c): the times read, two UTIME_OMITs a no-op, the flags,
+     * then the lookup or the descriptor, then vfs_utimes, where a nanosecond out of range is
+     * EINVAL before the mount's EROFS */
+    if (nr == NR_utimensat) {
+        if (a[2]) {
+            if ((r = copy_exact(S->pid, ts, (const void *)a[2], sizeof ts))) return r;
+            if (ts[1] == UTIME_OMIT && ts[3] == UTIME_OMIT) return 0;
+            badns = !nsec_valid(ts[1]) || !nsec_valid(ts[3]);
         }
-        if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
-        if (r == 1) { /* AT_EMPTY_PATH: the descriptor itself (5.9+) */
-            if (!fd_exclave(S, (int)a[0])) return RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], 0);
+        if (fl & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) return -EINVAL;
+        /* a NULL path names the descriptor, with no flag allowed; with AT_FDCWD it is getname's EFAULT */
+        if (a[1] == 0) {
+            /* the descriptor is an int in the register: glibc's syscall() zero-extends it */
+            if ((int)a[0] == AT_FDCWD) return -EFAULT;
+            if (fl) return -EINVAL;
+            if (!fd_exclave(S, (int)a[0])) return RE5(nr, a[0], 0, a[2], a[3], 0);
             return badns ? -EINVAL : -EROFS;
         }
-        /* the name's own error, then the times, then the write */
-        if (is_exclave_path(S->v)) {
-            struct kstat st;
-            if (!exists_exclave(S, S->v, &st)) return absent_errno(S);
-            return badns ? -EINVAL : -EROFS;
-        }
-        to_real(S->v, S->real, S->tmp);
-        if (nr == NR_utime) return RE5(NR_utime, S->real, a[1], 0, 0, 0);
-        if (nr == NR_utimes) return RE5(NR_utimes, S->real, a[1], 0, 0, 0);
-        if (nr == NR_futimesat) return RE5(NR_futimesat, RE_DFD(S), RE_PATH(S), a[2], 0, 0);
-        return RE5(NR_utimensat, RE_DFD(S), RE_PATH(S), a[2], fl | re_flag(S, AT_SYMLINK_NOFOLLOW), 0);
+    } else if ((nr == NR_utimes || nr == NR_futimesat) && a[pi + 1]) {
+        /* do_futimesat: a microsecond out of range is EINVAL before the lookup */
+        long tv[4];
+        if ((r = copy_exact(S->pid, tv, (const void *)a[pi + 1], sizeof tv))) return r;
+        if (tv[1] < 0 || tv[1] >= 1000000 || tv[3] < 0 || tv[3] >= 1000000) return -EINVAL;
     }
+    if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
+    if (r == 1) { /* AT_EMPTY_PATH: the descriptor itself (5.9+) */
+        if (!fd_exclave(S, (int)a[0])) return RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], 0);
+        return badns ? -EINVAL : -EROFS;
+    }
+    /* the name's own error, then the times, then the write */
+    if (is_exclave_path(S->v)) {
+        struct kstat st;
+        if (!exists_exclave(S, S->v, &st)) return absent_errno(S);
+        return badns ? -EINVAL : -EROFS;
+    }
+    to_real(S->v, S->real, S->tmp);
+    if (nr == NR_utime) return RE5(NR_utime, S->real, a[1], 0, 0, 0);
+    if (nr == NR_utimes) return RE5(NR_utimes, S->real, a[1], 0, 0, 0);
+    if (nr == NR_futimesat) return RE5(NR_futimesat, RE_DFD(S), RE_PATH(S), a[2], 0, 0);
+    return RE5(NR_utimensat, RE_DFD(S), RE_PATH(S), a[2], fl | re_flag(S, AT_SYMLINK_NOFOLLOW), 0);
+}
+
+/* the extended attributes by path and the chattr syscalls: the name and flags the kernel reads first, then the
+ * read-only rule for a change */
+static long do_xattr(struct scratch *S, int nr, long *a)
+{
+    long r;
+    switch (nr) {
     case NR_setxattrat:
     case NR_removexattrat: /* (dfd, path, at_flags, name, [xattr_args, its size]) */
         if ((r = resolve(S, a, 1, 0, !(a[2] & AT_SYMLINK_NOFOLLOW), (a[2] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
@@ -1412,14 +1403,15 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if ((r = resolve(S, a, 0, -1, nr == NR_getxattr || nr == NR_listxattr, 0)) < 0) return r;
         to_real(S->v, S->real, S->tmp);
         return RE5(nr, S->real, a[1], a[2], a[3], 0);
-    case NR_statfs:
-        if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
-        to_real(S->v, S->real, S->tmp);
-        r = RE5(NR_statfs, S->real, a[1], 0, 0, 0);
-        return r == 0 && is_exclave_path(S->v) ? ro_flag(S, (char *)a[1] + STATFS_FLAGS_OFF) : r;
-    case NR_fstatfs:
-        r = RE5(NR_fstatfs, a[0], a[1], 0, 0, 0);
-        return r == 0 && fd_exclave(S, (int)a[0]) ? ro_flag(S, (char *)a[1] + STATFS_FLAGS_OFF) : r;
+    default: __builtin_trap(); /* dispatch sends only the syscalls above */
+    }
+}
+
+/* inotify_add_watch and fanotify_mark: the watched path */
+static long do_watch(struct scratch *S, int nr, long *a)
+{
+    long r;
+    switch (nr) {
     case NR_inotify_add_watch: {
         /* the mask, then the descriptor, which must be an inotify instance, then the path */
         unsigned mask = (unsigned)a[2];
@@ -1435,29 +1427,137 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         if ((r = resolve(S, a, 4, 3, !(a[1] & FAN_MARK_DONT_FOLLOW), 0)) < 0) return r;
         to_real(S->v, S->real, S->tmp);
         return RE5(nr, a[0], a[1] | re_flag(S, FAN_MARK_DONT_FOLLOW), a[2], RE_DFD(S), RE_PATH(S));
+    default: __builtin_trap(); /* dispatch sends only the syscalls above */
+    }
+}
+
+/* the changes made through a descriptor, which are EROFS on the exclave's file */
+static long do_fd_change(struct scratch *S, int nr, long *a)
+{
+    long r;
+    /* fsetxattr, fremovexattr: the name, flags and size before the descriptor */
+    r = nr == NR_fsetxattr      ? setxattr_args(S, (const char *)a[1], (size_t)a[3], (int)a[4])
+        : nr == NR_fremovexattr ? xattr_name(S, (const char *)a[1])
+                                : 0;
+    if (r) return r;
+    r = sys_fcntl((int)a[0], F_GETFL, 0);
+    if (r < 0) return r;
+    /* an O_PATH descriptor cannot be used for these (open(2)) */
+    if (r & O_PATH) return -EBADF;
+    if (!fd_exclave(S, (int)a[0])) return RE5(nr, a[0], a[1], a[2], a[3], a[4]);
+    /* the exclave's file: the chattr ioctls read their argument before the mount's EROFS (ioctl_setflags,
+         * ioctl_fssetxattr) */
+    if (nr == NR_ioctl) {
+        r = copy_exact(S->pid, S->tmp, (const void *)a[2], (unsigned long)a[1] == FS_IOC_SETFLAGS ? sizeof(int) : 28);
+        if (r) return r;
+    }
+    return -EROFS;
+}
+
+static long dispatch(struct scratch *S, int nr, long *a, void *uc)
+{
+    long r;
+    switch (nr) {
+    case NR_open: return do_open(S, a, 0, -1, a[1], a[2], NR_openat);
+    case NR_openat: return do_open(S, a, 1, 0, a[2], a[3], NR_openat);
+    case NR_openat2:
+        return do_openat2(S, a);
+/* build/launcher-old, filter version 3, traps neither (17.4) */
+#ifndef EXCLAVE_TEST_OLD
+    case NR_bind:
+    case NR_connect: return do_sockaddr(S, a, nr);
+#endif
+    case NR_creat: return do_open(S, a, 0, -1, O_CREAT | O_WRONLY | O_TRUNC, a[1], NR_openat);
+    case NR_stat:
+    case NR_lstat:
+    case NR_newfstatat:
+    case NR_statx: return do_stat(S, nr, a);
+    case NR_access:
+    case NR_faccessat:
+    case NR_faccessat2: return do_access(S, nr, a);
+    /* bufsiz is an int: the kernel truncates, so must the copy's bound */
+    case NR_readlink: return do_readlink(S, a, 0, -1, (char *)a[1], (int)a[2]);
+    case NR_readlinkat: return do_readlink(S, a, 1, 0, (char *)a[2], (int)a[3]);
+    case NR_getcwd: return do_getcwd(S, a);
+    case NR_chdir:
+        if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
+        to_real_exec(S->v, S->real);
+        return RE5(NR_chdir, S->real, 0, 0, 0, 0);
+    case NR_execve: return do_execve(S, a, 0, -1, 0, (char **)a[1], (char **)a[2]);
+    case NR_execveat: return do_execve(S, a, 1, 0, a[4], (char **)a[2], (char **)a[3]);
+    case NR_truncate: return do_truncate(S, nr, a);
+    case NR_mkdir:
+    case NR_mkdirat: {
+        int pi = nr == NR_mkdir ? 0 : 1, di = nr == NR_mkdir ? -1 : 0;
+        if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
+        if ((r = ro_create(S, S->v, 1))) return r;
+        return RE5(NR_mkdirat, RE_DFD(S), RE_PATH(S), a[pi + 1], 0, 0);
+    }
+    case NR_mknod:
+    case NR_mknodat: {
+        int pi = nr == NR_mknod ? 0 : 1, di = nr == NR_mknod ? -1 : 0;
+        if ((r = may_mknod((unsigned short)a[pi + 1]))) return r;
+        if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
+        if ((r = ro_create(S, S->v, 0))) return r;
+        return RE5(NR_mknodat, RE_DFD(S), RE_PATH(S), a[pi + 1], a[pi + 2], 0);
+    }
+    case NR_rmdir:
+    case NR_unlink:
+    case NR_unlinkat: return do_unlink(S, nr, a);
+    case NR_symlink:
+    case NR_symlinkat: {
+        int pi = nr == NR_symlink ? 1 : 2, di = nr == NR_symlink ? -1 : 1;
+        /* do_symlinkat: the target is read before the new name */
+        if ((r = copy_str_in(S->pid, S->extra, (const char *)a[0])) < 0) return r;
+        if (S->extra[0] == 0) return -ENOENT;
+        if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
+        if ((r = ro_create(S, S->v, 0))) return r;
+        return RE5(NR_symlinkat, S->extra, RE_DFD(S), RE_PATH(S), 0, 0);
+    }
+    case NR_rename:
+    case NR_renameat:
+    case NR_renameat2: return do_rename(S, nr, a);
+    case NR_link:
+    case NR_linkat: return do_link(S, nr, a);
+    case NR_chmod:
+    case NR_fchmodat:
+    case NR_fchmodat2: return do_chmod(S, nr, a);
+    case NR_chown:
+    case NR_lchown:
+    case NR_fchownat: return do_chown(S, nr, a);
+    case NR_utime:
+    case NR_utimes:
+    case NR_futimesat:
+    case NR_utimensat: return do_times(S, nr, a);
+    case NR_setxattrat:
+    case NR_removexattrat:
+    case NR_getxattrat:
+    case NR_listxattrat:
+    case NR_file_getattr:
+    case NR_file_setattr:
+    case NR_setxattr:
+    case NR_lsetxattr:
+    case NR_removexattr:
+    case NR_lremovexattr:
+    case NR_getxattr:
+    case NR_lgetxattr:
+    case NR_listxattr:
+    case NR_llistxattr: return do_xattr(S, nr, a);
+    case NR_statfs:
+        if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
+        to_real(S->v, S->real, S->tmp);
+        r = RE5(NR_statfs, S->real, a[1], 0, 0, 0);
+        return r == 0 && is_exclave_path(S->v) ? ro_flag(S, (char *)a[1] + STATFS_FLAGS_OFF) : r;
+    case NR_fstatfs:
+        r = RE5(NR_fstatfs, a[0], a[1], 0, 0, 0);
+        return r == 0 && fd_exclave(S, (int)a[0]) ? ro_flag(S, (char *)a[1] + STATFS_FLAGS_OFF) : r;
+    case NR_inotify_add_watch:
+    case NR_fanotify_mark: return do_watch(S, nr, a);
     case NR_fchmod:
     case NR_fchown:
     case NR_fsetxattr:
     case NR_fremovexattr:
-    case NR_ioctl:
-        /* fsetxattr, fremovexattr: the name, flags and size before the descriptor */
-        r = nr == NR_fsetxattr      ? setxattr_args(S, (const char *)a[1], (size_t)a[3], (int)a[4])
-            : nr == NR_fremovexattr ? xattr_name(S, (const char *)a[1])
-                                    : 0;
-        if (r) return r;
-        r = sys_fcntl((int)a[0], F_GETFL, 0);
-        if (r < 0) return r;
-        /* an O_PATH descriptor cannot be used for these (open(2)) */
-        if (r & O_PATH) return -EBADF;
-        if (!fd_exclave(S, (int)a[0])) return RE5(nr, a[0], a[1], a[2], a[3], a[4]);
-        /* the exclave's file: the chattr ioctls read their argument before the mount's EROFS (ioctl_setflags,
-         * ioctl_fssetxattr) */
-        if (nr == NR_ioctl) {
-            r = copy_exact(S->pid, S->tmp, (const void *)a[2],
-                           (unsigned long)a[1] == FS_IOC_SETFLAGS ? sizeof(int) : 28);
-            if (r) return r;
-        }
-        return -EROFS;
+    case NR_ioctl: return do_fd_change(S, nr, a);
     case NR_rt_sigaction: return do_sigaction(S, a);
     case NR_rt_sigprocmask: return do_sigprocmask(S, a, uc);
     case NR_rt_sigsuspend: return do_sigsuspend(S, a);

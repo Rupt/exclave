@@ -173,17 +173,13 @@ static int valid_abs_path(const char *s, size_t n)
     return 1;
 }
 
-int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, size_t errn)
+/* the checks of the whole file before its records: the final LF, no byte order mark, UTF-8 and no CR, each naming the
+ * line as the record pass would */
+static int whole_file(struct cur *K, char *err, size_t errn)
 {
-    struct cur cu = {(const unsigned char *)buf, (const unsigned char *)buf + len, 1, 1};
-    struct cur *K = &cu;
-    int seen_exclave = 0, seen_cpu = 0, nrec = 0;
-    int pending_comment = 0;
-
-    if (len == 0 || buf[len - 1] != '\n') return fail(err, errn, K, "file must end with LF");
-    if (len >= 3 && (unsigned char)buf[0] == 0xEF && (unsigned char)buf[1] == 0xBB && (unsigned char)buf[2] == 0xBF)
-        return fail(err, errn, K, "byte order mark");
-    /* whole-file UTF-8 and CR check, naming the line as the record pass would */
+    size_t len = (size_t)(K->end - K->p);
+    if (len == 0 || K->end[-1] != '\n') return fail(err, errn, K, "file must end with LF");
+    if (len >= 3 && K->p[0] == 0xEF && K->p[1] == 0xBB && K->p[2] == 0xBF) return fail(err, errn, K, "byte order mark");
     for (const unsigned char *p = K->p; p < K->end;) {
         if (*p == '\r') return fail(err, errn, K, "CR not allowed");
         int l = utf8_len(p, (size_t)(K->end - p));
@@ -192,6 +188,18 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
         p += l;
     }
     K->line = 1;
+    return 0;
+}
+
+int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, size_t errn)
+{
+    struct cur cu = {(const unsigned char *)buf, (const unsigned char *)buf + len, 1, 1};
+    struct cur *K = &cu;
+    int seen_exclave = 0, seen_cpu = 0, nrec = 0;
+    int pending_comment = 0;
+
+    int r = whole_file(K, err, errn);
+    if (r) return r;
 
     while (K->p < K->end) {
         K->col = 1;
@@ -236,7 +244,7 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
             if (K->p >= K->end || *K->p == '\n') return fail(err, errn, K, "trailing space");
             if (*K->p == ' ') return fail(err, errn, K, "multiple spaces");
             if (nf == 8) return fail(err, errn, K, "too many fields");
-            int r = (*K->p == '"') ? parse_string(K, err, errn, &f[nf]) : parse_token(K, err, errn, &f[nf]);
+            r = (*K->p == '"') ? parse_string(K, err, errn, &f[nf]) : parse_token(K, err, errn, &f[nf]);
             if (r) return r;
             nf++;
         }
