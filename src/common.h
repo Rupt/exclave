@@ -289,6 +289,7 @@ int cache_classify(const char *v, const char *real, char *tmp);
 
 /* ---------- canonicalisation (canon.c) ---------- */
 int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *out); /* 0 or -errno */
+int through_magic(struct scratch *S, const char *path, int dfd, char *out);
 int fd_virtual(int fd, char *out);
 int cwd_virtual(char *out);
 int is_self_exe(const char *p, pid_t pid); /* /proc/self/exe in any spelling, for this process */

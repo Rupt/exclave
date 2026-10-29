@@ -1056,7 +1056,13 @@ every path syscall: a path relative to a descriptor whose walk never
 touched the exclave is re-issued as given, relative to that descriptor,
 so the kernel resolves it from the directory itself and a rename of
 the directory's ancestors meanwhile changes nothing, as it would not
-natively; a path relative to the working directory is re-issued as its
+natively. A walk from such a descriptor that fails at a host
+component, with any error but a length's, is re-issued the same way,
+spelt through the descriptor's magic link as a walk from a deleted
+directory is: the launcher walked from its own reading of the
+directory's name, which the rename can have made stale, and the
+kernel's answer from the directory itself is the one the program
+would get natively. A path relative to the working directory is re-issued as its
 real path, since the working directory can change under the walk (13
 item 14). Any other host path,
 reached through an exclave symlink or a magic link, is re-issued as its
@@ -2325,17 +2331,17 @@ describes the procedure. Measured October 2026:
 
 | Distribution | Kernel | Suite | Oracles | Notes |
 |---|---|---|---|---|
-| CentOS 7 | 3.10 | 76 of 76 | none: no user namespaces | `seccomp(2)` absent, so the `prctl` form is used; `renameat`, not `renameat2` |
-| Ubuntu 18.04 | 4.15 | 76 of 76 | namespace, probe and Docker profile pass; no `openat2` | bwrap 0.2 |
-| Rocky Linux 8 | 4.18 | 76 of 76 | all pass | |
-| Ubuntu 20.04 | 5.4 | 76 of 76 | namespace, probe and Docker profile pass; no `openat2` | |
-| Debian 11 | 5.10 | 76 of 76 | all pass | the security suite lists a `bubblewrap` it does not serve; the matrix installs the release's |
-| Ubuntu 22.04 | 5.15 | 76 of 76 | all pass | |
-| Debian 12 | 6.1 | 76 of 76 | all pass | |
-| Alpine 3.20 | 6.6 | 76 of 76 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
-| Fedora 42 | 6.14 | 76 of 76 | all pass | SELinux enforcing |
+| CentOS 7 | 3.10 | 79 of 79 | none: no user namespaces | `seccomp(2)` absent, so the `prctl` form is used; `renameat`, not `renameat2` |
+| Ubuntu 18.04 | 4.15 | 79 of 79 | namespace, probe and Docker profile pass; no `openat2` | bwrap 0.2 |
+| Rocky Linux 8 | 4.18 | 79 of 79 | all pass | |
+| Ubuntu 20.04 | 5.4 | 79 of 79 | namespace, probe and Docker profile pass; no `openat2` | |
+| Debian 11 | 5.10 | 79 of 79 | all pass | the security suite lists a `bubblewrap` it does not serve; the matrix installs the release's |
+| Ubuntu 22.04 | 5.15 | 79 of 79 | all pass | |
+| Debian 12 | 6.1 | 79 of 79 | all pass | |
+| Alpine 3.20 | 6.6 | 79 of 79 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
+| Fedora 42 | 6.14 | 79 of 79 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
 | Ubuntu 24.04 arm64 | 6.8 | 74 of 74 | all pass | aarch64 under TCG, `-cpu max`, 4 vCPUs, at about a tenth of native speed: the suite takes 55 minutes, the row 81; the exclave is made inside the VM (10.1) |
-| reference machine | 7.0 | 76 of 76 | all pass | Ubuntu 24.04, AppArmor |
+| reference machine | 7.0 | 79 of 79 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
 run passes. Two checks outside the suite run natively on each row:
@@ -3632,7 +3638,10 @@ meaning items 4 and 7.
      `open` interrupted by `SIGINT` or left by `siglongjmp`, Go's
      goroutines, 64 threads trapping at once and threads trapping while
      another spawns, a descriptor-relative path looked up while its
-     directory's parent is renamed, the scratch pool under contention
+     directory's parent is renamed, in both forms of the walk (16.6
+     item 5; the walk from the root under a second mount of the
+     tree's filesystem, which failed on the matrix's btrfs row until
+     the failed walk was re-issued as given), the scratch pool under contention
      (`test/scratch_test.c`), and the cache's lock across `fork`
      (`test/cache_test.c`);
    - *spawning and exec*: 100 000 `posix_spawn`s with RSS measured (16),

@@ -766,11 +766,35 @@ def tool_version(ctx: Ctx) -> None:
 
 @test
 def relative_to_a_renamed_directory(ctx: Ctx) -> None:
-    """A descriptor-relative host path resolves while the directory's parent is renamed (7.4.3)."""
+    """A descriptor-relative host path resolves while the directory's parent is renamed (7.4.3).
+
+    In both forms of the walk: from the directory itself, where the one-step host check vouches
+    for it, and from the root, lstat by lstat, where it cannot (16.6 item 5), made here by a second
+    mount of the tree's filesystem in a user namespace, as on a btrfs host; the second form runs
+    where bwrap and user namespaces are available.
+    """
     d = os.path.join(ctx.work, f"hostdir-race-{os.getpid()}")
     os.makedirs(d, exist_ok=True)
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "rename_race"), [d], timeout=120)
-    expect(rc == 0 and "FAIL" not in out, out + err)
+    prog = os.path.join(ctx.progs, "rename_race")
+    rc, out, err = inside(ctx, prog, [d], timeout=120)
+    expect(rc == 0 and "FAIL" not in out, "from the directory: " + out + err)
+    if (
+        not shutil.which("bwrap")
+        or subprocess.run(
+            ["bwrap", "--dev-bind", "/", "/", "true"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+    ):
+        return
+    rc, out, err = run(
+        ["bwrap", "--dev-bind", "/", "/", "--bind", ctx.exclave, "/mnt", ctx.launcher, prog, d],
+        cwd=ctx.work,
+        env=dict(ctx.env),
+        timeout=120,
+    )
+    expect(rc == 0 and "FAIL" not in out, "from the root: " + out + err)
 
 
 @test

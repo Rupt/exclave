@@ -166,6 +166,14 @@ static long setxattr_args(struct scratch *S, const char *name, size_t size, int 
 }
 
 /* ---------- path resolution ---------- */
+/* The re-issue of a resolved path (7.4.3): the real path from the root, or, for a walk relative to a descriptor that
+ * never touched the exclave, the path as given relative to that descriptor, which the kernel then resolves from the
+ * directory itself, immune to a rename of the directory's ancestors, with no flag the handler adds. A path relative to
+ * the working directory is re-issued as its real path: the working directory can change under the walk (13 item 14),
+ * and a re-issue as given after such a change could write into the tree. */
+static int as_given(const struct scratch *S) { return !S->touched_exclave && S->dfd != AT_FDCWD; }
+#define RE_DFD(S) (as_given(S) ? (S)->dfd : AT_FDCWD)
+#define RE_PATH(S) (as_given(S) ? (S)->given : (S)->real)
 /* args[pi] relative to args[di] (or the cwd when di < 0) into S->v; 1 means "empty path with AT_EMPTY_PATH: fd-based".
  * allow_empty: 1 accepts the empty string, 2 also a NULL path, as getname_maybe_null does under AT_EMPTY_PATH for
  * newfstatat and statx (6.11+), the *xattrat calls and file_getattr and file_setattr; every other syscall answers
@@ -188,6 +196,11 @@ static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int 
         if (r < 0) return r;
     }
     r = canon(S, S->given, dfd, follow, S->v);
+    /* a walk from a host directory that failed at a host component: the handler walked from its own reading of
+     * the directory's name, which a rename of an ancestor meanwhile makes stale where the kernel, walking from the
+     * directory itself, sees nothing; the failed walk is the kernel's own to make too, so the path is spelt through
+     * the descriptor's magic link and re-issued as given (7.4.3), the length errors excepted */
+    if (r < 0 && r != -ENAMETOOLONG && as_given(S)) return through_magic(S, S->given, dfd, S->v);
     if (r < 0) scpy(S->v, S->given, PATH_MAX);                    /* the log names what was asked for, as given */
     return r;
 }
@@ -296,14 +309,6 @@ static long empty_as_given(long path) { return path ? (long)"" : 0; }
 /* A no-follow flag for a re-issue on the resolved real path, which names the object the walk found; none when the walk
  * ended on a magic link to an object with no path, which the kernel reaches only by following the link (canon). */
 static long nofollow(const struct scratch *S, long flag) { return S->magic_end ? 0 : flag; }
-/* The re-issue of a resolved path (7.4.3): the real path from the root, or, for a walk relative to a descriptor that
- * never touched the exclave, the path as given relative to that descriptor, which the kernel then resolves from the
- * directory itself, immune to a rename of the directory's ancestors, with no flag the handler adds. A path relative to
- * the working directory is re-issued as its real path: the working directory can change under the walk (13 item 14),
- * and a re-issue as given after such a change could write into the tree. */
-static int as_given(const struct scratch *S) { return !S->touched_exclave && S->dfd != AT_FDCWD; }
-#define RE_DFD(S) (as_given(S) ? (S)->dfd : AT_FDCWD)
-#define RE_PATH(S) (as_given(S) ? (S)->given : (S)->real)
 /* a no-follow flag the handler adds to a re-issue on the real path, which names what the walk found */
 static long re_flag(const struct scratch *S, long flag) { return as_given(S) ? 0 : nofollow(S, flag); }
 static int dfd_virtual(int fd, char *out);

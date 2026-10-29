@@ -242,6 +242,20 @@ static int start_resolved(struct scratch *S, const char *v, int owned, int tree)
     return tree_once > 0;
 }
 
+/* path relative to dfd spelt through the descriptor's magic link, /proc/self/fd/N/path or /proc/self/cwd/path: a host
+ * path the kernel resolves itself from the directory, whatever its name is by then (7.4.3) */
+int through_magic(struct scratch *S, const char *path, int dfd, char *out)
+{
+    char *n = S->comp;
+    if (dfd != AT_FDCWD) ltoa_(dfd, n);
+    scpy(out, dfd == AT_FDCWD ? "/proc/self/cwd" : "/proc/self/fd/", PATH_MAX);
+    if (dfd != AT_FDCWD) scat(out, n, PATH_MAX);
+    if (xstrlen(out) + 1 + xstrlen(path) >= PATH_MAX) return -ENAMETOOLONG;
+    scat(out, "/", PATH_MAX);
+    scat(out, path, PATH_MAX);
+    return 0;
+}
+
 int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *out)
 {
     char *rest = S->rest, *cur = S->cur, *real = S->real, *tmp = S->tmp;
@@ -282,16 +296,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         /* a directory deleted under the program, which the kernel still walks from and the handler cannot name: the
          * path is spelt through the magic link, a host path the kernel resolves itself; a walk from there into the
          * exclave stays the host's (7.4.3) */
-        if (r == -ENOENT) {
-            char *n = S->comp;
-            if (dfd != AT_FDCWD) ltoa_(dfd, n);
-            scpy(out, dfd == AT_FDCWD ? "/proc/self/cwd" : "/proc/self/fd/", PATH_MAX);
-            if (dfd != AT_FDCWD) scat(out, n, PATH_MAX);
-            if (xstrlen(out) + 1 + pl >= PATH_MAX) return -ENAMETOOLONG;
-            scat(out, "/", PATH_MAX);
-            scat(out, path, PATH_MAX);
-            return 0;
-        }
+        if (r == -ENOENT) return through_magic(S, path, dfd, out);
         if (r < 0) return r;
         if (rf & RESOLVE_NO_XDEV) dom = rest[1] ? is_exclave_path(rest) : 1;
         int owned = !rest[1] || is_exclave_path(rest);
