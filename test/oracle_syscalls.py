@@ -115,6 +115,7 @@ AT_FDCWD, AT_SYMLINK_NOFOLLOW, AT_REMOVEDIR, AT_SYMLINK_FOLLOW, AT_EMPTY_PATH, A
     0x200,
 )
 RENAME_NOREPLACE, RENAME_EXCHANGE, RENAME_WHITEOUT = 1, 2, 4
+AT_EXECVE_CHECK = 0x10000  # execveat's check that runs nothing, 6.14
 (
     RESOLVE_NO_XDEV,
     RESOLVE_NO_MAGICLINKS,
@@ -627,6 +628,9 @@ def generate(
         add("futimesat", n + "/bad_usec", d, p, "T:1000,0,2000,-1")
         add("execveat", n, d, p, V("x"), V(), I(0))
         add("execveat", n + "/empty", d, p, V("x"), V(), I(AT_EMPTY_PATH))
+        # a check that runs nothing (6.14), and a flag no kernel knows
+        add("execveat", n + "/check", d, p, V("x"), V(), I(AT_EXECVE_CHECK))
+        add("execveat", n + "/bad_flag", d, p, V("x"), V(), I(0x40000))
         add("setxattrat", n, d, p, I(0), S("user.probe"), X("v"), I(16))
         add(
             "setxattrat",
@@ -749,6 +753,15 @@ def generate(
     add("readlinkat", "proc_fd", I(AT_FDCWD), S("/proc/self/fd/0"), B("link", 4096), I(4096))
     add("execveat", "true_fd", F(O_RDONLY, forms.true), S(""), V("true"), V(), I(AT_EMPTY_PATH))
     add("execveat", "true_pathfd", F(O_PATH, forms.true), S(""), V("true"), V(), I(AT_EMPTY_PATH))
+    add(
+        "execveat",
+        "true_fd/check",
+        F(O_RDONLY, forms.true),
+        S(""),
+        V("true"),
+        V(),
+        I(AT_EMPTY_PATH | AT_EXECVE_CHECK),
+    )
     add(
         "execveat",
         "sh_fd",
@@ -1187,6 +1200,35 @@ EXPECTED.extend(
         ),
     )
     for call, since in ADDED.items()
+)
+
+# execveat's flags: AT_EXECVE_CHECK is 6.14+, an unknown flag before it, and the handler looks the
+# name up before it re-issues the check; and a kernel before the one measured, 7.0, may read the
+# name before it refuses a flag it does not know. The handler answers as 7.0 does.
+EXPECTED.extend(
+    [
+        (
+            "execveat",
+            lambda label, b, o: (
+                KERNEL < (6, 14) and label.endswith("/check") and errnos(b, o)[0] == errno.EINVAL
+            ),
+            (
+                "AT_EXECVE_CHECK is 6.14+: this kernel refuses it as unknown before the lookup "
+                "(EINVAL); the handler looks the name up first and re-issues, so the lookup's own "
+                "error comes first"
+            ),
+        ),
+        (
+            "execveat",
+            lambda label, b, o: (
+                KERNEL < (7, 0) and label.endswith("/bad_flag") and errnos(b, o)[1] == errno.EINVAL
+            ),
+            (
+                "an unknown execveat flag: this kernel reads the name first (EFAULT, "
+                "ENAMETOOLONG, ENOENT); 7.0 refuses the flag before the name, as the handler does"
+            ),
+        ),
+    ]
 )
 
 # Before 6.13 the xattr calls looked the path up, or took a descriptor's mount for writing, before

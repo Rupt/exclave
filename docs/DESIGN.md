@@ -1189,7 +1189,11 @@ kernel does (interpreter, optional argument, the script's path as
 given, the remaining arguments; five nested interpreters, the sixth
 `ELOOP`), from the same 256 bytes: with no newline among them, an
 interpreter path that no blank ends within the first 255 is `ENOEXEC`,
-never a shorter path. Then:
+never a shorter path. An `execveat` flag the kernel does not know is
+`EINVAL` before the name is read, and `AT_EXECVE_CHECK` (6.14), which
+asks whether the file could be run and runs nothing, is re-issued on
+the file the walk found, so the kernel answers it and the process is
+never replaced. Then:
 
 - **A target in a data directory** is `EACCES`, never executed (6.2).
 - **A wrapper** is `execve`d: the kernel runs the launcher under the

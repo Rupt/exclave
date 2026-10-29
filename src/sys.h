@@ -200,6 +200,7 @@ long __sc6_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define AT_SYMLINK_NOFOLLOW 0x100
 #define AT_REMOVEDIR 0x200
 #define AT_EMPTY_PATH 0x1000
+#define AT_EXECVE_CHECK 0x10000
 
 #define O_RDONLY 00
 #define O_WRONLY 01

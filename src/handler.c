@@ -737,8 +737,19 @@ static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp)
 
 static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, char **argv, char **envp)
 {
-    long r = resolve(S, a, pi, di, !(flags & AT_SYMLINK_NOFOLLOW), (flags & AT_EMPTY_PATH) != 0);
+    long r;
+    /* execveat: a flag the kernel does not know is EINVAL before the name is read (oracle 17.7) */
+    if (flags & ~(long)(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_EXECVE_CHECK)) return -EINVAL;
+    r = resolve(S, a, pi, di, !(flags & AT_SYMLINK_NOFOLLOW), (flags & AT_EMPTY_PATH) != 0);
     if (r < 0) return r;
+    /* AT_EXECVE_CHECK (6.14) asks whether the file could be run and runs nothing: the kernel's own answer for the file
+     * the walk found, re-issued with the flags as given, a wrapper answering as the launcher it is; a kernel before
+     * 6.14 answers EINVAL for the flag (7.4.5) */
+    if (flags & AT_EXECVE_CHECK) {
+        if (r == 1) return RE5(NR_execveat, a[di], empty_as_given(a[pi]), (long)argv, (long)envp, flags);
+        to_real(S->v, S->real, S->tmp);
+        return RE5(NR_execveat, RE_DFD(S), RE_PATH(S), (long)argv, (long)envp, flags | re_flag(S, AT_SYMLINK_NOFOLLOW));
+    }
     int dfd = di < 0 ? AT_FDCWD : (int)a[di], byfd = r == 1, cloexec = 0;
     /* the name the program is exec'd by, spelt as the kernel spells it (fs/exec.c, alloc_bprm): the path as given, or
      * through a descriptor /dev/fd/N and /dev/fd/N/rel; a script's $0, AT_EXECFN and comm come from it (7.6) */
