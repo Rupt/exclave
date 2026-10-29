@@ -177,8 +177,8 @@ The loop that has served well, in the order it pays:
   of the code checks, the unit tests, the stack budget,
   the suite on every exclave in two orders and, for the first exclave,
   under the plain terminal's AppArmor label, the oracles and the syscall
-  probe, the ones the changed paths can affect (`--full`: all of them,
-  about 80 s), four steps at a time (`--jobs N`; this laptop is in use
+  probe, the ones the changed paths can affect (`--full`: all of them),
+  two steps at a time (`--jobs N`; this laptop is in use
   meanwhile) on copies with its time printed, and a 30 s budget per test. Every driver runs `build/launcher`
   on a copy of its own, the suite an exclave it wraps from the given
   exclave's tree and the others `tree.fresh_exclave`, a copy relinked

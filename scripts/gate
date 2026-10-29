@@ -17,7 +17,7 @@
 # signature checks (test/fetch_test.py); a release of the first exclave made and taken as a consumer takes it
 # (test/release_test.py); and when EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled,
 # the Docker profile run on its src/docker-seccomp.json. No step
-# touches the network. The steps run four at a time, or N with --jobs, so
+# touches the network. The steps run two at a time, or N with --jobs, so
 # that the machine stays usable meanwhile; every driver runs
 # build/launcher on a copy of its own (the suite wraps one from the exclave's tree, the others take
 # test/tree.py's fresh_exclave), so the exclaves given are never run as they are nor written. One
@@ -28,7 +28,7 @@ set -u
 here=$ROOT/test
 repo=$ROOT
 out=$repo/build/gate
-full=false jobs=4 since='' seed=1
+full=false jobs=2 since='' seed=1
 while :; do
     case ${1-} in
     --full) full=true ;;

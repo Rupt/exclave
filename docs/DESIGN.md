@@ -3825,7 +3825,7 @@ the matrix is due, as do the command and the matrix's own code, since
 the VMs run them; documents, scripts and settings run the code checks
 alone; and a path nothing names runs everything. `--full` runs every
 step whatever changed.
-The steps run four at a time, or `--jobs N`, so that the machine stays
+The steps run two at a time, or `--jobs N`, so that the machine stays
 usable, each with its own log under `build/gate/`, one line each with
 its time, ok, SKIP or FAIL:
 
