@@ -746,6 +746,25 @@ def threads(ctx: Ctx) -> None:
 
 
 @test
+def tool_version(ctx: Ctx) -> None:
+    """The build `version` names is the launcher's and the hashes file's too (7, 10)."""
+    rc, out, err = run([*tree.TOOL, "version"], cwd=ctx.work, env=ctx.env)
+    name = out.strip()
+    expect(
+        rc == 0 and name.startswith("exclave ") and name.count(" ") == 1,
+        f"version: rc={rc} {out!r} {err!r}",
+    )
+    expect(name.encode() in read_bytes(ctx.launcher), f"the launcher does not carry {name!r}")
+    ex = os.path.join(ctx.work, f"version-{os.getpid()}.exclave")
+    os.makedirs(os.path.join(ex, "tree"))
+    rc, out, err = run([*tree.TOOL, "wrap", ex], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, f"wrap of an empty tree: rc={rc} {out!r} {err!r}")
+    hashes = read_bytes(os.path.join(ex, ".exclave", "hashes")).decode()
+    want = f'tool "{name.removeprefix("exclave ")}"\n'
+    expect(want in hashes, f"the hashes file lacks {want!r}: {hashes!r}")
+
+
+@test
 def relative_to_a_renamed_directory(ctx: Ctx) -> None:
     """A descriptor-relative host path resolves while the directory's parent is renamed (7.4.3)."""
     d = os.path.join(ctx.work, f"hostdir-race-{os.getpid()}")

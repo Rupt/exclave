@@ -34,9 +34,12 @@ cd "$ROOT" || exit 2
 mkdir -p build || exit 2
 stamp=build/.built
 native=$(uname -m)
+# the build's version (7, 10): the project's version and the commit, -dirty for uncommitted changes
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)+$(git describe --always --dirty --exclude='*' 2>/dev/null || echo unknown)
+[ "$(cat build/.version 2>/dev/null)" = "$version" ] || fresh=false
 cross=$(c_arches | grep -vx "$native")
 
-fresh=true
+fresh=${fresh:-true}
 for f in "$stamp" build/launcher build/launcher-old build/launcher-debug build/exclave build/exclave-asan; do
     [ -e "$f" ] || fresh=false
 done
@@ -59,7 +62,7 @@ launcher() {
     # plain RELA relocations, the only kind reloc_self reads; aarch64's linker
     # does not know the option and warns that it ignores it
     [ "$arch" = aarch64 ] || set -- "$@" -Wl,-z,nopack-relative-relocs
-    launcher_cc "$arch" "$@" -shared -Wl,-e,_start -Wl,--no-relax -Wl,-z,noexecstack -Wl,-z,norelro \
+    launcher_cc "$arch" "$@" "-DEXCLAVE_VERSION=\"$version\"" -shared -Wl,-e,_start -Wl,--no-relax -Wl,-z,noexecstack -Wl,-z,norelro \
         -Wl,-Bsymbolic -Wl,--build-id=none -o "$out.debug" src/*.c || return 1
     # a freestanding link binds nothing: no PLT and no undefined symbol (an
     # outline atomic helper of libgcc, say)
@@ -72,7 +75,7 @@ launcher() {
         return 1
     fi
     "${tools}objcopy" --strip-all --keep-section=.debug_gdb_scripts --keep-section=.exclave.license \
-        "$out.debug" "$out" || return 1
+        --keep-section=.exclave.version "$out.debug" "$out" || return 1
     notes=$("${tools}readelf" -n "$out")
     if ! printf '%s\n' "$notes" | grep -Eq '^ +exclave +0x' || ! printf '%s\n' "$notes" | grep -Eq '^ +cont +0x'; then
         echo "build: $out lost a note: the launcher carries exclave and cont (7.4.5)" >&2
@@ -84,6 +87,10 @@ launcher() {
     }
     "${tools}readelf" -p .exclave.license "$out" | grep -q 'MIT License' || {
         echo "build: $out lost the licence" >&2
+        return 1
+    }
+    "${tools}readelf" -p .exclave.version "$out" | grep -qF "exclave $version" || {
+        echo "build: $out lost its version" >&2
         return 1
     }
     "${tools}readelf" --dyn-syms "$out" | grep -q exclave_debug_hook || {
@@ -104,7 +111,7 @@ tool() { # tool ARCH OUT ARGS...: the exclave command for ARCH
     [ "$arch" = "$native" ] || compiler=$arch-linux-gnu-gcc
     launcher=build/launcher
     [ "$arch" = "$native" ] || launcher=build/launcher-$arch
-    tool_cc "$compiler" "-DLAUNCHER=\"$launcher\"" "$@" -o "$out" tool/*.c tool/blobs.S || return 1
+    tool_cc "$compiler" "-DLAUNCHER=\"$launcher\"" "-DEXCLAVE_VERSION=\"$version\"" "$@" -o "$out" tool/*.c tool/blobs.S || return 1
     echo "built $out ($(stat -c %s "$out") bytes, $arch)"
 }
 
@@ -130,5 +137,5 @@ for arch in $cross; do
 done
 status=0
 for pid in $pids; do wait "$pid" || status=1; done
-[ $status = 0 ] && touch "$stamp"
+[ $status = 0 ] && touch "$stamp" && printf '%s\n' "$version" >build/.version
 exit $status

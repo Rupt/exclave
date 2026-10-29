@@ -92,6 +92,11 @@ char *rel_join(const char *rel, const char *name);
 
 /* an exclave's other files (6.1, 6.4) */
 #define TOOL_VERSION "0.1.0"
+/* the build's version: TOOL_VERSION and the commit, which scripts/build defines; what `version` prints and the
+ * hashes file's tool record says (6.4) */
+#ifndef EXCLAVE_VERSION
+#define EXCLAVE_VERSION TOOL_VERSION
+#endif
 void write_readme(const char *ex);
 void write_hashes(const char *ex, const char *manifest_hash, int tree, int keep);
 int has_tree_record(const char *ex);
@@ -199,4 +204,5 @@ int cmd_prune(int argc, char **argv);
 char *read_file(const char *path, size_t *n);
 
 int cmd_hash(int argc, char **argv);
+int cmd_version(int argc, char **argv);
 int cmd_format(int argc, char **argv);

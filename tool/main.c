@@ -17,6 +17,16 @@
 #include <string.h>
 #include "tool.h"
 
+/* the build this command is from (10): the project's version and the commit, as the launcher's .exclave.version
+ * section and the hashes file's tool record say it */
+int cmd_version(int argc, char **argv)
+{
+    (void)argv;
+    if (argc != 0) usage("version");
+    printf("exclave %s\n", EXCLAVE_VERSION);
+    return 0;
+}
+
 int cmd_hash(int argc, char **argv)
 {
     if (argc != 1) usage("hash EXCLAVE");
@@ -82,8 +92,8 @@ int main(int argc, char **argv)
         const char *name;
         int (*run)(int, char **);
     } commands[] = {
-        {"check", cmd_check},   {"format", cmd_format}, {"hash", cmd_hash}, {"prune", cmd_prune},
-        {"relink", cmd_relink}, {"unwrap", cmd_unwrap}, {"wrap", cmd_wrap},
+        {"check", cmd_check},   {"format", cmd_format}, {"hash", cmd_hash},       {"prune", cmd_prune},
+        {"relink", cmd_relink}, {"unwrap", cmd_unwrap}, {"version", cmd_version}, {"wrap", cmd_wrap},
     };
     if (argc < 2) usage("COMMAND ARGS...");
     for (size_t i = 0; i < sizeof commands / sizeof *commands; i++)

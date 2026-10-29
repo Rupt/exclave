@@ -119,7 +119,7 @@ void write_hashes(const char *ex, const char *manifest_hash, int tree, int keep)
     f.v = xrealloc(NULL, 2);
     strcpy(f.v, "1"); /* NOLINT(clang-analyzer-security.insecureAPI.strcpy) -- two bytes, sized above */
     add_record(&rs, "hashes", &f, 1);
-    f = string_field(TOOL_VERSION);
+    f = string_field(EXCLAVE_VERSION);
     add_record(&rs, "tool", &f, 1);
     if (manifest_hash || tree) {
         size_t n;

@@ -141,7 +141,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 77 named tests, most of them programs that
+- **The regression suite**: 78 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -610,7 +610,7 @@ error, is fatal with a message, never a silent answer of "the host's".
 ```
 hashes 1
 
-tool "0.1.0"
+tool "0.1.0+1a2b3c4"
 
 launcher "b2:<blake2b-256 of .exclave/launcher>"
 
@@ -625,7 +625,11 @@ tree "b2:<blake2b-256 of the serialised listing>"
 The hashes file uses the grammar of 6.2; its keys, in canonical order,
 are `hashes`, `tool`, `launcher`, `pkg`, `manifest` and `tree`, each
 once but for `pkg`, whose four strings are a package's name, version,
-architecture and hash. It is a record of an exclave's inputs and its
+architecture and hash. `tool` names the build of the command that
+wrote the file: the project's version and the commit it was built
+from, `-dirty` when the checkout had uncommitted changes, as `exclave
+version` prints it and the launcher's `.exclave.version` section
+carries it (7). It is a record of an exclave's inputs and its
 output, not a way to obtain either.
 
 | Command | What it does to the hashes file |
@@ -703,6 +707,10 @@ the program a wrapper stands for, its *original*, sits beside it in
   launchers from before the project's rename look for.
 - **The MIT licence text**, in a `.exclave.license` section that is not
   loaded, since the licence's text goes with every copy.
+- **Its version**, in `.exclave.version`: `exclave` and the build's
+  name, the project's version and the commit it was built from, as
+  `exclave version` prints it and the hashes file's `tool` record says
+  it (6.4); `readelf -p .exclave.version` shows it.
 - **gdb's script**, in `.debug_gdb_scripts`, and six exported names for
   it to read (7.6).
 
@@ -1828,6 +1836,7 @@ exclave prune EXCLAVE LOG...        drop what no logged workload touched
 exclave format [--check] FILE...    canonical form of a manifest or hashes file; --check only reports
 exclave hash EXCLAVE                the tree hash of 6.4
 exclave relink EXCLAVE [LAUNCHER]   replace the launcher and relink every wrapper
+exclave version                     the build this command is from: the project's version and the commit
 ```
 
 `wrap` and `relink` also write the exclave's `README` (6.1) where it
@@ -2262,7 +2271,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 77 named regressions and every oracle its kernel can run; 17
+suite's 78 named regressions and every oracle its kernel can run; 17
 describes the procedure. Measured October 2026:
 
 | Distribution | Kernel | Suite | Oracles | Notes |
@@ -3591,7 +3600,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus the read-only matrix program (`test/progs/ro_matrix.c`) under `bwrap` against its own expectations |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it); the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/progs/`: 77 named tests |
+| 4 | `test/run.py` with `test/progs/`: 78 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

@@ -35,6 +35,14 @@ __asm__(".pushsection .exclave.license,\"\",@progbits\n"
         " .incbin \"LICENSE\"\n"
         " .byte 0\n"
         ".popsection\n");
+/* the build the launcher is from (7): the project's version and the commit, as `exclave version` prints it;
+ * scripts/build defines it, and readelf -p .exclave.version shows it */
+#ifndef EXCLAVE_VERSION
+#define EXCLAVE_VERSION "unversioned" /* a compile outside scripts/build, as scripts/check makes */
+#endif
+__asm__(".pushsection .exclave.version,\"\",@progbits\n"
+        " .asciz \"exclave " EXCLAVE_VERSION "\"\n"
+        ".popsection\n");
 
 /* before the page and the version check: a message and an exit, raw, as nothing else is allowed yet */
 static void raw_fatal(const char *msg, long len)

@@ -18,9 +18,10 @@ command** builds exclaves from files: package files it is handed, or
 any filesystem tree.
 
 > **Experimental.** exclave works and is tested widely (below), but it
-> has no release or version number yet. The format is versioned
-> (`exclave 1`, `hashes 1`), and nothing else promises compatibility
-> between commits.
+> has no release yet. The format is versioned (`exclave 1`, `hashes
+> 1`), a build is named by the project's version and its commit
+> (`exclave version`; the launcher and the hashes file carry the same
+> name), and nothing else promises compatibility between commits.
 
 ## What works
 
@@ -40,7 +41,7 @@ any filesystem tree.
   untested). One source builds both launchers.
 - **gdb** debugs a program in an exclave: the launcher carries the
   script gdb needs.
-- **Tested against the kernel.** A suite of 77 named tests, oracles that
+- **Tested against the kernel.** A suite of 78 named tests, oracles that
   compare the launcher's answers with the kernel's under a read-only
   bind mount, and a differential probe of 21 732 syscall cases pass on
   gcc, clang, Alpine and Fedora exclaves. An exclave also runs under
@@ -255,6 +256,7 @@ scripts/exclave prune gcc.exclave /tmp/exclave.log        # keep what the logged
 scripts/exclave unwrap gcc.exclave                        # the originals back over their wrappers, to edit; wrap again after
 scripts/exclave relink gcc.exclave build/launcher         # swap the launcher after rebuilding it; the wrappers are relinked
 scripts/exclave hash gcc.exclave                          # the tree hash the hashes file records
+scripts/exclave version                                   # the build this command is from, which the launcher and the hashes file name too
 scripts/exclave format gcc.exclave/.exclave/manifest      # the canonical spelling of a manifest or hashes file; --check only reports
 ```
 
