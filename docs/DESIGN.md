@@ -2946,7 +2946,14 @@ first automatic packager, did the same, and its paper is the reference
 for the completeness problems of trace capture that `exclave prune`
 inherits (10.4). All pay a ptrace round trip per intercepted syscall;
 PRoot's seccomp acceleration "may exhibit problems in Linux kernels
-above 4.0", in udocker's words, and udocker leaves it off.
+above 4.0", in udocker's words, and udocker leaves it off. PRoot is
+maintained (5.5.0, October 2026, adds `fchmodat2`), and **proot-next**
+reimplements it in Rust with seccomp user notification in place of
+most ptrace stops: a pool of supervisor threads performs the real
+syscall, and `execve`, `chdir`, `chroot` and unix-socket `bind` and
+`connect` still take a ptrace stop. It confines "paths, not
+privileges", as exclave does, and stays a supervisor outside the
+process (14.1).
 
 **fakechroot, and the fakechroot engine of `guix pack -RR`.** An
 `LD_PRELOAD` library interposes libc's path functions and, for
@@ -2975,6 +2982,24 @@ process services it. It replaced ptrace because "this alone proved to
 be faster than using PTRACE_SYSEMU". exclave has the same trap shape,
 but services the syscall in the process and traps only path-taking
 syscalls.
+
+**burrow and chroot-ng** have exclave's shape exactly, on aarch64
+alone: a seccomp filter traps the path syscalls with `SIGSYS`, a
+handler in the process emulates them, and a freestanding binary with
+its own ELF loader maps the program and its interpreter, "without
+root, user namespaces or ptrace". Both were written for Android
+without user namespaces, to run a distribution's rootfs there, and
+both say they are not a security boundary. burrow measures one trap at
+about 1.1 µs on a tablet, 0.4 µs of it the kernel's signal delivery,
+against 40 to 64 µs for a ptrace stop and 9.5 µs for a user
+notification served on the same core, which is the ranking 14.1 gives.
+Where they differ from exclave: they emulate a root user and parts of
+`/proc`, chroot-ng emulates `ptrace` for a guest's `strace` and `gdb`
+and runs programs from `noexec` media through its loader, and neither
+has the hard-link wrapper for identity (7.6), the read-only rule in the
+kernel's order (8.2), one source for two architectures, or a kernel
+oracle for its answers (17). The in-process trap is not exclave's
+alone; the combination around it is.
 
 **Binary rewriting: zpoline, SaBRe, syscall_intercept, lazypoline,
 rr.** zpoline's trampoline at address 0 needs a lowered
@@ -3064,18 +3089,25 @@ pointer. Run directly, it `execve`s the real loader.
 **BPF `binfmt_misc`.** A proposal to let `PT_INTERP` be relative to the
 executable was called "ripe for malicious loader injection attacks" by
 Christian Brauner, who proposed instead a BPF `struct_ops` for
-`binfmt_misc` (LWN, 2026) that can override `PT_INTERP` with a
-BPF-selected interpreter, registered by root. That accepts that
-hermetic binaries need a substituted loader, through a privileged
-mechanism; the launcher's wrappers and loader are the unprivileged
-analogue, and the objection applies to exclave as to `LD_PRELOAD`: an
-exclave is not a security boundary (3).
+`binfmt_misc` (LWN, 2026), now in the kernel's documentation: a
+handler with a `match` and a `load` program, registered in a user
+namespace and usable only there, whose `L` flag loads a binary that
+asks for a loader as a native executable and whose `T` flag hands the
+binary to an interpreter through `AT_EXECFD`. Its documentation says
+the `L` flag "is therefore not an enforcement mechanism". That accepts
+that hermetic binaries need a substituted loader, through a mechanism
+that needs a user namespace of one's own, which is the constraint of
+4.3 again; the launcher's wrappers and loader are the analogue that
+needs none, and the objection applies to exclave as to `LD_PRELOAD`:
+an exclave is not a security boundary (3).
 
 Each piece of the launcher, a no-libc loader that maps the real
 `ld.so`, interpreter substitution at scale, hard-linked launchers for
 identity, exists separately in nix-ld, uninative, sharun and the
-tmp.0ut technique. This survey found no system that also installs a
-syscall translator before the real loader runs.
+tmp.0ut technique, and burrow and chroot-ng (15.1) also install a
+syscall translator before the real loader runs, on aarch64. exclave
+claims no novelty: it is the combination its author wanted and could
+not find, with the tests of 17.
 
 ### 15.4 Shadow wrappers
 
@@ -3109,16 +3141,20 @@ The four bindings are those of 4.1.
 | fakechroot, Guix engine | `ld.so` run directly | interposed | libc calls only | wrapper | none | no | yes |
 | udocker F modes | patched to an absolute path | yes | fakechroot | wrapper | none | no | "cannot be moved across hosts" |
 | PRoot, CARE, CDE | rewritten `execve` | yes | yes | wrapper | none | ptrace | yes |
+| proot-next | rewritten `execve` | yes | yes | wrapper | none | notification threads, ptrace for exec | yes |
+| burrow, chroot-ng (aarch64) | own loader, exec of itself | translated | translated | wrapper | none | no | yes |
 | gVisor systrap | sentry | sentry | sentry | sentry | none, but a runtime | yes | image |
 | bwrap, Guix userns, conty, junest | bind mounts | yes | yes | yes | user namespaces | no | yes |
 | Docker, Podman | image | yes | yes | yes | daemon or user namespaces | yes | image |
-| BPF `binfmt_misc` | kernel substitution | through the loader | no | no | root to register | no | yes |
+| BPF `binfmt_misc` | kernel substitution | through the loader | no | no | a user namespace to register in | no | yes |
 | **exclave** | launcher at every executable's path, originals in `.real/` | translated | translated | passed through minus loader and libc variables; `PATH`, `LANG`, `TZ`, `SHELL` fixed | none | no | yes, `cp -a` |
 
-exclave is the only row that is unprivileged, has no supervisor, covers
-all four bindings and moves with a copy. Its nearest relatives are
-gVisor systrap for the trap, CARE for pruning, and the wrappers of
-15.4 for identity.
+exclave, burrow and chroot-ng are the rows that are unprivileged, have
+no supervisor, cover all four bindings and move with a copy; exclave is
+the one of them on x86-64, and the one whose answers are checked
+against the kernel's (17). Its nearest relatives are burrow and
+chroot-ng for the trap, gVisor systrap before them, CARE for pruning,
+and the wrappers of 15.4 for identity.
 
 ### 15.6 Kernel and library behaviour the design relies on
 
@@ -3212,7 +3248,8 @@ item 9).
 - [uninative: Add uninative, OpenEmbedded commit](https://git.openembedded.org/openembedded-core/commit/?id=e66c96ae9c7ba21ebd04a4807390f0031238a85a); [Linuxbrew bottles](https://github.com/Linuxbrew/brew/wiki/Bottles); [Plash](http://plash.beasts.org/environment.html)
 - [Cosmopolitan APE specification](https://github.com/jart/cosmopolitan/blob/master/ape/specification.md); [APE loader](https://justine.lol/apeloader/)
 - [Preloading the linker for fun and profit, tmp.0ut 2](https://tmpout.sh/2/6.html); [nix-ld](https://github.com/nix-community/nix-ld); [nix-ld: a clean solution for issues with pre-compiled executables on NixOS](https://blog.thalheim.io/2022/12/31/nix-ld-a-clean-solution-for-issues-with-pre-compiled-executables-on-nixos/)
-- [Bringing BPF to binfmt_misc, LWN 2026](https://lwn.net/Articles/1086947/)
+- [Bringing BPF to binfmt_misc, LWN 2026](https://lwn.net/Articles/1086947/); [binfmt-misc.rst](https://github.com/torvalds/linux/blob/master/Documentation/admin-guide/binfmt-misc.rst)
+- [burrow](https://github.com/RickyTr99/burrow); [chroot-ng](https://github.com/sylirre/fake-chroot-ng); [proot-next](https://github.com/selkies-project/proot-next); [PRoot releases](https://github.com/proot-me/proot/releases)
 - [fs/binfmt_elf.c](https://github.com/torvalds/linux/blob/master/fs/binfmt_elf.c); [kernel/signal.c](https://github.com/torvalds/linux/blob/master/kernel/signal.c); [glibc elf/rtld.c](https://github.com/bminor/glibc/blob/master/elf/rtld.c); [musl ldso/dlstart.c](https://git.musl-libc.org/cgit/musl/tree/ldso/dlstart.c); [binfmt_misc admin guide](https://www.kernel.org/doc/html/latest/admin-guide/binfmt-misc.html)
 - [Understanding AppArmor User Namespace Restriction, Ubuntu](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007); [Ubuntu 24.04 release notes](https://documentation.ubuntu.com/release-notes/24.04/); [Three bypasses of Ubuntu's unprivileged user namespace restrictions, oss-security 2025](https://seclists.org/oss-sec/2025/q1/253)
 - Docker's default seccomp profile: [`seccomp/default.json` in moby/profiles at 3c28324](https://github.com/moby/profiles/blob/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json)
