@@ -2230,6 +2230,22 @@ under ASan and UBSan, `build/exclave-asan`. Its BLAKE2b is written from
 RFC 7693 and tested against the RFC's vector and Python's `hashlib`
 (17).
 
+**A release.** `scripts/release KEY DIR EXCLAVE...` puts under `DIR`
+each exclave as `NAME.exclave.tar.xz`, an archive that keeps the hard
+links, sorted and without owners, made only after the exclave passes
+`check`; the command itself as `exclave`, and `exclave-aarch64` where
+the cross build exists; `SHA256SUMS` and `B2SUMS` over every file
+there; and `SHA256SUMS.sig`, the sums signed with the ssh key `KEY`
+(`ssh-keygen -Y`, namespace `exclave`). A consumer needs nothing of the
+checkout: the signature is verified against the releaser's public key,
+obtained through a channel the consumer trusts; the sums are checked;
+the archive is unpacked; and the release's own `exclave check` compares
+the tree with the hashes file and runs the static check, so what runs
+is what was released. The README gives the commands, and the gate's
+release step (`test/release_test.py`) runs them on a release of its
+first exclave, with a tampered archive and a tampered sums file
+refused (17).
+
 The step before it, `unpack` (10.1), is a Python package run by the
 pinned Python, like the fetchers and the tests; nothing of it is in the
 command.
@@ -3957,9 +3973,11 @@ questions.
    gap closes when a real exclave needs it, as a rule in the synthesis
    table rather than an option. Failed opens in an `EXCLAVE_LOG` show
    where an exclave lacks one.
-2. **Releases.** There is no release, version number or continuous
-   integration yet. Until there is, the commit gate (17) and the kernel
-   matrix (12.1) run on the reference machine, and nothing promises
+2. **Releases.** There is no public release or continuous integration
+   yet. A release has its shape, `scripts/release` (10.5), and every
+   build is named by the project's version and its commit (7, 10);
+   until a release is made, the commit gate (17) and the kernel matrix
+   (12.1) run on the reference machine, and nothing promises
    compatibility between commits (2).
 3. **aarch64 kernels with 16 KB or 64 KB pages.** The loader rounds to
    the kernel's page size and the launcher's own segments are 64 KB

@@ -332,6 +332,31 @@ new log names what pruning removed, so the cycle is prune, run the
 whole workload, add back from an unpruned copy. The suite runs on
 exclaves pruned this way.
 
+## Shipping an exclave, and taking one
+
+An exclave is a directory, and `tar` makes it one file; `scripts/release`
+makes a release of one or more, signed, with the `exclave` command
+beside them so that whoever takes it needs nothing of this checkout:
+
+```bash
+scripts/release ~/.ssh/id_ed25519 release gcc.exclave    # release/: gcc.exclave.tar.xz, exclave, SHA256SUMS, B2SUMS, SHA256SUMS.sig
+```
+
+Taking one: with the release's files in a directory, and the releaser's
+public key from a channel you trust (not the release itself):
+
+```bash
+echo "exclave-release $(cat releaser.pub)" > allowed_signers
+ssh-keygen -Y verify -f allowed_signers -I exclave-release -n exclave -s SHA256SUMS.sig < SHA256SUMS
+sha256sum -c SHA256SUMS                                   # or b2sum -c B2SUMS
+tar -xJf gcc.exclave.tar.xz
+chmod +x exclave && ./exclave check gcc.exclave           # the tree against the hashes file, the wrappers, the static check
+./exclave version                                         # which build made it; the launcher inside says the same
+```
+
+The gate runs exactly this on a release of its first exclave
+(`test/release_test.py`).
+
 ## Development
 
 Every command is a POSIX shell script in `scripts/`, run from anywhere.
@@ -374,6 +399,7 @@ scripts/install-uv   the pinned uv into .uv/, checked against a committed checks
 scripts/exclave      the exclave command; scripts/unpack, fetch-debs, fetch-apks and fetch-rpms the steps before it
 scripts/example      the first run: from the build to a program built inside an exclave that runs on any glibc since 2.17, every command shown
 scripts/check        the code checks; scripts/gate the commit gate; scripts/inputs the development inputs; scripts/examples the example runs
+scripts/release      a signed release of exclaves with the command beside them; test/release_test.py takes one as a consumer would
 scripts/test         the suite; scripts/matrix, exercise and sysroot the other test drivers
 pyproject.toml       the Python project, unpack: no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python
 scripts/build        the launchers, build/launcher, build/launcher-old for the nesting regression and build/launcher-debug with UBSan's checks; the command, build/exclave, and build/exclave-asan for the gate; the aarch64 ones with a cross compiler; nothing when they are up to date

@@ -1,0 +1,53 @@
+#!/bin/sh
+# scripts/release KEY DIR EXCLAVE... — a release of the exclaves named (docs/DESIGN.md 10.5): under DIR, each as
+# NAME.exclave.tar.xz, the command itself as `exclave` (and `exclave-aarch64` when the cross build is there), SHA256SUMS
+# and B2SUMS over every file there, and SHA256SUMS.sig, the sums signed with the ssh private key KEY (ssh-keygen -Y, in
+# the namespace "exclave"). Each exclave passes `exclave check` first. The README says how a consumer verifies, unpacks
+# and checks one with nothing but the release's own files; test/release_test.py runs that recipe.
+set -eu
+. "$(dirname -- "$0")/lib.sh"
+[ $# -ge 3 ] || {
+    echo "usage: scripts/release KEY DIR EXCLAVE..." >&2
+    exit 2
+}
+key=$1 dir=$2
+shift 2
+[ -r "$key" ] || {
+    echo "release: cannot read the key $key" >&2
+    exit 2
+}
+"$ROOT/scripts/build"
+mkdir -p "$dir"
+for ex; do
+    ex=${ex%/}
+    name=$(basename -- "$ex")
+    case $name in
+    *.exclave) ;;
+    *)
+        echo "release: $ex is not named NAME.exclave" >&2
+        exit 2
+        ;;
+    esac
+    [ -d "$ex/.exclave" ] || {
+        echo "release: $ex is not wrapped" >&2
+        exit 2
+    }
+    "$ROOT/build/exclave" check "$ex" >/dev/null || {
+        echo "release: $ex does not pass exclave check" >&2
+        exit 1
+    }
+    # hard links kept, so the wrappers stay links to the launcher; names sorted and no owner, so the archive
+    # does not depend on the machine that made it
+    tar -C "$(dirname -- "$ex")" --sort=name --owner=0 --group=0 --numeric-owner -cf - "$name" |
+        xz -T0 >"$dir/$name.tar.xz"
+    echo "release: $name ($(stat -c %s "$dir/$name.tar.xz") bytes)"
+done
+cp "$ROOT/build/exclave" "$dir/exclave"
+[ -e "$ROOT/build/exclave-aarch64" ] && cp "$ROOT/build/exclave-aarch64" "$dir/exclave-aarch64"
+cd "$dir"
+rm -f SHA256SUMS B2SUMS SHA256SUMS.sig
+set -- *
+sha256sum "$@" >SHA256SUMS
+b2sum "$@" >B2SUMS
+ssh-keygen -q -Y sign -f "$key" -n exclave SHA256SUMS
+echo "release: $dir holds $(($# + 3)) files, the sums signed; $(./exclave version)"

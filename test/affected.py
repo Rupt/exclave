@@ -44,6 +44,7 @@ STEPS: dict[str, tuple[str, ...]] = {
     ),
     "unpack": ("test/unpack_test.py",),
     "fetch": ("test/fetch_test.py",),
+    "release": ("test/release_test.py", "scripts/release", "tool/*"),
     "suite": ("test/run.py",),
     "random": ("test/run.py",),
     "oracles": (
