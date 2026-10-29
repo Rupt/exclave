@@ -452,7 +452,8 @@ test/oracle_syscalls.py  the differential syscall probe: every trapped path and 
 test/exercise.py     one program run under bwrap and under the launcher, the answers side by side: how a limitation is measured before it is fixed
 test/docker_profile.py   an exclave under Docker's default seccomp profile, which scripts/inputs fetches
 test/matrix.py       the kernel matrix in VMs, carrying the pinned Python for each; test/vm_run.py one VM
-test/sysroot.py      a glibc sysroot as a data directory and an output built against it, for the matrix to run natively
+test/sysroot.py      a glibc sysroot as a data directory and an output built against it with gcc and clang, for the matrix to run natively
+test/bytecode.py     Python's bytecode made by the two-phase pattern, a cache only the tree's own binary can make, timed before and after
 test/realsoft.py     real projects built inside and outside an exclave; test/bench.py the performance table
 test/syscalls.py     every kernel syscall classified; test/stackcheck.py the stack budget
 test/affected.py     the gate's steps a change reaches, derived from what each step runs; test/figures.py the figures the documents quote, checked against the tree

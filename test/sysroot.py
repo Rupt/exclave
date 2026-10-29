@@ -10,9 +10,10 @@ Makes a copy of the gcc exclave, unwraps it, unpacks the rpm files (a glibc, its
 headers, libgcc) into a tree of their own with unpack, copies that tree into the copy at the
 prefix, records the prefix as `data` in the manifest and wraps the copy: nothing under the prefix is
 wrapped, checked or executed. Then compiles a hello with `--sysroot=PREFIX -B PREFIX/usr/lib64/`
-inside, checks that it binds no glibc symbol version newer than the sysroot's, runs it inside and on
-the host, and writes it to FILE; the kernel matrix packs that file and runs it natively in every VM,
-CentOS 7 at glibc 2.17 included.
+inside, with every compiler the exclave has, gcc or clang, checks that it binds no glibc symbol
+version newer than the sysroot's, runs it inside and on the host, and writes the first to FILE;
+the kernel matrix packs that file and runs it natively in every VM, CentOS 7 at glibc 2.17
+included.
 """
 
 import argparse
@@ -49,7 +50,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--exclave", required=True, help="a wrapped gcc exclave")
+    ap.add_argument("--exclave", required=True, help="a wrapped gcc or clang exclave")
     ap.add_argument(
         "--rpms",
         required=True,
@@ -82,53 +83,60 @@ def main() -> int:
     if rc:
         sys.exit("wrap: " + out + err)
     print([line for line in out.splitlines() if line.startswith("static check")][-1])
-    gcc = next(
+    # every compiler the exclave has: gcc's and clang's drivers take the same sysroot flags, and
+    # clang finds crtbegin.o in the exclave's own libgcc development files
+    compilers = [
         n
-        for n in ("x86_64-linux-gnu-gcc-13", "gcc")
+        for n in ("x86_64-linux-gnu-gcc-13", "gcc", "clang-18", "clang")
         if os.path.exists(os.path.join(ex, "tree", "usr", "bin", n))
-    )
+    ]
+    if not compilers:
+        sys.exit("no gcc or clang in the exclave")
     src = os.path.join(work, "hello.c")
     with open(src, "w") as f:
         f.write(HELLO)
-    prog = os.path.join(work, "hello")
     env = {"PATH": "/usr/bin:/bin"}
-    rc, out, err = run(
-        [
-            os.path.join(ex, "tree", "usr", "bin", gcc),
-            "--sysroot=" + args.prefix,
-            "-B" + args.prefix + "/usr/lib64/",
-            "-o",
-            prog,
-            src,
-        ],
-        cwd=work,
-        env=env,
-    )
-    if rc:
-        sys.exit("compile against the sysroot: " + err)
-    rc, out, err = run(
-        [os.path.join(ex, "tree", "usr", "bin", "objdump"), "-T", prog], cwd=work, env=env
-    )
-    versions = sorted(
-        set(re.findall(r"GLIBC_([0-9.]+)", out)), key=lambda v: [int(x) for x in v.split(".")]
-    )
     # the banner in libc.so.6, any glibc
     gv = tree.glibc_version(os.path.join(sysroot_ex, "tree"), platform.machine())
     if gv is None:
         sys.exit("cannot read the sysroot's glibc version from its libc.so.6")
     have = f"{gv[0]:d}.{gv[1]:d}"
-    print("symbol versions bound: {}; the sysroot's glibc: {}".format(" ".join(versions), have))
-    if not versions or [int(x) for x in versions[-1].split(".")] > [
-        int(x) for x in have.split(".")
-    ]:
-        sys.exit("the output binds a glibc newer than the sysroot's, or none")
-    rc, inside, err = run(
-        [os.path.join(ex, "tree", "usr", "bin", "sh"), "-c", prog], cwd=work, env=env
-    )
-    rc2, native, err2 = run([prog], cwd=work, env=env)
-    print(f"inside the exclave: {inside.strip()!r}; on this host: {native.strip()!r}")
-    if rc or rc2 or inside != native:
-        sys.exit("the output does not run the same inside and outside: " + err + err2)
+    prog = ""
+    for cc in compilers:
+        prog = os.path.join(work, "hello-" + cc)
+        rc, out, err = run(
+            [
+                os.path.join(ex, "tree", "usr", "bin", cc),
+                "--sysroot=" + args.prefix,
+                "-B" + args.prefix + "/usr/lib64/",
+                "-o",
+                prog,
+                src,
+            ],
+            cwd=work,
+            env=env,
+        )
+        if rc:
+            sys.exit(f"compile with {cc} against the sysroot: " + err)
+        rc, out, err = run(
+            [os.path.join(ex, "tree", "usr", "bin", "objdump"), "-T", prog], cwd=work, env=env
+        )
+        versions = sorted(
+            set(re.findall(r"GLIBC_([0-9.]+)", out)), key=lambda v: [int(x) for x in v.split(".")]
+        )
+        print(f"{cc}: symbol versions bound: {' '.join(versions)}; the sysroot's glibc: {have}")
+        if not versions or [int(x) for x in versions[-1].split(".")] > [
+            int(x) for x in have.split(".")
+        ]:
+            sys.exit(f"{cc}'s output binds a glibc newer than the sysroot's, or none")
+        rc, inside, err = run(
+            [os.path.join(ex, "tree", "usr", "bin", "sh"), "-c", prog], cwd=work, env=env
+        )
+        rc2, native, err2 = run([prog], cwd=work, env=env)
+        print(f"{cc}: inside the exclave: {inside.strip()!r}; on this host: {native.strip()!r}")
+        if rc or rc2 or inside != native:
+            sys.exit(f"{cc}'s output does not run the same inside and outside: " + err + err2)
+    prog = os.path.join(work, "hello-" + compilers[0])
     shutil.copy2(prog, args.out)
     print("wrote " + args.out)
     return 0
