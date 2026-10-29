@@ -1399,10 +1399,14 @@ internal signals, which traps for the mask scrub. That is the cost of
 refusing `clone3`: a handful of traps per `posix_spawn`, two
 `rt_sigaction`s and one `rt_sigprocmask` for a parent with no handlers.
 What a spawn costs in all is the child launcher's start and the kernel's
-work behind it (16.4). Honouring `clone3` by copying the signal frame
-onto the new stack would leave the FPU save-area pointer at the
-parent's stack and start every new thread with a corrupt `MXCSR`
-(14.3).
+work behind it (16.4). Honouring `clone3` would mean copying the
+handler's signal frame onto the child's stack, and with it the FPU save
+area, whose pointer in the frame names the parent's stack: a copy that
+leaves the pointer there starts every new thread with a corrupt
+`MXCSR`. The copy can be made, since the frame records the save area's
+size, but it ties the handler to the kernel's frame layout on both
+architectures, which grows with each new register set, to save a
+handful of traps per spawn (14.3).
 
 #### 7.5.6 `EFAULT`
 
@@ -2911,7 +2915,7 @@ every file at its base, originals included.
 |---|---|
 | `chmod -R a-w` for read-only | The tree resists `rm -r`, loses its modes to version control and careless copies, and its owner can restore the bits. Refusal in the handler depends on nothing; its price is 8.2's error precedence. |
 | Resolving host symlinks in the host's domain | A host link into `/usr` would reach the host's `/usr`. Links resolve in the exclave's view; the identity files are handled at startup (8.4). |
-| Honouring `clone3` by copying the signal frame onto the child's stack | The copy leaves the FPU save-area pointer at the parent's stack, and every new thread starts with a corrupt `MXCSR`. `ENOSYS` costs a few traps per `posix_spawn` (7.5.5). |
+| Honouring `clone3` by copying the signal frame onto the child's stack | The FPU save area must be copied with the frame and the frame's pointer to it moved, or every new thread starts with a corrupt `MXCSR`. That can be done, but it ties the handler to the kernel's signal-frame layout on both architectures, a layout that grows with each new register set, where `ENOSYS` costs a few traps per `posix_spawn` (7.5.5). |
 | Reclaiming scratch by comparing stack pointers across threads | Meaningless across alternate stacks and coroutines; scratch is reclaimed by liveness sweeps (7.5.4). |
 | Synthesising host entries into `getdents64` | Invents results and traps every directory read. Empty placeholders in the tree give `ls /` the same answer for free (8.3). |
 | A canonicalisation cache shared across processes | Would save a few hundred `lstat`s per compile, but an inherited descriptor is visible to the program (descriptor counts, `close_range`, leak checks), and a file outside the exclave is state an edited tree makes wrong (14.5). |
@@ -4210,8 +4214,11 @@ specified.
   `SECCOMP_FILTER_FLAG_SPEC_ALLOW`**: the kernel's action cache allows
   most syscalls without running it, and an exclave is not a security
   boundary (7.4.2).
-- **`clone3` is refused with `ENOSYS`**: honouring it with a prepared
-  child frame corrupted the FPU state of new threads (7.5.5).
+- **`clone3` is refused with `ENOSYS`**: honouring it means copying the
+  signal frame and its FPU save area for the child, a dependence on the
+  kernel's frame layout on both architectures, to save a few traps per
+  spawn (7.5.5). A flag only `clone3` offers, which a library came to
+  need and so dropped its fallback to `clone`, would reopen it.
 - **A program's `rt_sigaction` install traps; its queries do not**
   (7.5.2).
 - **Handler memory comes from scratch chunks reclaimed by liveness,
