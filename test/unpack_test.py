@@ -18,17 +18,19 @@ import io
 import os
 import shutil
 import stat
-import subprocess
 import sys
 import tarfile
-import time
-from typing import Protocol
+from typing import TYPE_CHECKING, Any
 lazy from collections.abc import Sequence
 
 import tree
+from harness import TESTS, expect, read_text, run, run_tests, select, test
 from packages import MACHINE, MTIME, Member, compress, cpio, make_apk, make_deb, make_rpm, tar_bytes
 
 from unpack import steps
+
+if TYPE_CHECKING:
+    from harness import Test
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -43,39 +45,6 @@ class Ctx:
 
     work: str
     host: str
-
-
-class Test(Protocol):
-    """A test: given its directories, it raises AssertionError when a rule does not hold."""
-
-    __name__: str
-
-    def __call__(self, ctx: Ctx, /) -> None: ...
-
-
-TESTS: list[Test] = []
-
-
-def test(f: Test) -> Test:
-    """Register a test."""
-    TESTS.append(f)
-    return f
-
-
-def run(cmd: Sequence[str]) -> tuple[int, str, str]:
-    p = subprocess.run(cmd, check=False, capture_output=True, timeout=300)
-    return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
-
-
-def expect(cond: object, msg: str) -> None:
-    """Fail the test with msg unless cond holds."""
-    if not cond:
-        raise AssertionError(msg)
-
-
-def read_text(path: str) -> str:
-    with open(path) as f:
-        return f.read()
 
 
 def package(
@@ -902,24 +871,19 @@ def main() -> int:
     args = ap.parse_args()
     work = os.path.abspath(args.work)
     shutil.rmtree(work, ignore_errors=True)
-    failures = 0
-    chosen = [t for t in TESTS if args.select in t.__name__]
-    for t in chosen:
+    chosen = select(TESTS, args.select)
+
+    def call(t: Test[Any]) -> str | None:
         d = os.path.join(work, t.__name__)
         host = os.path.join(d, "host")
         os.makedirs(host)
         with open(os.path.join(host, "secret"), "w") as f:
             f.write("the host's own\n")
-        start = time.monotonic()
-        try:
-            t(Ctx(work=d, host=host))
-        except (AssertionError, OSError, steps.UnpackError) as e:
-            failures += 1
-            print(f"FAIL {t.__name__:<34} {time.monotonic() - start:5.1f}s {str(e)[:600]}")
-            continue
-        print(f"PASS {t.__name__:<34} {time.monotonic() - start:5.1f}s")
-    print(f"{len(chosen)} tests, {failures} failures")
-    return min(failures, 255)
+        return t(Ctx(work=d, host=host))
+
+    failed = run_tests(chosen, call)
+    print(f"{len(chosen)} tests, {len(failed)} failures")
+    return min(len(failed), 255)
 
 
 if __name__ == "__main__":

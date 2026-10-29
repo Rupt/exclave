@@ -42,7 +42,11 @@ def resolve_paths() -> int:
 
 def figures() -> dict[str, int | None]:
     return {
-        "named tests": len(re.findall(r"^@test", read("test/run.py"), re.MULTILINE)),
+        "named tests": sum(
+            len(re.findall(r"^@test", read(os.path.join("test", f)), re.MULTILINE))
+            for f in sorted(os.listdir(os.path.join(REPO, "test")))
+            if f.startswith("regress_") and f.endswith(".py")
+        ),
         "resolve paths": resolve_paths(),
         "matrix rows": len(re.findall(r"^    VmRow\(", read("test/matrix.py"), re.MULTILINE)),
         "command KB": kb("build/exclave"),

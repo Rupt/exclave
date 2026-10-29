@@ -3,7 +3,7 @@
     test/tables_test.py
 
 The host identity files (8.4) are listed in src/vis.c, tool/layout.c and test/tree.py; the
-volatile directories (8.1) in src/vis.c, unpack/steps.py and test/run.py; and the name the
+volatile directories (8.1) in src/vis.c, unpack/steps.py and test/suite.py; and the name the
 launcher logs for a trapped syscall (`sysname` in src/handler.c) must cover exactly the syscalls
 src/filter.c traps. Each is read from its source here, so a table changed in one place fails the
 gate's unit step. Prints one line per table; the exit status is the number that differ.
@@ -87,7 +87,7 @@ def main() -> int:
         {
             "src/vis.c": c_strings("src/vis.c", "volatile_dirs"),
             "unpack/steps.py": py_tuple("unpack/steps.py", "VOLATILE"),
-            "test/run.py": py_tuple("test/run.py", "VOLATILE"),
+            "test/suite.py": py_tuple("test/suite.py", "VOLATILE"),
         },
     )
     trapped: set[str] = {"ioctl"}  # singled out for chattr (7.4.3)

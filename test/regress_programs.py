@@ -1,0 +1,348 @@
+"""Programs that matter: a group of the regression suite (DESIGN.md 17 item 4).
+
+Run by test/run.py, on the fixtures test/suite.py makes.
+"""
+
+import os
+import re
+import shutil
+import subprocess
+
+from harness import expect, read_bytes, run, test
+from suite import Ctx, copy_exclave, hello_source, inside, wrapper
+
+
+# ------------------------------------------------------------------ tests
+@test
+def version(ctx: Ctx) -> None:
+    rc, out, err = run([wrapper(ctx, ctx.gcc), "--version"], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out.strip(), f"{ctx.gcc} --version: rc={rc} out={out!r} err={err!r}")
+
+
+@test
+def hello(ctx: Ctx) -> str | None:
+    src = hello_source(ctx)
+    exe = os.path.join(ctx.work, "hello")
+    rc, out, err = run([wrapper(ctx, ctx.gcc), "-O2", src, "-o", exe], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "compile: " + err)
+    rc, out, err = inside(ctx, exe, ["a", "b"])
+    expect(rc == 0 and out == f"hello {exe} 3\n", f"loader-mode run: {out!r} {err!r}")
+    try:
+        rc, out, err = run([exe, "a"], cwd=ctx.work)
+    except OSError:  # no glibc loader on this host at all (a musl host): exec itself fails
+        rc, err = 1, "GLIBC_"
+    # the host's libc cannot load the output: it runs inside the exclave only (9)
+    if rc != 0 and "GLIBC_" in err:
+        return "host cannot load the exclave's output; it runs inside the exclave only"
+    expect(rc == 0 and out == f"hello {exe} 2\n", f"host run: {out!r} {err!r}")
+    return None
+
+
+@test
+def identical_object(ctx: Ctx) -> str | None:
+    host = "/usr/bin/gcc-13"
+    if "gcc-13" not in ctx.gcc:
+        return f"the exclave's compiler is {ctx.gcc}: no host twin"
+    if not os.path.exists(host):
+        return "no host gcc-13"
+    src = hello_source(ctx)
+    a, b = os.path.join(ctx.work, "h_host.o"), os.path.join(ctx.work, "h_exclave.o")
+    run([host, "-O2", "-c", src, "-o", a], cwd=ctx.work)
+    rc, _out, err = run(
+        [wrapper(ctx, ctx.gcc), "-O2", "-c", src, "-o", b], cwd=ctx.work, env=ctx.env
+    )
+    expect(rc == 0, err)
+    expect(read_bytes(a) == read_bytes(b), "objects differ")
+    return None
+
+
+@test
+def interp_from_original(ctx: Ctx) -> str | None:
+    """7.3: the loader honours each program's own PT_INTERP, resolved in the exclave.
+
+    A program naming a loader the exclave lacks fails with a message naming it, before anything
+    runs.
+    """
+    src = read_bytes(ctx.payload("true"))
+    interp = ctx.interp.encode() + b"\0"
+    i = src.index(interp)
+    other = (ctx.other_interp.encode() + b"\0").ljust(len(interp), b"\0")
+    exe = os.path.join(ctx.work, "other-true")
+    with open(exe, "wb") as f:
+        f.write(src[:i] + other + src[i + len(interp) :])
+    os.chmod(exe, 0o755)
+    rc, out, err = inside(ctx, exe)
+    expect(
+        rc == 127 and os.path.basename(ctx.other_interp) in err and "does not have" in err,
+        f"a loader the exclave lacks: rc={rc} {err!r}",
+    )
+    os.makedirs(os.path.join(ctx.work, "same"), exist_ok=True)
+    # by its own name: busybox chooses the applet from argv[0]
+    same = os.path.join(ctx.work, "same", "true")
+    shutil.copy2(ctx.payload("true"), same)
+    rc, out, err = inside(ctx, same)
+    expect(
+        rc == 0, f"a program naming the exclave's loader by its own header runs: rc={rc} {err!r}"
+    )
+    # one world (7.4.5): a loader on a host path, the shape of a Nix or --dynamic-linker binary, is
+    # refused
+    if not ctx.libc:
+        return "musl's libc is its loader; the host-path loader case needs libc.so.6 beside one"
+    hostlib = os.path.join(ctx.work, "hostworld")
+    os.makedirs(hostlib, exist_ok=True)
+    for f, v in ((ctx.ldso_name, ctx.interp), ("libc.so.6", ctx.libc)):
+        shutil.copy2(ctx.payload(v), os.path.join(hostlib, f))
+    src = hello_source(ctx)
+    world = os.path.join(ctx.work, "world")
+    rc, out, err = run(
+        [
+            wrapper(ctx, ctx.gcc),
+            "-O1",
+            src,
+            "-o",
+            world,
+            "-Wl,--dynamic-linker=" + os.path.join(hostlib, ctx.ldso_name),
+            "-Wl,-rpath," + hostlib,
+        ],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    expect(rc == 0, err)
+    rc, out, err = inside(ctx, world)
+    expect(
+        rc == 127 and "does not have" in err and hostlib in err,
+        f"a host-path loader must be refused: rc={rc} {out!r} {err!r}",
+    )
+    rc, out, err = run([wrapper(ctx, "sh"), "-c", world], cwd=ctx.work, env=ctx.env)
+    expect(
+        rc == 127 and "does not have" in err, f"the same from the exclave's shell: rc={rc} {err!r}"
+    )
+    return None
+
+
+@test
+def ld_so(ctx: Ctx) -> str | None:
+    ld = ctx.interp
+    rc, out, err = run(
+        [wrapper(ctx, "sh"), "-c", f"{ld} --list {ctx.vbin(ctx.gcc)}"], cwd=ctx.work, env=ctx.env
+    )
+    expect(
+        rc == 0 and (ctx.musl or f"libc.so.6 => {ctx.libc}" in out) and ctx.root not in out,
+        f"ld.so --list: {out!r} {err!r}",
+    )
+    if ctx.musl:
+        return "musl's loader has no --verify"
+    rc, out, err = run(
+        [wrapper(ctx, "sh"), "-c", f"{ld} --verify {ctx.vbin(ctx.gcc)}"], cwd=ctx.work, env=ctx.env
+    )
+    expect(rc == 0, f"ld.so --verify rc={rc}")
+    rc, out, err = run(
+        [os.path.join(ctx.root, ctx.interp.lstrip("/")), "--verify", ctx.vbin(ctx.gcc)],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    expect(rc == 0, f"ld.so run by its real path from the host: rc={rc} {err!r}")
+    return None
+
+
+@test
+def origin(ctx: Ctx) -> None:
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "origin_main"), cwd=ctx.work)
+    expect(rc == 0 and out == "origin 42\n", f"RUNPATH=$ORIGIN: {out!r} {err!r}")
+
+
+@test
+def gconv_and_locale(ctx: Ctx) -> str:
+    notes: list[str] = []
+    if os.path.exists(wrapper(ctx, "iconv")):
+        p = subprocess.run(
+            [wrapper(ctx, "iconv"), "-f", "utf-8", "-t", "cp1252"],
+            check=False,
+            input="caf\xe9".encode(),
+            env=ctx.env,
+            cwd=ctx.work,
+            capture_output=True,
+        )
+        expect(
+            p.returncode == 0 and p.stdout == b"caf\xe9",
+            f"iconv via gconv: rc={p.returncode} {p.stdout!r} {p.stderr!r}",
+        )
+    else:
+        notes.append("no iconv in the tree")
+    if os.path.isdir(os.path.join(ctx.root, "usr", "lib", "locale", "C.utf8")):
+        _rc, out, _err = run(
+            [wrapper(ctx, "wc"), "-m"],
+            cwd=ctx.work,
+            env=dict(ctx.env, LC_ALL="C.UTF-8"),
+            inp="caf\xe9".encode(),
+        )
+        expect(out.strip() == "4", f"wc -m under C.UTF-8: {out!r}")
+    else:
+        notes.append("no C.utf8 locale in the tree")
+    return "; ".join(notes)
+
+
+@test
+def rust(ctx: Ctx) -> str | None:
+    rustc = shutil.which("rustc") or shutil.which("rustc", path=os.path.expanduser("~/.cargo/bin"))
+    if not rustc:
+        return "no rustc"
+    if ctx.musl:
+        return "the host's rustc targets glibc; the exclave has musl"
+    exe = os.path.join(ctx.progs, "rs")
+    rc, out, err = run(
+        [rustc, "-O", "-o", exe, os.path.join(ctx.work, "src", "rs.rs")], cwd=ctx.work
+    )
+    expect(rc == 0, "rustc: " + err[-600:])
+    rc, out, err = inside(ctx, exe)
+    expect(rc == 0 and "FAIL" not in out, out + err)
+    return None
+
+
+@test
+def gdb_hooks(ctx: Ctx) -> str | None:
+    """7.6, 13.1: gdb needs no manual command.
+
+    The launcher carries a script gdb auto-loads; a breakpoint in a library hits with the exclave's
+    own symbols, the program's source line is known, a wrapped program's libc frames resolve, and
+    the positional entry's re-exec does not confuse gdb.
+    """
+    gdb = shutil.which("gdb")
+    if not gdb:
+        return "no gdb"
+    rc, out, err = run([gdb, "-batch", "-nx", "-ex", "python print(gdb.VERSION)"])
+    if rc or not out.strip():
+        return "gdb without Python"
+    src = hello_source(ctx)
+    exe = os.path.join(ctx.work, "hello-g")
+    rc, out, err = run(
+        [wrapper(ctx, ctx.gcc), "-g", "-O0", "-o", exe, src], cwd=ctx.work, env=ctx.env
+    )
+    expect(rc == 0, "compile -g: " + err)
+    base = [
+        gdb,
+        "-batch",
+        "-nx",
+        "-iex",
+        "set auto-load safe-path /",
+        "-iex",
+        "set debuginfod enabled off",
+        "-ex",
+        "set breakpoint pending on",
+    ]
+    if ctx.musl:
+        return "gdb's breakpoints in a musl libc do not hit, the program's own do (13 item 1)"
+    wr = "write"
+    rc, out, err = run(
+        [
+            *base,
+            "-ex",
+            "break main",
+            "-ex",
+            "break " + wr,
+            "-ex",
+            "run",
+            "-ex",
+            "bt",
+            "-ex",
+            "continue",
+            "-ex",
+            "bt",
+            "-ex",
+            "info auto-load python-scripts",
+            "--args",
+            ctx.launcher,
+            exe,
+        ],
+        cwd=ctx.work,
+        env=ctx.env,
+        timeout=300,
+    )
+    expect(
+        re.search(r"^Breakpoint 1, main \(.*\) at \S*hello\.c:\d+", out, re.MULTILINE),
+        f"the program's own breakpoint hits with its source line: {out[-800:]!r} {err[-400:]!r}",
+    )
+    expect(
+        "Breakpoint 2, " in out and wr in out.split("Breakpoint 2, ", 1)[1].split("\n")[0],
+        f"a breakpoint in the exclave's libc hits with its name: {out[-800:]!r} {err[-400:]!r}",
+    )
+    expect(
+        "__libc_start" in out.split("Breakpoint 2, ", 1)[1],
+        f"the libc frames below the program resolve: {out[-800:]!r}",
+    )
+    expect(
+        "exclave-launcher.py" in out
+        and "Python Exception" not in out
+        and "Cannot insert" not in out,
+        f"the script loaded once and quietly: {out[-600:]!r} {err[-400:]!r}",
+    )
+    rc, out, err = run(
+        [
+            *base,
+            "-ex",
+            "break " + wr,
+            "-ex",
+            "run",
+            "-ex",
+            "bt",
+            "--args",
+            wrapper(ctx, "echo"),
+            "hi",
+        ],
+        cwd=ctx.work,
+        env=ctx.env,
+        timeout=300,
+    )
+    expect(
+        "Breakpoint 1, " in out and "__libc_start" in out,
+        f"a wrapped program's libc frames resolve: {out[-800:]!r} {err[-400:]!r}",
+    )
+    expect(
+        "Python Exception" not in out and "Cannot insert" not in out,
+        f"quiet for a wrapper: {out[-600:]!r}",
+    )
+    spaced = os.path.join(ctx.work, "space dir", "exclave")  # an exclave under a path with a space
+    copy_exclave(ctx.exclave, spaced)
+    rc, out, err = run(
+        [
+            *base,
+            "-ex",
+            "break main",
+            "-ex",
+            "run",
+            "-ex",
+            "bt",
+            "--args",
+            os.path.join(spaced, ".exclave", "launcher"),
+            exe,
+        ],
+        cwd=ctx.work,
+        env=ctx.env,
+        timeout=300,
+    )
+    expect(
+        re.search(r"^Breakpoint 1, main \(.*\) at \S*hello\.c:\d+", out, re.MULTILINE)
+        and "Python Exception" not in out,
+        f"an exclave under a path with a space: {out[-600:]!r} {err[-300:]!r}",
+    )
+    return None
+
+
+@test
+def stat_bench(ctx: Ctx) -> str:
+    src = os.path.join(ctx.work, "bench.c")
+    with open(src, "w") as f:
+        f.write(
+            "#include <sys/stat.h>\n#include <stdio.h>\n#include <time.h>\n"
+            "int main(void){struct stat st;struct timespec a,b;"
+            "clock_gettime(CLOCK_MONOTONIC,&a);"
+            'for(int i=0;i<100000;i++)stat("/usr/share/exclave-test-marker",&st);'
+            "clock_gettime(CLOCK_MONOTONIC,&b);"
+            'printf("%.0f\\n",((b.tv_sec-a.tv_sec)*1e9+(b.tv_nsec-a.tv_nsec))/100000);return 0;}\n'
+        )
+    exe = os.path.join(ctx.work, "bench")
+    rc, out, err = run([wrapper(ctx, ctx.gcc), "-O2", src, "-o", exe], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, err)
+    rc, out, err = inside(ctx, exe)
+    expect(rc == 0, err)
+    return f"stat of an exclave path: {int(out.strip())} ns per call"

@@ -3633,7 +3633,8 @@ meaning items 4 and 7.
    where a malformed byte meets freestanding C on every exec.
 4. **Named regressions.** Most are programs that compute, not just
    spawn; the rest exercise the tool. Each asserts the kernel's answer
-   or the rule's. They fall into six groups:
+   or the rule's. They fall into eight groups, one file each,
+   `test/regress_*.py`:
    - *signals and threads*: `SA_ONSTACK` handlers that trap, a FIFO
      `open` interrupted by `SIGINT` or left by `siglongjmp`, Go's
      goroutines, 64 threads trapping at once and threads trapping while
@@ -3657,19 +3658,28 @@ meaning items 4 and 7.
    - *paths and the border*: working directories on either side, host
      symlinks, the read-only matrix of 8.2, unix sockets, `PATH_MAX`,
      `openat2`'s `resolve` flags, `/proc` magic links, those to objects
-     with no path among them, and the `*xattrat`
-     calls;
+     with no path among them, a link's text read as stored, and the
+     `*xattrat` calls;
    - *programs that matter*: the loader, `dlopen`, locales and gconv,
      Rust and Go, built outputs run inside, a byte-for-byte comparison
      with a host compile, gdb, and a `noexec` mount;
-   - *ownership, the log and the tool*: ownership failing closed, the
-     log's names and escapes, the log's path refused when relative or
-     inside the exclave, a link's text read as stored, the three package readers, `wrap`'s
-     refusals, pruning, `check`, and a directory in the pre-rename
-     `.can/` layout refused by name by every command.
+   - *ownership, identity files and the log*: ownership read from the
+     tree and failing closed, the root and the exclave's own directory
+     as the walk sees them, identity files, the log's names and
+     escapes, and the log's path refused when relative or inside the
+     exclave;
+   - *the tool's unpack and wrap*: the three package readers, a tree
+     made by hand, `wrap`'s refusals, the exclave's README and version,
+     and a directory in the pre-rename `.can/` layout refused by name by
+     every command;
+   - *the tool's check and prune*: the static check's model of the
+     loader, a tree naming two loaders, an unreadable file, and
+     pruning with logs.
 
-   The tests in `test/run.py` say what each asserts, in their
-   docstrings and their failure messages.
+   The tests say what each asserts, in their docstrings and their
+   failure messages. `test/run.py` runs them on the fixtures
+   `test/suite.py` makes, through the runner of `test/harness.py`,
+   which the unpack tests share.
 5. **Kernel matrix.** Docker's default seccomp profile stands for the
    environment where user namespaces are blocked. VMs run kernels 3.10,
    4.15, 4.18, 5.4, 5.10, 5.15, 6.1, 6.6 and 6.14, and an emulated
@@ -3710,7 +3720,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus the read-only matrix program (`test/progs/ro_matrix.c`) under `bwrap` against its own expectations |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it); the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/progs/`: 79 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 79 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -3906,8 +3916,8 @@ copy to those logs with `exclave prune` and keeps it under
 `build/fixtures/` if the copy passes the static check, so a partial log
 never makes a partial fixture. There is one fixture per exclave, named
 by its hashes file and stamped with a hash of the sources that decide
-what the tests touch: `test/run.py`, `test/tree.py`, `test/progs/`,
-`exclave/` and the launcher's. A run with no fixture uses the full
+what the tests touch: the suite's own files, `test/tree.py`,
+`test/packages.py`, `test/progs/`, the command's and the launcher's. A run with no fixture uses the full
 exclave and makes one, removing that exclave's older ones. A fixture
 with another stamp is still used, since a change to the sources rarely
 changes what the tests touch: when every test passes the stamp is

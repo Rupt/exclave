@@ -1,0 +1,484 @@
+"""The regression suite's fixtures (DESIGN.md 17 item 4) and the helpers its tests share.
+
+The fixtures are the exclave wrapped from the given tree, the compiled test programs and the
+environment, made once by `prepare` and given to every test as a `Ctx`, which no test may change;
+the pruned fixture kept under build/fixtures/ is made and keyed here too.
+"""
+
+import os
+import platform
+import shutil
+import stat
+import subprocess
+import sys
+import time
+from typing import TYPE_CHECKING
+lazy import argparse
+lazy import hashlib
+
+import tree
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping, Sequence
+from harness import read_bytes, run
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+REPO = os.path.dirname(HERE)
+
+
+TOOL = tree.TOOL
+
+
+# Debian's name; make_exclave takes the tree's gcc when that one is absent (an Alpine exclave, an
+# arm64 one)
+GCC = "x86_64-linux-gnu-gcc-13"
+
+
+VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
+
+
+class Ctx:
+    """The fixtures made at setup, which every test is given and none may change."""
+
+    from_exclave: bool
+    tree: str
+    work: str
+    launcher_src: str
+    env: dict[str, str]
+    exclave: str
+    root: str
+    launcher: str
+    cwd_given: bool
+    gcc: str
+    progs: str
+    shared: tuple[bytes, bytes, tuple[tuple[str, int, int, int], ...]]
+    machine: str
+    triplet: str
+    vbin: Callable[[str], str]
+    vreal: Callable[[str], str]
+    payload: Callable[[str], str]
+    interp: str
+    ldso_dir: str
+    ldso_name: str
+    musl: bool
+    musl_interp: str
+    other_interp: str
+    deb_arch: str
+    sh_exe: str
+    sh_link: str
+    busybox: bool
+    libc: str | None
+    ldso_cache: bool
+
+
+def wrapper(ctx: Ctx, name: str) -> str:
+    """A wrapper by name.
+
+    Debian's /usr/bin, or /bin where the tree is not merged (an Alpine exclave).
+    """
+    p = os.path.join(ctx.root, "usr", "bin", name)
+    return p if os.path.lexists(p) else os.path.join(ctx.root, "bin", name)
+
+
+def inside(
+    ctx: Ctx,
+    prog: str,
+    args: Sequence[str] = (),
+    *,
+    cwd: str | None = None,
+    env: Mapping[str, str] | None = None,
+    inp: bytes | None = None,
+    timeout: float = 300,
+) -> tuple[int, str, str]:
+    """Run a program inside the exclave through the launcher's positional entry (7.2).
+
+    The program is named by its virtual or its host path.
+    """
+    return run(
+        [ctx.launcher, prog, *list(args)],
+        cwd=cwd or ctx.work,
+        env=dict(env if env is not None else ctx.env),
+        inp=inp,
+        timeout=timeout,
+    )
+
+
+# a copy for a test to alter: the tree hard-linked, .exclave/ copied
+copy_exclave = tree.copy_exclave
+
+
+def shared_state(ctx: Ctx) -> tuple[bytes, bytes, tuple[tuple[str, int, int, int], ...]]:
+    """Return what every test shares and none may change.
+
+    That is the exclave's manifest, its hashes file, and the path, size, mode and mtime of every
+    entry of its tree. An added file, a removed one or a write through a hard link changes these.
+    The walk is one lstat per entry, cheap enough to repeat after every test.
+    """
+    ex = ctx.exclave
+    entries = []
+    for dirpath, dirnames, filenames in os.walk(ctx.root):
+        for n in dirnames + filenames:
+            st = os.lstat(os.path.join(dirpath, n))
+            # a directory's mtime moves when a test makes and removes a file there: not a residue
+            isdir = stat.S_ISDIR(st.st_mode)
+            entries.append(
+                (
+                    os.path.relpath(os.path.join(dirpath, n), ctx.root),
+                    0 if isdir else st.st_size,
+                    st.st_mode,
+                    0 if isdir else st.st_mtime_ns,
+                )
+            )
+    return (
+        read_bytes(os.path.join(ex, ".exclave", "manifest")),
+        read_bytes(os.path.join(ex, ".exclave", "hashes"))
+        if os.path.exists(os.path.join(ex, ".exclave", "hashes"))
+        else b"",
+        tuple(sorted(entries)),
+    )
+
+
+def left_alone(ctx: Ctx) -> str | None:
+    """What a test changed of the shared exclave, which it must leave alone (17), or None.
+
+    The changed state becomes the new baseline, so that one test's residue fails only that test.
+    """
+    now = shared_state(ctx)
+    changed = [
+        n
+        for n, a, b in zip(("manifest", "hashes", "tree"), ctx.shared, now, strict=False)
+        if a != b
+    ]
+    if not changed:
+        return None
+    if "tree" in changed:
+        d = sorted(set(now[2]) ^ set(ctx.shared[2]))
+        changed[changed.index("tree")] = "tree: " + ", ".join(sorted({e[0] for e in d})[:6])
+    ctx.shared = now
+    return f"the test changed the shared exclave: {', '.join(changed)}"
+
+
+def fixture_keys(ex: str) -> tuple[str, str] | None:
+    """Return the keys of the pruned fixture (17): the exclave's and the sources'.
+
+    The fixture is named by a hash of the exclave's hashes file, which hashes its tree, so each
+    exclave has its own. What the tests touch depends on the sources of the suite, the tool and the
+    launcher, and the fixture keeps their key as a stamp. A fixture made with other sources is
+    almost always still enough, and a failure on it is checked again on the whole exclave. Returns
+    None when the exclave has no hashes file.
+    """
+    hashes = os.path.join(ex, ".exclave", "hashes")
+    if not os.path.isfile(hashes):
+        return None
+    # the suite's own files: its driver, harness, fixtures, groups and the helpers they import
+    names = sorted(f for f in os.listdir(HERE) if f.startswith("regress_") and f.endswith(".py"))
+    names += ["run.py", "harness.py", "suite.py", "tree.py", "packages.py"]
+    files = [os.path.join(HERE, f) for f in names]
+    files += sorted(os.path.join(HERE, "progs", f) for f in os.listdir(os.path.join(HERE, "progs")))
+    files += sorted(
+        os.path.join(REPO, "src", f)
+        for f in os.listdir(os.path.join(REPO, "src"))
+        if f[-2:] in (".c", ".h")
+    )
+    files += sorted(
+        os.path.join(REPO, "tool", f)
+        for f in os.listdir(os.path.join(REPO, "tool"))
+        if not f.startswith(".")
+    )
+    sources = hashlib.blake2b(digest_size=6)
+    for f in files:
+        sources.update(os.path.basename(f).encode() + b"\0" + read_bytes(f) + b"\0")
+    return hashlib.blake2b(read_bytes(hashes), digest_size=6).hexdigest(), sources.hexdigest()
+
+
+STAMP = ".sources"  # in a fixture: the sources' key it was made with
+
+
+def make_fixture(ctx: Ctx, dst: str, sources: str) -> None:
+    """Keep the shared exclave, pruned to what this run touched, for the next run (17).
+
+    The prune is the tool's own, from every EXCLAVE_LOG file the run wrote, so the fixture is the
+    tree the tests just passed on. Call it only after a run with no failure, so that a partial log
+    never makes a partial fixture.
+    """
+    logs = sorted(
+        os.path.join(dp, f) for dp, dn, fn in os.walk(ctx.work) for f in fn if f.endswith(".log")
+    )
+    # two runs may make the same fixture at once (scripts/gate)
+    tmp = f"{dst}.tmp{os.getpid()}"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    copy_exclave(ctx.exclave, tmp)
+    if subprocess.run([*TOOL, "prune", tmp, *logs], capture_output=True, check=False).returncode:
+        print("fixture not kept: the pruned exclave does not pass the static check")
+        shutil.rmtree(tmp, ignore_errors=True)
+        return
+    with open(os.path.join(tmp, STAMP), "w") as f:
+        f.write(sources + "\n")
+    try:
+        os.rename(tmp, dst)
+    except OSError:  # another run made it meanwhile
+        shutil.rmtree(tmp, ignore_errors=True)
+    # one fixture per exclave name: those of the exclave's earlier contents go
+    name = os.path.basename(dst).rsplit("-", 1)[0]
+    for old in os.listdir(os.path.dirname(dst)):
+        if old.rsplit("-", 1)[0] == name and old != os.path.basename(dst) and ".tmp" not in old:
+            shutil.rmtree(os.path.join(os.path.dirname(dst), old), ignore_errors=True)
+    n = sum(len(fn) for dp, dn, fn in os.walk(os.path.join(dst, "tree")))
+    print(f"fixture: {n} files, kept at {dst}")
+
+
+def check(ex: str, *logs: str) -> tuple[list[str], list[str], str]:
+    """Run exclave check on ex with the given EXCLAVE_LOG files (10.3).
+
+    Returns its error lines and its warning lines, each without its prefix, and its whole output.
+    """
+    _rc, out, err = run([*TOOL, "check", ex, *logs])
+    lines = out.splitlines()
+    errors = [x.removeprefix("error: ") for x in lines if x.startswith("error: ")]
+    warnings = [x.removeprefix("warning: ") for x in lines if x.startswith("warning: ")]
+    return errors, warnings, out + err
+
+
+def hello_source(ctx: Ctx) -> str:
+    """Return hello.c in the work directory, writing it if no test has yet."""
+    src = os.path.join(ctx.work, "hello.c")
+    if not os.path.exists(src):
+        with open(src, "w") as f:
+            f.write(
+                "#include <stdio.h>\n"
+                'int main(int c, char **v) { printf("hello %s %d\\n", v[0], c); return 0; }\n'
+            )
+    return src
+
+
+# ------------------------------------------------------------------ setup
+def make_exclave(ctx: Ctx) -> None:
+    """Make the shared exclave from ctx.tree, add the test files and wrap it."""
+    ex = os.path.join(ctx.work, "exclave")
+    root = os.path.join(ex, "tree")
+    os.makedirs(os.path.join(ex, ".exclave"))
+    shutil.copy2(ctx.launcher_src, os.path.join(ex, ".exclave", "launcher"))
+    os.chmod(os.path.join(ex, ".exclave", "launcher"), 0o755)
+    shutil.copytree(ctx.tree, root, symlinks=True, copy_function=tree.link_or_copy)
+    # a copy made under a setgid directory inherits the bit; the suite tests the launcher, not the
+    # copy
+    for dirpath, dirnames, _filenames in os.walk(root):
+        for d in dirnames:
+            p = os.path.join(dirpath, d)
+            if not os.path.islink(p):
+                m = os.lstat(p).st_mode
+                if m & 0o7000:
+                    os.chmod(p, m & 0o777)
+    if ctx.from_exclave:
+        tree.unwrap_tree(ex)
+
+    # test additions to the tree, each a new file: the copy's files are hard links to the given
+    # tree's, which a fixture shares with every run made from it, and a fixture has these already
+    def add(path: str, body: str, mode: int = 0o644) -> None:
+        if os.path.lexists(path):
+            os.remove(path)
+        with open(path, "w") as f:
+            f.write(body)
+        os.chmod(path, mode)
+
+    add(os.path.join(root, "usr", "share", "exclave-test-marker"), "marker\n")
+    # a socket file in the tree (13 item 31); a fixture carries one already
+    tree.socket_file(os.path.join(root, "usr", "share", "exclave-test.sock"))
+    for name, body in (
+        ("exclave-test-script", "#!/bin/sh\necho script ok $1 $#\n"),
+        ("exclave-test-noshebang", "echo noshebang ok\n"),
+        ("exclave-test-script2", "#!/usr/bin/exclave-test-script\n"),
+        ("exclave-test-exe", "#!/bin/sh\nreadlink /proc/$$/exe\n"),
+    ):
+        add(os.path.join(root, "usr", "bin", name), body, 0o755)
+    top = "/" + ctx.work.split("/")[1]
+    ctx.cwd_given = top not in VOLATILE
+    # wrapped by the suite, since the tree it is given need not pass the static check
+    own = f'\nown "{top}"\n'.encode() if ctx.cwd_given else b""
+    tree.wrap_unchecked(ex, b"exclave 1\n" + own)
+    ctx.exclave, ctx.root, ctx.launcher = ex, root, os.path.join(ex, ".exclave", "launcher")
+    tree_facts(ctx)
+    ctx.gcc = tree.compiler(root, ctx.machine) or GCC  # the tree's C compiler
+
+
+def tree_facts(ctx: Ctx) -> None:
+    """Record in ctx what the tree says about its architecture (7.1).
+
+    That is the machine, Debian's multiarch triplet, the loader named by the originals' PT_INTERP
+    and the directory it lives in, the shell's spellings and the libc.
+    """
+    ctx.machine = platform.machine()
+    ctx.triplet = tree.triplet(ctx.root, ctx.machine)
+
+    def vbin(name: str) -> str:
+        return tree.vbin(ctx.root, name)
+
+    def vreal(vpath: str) -> str:
+        """Resolve a virtual path through the tree's links to the file behind it, a virtual path."""
+        return tree.resolve(ctx.root, vpath)
+
+    def payload(name: str) -> str:
+        """The real file of a program's original, behind its wrapper and its links.
+
+        One of its links may be an applet link to busybox.
+        """
+        return tree.payload(ctx.root, vreal(name if name.startswith("/") else vbin(name)))
+
+    ctx.vbin, ctx.vreal, ctx.payload = vbin, vreal, payload
+    true = payload("true")
+    interp = (
+        tree.interp(true)
+        if os.path.exists(true)
+        else {"x86_64": "/lib64/ld-linux-x86-64.so.2", "aarch64": "/lib/ld-linux-aarch64.so.1"}[
+            ctx.machine
+        ]
+    )
+    assert interp, f"{true} names no loader"
+    ctx.interp = interp
+    ctx.ldso_dir, ctx.ldso_name = ctx.interp.split("/")[1], os.path.basename(ctx.interp)
+    ctx.musl = os.path.basename(ctx.interp).startswith("ld-musl")
+    ctx.musl_interp = f"/lib/ld-musl-{ctx.machine}.so.1"
+    # a loader this exclave lacks, no longer than its own
+    ctx.other_interp = f"/lib/ld-gnu-{ctx.machine}.so.2" if ctx.musl else ctx.musl_interp
+    ctx.deb_arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(ctx.machine, ctx.machine)
+    # what /proc/self/exe reads for a script: dash, bash or busybox by its path
+    ctx.sh_exe = vreal(vbin("sh"))
+    ctx.sh_link = (
+        os.readlink(os.path.join(ctx.root, vbin("sh").lstrip("/")))
+        if os.path.islink(os.path.join(ctx.root, vbin("sh").lstrip("/")))
+        else ""
+    )
+    ctx.busybox = os.path.basename(ctx.sh_exe) == "busybox"
+    # libc.so.6 as the loader names it; none on musl
+    ctx.libc = next(
+        (
+            v
+            for v in (
+                f"/lib/{ctx.triplet}/libc.so.6",
+                "/lib64/libc.so.6",
+                "/lib/libc.so.6",
+                "/usr/lib/libc.so.6",
+            )
+            if os.path.lexists(os.path.join(ctx.root, v.lstrip("/")))
+        ),
+        None,
+    )
+    ctx.ldso_cache = os.path.exists(os.path.join(ctx.root, "etc", "ld.so.cache"))
+    # the test programs read the tree's spellings from the environment, which the border passes
+    # through
+    ctx.env.update(
+        EXCLAVE_TEST_SH=vbin("sh"),
+        EXCLAVE_TEST_SH_EXE=ctx.sh_exe,
+        EXCLAVE_TEST_SH_LINK=ctx.sh_link,
+        EXCLAVE_TEST_TRUE=vbin("true"),
+        EXCLAVE_TEST_TRUE_PAYLOAD="/" + os.path.relpath(true, ctx.root),
+    )
+
+
+def compile_progs(ctx: Ctx) -> None:
+    """Compile the test programs with the tree's own C compiler.
+
+    The sources are copied into the work directory: with the work directory's top-level directory
+    owned by the exclave (8.1), only the working directory's subtree is the host's.
+    """
+    ctx.progs = os.path.join(ctx.work, "progs")
+    src = os.path.join(ctx.work, "src")
+    shutil.copytree(os.path.join(HERE, "progs"), src)
+    os.makedirs(ctx.progs, exist_ok=True)
+    gcc = wrapper(ctx, ctx.gcc)
+    for name in (
+        "ro_matrix",
+        "signals",
+        "threads",
+        "spawn",
+        "exec",
+        "fifo",
+        "execstack",
+        "ljmp",
+        "fdpress",
+        "openat2",
+        "unix_socket",
+        "openat2_xdev",
+        "fexec",
+        "exec_identity",
+        "path_length",
+        "spawn_threads",
+        "adversarial",
+        "magic_links",
+        "rename_race",
+    ):
+        rc, _out, err = run(
+            [
+                gcc,
+                "-O1",
+                "-g",
+                "-pthread",
+                "-o",
+                os.path.join(ctx.progs, name),
+                os.path.join(src, name + ".c"),
+                "-lm",
+                "-ldl",
+            ],
+            cwd=ctx.work,
+            env=ctx.env,
+        )
+        # nested functions are gcc's; clang has none
+        if rc and name == "execstack" and "not allowed here" in err:
+            continue
+        if rc:
+            sys.exit(f"cannot compile {name} with the exclave's gcc:\n{err}")
+    rc, _out, err = run(
+        [
+            gcc,
+            "-shared",
+            "-fPIC",
+            "-o",
+            os.path.join(ctx.progs, "liborigin.so"),
+            os.path.join(src, "origin_lib.c"),
+        ],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    rc2, _out, err2 = run(
+        [
+            gcc,
+            "-o",
+            os.path.join(ctx.progs, "origin_main"),
+            os.path.join(src, "origin_main.c"),
+            "-L" + ctx.progs,
+            "-lorigin",
+            "-Wl,-rpath,$ORIGIN",
+        ],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    if rc or rc2:
+        sys.exit(f"cannot build the origin test:\n{err}{err2}")
+
+
+def prepare(args: argparse.Namespace, tree_: str, work: str, *, logging: bool) -> Ctx:
+    """Make the fixtures every test is given: the exclave wrapped from tree_, the programs."""
+    ctx = Ctx()
+    ctx.from_exclave = bool(args.exclave)
+    ctx.tree = tree_
+    ctx.work = work
+    ctx.launcher_src = os.path.abspath(args.launcher)
+    if not os.path.exists(ctx.launcher_src):
+        sys.exit(f"{args.launcher} missing: run scripts/build")
+    if os.path.exists(ctx.work):
+        shutil.rmtree(ctx.work)
+    os.makedirs(ctx.work)
+    ctx.env = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/"), "LANG": "C"}
+    t0 = time.time()
+    make_exclave(ctx)
+    if logging:
+        # from here every in-exclave run of the suite's own is logged, the test programs' compile
+        # first
+        ctx.env["EXCLAVE_LOG"] = os.path.join(ctx.work, "fixture.log")
+    compile_progs(ctx)
+    ctx.shared = shared_state(ctx)
+    print(f"exclave made and programs compiled in {time.time() - t0:.1f}s")
+    return ctx

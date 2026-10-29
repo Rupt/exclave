@@ -1,0 +1,909 @@
+"""Paths and the border: a group of the regression suite (DESIGN.md 17 item 4).
+
+Run by test/run.py, on the fixtures test/suite.py makes.
+"""
+
+import errno
+import os
+import re
+import shutil
+import subprocess
+lazy import ctypes
+
+import tree
+from harness import expect, read_bytes, read_text, run, test
+from suite import VOLATILE, Ctx, check, copy_exclave, hello_source, inside, wrapper
+
+# the path syscalls the isolation test traces; the legacy forms exist on x86-64 only and strace says
+# so elsewhere
+TRACED = (
+    "open",
+    "stat",
+    "lstat",
+    "access",
+    "execve",
+    "readlink",
+    "openat",
+    "newfstatat",
+    "readlinkat",
+    "faccessat",
+    "faccessat2",
+    "statx",
+    "execveat",
+    "chdir",
+    "mkdir",
+    "mkdirat",
+    "unlink",
+    "unlinkat",
+    "rename",
+    "renameat",
+    "renameat2",
+    "link",
+    "linkat",
+    "symlink",
+    "symlinkat",
+)
+
+
+PATH_MAX = 4096
+
+
+@test
+def isolation(ctx: Ctx) -> str | None:
+    if not shutil.which("strace"):
+        return "no strace"
+    tr = os.path.join(ctx.work, "trace")
+    src = hello_source(ctx)
+    names = list(TRACED)
+    while True:  # an older strace may not know the newest names
+        rc, _out, err = run(
+            [
+                "strace",
+                "-f",
+                "-s",
+                "4096",
+                "-o",
+                tr,
+                "-e",
+                "trace=" + ",".join(names),
+                wrapper(ctx, ctx.gcc),
+                "-O1",
+                src,
+                "-o",
+                os.path.join(ctx.work, "hello2"),
+            ],
+            cwd=ctx.work,
+            env=ctx.env,
+        )
+        m = re.search(r"invalid system call '(\w+)'", err)
+        if m and m.group(1) in names:
+            names.remove(m.group(1))
+            continue
+        break
+    expect(rc == 0, "compile under strace failed: " + err)
+    bad, seen = [], 0
+    # 8.1 as the launcher computes it: a top-level name outside it is the host's
+    owned = tree.owned(ctx.exclave)
+    allowed_files = set(tree.IDENTITY_FILES)
+    # the launcher resolves each identity file's host symlink chain at startup
+    for f in tree.IDENTITY_FILES:
+        p = f
+        for _ in range(40):
+            if not os.path.islink(p):
+                break
+            t = os.readlink(p)
+            p = os.path.normpath(t if t.startswith("/") else os.path.join(os.path.dirname(p), t))
+            allowed_files.add(p)
+    # A trapped syscall appears in the trace too, at its exit stop, with the registers the kernel
+    # rolled back (x86-64 shows the number as its result, aarch64 the first argument); its SIGSYS
+    # line, naming it, follows. That call is the one the kernel skipped and the handler re-issued,
+    # so a line followed by its own SIGSYS is not judged. A trapped syscall outside the traced set
+    # prints no line, only the SIGSYS, hence the name.
+    lines: list[str] = []
+    pending: dict[str, str] = {}
+    with open(tr) as trace:
+        for line in trace:
+            m = re.match(r"^(\d+)\s+(.*)", line)
+            pid, rest = (m.group(1), m.group(2)) if m else ("", line)
+            m = re.match(r"--- SIGSYS .*si_syscall=__NR_(\w+)", rest)
+            if m:
+                if pid in pending and re.match(r"^\d+\s+" + m.group(1) + r"\(", pending[pid]):
+                    pending.pop(pid)
+                continue
+            if pid in pending:
+                lines.append(pending.pop(pid))
+            pending[pid] = line
+    lines.extend(pending.values())
+    for line in lines:
+        m = re.match(r"^\d+\s+(\w+)\((.*)\)\s+=\s+(-?\d+)", line)
+        if not m:
+            continue
+        name, args, res = m.group(1), m.group(2), int(m.group(3))
+        if res < 0:
+            continue
+        paths = re.findall(r'"((?:[^"\\]|\\.)*)"', args)
+        if name in ("execve", "execveat", "readlink", "readlinkat") and paths:
+            # the rest are argv strings, or the link's text (Fedora's /usr/bin/ld ->
+            # /etc/alternatives/ld)
+            paths = paths[:1]
+        for given in paths:
+            seen += 1
+            p = os.path.normpath(given) if given.startswith("/") else given
+            # a top-level name the exclave does not own, absent or a placeholder,
+            # is the host's (8.1)
+            ok = (
+                not p.startswith("/")
+                or p.startswith((ctx.root, ctx.work, *VOLATILE))
+                or p in allowed_files
+                or ctx.work.startswith(p + "/")
+                or "/" + p.split("/")[1] not in owned
+            )
+            if not ok:
+                bad.append(f"{name} {p}")
+    expect(seen > 50, f"trace looks empty ({seen} paths)")
+    expect(not bad, "host paths touched: " + ", ".join(sorted(set(bad))[:10]))
+    return None
+
+
+@test
+def ro_matrix(ctx: Ctx) -> None:
+    d = os.path.join(ctx.work, "hostdir")
+    os.makedirs(d, exist_ok=True)
+    # the wrapper itself, behind a link
+    rc, out, err = inside(
+        ctx, os.path.join(ctx.progs, "ro_matrix"), [d, ctx.vreal(ctx.vbin(ctx.gcc))]
+    )
+    expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
+def coreutils_ro(ctx: Ctx) -> None:
+    def w(name: str, *args: str) -> tuple[int, str, str]:
+        return run([wrapper(ctx, name), *list(args)], cwd=ctx.work, env=ctx.env)
+
+    rc, out, err = w("touch", "/usr/newfile")
+    expect(rc and "Read-only" in err, err)
+    rc, out, err = w("mkdir", "-p", "/usr/lib")
+    expect(rc == 0, err)
+    rc, out, err = w("install", "-d", "/usr/lib")
+    # busybox's install -d chmods an existing directory, which the read-only rule refuses as a mount
+    # would
+    if ctx.busybox:
+        expect(rc and "Read-only" in err, err)
+    else:
+        expect(rc == 0, err)
+    rc, out, err = w("mkdir", "/usr/lib")
+    expect(rc and "exists" in err, err)
+    rc, out, err = w("rm", ctx.vbin(ctx.gcc))
+    expect(rc and "Read-only" in err, err)
+    rc, out, err = w("ln", ctx.vbin(ctx.gcc), os.path.join(ctx.work, "lnk-x"))
+    expect(rc and "cross-device" in err.lower(), err)
+    rc, out, err = w("cp", ctx.vbin(ctx.gcc), os.path.join(ctx.work, "gcc-copy"))
+    expect(rc == 0, err)
+    payload = ctx.payload(ctx.gcc)
+    expect(
+        os.path.getsize(os.path.join(ctx.work, "gcc-copy")) == os.path.getsize(payload),
+        "cp of a wrapper did not copy the original",
+    )
+    expect(read_bytes(os.path.join(ctx.work, "gcc-copy"), 4) == b"\x7fELF", "copy is not ELF")
+    rc, out, err = w("cat", "/usr/share/exclave-test-marker")
+    expect(out == "marker\n", out + err)
+
+
+@test
+def host_walk_one_step(ctx: Ctx) -> None:
+    """DESIGN.md 16.6 item 4: one openat2 stands in for a host walk's lstats.
+
+    Where the directories ahead of a walk are all the host's, one openat2 with RESOLVE_NO_SYMLINKS
+    stands in for their lstats, and anything it cannot vouch for is the walk's. A host symlink into
+    /usr deep in the chain still reaches the exclave's /usr; a file where a directory should be is
+    ENOTDIR and a missing directory ENOENT, as the walk answers; a plain deep path reads as it does
+    natively.
+    """
+    base = os.path.join(ctx.work, f"deephost-{os.getpid()}")
+    deep = os.path.join(base, "h1", "h2", "h3", "h4")
+    os.makedirs(deep, exist_ok=True)
+    with open(os.path.join(deep, "f"), "w") as f:
+        f.write("deep\n")
+    if not os.path.lexists(os.path.join(deep, "lnk")):
+        os.symlink("/usr", os.path.join(deep, "lnk"))
+    cat = wrapper(ctx, "cat")
+    rc, out, err = run([cat, os.path.join(deep, "f")], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out == "deep\n", f"a deep host file: rc={rc} {out!r} {err!r}")
+    rc, out, err = run(
+        [cat, os.path.join(deep, "lnk", "share", "exclave-test-marker")], cwd=ctx.work, env=ctx.env
+    )
+    expect(
+        rc == 0 and out == "marker\n",
+        "a host link into /usr deep in a host chain reaches the exclave's: "
+        f"rc={rc} {out!r} {err!r}",
+    )
+    rc, out, err = run(
+        [
+            cat,
+            os.path.join(
+                f"deephost-{os.getpid()}",
+                "h1",
+                "h2",
+                "h3",
+                "h4",
+                "lnk",
+                "share",
+                "exclave-test-marker",
+            ),
+        ],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    expect(rc == 0 and out == "marker\n", f"the same, relative: rc={rc} {out!r} {err!r}")
+    rc, out, err = run([cat, os.path.join(deep, "f", "x", "y")], cwd=ctx.work, env=ctx.env)
+    expect(rc != 0 and "Not a directory" in err, f"a file in the middle: {err!r}")
+    rc, out, err = run(
+        [cat, os.path.join(base, "h1", "missing", "h3", "f")], cwd=ctx.work, env=ctx.env
+    )
+    expect(rc != 0 and "No such file" in err, f"a missing directory in the middle: {err!r}")
+    # these answers hold with or without the one-step check; where the launcher would use it, it
+    # must have run
+    if shutil.which("strace") and has_openat2() and mounted_once(ctx.root):
+        trace = os.path.join(ctx.work, f"deephost-{os.getpid()}.trace")
+        run(
+            ["strace", "-f", "-e", "trace=openat2", "-o", trace, cat, os.path.join(deep, "f")],
+            cwd=ctx.work,
+            env=ctx.env,
+        )
+        expect(
+            "RESOLVE_NO_SYMLINKS" in read_text(trace),
+            "the one-step check did not run where the tree's filesystem is mounted once",
+        )
+
+
+def has_openat2() -> bool:
+    """The one-step check's other condition: the kernel has openat2 (5.6).
+
+    Asked of the kernel, not of its version.
+    """
+    libc = ctypes.CDLL(None, use_errno=True)
+    how = (ctypes.c_uint64 * 3)(0o10000000, 0, 0)  # O_PATH
+    nr = {"x86_64": 437, "aarch64": 437}.get(os.uname().machine, 437)
+    fd = libc.syscall(nr, -100, b"/", ctypes.byref(how), ctypes.c_size_t(24))
+    if fd >= 0:
+        os.close(fd)
+        return True
+    return False
+
+
+def mounted_once(path: str) -> bool:
+    """The one-step check's condition (canon.c tree_mounted_once).
+
+    The mount holding path is its filesystem's only one in /proc/self/mountinfo, with path's own
+    device number.
+    """
+    real = os.path.realpath(path)
+    dev = os.stat(real).st_dev
+    best, mm, lines = -1, None, []
+    with open("/proc/self/mountinfo") as mountinfo:
+        for entry in mountinfo:
+            f = entry.split()
+            mp = f[4].encode().decode("unicode_escape")
+            lines.append(f[2])
+            if (real == mp or real.startswith(mp.rstrip("/") + "/")) and len(mp) >= best:
+                best, mm = len(mp), f[2]
+    return mm is not None and lines.count(mm) == 1 and mm == f"{os.major(dev)}:{os.minor(dev)}"
+
+
+@test
+def casefold_alias(ctx: Ctx) -> str | None:
+    """The tree's other spellings on a case-insensitive filesystem stay the tree's.
+
+    On a case-insensitive filesystem the tree's root has other spellings, x.exclave/TREE for
+    X.exclave/tree, on the same mount; a host walk that stood in for its lstats with one openat2
+    must still see the tree there, read-only. Made on a casefold tmpfs (6.13) in a user namespace;
+    skipped where either is missing.
+    """
+    if subprocess.run(
+        ["unshare", "-Urm", "true"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode:
+        return "no user namespaces"
+    mnt = os.path.join(ctx.work, f"casefold-{os.getpid()}")
+    os.makedirs(mnt, exist_ok=True)
+    sh = wrapper(ctx, "sh")
+    rel = os.path.relpath(sh, ctx.exclave)
+    setup = (
+        f"mount -t tmpfs -o casefold tmpfs {mnt} && mkdir {mnt}/cf && chattr +F {mnt}/cf "
+        "|| exit 99; "
+        # names that differ only in case (the kernel's headers) are skipped
+        f"cp -a {ctx.exclave} {mnt}/cf/X.exclave 2>/dev/null; "
+        f"test -x {mnt}/cf/X.exclave/{rel} || exit 98"
+    )
+    inner = (
+        f"touch {mnt}/cf/x.exclave/TREE/usr/zz-cf; echo rc=$?; "
+        f"cat {mnt}/cf/x.exclave/TREE/usr/share/exclave-test-marker; "
+        f"cd {mnt}/cf/x.exclave/TREE/usr && touch zz-cf2; echo rc=$?"
+    )
+    # what reached the tree
+    cmd = (
+        f"{setup} && {mnt}/cf/X.exclave/{rel} -c '{inner}'; "
+        f"ls {mnt}/cf/X.exclave/tree/usr | grep zz-cf"
+    )
+    rc, out, err = run(
+        ["unshare", "-Urm", "sh", "-c", cmd], cwd=ctx.work, env=dict(ctx.env, PATH="/usr/bin:/bin")
+    )
+    if rc == 99:
+        return f"no casefold tmpfs here: {err.strip()[-120:]}"
+    expect(rc != 98, f"the exclave's shell did not copy onto the casefold tmpfs: {err[-300:]!r}")
+    expect(
+        out == "rc=1\nmarker\nrc=1\n" and err.count("Read-only") >= 2,
+        f"a case-folded spelling of the tree's root: rc={rc} {out!r} {err!r}",
+    )
+    return None
+
+
+@test
+def cwd_rules(ctx: Ctx) -> str | None:
+    rc, out, err = run([wrapper(ctx, "pwd")], cwd=os.path.join(ctx.root, "usr", "bin"), env=ctx.env)
+    expect(out == "/usr/bin\n", f"cwd inside tree/: {out!r}")
+    rc, out, err = run(
+        [wrapper(ctx, "touch"), "x"], cwd=os.path.join(ctx.root, "usr", "bin"), env=ctx.env
+    )
+    expect(rc and "Read-only" in err, f"write in tree/ cwd: {err!r}")
+    sub = os.path.join(ctx.work, "sub", "sub2")
+    os.makedirs(sub, exist_ok=True)
+    with open(os.path.join(sub, "file"), "w") as f:
+        f.write("deep\n")
+    rc, out, err = run(
+        [wrapper(ctx, "sh"), "-c", "pwd; cd sub && pwd && cat sub2/file"], cwd=ctx.work, env=ctx.env
+    )
+    expect(out == f"{ctx.work}\n{ctx.work}/sub\ndeep\n", f"cwd given to the host: {out!r} {err!r}")
+    inc, outd = os.path.join(ctx.work, "inc"), os.path.join(ctx.work, "out")
+    os.makedirs(inc, exist_ok=True)
+    os.makedirs(outd, exist_ok=True)
+    with open(os.path.join(inc, "x.h"), "w") as f:
+        f.write("#define X 41\n")
+    with open(os.path.join(ctx.work, "sub", "y.c"), "w") as f:
+        f.write(
+            '#include "x.h"\n#include <stdio.h>\nint main(void){printf("%d\\n", X+1);return 0;}\n'
+        )
+    rc, out, err = run(
+        [wrapper(ctx, ctx.gcc), "-Iinc", "sub/y.c", "-o", "out/y"], cwd=ctx.work, env=ctx.env
+    )
+    expect(rc == 0, "compile with subdirectory include and output: " + err)
+    rc, out, err = inside(ctx, os.path.join(outd, "y"))
+    expect(out == "42\n", f"built output run inside: {out!r} {err!r}")
+    if not ctx.cwd_given:
+        return "work dir under a volatile prefix; the cwd given to the host is not exercised"
+    # a directory on the way to the working directory is the host's in every spelling: a trailing
+    # slash names the same directory
+    top = "/" + ctx.work.split("/")[1]
+    rc, out, err = run(
+        [wrapper(ctx, "sh"), "-c", f"stat -L -c %i {top} {top}/ {top}/."], cwd=ctx.work, env=ctx.env
+    )
+    expect(
+        out.split() == [str(os.stat(top).st_ino)] * 3,
+        f"{top}, {top}/ and {top}/. on the way to the working directory: {out!r} {err!r}",
+    )
+    # the launcher's line for rule 4 and the dynamic check's reading of it, both spellings at once:
+    # a library the workload opened under that directory is its own output, a warning, where without
+    # the line it would pass unseen
+    log = os.path.join(ctx.work, f"cwd-given-{os.getpid()}.log")
+    rc, out, err = run([wrapper(ctx, "true")], cwd=ctx.work, env=dict(ctx.env, EXCLAVE_LOG=log))
+    expect(
+        rc == 0 and f"launcher 0 cwd given to the host {ctx.work}\n" in read_text(log),
+        f"the rule-4 log line: {read_text(log)[:400]!r}",
+    )
+    with open(log, "a") as f:
+        f.write(f"open 3 {ctx.work}/sub/libown.so.1\n")
+    _errors, warnings, out = check(ctx.exclave, log)
+    expect(
+        any("working directory" in w and "libown.so.1" in w for w in warnings)
+        and re.search(r"dynamic check: \d+ log lines, 0 errors", out),
+        f"the dynamic check's reading of the rule-4 line: {warnings!r} {out[-400:]!r}",
+    )
+    return None
+
+
+@test
+def real_root_is_the_tree(ctx: Ctx) -> None:
+    """The tree's real root is an alias of /.
+
+    A path spelt through <exclave>/tree/ obeys the same rules.
+    """
+    root = ctx.root
+    _rc, out, err = run(
+        [
+            wrapper(ctx, "sh"),
+            "-c",
+            (
+                "touch {}/usr/zz; echo rc=$?; rm {}{}; echo rc=$?; "
+                "cat {}/usr/share/exclave-test-marker; ls -l {}{} | cut -c1 "
+            ).format(root, root, ctx.vbin("true"), root, root, ctx.vbin("sh")),
+        ],
+        cwd="/",
+        env=ctx.env,
+    )
+    expect(
+        out == "rc=1\nrc=1\nmarker\nl\n" and "Read-only" in err,
+        f"real-root spelling: {out!r} {err!r}",
+    )
+    expect(
+        not os.path.exists(os.path.join(root, "usr", "zz"))
+        and os.path.exists(os.path.join(root, ctx.vbin("true").lstrip("/"))),
+        "the tree was written through its real path",
+    )
+    # other spellings of the same path, which the walk resolves rather than the shortcut for the
+    # exact one: relative from a host working directory, and with a doubled slash (a mutant without
+    # the walk's refusal of the root's name wrote)
+    relp = os.path.relpath(os.path.join(root, "usr", "zz2"), ctx.work)
+    slashed = root.replace("/", "//", 1) + "/usr/zz3"
+    _rc, out, err = run(
+        [wrapper(ctx, "sh"), "-c", f"touch {relp}; echo rc=$?; touch {slashed}; echo rc=$?"],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    expect(
+        out == "rc=1\nrc=1\n" and err.count("Read-only") == 2,
+        f"relative and doubled-slash spellings: {out!r} {err!r}",
+    )
+    expect(
+        not os.path.exists(os.path.join(root, "usr", "zz2"))
+        and not os.path.exists(os.path.join(root, "usr", "zz3")),
+        "the tree was written through another spelling of its real path",
+    )
+
+
+@test
+def readlink_as_stored(ctx: Ctx) -> None:
+    """7.4.3: a link's text is returned as stored, even when it names the tree's real location.
+
+    Only /proc links and identity files answer in virtual terms; a host link made from outside
+    toward the tree's real path reads as the kernel reads it, and still leads to the tree's file.
+    """
+    link = os.path.join(ctx.work, "to-tree-link")
+    if os.path.lexists(link):
+        os.remove(link)
+    target = os.path.join(os.path.realpath(ctx.root), "usr", "share", "exclave-test-marker")
+    os.symlink(target, link)
+    rc, out, err = run(
+        [wrapper(ctx, "sh"), "-c", f"readlink {link}; cat {link}"], cwd=ctx.work, env=ctx.env
+    )
+    os.remove(link)
+    expect(
+        rc == 0 and out == f"{target}\nmarker\n",
+        f"readlink of a host link into the tree: {out!r} {err!r}",
+    )
+
+
+@test
+def magic_links_to_pathless(ctx: Ctx) -> None:
+    """7.4.3: a magic link to an object with no path reaches the object, as the kernel's walk does.
+
+    stat, statx and faccessat2 through /proc/self/fd/N find the pipe, memfd, inotify descriptor or
+    unlinked file fstat finds, /dev/stdin is the caller's pipe, and an O_TMPFILE file is linked by
+    its magic link. A tree directory named "... (deleted)" is a path all the same: creating under a
+    descriptor on it is EROFS.
+    """
+    prog = os.path.join(ctx.progs, "magic_links")
+    rc, out, err = inside(ctx, prog, ["pathless", ctx.work], inp=b"piped\n")
+    bad = [line for line in out.splitlines() if not line.endswith((" ok", " n/a"))]
+    expect(rc == 0 and out and not bad, f"magic links: rc={rc} {bad!r} {err!r}")
+    ex2 = os.path.join(ctx.work, "deleted-name.exclave")
+    copy_exclave(ctx.exclave, ex2)
+    os.makedirs(os.path.join(ex2, "tree", "usr", "share", "x (deleted)"))
+    rc, out, err = run(
+        [os.path.join(ex2, ".exclave", "launcher"), prog, "deleted-name", "/usr/share/x (deleted)"],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    expect(
+        out == f"create {errno.EROFS}\nmkdir {errno.EROFS}\n",
+        f"a directory named ' (deleted)': rc={rc} {out!r} {err!r}",
+    )
+    expect(
+        not os.listdir(os.path.join(ex2, "tree", "usr", "share", "x (deleted)")),
+        "the tree was written through a descriptor on ' (deleted)'",
+    )
+
+
+@test
+def proc_magic_links(ctx: Ctx) -> None:
+    """/dev/stdin on a pipe, process substitution and /proc/self/fd of a file are reachable."""
+    _rc, out, err = run(
+        [wrapper(ctx, "sh"), "-c", "cat /dev/stdin"], cwd=ctx.work, env=ctx.env, inp=b"hi\n"
+    )
+    expect(out == "hi\n", f"/dev/stdin on a pipe: {out!r} {err!r}")
+    if os.path.exists(wrapper(ctx, "bash")):
+        _rc, out, err = run(
+            [wrapper(ctx, "bash"), "-c", "cat <(echo psub)"], cwd=ctx.work, env=ctx.env
+        )
+        expect(out == "psub\n", f"process substitution: {out!r} {err!r}")
+    _rc, out, err = run(
+        [wrapper(ctx, "sh"), "-c", "exec 3</etc/passwd; head -1 /proc/self/fd/3 | cut -d: -f1"],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    expect(out == "root\n", f"/proc/self/fd of a file: {out!r} {err!r}")
+
+
+@test
+def new_xattr_syscalls(ctx: Ctx) -> str | None:
+    """The *at xattr syscalls of 6.13 are translated.
+
+    On older kernels they are ENOSYS either way.
+    """
+    src = os.path.join(ctx.work, "xat.c")
+    with open(src, "w") as f:
+        f.write(
+            "#include <stdio.h>\n#include <errno.h>\n#include <unistd.h>\n"
+            "#include <sys/syscall.h>\n#include <fcntl.h>\n"
+            "int main(void){char b[64];errno=0;"
+            'long r=syscall(465,AT_FDCWD,"/etc/hostname",0,b,sizeof b);printf("%ld %d\\n",r,errno);'
+            'errno=0;r=syscall(465,AT_FDCWD,"/usr/share/exclave-test-marker",0,b,sizeof b);'
+            'printf("%ld %d\\n",r,errno);return 0;}\n'
+        )
+    exe = os.path.join(ctx.work, "xat")
+    rc, out, err = run([wrapper(ctx, ctx.gcc), "-O1", src, "-o", exe], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, err)
+    rc, out, err = inside(ctx, exe)
+    lines = out.splitlines()
+    if lines and lines[0].endswith(" 38"):
+        return "kernel has no listxattrat"
+    # an exclave that ships the file shows its own
+    own = os.path.lexists(os.path.join(ctx.root, "etc", "hostname"))
+    # SELinux hosts label every file
+    ok = (
+        len(lines) == 2
+        and (lines[0] == "-1 2" if not own else int(lines[0].split()[0]) >= 0)
+        and lines[1].endswith(" 0")
+        and int(lines[1].split()[0]) >= 0
+    )
+    expect(ok, f"listxattrat sees the exclave, not the host: {out!r} {err!r}")
+    return None
+
+
+@test
+def bind_mount_alias(ctx: Ctx) -> str | None:
+    """A second spelling of the tree's root through a bind mount is the tree, read-only."""
+    if subprocess.run(
+        ["unshare", "-Urm", "true"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode:
+        return "no user namespaces"
+    alias = os.path.join(ctx.work, "alias")
+    os.makedirs(alias, exist_ok=True)
+    cmd = (
+        "mount --bind {} {} && {} -c 'touch {}/tree/usr/zz-alias; echo rc=$?; "
+        "cat {}/tree/usr/share/exclave-test-marker'"
+    ).format(ctx.exclave, alias, wrapper(ctx, "sh"), alias, alias)
+    rc, out, err = run(
+        ["unshare", "-Urm", "sh", "-c", cmd], cwd=ctx.work, env=dict(ctx.env, PATH="/usr/bin:/bin")
+    )
+    expect(out == "rc=1\nmarker\n" and "Read-only" in err, f"bind alias: rc={rc} {out!r} {err!r}")
+    expect(
+        not os.path.exists(os.path.join(ctx.root, "usr", "zz-alias")),
+        "the tree was written through a bind mount",
+    )
+    # relative names from a working directory inside the alias: the walk that starts from the
+    # kernel's name of the directory (DESIGN.md 16.6 item 5) must still see the tree there
+    cmd = (
+        "mount --bind {} {} && cd {}/tree/usr && {} -c 'touch zz-alias; echo rc=$?; "
+        "cat share/exclave-test-marker'"
+    ).format(ctx.exclave, alias, alias, wrapper(ctx, "sh"))
+    rc, out, err = run(
+        ["unshare", "-Urm", "sh", "-c", cmd], cwd=ctx.work, env=dict(ctx.env, PATH="/usr/bin:/bin")
+    )
+    expect(
+        out == "rc=1\nmarker\n" and "Read-only" in err,
+        f"bind alias, relative: rc={rc} {out!r} {err!r}",
+    )
+    expect(
+        not os.path.exists(os.path.join(ctx.root, "usr", "zz-alias")),
+        "the tree was written through a bind mount, relative",
+    )
+    return None
+
+
+@test
+def readlink_bad_buffer(ctx: Ctx) -> None:
+    """7.5.6: an unwritable readlink buffer answers EFAULT, not SIGSEGV."""
+    src = os.path.join(ctx.work, "rl.c")
+    with open(src, "w") as f:
+        f.write(
+            "#include <unistd.h>\n#include <errno.h>\n#include <stdio.h>\n"
+            "int main(int c, char **v) { for (int i = 1; i < c; i++) { errno = 0; "
+            'long r = readlink(v[i], (char *)8, 64); printf("%ld %d\\n", r, errno); } return 0; }\n'
+        )
+    exe = os.path.join(ctx.work, "rl")
+    rc, out, err = run([wrapper(ctx, ctx.gcc), "-O1", src, "-o", exe], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, err)
+    # a link in the tree; a directory would be EINVAL before the copy
+    lib = "/lib" if os.path.islink(os.path.join(ctx.root, "lib")) else ctx.vbin("sh")
+    rc, out, err = inside(ctx, exe, [lib, "/proc/self/exe", ctx.vbin("sh"), "/nonexistent"])
+    expect(rc == 0 and out == "-1 14\n-1 14\n-1 14\n-1 2\n", f"bad buffer: rc={rc} {out!r} {err!r}")
+
+
+@test
+def host_symlink_into_usr(ctx: Ctx) -> None:
+    lnk = os.path.join(ctx.work, "lnk")
+    if os.path.lexists(lnk):
+        os.remove(lnk)
+    os.symlink("/usr/share", lnk)
+    _rc, out, err = run(
+        [wrapper(ctx, "cat"), os.path.join(lnk, "exclave-test-marker")], cwd=ctx.work, env=ctx.env
+    )
+    expect(out == "marker\n", f"host symlink into /usr resolves in the exclave: {out!r} {err!r}")
+
+
+@test
+def openat2_resolve(ctx: Ctx) -> str | None:
+    """7.4.3: openat2 in the exclave's world.
+
+    RESOLVE_IN_ROOT and RESOLVE_BENEATH scope the walk to the descriptor's directory,
+    RESOLVE_NO_SYMLINKS refuses the tree's own links as a bind mount would, magic links are refused
+    by the scoped flags, RESOLVE_NO_XDEV refuses the exclave-to-host crossing, the read-only rule
+    holds, and the struct's own rules answer EINVAL before any lookup. Skips on a kernel without
+    openat2.
+    """
+    d = os.path.join(ctx.work, "o2host")
+    os.makedirs(d, exist_ok=True)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "openat2"), [d])
+    if rc == 3:
+        return "no openat2 on this kernel (5.6 and later)"
+    expect(rc == 0 and "FAIL" not in out, out + err)
+    return None
+
+
+@test
+def openat2_xdev(ctx: Ctx) -> str | None:
+    """13 item 22, 7.4.3: an openat2 whose walk never touches the exclave is re-issued as given.
+
+    It keeps its resolve flags, so the kernel enforces RESOLVE_NO_XDEV across the host's own mounts,
+    and the other flags, on host-only walks. The kernel's answers come from this harness itself,
+    natively, for the same cases with the same descriptors (bwrap rebuilds /dev and cannot be the
+    oracle for the host's mounts); the walks that touch the exclave assert the crossing rule. Skips
+    on a kernel without openat2.
+    """
+    d = os.path.join(ctx.work, "xdevhost")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "openat2_xdev"), [d])
+    if rc == 3:
+        return "no openat2 on this kernel (5.6 and later)"
+    expect(rc == 0, out + err)
+    got = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    no_xdev, no_magic, no_symlinks, beneath, in_root = 1, 2, 4, 8, 16
+    rd, rd_dir = os.O_RDONLY, os.O_RDONLY | os.O_DIRECTORY
+    dev, proc, hd = (os.open(x, os.O_PATH | os.O_DIRECTORY) for x in ("/dev", "/proc", d))
+    cases = [
+        ("no_xdev cwd to .", -100, ".", rd_dir, no_xdev),
+        ("no_xdev cwd to sub", -100, "sub", rd_dir, no_xdev),
+        ("no_xdev cwd to ..", -100, "..", rd_dir, no_xdev),
+        ("no_xdev /dev fd to null", dev, "null", rd, no_xdev),
+        ("no_xdev /dev fd to shm", dev, "shm", rd_dir, no_xdev),
+        ("no_xdev /dev fd to ..", dev, "..", rd_dir, no_xdev),
+        ("no_xdev /proc fd to self/status", proc, "self/status", rd, no_xdev),
+        ("no_xdev host fd to file", hd, "file", rd, no_xdev),
+        ("no_symlinks host fd to lnk", hd, "lnk", rd, no_symlinks),
+        ("no_symlinks host fd to file", hd, "file", rd, no_symlinks),
+        ("no_magiclinks /proc fd to self/status", proc, "self/status", rd, no_magic),
+        ("no_magiclinks /proc fd to version", proc, "version", rd, no_magic),
+        ("beneath host fd to sub", hd, "sub", rd_dir, beneath),
+        ("beneath host fd to ..", hd, "..", rd_dir, beneath),
+        ("beneath host fd to sub/..", hd, "sub/..", rd_dir, beneath),
+        ("in_root host fd to /etc/passwd", hd, "/etc/passwd", rd, in_root),
+        ("in_root host fd to ../../../file", hd, "../../../file", rd, in_root),
+        ("in_root /dev fd to /null", dev, "/null", rd, in_root),
+        ("beneath|no_xdev /dev fd to shm", dev, "shm", rd_dir, beneath | no_xdev),
+    ]
+    here = os.getcwd()
+    os.chdir(d)  # the AT_FDCWD cases start where the program started them
+    try:
+        bad = []
+        for label, dfd, path, flags, resolve in cases:
+            how = (ctypes.c_ulonglong * 3)(flags, 0, resolve)
+            r = libc.syscall(437, dfd, path.encode(), how, 24)
+            native = "ret=0 errno=0" if r >= 0 else f"ret=-1 errno={ctypes.get_errno()}"
+            if r >= 0:
+                os.close(r)
+            if got.get(label) != native:
+                bad.append(f"{label}: the exclave says {got.get(label)}, the kernel says {native}")
+    finally:
+        os.chdir(here)
+        for fd in (dev, proc, hd):
+            os.close(fd)
+    expect(not bad, "; ".join(bad))
+    # a .. that reaches the root is the walk's
+    crossing = {
+        "no_xdev cwd to /dev/null": "ret=-1 errno=18",
+        "no_xdev cwd to /dev/shm": "ret=-1 errno=18",
+        "no_xdev cwd to /proc/self/status": "ret=-1 errno=18",
+        "no_xdev cwd to /usr/share (exclave)": "ret=0 errno=0",
+        "no_xdev host fd to /dev/null (absolute)": "ret=-1 errno=18",
+        "root by .. from host fd is the tree's": "yes",
+        "no_xdev host fd to the root by ..": "ret=-1 errno=18",
+    }
+    bad = [f"{k}: {got.get(k)}, wanted {v}" for k, v in crossing.items() if got.get(k) != v]
+    expect(not bad, "the exclave-to-host crossing under RESOLVE_NO_XDEV: " + "; ".join(bad))
+    return None
+
+
+@test
+def path_length(ctx: Ctx) -> str | None:
+    """13 item 13, 7.4.4: an exclave path too long for PATH_MAX is ENAMETOOLONG.
+
+    An exclave path whose real spelling, the root prefix and the virtual path, would not fit
+    PATH_MAX is refused with ENAMETOOLONG and never cut to a shorter name, which would answer
+    ENOENT for the cut; its parent, which fits, is fine. And a relative path from a working
+    directory so deep that the two together pass PATH_MAX is ENAMETOOLONG too, where the kernel,
+    walking relatively, succeeds: the stated limitation. On a private copy of the exclave, since the
+    chain is made in the tree.
+    """
+    copy = os.path.join(ctx.work, "lengthexclave")
+    shutil.rmtree(copy, ignore_errors=True)
+    copy_exclave(ctx.exclave, copy)
+    rootlen = len(os.path.join(copy, "tree"))
+    if rootlen > 200:
+        return "the work directory's path is too long for the window: skipped"
+    base = "/usr/share/exclave-deep"
+    # /usr/share
+    fd = os.open(os.path.join(copy, "tree", base.lstrip("/")[:9]), os.O_RDONLY | os.O_DIRECTORY)
+    os.mkdir("exclave-deep", dir_fd=fd)
+    nfd = os.open("exclave-deep", os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+    os.close(fd)
+    fd = nfd
+    v = base
+    for _i in range(19):  # 19 components of 200: 3839 characters
+        os.mkdir("a" * 200, dir_fd=fd)
+        nfd = os.open("a" * 200, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+        os.close(fd)
+        fd = nfd
+        v += "/" + "a" * 200
+    parent = v
+    # a directory whose real spelling is exactly PATH_MAX long
+    last = "b" * (PATH_MAX - rootlen - len(v) - 1)
+    os.mkdir(last, dir_fd=fd)
+    nfd = os.open(last, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+    os.close(fd)
+    fd = nfd
+    with os.fdopen(os.open("f", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fd), "w") as f:
+        f.write("deep\n")
+    os.close(fd)
+    deep, dfile = v + "/" + last, v + "/" + last + "/f"
+    expect(
+        len(dfile) < PATH_MAX and rootlen + len(deep) == PATH_MAX,
+        f"the window: root {rootlen}, dir {len(deep)}, file {len(dfile)}",
+    )
+    # the deep working directory on the host: 14 components of 200 below the work directory, then 7
+    # more reached relatively
+    d = "d" * 200
+    hostdeep = os.path.join(ctx.work, "deepcwd")
+    os.makedirs(hostdeep)
+    fd = os.open(hostdeep, os.O_RDONLY | os.O_DIRECTORY)
+    for _i in range(14):
+        os.mkdir(d, dir_fd=fd)
+        nfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+        os.close(fd)
+        fd = nfd
+        hostdeep = os.path.join(hostdeep, d)
+    with os.fdopen(os.open("f", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fd), "w") as f:
+        f.write("here\n")
+    rel = ""
+    for _i in range(7):
+        os.mkdir(d, dir_fd=fd)
+        nfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+        os.close(fd)
+        fd = nfd
+        rel += d + "/"
+    with os.fdopen(os.open("f", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fd), "w") as f:
+        f.write("below\n")
+    os.close(fd)
+    rel += "f"
+    expect(
+        len(hostdeep) < PATH_MAX and len(hostdeep) + 1 + len(rel) > PATH_MAX,
+        f"the deep working directory: {len(hostdeep)} + {len(rel)}",
+    )
+    rc, out, err = run(
+        [
+            os.path.join(copy, ".exclave", "launcher"),
+            os.path.join(ctx.progs, "path_length"),
+            parent,
+            deep,
+            dfile,
+            "cd:" + hostdeep,
+            rel,
+            "f",
+        ],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    expect(rc == 0, f"path_length: rc={rc} {out!r} {err!r}")
+    want = [
+        "1: stat=ok open=ok",
+        "2: stat=ENAMETOOLONG open=ENAMETOOLONG",
+        "3: stat=ENAMETOOLONG open=ENAMETOOLONG",
+        "4: stat=ENAMETOOLONG open=ENAMETOOLONG",
+        "5: stat=ok open=ok",
+    ]
+    expect(
+        out.splitlines() == want,
+        "the parent fits, the directory at the limit and its file are ENAMETOOLONG, a relative "
+        "path past PATH_MAX from a deep working directory is ENAMETOOLONG (13), a short one is "
+        f"fine: {out!r}",
+    )
+    shutil.rmtree(copy, ignore_errors=True)
+    return None
+
+
+@test
+def unix_socket(ctx: Ctx) -> None:
+    """7.4.3, 13 item 31: a sockaddr_un's path is a path.
+
+    bind and connect at a path of every class answer what the kernel answers on a read-only bind
+    mount (the namespace oracle measured these): a bind on an exclave path is EADDRINUSE for an
+    existing name and EROFS otherwise, from a working directory inside the tree too; a connect to an
+    exclave path is ENOENT, ENOTDIR or ECONNREFUSED; host paths and abstract names work; the
+    structure's own limits are EINVAL. A datagram destination in sendto stays as written (13), so
+    only its host case is asserted.
+    """
+    # absolute host names a program can write in sun_path's 108 bytes
+    d = f"/tmp/exclave-sockhost-{os.getpid()}"
+    # relative ones from a working directory deeper than sun_path holds
+    deep = os.path.join(ctx.work, "sockhost")
+    deep = os.path.join(deep, "d" * max(1, 120 - len(deep)))
+    shutil.rmtree(os.path.join(ctx.work, "sockhost"), ignore_errors=True)
+    for p in (d, deep):
+        shutil.rmtree(p, ignore_errors=True)
+        os.makedirs(p)
+    try:
+        rc, out, err = inside(
+            ctx,
+            os.path.join(ctx.progs, "unix_socket"),
+            [d, "/usr/share", ctx.vbin("true"), "/usr/share/exclave-test.sock", deep],
+        )
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    expect(rc == 0, f"unix_socket: {out!r} {err!r}")
+    got = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
+    want = {
+        "bind host dir": "ret=0 errno=0",
+        "bind /tmp": "ret=0 errno=0",
+        "bind exclave dir": "ret=-1 errno=30",
+        "bind existing exclave file": "ret=-1 errno=98",
+        "bind existing exclave socket": "ret=-1 errno=98",
+        "bind missing exclave parent": "ret=-1 errno=2",
+        "bind under an exclave file": "ret=-1 errno=20",
+        "bind exclave dir itself": "ret=-1 errno=98",
+        "bind exclave dir trailing slash name": "ret=-1 errno=2",
+        "bind abstract": "ret=0 errno=0",
+        "bind relative in host cwd": "ret=0 errno=0",
+        "bind relative in exclave cwd": "ret=-1 errno=30",
+        "connect host listener": "ret=0 errno=0",
+        "connect host socket no listener": "ret=-1 errno=111",
+        "connect exclave file": "ret=-1 errno=111",
+        "connect exclave socket": "ret=-1 errno=111",
+        "connect missing exclave path": "ret=-1 errno=2",
+        "connect exclave dir": "ret=-1 errno=111",
+        "connect under an exclave file": "ret=-1 errno=20",
+        "connect missing host path": "ret=-1 errno=2",
+        "sendto host dgram": "ret=1 errno=0",
+        "bind through /proc/self/cwd": "ret=0 errno=0",
+        "connect through /proc/self/cwd": "ret=0 errno=0",
+        "bind addrlen too long": "ret=-1 errno=22",
+        "bind addrlen too short": "ret=-1 errno=22",
+        "bind wrong family": "ret=-1 errno=22",
+        "bind exclave path of 107 bytes": "ret=-1 errno=30",
+        "connect exclave path of 107 bytes": "ret=-1 errno=2",
+    }
+    bad = [
+        f"{k}: got {got.get(k)}, the kernel says {v}" for k, v in want.items() if got.get(k) != v
+    ]
+    expect(not bad, "; ".join(bad))
+    expect(
+        not os.path.exists(os.path.join(ctx.root, "usr", "share", "sock-rel")),
+        "a relative bind from a working directory inside the tree wrote into the tree",
+    )

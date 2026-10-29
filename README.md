@@ -443,7 +443,8 @@ fetch/debs.py        resolve a closure from a Debian archive and download it: In
 fetch/apks.py        the same for an Alpine repository: the index against the key its signature names, each package's checksums as apk checks them
 fetch/rpms.py        the same for a yum or dnf repository: every rpm's own signatures as rpm checks them, repomd.xml's where the repository signs it
 fetch/verify.py      the signature checks the fetchers share: gpgv for OpenPGP, openssl for Alpine's RSA, armoured keys decoded
-test/run.py          the regression suite; test/progs/ its C, Rust and Go programs
+test/run.py          the regression suite: test/regress_*.py its tests in eight groups, test/suite.py its fixtures,
+                     test/harness.py the runner it shares with the unpack tests; test/progs/ its C, Rust and Go programs
 test/unpack_test.py  unpack's rules on hostile .deb, .apk and .rpm files; test/packages.py builds them
 test/fetch_test.py   the fetchers' signature checks, on repositories made and signed there
 test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it

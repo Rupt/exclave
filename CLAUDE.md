@@ -31,7 +31,7 @@ The loop that has served well, in the order it pays:
    own construction or a stated limitation goes into the probe's
    `EXPECTED` list with the rule that makes it right, since a
    difference accepted without a reason hides the next defect.
-3. **Regression.** The exerciser becomes a named test in `test/run.py`
+3. **Regression.** The exerciser becomes a named test in `test/regress_*.py`
    asserting the kernel's answers. A test that asserts what the tree
    says rather than what Debian says (`test/tree.py`, `tree_facts`)
    passes on every exclave kind, and an exclave kind that cannot answer
@@ -194,7 +194,7 @@ The loop that has served well, in the order it pays:
   stale fixture goes for the next run to remake. After rebuilding the launcher,
   `scripts/exclave relink EXCLAVE` refreshes an exclave; replacing
   `.exclave/launcher` alone leaves the wrappers linked to the old file.
-- **Tests are independent.** A test in `test/run.py` makes what it
+- **Tests are independent.** A test of `test/run.py` makes what it
   needs and leaves the shared context alone; the fixtures are the exclave,
   the compiled programs and the environment made at setup. `--order
   random` and `--order reverse` are expected to pass like the given
