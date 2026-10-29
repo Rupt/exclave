@@ -11,6 +11,32 @@ by numbered item, "(13 item 31)", "(17 item 4)"; those numbers are
 stable. Two short forms appear in the code: "8.1.N" means rule N of
 8.1, and "17.N" means item N of section 17.
 
+**Contents.** Sections 1 to 5 say what exclave is for and name its
+parts; 6 to 10 specify it; 11 to 13 bound it; 14 to 19 justify and
+measure it.
+
+| Section | What it holds |
+|---|---|
+| 1. Summary | the design in a page |
+| 2. Status | what exists, what is tested, the counts |
+| 3. Goals and non-goals | what exclave is for, and what it will not do |
+| 4. Problem analysis | why a program is bound to its host |
+| 5. Concepts and names | the words the rest uses |
+| 6. The exclave format | the directory, the manifest, the hashes file |
+| 7. The launcher | the filter, the handler, the loader, exec |
+| 8. Visibility rule | which paths are the exclave's and which the host's |
+| 9. Compilers specifically | toolchains, sysroots and their outputs |
+| 10. The `exclave` command | unpack, wrap, check, prune, release |
+| 11. Layers | why there are none |
+| 12. Portability envelope | the kernels and hosts it runs on, measured |
+| 13. Limitations and risks | each numbered, each with its cause |
+| 14. Alternatives considered | what was tried or weighed, and why not |
+| 15. Related work | the relatives, each with what it shares |
+| 16. Performance | where the time goes, measured |
+| 17. Testing | the gate, the oracles, the matrix |
+| 18. Roadmap | what is open |
+| 19. Design decisions | what is settled, and where it is specified |
+
 ## 1. Summary
 
 exclave turns Linux software that depends on its environment,
