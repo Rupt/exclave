@@ -3522,19 +3522,19 @@ pace.
 
 | Workload | native | exclave |
 |---|---|---|
-| `stat()`, three-component exclave path | 304 ns | 1.90 µs |
-| `stat()`, seven-component exclave path | 346 ns | 2.46 µs |
-| `stat()`, seven-component host path | 360 ns | 3.57 µs |
-| `stat()`, relative name, working directory six deep on the host | 277 ns | 2.74 µs |
-| `realpath()` of that working directory | 0.98 µs | 13.3 µs |
-| `getppid()`, untrapped | 45 ns | 55 ns |
+| `stat()`, three-component exclave path | 302 ns | 1.88 µs |
+| `stat()`, seven-component exclave path | 345 ns | 2.36 µs |
+| `stat()`, seven-component host path | 346 ns | 3.48 µs |
+| `stat()`, relative name, working directory six deep on the host | 276 ns | 2.72 µs |
+| `realpath()` of that working directory | 0.77 µs | 10.9 µs |
+| `getppid()`, untrapped | 44 ns | 53 ns |
 | `posix_spawn` of `/usr/bin/true`, against native | 1 | 2.0 times |
 | 100 000 `posix_spawn`s from one process, RSS | +200 kB | +152 kB |
 | thirty `gcc -O0 hello.c` | 0.56 s | 0.74 s |
 | a 61-file project, `-O1 -c` each then link | 0.55 s | 0.74 s |
 | CPU time of one `gcc -O0 hello.c`, `perf stat` | 19.0 ms | 24.2 ms |
 | `gcc -O2 -c sqlite3.c` | 14.00 s | 13.75 s, identical object |
-| syscalls for one `gcc -O0 hello.c`, all processes (`strace -f -c`) | 2 650 | 11 889 |
+| syscalls for one `gcc -O0 hello.c`, all processes (`strace -f -c`) | 2 651 | 11 179 |
 
 Thirty small compiles cost 32% more than natively, the 61-file project
 35% more, and a small compile's CPU time 27% more. The compute-bound
