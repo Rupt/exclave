@@ -204,7 +204,20 @@ struct walk_ctx {
     const char *libc_soname;
     struct report *rep;
     struct set seen, reached;
+    const struct objects *libraries; /* every library in the tree, for a soname no search finds */
 };
+
+/* a library of the tree whose DT_SONAME is name, outside the data directories, or NULL; a name with a slash is a path,
+ * which the loader opens and never matches by soname */
+static const char *by_soname(const struct walk_ctx *w, const char *name)
+{
+    if (strchr(name, '/')) return NULL;
+    for (size_t i = 0; i < w->libraries->n; i++) {
+        const struct object *o = &w->libraries->o[i];
+        if (o->e.soname && !strcmp(o->e.soname, name) && !under_any(o->vpath, w->data)) return o->vpath;
+    }
+    return NULL;
+}
 
 /* the DT_NEEDED entries of an object the walk has reached through chain, and theirs */
 static void check_object(struct walk_ctx *w, const char *vpath, const struct elf *e, const struct strs *rpaths,
@@ -243,7 +256,16 @@ static void check_object(struct walk_ctx *w, const char *vpath, const struct elf
                 buf_str(&path, next.s[c]);
             }
             buf_add(&path, "", 1);
-            addf(&w->rep->errors, "%s needs %s, which does not resolve in the tree (chain %s)", vpath, n, path.p);
+            /* no search finds it, so no host library can stand in for it either: an error when the tree lacks it,
+             * a package missing; a warning when the tree has it elsewhere, which loads only when a program has
+             * opened it first by its path, as the JVM opens its libjvm.so (10.3) */
+            const char *elsewhere = by_soname(w, n);
+            if (elsewhere)
+                addf(&w->rep->warnings,
+                     "%s needs %s, which no search finds; the tree has it at %s, loaded only once a program has "
+                     "opened it by its path (chain %s)",
+                     vpath, n, elsewhere, path.p);
+            else addf(&w->rep->errors, "%s needs %s, which does not resolve in the tree (chain %s)", vpath, n, path.p);
             free(path.p);
             continue;
         }
@@ -387,7 +409,7 @@ void static_check(const char *ex, const struct ownership *own, const struct strs
                  major, minor);
     }
     struct search search = {root, has_cache ? &cache : NULL, &defaults, interp, own, NULL};
-    struct walk_ctx w = {root, data, &search, musl ? musl_soname : GLIBC_SONAME, rep, {0}, {0}};
+    struct walk_ctx w = {root, data, &search, musl ? musl_soname : GLIBC_SONAME, rep, {0}, {0}, &s.libraries};
     struct strs none = {0};
     for (size_t i = 0; i < s.executables.n; i++) /* executables first, so that RPATH inheritance is seen */
         check_object(&w, s.executables.o[i].vpath, &s.executables.o[i].e, &none, &none);

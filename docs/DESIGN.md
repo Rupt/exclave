@@ -1932,7 +1932,10 @@ refused. From `.deb` files, in five steps:
    `update-alternatives --install` line in a `postinst`, with its
    slaves, the highest priority winning unless a `--set` names one,
    which yields `awk`, `which`, `pager`, `cc` and the rest without a
-   per-package list; `busybox-applets`, Alpine's applet links from
+   per-package list; `java-jinfo`, a Debian JDK's tool links from the
+   `/usr/lib/jvm/.*.jinfo` file it ships for `update-java-alternatives`,
+   since its `postinst` makes them in a loop, the highest priority
+   winning; `busybox-applets`, Alpine's applet links from
    `/etc/busybox-paths.d`; `sbin-merge`, Fedora's `/usr/sbin` as a link
    to `bin`; `dash-sh`; `ca-certificates`, `ca-certificates.crt`
    concatenated from the certificates `ca-certificates.conf` enables;
@@ -2144,7 +2147,13 @@ outside data directories, reading originals in place of wrappers.
   subdirectories on x86-64. The loader satisfies its own soname without
   a search, as `ld.so` does. Executables are checked first, so that
   `RPATH` inheritance down a chain is seen; a library that nothing
-  reaches is a `dlopen` candidate and is checked on its own.
+  reaches is a `dlopen` candidate and is checked on its own. A
+  `DT_NEEDED` that no search finds, when the tree has a library of that
+  soname elsewhere, is a warning naming where: no host library can
+  stand in for it, and it loads once a program has opened it by its
+  path, as the JVM opens `lib/server/libjvm.so` before the libraries
+  that need `libjvm.so`. One the tree lacks altogether is an error, a
+  package missing from the set.
 - A search directory the exclave does not own, on an `RPATH` or among
   the defaults, is an error, since the host's library would load from
   it. A tree that does not own `/etc` is an error, since the loader
@@ -4072,6 +4081,16 @@ the gate cannot afford. Each runs when its input variable is set:
 - python3 in the exclave: `test/bytecode.py` makes Python's bytecode
   by the two-phase pattern (10.1) and times the imports before and
   after.
+- `EXCLAVE_TEST_INPUTS`: `test/workloads.py` runs six real workloads
+  in exclaves of their own, each in the same work directory under
+  `bwrap` with the tree read-only at `/` and under the launcher,
+  and compares the outputs byte for byte, the hashes of what the builds
+  make included: valgrind's memcheck over a faulty program, `pdftotext`,
+  `pdffonts` and `pdftoppm` of a PDF with embedded fonts and a
+  substituted one, a cargo build, zlib built by CMake and ninja with four
+  jobs, a Java program run as source and compiled by `javac`, and a
+  Python process with threads, subprocesses and sqlite. All six agree;
+  each takes under two seconds in either world.
 - `EXCLAVE_TEST_DEBS_ARM64`: the emulated aarch64 row, with
   `EXCLAVE_TEST_DOCKER` adding the Docker profile run.
 
@@ -4114,10 +4133,13 @@ The format, the launcher and the tool are complete for what section 3
 asks of them. What comes next is use, releases and a few open
 questions.
 
-1. **Exclaves of real packaged software.** The exclaves built so far
-   are compilers and the tool itself. The next exclaves are of real
-   packaged software that people run, and they decide which of the
-   tool's synthesis gaps close (10.1): `unpack` does not generate
+1. **Exclaves of real packaged software.** Beyond the compilers, the
+   example runs make exclaves of valgrind, poppler, Rust, CMake, a Java
+   JDK and Python and run them against the kernel (17); the JDK closed
+   two gaps, its alternatives (`java-jinfo`) and the static check's
+   refusal of a soname only a prior `dlopen` by path provides (10.3).
+   Further real software decides which of the tool's synthesis gaps
+   close next (10.1): `unpack` does not generate
    locales, GLib schemas, MIME or font caches, or Python bytecode, and a
    gap closes when a real exclave needs it, as a rule in the synthesis
    table rather than an option. `unpack`'s notes name the caches a tree

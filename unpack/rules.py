@@ -102,8 +102,8 @@ def alternatives(r: Root, packages: list[Package], log: Log) -> bool:
         if _UA_ANY.search(text) and not matched:
             log(
                 f"note: {pkg.name}'s postinst calls update-alternatives in a form the "
-                "alternatives rule does not read, variables or a loop: its alternatives are not "
-                "made"
+                "alternatives rule does not read, variables or a loop: its alternatives are made "
+                "only where another rule makes them"
             )
     made = False
     for gname, cands in groups.items():
@@ -118,6 +118,34 @@ def alternatives(r: Root, packages: list[Package], log: Log) -> bool:
             if r.lexists(starget):
                 made |= _link(r, "/etc/alternatives/" + sname, starget, log, replace=True)
                 made |= _link(r, slink, "/etc/alternatives/" + sname, log, replace=True)
+    return made
+
+
+def java_jinfo(r: Root, _packages: list[Package], log: Log) -> bool:
+    """Debian's JDKs: the alternatives a /usr/lib/jvm/.*.jinfo file lists.
+
+    The JDK's postinst makes them in a loop the alternatives rule cannot read; the file it ships
+    for update-java-alternatives names the JDK's priority and, a line each, every tool and its
+    path. Each tool's /usr/bin link goes through /etc/alternatives to the highest priority's path,
+    where nothing stands there already.
+    """
+    best: dict[str, tuple[int, str]] = {}
+    if not r.isdir("/usr/lib/jvm"):
+        return False
+    for name in sorted(r.listdir("/usr/lib/jvm")):
+        if not (name.startswith(".") and name.endswith(".jinfo")):
+            continue
+        text = r.read_text("/usr/lib/jvm/" + name)
+        m = re.search(r"^priority=(\d+)$", text, re.MULTILINE)
+        prio = int(m.group(1)) if m else 0
+        for t in re.finditer(r"^(?:jre|jdk|hl|jdkhl)\s+(\S+)\s+(/\S+)$", text, re.MULTILINE):
+            tool, target = t.groups()
+            if r.lexists(target) and (tool not in best or prio > best[tool][0]):
+                best[tool] = (prio, target)
+    made = False
+    for tool, (_prio, target) in sorted(best.items()):
+        made |= _link(r, "/etc/alternatives/" + tool, target, log)
+        made |= _link(r, "/usr/bin/" + tool, "/etc/alternatives/" + tool, log)
     return made
 
 
@@ -349,6 +377,7 @@ RULES: tuple[Rule, ...] = (
         "the links of every update-alternatives --install line, --set honoured",
         alternatives,
     ),
+    Rule("java-jinfo", "a JDK's tool links from its /usr/lib/jvm/.*.jinfo file", java_jinfo),
     Rule("busybox-applets", "busybox's applet links from /etc/busybox-paths.d", busybox_applets),
     Rule("sbin-merge", "Fedora's /usr/sbin and /usr/local/sbin as links to bin", sbin_merge),
     Rule("dash-sh", "dash's /bin/sh", dash_sh),

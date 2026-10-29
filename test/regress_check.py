@@ -128,7 +128,8 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
     absolute link in the tree, and a link is judged in the tree though the host has a directory
     where it points; a separate debug file, whose segments carry no bytes, is not a program; a
     DT_NEEDED that is a path through $ORIGIN resolves where glibc's loader expands it, and not under
-    musl's, which does not.
+    musl's, which does not; a soname no search finds is a warning naming where the tree has it,
+    as the JVM's libjvm.so, which it opens by path before the libraries that need it.
     """
     x = os.path.join(ctx.root, "usr", "local", "x")
     base = os.path.join(x, "lib")
@@ -196,6 +197,23 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
                 "bar.c",
             ],
             ["-o", os.path.join(built, "dstprog"), "dst.c", "-L" + built, "-l:libdst.so"],
+            [
+                "-shared",
+                "-fPIC",
+                "-Wl,-soname,libjvmish.so",
+                "-o",
+                os.path.join(built, "libjvmish.so"),
+                "bar.c",
+            ],
+            [
+                "-shared",
+                "-fPIC",
+                "-o",
+                os.path.join(built, "libneed.so"),
+                "foo.c",
+                "-L" + built,
+                "-l:libjvmish.so",
+            ],
         ):
             rc, out, err = run([gcc, *cmd], cwd=src, env=ctx.env)
             expect(rc == 0, err)
@@ -219,7 +237,20 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
         shutil.copy2(os.path.join(built, "dstprog"), os.path.join(x, "bin", "dstprog"))
         for f in ("prog", "hostprog"):
             shutil.copy2(os.path.join(built, f), os.path.join(x, f))
-        errors, _warnings, _out = check(ctx.exclave)
+        # the soname found only where no search reaches: a library in a directory of its own
+        for d, f in (("server", "libjvmish.so"), ("jvmlib", "libneed.so")):
+            os.makedirs(os.path.join(x, d), exist_ok=True)
+            shutil.copy2(os.path.join(built, f), os.path.join(x, d, f))
+        errors, warnings, _out = check(ctx.exclave)
+        expect(
+            not [e for e in errors if "libjvmish" in e]
+            and any(
+                "libneed.so needs libjvmish.so, which no search finds" in w
+                and "/usr/local/x/server/libjvmish.so" in w
+                for w in warnings
+            ),
+            f"a soname the tree has where no search reaches is a warning: {errors[:2]!r}",
+        )
         bad = [
             e for e in errors if "/usr/local/x/prog" in e or ("libfoo" in e and "hostprog" not in e)
         ]

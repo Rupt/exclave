@@ -219,41 +219,33 @@ def run_launcher(
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    ap.add_argument("--exclave", required=True)
-    ap.add_argument("--work", default=os.path.join(REPO, "build", "oracle-work"))
-    ap.add_argument("--keep", action="store_true")
-    args = ap.parse_args()
+def bwrap_unusable() -> str | None:
+    """Why the kernel's world cannot be made here, or None: bwrap missing or namespaces denied."""
     if not shutil.which("bwrap"):
-        print("no bwrap; the namespace oracle cannot run here")
-        return 0
+        return "no bwrap"
     if subprocess.run(
         ["bwrap", "--ro-bind", "/", "/", "true"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
     ).returncode:
-        print("bwrap cannot create namespaces here (user namespaces denied); the oracle cannot run")
-        return 0
-    work = os.path.abspath(args.work)
-    if os.path.exists(work):
-        shutil.rmtree(work)
-    os.makedirs(work)
-    # the launcher's world: a copy relinked with the build (17)
-    ex = tree.fresh_exclave(os.path.abspath(args.exclave), os.path.join(work, "exclave"))
-    # an unwrapped copy of the tree for bwrap: hard links, then the originals moved back over the
-    # wrappers
+        return "bwrap cannot create namespaces here (user namespaces denied)"
+    return None
+
+
+def worlds(given: str, work: str) -> tuple[str, str]:
+    """Make the two worlds under work from the exclave given: the launcher's and the kernel's.
+
+    Returns the launcher's exclave, a copy relinked with the build (17), and the kernel's root, an
+    unwrapped copy of its tree for run_bwrap: hard links, then the originals moved back over the
+    wrappers. An identity file that is a host symlink gets a symlink with the host's text in the
+    copy, since a bind of the host's file would hide the link text the launcher reports (8.4), and
+    run_bwrap binds its target.
+    """
+    ex = tree.fresh_exclave(given, os.path.join(work, "exclave"))
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=tree.link_or_copy)
     tree.unwrap_tree(os.path.join(work, "bare"))
-    with open(os.path.join(root, "usr", "share", "exclave-test-marker"), "w") as f:
-        f.write("marker\n")
-    # an identity file that is a host symlink: a bind of the host's file would hide its link text,
-    # which the launcher reports (8.4); the copy gets a symlink with the host's text, and run_bwrap
-    # binds the target
     for f in IDENTITY:
         p_ = os.path.join(root, f.lstrip("/"))
         if os.path.islink(f) and os.path.lexists(p_):
@@ -266,6 +258,28 @@ def main() -> int:
                 os.makedirs(os.path.dirname(tp), exist_ok=True)
                 with open(tp, "wb"):
                     pass
+    return ex, root
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("--exclave", required=True)
+    ap.add_argument("--work", default=os.path.join(REPO, "build", "oracle-work"))
+    ap.add_argument("--keep", action="store_true")
+    args = ap.parse_args()
+    why = bwrap_unusable()
+    if why:
+        print(f"{why}; the oracle cannot run")
+        return 0
+    work = os.path.abspath(args.work)
+    if os.path.exists(work):
+        shutil.rmtree(work)
+    os.makedirs(work)
+    ex, root = worlds(os.path.abspath(args.exclave), work)
+    with open(os.path.join(root, "usr", "share", "exclave-test-marker"), "w") as f:
+        f.write("marker\n")
     with open(os.path.join(work, "hello.c"), "w") as f:
         f.write(
             "#include <stdio.h>\n"

@@ -465,6 +465,7 @@ test/matrix.py       the kernel matrix in VMs, carrying the pinned Python for ea
 test/sysroot.py      a glibc sysroot as a data directory and an output built against it with gcc and clang, for the matrix to run natively
 test/bytecode.py     Python's bytecode made by the two-phase pattern, a cache only the tree's own binary can make, timed before and after
 test/realsoft.py     real projects built inside and outside an exclave; test/bench.py the performance table
+test/workloads.py    valgrind, poppler, cargo, CMake, Java and Python in their own exclaves, against the kernel
 test/syscalls.py     every kernel syscall classified; test/stackcheck.py the stack budget
 test/affected.py     the gate's steps a change reaches, derived from what each step runs; test/figures.py the figures the documents quote, checked against the tree
 test/tables_test.py  the tables the launcher, the command, unpack and the tests each carry, read from every source and compared

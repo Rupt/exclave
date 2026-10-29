@@ -524,6 +524,7 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
 
     A postinst that builds its update-alternatives lines from variables is noted, since its
     alternatives are not made, and a trigger interest the tree lacks a cache for is noted by name.
+    A JDK's tools are linked from its .jinfo file, the highest priority's winning.
     """
     alt = package(
         ctx,
@@ -566,13 +567,38 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
         [("usr/lib/python3.12/os.py", "file", b"pass\n", 0o644)],
         control_files=[("triggers", "interest-noawait /usr/lib/python3.12\n")],
     )
-    root, out = accepted(ctx, "rules", [alt, loopy, py])
+    jdks = [
+        package(
+            ctx,
+            "deb",
+            f"jdk{n}",
+            [
+                (f"usr/lib/jvm/jdk{n}/bin/java", "file", b"#!/bin/sh\n", 0o755),
+                (
+                    f"usr/lib/jvm/.jdk{n}.jinfo",
+                    "file",
+                    f"name=jdk{n}\npriority={10 * n}\nsection=main\n\n"
+                    f"hl java /usr/lib/jvm/jdk{n}/bin/java\n".encode(),
+                    0o644,
+                ),
+            ],
+        )
+        for n in (1, 2)
+    ]
+    root, out = accepted(ctx, "rules", [alt, loopy, py, *jdks])
+    expect(
+        os.readlink(os.path.join(root, "usr", "bin", "java")) == "/etc/alternatives/java"
+        and os.readlink(os.path.join(root, "etc", "alternatives", "java"))
+        == "/usr/lib/jvm/jdk2/bin/java",
+        "the JDK of the higher priority is not linked: " + out[-400:],
+    )
     expect(
         os.readlink(os.path.join(root, "etc", "alternatives", "x")) == "/usr/bin/x-1",
         "--set did not choose the alternative: " + out[-400:],
     )
     expect(
-        "synthesis rules applied: alternatives\n" in out, "the applied rules are not named: " + out
+        "synthesis rules applied: alternatives, java-jinfo\n" in out,
+        "the applied rules are not named: " + out,
     )
     expect(
         "note: loopy's postinst calls update-alternatives in a form the alternatives rule does not"
