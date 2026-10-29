@@ -1019,6 +1019,16 @@ def errnos(b: str, o: str) -> tuple[int, int]:
     )
 
 
+def exec_errnos(b: str, o: str) -> tuple[int, int]:
+    """An exec's errnos: the probe runs it in a child whose wait status is 100 + errno (probe.c)."""
+
+    def one(a: str) -> int:
+        status = int(a.split("ret=")[1].split(maxsplit=1)[0])
+        return (status >> 8) - 100
+
+    return one(b), one(o)
+
+
 # differences with a reason: (syscall name or None, predicate on (label, bwrap answer, launcher
 # answer), reason). The list is part of the design (17): each entry names the rule that makes the
 # difference right.
@@ -1210,7 +1220,9 @@ EXPECTED.extend(
         (
             "execveat",
             lambda label, b, o: (
-                KERNEL < (6, 14) and label.endswith("/check") and errnos(b, o)[0] == errno.EINVAL
+                KERNEL < (6, 14)
+                and label.endswith("/check")
+                and exec_errnos(b, o)[0] == errno.EINVAL
             ),
             (
                 "AT_EXECVE_CHECK is 6.14+: this kernel refuses it as unknown before the lookup "
@@ -1221,7 +1233,9 @@ EXPECTED.extend(
         (
             "execveat",
             lambda label, b, o: (
-                KERNEL < (7, 0) and label.endswith("/bad_flag") and errnos(b, o)[1] == errno.EINVAL
+                KERNEL < (7, 0)
+                and label.endswith("/bad_flag")
+                and exec_errnos(b, o)[1] == errno.EINVAL
             ),
             (
                 "an unknown execveat flag: this kernel reads the name first (EFAULT, "
