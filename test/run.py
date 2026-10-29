@@ -936,6 +936,25 @@ def script_argv0_as_given(ctx: Ctx) -> None:
 
 
 @test
+def wrapped_script_from_outside(ctx: Ctx) -> None:
+    """A wrapped script run from outside gets its own virtual path as $0 (13 item 39)."""
+    link = os.path.join(ctx.work, f"shortcut-{os.getpid()}")
+    os.symlink(os.path.join(ctx.root, "usr", "bin", "exclave-test-script2"), link)
+    rc, out, err = run([link, "a", "b"], cwd=ctx.work, env=ctx.env)
+    expect(
+        rc == 0 and out.startswith("script ok /usr/bin/exclave-test-script2 "),
+        f"through a host symlink: {out!r} {err!r}",
+    )
+    rc, out, err = run(
+        ["./exclave-test-script2", "x"], cwd=os.path.join(ctx.root, "usr", "bin"), env=ctx.env
+    )
+    expect(
+        rc == 0 and out.startswith("script ok /usr/bin/exclave-test-script2 "),
+        f"by a relative spelling from outside: {out!r} {err!r}",
+    )
+
+
+@test
 def identity(ctx: Ctx) -> None:
     rc, out, err = run([wrapper(ctx, "cat"), "/etc/passwd"], cwd=ctx.work, env=ctx.env)
     expect(rc == 0 and out == read_text("/etc/passwd"), "passwd differs from the host")

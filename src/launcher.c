@@ -323,8 +323,10 @@ static __attribute__((noreturn)) void run(const char *v, const char *given, long
     /* sized from argc, never from a fixed pool */
     char **nargv = (char **)m;
     char *script = arena_alloc(PATH_MAX);
-    /* the script's path as it was spelt, as the kernel passes it (7.4.5) */
-    scpy(script, given, PATH_MAX);
+    /* the script's path as it was spelt, as the kernel passes it (7.4.5); a wrapped script run from outside the
+     * exclave gets its own virtual path instead, since the spelling names the file in the host's world, where "$0.bin"
+     * and $(dirname "$0")/sibling are not (13 item 39) */
+    scpy(script, depth == 0 && C.boundary && !C.loader_mode ? v : given, PATH_MAX);
     long k = shebang_argv(line, n, script, argv, argc, nargv, cap);
     if (k == -1) die_status(126, "not an executable", v, ENOEXEC);
     if (k == -2) die_status(126, "argument list too long", v, E2BIG);
