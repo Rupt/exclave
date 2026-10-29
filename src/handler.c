@@ -10,7 +10,10 @@
 #include "common.h"
 
 #define IN_DONT_FOLLOW 0x02000000
+#define FAN_MARK_ADD 0x1
+#define FAN_MARK_REMOVE 0x2
 #define FAN_MARK_DONT_FOLLOW 0x4
+#define FAN_MARK_FLUSH 0x80
 #define STATFS_FLAGS_OFF offsetof(struct kstatfs, f_flags)
 #define RENAME_NOREPLACE 1
 #define RENAME_EXCHANGE 2
@@ -1422,11 +1425,21 @@ static long do_watch(struct scratch *S, int nr, long *a)
         to_real(S->v, S->real, S->tmp);
         return RE5(nr, a[0], S->real, a[2] | nofollow(S, IN_DONT_FOLLOW), 0, 0);
     }
-    case NR_fanotify_mark:
-        if (a[4] == 0) return RE5(nr, a[0], a[1], a[2], a[3], 0);
+    case NR_fanotify_mark: {
+        /* do_fanotify_mark: the mask's upper half, the command and its mask, then the descriptor, which must be a
+         * fanotify instance, before the path; a flush names none. The flag bits and mark types each kernel knows are
+         * its own to refuse, after the handler's lookup (13 item 41) */
+        unsigned cmd = (unsigned)a[1] & (FAN_MARK_ADD | FAN_MARK_REMOVE | FAN_MARK_FLUSH);
+        if ((unsigned long)a[2] >> 32) return -EINVAL;
+        if (cmd != FAN_MARK_ADD && cmd != FAN_MARK_REMOVE && cmd != FAN_MARK_FLUSH) return -EINVAL;
+        if (cmd != FAN_MARK_FLUSH && !(unsigned)a[2]) return -EINVAL;
+        if (fd_real_path((int)a[0], S->tmp) < 0) return -EBADF;
+        if (xstrcmp(S->tmp, "anon_inode:[fanotify]") != 0) return -EINVAL;
+        if (a[4] == 0 || cmd == FAN_MARK_FLUSH) return RE5(nr, a[0], a[1], a[2], a[3], a[4]);
         if ((r = resolve(S, a, 4, 3, !(a[1] & FAN_MARK_DONT_FOLLOW), 0)) < 0) return r;
         to_real(S->v, S->real, S->tmp);
         return RE5(nr, a[0], a[1] | re_flag(S, FAN_MARK_DONT_FOLLOW), a[2], RE_DFD(S), RE_PATH(S));
+    }
     default: __builtin_trap(); /* dispatch sends only the syscalls above */
     }
 }

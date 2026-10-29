@@ -53,24 +53,22 @@ retry; with no renames, none of a million did. RESOLVE_CACHED's EAGAIN is not a 
 retried.
 
 Accepted differences. EXPECTED is part of the design (DESIGN.md 17 item 7): each entry names the
-rule that makes a difference right, and a difference no entry names fails. The entries are of three
-kinds:
+rule that makes a difference right, and a difference no entry names fails. The entries are of two
+kinds, and each names the syscalls and the answers its reason covers:
   - the oracle's own construction: a host entry bound into bwrap's read-only root answers EROFS
     there; uid 0 is unmapped in bwrap's user namespace; a new top-level name is the host's (8.1),
     whose / answers EACCES where bwrap's root says EROFS; an identity symlink whose host target is
     on a tmpfs gives other xattr answers than the tree copy; RESOLVE_CACHED answers EAGAIN under
     bwrap's cold cache;
-  - stated limitations: fanotify_mark's order of checks (13 item 41); ETXTBSY before EROFS when
-    another gate step runs the exclave copy's shell while the probe write-opens it (13 item 29);
   - for the kernel matrix (12.1), what an older kernel lacks or decided differently, each with the
-    kernel change, the handler answering as the newest kernel does: ENOSYS for a syscall the kernel
-    lacks; EISDIR for O_CREAT|O_EXCL on ., .. or / before 5.8; linkat with AT_EMPTY_PATH refused
-    with ENOENT before 6.10; RENAME_WHITEOUT's capability check in the initial user namespace;
-    O_DIRECTORY|O_CREAT opening or creating before 6.3; RHEL 8's 4.18 openat2 answering EXDEV for a
-    create through a symlink under RESOLVE_NO_XDEV; RESOLVE_CACHED unknown before 5.12; utimensat
-    refusing AT_EMPTY_PATH and checking the nanoseconds first before 5.9; an exec of a socket
-    answered ENXIO before 5.9; truncate checking the mount before the permission on 6.1 and earlier
-    (6.14 checks the permission first).
+    kernel change, the handler answering as the newest kernel does: ENOSYS for a syscall added after
+    3.10, named with its release; EISDIR for O_CREAT|O_EXCL on ., .. or / before 5.8; linkat with
+    AT_EMPTY_PATH refused with ENOENT before 6.10; RENAME_WHITEOUT's capability check in the initial
+    user namespace; O_DIRECTORY|O_CREAT opening or creating before 6.3; RHEL 8's 4.18 openat2
+    answering EXDEV for a create through a symlink under RESOLVE_NO_XDEV; RESOLVE_CACHED unknown
+    before 5.12; utimensat refusing AT_EMPTY_PATH and checking the nanoseconds first before 5.9; an
+    exec of a socket answered ENXIO before 5.9; truncate checking the mount before the permission on
+    6.1 and earlier (6.14 checks the permission first).
 More differences are accepted on older kernels, where more of the kernel entries apply.
 
 Counts. The last line of the output gives the number of cases, of groups (one per syscall, plus
@@ -1018,14 +1016,6 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
     # kernel change
     (
         None,
-        lambda _, b, o: errnos(b, o)[0] == 38,
-        (
-            "a syscall this kernel lacks (ENOSYS): the handler answers what it can from its own "
-            "rule and re-issues the rest, so only the error cases differ"
-        ),
-    ),
-    (
-        None,
         lambda label, b, o: KERNEL < (5, 8) and "creat_excl" in label and errnos(b, o) == (21, 17),
         (
             "O_CREAT|O_EXCL on '.', '..' or '/': EISDIR before the lookup rework of 5.8, EEXIST "
@@ -1121,15 +1111,6 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
         ),
     ),
     (
-        "fanotify_mark",
-        lambda _, b, o: errnos(b, o)[0] == 22,
-        (
-            "fanotify_mark checks its flags and descriptor before its path; the launcher resolves "
-            "the path first, and fanotify needs CAP_SYS_ADMIN, which no process in an exclave has "
-            "(13)"
-        ),
-    ),
-    (
         None,
         lambda label, b, o: (
             KERNEL < (6, 14) and "ro_file" in forms_in(label) and errnos(b, o) == (30, 13)
@@ -1177,16 +1158,36 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
             "(fs/namei.c); the handler answers as the newer kernels do"
         ),
     ),
-    (
-        None,
-        lambda _, b, o: errnos(b, o) == (26, 30),
-        (
-            "a write-open of an executable another process is running: the kernel says ETXTBSY "
-            "before EROFS, the launcher EROFS (13); seen when the gate runs the same exclave "
-            "copy's shell beside the probe"
-        ),
-    ),
 ]
+
+# The syscalls the probe issues that came after the matrix's oldest kernel, 3.10, with the release
+# that added each: a kernel before it answers ENOSYS, and the handler answers what it can from its
+# own rule and re-issues the rest, so only the error cases differ.
+ADDED = {
+    "renameat2": (3, 15),
+    "execveat": (3, 19),
+    "statx": (4, 11),
+    "openat2": (5, 6),
+    "faccessat2": (5, 8),
+    "fchmodat2": (6, 6),
+    "setxattrat": (6, 13),
+    "getxattrat": (6, 13),
+    "listxattrat": (6, 13),
+    "removexattrat": (6, 13),
+    "file_getattr": (6, 17),
+    "file_setattr": (6, 17),
+}
+EXPECTED.extend(
+    (
+        call,
+        lambda _label, b, o, since=since: since > KERNEL and errnos(b, o)[0] == errno.ENOSYS,
+        (
+            f"{call} is {since[0]}.{since[1]}+: this kernel lacks it (ENOSYS); the handler "
+            "answers what it can from its own rule and re-issues the rest"
+        ),
+    )
+    for call, since in ADDED.items()
+)
 
 # Before 6.13 the xattr calls looked the path up, or took a descriptor's mount for writing, before
 # they read the name, the flags and the size; the handler answers as the newer kernels do.
@@ -1291,6 +1292,14 @@ def main() -> int:
                 with open(tp, "wb"):
                     pass
     forms = Forms(root, host, links, dirs, files)
+    # a tree file the probe names has a copy of its own in the kernel's world, not a hard link to
+    # the given exclave's: another gate step may be running that program, and a write-open of it
+    # would be ETXTBSY there, an answer about the gate rather than the rule
+    for v in (forms.file, forms.true, forms.sh, *forms.link.values()):
+        real = os.path.join(root, tree.resolve(root, v).lstrip("/"))
+        if os.path.isfile(real) and not os.path.islink(real) and os.lstat(real).st_nlink > 1:
+            shutil.copy2(real, real + ".copy")
+            os.replace(real + ".copy", real)
     bindir = os.path.join(work, "bin")
     os.makedirs(bindir)
     cc = tree.compiler(root, MACHINE)
@@ -1372,6 +1381,7 @@ def main() -> int:
     print(
         f"{total} cases over {len(names)} groups and {len(forms.paths)} path forms: "
         f"{differ} differ, {accepted} differences expected"
+        + (f"; seed {args.seed}" if differ else "")
     )
     rmtree(f"/tmp/exclave-probe-{os.getpid()}")
     if not args.keep and not differ:

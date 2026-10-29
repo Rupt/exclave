@@ -141,7 +141,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 79 named tests, most of them programs that
+- **The regression suite**: 80 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1681,7 +1681,7 @@ exclave file that is running answers `EROFS` where the kernel answers
 `ETXTBSY` (13 item 29); on a host path it succeeds (13 item 40).
 
 Two orders the handler does not follow are stated in 13: that one,
-and `fanotify_mark`'s flag check (13 item 41). The oracles measure the
+and `fanotify_mark`'s flag bits (13 item 41). The oracles measure the
 rest on the kernel matrix, since orderings differ between kernels.
 
 There is no `chmod` of the tree: modes are fragile across copies and
@@ -2329,7 +2329,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 79 named regressions and every oracle its kernel can run; 17
+suite's 80 named regressions and every oracle its kernel can run; 17
 describes the procedure. Measured October 2026:
 
 | Distribution | Kernel | Suite | Oracles | Notes |
@@ -2469,6 +2469,11 @@ and stay fixed.
     syscall can resolve against the older directory, and a rename of
     an ancestor of the working directory meanwhile can make it fail
     where the kernel, resolving from the directory itself, would not.
+    Measured by `test/progs/cwd_race.c`, four threads making a million
+    relative lookups: with a fifth changing directory between two that
+    both hold the file, none fails, as natively; with it renaming the
+    working directory's parent back and forth without pause, about 13%
+    fail under the launcher and none natively.
     A path relative to a descriptor has neither problem: one whose walk
     never touched the exclave is re-issued as given (7.4.3). `..` above
     a working directory that was handed to the host stays in the
@@ -2662,11 +2667,12 @@ and stay fixed.
     busy"; in an exclave it succeeds. Linkers unlink their output
     first, so relinking is safe either way.
 
-41. **`fanotify_mark` checks in a different order from the kernel**
-    (8.2, 17 item 7). Its path is resolved before its flags and
-    descriptor are checked, where the kernel checks those first. The
-    difference is unreachable in practice: fanotify needs
-    `CAP_SYS_ADMIN`, which no exclave process has.
+41. **`fanotify_mark`'s flag bits are checked after its path** (8.2,
+    17 item 7). The handler checks the mask, the command and the
+    descriptor in the kernel's order before the path, but not the flag
+    bits and mark types, which differ between kernels: the kernel
+    refuses an unknown one after the handler's lookup, so the path's
+    own error can come first.
 
 42. **An ext4 race that the probe's own reset provokes.** On kernels
     5.10 to 6.1, natively too, ext4 refuses to clear the extent flag
@@ -3715,8 +3721,16 @@ meaning items 4 and 7.
    under the launcher. It compares the answers case by case. A
    difference is either fixed in the handler, following the kernel's
    order of checks, or listed with the rule that makes it right. It is
-   never accepted silently. A limitation is measured the same way
-   before it is fixed, by an exerciser run in both worlds.
+   never accepted silently, and the rule names the syscalls and the
+   answers it covers, so that it cannot absorb a new difference: a
+   syscall the kernel lacks is accepted only for the syscalls added
+   after the matrix's oldest kernel, each with its release. The tree's
+   files the probe names are copies of their own in the kernel's world,
+   not hard links to the given exclave's, which another gate step may
+   be running. The two randomised oracles take a seed, fixed in the
+   gate and of the moment under `--full`, and print it with any
+   difference. A limitation is measured the same way before it is
+   fixed, by an exerciser run in both worlds.
 
 **What implements each item.**
 
@@ -3725,7 +3739,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus the read-only matrix program (`test/progs/ro_matrix.c`) under `bwrap` against its own expectations |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it); the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 79 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 80 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

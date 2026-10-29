@@ -212,7 +212,10 @@ def main() -> int:
             fails += 1
             if fails <= 25:
                 print(f"DIFF {path[:60]:<60} kernel={k} launcher={ans}")
-    print(f"{len(paths)} paths: {agree} agree, {fails} differ")
+    print(
+        f"{len(paths)} paths: {agree} agree, {fails} differ"
+        + (f"; seed {args.seed}" if fails else "")
+    )
     if not args.keep and not fails:
         shutil.rmtree(work, ignore_errors=True)
     return 1 if fails else 0

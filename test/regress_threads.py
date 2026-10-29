@@ -139,3 +139,20 @@ def go_paths(ctx: Ctx) -> str | None:
         rc, out, err = inside(ctx, exe)
         expect(rc == 0 and "FAIL" not in out, f"{name}: {out}{err}")
     return None
+
+
+@test
+def working_directory_races(ctx: Ctx) -> str:
+    """Relative lookups while another thread changes the working directory (13 item 14).
+
+    A change between two directories that both hold the file fails no lookup, as natively. A
+    rename of the working directory's parent meanwhile fails some under the launcher, which reads
+    the directory's name and walks it, where the kernel fails none: a stated limitation, whose
+    rate the PASS line reports.
+    """
+    d = os.path.join(ctx.work, f"hostdir-cwd-race-{os.getpid()}")
+    os.makedirs(d, exist_ok=True)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "cwd_race"), [d], timeout=120)
+    lines = out.splitlines()
+    expect(rc == 0 and "chdir ok" in lines and "FAIL" not in out, out + err)
+    return next((x for x in lines if x.startswith("rename ")), "")
