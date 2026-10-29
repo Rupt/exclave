@@ -407,7 +407,9 @@ class VM:
             "-device",
             "virtio-net-pci,netdev=n0",
         ]
-        # no KVM for another architecture: TCG, and UEFI firmware, which arm64 images boot from
+        # no KVM for another architecture: TCG, and UEFI firmware, which arm64 images boot from; the
+        # translated code's cache is capped at 256 MB, since its default of 1 GiB fills over the
+        # suite and, beside the guest's memory, ran the reference machine out of memory
         if arch == "aarch64":
             varstore = os.path.join(work, name + "-vars.fd")
             shutil.copyfile(os.path.join(AAVMF, "AAVMF_VARS.fd"), varstore)
@@ -416,7 +418,7 @@ class VM:
                 "-M",
                 "virt",
                 "-accel",
-                "tcg",
+                "tcg,tb-size=256",
                 "-cpu",
                 "max",
                 "-m",
