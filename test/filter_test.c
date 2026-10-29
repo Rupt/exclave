@@ -29,7 +29,7 @@ struct data {
     uint32_t nr, arch;
     uint64_t ip, args[6];
 };
-#define HIGHEST 470                                           /* src/filter.c's HIGHEST_KNOWN_SYSCALL */
+#define HIGHEST 471                                           /* src/filter.c's HIGHEST_KNOWN_SYSCALL */
 #define NOT_CONST 0xffffffffU
 
 /* the interpreter: the instructions src/filter.c emits, and nothing else. known: 0 runs on full data; 1 runs as the

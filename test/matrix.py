@@ -146,6 +146,18 @@ VMS: list[VmRow] = [
         notes="musl host, busybox",
         arch="x86_64",
     ),
+    # the newest kernel a distribution's cloud image boots (12.1): 7.3 in October 2026
+    VmRow(
+        name="ubuntu-26.10",
+        kernel="7.3",
+        user="ubuntu",
+        urls=[
+            "https://cloud-images.ubuntu.com/stonking/current/stonking-server-cloudimg-amd64.img"
+        ],
+        family="apt",
+        notes="the newest kernel",
+        arch="x86_64",
+    ),
     # aarch64 under TCG (12): the same suite and oracles, the arm64 launcher and exclave, ten to
     # twenty times slower
     VmRow(

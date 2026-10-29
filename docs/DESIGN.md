@@ -926,11 +926,14 @@ lists in `src/filter.c` against the running kernel's table, so a new
 path-taking syscall is noticed rather than discovered (17).
 
 **The ceiling.** A syscall numbered above the filter's table, whose
-last entry is 470 (`listns`), traps and is answered `ENOSYS`, like any
-trap the handler does not know, so a path-taking syscall a future
-kernel adds cannot reach the host untranslated. The table test asks the
-running kernel above the table rather than trusting a userspace header,
-which lags the kernel by years.
+last entry is 471 (`rseq_slice_yield`), traps and is answered `ENOSYS`,
+like any trap the handler does not know, so a path-taking syscall a
+future kernel adds cannot reach the host untranslated. The table test
+reads the running kernel's own table where its headers are installed,
+and asks the running kernel above the table, rather than trusting a
+userspace header, which lags the kernel by years: a syscall the
+running kernel has and the table does not classify fails the gate's
+unit step until it is.
 
 **Versioned reuse.** The filter answers a `uname` whose argument is a
 magic 64-bit value with `SECCOMP_RET_ERRNO` carrying `0x800` plus its

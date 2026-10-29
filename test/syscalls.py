@@ -131,6 +131,10 @@ STRUCT_PATH = {
 # no path argument at all
 NONPATH = {
     "listns",
+    "rseq_slice_yield",
+    # x86-64's uprobe trampolines' own syscalls: no arguments that name a file
+    "uprobe",
+    "uretprobe",
     "mseal",
     "sync_file_range2",
     "_sysctl",
@@ -433,10 +437,11 @@ EXTRA = {
     468: "file_getattr",
     469: "file_setattr",
     470: "listns",
+    471: "rseq_slice_yield",
 }
 # the highest number src/filter.c classifies; anything above is trapped and answered ENOSYS by
 # rule 7.4.2
-HIGHEST_KNOWN = 470
+HIGHEST_KNOWN = 471
 
 
 HEADERS = (
@@ -520,6 +525,23 @@ def kernel_table(path: str | None = None, roots: Sequence[str] = ("/",)) -> dict
     return table
 
 
+def running_table() -> dict[str, int]:
+    """The running kernel's own table, from its headers where they are installed, else nothing.
+
+    The userspace header lags the kernel; the kernel's own generated header names every syscall it
+    has, so a new one is unclassified here, and fails, as soon as the machine boots that kernel.
+    """
+    arch = {"x86_64": "x86", "aarch64": "arm64"}.get(MACHINE, MACHINE)
+    path = (
+        f"/usr/src/linux-headers-{os.uname().release}/arch/{arch}/include/generated/uapi/asm/"
+        "unistd_64.h"
+    )
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return parse_table(f.read())
+
+
 def kernel_probe(lo: int, hi: int) -> list[int]:
     """The numbers in [lo, hi] the running kernel implements: anything but ENOSYS.
 
@@ -570,6 +592,14 @@ def launcher_lists() -> tuple[set[str], set[str], dict[str, int]]:
 
 def main() -> int:
     table = kernel_table(sys.argv[1] if len(sys.argv) > 1 else None)
+    running = running_table()
+    for name, nr in running.items():
+        table.setdefault(name, nr)
+    if running:
+        print(
+            f"note: the running kernel's headers name {len(running):d} syscalls, the highest "
+            f"{max(running.values()):d}"
+        )
     fails = 0
     known = TRAP | DENIED | STRUCT_PATH | NONPATH
     for name in sorted(table, key=lambda n: table[n]):

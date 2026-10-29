@@ -27,7 +27,8 @@ struct sock_fprog {
 #endif
 #define RET_K 0x06
 #define AND_K 0x54      /* BPF_ALU | BPF_AND | BPF_K */
-#define HIGHEST_KNOWN_SYSCALL 470 /* listns, in 7.0's table; test/syscalls.py probes the running kernel above it */
+/* rseq_slice_yield, in 7.0's table; test/syscalls.py reads the running kernel's table and probes it above this */
+#define HIGHEST_KNOWN_SYSCALL 471
 #define OFF_NR 0
 #define OFF_ARCH 4
 #define OFF_IP 8
