@@ -150,10 +150,11 @@ What is built and tested:
   gcc exclave, never executed, links outputs against glibc 2.17, which
   run natively on any later glibc (9).
 - **aarch64**: the launcher runs there, tested in an emulated row of the
-  kernel matrix on a kernel with 4 KB pages (12.1, 13 item 43).
+  kernel matrix on a kernel with 4 KB pages (12.1, 13 item 43); the
+  exclave it runs is made on x86-64 (10.1).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The command as one file**: `build/exclave`, 1 023 KB, statically
+- **The command as one file**: `build/exclave`, 1 014 KB, statically
   linked, carrying its launcher, wraps, checks and prunes an exclave
   with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
@@ -167,7 +168,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 80 named tests, most of them programs that
+- **The regression suite**: 82 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1982,11 +1983,19 @@ refused. From `.deb` files, in five steps:
    `ssl-paths`, OpenSSL's compiled-in trust paths when a libssl is
    present, so that the host's bundle at the identity path (8.4) is
    consulted; `base-passwd`, `/etc/passwd` and `/etc/group` from its
-   masters; and `ldconfig`, `ld.so.cache` by `ldconfig -r` with the
-   exclave's own static `ldconfig`, before wrapping so that the cache
-   never indexes the launcher, its `aux-cache` removed since it records
-   inodes and modification times. A new effect is a new rule in the
-   table, never an option.
+   masters; and `ldconfig`, `ld.so.cache` written as the exclave's own
+   static `ldconfig` would write it, from the tree's files alone
+   (`unpack/ldcache.py`, from glibc's `ldconfig` source): the directories
+   `ld.so.conf` names and then the loader's trusted directories, read
+   from the loader's own table (10.3), the soname links made and the
+   dangling `.so.` links removed in them as `ldconfig` makes and removes
+   them, the entries and the string table in `ldconfig`'s order and the
+   generator string its binary carries; before wrapping, so that the
+   cache never indexes the launcher, and with no `aux-cache`, which
+   records inodes and modification times. The suite holds the writer
+   to the tree's own `ldconfig`, byte for byte, on copies altered to
+   exercise each rule (17). A new effect is a new rule in the table,
+   never an option.
 
    What no rule makes is noted at unpack time. `unpack` reads each
    package's trigger interests, dpkg's `triggers` file and apk's
@@ -2022,13 +2031,15 @@ refused. From `.deb` files, in five steps:
    which is all that `unpack` writes outside `tree/`: the launcher, the
    manifest and the `README` are `wrap`'s.
 
-`unpack` runs on any machine. A tree of another architecture gets no
-`ld.so.cache`, since its `ldconfig` cannot run here, and `unpack` says
-so. `wrap` must run on a machine of the exclave's architecture: the
-static check asks the tree's loader for its directories and checks the
-objects of the launcher's machine, and on any other machine it refuses
-with the reason. The kernel matrix makes its arm64 exclave inside the
-arm64 virtual machine for this reason (17).
+`unpack` and `wrap` run on any machine, for an exclave of either
+architecture, since nothing of the tree runs: `unpack` writes the cache
+the tree's `ldconfig` would write, and `wrap EXCLAVE LAUNCHER` installs
+the launcher given, whose machine the static check reads the tree as:
+the loader's directories from the loader file, the objects of that
+machine checked and the others foreign (10.3). An arm64 exclave is made
+on x86-64 in about two seconds, with the tree hash of one made inside
+the arm64 virtual machine (measured October 2026), and the kernel
+matrix makes its arm64 exclave here and only runs it there (17).
 
 The result of `unpack` is an unwrapped exclave, which is a directory.
 Anything may be done to it before it is wrapped, with the tools one uses
@@ -2056,7 +2067,7 @@ the suite makes one this way (17).
 **Wrap** wraps an exclave, in an order that leaves a refused exclave
 unwrapped:
 
-1. It installs this machine's launcher if none is there, adds the
+1. It installs the launcher given, or the one it carries, if none is there, adds the
    placeholders and identity files the tree lacks (8.1, 8.4), and writes `exclave 1` as the manifest
    if there is none. It refuses a manifest that is not in canonical form
    or that exceeds the launcher's tables (8.1).
@@ -2180,10 +2191,13 @@ outside data directories, reading originals in place of wrappers.
 - Every `DT_NEEDED` resolves under `tree/` by that loader's algorithm:
   `DT_RPATH`, `DT_RUNPATH` with `$ORIGIN` and the other substitutions,
   the exclave's `ld.so.cache`, then the loader's own default
-  directories. The defaults are asked of the loader in the tree (`ld.so
-  --list-diagnostics` on glibc 2.33 and later; musl's fixed list;
-  Debian's list for older loaders), including the `glibc-hwcaps`
-  subdirectories on x86-64. The loader satisfies its own soname without
+  directories. The defaults are read from the loader file in the tree:
+  glibc's build writes its trusted directories into the loader as a
+  table, the one `ld.so --list-diagnostics` prints as
+  `path.system_dirs`, which the suite checks it against (17); musl's are
+  its fixed list; a loader without the table gets Debian's and Fedora's
+  defaults, with a warning. The `glibc-hwcaps` subdirectories on x86-64
+  are searched first. The loader satisfies its own soname without
   a search, as `ld.so` does. Executables are checked first, so that
   `RPATH` inheritance down a chain is seen; a library that nothing
   reaches is a `dlopen` candidate and is checked on its own. A
@@ -2305,13 +2319,13 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, 1 023 KB and 860 KB, with nothing beside it to run: no
+the cross compiler, 1 014 KB and 794 KB, with nothing beside it to run: no
 interpreter, no library, no file of the checkout. It carries its
 architecture's launcher and the text of every exclave's `README` as data
-(`tool/blobs.S`), so `wrap` installs the launcher it carries and
-`relink` uses it unless given another. An exclave is wrapped on a
-machine of its own architecture (10.1), so each file carries that
-architecture's launcher and no other.
+(`tool/blobs.S`), so `wrap` and `relink` install the launcher it
+carries unless given another. The launcher's machine is the exclave's:
+the checks read the tree as that machine's loader would, so an exclave
+of either architecture is wrapped on either (10.1).
 
 It is ordinary C on the C library, glibc linked statically, unlike the
 launcher, which is freestanding because it runs inside other programs'
@@ -2395,7 +2409,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 80 named regressions and every oracle its kernel can run; 17
+suite's 82 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -2414,7 +2428,7 @@ October 2026:
 | Alpine 3.20 | 6.6 | 80 of 80 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
 | Fedora 42 | 6.14 | 80 of 80 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
 | Ubuntu 26.10 | 7.3 | 80 of 80 | all pass | glibc 2.44 |
-| Ubuntu 24.04 arm64 | 6.8 | 80 of 80 | all pass | aarch64 under TCG, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed: the suite takes 17 minutes, the row 36; the exclave is made inside the VM (10.1) |
+| Ubuntu 24.04 arm64 | 6.8 | 80 of 80 | all pass | aarch64 under TCG, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed: the suite takes 17 minutes, the row 36; the exclave is made on the reference machine and only run here (10.1) |
 | reference machine | 7.0 | 80 of 80 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
@@ -2679,12 +2693,11 @@ and stay fixed.
     does not sign `repomd.xml`, as Fedora's do not, leaves which
     versions it offers to the mirror, every package still verified.
     Alpine signs its indexes with RSA over SHA-1, so an Alpine index is
-    held to a weaker digest than the others. Unpack and the tool also run two of the packages'
-    binaries on the host, outside any exclave: the tree's static
-    `ldconfig` during `unpack`, to make the cache (10.1), and the
-    tree's loader with `--list-diagnostics` during the static check, to
-    learn its search directories (10.3). A package one would not run is a package
-    one should not unpack.
+    held to a weaker digest than the others. Nothing of a package runs
+    on the host: `unpack` writes the cache the tree's `ldconfig` would
+    write (10.1) and the static check reads the loader's directories
+    from its file (10.3), so what a package's programs do, they do
+    inside an exclave.
 
 33. **The launcher's tables are fixed in size** (8.1). A manifest or a
     tree beyond them is refused, by `exclave wrap` before it is made
@@ -3753,9 +3766,12 @@ meaning items 4 and 7.
      escapes, and the log's path refused when relative or inside the
      exclave;
    - *the tool's unpack and wrap*: the three package readers, a tree
-     made by hand, `wrap`'s refusals, the exclave's README and version,
-     and a directory in the pre-rename `.can/` layout refused by name by
-     every command;
+     made by hand, `wrap`'s refusals, `ld.so.cache` written as the
+     tree's own `ldconfig` writes it, byte for byte on copies altered to
+     exercise each rule, and the loader's table of directories against
+     what it prints, a wrap with the other machine's launcher, the
+     exclave's README and version, and a directory in the pre-rename
+     `.can/` layout refused by name by every command;
    - *the tool's check and prune*: the static check's model of the
      loader, a tree naming two loaders, an unreadable file, and
      pruning with logs.
@@ -3812,7 +3828,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus the read-only matrix program (`test/progs/ro_matrix.c`) under `bwrap` against its own expectations |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it); the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 80 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 82 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -4095,10 +4111,10 @@ noble-arm64 --debs-arm64 DIR [--docker-profile FILE]`) boots Ubuntu
 24.04's arm64 cloud image under `qemu-system-aarch64 -M virt -cpu max`
 with TCG and the AAVMF firmware, since user-mode emulation has no
 seccomp and the reference machine has no KVM for another architecture.
-It carries the aarch64 launchers, which `scripts/build` builds when
-`aarch64-linux-gnu-gcc` is installed, and the arm64 packages, and makes
-the gcc exclave inside the VM, since an exclave is wrapped on its own
-architecture. A fresh VM has no fixture, so the suite runs on the full
+It carries the aarch64 launchers and command, which `scripts/build`
+builds when `aarch64-linux-gnu-gcc` is installed, and the gcc exclave
+made here from the arm64 packages with that launcher (10.1), which the
+VM only relinks and runs. A fresh VM has no fixture, so the suite runs on the full
 exclave with logging, which makes the row long (12.1); it runs when
 asked, not in the gate, and making it shorter is in 18.
 
@@ -4203,7 +4219,8 @@ questions.
    fact.
 4. **The emulated arm64 row's speed.** The arm64 row runs under QEMU's
    TCG emulation at about a tenth of native speed (12.1), so it runs
-   when asked rather than at every commit. A faster row, on native
+   when asked rather than at every commit; the exclave it runs is made
+   on the reference machine (10.1). A faster row, on native
    aarch64 hardware or a lighter fixture, would let it run as often as
    the x86-64 rows.
 5. **Hosts the matrix has not covered.** Snap-confined terminals,
@@ -4347,7 +4364,8 @@ specified.
 - **The tool is static C, one file per architecture carrying its
   launcher**: it runs with nothing beside it, and ordinary C on the C
   library is enough, since unlike the launcher it never runs inside
-  another program (10.5).
+  another program; `wrap` takes the other architecture's launcher, since
+  the checks read the tree as the launcher's machine (10.5).
 - **One pinned Python, never the machine's**, for `unpack`, the
   fetchers and the tests: uv, pinned with a checksum per architecture
   in `scripts/install-uv`, installs the version `.python-version` names
@@ -4364,8 +4382,11 @@ specified.
   `tool/.clang-tidy` turns off carries its reason (17).
 - **`wrap` checks before it touches the tree**: a refused exclave is
   left unwrapped (10.1, 10.3).
-- **An exclave is wrapped on a machine of its architecture**: the static
-  check asks the tree's own loader for its directories (10.3).
+- **Nothing of the tree runs during `unpack` or `wrap`**: the cache is
+  written as the tree's `ldconfig` would write it and the loader's
+  directories are read from the loader file, so an exclave of either
+  architecture is made on either, and a package's programs run only
+  inside an exclave (10.1, 10.3, 13 item 32).
 - **The tool applies `host` records as the launcher does**, by longest
   prefix (10.3).
 - **A foreign ELF object is a warning, and a tree stays readable by its

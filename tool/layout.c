@@ -446,20 +446,36 @@ static size_t wrap_files(const char *ex, const struct strs *data)
  * the launcher, manifest and tree hashes (10.1). */
 int cmd_wrap(int argc, char **argv)
 {
-    if (argc != 1) usage("wrap EXCLAVE");
-    const char *ex = argv[0];
+    if (argc != 1 && argc != 2) usage("wrap EXCLAVE [LAUNCHER]");
+    const char *ex = argv[0], *given = argc == 2 ? argv[1] : NULL;
     require_exclave(ex, "wrap");
     char *ld = path_join(ex, ".exclave/launcher"), *root = path_join(ex, "tree"),
          *mp = path_join(ex, ".exclave/manifest");
     struct stat st;
-    if (stat(ld, &st)) { /* this machine's launcher, the one this command carries */
+    size_t gn = 0;
+    char *gdata = NULL;
+    if (given) {
+        if (stat(given, &st) || !S_ISREG(st.st_mode)) fail("no launcher at %s", given);
+        gdata = read_file(given, &gn);
+    }
+    if (stat(ld, &st)) { /* the launcher given, for its own machine, or the one this command carries */
         char *dot = path_join(ex, ".exclave");
         make_dirs(dot);
         free(dot);
         unlink(ld);
-        write_file(ld, launcher_blob, (size_t)launcher_size, 0755);
+        if (gdata) write_file(ld, gdata, gn, 0755);
+        else write_file(ld, launcher_blob, (size_t)launcher_size, 0755);
         if (chmod(ld, 0755)) fail_errno(ld);
+        machine_of_launcher(ex);
+    } else if (gdata) { /* a launcher already there is kept, since the wrappers are its copies; relink replaces it */
+        size_t have_n;
+        char *have = read_file(ld, &have_n);
+        if (have_n != gn || memcmp(have, gdata, gn) != 0)
+            fail("%s has a launcher already, which differs from %s; exclave relink %s %s replaces it", ex, given, ex,
+                 given);
+        free(have);
     }
+    free(gdata);
     placeholders(root);
     if (stat(mp, &st)) write_file(mp, "exclave 1\n", 10, 0666);
     size_t n;

@@ -8,9 +8,10 @@
  *     exclave prune EXCLAVE LOG...        Drop every file no logged workload touched (10.4).
  *     exclave relink EXCLAVE [LAUNCHER]   Replace the launcher and relink every wrapper.
  *     exclave unwrap EXCLAVE              Move every original back over its wrapper.
- *     exclave wrap EXCLAVE                Wrap an exclave: add the launcher and the placeholders where missing, check
- *                                         the manifest, the wrappers and every ELF, then wrap every executable and
- *                                         write the launcher, manifest and tree hashes to .exclave/hashes. */
+ *     exclave wrap EXCLAVE [LAUNCHER]     Wrap an exclave: add the launcher, the one given or this command's own, and
+ *                                         the placeholders where missing, check the manifest, the wrappers and every
+ *                                         ELF as the launcher's machine, then wrap every executable and write the
+ *                                         launcher, manifest and tree hashes to .exclave/hashes. */
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -41,7 +41,7 @@ any filesystem tree.
   untested). One source builds both launchers.
 - **gdb** debugs a program in an exclave: the launcher carries the
   script gdb needs.
-- **Tested against the kernel.** A suite of 80 named tests, oracles that
+- **Tested against the kernel.** A suite of 82 named tests, oracles that
   compare the launcher's answers with the kernel's under a read-only
   bind mount, and a differential probe of 21 732 syscall cases pass on
   gcc, clang, Alpine and Fedora exclaves. An exclave also runs under
@@ -229,7 +229,7 @@ files that is `scripts/unpack`, a program of its own beside the three
 fetchers here: it reads each package's own control archive, reports
 dependencies the set does not satisfy, extracts in Python, synthesises
 what maintainer scripts would have done (alternatives, `ld.so.cache`
-with the exclave's own `ldconfig`, the CA bundle, `/etc/passwd`) and
+as the exclave's own `ldconfig` would write it, the CA bundle, `/etc/passwd`) and
 records every input by hash in the hashes file. The result is a
 directory; `ar` and `tar`, `debootstrap` or a container export make
 others (DESIGN.md 10.1). `wrap` adds the launcher and the placeholders,
@@ -443,6 +443,7 @@ tool/blobs.S         the launcher and tool/README.txt, the README every exclave 
 unpack/cli.py        the step before the tool: package files -> an unwrapped exclave (10.1)
 unpack/steps.py      extraction rules, synthesis, the volatile directories, dependency report, the pkg records
 unpack/rules.py      the synthesis rules as a table, named in the log as they apply, and the notes on what no rule makes; unpack/package.py a package file and its reader
+unpack/ldcache.py    ld.so.cache as the tree's own ldconfig would write it, from glibc's ldconfig source, running nothing (10.1)
 unpack/reader.py     the interface every package reader provides, and the streams they read as they decompress
 unpack/root.py       the tree as a root: every path resolved inside it, every write through a directory descriptor
 unpack/deb.py        the Debian reader: ar, tar, compression, control stanzas, dependency fields, version order

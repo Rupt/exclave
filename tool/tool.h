@@ -193,7 +193,7 @@ int static_report(const char *ex);
 void wrapper_problems(const char *ex, const struct strs *data, struct strs *out);
 void located_links(const char *ex, struct strs *out);
 int cmd_check(int argc, char **argv);
-/* machines (7.1): the table of those the command knows, and the one it was built for */
+/* machines (7.1): the table of those the command knows, and the exclave's, read from its launcher (10.1) */
 struct machine {
     int e_machine;
     const char *uname, *triplet; /* uname -m, which glibc's loader substitutes for $PLATFORM; the multiarch triplet */
@@ -201,9 +201,9 @@ struct machine {
     int nhwcaps;
 };
 extern const struct machine MACHINES[2];
-extern const struct machine *const NATIVE;
+extern const struct machine *MACHINE; /* the exclave's launcher's; the command's own build until one is read */
+void machine_of_launcher(const char *ex);
 #define GLIBC_SONAME "libc.so.6"
-const char *uname_machine(void);
 void default_dirs(struct strs *out);
 int is_payload_file(const char *root, const char *v);
 int glibc_version(const char *root, int *major, int *minor);

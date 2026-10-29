@@ -137,8 +137,8 @@ static void scan_file(struct scan *s, const char *vpath, const struct stat *st, 
         addf(&rep->errors, "%s: %s", vpath, why);
         return;
     }
-    if (e.machine != NATIVE->e_machine) {
-        addf(&rep->warnings, "%s: not %s: a foreign object, not checked (13)", vpath, NATIVE->uname);
+    if (e.machine != MACHINE->e_machine) {
+        addf(&rep->warnings, "%s: not %s: a foreign object, not checked (13)", vpath, MACHINE->uname);
         elf_free(&e);
         return;
     }
@@ -298,24 +298,8 @@ static void check_object(struct walk_ctx *w, const char *vpath, const struct elf
 void static_check(const char *ex, const struct ownership *own, const struct strs *data, struct report *rep)
 {
     *rep = (struct report){0};
-    char *root = path_join(ex, "tree"), *ld = path_join(ex, ".exclave/launcher"), why[ELF_WHY];
-    struct elf le;
-    int e_machine = elf_read(ld, &le, why) == ELF_OK ? le.machine : 0;
-    if (e_machine) elf_free(&le);
-    free(ld);
-    /* an exclave is checked on a machine of its own architecture, where its loader can be asked (10.1) */
-    if (e_machine && e_machine != NATIVE->e_machine) {
-        char theirs[32];
-        int known = e_machine == MACHINES[0].e_machine ? 0 : e_machine == MACHINES[1].e_machine ? 1 : -1;
-        if (known >= 0) snprintf(theirs, sizeof theirs, "%s", MACHINES[known].uname);
-        else snprintf(theirs, sizeof theirs, "machine %d", e_machine);
-        addf(&rep->errors,
-             "the exclave's launcher is for %s and this machine is %s: wrap the exclave on a machine of its "
-             "architecture (10.1)",
-             theirs, uname_machine());
-        free(root);
-        return;
-    }
+    /* the tree is read as its launcher's machine's loader reads it (10.1): nothing of it runs */
+    char *root = path_join(ex, "tree"), why[ELF_WHY];
     struct cache cache;
     int has_cache = read_cache(root, &cache);
     if (host_owned("/etc", own)) { /* the loader would read the host's cache and preload list */
@@ -324,7 +308,7 @@ void static_check(const char *ex, const struct ownership *own, const struct strs
     } else if (!has_cache) {
         /* musl has no cache; glibc without one searches its defaults only */
         char musl[64];
-        snprintf(musl, sizeof musl, "/lib/ld-musl-%s.so.1", NATIVE->uname);
+        snprintf(musl, sizeof musl, "/lib/ld-musl-%s.so.1", MACHINE->uname);
         char *r = tree_resolve(root, musl, 1, NULL);
         if (!(r && is_payload_file(root, r)))
             addf(&rep->warnings, "no /etc/ld.so.cache: only the loader's default directories are searched at run time");
@@ -381,7 +365,7 @@ void static_check(const char *ex, const struct ownership *own, const struct strs
     const char *interp = s.interp_text.n ? s.interp_text.s[0] : NULL;
     int musl = interp && strstr(basename_of(interp), "musl");
     char musl_soname[64];
-    snprintf(musl_soname, sizeof musl_soname, "libc.musl-%s.so.1", NATIVE->uname);
+    snprintf(musl_soname, sizeof musl_soname, "libc.musl-%s.so.1", MACHINE->uname);
     struct strs defaults = {0};
     char *assumed = loader_dirs(root, interp, &defaults);
     if (assumed) strs_add(&rep->warnings, assumed);

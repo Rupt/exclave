@@ -237,8 +237,8 @@ under `~/.cache` or the session scratchpad is assumed to persist: the
 scratchpad lost every exclave once, so an input is best not kept only
 there, nor put where a script will remove it, and refetching beats
 hunting. The scratchpad suits traces and one-off trees; a driver worth running twice belongs in `test/`.
-The arm64 exclave is made inside the VM, since an exclave is wrapped on
-its own architecture; the suite, the oracles and `test/exercise.py` make
+The matrix makes its arm64 exclave here, wrapped with the cross-built
+launcher, and the VM only runs it; the suite, the oracles and `test/exercise.py` make
 their own copies under `build/` (ignored by git). Cloud images for the
 matrix live in `~/.cache/exclave-images`; QEMU with KVM and
 `cloud-image-utils` are installed, and this user can open `/dev/kvm`.

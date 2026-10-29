@@ -16,7 +16,10 @@ from packages import make_apk, make_deb
 if TYPE_CHECKING:
     from collections.abc import Sequence
 from harness import expect, read_bytes, read_text, run, test
-from suite import REPO, TOOL, Ctx, check, copy_exclave
+from suite import REPO, TOOL, Ctx, check, copy_exclave, inside
+
+from unpack import ldcache
+from unpack.root import Root
 
 UNPACK = (sys.executable, "-m", "unpack")
 
@@ -578,3 +581,155 @@ def wrap_refusals(ctx: Ctx) -> None:
         and not os.path.exists(os.path.join(lk, "tree", "usr", "bin", ".real")),
         f"a link naming the exclave's location must be refused: {rc} {(o + e)[-400:]}",
     )
+
+
+@test
+def ld_so_cache_as_ldconfig_writes_it(ctx: Ctx) -> str | None:
+    """10.1: unpack writes ld.so.cache as the tree's own ldconfig would, running nothing of it.
+
+    Two unwrapped copies of the exclave, altered alike: a dangling `.so.` link, a library under a
+    new name whose soname link then moves to it, a directory a `ld.so.conf.d` file adds, a
+    `glibc-hwcaps` subdirectory, libraries in `lib`, `lib64` and `libx32`, a linker script and a
+    truncated file. The tree's ldconfig runs on one, inside the exclave as a program of the tree,
+    and unpack's writer on the other; the caches and the directories' links must agree. The
+    loader's directories the writer reads from the loader file must be those `--list-diagnostics`
+    prints.
+    """
+    if ctx.musl or not ctx.libc:
+        return "musl reads no ld.so.cache"
+    copies = []
+    for which in ("ldconfig", "writer"):
+        ex = os.path.join(ctx.work, f"cache-{which}-{os.getpid()}.exclave")
+        shutil.rmtree(ex, ignore_errors=True)
+        copy_exclave(ctx.exclave, ex)
+        tree.unwrap_tree(ex)
+        copies.append(os.path.join(ex, "tree"))
+    a, b = copies
+    with Root(a) as r:
+        ldconfig = ldcache.find_ldconfig(r)
+    # a glibc tree carries one; the pruned fixture keeps it, since this run opens it
+    expect(ldconfig is not None, "no static ldconfig in the tree")
+    assert ldconfig is not None
+    family = ldcache.EM_X86_64 if ctx.machine == "x86_64" else ldcache.EM_AARCH64
+    libdir = os.path.dirname(ctx.vreal(ctx.libc))
+    sample = None  # a library beside libc with a soname, which the alterations copy
+    for name in sorted(os.listdir(os.path.join(a, libdir.lstrip("/")))):
+        p = os.path.join(a, libdir.lstrip("/"), name)
+        if name.startswith("lib") and ".so" in name and name != "libc.so.6" and os.path.isfile(p):
+            info = None if os.path.islink(p) else ldcache.shared_object(read_bytes(p), family)
+            if info and info[2]:
+                sample = name
+                break
+    if not sample:
+        return "no library with a soname beside libc"
+    hwcaps = os.path.join(libdir.lstrip("/"), "glibc-hwcaps", "x86-64-v3")
+    for root in copies:
+        ld = os.path.join(root, libdir.lstrip("/"))
+        src = os.path.join(ld, sample)
+        os.symlink("libgone.so.1.0.0", os.path.join(ld, "libgone.so.1"))
+        shutil.copyfile(src, os.path.join(ld, "libzz.so.9"))
+        for d in ("opt/testlib", "usr/lib", "usr/lib64", "usr/libx32", hwcaps):
+            os.makedirs(os.path.join(root, d), exist_ok=True)
+        shutil.copyfile(src, os.path.join(root, "opt", "testlib", "libopt.so.1.2"))
+        shutil.copyfile(src, os.path.join(root, "usr", "lib", "libplain.so.3"))
+        shutil.copyfile(src, os.path.join(root, "usr", "lib64", "lib64only.so.2"))
+        shutil.copyfile(src, os.path.join(root, "usr", "libx32", "libx.so.1"))
+        shutil.copyfile(src, os.path.join(root, hwcaps, "libhw.so.1"))
+        with open(os.path.join(ld, "libscript.so"), "w") as f:
+            f.write("/* GNU ld script */\nGROUP ( libzz.so.9 )\n")
+        with open(os.path.join(ld, "libjunk.so.1"), "wb") as f:
+            f.write(b"\x7fELF" + bytes(16))
+        os.makedirs(os.path.join(root, "etc", "ld.so.conf.d"), exist_ok=True)
+        with open(os.path.join(root, "etc", "ld.so.conf.d", "zz-test.conf"), "w") as f:
+            f.write("# a test\n/opt/testlib  \n/missing/dir\n")
+    # the tree's ldconfig on the first copy; a relative include, Red Hat's, is spelt from /etc,
+    # since -r refuses it
+    conf, cf = os.path.join(a, "etc", "ld.so.conf"), "/etc/ld.so.conf"
+    if os.path.exists(conf):
+        text = read_text(conf)
+        spelt = re.sub(r"^(\s*include\s+)([^/\s]\S*)", r"\1/etc/\2", text, flags=re.MULTILINE)
+        if spelt != text:
+            cf = "/etc/ld.so.conf.exclave"
+            with open(os.path.join(a, "etc", "ld.so.conf.exclave"), "w") as f:
+                f.write(spelt)
+    rc, out, err = inside(ctx, ldconfig, ["-r", a, "-f", cf])
+    expect(rc == 0, f"the tree's ldconfig on a copy: {out}{err}")
+    if cf != "/etc/ld.so.conf":
+        os.remove(os.path.join(a, "etc", "ld.so.conf.exclave"))
+    logs: list[str] = []
+    with Root(b) as r:
+        expect(ldcache.write(r, ldconfig, logs.append), f"the writer wrote no cache: {logs}")
+    ca = read_bytes(os.path.join(a, "etc", "ld.so.cache"))
+    cb = read_bytes(os.path.join(b, "etc", "ld.so.cache"))
+    expect(
+        ca == cb, f"the caches differ: ldconfig's {len(ca)} bytes, the writer's {len(cb)}; {logs}"
+    )
+    dirs = (libdir, "/opt/testlib", "/usr/lib", "/usr/lib64", "/usr/libx32", "/" + hwcaps)
+
+    def listing(root: str) -> list[tuple[str, str, str]]:
+        out = []
+        for d in dirs:
+            p = os.path.join(root, d.lstrip("/"))
+            for n in sorted(os.listdir(p)) if os.path.isdir(p) else []:
+                q = os.path.join(p, n)
+                kind = os.readlink(q) if os.path.islink(q) else "file" if os.path.isfile(q) else "?"
+                out.append((d, n, kind))
+        return out
+
+    la, lb = listing(a), listing(b)
+    expect(la == lb, f"the links differ: {sorted(set(la) ^ set(lb))[:6]!r}")
+    rc, out, err = inside(ctx, ctx.interp, ["--list-diagnostics"])
+    printed = re.findall(r'^path\.system_dirs\[0x[0-9a-f]+\]="([^"]*)"', out, flags=re.MULTILINE)
+    if printed:  # glibc 2.33 and later print them
+        got = ldcache.trusted_dirs(read_bytes(ctx.payload(ctx.interp)))
+        expect(got == printed, f"the loader's table {got!r} is not what it prints {printed!r}")
+    for root in copies:
+        shutil.rmtree(os.path.dirname(root), ignore_errors=True)
+    return f"{len(ca)} bytes, {len(logs)} links made or removed, table of {len(printed)}"
+
+
+@test
+def wrap_takes_a_launcher(ctx: Ctx) -> str | None:
+    """10.1, 10.5: wrap takes a launcher and checks the tree as that launcher's machine.
+
+    A hand-made tree holding a static program of the other machine, that machine's launcher
+    built here, and one of this machine is wrapped with the other machine's launcher: the other
+    machine's program is checked and wrapped, this machine's is a foreign object, warned about and
+    not checked; the hashes file records the launcher given; a second wrap with the same launcher
+    passes, one with another launcher is refused naming relink, and check passes.
+    """
+    other = os.path.join(REPO, "build", "launcher-aarch64")
+    if (
+        not os.path.exists(other)
+        or read_bytes(other, 20)[18:20] == read_bytes(ctx.launcher, 20)[18:20]
+    ):
+        return "no launcher of another machine built here"
+    ex = os.path.join(ctx.work, f"foreign-{os.getpid()}.exclave")
+    shutil.rmtree(ex, ignore_errors=True)
+    os.makedirs(os.path.join(ex, "tree", "usr", "bin"))
+    for name, src in (("theirs", other), ("ours", ctx.launcher)):
+        shutil.copyfile(src, os.path.join(ex, "tree", "usr", "bin", name))
+        os.chmod(os.path.join(ex, "tree", "usr", "bin", name), 0o755)
+    rc, o, e = run([*TOOL, "wrap", ex, other])
+    expect(rc == 0 and f"{ex} is wrapped" in o, "wrap with the other machine's launcher: " + o + e)
+    expect(
+        "/usr/bin/ours: not aarch64: a foreign object, not checked" in o,
+        "this machine's program is a foreign object to that launcher: " + o[-500:],
+    )
+    expect(
+        tree.is_wrapper(os.path.join(ex, "tree", "usr", "bin", "theirs"), ex),
+        "the other machine's program was not wrapped",
+    )
+    lock = tree.records(os.path.join(ex, ".exclave", "hashes"))
+    expect(
+        [[tree.b2(read_bytes(other))]] == lock.get("launcher"),
+        f"the launcher given is not the one recorded: {lock.get('launcher')!r}",
+    )
+    rc, o, e = run([*TOOL, "wrap", ex, other])
+    expect(rc == 0, "a second wrap with the same launcher: " + o + e)
+    rc, o, e = run([*TOOL, "wrap", ex, ctx.launcher])
+    expect(rc != 0 and "relink" in o + e, "a wrap with another launcher must refuse: " + o + e)
+    errors, _warnings, _out = check(ex)
+    expect(not errors, f"check of the foreign exclave: {errors[:3]!r}")
+    shutil.rmtree(ex, ignore_errors=True)
+    return None

@@ -28,6 +28,7 @@ void require_exclave(const char *ex, const char *cmd)
              ex);
     if (!is_dir(tree)) fail("refusing: %s has no tree/ directory", ex);
     if (strcmp(cmd, "wrap") != 0 && !has_exclave) fail("refusing: %s has no .exclave/ directory; wrap makes one", ex);
+    if (has_exclave) machine_of_launcher(ex);
     free(dot_exclave);
     free(can);
     free(tree);

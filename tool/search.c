@@ -3,18 +3,11 @@
  * names for itself; and the glibc a tree carries, by its banner. The static check and prune ask it. */
 #include <ctype.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
-#include <poll.h>
-#include <signal.h>
-#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/utsname.h>
-#include <sys/wait.h>
-#include <time.h>
-#include <unistd.h>
+#include <sys/stat.h>
 #include "tool.h"
 
 /* ---------------------------------------------------------------- machines (7.1) */
@@ -27,25 +20,35 @@ const struct machine MACHINES[2] = {
     {183, "aarch64", "aarch64-linux-gnu", {0}, 0},
 };
 #if defined(__x86_64__)
-const struct machine *const NATIVE = &MACHINES[0];
+const struct machine *MACHINE = &MACHINES[0];
 #elif defined(__aarch64__)
-const struct machine *const NATIVE = &MACHINES[1];
+const struct machine *MACHINE = &MACHINES[1];
 #endif
 
-const char *uname_machine(void)
+/* The exclave's machine is its launcher's (10.1): the checks read the tree as that machine's loader would, so an
+ * exclave of another architecture is wrapped and checked here. A launcher for a machine the table lacks is refused. */
+void machine_of_launcher(const char *ex)
 {
-    static struct utsname u;
-    if (!u.machine[0] && uname(&u)) return NATIVE->uname;
-    return u.machine;
+    char *ld = path_join(ex, ".exclave/launcher"), why[ELF_WHY];
+    struct elf e;
+    if (elf_read(ld, &e, why) == ELF_OK) {
+        const struct machine *m = NULL;
+        for (size_t i = 0; i < sizeof MACHINES / sizeof *MACHINES; i++)
+            if (MACHINES[i].e_machine == e.machine) m = &MACHINES[i];
+        if (!m) fail("%s is a launcher for machine %d, which this command does not know", ld, e.machine);
+        MACHINE = m;
+        elf_free(&e);
+    }
+    free(ld);
 }
 
-/* glibc's default directories on Debian and Fedora, for a loader that cannot be asked */
+/* glibc's default directories on Debian and Fedora, for a loader that carries no table of them */
 void default_dirs(struct strs *out)
 {
     char d[96];
-    snprintf(d, sizeof d, "/lib/%s", NATIVE->triplet);
+    snprintf(d, sizeof d, "/lib/%s", MACHINE->triplet);
     strs_add(out, d);
-    snprintf(d, sizeof d, "/usr/lib/%s", NATIVE->triplet);
+    snprintf(d, sizeof d, "/usr/lib/%s", MACHINE->triplet);
     strs_add(out, d);
     strs_add(out, "/lib64");
     strs_add(out, "/usr/lib64");
@@ -58,9 +61,9 @@ void default_dirs(struct strs *out)
 static char *expand(const char *s, const char *origin)
 {
     char lib[96];
-    snprintf(lib, sizeof lib, "lib/%s", NATIVE->triplet);
-    const char *const subs[][2] = {{"$ORIGIN", origin}, {"${ORIGIN}", origin},        {"$LIB", lib},
-                                   {"${LIB}", lib},     {"$PLATFORM", NATIVE->uname}, {"${PLATFORM}", NATIVE->uname}};
+    snprintf(lib, sizeof lib, "lib/%s", MACHINE->triplet);
+    const char *const subs[][2] = {{"$ORIGIN", origin}, {"${ORIGIN}", origin},         {"$LIB", lib},
+                                   {"${LIB}", lib},     {"$PLATFORM", MACHINE->uname}, {"${PLATFORM}", MACHINE->uname}};
     struct buf cur = {0};
     buf_str(&cur, s);
     buf_add(&cur, "", 1);
@@ -95,8 +98,8 @@ int is_payload_file(const char *root, const char *v)
 /* the first of the tree's files the loader would take in directory d for name, its hwcaps subdirectories first */
 static char *search_dir(const char *root, const char *d, const char *name)
 {
-    for (int i = 0; i <= NATIVE->nhwcaps; i++) {
-        char *sub = i < NATIVE->nhwcaps ? path_join(d, NATIVE->hwcaps[i]) : NULL;
+    for (int i = 0; i <= MACHINE->nhwcaps; i++) {
+        char *sub = i < MACHINE->nhwcaps ? path_join(d, MACHINE->hwcaps[i]) : NULL;
         char *cand = path_join(sub ? sub : d, name);
         free(sub);
         char *r = tree_resolve(root, cand, 1, NULL);
@@ -183,9 +186,12 @@ char *find_library(const struct search *s, const char *name, const struct elf *e
 }
 
 /* ---------------------------------------------------------------- the loader's own directories */
-/* The default search directories of the tree's loader, and the reason when they were assumed: glibc 2.33 and later
- * prints them with --list-diagnostics; musl's are fixed; an older glibc is taken to search Debian's and Fedora's
- * defaults. The loader run is the file PT_INTERP names in the tree, never a host file an absolute link names. */
+/* The default search directories of the tree's loader, read from the loader file: glibc's build writes them into the
+ * loader as a table of consecutive strings, each `/.../`, the same table `--list-diagnostics` prints as
+ * path.system_dirs; musl's are fixed. Nothing of the tree runs, so a loader of another machine is read like this one's
+ * (10.3). The loader read is the file PT_INTERP names in the tree, never a host file an absolute link names. Returns
+ * the reason when the directories were assumed instead: Debian's and Fedora's defaults, for a loader without the
+ * table. */
 char *loader_dirs(const char *root, const char *interp, struct strs *out)
 {
     if (!interp) {
@@ -200,70 +206,41 @@ char *loader_dirs(const char *root, const char *interp, struct strs *out)
     }
     char *r = tree_resolve(root, interp, 1, NULL), *loader = tree_payload(root, r ? r : interp);
     free(r);
-    int pipefd[2];
-    struct buf text = {0};
-    if (pipe2(pipefd, O_CLOEXEC) == 0) {
-        posix_spawn_file_actions_t fa;
-        posix_spawn_file_actions_init(&fa);
-        posix_spawn_file_actions_adddup2(&fa, pipefd[1], 1);
-        posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
-        static char diagnostics[] = "--list-diagnostics";
-        char *argv[] = {loader, diagnostics, NULL};
-        pid_t pid;
-        if (posix_spawn(&pid, loader, &fa, NULL, argv, environ) == 0) {
-            close(pipefd[1]);
-            struct timespec start, now;
-            clock_gettime(CLOCK_MONOTONIC, &start);
-            for (;;) { /* 20 s at most, as for a loader that hangs */
-                clock_gettime(CLOCK_MONOTONIC, &now);
-                long left = 20000 - (now.tv_sec - start.tv_sec) * 1000 - (now.tv_nsec - start.tv_nsec) / 1000000;
-                struct pollfd p = {pipefd[0], POLLIN, 0};
-                if (left <= 0 || poll(&p, 1, (int)left) <= 0) {
-                    kill(pid, SIGKILL);
-                    text.n = 0;
-                    break;
-                }
-                char chunk[4096];
-                ssize_t k = read(pipefd[0], chunk, sizeof chunk);
-                if (k <= 0) break;
-                buf_add(&text, chunk, (size_t)k);
-            }
-            waitpid(pid, NULL, 0);
-        } else {
-            close(pipefd[1]);
-        }
-        posix_spawn_file_actions_destroy(&fa);
-        close(pipefd[0]);
-    }
+    size_t n = 0;
+    struct stat st;
+    char *data = stat(loader, &st) == 0 && S_ISREG(st.st_mode) ? read_file(loader, &n) : xrealloc(NULL, 1);
     free(loader);
-    buf_add(&text, "", 1);
-    /* lines path.system_dirs[0xN]="DIR" */
-    for (char *line = text.p; line && *line;) {
-        char *end = strchr(line, '\n');
-        if (end) *end = 0;
-        static const char key[] = "path.system_dirs[0x";
-        if (!strncmp(line, key, sizeof key - 1)) {
-            char *c = line + sizeof key - 1;
-            size_t hexes = strspn(c, "0123456789abcdef");
-            if (hexes && !strncmp(c + hexes, "]=\"", 3)) {
-                char *v = c + hexes + 3, *q = strchr(v, '"');
-                if (q && q > v) {
-                    *q = 0;
-                    size_t k = strlen(v);
-                    while (k && v[k - 1] == '/') v[--k] = 0;
-                    strs_add(out, v);
-                }
-            }
+    /* the first run of two or more strings spelt /.../, each ending in a slash */
+    size_t at = 0, run_from = 0;
+    int run = 0;
+    while (at < n) {
+        size_t k = strnlen(data + at, n - at);
+        if (k >= 2 && data[at] == '/' && data[at + k - 1] == '/') {
+            if (!run) run_from = at;
+            run++;
+        } else if (run >= 2) {
+            break;
+        } else {
+            run = 0;
         }
-        line = end ? end + 1 : NULL;
+        at += k + 1;
     }
-    free(text.p);
+    for (size_t i = run_from; run >= 2 && out->n < (size_t)run; i += strnlen(data + i, n - i) + 1) {
+        size_t k = strnlen(data + i, n - i);
+        char *v = xrealloc(NULL, k + 1);
+        memcpy(v, data + i, k);
+        v[k] = 0;
+        while (k > 1 && v[k - 1] == '/') v[--k] = 0;
+        strs_add(out, v);
+        free(v);
+    }
+    free(data);
     if (out->n) return NULL;
     default_dirs(out);
     struct buf why = {0};
     buf_str(&why, "the loader ");
     buf_str(&why, interp);
-    buf_str(&why, " lists no search directories (glibc before 2.33, or it cannot run here): ");
+    buf_str(&why, " carries no table of search directories (not glibc's?): ");
     for (size_t i = 0; i < out->n; i++) {
         if (i) buf_add(&why, ":", 1);
         buf_str(&why, out->s[i]);

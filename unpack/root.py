@@ -184,6 +184,10 @@ class Root:
         dfd, name = self._at(vpath, follow=False, create=False)
         return os.readlink(name, dir_fd=dfd)
 
+    def stat(self, vpath: str, *, follow: bool = True) -> os.stat_result | None:
+        """What vpath names, resolved in the tree; None when nothing does."""
+        return self._lstat(vpath, follow=follow)
+
     # ------------------------------------------------------------ reading
     @contextlib.contextmanager
     def _open(self, vpath: str, flags: int) -> Generator[int]:
@@ -271,6 +275,11 @@ class Root:
 
     def chmod_dir(self, vpath: str, mode: int) -> None:
         with self._open(vpath, os.O_RDONLY | os.O_DIRECTORY) as fd:
+            os.fchmod(fd, mode)
+
+    def chmod(self, vpath: str, mode: int) -> None:
+        """The mode of the file at vpath, exactly, whatever the umask."""
+        with self._open(vpath, os.O_RDONLY) as fd:
             os.fchmod(fd, mode)
 
     def room(self, size: int, what: str) -> None:

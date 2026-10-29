@@ -13,10 +13,10 @@ cannot read is noted too.
 import fnmatch
 import os
 import re
-import subprocess
 from typing import NamedTuple
 lazy from collections.abc import Callable
 
+from unpack import ldcache
 from unpack.package import Log, Package, reader, safe_rel
 lazy from unpack.root import Root
 
@@ -307,64 +307,22 @@ def base_passwd(r: Root, packages: list[Package], log: Log) -> bool:
 
 
 def ldconfig(r: Root, packages: list[Package], log: Log) -> bool:
-    """ld.so.cache by the exclave's own static ldconfig, run on this host.
+    """ld.so.cache as the exclave's own static ldconfig would write it, without running it.
 
-    Before wrapping, so the cache never indexes the launcher; Fedora 42 has merged sbin into bin.
-    The aux-cache is removed, since it records inodes and mtimes: never reproducible, never needed.
+    unpack/ldcache.py reads the tree as ldconfig reads it, so a tree of any architecture gets its
+    cache here, before wrapping, so that the cache never indexes the launcher; Fedora 42 has
+    merged sbin into bin. The aux-cache is removed, since it records inodes and mtimes: never
+    reproducible, never needed.
     """
     names = {p.name for p in packages}
-    ld = None
-    for cand in (
-        "/usr/sbin/ldconfig.real",
-        "/sbin/ldconfig.real",
-        "/usr/sbin/ldconfig",
-        "/sbin/ldconfig",
-        "/usr/bin/ldconfig",
-    ):
-        if r.isfile(cand) and r.read_bytes(cand, 4) == b"\x7fELF":
-            ld = cand
-            break
+    ld = ldcache.find_ldconfig(r)
     if not ld:
         if "libc-bin" in names:
             log("libc-bin present but no static ldconfig found; no ld.so.cache")
         return False
-    conf, tmp = "/etc/ld.so.conf", None
-    # ldconfig -r refuses a relative include, which Red Hat's ld.so.conf has:
-    # a copy with the pattern spelt from /etc is written in the tree for the run
-    if r.isfile(conf):
-        lines_out: list[str] = []
-        changed = False
-        for line in _lines(r.read_text(conf)):
-            m = re.match(r"^(\s*include\s+)([^/\s][^\s]*)(.*)$", line)
-            if m:
-                lines_out.append(m.group(1) + "/etc/" + m.group(2) + m.group(3) + "\n")
-                changed = True
-            else:
-                lines_out.append(line)
-        if changed:
-            tmp = "/etc/ld.so.conf.exclave"
-            r.write_bytes(tmp, "".join(lines_out).encode())
-    made = False
-    try:
-        # the tree's own ldconfig, run on this host, as wrapping requires (10.1)
-        res = subprocess.run(  # noqa: S603 -- an argument vector, no shell
-            [r.real(ld), "-r", r.path, "-f", tmp or "/etc/ld.so.conf"],
-            capture_output=True,
-            check=False,
-        )
-        if res.returncode:
-            log("ldconfig failed: " + res.stderr.decode(errors="replace").strip())
-        else:
-            log("synthesised /etc/ld.so.cache with the exclave's ldconfig")
-            made = True
-    except OSError as e:  # the tree's ldconfig is of another architecture: no cache here (10.1)
-        log(
-            f"the tree's ldconfig cannot run on this machine ({e.strerror}): no ld.so.cache; "
-            "wrap the exclave on a machine of its architecture"
-        )
-    finally:
-        if tmp:
-            r.remove(tmp)
+    made = ldcache.write(r, ld, log)
+    if made:
+        log("synthesised /etc/ld.so.cache as the exclave's ldconfig writes it")
     aux = "/var/cache/ldconfig"
     if r.isdir(aux) and not r.islink(aux):
         r.rmtree(aux)
@@ -389,7 +347,7 @@ RULES: tuple[Rule, ...] = (
     Rule("ca-trust", "Fedora's tls-ca-bundle.pem from the p11-kit trust source", ca_trust),
     Rule("ssl-paths", "OpenSSL's compiled-in trust paths as links to /etc/ssl", ssl_paths),
     Rule("base-passwd", "/etc/passwd and /etc/group from base-passwd's masters", base_passwd),
-    Rule("ldconfig", "ld.so.cache by the exclave's own ldconfig", ldconfig),
+    Rule("ldconfig", "ld.so.cache as the exclave's own ldconfig writes it", ldconfig),
 )
 
 # ---------------------------------------------------------------- what the rules do not make

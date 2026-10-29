@@ -536,7 +536,7 @@ def main() -> int:
     )
     ap.add_argument(
         "--debs-arm64",
-        help="directory of arm64 .deb files the aarch64 VM makes its gcc exclave from",
+        help="directory of arm64 .deb files the aarch64 VM's gcc exclave is made from, here",
     )
     ap.add_argument(
         "--docker-profile",
@@ -556,10 +556,43 @@ def main() -> int:
         pubkey = f.read().strip()
     # the payload: the exclave (hard links preserved by tar) and the repository's test tree,
     # exclave, launcher and, where the host has go, the Go regression's programs built for the VM's
-    # machine. For the aarch64 VM the payload carries the arm64 package files and the cross-built
-    # launchers under the suite's names: the exclave is unpacked and wrapped in the VM, on its own
-    # architecture (10.1).
+    # machine. For the aarch64 VM the payload carries the exclave made here from the arm64 package
+    # files, wrapped with the cross-built launcher (10.1), and the cross-built launchers and
+    # command under the suite's names.
     payloads: dict[tuple[str, str], str] = {}
+
+    def arm64_exclave() -> str:
+        """The gcc exclave for the aarch64 VM, unpacked and wrapped here with its launcher."""
+        if not args.debs_arm64:
+            sys.exit(
+                "the aarch64 VM needs --debs-arm64 DIR, "
+                "a directory of arm64 .deb files for the gcc exclave"
+            )
+        dst = os.path.join(work, "ex-aarch64")
+        shutil.rmtree(dst, ignore_errors=True)
+        debs = sorted(
+            os.path.join(args.debs_arm64, n)
+            for n in os.listdir(args.debs_arm64)
+            if n.endswith(".deb")
+        )
+        log("making the arm64 exclave here from", len(debs), "packages")
+        for cmd in (
+            [sys.executable, "-m", "unpack", dst, *debs],
+            [
+                os.path.join(REPO, "build", "exclave"),
+                "wrap",
+                dst,
+                os.path.join(REPO, "build", "launcher-aarch64"),
+            ],
+        ):
+            p = subprocess.run(cmd, capture_output=True, check=False)
+            if p.returncode:
+                sys.exit(
+                    f"cannot make the arm64 exclave: {' '.join(cmd[:2])}: "
+                    + (p.stdout + p.stderr).decode(errors="replace")[-400:]
+                )
+        return dst
+
     # 10.5: the launcher and the command built inside the exclave here, which each x86-64 VM builds
     # again inside its copy and must match byte for byte
     p = subprocess.run(
@@ -632,12 +665,7 @@ def main() -> int:
                         arcname="repo/build/sysroot-hello",
                     )
             else:
-                if not args.debs_arm64:
-                    sys.exit(
-                        "the aarch64 VM needs --debs-arm64 DIR, "
-                        "a directory of arm64 .deb files for the gcc exclave"
-                    )
-                t.add(args.debs_arm64, arcname="debs")
+                t.add(arm64_exclave(), arcname="ex")
                 t.add(
                     os.path.join(REPO, "build", "launcher-aarch64"), arcname="repo/build/launcher"
                 )
@@ -675,28 +703,15 @@ def main() -> int:
             )
             if "unpacked" not in out:
                 return failure(uname, "cannot unpack: " + out[-200:])
-            if arch != "x86_64":  # the exclave is made here, on its own architecture (10.1)
-                _rc, out = vm.ssh(
-                    "cd m && $PWD/python/bin/python3 -m unpack ex debs/*.deb "
-                    "2>&1 | tail -3 && "
-                    "repo/build/exclave wrap ex 2>&1 | tail -3",
-                    timeout=3600 * slow,
+            # the exclave given carries the launcher that made it: the row tests the checkout's
+            _rc, out = vm.ssh(
+                "cd m && repo/build/exclave relink ex repo/build/launcher 2>&1 | tail -1",
+                timeout=600 * slow,
+            )
+            if "relinked" not in out:
+                return failure(
+                    uname, "cannot relink the exclave: " + out[-200:].replace("\n", " | ")
                 )
-                log(name, "exclave:", " | ".join(x.strip() for x in out.splitlines()[-3:]))
-                if "ex is wrapped" not in out:
-                    return failure(
-                        uname, "cannot make the exclave: " + out[-300:].replace("\n", " | ")
-                    )
-            else:
-                # the exclave given carries the launcher that made it: the row tests the checkout's
-                _rc, out = vm.ssh(
-                    "cd m && repo/build/exclave relink ex repo/build/launcher 2>&1 | tail -1",
-                    timeout=600 * slow,
-                )
-                if "relinked" not in out:
-                    return failure(
-                        uname, "cannot relink the exclave: " + out[-200:].replace("\n", " | ")
-                    )
             suite_rc, out = vm.ssh(
                 "cd m && $PWD/python/bin/python3 repo/test/run.py --exclave $PWD/ex "
                 f"--work $PWD/work --budget {60 * slow:d} 2>&1",
