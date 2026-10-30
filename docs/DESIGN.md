@@ -4161,16 +4161,22 @@ the gate cannot afford. Each runs when its input variable is set:
 - python3 in the exclave: `test/bytecode.py` makes Python's bytecode
   by the two-phase pattern (10.1) and times the imports before and
   after.
-- `EXCLAVE_TEST_INPUTS`: `test/workloads.py` runs six real workloads
+- `EXCLAVE_TEST_INPUTS`: `test/workloads.py` runs seven real workloads
   in exclaves of their own, each in the same work directory under
   `bwrap` with the tree read-only at `/` and under the launcher,
   and compares the outputs byte for byte, the hashes of what the builds
   make included: valgrind's memcheck over a faulty program, `pdftotext`,
   `pdffonts` and `pdftoppm` of a PDF with embedded fonts and a
   substituted one, a cargo build, zlib built by CMake and ninja with four
-  jobs, a Java program run as source and compiled by `javac`, and a
-  Python process with threads, subprocesses and sqlite. All six agree;
-  each takes under two seconds in either world.
+  jobs, a Java program run as source and compiled by `javac`, a
+  Python process with threads, subprocesses and sqlite, and a Hutter
+  Prize entry's unmodified `build.sh` (cmix-neif 1.0: clang-18 and
+  lld-18 under `env -i`, `make -j` unbounded, a profile-guided second
+  build) in an exclave of the packages its `install.sh` names at the
+  Ubuntu snapshot it pins, the judging image a contest rebuilds it in.
+  All seven agree; six take under two seconds in either world, and the
+  entry builds in about two minutes, to the byte its author published
+  (its `comp9`'s SHA-256 is the one in the entry's `SHA256SUMS`).
 - `EXCLAVE_TEST_DEBS_ARM64`: the emulated aarch64 row, with
   `EXCLAVE_TEST_DOCKER` adding the Docker profile run.
 
@@ -4215,7 +4221,8 @@ questions.
 
 1. **Exclaves of real packaged software.** Beyond the compilers, the
    example runs make exclaves of valgrind, poppler, Rust, CMake, a Java
-   JDK and Python and run them against the kernel (17); the JDK closed
+   JDK, Python and a contest's judging image, which rebuilds an entry to
+   the byte, and run them against the kernel (17); the JDK closed
    two gaps, its alternatives (`java-jinfo`) and the static check's
    refusal of a soname only a prior `dlopen` by path provides (10.3).
    Further real software decides which of the tool's synthesis gaps

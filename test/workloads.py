@@ -17,6 +17,9 @@ both worlds. The workloads, each a program with its own syscall layer, caches or
   java      java -version, a single-file program, javac and the class run, through
             /usr/bin/java's alternatives link
   python    a Python process's threads, subprocesses, sqlite and files, a fixed amount of each
+  buildimage  a Hutter Prize entry's unmodified build.sh (cmix-neif 1.0: clang-18, lld-18, a
+            PGO training run, make -j) in an exclave of the judging image's packages at the
+            Ubuntu snapshot the entry pins; its comp9 is hashed, the published hash beside it
 
 Prints a line per workload with both times and the failed opens the log names; the exit status is
 the number of workloads whose outputs differ. A workload whose exclave is missing is skipped with
@@ -133,6 +136,15 @@ WORKLOADS: dict[str, tuple[str, tuple[str, ...], str]] = {
         ),
     ),
     "python": ("realsoft", ("work.py",), "python3 work.py"),
+    "buildimage": (
+        "buildimage",
+        ("src/cmix-neif-1.0.tar.gz",),
+        (
+            "cd cmix-neif-1.0 && sh ./build.sh >build.log 2>&1; echo build rc=$?; "
+            "echo published 8b07d85f0a374b55688fd08d1a464222f766efbb5bfefc2bc94d6abb201133d7; "
+            "sha256sum comp9 | sed 's/  .*//'"
+        ),
+    ),
 }
 
 
