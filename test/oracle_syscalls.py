@@ -437,11 +437,12 @@ class Forms:
 
 
 def generate(
-    forms: Forms, nr: dict[str, int], uid: int, gid: int
+    forms: Forms, nr: dict[str, int], uid: int, gid: int, mutable: set[str]
 ) -> list[tuple[str, str, list[str], str]]:
     """(label, syscall name, [tokens], group) for every case.
 
-    A name absent from this machine's table is skipped.
+    A name absent from this machine's table is skipped. mutable names the bound host directories
+    the kernel's world can write to (writable_in_bwrap), which no case changes.
     """
     out: list[tuple[str, str, list[str], str]] = []
     # cases that depend on one another run in one group, in order; None groups by syscall
@@ -472,11 +473,10 @@ def generate(
         ("empty", AT_EMPTY_PATH),
         ("nofollow_empty", AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH),
     ]
-    # a bound host directory this user can write to, /tmp aside, is left as it is: the two worlds
-    # would share what one of them changed there (an xattr set, a socket bound), and the host is
-    # not the probe's to change. /tmp is sticky, so an xattr there is refused and a relative bind
-    # there is cleaned up between the worlds.
-    mutable = {n for n, p in forms.paths if n in BOUND and p != "/tmp" and os.access(p, os.W_OK)}
+    # a bound host directory the kernel's world can write to, /tmp aside, is left as it is: the
+    # two worlds would share what one of them changed there (an xattr set, a socket bound), and
+    # the host is not the probe's to change. /tmp is sticky, so an xattr there is refused and a
+    # relative bind there is cleaned up between the worlds.
     for n, p in forms.paths:
         for fn, fl in open_flags:
             if n == "proc_exe" and fl & O_TRUNC:
@@ -1014,6 +1014,26 @@ def run_bwrap(root: str, host: str, _bindir: str, probe: str, cases: str) -> tup
     return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
+def writable_in_bwrap(forms: Forms, root: str, host: str, bindir: str) -> set[str]:
+    """The names of the bound host directories (BOUND) the kernel's world can write to.
+
+    Asked in that world rather than here: an unprivileged bwrap gives its user the capabilities of
+    its own user namespace, so a directory this user owns but cannot write to is writable there.
+    """
+    dirs = [
+        (n, d)
+        for n, p in forms.paths
+        if n in BOUND and (d := raw_of(p)) is not None and os.path.isdir(d)
+    ]
+    script = os.path.join(bindir, "writable.sh")
+    os.makedirs(host, exist_ok=True)  # bwrap starts in the host area, which the reset remakes
+    with open(script, "w") as f:
+        f.write("".join(f'[ -w "{p}" ] && echo "{p}"\n' for _n, p in dirs) + "exit 0\n")
+    _rc, out, _err = run_bwrap(root, host, bindir, forms.sh, script)
+    found = set(out.split())
+    return {n for n, p in dirs if p in found}
+
+
 def run_launcher(ex: str, host: str, probe: str, cases: str) -> tuple[int, str, str]:
     with open(cases, "rb") as inp:
         p = subprocess.run(
@@ -1399,7 +1419,20 @@ def main() -> int:
             + r.stderr.decode(errors="replace")
         )
     nr = kernel_table(roots=(root, "/"))
-    cases = generate(forms, nr, os.getuid(), os.getgid())
+    writable = writable_in_bwrap(forms, root, host, bindir)
+    mutable = writable - {"tmp"}  # /tmp is sticky: the cases there are safe (generate)
+    # the bound host paths as this host has them: a difference on one is often the host's doing
+    for n, p in forms.paths:
+        d = raw_of(p)
+        if n in BOUND and d is not None and os.path.lexists(d):
+            st = os.stat(d)
+            print(
+                f"bound host path {d}: uid {st.st_uid} mode {st.st_mode & 0o7777:o}, writable here "
+                f"{'yes' if os.access(d, os.W_OK) else 'no'}, in the kernel's world "
+                f"{'yes' if n in writable else 'no'}"
+                + ("; the cases that change it are left out" if n in mutable else "")
+            )
+    cases = generate(forms, nr, os.getuid(), os.getgid(), mutable)
     if args.only:
         cases = [c for c in cases if args.only in (c[1], c[3])]
     names = []
