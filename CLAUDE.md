@@ -51,10 +51,16 @@ The loop that has served well, in the order it pays:
    commit does not wait for it, and asking names the commits it has not
    seen. `--full` runs every gate step, worth it before a series of
    commits is pushed. Both also run on GitHub's hosted runners when the
-   user dispatches `.github/workflows/ci.yml` by hand: the gate on
-   x86-64 and natively on aarch64, the x86-64 rows under KVM and the
-   64 KB-page row emulated; it never runs at a push, and dispatching it
-   is the user's. One commit per item.
+   user dispatches `.github/workflows/ci.yml`, from the Actions tab or
+   as `gh workflow run ci.yml -f matrix=true` (`false`: the gate
+   alone) on the pushed `main`: the gate on x86-64 and natively on
+   aarch64, the x86-64 rows under KVM and the 64 KB-page row emulated,
+   about an hour. It never runs at a push, and a dispatch is the
+   user's to ask for in so many words, as a matrix run is; reading a
+   run is always fine (`gh run list --workflow ci.yml`, `gh run watch
+   ID --exit-status` in the background, `gh run view ID
+   --log-failed`), reported as failures and the end. One commit per
+   item.
 
 ## Preferences
 

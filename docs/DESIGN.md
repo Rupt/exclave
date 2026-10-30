@@ -4150,8 +4150,12 @@ exclave with logging, which makes the row long (12.1); it runs when
 asked, not in the gate, and making it shorter is in 18.
 
 **On GitHub's hosted runners** (`.github/workflows/ci.yml`), the gate
-and the matrix run when a maintainer dispatches the workflow from the
-Actions tab, never at a push: it calls `scripts/install-uv`,
+and the matrix run when a maintainer dispatches the workflow, from the
+Actions tab or as `gh workflow run ci.yml -f matrix=true` (`false`
+for the gate alone) on the pushed `main`, never at a push; `gh run
+list --workflow ci.yml` names the run, `gh run watch ID
+--exit-status` waits for it and `gh run view ID --log-failed` shows
+what failed. It calls `scripts/install-uv`,
 `scripts/inputs` (its package files cached between runs, keyed on the
 inputs script and the fetchers), `scripts/gate --full` and
 `scripts/matrix`, adding only what a runner lacks and the reference

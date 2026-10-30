@@ -1,5 +1,6 @@
 # The commit gate and the kernel matrix on GitHub's hosted runners (docs/DESIGN.md 17), run by
-# hand from the Actions tab (workflow_dispatch) and never at a push. The workflow only calls the
+# hand (workflow_dispatch: the Actions tab, or gh workflow run ci.yml -f matrix=true, false for
+# the gate alone; gh run watch ID --exit-status waits) and never at a push. The workflow only calls the
 # repository's scripts: scripts/install-uv for the pinned Python, scripts/inputs for the
 # development inputs through cached package files, scripts/gate --full and scripts/matrix. What
 # it adds is what the runner lacks and the reference machine has: packages, the KVM device
