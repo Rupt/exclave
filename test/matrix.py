@@ -360,7 +360,8 @@ def boot(
         log("booting", name)
         vm = VM(name, image, work, row.user, port, memory=memory, arch=row.arch)
     slow = 10 if row.arch != "x86_64" else 1
-    if not vm.wait(deadline=600 * slow):
+    # a kernel to install and reboot into takes the emulated VM most of its allowance
+    if not vm.wait(deadline=600 * slow * (2 if row.kernel_package else 1)):
         vm.stop()
         with open(vm.qemu_log, errors="replace") as f:
             said = " | ".join(f.read()[-300:].split())
@@ -369,7 +370,7 @@ def boot(
 
 
 def user_data(family: str, pubkey: str, kernel_package: str = "") -> str:
-    pk = PACKAGES[family] + ([kernel_package] if kernel_package else [])
+    pk = PACKAGES[family]
     if family == "centos7":
         return "\n".join(
             [
@@ -400,15 +401,24 @@ def user_data(family: str, pubkey: str, kernel_package: str = "") -> str:
         else []
     )
     # with a kernel to boot into, the first boot installs it and reboots, and every boot marks the
-    # VM ready only once its pages are 64 KB (bootcmd runs on every boot, runcmd on the first)
+    # VM ready only once its pages are 64 KB (bootcmd runs on every boot, runcmd on the first).
+    # The kernel is the versioned image the meta-package names, without recommendations: the
+    # meta-package also brings linux-firmware, hundreds of megabytes that take the emulated VM
+    # a quarter of an hour to unpack and a second initramfs to build, for devices it has not
     ready = ["  - touch /var/tmp/exclave-ready"]
     bootcmd: list[str] = []
     if kernel_package:
-        ready = ["  - reboot"]
-        bootcmd = [
-            "bootcmd:",
-            "  - [sh, -c, 'test \"$(getconf PAGESIZE)\" = 65536 && touch /var/tmp/exclave-ready']",
+        # a YAML single-quoted item: the colon and the backslashes stay as written
+        pick = 'sed -n "s/^ *Depends: \\(linux-image-[0-9][^ ]*\\)/\\1/p" | head -1'
+        ready = [
+            (
+                f"  - 'image=$(apt-cache depends {kernel_package} | {pick}); "
+                'apt-get install -y --no-install-recommends "$image"\''
+            ),
+            "  - reboot",
         ]
+        mark = 'test "$(getconf PAGESIZE)" = 65536 && touch /var/tmp/exclave-ready; true'
+        bootcmd = ["bootcmd:", f"  - [sh, -c, '{mark}']"]
     return "\n".join(
         [
             "#cloud-config",
@@ -476,8 +486,9 @@ class VM:
                 "max",
                 "-m",
                 str(max(memory, 2048)),
+                # emulated vCPUs beyond the host's cores only contend with each other
                 "-smp",
-                "4",
+                str(min(4, os.cpu_count() or 1)),
                 "-drive",
                 "if=pflash,format=raw,readonly=on,file=" + os.path.join(AAVMF, "AAVMF_CODE.fd"),
                 "-drive",
