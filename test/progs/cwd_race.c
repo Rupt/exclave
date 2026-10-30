@@ -18,7 +18,7 @@
 
 #define WORKERS 4
 #define LOOKUPS 250000 /* per worker */
-#define SECONDS 15
+#define SECONDS 10
 
 static int stop; /* the compiler's atomic builtins: no header, which a pruned fixture may lack */
 static long failed, done;

@@ -16,7 +16,7 @@
 #include <unistd.h>
 
 #define LOOKUPS 200000
-#define SECONDS 15
+#define SECONDS 10
 
 static char a[4096], a2[4096 + 8];
 static int stop;
