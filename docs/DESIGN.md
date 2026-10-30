@@ -2433,7 +2433,8 @@ October 2026:
 | Alpine 3.20 | 6.6 | 84 of 84 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
 | Fedora 42 | 6.14 | 84 of 84 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
 | Ubuntu 26.10 | 7.3 | 84 of 84 | all pass | glibc 2.44 |
-| Ubuntu 24.04 arm64 | 6.8 | 80 of 80 | all pass | aarch64 under TCG, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed: the suite takes 17 minutes, the row 36; the exclave is made on the reference machine and only run here (10.1) |
+| Ubuntu 24.04 arm64 | 6.8 | 84 of 84 | all pass | aarch64: natively on GitHub's aarch64 runner, where the gate runs this kernel (17), and under TCG on the reference machine, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed, where the suite takes 17 minutes and the row 36; the exclave is made on the reference machine and only run here (10.1) |
+| Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | 84 of 84 | all pass | aarch64 under TCG on GitHub's aarch64 runner: the VM installs the 64 KB kernel and reboots into it; the row takes about two hours there (17); reproduced |
 | reference machine | 7.0 | 84 of 84 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
@@ -2787,7 +2788,8 @@ and stay fixed.
     resolution oracle's 3 000 paths, the namespace oracle's 21 workloads,
     the probe's 18 293 cases with no unexplained difference, and both
     Docker profiles; the suite's two failures were the tests' own 4 KB
-    assumptions, since corrected, so the row's clean run is still due.
+    assumptions, since corrected, and the row now passes in full on
+    GitHub's aarch64 runner (12.1).
 
 44. **Two handlers never share a scratch chunk**: a rule, not a
     limitation (7.5.4).
@@ -4179,7 +4181,8 @@ which the emulated row never ran (its code checks go without
 shellcheck and taplo, which have no aarch64 wheel; the shell and the
 TOML are text, checked on x86-64). The x86-64 rows run under KVM, two
 VMs at a time; the 64 KB-page row runs emulated on the aarch64 runner,
-since no hosted runner boots such a kernel, and remains the long job.
+since no hosted runner boots such a kernel, and remains the long job,
+about two hours (measured October 2026).
 The results are the jobs' logs and each matrix job's results table,
 kept as the run's artifacts; the figures the documents quote stay
 those measured on the reference machine.
@@ -4289,8 +4292,9 @@ questions.
 3. **aarch64 kernels with 16 KB or 64 KB pages.** The loader rounds to
    the kernel's page size and the launcher's own segments are 64 KB
    aligned (13 item 43). The matrix's `noble-arm64-64k` row, on
-   Ubuntu's `linux-image-generic-64k`, has run once with every oracle
-   passing; its clean suite run is due.
+   Ubuntu's `linux-image-generic-64k`, passes the suite and every
+   oracle, and rebuilds the launcher and the command to the same
+   bytes (12.1).
 4. **The emulated arm64 rows' speed.** The arm64 rows run under QEMU's
    TCG emulation at about a tenth of native speed (12.1), so they run
    when asked rather than at every commit; the exclave they run is made
