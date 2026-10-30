@@ -2423,21 +2423,24 @@ October 2026:
 
 | Distribution | Kernel | Suite | Oracles | Notes |
 |---|---|---|---|---|
-| CentOS 7 | 3.10 | 80 of 80 | none: no user namespaces | `seccomp(2)` absent, so the `prctl` form is used; `renameat`, not `renameat2` |
-| Ubuntu 18.04 | 4.15 | 80 of 80 | namespace, probe and Docker profile pass; no `openat2` | bwrap 0.2 |
-| Rocky Linux 8 | 4.18 | 80 of 80 | all pass | |
-| Ubuntu 20.04 | 5.4 | 80 of 80 | namespace, probe and Docker profile pass; no `openat2` | |
-| Debian 11 | 5.10 | 80 of 80 | all pass | the security suite lists a `bubblewrap` it does not serve; the matrix installs the release's |
-| Ubuntu 22.04 | 5.15 | 80 of 80 | all pass | |
-| Debian 12 | 6.1 | 80 of 80 | all pass | |
-| Alpine 3.20 | 6.6 | 80 of 80 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
-| Fedora 42 | 6.14 | 80 of 80 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
-| Ubuntu 26.10 | 7.3 | 80 of 80 | all pass | glibc 2.44 |
+| CentOS 7 | 3.10 | 84 of 84 | none: no user namespaces | `seccomp(2)` absent, so the `prctl` form is used; `renameat`, not `renameat2` |
+| Ubuntu 18.04 | 4.15 | 84 of 84 | namespace, probe and Docker profile pass; no `openat2` | bwrap 0.2 |
+| Rocky Linux 8 | 4.18 | 84 of 84 | all pass | |
+| Ubuntu 20.04 | 5.4 | 84 of 84 | namespace, probe and Docker profile pass; no `openat2` | |
+| Debian 11 | 5.10 | 84 of 84 | all pass | the security suite lists a `bubblewrap` it does not serve; the matrix installs the release's |
+| Ubuntu 22.04 | 5.15 | 84 of 84 | all pass | |
+| Debian 12 | 6.1 | 84 of 84 | all pass | |
+| Alpine 3.20 | 6.6 | 84 of 84 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
+| Fedora 42 | 6.14 | 84 of 84 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
+| Ubuntu 26.10 | 7.3 | 84 of 84 | all pass | glibc 2.44 |
 | Ubuntu 24.04 arm64 | 6.8 | 80 of 80 | all pass | aarch64 under TCG, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed: the suite takes 17 minutes, the row 36; the exclave is made on the reference machine and only run here (10.1) |
-| reference machine | 7.0 | 80 of 80 | all pass | Ubuntu 24.04, AppArmor |
+| reference machine | 7.0 | 84 of 84 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
-run passes. Two checks outside the suite run natively on each row:
+run passes; the ten x86-64 rows pass the same way on GitHub's hosted
+x86-64 runner, where the matrix job takes about 25 minutes (17,
+measured October 2026). Two checks outside the suite run natively on
+each row:
 
 - **`noexec`.** A program built by the exclave's gcc, placed on a
   `noexec` tmpfs, is refused with status 126, permission denied, by the
