@@ -303,6 +303,8 @@ class Forms:
             ("opt", "/opt"),
             ("exclave_to_host", "/maze/lH"),
             ("exclave_to_host_dir", "/maze/lHD"),
+            ("link_slash_absent", "/maze/lS"),
+            ("link_slash_file", "/maze/lFS"),
             ("overlong", "/maze/" + "a" * 5000),
             ("long_component", "/maze/" + "b" * 256),
             ("long_ok", "/maze/" + "c" * 255),
@@ -470,6 +472,11 @@ def generate(
         ("empty", AT_EMPTY_PATH),
         ("nofollow_empty", AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH),
     ]
+    # a bound host directory this user can write to, /tmp aside, is left as it is: the two worlds
+    # would share what one of them changed there (an xattr set, a socket bound), and the host is
+    # not the probe's to change. /tmp is sticky, so an xattr there is refused and a relative bind
+    # there is cleaned up between the worlds.
+    mutable = {n for n, p in forms.paths if n in BOUND and p != "/tmp" and os.access(p, os.W_OK)}
     for n, p in forms.paths:
         for fn, fl in open_flags:
             if n == "proc_exe" and fl & O_TRUNC:
@@ -495,25 +502,28 @@ def generate(
         add("rmdir", n, p)
         add("unlink", n, p)
         add("symlink", n, S("/maze/f0"), p)
-        add("chmod", n, p, I(0o644))
-        add("chown", n, p, I(uid), I(gid))
-        add("chown", n + "/to_root", p, I(0), I(0))
-        add("lchown", n, p, I(uid), I(gid))
-        add("utime", n, p, "U:1000,2000")
-        add("utime", n + "/null", p, "n:")
-        add("utimes", n, p, "T:1000,0,2000,0")
-        add("utimes", n + "/bad_usec", p, "T:1000,1000000,2000,0")
+        if n not in mutable:
+            add("chmod", n, p, I(0o644))
+            add("chown", n, p, I(uid), I(gid))
+            add("chown", n + "/to_root", p, I(0), I(0))
+            add("lchown", n, p, I(uid), I(gid))
+            add("utime", n, p, "U:1000,2000")
+            add("utime", n + "/null", p, "n:")
+            add("utimes", n, p, "T:1000,0,2000,0")
+            add("utimes", n + "/bad_usec", p, "T:1000,1000000,2000,0")
         add("mknod", n + "/fifo", p, I(0o10644), I(0))
         add("mknod", n + "/reg", p, I(0o100644), I(0))
         add("statfs", n, p, B("raw", 256))
-        add("setxattr", n, p, S("user.probe"), S("v"), I(1), I(0))
-        add("lsetxattr", n, p, S("user.probe"), S("v"), I(1), I(0))
+        if n not in mutable:
+            add("setxattr", n, p, S("user.probe"), S("v"), I(1), I(0))
+            add("lsetxattr", n, p, S("user.probe"), S("v"), I(1), I(0))
         add("getxattr", n, p, S("user.probe"), B("xattr", 64), I(64))
         add("lgetxattr", n, p, S("user.probe"), B("xattr", 64), I(64))
         add("listxattr", n, p, B("xattr", 512), I(512))
         add("llistxattr", n, p, B("xattr", 512), I(512))
-        add("removexattr", n, p, S("user.probe"))
-        add("lremovexattr", n, p, S("user.probe"))
+        if n not in mutable:
+            add("removexattr", n, p, S("user.probe"))
+            add("lremovexattr", n, p, S("user.probe"))
         add("inotify_add_watch", n, "I:", p, I(IN_MODIFY))
         add("fanotify_mark", n, I(-1), I(0), I(0), I(AT_FDCWD), p)
         # the arguments the kernel checks before the lookup (13 item 11)
@@ -544,8 +554,9 @@ def generate(
         add("stat", n + "/after_chdir_dot", S("."), B("stat", 256))
         add("stat", n + "/after_chdir_dotdot", S(".."), B("stat", 256))
         # a relative bind from that directory
-        add("bind", n + "/after_chdir_rel", K(SOCK_STREAM), A(REL_SOCK), I(alen(REL_SOCK)))
-        add("connect", n + "/after_chdir_rel", K(SOCK_STREAM), A(REL_SOCK), I(alen(REL_SOCK)))
+        if n not in mutable:
+            add("bind", n + "/after_chdir_rel", K(SOCK_STREAM), A(REL_SOCK), I(alen(REL_SOCK)))
+            add("connect", n + "/after_chdir_rel", K(SOCK_STREAM), A(REL_SOCK), I(alen(REL_SOCK)))
         add("chdir", n + "/back", S(forms.host))
         group = None
     add("getcwd", "short", B("cwd", 4), I(4))
@@ -581,13 +592,16 @@ def generate(
     add("execve", "argv_null", S(forms.true), "n:", V())
     add("execve", "rel_true", S("hlink"), V("x"), V())
     for n, d, p in forms.at:
+        changes = n.partition("/")[2] not in mutable  # cwd/NAME: the path form's own name
         for fn, fl in open_flags:
             add("openat", f"{n}/{fn}", d, p, I(fl), I(0o644))
         add("mkdirat", n, d, p, I(0o755))
         add("mknodat", n, d, p, I(0o10644), I(0))
         for fn, fl in (("follow", 0), ("nofollow", AT_SYMLINK_NOFOLLOW), ("empty", AT_EMPTY_PATH)):
-            add("fchownat", f"{n}/{fn}", d, p, I(uid), I(gid), I(fl))
-        add("futimesat", n, d, p, "T:1000,0,2000,0")
+            if changes:
+                add("fchownat", f"{n}/{fn}", d, p, I(uid), I(gid), I(fl))
+        if changes:
+            add("futimesat", n, d, p, "T:1000,0,2000,0")
         for fn, fl in stat_flags:
             add("newfstatat", f"{n}/{fn}", d, p, B("stat", 256), I(fl))
             add("statx", f"{n}/{fn}", d, p, I(fl), I(STATX_BASIC_STATS), B("statx", 256))
@@ -609,17 +623,19 @@ def generate(
         add("readlinkat", n, d, p, B("link", 4096), I(4096))
         add("readlinkat", n + "/zero", d, p, B("link", 4), I(0))
         add("readlinkat", n + "/hi_two", d, p, B("link", 4), I((1 << 32) | 2))
-        add("fchmodat", n, d, p, I(0o644))
+        if changes:
+            add("fchmodat", n, d, p, I(0o644))
         add("faccessat", n, d, p, I(4))
         add("faccessat", n + "/W", d, p, I(2))
         add("faccessat2", n, d, p, I(4), I(0))
         add("faccessat2", n + "/eaccess", d, p, I(2), I(AT_EACCESS))
-        add("fchmodat2", n, d, p, I(0o644), I(0))
-        add("fchmodat2", n + "/nofollow", d, p, I(0o644), I(AT_SYMLINK_NOFOLLOW))
-        add("utimensat", n, d, p, "t:1000,0,2000,0", I(0))
-        add("utimensat", n + "/nofollow", d, p, "t:1000,0,2000,0", I(AT_SYMLINK_NOFOLLOW))
-        add("utimensat", n + "/now", d, p, f"t:0,{UTIME_NOW},0,{UTIME_NOW}", I(0))
-        add("utimensat", n + "/omit", d, p, f"t:0,{UTIME_OMIT},0,{UTIME_OMIT}", I(0))
+        if changes:
+            add("fchmodat2", n, d, p, I(0o644), I(0))
+            add("fchmodat2", n + "/nofollow", d, p, I(0o644), I(AT_SYMLINK_NOFOLLOW))
+            add("utimensat", n, d, p, "t:1000,0,2000,0", I(0))
+            add("utimensat", n + "/nofollow", d, p, "t:1000,0,2000,0", I(AT_SYMLINK_NOFOLLOW))
+            add("utimensat", n + "/now", d, p, f"t:0,{UTIME_NOW},0,{UTIME_NOW}", I(0))
+            add("utimensat", n + "/omit", d, p, f"t:0,{UTIME_OMIT},0,{UTIME_OMIT}", I(0))
         add("utimensat", n + "/null_times", d, p, "n:", I(0))
         add("utimensat", n + "/bad_nsec", d, p, "t:0,1000000000,0,0", I(0))
         add("utimensat", n + "/bad_flags", d, p, "t:1000,0,2000,0", I(0x8000))
@@ -631,20 +647,22 @@ def generate(
         # a check that runs nothing (6.14), and a flag no kernel knows
         add("execveat", n + "/check", d, p, V("x"), V(), I(AT_EXECVE_CHECK))
         add("execveat", n + "/bad_flag", d, p, V("x"), V(), I(0x40000))
-        add("setxattrat", n, d, p, I(0), S("user.probe"), X("v"), I(16))
-        add(
-            "setxattrat",
-            n + "/nofollow",
-            d,
-            p,
-            I(AT_SYMLINK_NOFOLLOW),
-            S("user.probe"),
-            X("v"),
-            I(16),
-        )
+        if changes:
+            add("setxattrat", n, d, p, I(0), S("user.probe"), X("v"), I(16))
+            add(
+                "setxattrat",
+                n + "/nofollow",
+                d,
+                p,
+                I(AT_SYMLINK_NOFOLLOW),
+                S("user.probe"),
+                X("v"),
+                I(16),
+            )
         add("getxattrat", n, d, p, I(0), S("user.probe"), X("\0" * 64), I(16))
         add("listxattrat", n, d, p, I(0), B("xattr", 512), I(512))
-        add("removexattrat", n, d, p, I(0), S("user.probe"))
+        if changes:
+            add("removexattrat", n, d, p, I(0), S("user.probe"))
         add("file_getattr", n, d, p, B("raw", 32), I(32), I(0))
         add("file_setattr", n, d, p, B("raw", 32), I(32), I(0))
     # openat2: the resolve flags over every descriptor-relative form, and the struct's own rules
@@ -1328,6 +1346,10 @@ def main() -> int:
     # an exclave link to a host file, and to a host directory
     os.symlink(host + "/hfile", os.path.join(root, "maze", "lH"))
     os.symlink(host + "/hdir", os.path.join(root, "maze", "lHD"))
+    # a link whose text ends in a slash, to a missing name and to a file: the kernel walks the
+    # text as the rest of the path, so the slash is the path's trailing slash (8.1)
+    os.symlink("/maze/absent/", os.path.join(root, "maze", "lS"))
+    os.symlink("/maze/ro444/", os.path.join(root, "maze", "lFS"))
     shutil.copytree(os.path.join(root, "maze"), os.path.join(ex, "tree", "maze"), symlinks=True)
     # a socket file in the tree, for bind and connect (copytree cannot carry one)
     for r in (root, os.path.join(ex, "tree")):

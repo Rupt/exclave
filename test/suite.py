@@ -410,6 +410,7 @@ def compile_progs(ctx: Ctx) -> None:
         "magic_links",
         "rename_race",
         "cwd_race",
+        "creat_slash",
     ):
         rc, _out, err = run(
             [

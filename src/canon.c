@@ -519,6 +519,9 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         }
         if (w.rf & RESOLVE_NO_SYMLINKS) return -ELOOP;
         if (++w.hops > 40) return -ELOOP;
+        /* the kernel walks the final link's text as the rest of the path (link_path_walk), so a slash ending it is
+         * the path's trailing slash: a directory is meant, and O_CREAT answers EISDIR (open_last_lookups) */
+        if (last && tmp[0] && tmp[xstrlen(tmp) - 1] == '/') trailing = 1;
         w.chain_failed = 0; /* the walk restarts at the link's text */
         if ((r = walk_splice(S, &w, tmp)) < 0) return r;
         if (tmp[0] == '/') {

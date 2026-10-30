@@ -907,3 +907,27 @@ def unix_socket(ctx: Ctx) -> None:
         not os.path.exists(os.path.join(ctx.root, "usr", "share", "sock-rel")),
         "a relative bind from a working directory inside the tree wrote into the tree",
     )
+
+
+@test
+def create_through_a_slashed_link(ctx: Ctx) -> None:
+    """8.1: a slash ending the text of a final symlink is the path's trailing slash.
+
+    The kernel walks the link's text as the rest of the path, so open with O_CREAT through a link
+    whose text ends in a slash is EISDIR before any lookup, whether the target is missing or a
+    directory; a plain open through it finds nothing, and O_EXCL does not follow the link.
+    Measured natively and under bwrap; the launcher once answered EROFS or ELOOP.
+    """
+    d = os.path.join(ctx.work, "slashed")
+    os.makedirs(d, exist_ok=True)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "creat_slash"), [d])
+    expect(rc == 0, out + err)
+    want = (
+        "creat through a link to a missing name with a slash: Is a directory",
+        "creat for writing through the same link: Is a directory",
+        "creat through a link to a directory with a slash: Is a directory",
+        "creat through a link whose text has .. and a slash: Is a directory",
+        "open through a link to a missing name with a slash: No such file or directory",
+        "creat with O_EXCL through the link: File exists",
+    )
+    expect(out.splitlines() == list(want), out + err)
