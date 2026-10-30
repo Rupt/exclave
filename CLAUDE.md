@@ -50,7 +50,11 @@ The loop that has served well, in the order it pays:
    the user approves it, usually once before a series is pushed; a
    commit does not wait for it, and asking names the commits it has not
    seen. `--full` runs every gate step, worth it before a series of
-   commits is pushed. One commit per item.
+   commits is pushed. Both also run on GitHub's hosted runners when the
+   user dispatches `.github/workflows/ci.yml` by hand: the gate on
+   x86-64 and natively on aarch64, the x86-64 rows under KVM and the
+   64 KB-page row emulated; it never runs at a push, and dispatching it
+   is the user's. One commit per item.
 
 ## Preferences
 
@@ -84,8 +88,10 @@ The loop that has served well, in the order it pays:
   `x28` alone (`-ffixed-x28`), where a Go program keeps its goroutine
   while the handler runs (7.5.3). `scripts/build` builds `build/launcher-aarch64`
   when `aarch64-linux-gnu-gcc` is installed; it is tested in the arm64
-  VM (`scripts/matrix --exclave EXCLAVE --only noble-arm64 --debs-arm64
-  DIR --docker-profile FILE`), since user-mode emulation has no seccomp. A syscall the handler
+  VM (`scripts/matrix --exclave EXCLAVE --exclave
+  DIR/gcc13-arm64.exclave --only noble-arm64 --docker-profile FILE`,
+  the arm64 exclave `scripts/inputs` makes) and natively by the
+  workflow's aarch64 gate, since user-mode emulation has no seccomp. A syscall the handler
   re-issues is best one the oldest kernel of the matrix has (`renameat`,
   not `renameat2`, for a plain rename).
 - **Handler buffers come from `struct scratch`** rather than the stack,
@@ -237,8 +243,8 @@ under `~/.cache` or the session scratchpad is assumed to persist: the
 scratchpad lost every exclave once, so an input is best not kept only
 there, nor put where a script will remove it, and refetching beats
 hunting. The scratchpad suits traces and one-off trees; a driver worth running twice belongs in `test/`.
-The matrix makes its arm64 exclave here, wrapped with the cross-built
-launcher, and the VM only runs it; the suite, the oracles and `test/exercise.py` make
+`scripts/inputs` makes the arm64 gcc exclave here too (`gcc13-arm64.exclave`,
+wrapped with the cross-built launcher), and the matrix's VM only runs it; the suite, the oracles and `test/exercise.py` make
 their own copies under `build/` (ignored by git). Cloud images for the
 matrix live in `~/.cache/exclave-images`; QEMU with KVM and
 `cloud-image-utils` are installed, and this user can open `/dev/kvm`.

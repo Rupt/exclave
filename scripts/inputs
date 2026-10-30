@@ -4,10 +4,11 @@
 # ~/.cache, and both may be empty at any time: whatever is missing is fetched again, and an item DIR already
 # has is skipped, so a rerun costs nothing. Afterwards:
 #   EXCLAVE_TEST_INPUTS=DIR scripts/gate DIR/gcc13.exclave DIR/alpine.exclave DIR/f42.exclave DIR/clang.exclave
-#   EXCLAVE_TEST_INPUTS=DIR EXCLAVE_TEST_SRC=DIR/src EXCLAVE_TEST_SQLITE=DIR/src/sqlite3.c EXCLAVE_TEST_RPMS=DIR/el7 EXCLAVE_TEST_DEBS_ARM64=DIR/debs-arm64 scripts/examples DIR/realsoft.exclave
+#   EXCLAVE_TEST_INPUTS=DIR EXCLAVE_TEST_SRC=DIR/src EXCLAVE_TEST_SQLITE=DIR/src/sqlite3.c EXCLAVE_TEST_RPMS=DIR/el7 EXCLAVE_TEST_ARM64=DIR/gcc13-arm64.exclave scripts/examples DIR/realsoft.exclave
 # The package sets are the ones DESIGN.md measures (10.1, 12, 16.8): the noble gcc-13 and clang-18 closures,
 # Alpine 3.21's gcc, Fedora 42's gcc, the noble gcc, g++, make and python3 that test/realsoft.py builds with,
-# CentOS 7's glibc for the sysroot of 9, the noble arm64 gcc-13 closure for the emulated row, the exclaves of
+# CentOS 7's glibc for the sysroot of 9, the noble arm64 gcc-13 closure, made into an exclave with the aarch64
+# launcher built here (10.1) for the emulated rows and for the gate on an aarch64 machine, the exclaves of
 # test/workloads.py (valgrind, poppler's pdftotext and a PDF for it, Rust with cargo, CMake with ninja, a Java
 # JDK, and the judging image of a Hutter Prize entry, clang-18 and lld-18 at the Ubuntu snapshot the entry's
 # install.sh pins, with the entry's source package), and the four projects of test/realsoft.py with the SQLite amalgamation of test/bench.py, and Docker's default seccomp profile
@@ -50,15 +51,17 @@ fetch() { # fetch NAME FETCHER ARGS...: package files into DIR/NAME through the 
         return 1
     fi
 }
-make_exclave() { # make_exclave NAME PKGDIR: unpack the package files into DIR/NAME.exclave and wrap it
+make_exclave() { # make_exclave NAME PKGDIR [LAUNCHER]: unpack the package files into DIR/NAME.exclave and wrap it
     name=$1
     pkgs=$2
+    launcher=${3:-}
     if grep -q '^tree ' "$dir/$name.exclave/.exclave/hashes" 2>/dev/null; then
         echo "$name.exclave: present"
         return 0
     fi
     rm -rf "$dir/$name.exclave"
-    if unpack "$dir/$name.exclave" "$dir/$pkgs"/* >"$dir/log/$name.exclave.log" 2>&1 && exclave wrap "$dir/$name.exclave" >>"$dir/log/$name.exclave.log" 2>&1; then
+    # shellcheck disable=SC2086  # the launcher, one word or none
+    if unpack "$dir/$name.exclave" "$dir/$pkgs"/* >"$dir/log/$name.exclave.log" 2>&1 && exclave wrap "$dir/$name.exclave" $launcher >>"$dir/log/$name.exclave.log" 2>&1; then
         echo "$name.exclave: $(grep -c '^pkg ' "$dir/$name.exclave/.exclave/hashes") packages; $(tail -1 "$dir/log/$name.exclave.log")"
     else
         echo "$name.exclave: FAIL, see $dir/log/$name.exclave.log"
@@ -115,7 +118,17 @@ fetch debs-java debs.py --keyring "$ubuntu" --mirror $mirror openjdk-17-jdk-head
 fetch debs-buildimage debs.py --keyring "$ubuntu" --snapshot 20260927T160000Z clang-18 lld-18 llvm-18 libclang-rt-18-dev build-essential gawk python3 && make_exclave buildimage debs-buildimage
 file https://marwoelk.de/cmix-neif-1.0/cmix-neif-1.0.tar.gz cmix-neif-1.0.tar.gz f5e09238c88fb7290c8e36cc262bd25d625c9bb32c506237227839fc0aef4bb3
 file https://arxiv.org/pdf/1706.03762v7 attention.pdf 3d56f08914b524d39582df88d31489b197b246bb879406421664896210cb6e70
-fetch debs-arm64 debs.py --keyring "$ubuntu" --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev
+# the aarch64 launcher this machine builds: its own on aarch64, the cross-built one on x86-64 with the cross compiler
+case $(uname -m) in
+aarch64) aarch64_launcher=$repo/build/launcher ;;
+*) aarch64_launcher=$repo/build/launcher-aarch64 ;;
+esac
+fetch debs-arm64 debs.py --keyring "$ubuntu" --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev &&
+    if [ -x "$aarch64_launcher" ]; then
+        make_exclave gcc13-arm64 debs-arm64 "$aarch64_launcher"
+    else
+        echo "gcc13-arm64.exclave: no aarch64 launcher built here (aarch64-linux-gnu-gcc missing); skipped"
+    fi
 file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json 3d005310d39ca085839ee4d23373c37c5eaeee073951d1fed335c2553559b846
 file https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz ac034b9c7bbd9f8cc38953efaac07145ce0c8993107a1594d5cedd08fdf2a2bc
 file https://www.lua.org/ftp/lua-5.4.7.tar.gz lua-5.4.7.tar.gz 7a37bca67359c6917fd330eee4e5d9f50852c27a2f5bce4e40b2b3b02ce18830

@@ -1,12 +1,14 @@
 """Run an exclave built here in virtual machines, one per kernel (DESIGN.md 12, 17 item 5).
 
-    scripts/matrix --exclave EXCLAVE [--only NAME,...] [--work DIR] [--images DIR] [--memory MB]
-                   [--jobs N] [--arm64 --debs-arm64 DIR] [--docker-profile FILE]
+    scripts/matrix --exclave EXCLAVE... [--only NAME,...] [--work DIR] [--images DIR] [--memory MB]
+                   [--jobs N] [--arm64] [--docker-profile FILE]
 
 Each row of VMS names a distribution cloud image. The image is downloaded once, booted under QEMU
 with KVM behind a copy-on-write overlay and a cloud-init seed that installs strace (and bubblewrap
-where it exists), the exclave, the pinned Python built for the VM's machine and libc, and this
-repository's test tree and launcher are copied in over SSH, and the regression suite runs there;
+where it exists), the exclave of the row's machine (one --exclave per machine the rows need, each
+told by its launcher: scripts/inputs makes gcc13.exclave and gcc13-arm64.exclave), the pinned
+Python built for the VM's machine and libc, and this repository's test tree and launcher are
+copied in over SSH, and the regression suite runs there;
 the oracles, the syscall probe and, given the profile, the Docker-profile run follow where
 bubblewrap works. One VM at a time, or --jobs N, 1 GB each, 2 GB for the emulated row, so that the
 machine stays usable. Results go to build/matrix-results.md. The exit status is 1 when any row
@@ -20,6 +22,7 @@ import contextlib
 import dataclasses
 import io
 import os
+import platform
 import re
 import shutil
 import socket
@@ -36,6 +39,24 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 UV = os.path.join(REPO, ".uv", "bin", "uv")
 PYDIR = f"python{sys.version_info[0]}.{sys.version_info[1]}"
+MACHINE = platform.machine()
+# ELF e_machine to the name uname gives it, for the launcher an exclave carries
+MACHINES = {62: "x86_64", 183: "aarch64"}
+
+
+def built(name: str, arch: str) -> str:
+    """scripts/build's output NAME for arch: build/NAME here, build/NAME-ARCH for another."""
+    return os.path.join(REPO, "build", name if arch == MACHINE else f"{name}-{arch}")
+
+
+def launcher_machine(ex: str) -> str:
+    """The machine of the launcher an exclave carries, from its ELF header (10.1)."""
+    with open(os.path.join(ex, ".exclave", "launcher"), "rb") as f:
+        head = f.read(20)
+    machine = MACHINES.get(int.from_bytes(head[18:20], "little")) if len(head) == 20 else None
+    if machine is None:
+        sys.exit(f"{ex}: its launcher is not one of a machine the matrix knows")
+    return machine
 
 
 @dataclasses.dataclass(frozen=True)
@@ -546,7 +567,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--exclave", required=True)
+    ap.add_argument(
+        "--exclave",
+        action="append",
+        required=True,
+        help="the gcc exclave of one machine, wrapped with its launcher; once per machine",
+    )
     ap.add_argument("--only")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "matrix-work"))
     ap.add_argument(
@@ -562,18 +588,29 @@ def main() -> int:
         help="include the emulated aarch64 VM (slow); --only names it too",
     )
     ap.add_argument(
-        "--debs-arm64",
-        help="directory of arm64 .deb files the aarch64 VM's gcc exclave is made from, here",
-    )
-    ap.add_argument(
         "--docker-profile",
         help="Docker's default seccomp profile (scripts/inputs fetches it); "
         "without it the Docker-profile run is left out",
     )
     args = ap.parse_args()
-    if not shutil.which("qemu-system-x86_64") or not shutil.which("cloud-localds"):
-        sys.exit("need qemu-system-x86_64 and cloud-localds")
-    ex, work = os.path.abspath(args.exclave), os.path.abspath(args.work)
+    only = args.only.split(",") if args.only else []
+    rows = [
+        r
+        for r in VMS
+        if (not only or r.name in only)
+        # the emulated rows run only when asked: ten to twenty times slower
+        and (r.arch == "x86_64" or args.arm64 or r.name in only)
+    ]
+    for prog in ["cloud-localds", *sorted({"qemu-system-" + r.arch for r in rows})]:
+        if not shutil.which(prog):
+            sys.exit(f"need {prog}")
+    exclaves: dict[str, str] = {}  # machine to its gcc exclave, told by the launcher it carries
+    for given in args.exclave:
+        exclaves[launcher_machine(os.path.abspath(given))] = os.path.abspath(given)
+    for row in rows:
+        if row.arch not in exclaves:
+            sys.exit(f"row {row.name} needs an {row.arch} exclave: give it with --exclave")
+    work = os.path.abspath(args.work)
     os.makedirs(work, exist_ok=True)
     os.makedirs(args.images, exist_ok=True)
     key = os.path.join(work, "id_ed25519")
@@ -581,58 +618,30 @@ def main() -> int:
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
     with open(key + ".pub") as f:
         pubkey = f.read().strip()
-    # the payload: the exclave (hard links preserved by tar) and the repository's test tree,
-    # exclave, launcher and, where the host has go, the Go regression's programs built for the VM's
-    # machine. For the aarch64 VM the payload carries the exclave made here from the arm64 package
-    # files, wrapped with the cross-built launcher (10.1), and the cross-built launchers and
-    # command under the suite's names.
+    # the payload: the row's machine's exclave (hard links preserved by tar), the repository's
+    # test tree, the launchers and command built here for that machine, and, where the host has
+    # go, the Go regression's programs built for it
     payloads: dict[tuple[str, str], str] = {}
 
-    def arm64_exclave() -> str:
-        """The gcc exclave for the aarch64 VM, unpacked and wrapped here with its launcher."""
-        if not args.debs_arm64:
-            sys.exit(
-                "the aarch64 VM needs --debs-arm64 DIR, "
-                "a directory of arm64 .deb files for the gcc exclave"
-            )
-        dst = os.path.join(work, "ex-aarch64")
-        shutil.rmtree(dst, ignore_errors=True)
-        debs = sorted(
-            os.path.join(args.debs_arm64, n)
-            for n in os.listdir(args.debs_arm64)
-            if n.endswith(".deb")
-        )
-        log("making the arm64 exclave here from", len(debs), "packages")
-        for cmd in (
-            [sys.executable, "-m", "unpack", dst, *debs],
+    # 10.5: the launcher and the command built inside this machine's exclave here, which each VM
+    # of the same machine builds again inside its copy and must match byte for byte
+    reproduced: list[str] = []
+    if MACHINE in exclaves:
+        p = subprocess.run(
             [
-                os.path.join(REPO, "build", "exclave"),
-                "wrap",
-                dst,
-                os.path.join(REPO, "build", "launcher-aarch64"),
+                os.path.join(REPO, "scripts", "reproduce"),
+                exclaves[MACHINE],
+                os.path.join(work, "reproduce"),
             ],
-        ):
-            p = subprocess.run(cmd, capture_output=True, check=False)
-            if p.returncode:
-                sys.exit(
-                    f"cannot make the arm64 exclave: {' '.join(cmd[:2])}: "
-                    + (p.stdout + p.stderr).decode(errors="replace")[-400:]
-                )
-        return dst
-
-    # 10.5: the launcher and the command built inside the exclave here, which each x86-64 VM builds
-    # again inside its copy and must match byte for byte
-    p = subprocess.run(
-        [os.path.join(REPO, "scripts", "reproduce"), ex, os.path.join(work, "reproduce")],
-        capture_output=True,
-        check=False,
-    )
-    reproduced = p.stdout.decode().split() if p.returncode == 0 else []
-    if not reproduced:
-        log(
-            "scripts/reproduce failed here; the rows do not compare builds:",
-            p.stderr.decode()[-200:],
+            capture_output=True,
+            check=False,
         )
+        reproduced = p.stdout.decode().split() if p.returncode == 0 else []
+        if not reproduced:
+            log(
+                "scripts/reproduce failed here; the rows do not compare builds:",
+                p.stderr.decode()[-200:],
+            )
     commit = (
         subprocess.run(
             ["git", "-C", REPO, "describe", "--always", "--dirty", "--exclude=*"],
@@ -676,32 +685,16 @@ def main() -> int:
             if go:
                 for n, p in tree.go_build(go, os.path.join(work, "go-" + arch), arch, work):
                     t.add(p, arcname=f"repo/build/go/{arch}/{n}")
-            if arch == "x86_64":
-                t.add(ex, arcname="ex")
-                t.add(os.path.join(REPO, "build", "launcher"), arcname="repo/build/launcher")
-                t.add(os.path.join(REPO, "build", "exclave"), arcname="repo/build/exclave")
-                if os.path.exists(os.path.join(REPO, "build", "launcher-old")):
-                    t.add(
-                        os.path.join(REPO, "build", "launcher-old"),
-                        arcname="repo/build/launcher-old",
-                    )
-                # test/sysroot.py's output: runs natively on every glibc
-                if os.path.exists(os.path.join(REPO, "build", "sysroot-hello")):
-                    t.add(
-                        os.path.join(REPO, "build", "sysroot-hello"),
-                        arcname="repo/build/sysroot-hello",
-                    )
-            else:
-                t.add(arm64_exclave(), arcname="ex")
+            t.add(exclaves[arch], arcname="ex")
+            t.add(built("launcher", arch), arcname="repo/build/launcher")
+            t.add(built("exclave", arch), arcname="repo/build/exclave")
+            if os.path.exists(built("launcher-old", arch)):
+                t.add(built("launcher-old", arch), arcname="repo/build/launcher-old")
+            # test/sysroot.py's output: runs natively on every glibc of its machine
+            if arch == MACHINE and os.path.exists(os.path.join(REPO, "build", "sysroot-hello")):
                 t.add(
-                    os.path.join(REPO, "build", "launcher-aarch64"), arcname="repo/build/launcher"
+                    os.path.join(REPO, "build", "sysroot-hello"), arcname="repo/build/sysroot-hello"
                 )
-                t.add(os.path.join(REPO, "build", "exclave-aarch64"), arcname="repo/build/exclave")
-                if os.path.exists(os.path.join(REPO, "build", "launcher-old-aarch64")):
-                    t.add(
-                        os.path.join(REPO, "build", "launcher-old-aarch64"),
-                        arcname="repo/build/launcher-old",
-                    )
         payloads[arch, libc] = payload
         return payload
 
@@ -794,7 +787,7 @@ def main() -> int:
             notes += "; sysroot: " + sysroot + ("" if ok else " FAIL")
             if not ok:
                 fails.append("FAIL sysroot output did not run natively: " + sysroot)
-            if arch == "x86_64" and reproduced:
+            if arch == MACHINE and reproduced:
                 # 10.5: the exclave's own toolchain builds the same bytes on this kernel's host
                 _rc, out = vm.ssh(
                     "cd m && sh repo/scripts/reproduce $PWD/ex $PWD/repro 2>&1 | tail -2",
@@ -863,14 +856,6 @@ def main() -> int:
         finally:
             vm.stop()
 
-    only = args.only.split(",") if args.only else []
-    rows = [
-        r
-        for r in VMS
-        if (not only or r.name in only)
-        # the emulated rows run only when asked: ten to twenty times slower
-        and (r.arch == "x86_64" or args.arm64 or r.name in only)
-    ]
     # packed before the VMs start, once each, so no two rows pack at once
     for arch, libc in {(r.arch, "musl" if r.family == "apk" else "gnu") for r in rows}:
         payload_for(arch, libc)

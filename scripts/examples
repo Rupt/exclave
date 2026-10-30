@@ -6,7 +6,7 @@
 #   EXCLAVE_TEST_RPMS=DIR        test/sysroot.py: a CentOS 7 glibc as a data directory, its output run inside and out
 #   (python3 in the exclave)     test/bytecode.py: Python bytecode by the two-phase pattern, timed before and after
 #   EXCLAVE_TEST_INPUTS=DIR      test/workloads.py: six real workloads in the exclaves scripts/inputs made, against the kernel
-#   EXCLAVE_TEST_DEBS_ARM64=DIR  scripts/matrix --only noble-arm64: the emulated aarch64 row (12), about an hour
+#   EXCLAVE_TEST_ARM64=EXCLAVE   scripts/matrix --only noble-arm64: the emulated aarch64 row (12) on the arm64 gcc exclave, about an hour
 #   EXCLAVE_TEST_DOCKER=FILE     Docker's default seccomp profile, which the arm64 row then runs under too
 # The x86-64 kernel matrix is scripts/matrix --exclave EXCLAVE --docker-profile FILE on its own, about ten minutes.
 set -u
@@ -29,5 +29,5 @@ run() {
 [ -n "${EXCLAVE_TEST_RPMS:-}" ] && run sysroot py "$here/sysroot.py" --exclave "$ex" --rpms "$EXCLAVE_TEST_RPMS" --out "$repo/build/sysroot-hello" || echo "sysroot: EXCLAVE_TEST_RPMS not set"
 [ -n "${EXCLAVE_TEST_INPUTS:-}" ] && run workloads py "$here/workloads.py" --inputs "$EXCLAVE_TEST_INPUTS" || echo "workloads: EXCLAVE_TEST_INPUTS not set"
 [ -e "$ex/tree/usr/bin/python3" ] && run bytecode py "$here/bytecode.py" --exclave "$ex" || echo "bytecode: no python3 in the exclave"
-[ -n "${EXCLAVE_TEST_DEBS_ARM64:-}" ] && run arm64 py "$here/matrix.py" --exclave "$ex" --only noble-arm64 --debs-arm64 "$EXCLAVE_TEST_DEBS_ARM64" ${EXCLAVE_TEST_DOCKER:+--docker-profile "$EXCLAVE_TEST_DOCKER"} || echo "arm64 row: EXCLAVE_TEST_DEBS_ARM64 not set"
+[ -n "${EXCLAVE_TEST_ARM64:-}" ] && run arm64 py "$here/matrix.py" --exclave "$ex" --exclave "$EXCLAVE_TEST_ARM64" --only noble-arm64 ${EXCLAVE_TEST_DOCKER:+--docker-profile "$EXCLAVE_TEST_DOCKER"} || echo "arm64 row: EXCLAVE_TEST_ARM64 not set"
 exit $fails

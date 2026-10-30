@@ -395,7 +395,7 @@ D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave 
 scripts/test --exclave gcc.exclave       # the suite alone; -k NAME, --order random
 scripts/matrix --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix, due when the gate says a change reaches the VMs: cloud images under QEMU/KVM, one at a time (--jobs N), about sixteen minutes
 scripts/exercise --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the launcher, side by side
-scripts/examples ~/.cache/exclave-inputs/realsoft.exclave   # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_DEBS_ARM64 (the emulated aarch64 row), EXCLAVE_TEST_DOCKER (its Docker profile run)
+scripts/examples ~/.cache/exclave-inputs/realsoft.exclave   # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_ARM64 (the emulated aarch64 row, on the arm64 gcc exclave), EXCLAVE_TEST_DOCKER (its Docker profile run)
 ```
 
 The repository's layout:
@@ -408,6 +408,7 @@ scripts/check        the code checks; scripts/gate the commit gate; scripts/inpu
 scripts/release      a signed release of exclaves with the command beside them; test/release_test.py takes one as a consumer would
 scripts/reproduce    the launcher and the command built inside a gcc exclave, the same bytes wherever it runs
 scripts/test         the suite; scripts/matrix, exercise and sysroot the other test drivers
+.github/workflows/ci.yml  the gate and the matrix on GitHub's hosted runners, x86-64 and aarch64, when dispatched by hand
 pyproject.toml       the Python project, unpack: no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python
 scripts/build        the launchers, build/launcher, build/launcher-old for the nesting regression and build/launcher-debug with UBSan's checks; the command, build/exclave, and build/exclave-asan for the gate; the aarch64 ones with a cross compiler; nothing when they are up to date
 src/sys.h            syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
@@ -485,7 +486,8 @@ A problem report is most useful with the failing lines of an
 `EXCLAVE_LOG=/tmp/x.log` run, `uname -r` and the distribution, the
 exclave's `.exclave/hashes` file and the output of `exclave check` on
 it. Contributions are welcome: a change passes the gate on the four
-exclaves above, a launcher change the kernel matrix too, and the
+exclaves above, a launcher change the kernel matrix too (both run on
+GitHub's hosted runners when the workflow is dispatched), and the
 design decisions in section 19 of `docs/DESIGN.md` stand unless the
 change argues otherwise.
 

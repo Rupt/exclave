@@ -130,9 +130,11 @@ contributor wants 17, how a change is tested, and 19, what is settled.
 ## 2. Status
 
 exclave is experimental software. It works and is tested as described
-below, but it has not been released: there is no release, no version
-number and no continuous integration, and nothing yet promises
-compatibility between one commit and the next.
+below, but it has not been released: there is no release and no
+version number, the commit gate and the kernel matrix run on the
+reference machine or on GitHub's hosted runners when a maintainer
+dispatches the workflow (17), and nothing yet promises compatibility
+between one commit and the next.
 
 What is built and tested:
 
@@ -2038,8 +2040,9 @@ the launcher given, whose machine the static check reads the tree as:
 the loader's directories from the loader file, the objects of that
 machine checked and the others foreign (10.3). An arm64 exclave is made
 on x86-64 in about two seconds, with the tree hash of one made inside
-the arm64 virtual machine (measured October 2026), and the kernel
-matrix makes its arm64 exclave here and only runs it there (17).
+the arm64 virtual machine (measured October 2026): `scripts/inputs`
+makes the arm64 gcc exclave on the reference machine, and the kernel
+matrix only runs it (17).
 
 The result of `unpack` is an unwrapped exclave, which is a directory.
 Anything may be done to it before it is wrapped, with the tools one uses
@@ -4130,19 +4133,40 @@ output of `test/sysroot.py` run natively. The results go to
 take about ten minutes and are run before a launcher change is
 committed.
 
-**The emulated arm64 rows** (`scripts/matrix --exclave EXCLAVE --only
-noble-arm64 --debs-arm64 DIR [--docker-profile FILE]`; `--only
-noble-arm64-64k` for the 64 KB-page row, whose VM installs
+**The emulated arm64 rows** (`scripts/matrix --exclave EXCLAVE
+--exclave ARM64_EXCLAVE --only noble-arm64 [--docker-profile FILE]`;
+`--only noble-arm64-64k` for the 64 KB-page row, whose VM installs
 `linux-image-generic-64k` and reboots into it before the suite) boot Ubuntu
 24.04's arm64 cloud image under `qemu-system-aarch64 -M virt -cpu max`
 with TCG and the AAVMF firmware, since user-mode emulation has no
 seccomp and the reference machine has no KVM for another architecture.
-It carries the aarch64 launchers and command, which `scripts/build`
-builds when `aarch64-linux-gnu-gcc` is installed, and the gcc exclave
-made here from the arm64 packages with that launcher (10.1), which the
-VM only relinks and runs. A fresh VM has no fixture, so the suite runs on the full
+The matrix takes one gcc exclave per machine its rows need, each told
+by the launcher it carries; the arm64 one is `scripts/inputs`'s
+`gcc13-arm64.exclave`, made here from the arm64 packages with the
+aarch64 launcher `scripts/build` builds when `aarch64-linux-gnu-gcc`
+is installed (10.1), and the VM only relinks and runs it with the
+aarch64 launchers and command. A fresh VM has no fixture, so the suite runs on the full
 exclave with logging, which makes the row long (12.1); it runs when
 asked, not in the gate, and making it shorter is in 18.
+
+**On GitHub's hosted runners** (`.github/workflows/ci.yml`), the gate
+and the matrix run when a maintainer dispatches the workflow from the
+Actions tab, never at a push: it calls `scripts/install-uv`,
+`scripts/inputs` (its package files cached between runs, keyed on the
+inputs script and the fetchers), `scripts/gate --full` and
+`scripts/matrix`, adding only what a runner lacks and the reference
+machine has: packages, the KVM device opened to the runner, and the
+AppArmor sysctl. The gate runs on an x86-64 runner on the four
+exclaves and, natively, on an aarch64 runner on the arm64 gcc exclave
+made there, whose kernel is Ubuntu 24.04's 6.8, the one the emulated
+`noble-arm64` row boots: so that row has no job there, and the
+aarch64 build gets the unit tests, the fuzzer and the stack budget,
+which the emulated row never ran. The x86-64 rows run under KVM, two
+VMs at a time; the 64 KB-page row runs emulated on the aarch64 runner,
+since no hosted runner boots such a kernel, and remains the long job.
+The results are the jobs' logs and each matrix job's results table,
+kept as the run's artifacts; the figures the documents quote stay
+those measured on the reference machine.
 
 `test/vm_run.py --script SH FILE...` boots the same x86-64 rows and
 runs a script beside the files it is given, for exclaves made to ship,
@@ -4181,8 +4205,9 @@ the gate cannot afford. Each runs when its input variable is set:
   All seven agree; six take under two seconds in either world, and the
   entry builds in about two minutes, to the byte its author published
   (its `comp9`'s SHA-256 is the one in the entry's `SHA256SUMS`).
-- `EXCLAVE_TEST_DEBS_ARM64`: the emulated aarch64 row, with
-  `EXCLAVE_TEST_DOCKER` adding the Docker profile run.
+- `EXCLAVE_TEST_ARM64`: the emulated aarch64 row on the arm64 gcc
+  exclave named, with `EXCLAVE_TEST_DOCKER` adding the Docker profile
+  run.
 
 They exist because real builds and other hosts expose behaviour no
 synthetic test anticipates (12.1). `scripts/example DIR` at the repository's
@@ -4236,25 +4261,27 @@ questions.
    table rather than an option. `unpack`'s notes name the caches a tree
    lacks from the packages' trigger interests, and failed opens in an
    `EXCLAVE_LOG` show where an exclave misses one (10.1).
-2. **Releases.** There is no public release or continuous integration
-   yet. A release has its shape, `scripts/release` (10.5), its
-   binaries built reproducibly inside a gcc exclave, and every build is
-   named by the project's version and its commit (7, 10); an aarch64
-   release is made on an aarch64 machine, as its exclaves are (10.1);
-   until a release is made, the commit gate (17) and the kernel matrix
-   (12.1) run on the reference machine, and nothing promises
-   compatibility between commits (2).
+2. **Releases.** There is no public release yet. A release has its
+   shape, `scripts/release` (10.5), its binaries built reproducibly
+   inside a gcc exclave, and every build is named by the project's
+   version and its commit (7, 10); an aarch64 release is made on an
+   aarch64 machine, as its exclaves are (10.1). The commit gate (17)
+   and the kernel matrix (12.1) run on the reference machine, and on
+   GitHub's hosted runners when a maintainer dispatches the workflow;
+   nothing runs at a push, and nothing promises compatibility between
+   commits (2).
 3. **aarch64 kernels with 16 KB or 64 KB pages.** The loader rounds to
    the kernel's page size and the launcher's own segments are 64 KB
    aligned (13 item 43). The matrix's `noble-arm64-64k` row, on
    Ubuntu's `linux-image-generic-64k`, has run once with every oracle
    passing; its clean suite run is due.
-4. **The emulated arm64 row's speed.** The arm64 row runs under QEMU's
-   TCG emulation at about a tenth of native speed (12.1), so it runs
-   when asked rather than at every commit; the exclave it runs is made
-   on the reference machine (10.1). A faster row, on native
-   aarch64 hardware or a lighter fixture, would let it run as often as
-   the x86-64 rows.
+4. **The emulated arm64 rows' speed.** The arm64 rows run under QEMU's
+   TCG emulation at about a tenth of native speed (12.1), so they run
+   when asked rather than at every commit; the exclave they run is made
+   on the reference machine (10.1). On GitHub's aarch64 runner the gate
+   runs natively on the 4 KB-page kernel that row boots (17); the
+   64 KB-page row stays emulated there too, since no hosted runner
+   boots such a kernel, and a lighter fixture is what would shorten it.
 5. **Hosts the matrix has not covered.** Snap-confined terminals,
    gVisor-based CI, WSL1 and SELinux `execmem` policies are listed as
    untested in the portability envelope (12); each is a matrix row to
@@ -4451,7 +4478,8 @@ specified.
   download cloud images; the repository holds no third-party file (17).
 - **Tests are independent**: any order, any single test, several suites
   at once (17).
-- **The emulated arm64 row runs when asked**, not at every commit (18).
+- **The emulated arm64 rows run when asked**, not at every commit (18);
+  the hosted workflow is dispatched by hand, never by a push (17).
 
 ### 19.5 Scope
 

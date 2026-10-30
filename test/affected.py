@@ -85,6 +85,7 @@ CHECK_ONLY = (
     "uv.lock",
     "taplo.toml",
     ".gitignore",
+    ".github/*",
 )
 # A path under build/ a driver names stands for the sources it is built from.
 BUILT = {"build/exclave": "tool/*", "build/launcher": "src/*"}
