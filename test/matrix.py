@@ -49,6 +49,7 @@ class VmRow:
     family: str  # the package family, a key of PACKAGES
     notes: str
     arch: str
+    kernel_package: str = ""  # a kernel to install and reboot into, for a row on another page size
 
 
 VMS: list[VmRow] = [
@@ -168,6 +169,18 @@ VMS: list[VmRow] = [
         family="apt",
         notes="aarch64, TCG emulation",
         arch="aarch64",
+    ),
+    # the same image booted into Ubuntu's 64 KB-page kernel (13 item 43): cloud-init installs it
+    # and reboots, and the ready mark is made only under 64 KB pages
+    VmRow(
+        name="noble-arm64-64k",
+        kernel="6.8 with 64 KB pages",
+        user="ubuntu",
+        urls=["https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img"],
+        family="apt",
+        notes="aarch64, TCG emulation, 64 KB pages",
+        arch="aarch64",
+        kernel_package="linux-image-generic-64k",
     ),
 ]
 
@@ -307,7 +320,7 @@ def boot(
         return None, "image not available"
     seed = os.path.join(work, name + "-seed.iso")
     with open(os.path.join(work, name + "-user-data"), "w") as f:
-        f.write(user_data(row.family, pubkey))
+        f.write(user_data(row.family, pubkey, row.kernel_package))
     with open(os.path.join(work, name + "-meta-data"), "w") as f:
         f.write(f"instance-id: exclave-{name}\nlocal-hostname: {name}\n")
     subprocess.run(
@@ -330,8 +343,8 @@ def boot(
     return vm, ""
 
 
-def user_data(family: str, pubkey: str) -> str:
-    pk = PACKAGES[family]
+def user_data(family: str, pubkey: str, kernel_package: str = "") -> str:
+    pk = PACKAGES[family] + ([kernel_package] if kernel_package else [])
     if family == "centos7":
         return "\n".join(
             [
@@ -361,6 +374,16 @@ def user_data(family: str, pubkey: str) -> str:
         if family == "apt"
         else []
     )
+    # with a kernel to boot into, the first boot installs it and reboots, and every boot marks the
+    # VM ready only once its pages are 64 KB (bootcmd runs on every boot, runcmd on the first)
+    ready = ["  - touch /var/tmp/exclave-ready"]
+    bootcmd: list[str] = []
+    if kernel_package:
+        ready = ["  - reboot"]
+        bootcmd = [
+            "bootcmd:",
+            "  - [sh, -c, 'test \"$(getconf PAGESIZE)\" = 65536 && touch /var/tmp/exclave-ready']",
+        ]
     return "\n".join(
         [
             "#cloud-config",
@@ -370,9 +393,11 @@ def user_data(family: str, pubkey: str) -> str:
             "packages:",
         ]
         + ["  - " + p for p in pk]
+        + bootcmd
         + ["runcmd:"]
         + retry
-        + ["  - touch /var/tmp/exclave-ready", ""]
+        + ready
+        + [""]
     )
 
 

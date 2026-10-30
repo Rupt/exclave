@@ -2773,8 +2773,9 @@ and stay fixed.
     pages: all 379 ELF files of `coreutils`, `libc6` and `gcc-13` are
     congruent modulo 64 KB. The launcher's own segments and the syscall
     page are 64 KB-aligned (7.4.2). The arm64 test row runs a 4 KB
-    kernel; a row with `linux-image-generic-64k` would make support a
-    measured fact.
+    kernel; the matrix has a second emulated row, `noble-arm64-64k`,
+    which installs `linux-image-generic-64k` and reboots into it (17),
+    and has not yet run.
 
 44. **Two handlers never share a scratch chunk**: a rule, not a
     limitation (7.5.4).
@@ -3801,7 +3802,8 @@ meaning items 4 and 7.
 5. **Kernel matrix.** Docker's default seccomp profile stands for the
    environment where user namespaces are blocked. VMs run kernels 3.10,
    4.15, 4.18, 5.4, 5.10, 5.15, 6.1, 6.6, 6.14 and 7.3, and an emulated
-   aarch64 row runs 6.8; the results are in 12.1. The kernel source a
+   aarch64 row runs 6.8, with a second emulated row for the 64 KB-page
+   build of 6.8 (13 item 43); the results are in 12.1. The kernel source a
    rule follows is cited beside the handler code that follows it, so a
    breakage can be diagnosed. The path-syscall list is checked against
    the kernel's own syscall table.
@@ -4124,8 +4126,10 @@ output of `test/sysroot.py` run natively. The results go to
 take about ten minutes and are run before a launcher change is
 committed.
 
-**The emulated arm64 row** (`scripts/matrix --exclave EXCLAVE --only
-noble-arm64 --debs-arm64 DIR [--docker-profile FILE]`) boots Ubuntu
+**The emulated arm64 rows** (`scripts/matrix --exclave EXCLAVE --only
+noble-arm64 --debs-arm64 DIR [--docker-profile FILE]`; `--only
+noble-arm64-64k` for the 64 KB-page row, whose VM installs
+`linux-image-generic-64k` and reboots into it before the suite) boot Ubuntu
 24.04's arm64 cloud image under `qemu-system-aarch64 -M virt -cpu max`
 with TCG and the AAVMF firmware, since user-mode emulation has no
 seccomp and the reference machine has no KVM for another architecture.
@@ -4231,10 +4235,10 @@ questions.
    compatibility between commits (2).
 3. **aarch64 kernels with 16 KB or 64 KB pages.** The loader rounds to
    the kernel's page size and the launcher's own segments are 64 KB
-   aligned, but no such kernel has run an exclave (13 item 43). A
-   matrix row on a 64 KB-page kernel, Ubuntu's
-   `linux-image-generic-64k` for one, would turn this into a measured
-   fact.
+   aligned, but no such kernel has run an exclave (13 item 43). The
+   matrix's `noble-arm64-64k` row, on Ubuntu's
+   `linux-image-generic-64k`, turns this into a measured fact once it
+   has run.
 4. **The emulated arm64 row's speed.** The arm64 row runs under QEMU's
    TCG emulation at about a tenth of native speed (12.1), so it runs
    when asked rather than at every commit; the exclave it runs is made
