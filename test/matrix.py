@@ -362,7 +362,9 @@ def boot(
     slow = 10 if row.arch != "x86_64" else 1
     if not vm.wait(deadline=600 * slow):
         vm.stop()
-        return None, f"did not come up (see {name}-console.log)"
+        with open(vm.qemu_log, errors="replace") as f:
+            said = " | ".join(f.read()[-300:].split())
+        return None, f"did not come up (see {name}-console.log)" + (f": {said}" if said else "")
     return vm, ""
 
 
@@ -491,7 +493,10 @@ class VM:
                 "2",
                 *common,
             ]
-        self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # QEMU's own output, kept beside the console log: a VM that never comes up says why there
+        self.qemu_log = os.path.join(work, name + "-qemu.log")
+        with open(self.qemu_log, "wb") as out:
+            self.proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT)
 
     def ssh(self, cmd: str, timeout: float = 1800) -> tuple[int, str]:
         p = subprocess.run(
