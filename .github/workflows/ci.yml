@@ -105,8 +105,10 @@ jobs:
             sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
           fi
           ls -l /dev/kvm || echo "no /dev/kvm: an aarch64 row runs under TCG"
-      - name: the runner's larger disk, for the images and the VMs
-        run: sudo mkdir -p /mnt/matrix && sudo chown "$(id -u):$(id -g)" /mnt/matrix
+      - name: the runner's second disk, for the VMs' overlays; the images stay on the first
+        run: |
+          sudo mkdir -p /mnt/matrix && sudo chown "$(id -u):$(id -g)" /mnt/matrix
+          df -h / /mnt
       - name: the pinned uv, its Python and the locked tools
         run: |
           scripts/install-uv
@@ -126,7 +128,7 @@ jobs:
       - name: the matrix
         run: >
           scripts/matrix --exclave "$INPUTS/${{ matrix.row.exclave }}" ${{ matrix.row.only }}
-          --jobs 2 --images /mnt/matrix/images --work /mnt/matrix/work
+          --jobs 2 --work /mnt/matrix/work
           --docker-profile "$INPUTS/src/docker-seccomp.json"
       - name: the rows' results and logs
         if: always()

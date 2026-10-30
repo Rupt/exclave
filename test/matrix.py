@@ -443,6 +443,7 @@ class VM:
         subprocess.run(["qemu-img", "resize", "-q", self.overlay, "+8G"], check=True)
         self.seed = os.path.join(work, name + "-seed.iso")
         self.key = os.path.join(work, "id_ed25519")
+        self.varstore: str | None = None
         common = [
             "-display",
             "none",
@@ -461,7 +462,7 @@ class VM:
         # translated code's cache is capped at 256 MB, since its default of 1 GiB fills over the
         # suite and, beside the guest's memory, ran the reference machine out of memory
         if arch == "aarch64":
-            varstore = os.path.join(work, name + "-vars.fd")
+            varstore = self.varstore = os.path.join(work, name + "-vars.fd")
             shutil.copyfile(os.path.join(AAVMF, "AAVMF_VARS.fd"), varstore)
             cmd = [
                 "qemu-system-aarch64",
@@ -560,12 +561,21 @@ class VM:
         return False
 
     def stop(self) -> None:
+        """Power the VM off and remove its disks.
+
+        The overlay grows to gigabytes over a row and says nothing afterwards that the console log
+        and the row's logs do not; the image stays.
+        """
         with contextlib.suppress(Exception):
             self.ssh("sudo poweroff || doas poweroff || poweroff", timeout=20)
         try:
             self.proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
             self.proc.kill()
+        for f in (self.overlay, self.seed, self.varstore):
+            if f:
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(f)
 
 
 def main() -> int:
