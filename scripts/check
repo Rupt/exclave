@@ -39,16 +39,22 @@ if $fix; then
     run "$UV" run --quiet ruff format .
     run "$UV" run --quiet shfmt --indent 4 --posix --simplify --write "$@"
     run "$UV" run --quiet clang-format -i src/*.[ch] tool/*.[ch] test/*.c test/progs/*.c
-    run env RUST_LOG=warn "$UV" run --quiet taplo fmt pyproject.toml
+    if [ -x .venv/bin/taplo ]; then run env RUST_LOG=warn "$UV" run --quiet taplo fmt pyproject.toml; fi
 else
     run "$UV" run --quiet ruff format --check --quiet .
     run "$UV" run --quiet ruff check --quiet .
     run "$UV" run --quiet shfmt --indent 4 --posix --simplify --diff "$@"
     run "$UV" run --quiet clang-format --dry-run --Werror src/*.[ch] tool/*.[ch] test/*.c test/progs/*.c
-    run env RUST_LOG=warn "$UV" run --quiet taplo fmt --check --diff pyproject.toml
+    if [ -x .venv/bin/taplo ]; then run env RUST_LOG=warn "$UV" run --quiet taplo fmt --check --diff pyproject.toml; fi
 fi
-run "$UV" run --quiet shellcheck --severity=style --shell=sh \
-    --external-sources --source-path=SCRIPTDIR "$@"
+# on an aarch64 machine neither is installed (pyproject.toml): the shell and the TOML are checked on x86-64
+[ -x .venv/bin/taplo ] || echo "check: no taplo for $(uname -m); pyproject.toml's format unchecked here"
+if [ -x .venv/bin/shellcheck ]; then
+    run "$UV" run --quiet shellcheck --severity=style --shell=sh \
+        --external-sources --source-path=SCRIPTDIR "$@"
+else
+    echo "check: no shellcheck for $(uname -m); the shell scripts unchecked here"
+fi
 run "$UV" run --quiet ty check --quiet
 
 # The C, formatted above (.clang-format), checked a process to a file. First

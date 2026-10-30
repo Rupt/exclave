@@ -11,6 +11,7 @@ an exclave and is checked by the gate's syscalls step instead. scripts/check run
 
 import argparse
 import os
+import platform
 import re
 import sys
 
@@ -31,6 +32,11 @@ def kb(path: str) -> int | None:
         return None
 
 
+def built(name: str, arch: str) -> str:
+    """scripts/build's output NAME for arch: build/NAME here, build/NAME-ARCH for another."""
+    return os.path.join("build", name if arch == platform.machine() else f"{name}-{arch}")
+
+
 def resolve_paths() -> int:
     """The resolution oracle's default number of paths, read from its option."""
     m = re.search(r'"--paths", type=int, default=(\d+)', read("test/oracle_resolve.py"))
@@ -49,8 +55,9 @@ def figures() -> dict[str, int | None]:
         ),
         "resolve paths": resolve_paths(),
         "matrix rows": len(re.findall(r"^    VmRow\(", read("test/matrix.py"), re.MULTILINE)),
-        "command KB": kb("build/exclave"),
-        "command KB aarch64": kb("build/exclave-aarch64"),
+        # scripts/build names this machine's command build/exclave and another's by its machine
+        "command KB": kb(built("exclave", "x86_64")),
+        "command KB aarch64": kb(built("exclave", "aarch64")),
     }
 
 

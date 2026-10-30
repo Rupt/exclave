@@ -4165,7 +4165,9 @@ exclaves and, natively, on an aarch64 runner on the arm64 gcc exclave
 made there, whose kernel is Ubuntu 24.04's 6.8, the one the emulated
 `noble-arm64` row boots: so that row has no job there, and the
 aarch64 build gets the unit tests, the fuzzer and the stack budget,
-which the emulated row never ran. The x86-64 rows run under KVM, two
+which the emulated row never ran (its code checks go without
+shellcheck and taplo, which have no aarch64 wheel; the shell and the
+TOML are text, checked on x86-64). The x86-64 rows run under KVM, two
 VMs at a time; the 64 KB-page row runs emulated on the aarch64 runner,
 since no hosted runner boots such a kernel, and remains the long job.
 The results are the jobs' logs and each matrix job's results table,

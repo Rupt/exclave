@@ -37,18 +37,21 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends bubblewrap strace gdb gpgv
-          [ "$(uname -m)" != x86_64 ] || sudo apt-get install -y -q --no-install-recommends gcc-aarch64-linux-gnu
+          [ "$(uname -m)" != x86_64 ] || sudo apt-get install -y -q --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
       - name: unprivileged user namespaces, for bwrap
         run: sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: the pinned uv and Python
-        run: scripts/install-uv
-      - name: package files the inputs are made from
+      - name: the pinned uv, its Python and the locked tools
+        run: |
+          scripts/install-uv
+          ROOT=$PWD . scripts/lib.sh && "$UV" sync --quiet --project "$ROOT"
+      - name: package files and sources the inputs are made from
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/exclave-debs
             ~/.cache/exclave-apks
             ~/.cache/exclave-rpms
+            ~/inputs/src
           key: packages-${{ hashFiles('scripts/inputs', 'fetch/**') }}
           restore-keys: packages-
       - name: the development inputs
@@ -65,7 +68,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gate-${{ matrix.runner }}
-          path: build/gate/*.log
+          path: |
+            build/gate/*.log
+            ~/inputs/log/*.log
           if-no-files-found: ignore
   matrix:
     name: ${{ matrix.row.name }}
@@ -102,15 +107,18 @@ jobs:
           ls -l /dev/kvm || echo "no /dev/kvm: an aarch64 row runs under TCG"
       - name: the runner's larger disk, for the images and the VMs
         run: sudo mkdir -p /mnt/matrix && sudo chown "$(id -u):$(id -g)" /mnt/matrix
-      - name: the pinned uv and Python
-        run: scripts/install-uv
-      - name: package files the inputs are made from
+      - name: the pinned uv, its Python and the locked tools
+        run: |
+          scripts/install-uv
+          ROOT=$PWD . scripts/lib.sh && "$UV" sync --quiet --project "$ROOT"
+      - name: package files and sources the inputs are made from
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/exclave-debs
             ~/.cache/exclave-apks
             ~/.cache/exclave-rpms
+            ~/inputs/src
           key: packages-${{ hashFiles('scripts/inputs', 'fetch/**') }}
           restore-keys: packages-
       - name: the development inputs
@@ -128,4 +136,5 @@ jobs:
           path: |
             build/matrix-results.md
             /mnt/matrix/work/*.log
+            ~/inputs/log/*.log
           if-no-files-found: ignore
