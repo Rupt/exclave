@@ -105,12 +105,13 @@ int main(int argc, char **argv)
     {
         struct exclave c;
         memset(&c, 0, sizeof c);
-        char err[256];
+        char err[256] = "";
         const char *text = "exclave 1\n\nhost \"/srv/h\"\n\nown \"/a\\\\b\\\"c\\n\\t\\x01\"\nown \"/etc/hosts\"\n";
         runs++;
+        /* the CPU level default is the machine's own (sys.h) */
         if (manifest_parse(text, strlen(text), &c, err, sizeof err) != 0 || c.nown != 2 ||
             strcmp(c.own[0], "/a\\b\"c\n\t\x01") != 0 || strcmp(c.own[1], "/etc/hosts") != 0 || c.nhost != 1 ||
-            strcmp(c.host[0].v, "/srv/h") != 0 || strcmp(c.cpu, "x86-64") != 0) {
+            strcmp(c.host[0].v, "/srv/h") != 0 || strcmp(c.cpu, ARCH_ISA_DEFAULT) != 0) {
             fails++;
             printf("FAIL decode: %s nown=%d nhost=%d cpu=%s\n", err, c.nown, c.nhost, c.cpu);
         }

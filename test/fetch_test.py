@@ -164,6 +164,8 @@ def fetch_debs(work: str, mirror: str, keyring: str, name: str) -> tuple[int, st
             keyring,
             "--mirror",
             "file://" + mirror,
+            "--arch",
+            DEB_ARCH,  # the mirror's index is this machine's; the fetcher's default is amd64
             "--suite",
             "noble",
             "--components",
