@@ -680,12 +680,31 @@ def ld_so_cache_as_ldconfig_writes_it(ctx: Ctx) -> str | None:
     expect(la == lb, f"the links differ: {sorted(set(la) ^ set(lb))[:6]!r}")
     rc, out, err = inside(ctx, ctx.interp, ["--list-diagnostics"])
     printed = re.findall(r'^path\.system_dirs\[0x[0-9a-f]+\]="([^"]*)"', out, flags=re.MULTILINE)
+    table = ldcache.trusted_dirs(read_bytes(ctx.payload(ctx.interp)))
     if printed:  # glibc 2.33 and later print them
-        got = ldcache.trusted_dirs(read_bytes(ctx.payload(ctx.interp)))
-        expect(got == printed, f"the loader's table {got!r} is not what it prints {printed!r}")
+        expect(table == printed, f"the loader's table {table!r} is not what it prints {printed!r}")
+    # the tool reads the same table: a hand-made tree with libc in the table's first directory
+    # alone, the loader where PT_INTERP names it and no cache, is wrapped and passes the check
+    expect(bool(table), "no table in the loader")
+    hand = os.path.join(ctx.work, f"first-dir-{os.getpid()}.exclave")
+    shutil.rmtree(hand, ignore_errors=True)
+    first = os.path.join(hand, "tree", table[0].strip("/"))
+    os.makedirs(first)
+    interp_copy = os.path.join(hand, "tree", ctx.interp.lstrip("/"))
+    os.makedirs(os.path.dirname(interp_copy), exist_ok=True)
+    shutil.copy2(ctx.payload(ctx.libc), os.path.join(first, "libc.so.6"))
+    shutil.copy2(ctx.payload(ctx.interp), interp_copy)
+    os.makedirs(os.path.join(hand, "tree", "usr", "bin"))
+    shutil.copy2(ctx.payload("true"), os.path.join(hand, "tree", "usr", "bin", "true"))
+    rc, out, err = run([*TOOL, "wrap", hand])
+    expect(
+        rc == 0 and "assumed" not in out and "not found" not in out,
+        f"libc in the table's first directory {table[0]} must be found: {out[-500:]}{err}",
+    )
+    shutil.rmtree(hand, ignore_errors=True)
     for root in copies:
         shutil.rmtree(os.path.dirname(root), ignore_errors=True)
-    return f"{len(ca)} bytes, {len(logs)} links made or removed, table of {len(printed)}"
+    return f"{len(ca)} bytes, {len(logs)} links made or removed, table of {len(table)}"
 
 
 @test

@@ -266,17 +266,49 @@ def trusted_dirs(loader: bytes) -> list[str]:
     """The loader's trusted directories, from its own table of them.
 
     The first run of two or more consecutive strings spelt `/.../`, each ending in a slash as
-    glibc's build writes them.
+    glibc's build writes them, in the loader's read-only data: its sections that are allocated,
+    not code and not writable, in file order, each split at its NULs, so that a string is one the
+    section holds and not the tail of the code before it; a loader without section headers is
+    read whole.
     """
-    run: list[str] = []
-    for chunk in loader.split(b"\0"):
-        if len(chunk) >= 2 and chunk[:1] == b"/" and chunk[-1:] == b"/":
-            run.append(chunk.decode("utf-8", "surrogateescape"))
-        elif len(run) >= 2:
+    for data in _rodata(loader):
+        run: list[str] = []
+        for chunk in data.split(b"\0"):
+            if len(chunk) >= 2 and chunk[:1] == b"/" and chunk[-1:] == b"/":
+                run.append(chunk.decode("utf-8", "surrogateescape"))
+            elif len(run) >= 2:
+                return run
+            else:
+                run = []
+        if len(run) >= 2:
             return run
+    return []
+
+
+def _rodata(elf: bytes) -> list[bytes]:
+    """An ELF file's read-only data sections in file order, or the whole file without headers."""
+    try:
+        if elf[:4] != b"\x7fELF" or elf[4] not in (1, 2):
+            return [elf]
+        cls = elf[4]
+        if cls == 1:
+            shoff, shentsize, shnum = _u(elf, 32, 4), _u(elf, 46, 2), _u(elf, 48, 2)
         else:
-            run = []
-    return run if len(run) >= 2 else []
+            shoff, shentsize, shnum = _u(elf, 40, 8), _u(elf, 58, 2), _u(elf, 60, 2)
+        out: list[tuple[int, bytes]] = []
+        for i in range(shnum):
+            o = shoff + i * shentsize
+            kind = _u(elf, o + 4, 4)
+            if cls == 1:
+                flags, off, size = _u(elf, o + 8, 4), _u(elf, o + 16, 4), _u(elf, o + 20, 4)
+            else:
+                flags, off, size = _u(elf, o + 8, 8), _u(elf, o + 24, 8), _u(elf, o + 32, 8)
+            # SHT_PROGBITS, SHF_ALLOC, neither SHF_EXECINSTR nor SHF_WRITE
+            if kind == 1 and flags & 2 and not flags & 5 and off + size <= len(elf):
+                out.append((off, elf[off : off + size]))
+    except _TruncatedError:
+        return [elf]
+    return [d for _, d in sorted(out)] if out else [elf]
 
 
 def generator(ldconfig: bytes) -> str | None:

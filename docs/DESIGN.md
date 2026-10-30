@@ -154,7 +154,7 @@ What is built and tested:
   exclave it runs is made on x86-64 (10.1).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The command as one file**: `build/exclave`, 1 014 KB, statically
+- **The command as one file**: `build/exclave`, 1 018 KB, statically
   linked, carrying its launcher, wraps, checks and prunes an exclave
   with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
@@ -2319,7 +2319,7 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, 1 014 KB and 794 KB, with nothing beside it to run: no
+the cross compiler, 1 018 KB and 860 KB, with nothing beside it to run: no
 interpreter, no library, no file of the checkout. It carries its
 architecture's launcher and the text of every exclave's `README` as data
 (`tool/blobs.S`), so `wrap` and `relink` install the launcher it
@@ -2773,9 +2773,13 @@ and stay fixed.
     pages: all 379 ELF files of `coreutils`, `libc6` and `gcc-13` are
     congruent modulo 64 KB. The launcher's own segments and the syscall
     page are 64 KB-aligned (7.4.2). The arm64 test row runs a 4 KB
-    kernel; the matrix has a second emulated row, `noble-arm64-64k`,
-    which installs `linux-image-generic-64k` and reboots into it (17),
-    and has not yet run.
+    kernel; a second emulated row, `noble-arm64-64k`, installs
+    `linux-image-generic-64k` and reboots into it (17). On its first
+    run (October 2026, 6.8.0-147-generic-64k) every oracle passed: the
+    resolution oracle's 3 000 paths, the namespace oracle's 21 workloads,
+    the probe's 18 293 cases with no unexplained difference, and both
+    Docker profiles; the suite's two failures were the tests' own 4 KB
+    assumptions, since corrected, so the row's clean run is still due.
 
 44. **Two handlers never share a scratch chunk**: a rule, not a
     limitation (7.5.4).
@@ -4242,10 +4246,9 @@ questions.
    compatibility between commits (2).
 3. **aarch64 kernels with 16 KB or 64 KB pages.** The loader rounds to
    the kernel's page size and the launcher's own segments are 64 KB
-   aligned, but no such kernel has run an exclave (13 item 43). The
-   matrix's `noble-arm64-64k` row, on Ubuntu's
-   `linux-image-generic-64k`, turns this into a measured fact once it
-   has run.
+   aligned (13 item 43). The matrix's `noble-arm64-64k` row, on
+   Ubuntu's `linux-image-generic-64k`, has run once with every oracle
+   passing; its clean suite run is due.
 4. **The emulated arm64 row's speed.** The arm64 row runs under QEMU's
    TCG emulation at about a tenth of native speed (12.1), so it runs
    when asked rather than at every commit; the exclave it runs is made

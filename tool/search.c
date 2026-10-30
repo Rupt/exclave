@@ -186,6 +186,71 @@ char *find_library(const struct search *s, const char *name, const struct elf *e
 }
 
 /* ---------------------------------------------------------------- the loader's own directories */
+/* The first run of two or more NUL-terminated strings spelt /.../ in data[0..n), each ending in a slash, appended to
+ * out without the trailing slash; returns the number found. */
+static size_t dirs_run(const char *data, size_t n, struct strs *out)
+{
+    size_t at = 0, run_from = 0;
+    int run = 0;
+    while (at < n) {
+        size_t k = strnlen(data + at, n - at);
+        if (k >= 2 && data[at] == '/' && data[at + k - 1] == '/') {
+            if (!run) run_from = at;
+            run++;
+        } else if (run >= 2) {
+            break;
+        } else {
+            run = 0;
+        }
+        at += k + 1;
+    }
+    if (run < 2) return 0;
+    for (size_t i = run_from, left = (size_t)run; left; left--) {
+        size_t k = strnlen(data + i, n - i);
+        char *v = xrealloc(NULL, k + 1);
+        memcpy(v, data + i, k);
+        v[k] = 0;
+        while (k > 1 && v[k - 1] == '/') v[--k] = 0;
+        strs_add(out, v);
+        free(v);
+        i += strnlen(data + i, n - i) + 1;
+    }
+    return (size_t)run;
+}
+
+static uint64_t le(const unsigned char *p, int n) /* a little-endian field of n bytes */
+{
+    uint64_t v = 0;
+    for (int i = n - 1; i >= 0; i--) v = (v << 8) | p[i];
+    return v;
+}
+
+/* The table in an ELF file's read-only data: its allocated sections that are neither code nor writable, in file order,
+ * so that a string is one a section holds and not the tail of the code before it; a file without section headers is
+ * read whole. */
+static size_t dirs_table(const char *data, size_t n, struct strs *out)
+{
+    if (n < 64 || memcmp(data, "\177ELF", 4) != 0 || (data[4] != 1 && data[4] != 2)) return dirs_run(data, n, out);
+    const unsigned char *u = (const unsigned char *)data;
+    int cls = (unsigned char)data[4];
+    uint64_t shoff = cls == 1 ? le(u + 32, 4) : le(u + 40, 8);
+    uint64_t shentsize = cls == 1 ? le(u + 46, 2) : le(u + 58, 2), shnum = cls == 1 ? le(u + 48, 2) : le(u + 60, 2);
+    size_t found = 0, seen = 0;
+    for (uint64_t i = 0; i < shnum && !found; i++) {
+        uint64_t o = shoff + i * shentsize;
+        if (o + (cls == 1 ? 40 : 64) > n) break;
+        uint64_t kind = le(u + o + 4, 4);
+        uint64_t flags = cls == 1 ? le(u + o + 8, 4) : le(u + o + 8, 8);
+        uint64_t off = cls == 1 ? le(u + o + 16, 4) : le(u + o + 24, 8);
+        uint64_t size = cls == 1 ? le(u + o + 20, 4) : le(u + o + 32, 8);
+        /* SHT_PROGBITS, SHF_ALLOC, neither SHF_EXECINSTR nor SHF_WRITE */
+        if (kind != 1 || !(flags & 2) || (flags & 5) || off > n || size > n - off) continue;
+        seen++;
+        found = dirs_run(data + off, (size_t)size, out);
+    }
+    return seen ? found : dirs_run(data, n, out);
+}
+
 /* The default search directories of the tree's loader, read from the loader file: glibc's build writes them into the
  * loader as a table of consecutive strings, each `/.../`, the same table `--list-diagnostics` prints as
  * path.system_dirs; musl's are fixed. Nothing of the tree runs, so a loader of another machine is read like this one's
@@ -210,30 +275,7 @@ char *loader_dirs(const char *root, const char *interp, struct strs *out)
     struct stat st;
     char *data = stat(loader, &st) == 0 && S_ISREG(st.st_mode) ? read_file(loader, &n) : xrealloc(NULL, 1);
     free(loader);
-    /* the first run of two or more strings spelt /.../, each ending in a slash */
-    size_t at = 0, run_from = 0;
-    int run = 0;
-    while (at < n) {
-        size_t k = strnlen(data + at, n - at);
-        if (k >= 2 && data[at] == '/' && data[at + k - 1] == '/') {
-            if (!run) run_from = at;
-            run++;
-        } else if (run >= 2) {
-            break;
-        } else {
-            run = 0;
-        }
-        at += k + 1;
-    }
-    for (size_t i = run_from; run >= 2 && out->n < (size_t)run; i += strnlen(data + i, n - i) + 1) {
-        size_t k = strnlen(data + i, n - i);
-        char *v = xrealloc(NULL, k + 1);
-        memcpy(v, data + i, k);
-        v[k] = 0;
-        while (k > 1 && v[k - 1] == '/') v[--k] = 0;
-        strs_add(out, v);
-        free(v);
-    }
+    dirs_table(data, n, out);
     free(data);
     if (out->n) return NULL;
     default_dirs(out);

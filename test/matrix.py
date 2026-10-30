@@ -50,6 +50,7 @@ class VmRow:
     notes: str
     arch: str
     kernel_package: str = ""  # a kernel to install and reboot into, for a row on another page size
+    image: str = ""  # the name the row's image is kept under, when another row shares it
 
 
 VMS: list[VmRow] = [
@@ -181,6 +182,7 @@ VMS: list[VmRow] = [
         notes="aarch64, TCG emulation, 64 KB pages",
         arch="aarch64",
         kernel_package="linux-image-generic-64k",
+        image="noble-arm64",
     ),
 ]
 
@@ -315,7 +317,7 @@ def boot(
     wait. The caller stops the VM.
     """
     name = row.name
-    image = os.path.join(images, name + ".qcow2")
+    image = os.path.join(images, (row.image or name) + ".qcow2")
     if not any(fetch(u, image) for u in row.urls):
         return None, "image not available"
     seed = os.path.join(work, name + "-seed.iso")

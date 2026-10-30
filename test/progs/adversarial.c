@@ -763,15 +763,17 @@ int main(int argc, char **argv)
         printf("exec with a bad pointer among argv: %s\n", exec_answer(&x));
     }
     {
-        char *pg = mmap(0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        mprotect(pg + 4096, 4096, PROT_NONE);
+        /* the kernel's page, 4 KB or 64 KB (13 item 43): the second of two unmapped, the write 6 bytes before it */
+        size_t ps = (size_t)sysconf(_SC_PAGESIZE);
+        char *pg = mmap(0, 2 * ps, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        mprotect(pg + ps, ps, PROT_NONE);
         snprintf(q, sizeof q, "%s/hl_long", hd);
         if (symlink("0123456789abcdef0123456789abcdef", q) != 0) {
             perror(q);
             return 2;
         }
-        P("readlink whose write crosses into an unmapped page", readlink(q, pg + 4090, 32));
-        munmap(pg, 8192);
+        P("readlink whose write crosses into an unmapped page", readlink(q, pg + ps - 6, 32));
+        munmap(pg, 2 * ps);
     }
     /* 15. execute-only files the loader cannot read (13 item 12), and interpreters spelt oddly */
     snprintf(p, sizeof p, "%s/unreadable", hd);
