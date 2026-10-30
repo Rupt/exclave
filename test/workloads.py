@@ -222,7 +222,7 @@ def main() -> int:
             continue
         given = os.path.join(inputs, exname + ".exclave")
         if not os.path.isdir(os.path.join(given, ".exclave")):
-            print(f"{name:<9} SKIP: no {given}; scripts/inputs makes it")
+            print(f"{name:<9} SKIP: no {given}; scripts/inputs DIR examples makes it")
             continue
         base = os.path.join(top, name)
         shutil.rmtree(base, ignore_errors=True)

@@ -237,10 +237,13 @@ mirror configured on this machine is `http://gb.archive.ubuntu.com/ubuntu`;
 
 Every development input is made by `scripts/inputs DIR`, which holds the
 exact fetch commands: the gcc, Alpine, Fedora and clang exclaves of the
-gate, Docker's seccomp profile, the CentOS 7 rpms
-for `test/sysroot.py`, the arm64 debs for the emulated row, and the
-sources of `test/realsoft.py` and `test/bench.py`. It is the one script
-that downloads: a test takes its inputs as paths and touches no
+gate, the arm64 gcc exclave and Docker's seccomp profile, from the
+package archives and GitHub alone, which is all the CI workflow
+fetches; `scripts/inputs DIR examples` adds the examples' inputs, the
+CentOS 7 rpms for `test/sysroot.py`, the workloads' exclaves and the
+sources of `test/realsoft.py`, `test/bench.py` and `test/workloads.py`,
+some from their authors' sites, which CI must not fetch. It is the one
+script that downloads: a test takes its inputs as paths and touches no
 network, and the repository holds no file of someone else's, so a
 third-party input is fetched there, pinned by its hash.
 `~/.cache/exclave-inputs` is a good `DIR`; the fetchers cache under

@@ -1,8 +1,10 @@
 #!/bin/sh
-# scripts/inputs DIR — the development inputs, remade from the network (DESIGN.md 17): the exclaves the gate
-# runs on and the files the examples take. Nothing is kept anywhere but DIR and the fetchers' caches under
-# ~/.cache, and both may be empty at any time: whatever is missing is fetched again, and an item DIR already
-# has is skipped, so a rerun costs nothing. Afterwards:
+# scripts/inputs DIR [examples] — the development inputs, remade from the network (DESIGN.md 17): the exclaves
+# the gate runs on and Docker's seccomp profile, from the distributions' package archives and GitHub alone, and
+# with the word examples the files the examples take too, some from their authors' own sites, which a
+# continuous-integration run has no business fetching. Nothing is kept anywhere but DIR and the fetchers'
+# caches under ~/.cache, and both may be empty at any time: whatever is missing is fetched again, and an item
+# DIR already has is skipped, so a rerun costs nothing. Afterwards:
 #   EXCLAVE_TEST_INPUTS=DIR scripts/gate DIR/gcc13.exclave DIR/alpine.exclave DIR/f42.exclave DIR/clang.exclave
 #   EXCLAVE_TEST_INPUTS=DIR EXCLAVE_TEST_SRC=DIR/src EXCLAVE_TEST_SQLITE=DIR/src/sqlite3.c EXCLAVE_TEST_RPMS=DIR/el7 EXCLAVE_TEST_ARM64=DIR/gcc13-arm64.exclave scripts/examples DIR/realsoft.exclave
 # The package sets are the ones DESIGN.md measures (10.1, 12, 16.8): the noble gcc-13 and clang-18 closures,
@@ -18,8 +20,8 @@
 set -u
 . "$(dirname -- "$0")/lib.sh"
 repo=$ROOT
-[ $# -eq 1 ] || {
-    echo "usage: scripts/inputs DIR" >&2
+{ [ $# -eq 1 ] || { [ $# -eq 2 ] && [ "$2" = examples ]; }; } || {
+    echo "usage: scripts/inputs DIR [examples]" >&2
     exit 2
 }
 "$repo/scripts/build" || exit 2 # the launchers and the command, which wrap the exclaves; nothing when up to date
@@ -93,28 +95,17 @@ centos=https://vault.centos.org/7.9.2009/os/x86_64
 # its BLAKE2b-256, so that the key is this file's and not the network's
 file https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg ubuntu-archive-keyring.gpg a216df0d4d5bbe223c5349283b2661d2e0a321fe4c8910eecdbcf7c12ae8fba5
 file https://src.fedoraproject.org/rpms/fedora-repos/raw/f42/f/RPM-GPG-KEY-fedora-42-primary RPM-GPG-KEY-fedora-42-primary 25bae133be1906e21720637fa4ece7d816b5f3946304166d98e954663d56dc33
-file https://vault.centos.org/7.9.2009/os/x86_64/RPM-GPG-KEY-CentOS-7 RPM-GPG-KEY-CentOS-7 4a088ee35b0355b8a9cc8b611b72ca76280cb34c4b90346ff08abb30fe0b82a0
 file https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub 7022bd8ba8209c32fad8211dfe5e69d66d7eb9424ea90990a28333f3b7318508
 ubuntu=$dir/src/ubuntu-archive-keyring.gpg
 # any Ubuntu mirror serves, every index being checked against the archive's key; archive.ubuntu.com has served the
 # reference machine at 13 kB/s
 mirror=http://gb.archive.ubuntu.com/ubuntu
 alpine=$dir/src/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub
+# the gate's: its four exclaves, the arm64 gcc exclave, and Docker's default seccomp profile
 fetch debs-gcc13 debs.py --keyring "$ubuntu" gcc-13 libc6-dev && make_exclave gcc13 debs-gcc13
 fetch apks apks.py --key "$alpine" gcc musl-dev binutils make linux-headers && make_exclave alpine apks
 fetch rpms-f42 rpms.py --keyring "$dir/src/RPM-GPG-KEY-fedora-42-primary" --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make && make_exclave f42 rpms-f42
 fetch debs-clang debs.py --keyring "$ubuntu" clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils && make_exclave clang debs-clang
-fetch debs-realsoft debs.py --keyring "$ubuntu" gcc g++ make libc6-dev python3 && make_exclave realsoft debs-realsoft
-fetch el7 rpms.py --keyring "$dir/src/RPM-GPG-KEY-CentOS-7" --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
-fetch debs-valgrind-gcc debs.py --keyring "$ubuntu" --mirror $mirror valgrind gcc libc6-dev && make_exclave valgrind debs-valgrind-gcc
-fetch debs-poppler debs.py --keyring "$ubuntu" --mirror $mirror poppler-utils poppler-data fonts-urw-base35 && make_exclave poppler debs-poppler
-fetch debs-rust debs.py --keyring "$ubuntu" --mirror $mirror cargo rustc gcc libc6-dev && make_exclave rust debs-rust
-fetch debs-cmake debs.py --keyring "$ubuntu" --mirror $mirror cmake ninja-build gcc g++ libc6-dev && make_exclave cmake debs-cmake
-fetch debs-java debs.py --keyring "$ubuntu" --mirror $mirror openjdk-17-jdk-headless libfreetype6 libharfbuzz0b libasound2t64 && make_exclave java debs-java
-# the packages cmix-neif 1.0's install.sh installs, at the snapshot it pins (test/workloads.py buildimage)
-fetch debs-buildimage debs.py --keyring "$ubuntu" --snapshot 20260927T160000Z clang-18 lld-18 llvm-18 libclang-rt-18-dev build-essential gawk python3 && make_exclave buildimage debs-buildimage
-file https://marwoelk.de/cmix-neif-1.0/cmix-neif-1.0.tar.gz cmix-neif-1.0.tar.gz f5e09238c88fb7290c8e36cc262bd25d625c9bb32c506237227839fc0aef4bb3
-file https://arxiv.org/pdf/1706.03762v7 attention.pdf 3d56f08914b524d39582df88d31489b197b246bb879406421664896210cb6e70
 # the aarch64 launcher this machine builds: its own on aarch64, the cross-built one on x86-64 with the cross compiler
 case $(uname -m) in
 aarch64) aarch64_launcher=$repo/build/launcher ;;
@@ -127,6 +118,25 @@ fetch debs-arm64 debs.py --keyring "$ubuntu" --arch arm64 --mirror http://ports.
         echo "gcc13-arm64.exclave: no aarch64 launcher built here (aarch64-linux-gnu-gcc missing); skipped"
     fi
 file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json 3d005310d39ca085839ee4d23373c37c5eaeee073951d1fed335c2553559b846
+[ "${2-}" = examples ] || {
+    echo "inputs: $fails failed (the gate's; scripts/inputs DIR examples fetches the examples' too)"
+    exit $fails
+}
+
+# the examples': test/realsoft.py's packages and sources, the sysroot's CentOS 7 glibc, test/workloads.py's exclaves
+# and files, and test/bench.py's SQLite, some from their authors' own sites
+file https://vault.centos.org/7.9.2009/os/x86_64/RPM-GPG-KEY-CentOS-7 RPM-GPG-KEY-CentOS-7 4a088ee35b0355b8a9cc8b611b72ca76280cb34c4b90346ff08abb30fe0b82a0
+fetch debs-realsoft debs.py --keyring "$ubuntu" gcc g++ make libc6-dev python3 && make_exclave realsoft debs-realsoft
+fetch el7 rpms.py --keyring "$dir/src/RPM-GPG-KEY-CentOS-7" --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
+fetch debs-valgrind-gcc debs.py --keyring "$ubuntu" --mirror $mirror valgrind gcc libc6-dev && make_exclave valgrind debs-valgrind-gcc
+fetch debs-poppler debs.py --keyring "$ubuntu" --mirror $mirror poppler-utils poppler-data fonts-urw-base35 && make_exclave poppler debs-poppler
+fetch debs-rust debs.py --keyring "$ubuntu" --mirror $mirror cargo rustc gcc libc6-dev && make_exclave rust debs-rust
+fetch debs-cmake debs.py --keyring "$ubuntu" --mirror $mirror cmake ninja-build gcc g++ libc6-dev && make_exclave cmake debs-cmake
+fetch debs-java debs.py --keyring "$ubuntu" --mirror $mirror openjdk-17-jdk-headless libfreetype6 libharfbuzz0b libasound2t64 && make_exclave java debs-java
+# the packages cmix-neif 1.0's install.sh installs, at the snapshot it pins (test/workloads.py buildimage)
+fetch debs-buildimage debs.py --keyring "$ubuntu" --snapshot 20260927T160000Z clang-18 lld-18 llvm-18 libclang-rt-18-dev build-essential gawk python3 && make_exclave buildimage debs-buildimage
+file https://marwoelk.de/cmix-neif-1.0/cmix-neif-1.0.tar.gz cmix-neif-1.0.tar.gz f5e09238c88fb7290c8e36cc262bd25d625c9bb32c506237227839fc0aef4bb3
+file https://arxiv.org/pdf/1706.03762v7 attention.pdf 3d56f08914b524d39582df88d31489b197b246bb879406421664896210cb6e70
 file https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz ac034b9c7bbd9f8cc38953efaac07145ce0c8993107a1594d5cedd08fdf2a2bc
 file https://www.lua.org/ftp/lua-5.4.7.tar.gz lua-5.4.7.tar.gz 7a37bca67359c6917fd330eee4e5d9f50852c27a2f5bce4e40b2b3b02ce18830
 file https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz sqlite-autoconf-3460100.tar.gz 12fab9a1ef11d6cb772b7b88ef73102a7c1e02f7ae35f4c2d3263fbe7af706d8

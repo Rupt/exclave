@@ -390,7 +390,8 @@ the design decisions a change is expected to respect.
 
 ```
 scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, clang-format and clang-tidy from uv.lock, and gcc's strict warnings; --fix lets them correct
-scripts/inputs ~/.cache/exclave-inputs   # the development inputs: the gate's four exclaves, Docker's seccomp profile, the examples' inputs; skips what is present
+scripts/inputs ~/.cache/exclave-inputs   # the gate's inputs: its four exclaves, the arm64 gcc exclave and Docker's seccomp profile, from the package archives and GitHub; skips what is present
+scripts/inputs ~/.cache/exclave-inputs examples   # the examples' inputs too, some from their authors' sites
 D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # the commit gate: the steps the change can affect, of the code checks, unit tests, stack budget, the suite in two orders and under the plain terminal's label, the oracles, the syscall probe and the Docker profile, four at a time (--jobs N); --full runs all of them, about 80 s
 scripts/test --exclave gcc.exclave       # the suite alone; -k NAME, --order random
 scripts/matrix --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix, due when the gate says a change reaches the VMs: cloud images under QEMU/KVM, one at a time (--jobs N), about sixteen minutes

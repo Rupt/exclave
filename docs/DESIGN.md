@@ -3909,12 +3909,16 @@ D=~/.cache/exclave-inputs
 EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave
 ```
 
-`scripts/inputs DIR` makes the gate's four exclaves: Ubuntu 24.04's
-gcc-13 closure, Alpine 3.21's gcc, Fedora 42's gcc, and Ubuntu 24.04's
-clang-18 closure. It also makes what the example runs take: the
-packages `test/realsoft.py` builds with, CentOS 7's glibc for the sysroot of 9, the arm64 gcc-13 closure,
-Docker's default seccomp profile, and the source tarballs of
-`test/realsoft.py` and `test/bench.py`. Packages come through the
+`scripts/inputs DIR` makes the gate's inputs: its four exclaves, Ubuntu
+24.04's gcc-13 closure, Alpine 3.21's gcc, Fedora 42's gcc and Ubuntu
+24.04's clang-18 closure; the arm64 gcc-13 exclave; and Docker's
+default seccomp profile, from the distributions' package archives and
+GitHub alone, which is all a continuous-integration run fetches.
+`scripts/inputs DIR examples` makes what the example runs take as
+well: the packages `test/realsoft.py` builds with, CentOS 7's glibc for
+the sysroot of 9, the workloads' exclaves, and the source tarballs of
+`test/realsoft.py`, `test/bench.py` and `test/workloads.py`, some from
+their authors' own sites. Packages come through the
 fetchers of `fetch/`, which verify each download against the repository
 index's checksum and cache it under `~/.cache`. Every other third-party
 file is pinned by its BLAKE2b-256 in the script. An item `DIR` already
@@ -4156,8 +4160,9 @@ for the gate alone) on the pushed `main`, never at a push; `gh run
 list --workflow ci.yml` names the run, `gh run watch ID
 --exit-status` waits for it and `gh run view ID --log-failed` shows
 what failed. It calls `scripts/install-uv`,
-`scripts/inputs` (its package files cached between runs, keyed on the
-inputs script and the fetchers), `scripts/gate --full` and
+`scripts/inputs` for the gate's inputs alone, from the package
+archives and GitHub (cached between runs, keyed on the inputs script
+and the fetchers), `scripts/gate --full` and
 `scripts/matrix`, adding only what a runner lacks and the reference
 machine has: packages, the KVM device opened to the runner, and the
 AppArmor sysctl. The gate runs on an x86-64 runner on the four
