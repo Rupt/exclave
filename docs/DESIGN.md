@@ -168,7 +168,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 82 named tests, most of them programs that
+- **The regression suite**: 83 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -2409,7 +2409,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 82 named regressions and every oracle its kernel can run; 17
+suite's 83 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -2875,6 +2875,22 @@ happens in `cc1`.
 `perf record` needs nothing special and symbolises `cc1` down to
 functions. perf cannot read the maps of a process under a different
 AppArmor label, so run it under the same label as the program.
+
+49. **Shadow stacks are off, by glibc's choice.** The kernel offers
+    user shadow stacks on the reference machine (`user_shstk`, kernel
+    7.0 on a Zen 5) and Ubuntu's and Fedora's programs and loaders are
+    marked for them, but glibc 2.39 through 2.42 never mark `SHSTK`
+    usable (`sysdeps/x86/cpu-features.c`, `#if CET_ENABLED && 0`), so
+    the loader asks the kernel for none, with
+    `GLIBC_TUNABLES=glibc.cpu.x86_shstk=on` or without, natively or in
+    an exclave: measured October 2026 with `strace`, no
+    `ARCH_SHSTK_ENABLE` is issued. The border drops `GLIBC_TUNABLES`
+    (6.2), but a program inside sets it for the programs it runs, so
+    the suite runs a CET-marked program inside with the tunable set,
+    through a signal, a thread making trapped calls, a `longjmp` across
+    one and a `fork` and `exec`, and reports whether a shadow stack was
+    on (17); the day a glibc turns them on, the handler's paths run on
+    one there. Until then the handler has not run on a shadow stack.
 
 ## 14. Alternatives considered
 
@@ -3748,7 +3764,9 @@ meaning items 4 and 7.
      the kernel's buffer cuts, `PATH` search,
      faulty argument vectors, unusual images, and the identity a program
      exec'd from inside gets;
-   - *the launcher and its filter*: a blocked or sent `SIGSYS`, older
+   - *the launcher and its filter*: a CET-marked program inside with the
+     shadow-stack tunable set, reporting whether glibc enabled one (13
+     item 49), a blocked or sent `SIGSYS`, older
      and newer launchers nested and side by side, a program installing
      its own filter, the speculation state, and an adversarial program
      (`adversarial`);
@@ -3828,7 +3846,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus the read-only matrix program (`test/progs/ro_matrix.c`) under `bwrap` against its own expectations |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it); the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 82 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 83 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

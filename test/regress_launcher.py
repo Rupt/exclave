@@ -709,3 +709,41 @@ def adversarial(ctx: Ctx) -> None:
         f"a wrapper run through the entry under a soft limit of 8 sees {out.strip()!r} "
         f"(rc={rc} {err!r}): the borrowed room was not given back",
     )
+
+
+@test
+def shadow_stack_if_glibc_enables_it(ctx: Ctx) -> str | None:
+    """13 item 49: a CET-marked program runs inside with the shadow-stack tunable set inside.
+
+    The border drops GLIBC_TUNABLES (6.2), so env sets it inside, where it stays for the programs
+    the exclave's programs run. The program takes a signal, runs a thread making trapped calls,
+    longjmps across one and forks and execs, each on a shadow stack if glibc enabled one, and says
+    whether it did. glibc 2.39 to 2.42 enable none, so the note says off; the day one does, the
+    handler's paths run on a shadow stack here.
+    """
+    if ctx.machine != "x86_64":
+        return "x86-64 only"
+    if ctx.musl:
+        return "musl enables no shadow stack"
+    prog = os.path.join(ctx.progs, "shstk")
+    rc, _out, err = run(
+        [
+            wrapper(ctx, ctx.gcc),
+            "-O1",
+            "-fcf-protection=full",
+            "-pthread",
+            "-o",
+            prog,
+            os.path.join(ctx.work, "src", "shstk.c"),
+        ],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    if rc:
+        return "the exclave's compiler takes no -fcf-protection: " + err[-100:]
+    rc, out, err = inside(ctx, "/usr/bin/env", ["GLIBC_TUNABLES=glibc.cpu.x86_shstk=on", prog])
+    expect(
+        rc == 0 and out.count(" ok\n") == 4 and "FAIL" not in out,
+        f"the marked program inside: rc={rc} {out!r} {err[-300:]!r}",
+    )
+    return "shadow stack " + ("on" if "shstk on" in out else "off, as glibc leaves it")
