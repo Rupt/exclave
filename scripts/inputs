@@ -22,10 +22,7 @@ repo=$ROOT
     echo "usage: scripts/inputs DIR" >&2
     exit 2
 }
-[ -x "$repo/build/launcher" ] && [ -x "$repo/build/exclave" ] || {
-    echo "build/launcher or build/exclave missing: run scripts/build" >&2
-    exit 2
-}
+"$repo/scripts/build" || exit 2 # the launchers and the command, which wrap the exclaves; nothing when up to date
 dir=$(mkdir -p "$1" && cd "$1" && pwd) || exit 2
 mkdir -p "$dir/log" "$dir/src" || exit 2
 fails=0
