@@ -455,8 +455,10 @@ class VM:
             f"file={self.seed},if=virtio,format=raw",
             "-netdev",
             f"user,id=n0,hostfwd=tcp:127.0.0.1:{port:d}-:22",
+            # no option ROM: the VM boots from its disk, never the network, and the ROM is a
+            # package of its own (ipxe-qemu) that a bare QEMU install lacks
             "-device",
-            "virtio-net-pci,netdev=n0",
+            "virtio-net-pci,netdev=n0,romfile=",
         ]
         # no KVM for another architecture: TCG, and UEFI firmware, which arm64 images boot from; the
         # translated code's cache is capped at 256 MB, since its default of 1 GiB fills over the
