@@ -4021,8 +4021,11 @@ given to the gate is never run as it is nor written. The suite wraps a
 copy from the given exclave's tree. The other drivers take
 `tree.fresh_exclave`, a copy relinked with `build/launcher`, because an
 exclave carries the launcher it was wrapped with. Each test has a
-budget of 30 s, against a slowest test of about 2 s natively, so a test
-that crawls fails instead of stalling the gate. The exit status is the
+budget of 30 s, against a slowest test of about 5 s on the fixture, so a
+test that crawls fails instead of stalling the gate: every program a
+test runs is started in a session of its own, its timeout is cut to what
+is left of the budget, and when that runs out its whole process group is
+killed, a launcher's children with it, and the test fails by name. The exit status is the
 number of failed steps. On the reference machine the whole gate
 (`--full`), on the gcc exclave with its fixture and with the Docker
 profile, two steps at a time, takes 47 s (measured October 2026).

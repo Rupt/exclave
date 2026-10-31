@@ -9,6 +9,9 @@ naming the rest.
 the failures. test/run.py and test/unpack_test.py run on it, each with its own fixture.
 """
 
+import contextlib
+import os
+import signal
 import subprocess
 import time
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol
@@ -51,6 +54,12 @@ def select[T: Test[Any]](tests: Sequence[T], k: str) -> list[T]:
     return [t for t in tests if t.__name__ == k] or [t for t in tests if k in t.__name__]
 
 
+class _Clock:
+    """The running test's deadline, a time.monotonic() value, which run() keeps to; None outside."""
+
+    deadline: float | None = None
+
+
 def run_tests[T: Test[Any]](
     order: Sequence[T],
     call: Callable[[T], str | None],
@@ -61,14 +70,16 @@ def run_tests[T: Test[Any]](
 ) -> list[T]:
     """Run each test by call(test), print a PASS, SKIP or FAIL line for it and return the failures.
 
-    A test over budget seconds fails: one that hangs is caught by run()'s timeouts, one that
-    crawls here (DESIGN.md 17). after(test), when given, runs whether the test passed, skipped or
-    failed, and a message from it fails the test too. The tests that skip are added to skipped.
+    A test over budget seconds fails (DESIGN.md 17): a program run() starts is killed, with its
+    process group, when the test's budget runs out, and a test that returns late fails here.
+    after(test), when given, runs whether the test passed, skipped or failed, and a message from it
+    fails the test too. The tests that skip are added to skipped.
     """
     width = max((len(t.__name__) for t in order), default=0)
     failed: list[T] = []
     for t in order:
         t0 = time.monotonic()
+        _Clock.deadline = None if budget is None else t0 + budget
         try:
             note = call(t)
             took = time.monotonic() - t0
@@ -83,11 +94,22 @@ def run_tests[T: Test[Any]](
             failed.append(t)
             why = str(e).strip().replace("\n", "\n     ")
             print(f"FAIL {t.__name__:<{width}} {time.monotonic() - t0:5.1f}s {why}")
+        except subprocess.TimeoutExpired as e:
+            failed.append(t)
+            took = time.monotonic() - t0
+            prog = e.cmd[0] if isinstance(e.cmd, list) else e.cmd
+            why = (
+                f"{prog} killed at the test's budget of {budget:g} s"
+                if budget is not None and took >= budget
+                else f"{prog} killed after its timeout of {e.timeout:g} s"
+            )
+            print(f"FAIL {t.__name__:<{width}} {took:5.1f}s {why}")
         except Exception as e:  # noqa: BLE001 -- any exception is that test's FAIL line
             failed.append(t)
             print(
                 f"FAIL {t.__name__:<{width}} {time.monotonic() - t0:5.1f}s {type(e).__name__}: {e}"
             )
+        _Clock.deadline = None
         why = after(t) if after else None
         if why:
             print(f"FAIL {t.__name__:<{width}} {time.monotonic() - t0:5.1f}s {why}")
@@ -108,18 +130,35 @@ def run(
     executable: str | None = None,
     preexec: Callable[[], object] | None = None,
 ) -> tuple[int, str, str]:
-    p = subprocess.run(
+    """Run cmd and return its status, stdout and stderr.
+
+    It runs in a session of its own, and when timeout seconds pass, or the running test's budget
+    runs out first, its whole process group is killed, so that a launcher's children die with it,
+    and TimeoutExpired is raised.
+    """
+    if _Clock.deadline is not None:
+        timeout = max(min(timeout, _Clock.deadline - time.monotonic()), 0.01)
+    with subprocess.Popen(
         cmd,
-        check=False,
         cwd=cwd,
         env=env,
-        input=inp,
-        timeout=timeout,
+        stdin=None if inp is None else subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         executable=executable,
-        preexec_fn=preexec,
-        capture_output=True,
-    )
-    return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
+        preexec_fn=preexec,  # noqa: PLW1509 -- only a test passes one, while no other thread runs
+        start_new_session=True,
+    ) as p:
+        try:
+            out, err = p.communicate(inp, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(p.pid, signal.SIGKILL)
+            # a program that left the group may still hold the pipes: not waited for
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                p.communicate(timeout=5)
+            raise
+    return p.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
 
 def expect(cond: object, msg: str) -> None:
