@@ -185,12 +185,15 @@ static long resolve(struct scratch *S, long *a, int pi, int di, int follow, int 
 {
     S->magic_end = 0;
     S->touched_exclave = 0;
+    /* the descriptor is recorded before the empty-path answers, so that a call on the descriptor's own file is
+     * re-issued through it as given (7.4.3) and the kernel's rule for AT_EMPTY_PATH is its own: linkat's
+     * CAP_DAC_READ_SEARCH check before 6.10 (oracle 17.7) */
+    int dfd = di < 0 ? AT_FDCWD : (int)a[di];
+    S->dfd = dfd;
     if (!a[pi] && allow_empty == 2) return 1;
     long r = copy_str_in(S->pid, S->given, (const char *)a[pi]);
     if (r < 0) return r;
     if (S->given[0] == 0) return allow_empty ? 1 : -ENOENT;
-    int dfd = di < 0 ? AT_FDCWD : (int)a[di];
-    S->dfd = dfd;
     /* a relative path starts with the kernel's search check on the directory it
      * starts from (link_path_walk): EACCES, ENOTDIR or EBADF before any lookup,
      * which the absolute re-issue would otherwise skip (oracle 17.7) */

@@ -1459,8 +1459,9 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
         ),
         (
             "linkat with AT_EMPTY_PATH needed CAP_DAC_READ_SEARCH (ENOENT without it) until 6.10 "
-            "allowed it for files with a link; the handler answers as the newer kernels do, and "
-            "what it re-issues this kernel refuses, so it links nothing"
+            "allowed it under the opener's own credentials; the handler answers the exclave's "
+            "rules (EXDEV, EROFS) before that check, which the kernel makes first, and a host "
+            "descriptor's call is re-issued through it as given, which this kernel refuses alike"
         ),
     ),
     (
