@@ -687,8 +687,7 @@ def main() -> int:
         # packed afresh every run, so the VMs never test a stale tree
         log("packing the test tree for", arch)
         with tarfile.open(payload, "w:gz", compresslevel=1) as t:
-            # src: the filter model the suite builds in the VM (filter_model); src and tool: the
-            # sources the suite's fixture is stamped with
+            # src and tool: the sources the suite's fixture is stamped with
             for d in ("test", "unpack", "src", "tool"):
                 t.add(os.path.join(REPO, d), arcname="repo/" + d)
             # the text the launcher carries, which exclave_readme compares

@@ -14,12 +14,6 @@ from suite import Ctx, copy_exclave, hello_source, inside, wrapper
 
 # ------------------------------------------------------------------ tests
 @test
-def version(ctx: Ctx) -> None:
-    rc, out, err = run([wrapper(ctx, ctx.gcc), "--version"], cwd=ctx.work, env=ctx.env)
-    expect(rc == 0 and out.strip(), f"{ctx.gcc} --version: rc={rc} out={out!r} err={err!r}")
-
-
-@test
 def hello(ctx: Ctx) -> str | None:
     src = hello_source(ctx)
     exe = os.path.join(ctx.work, "hello")
@@ -163,36 +157,25 @@ def origin(ctx: Ctx) -> None:
 
 
 @test
-def gconv_and_locale(ctx: Ctx) -> str:
-    notes: list[str] = []
-    if os.path.exists(wrapper(ctx, "iconv")):
-        p = subprocess.run(
-            [wrapper(ctx, "iconv"), "-f", "utf-8", "-t", "cp1252"],
-            check=False,
-            input="caf\xe9".encode(),
-            env=ctx.env,
-            cwd=ctx.work,
-            capture_output=True,
-        )
-        expect(
-            p.returncode == 0 and p.stdout == b"caf\xe9",
-            f"iconv via gconv: rc={p.returncode} {p.stdout!r} {p.stderr!r}",
-        )
-    else:
-        notes.append("no iconv in the tree")
-    if os.path.isdir(os.path.join(ctx.root, "usr", "lib", "locale", "C.utf8")):
-        _rc, out, _err = run(
-            [wrapper(ctx, "wc"), "-m"],
-            cwd=ctx.work,
-            env=dict(ctx.env, LC_ALL="C.UTF-8"),
-            inp="caf\xe9".encode(),
-        )
-        expect(out.strip() == "4", f"wc -m under C.UTF-8: {out!r}")
-    else:
-        notes.append("no C.utf8 locale in the tree")
-    if len(notes) == 2:
-        skip("; ".join(notes))
-    return "; ".join(notes)
+def gconv_and_locale(ctx: Ctx) -> None:
+    """Gconv's modules load from the exclave: iconv converts to a code page it has no built-in for.
+
+    The locale the border sets, C.UTF-8, is the environment test's.
+    """
+    if not os.path.exists(wrapper(ctx, "iconv")):
+        skip("no iconv in the tree")
+    p = subprocess.run(
+        [wrapper(ctx, "iconv"), "-f", "utf-8", "-t", "cp1252"],
+        check=False,
+        input="caf\xe9".encode(),
+        env=ctx.env,
+        cwd=ctx.work,
+        capture_output=True,
+    )
+    expect(
+        p.returncode == 0 and p.stdout == b"caf\xe9",
+        f"iconv via gconv: rc={p.returncode} {p.stdout!r} {p.stderr!r}",
+    )
 
 
 @test
@@ -315,7 +298,7 @@ def gdb_hooks(ctx: Ctx) -> str | None:
         f"quiet for a wrapper: {out[-600:]!r}",
     )
     spaced = os.path.join(ctx.work, "space dir", "exclave")  # an exclave under a path with a space
-    copy_exclave(ctx.exclave, spaced)
+    copy_exclave(ctx.mini, spaced)
     rc, out, err = run(
         [
             *base,
@@ -339,23 +322,3 @@ def gdb_hooks(ctx: Ctx) -> str | None:
         f"an exclave under a path with a space: {out[-600:]!r} {err[-300:]!r}",
     )
     return None
-
-
-@test
-def stat_bench(ctx: Ctx) -> str:
-    src = os.path.join(ctx.work, "bench.c")
-    with open(src, "w") as f:
-        f.write(
-            "#include <sys/stat.h>\n#include <stdio.h>\n#include <time.h>\n"
-            "int main(void){struct stat st;struct timespec a,b;"
-            "clock_gettime(CLOCK_MONOTONIC,&a);"
-            'for(int i=0;i<100000;i++)stat("/usr/share/exclave-test-marker",&st);'
-            "clock_gettime(CLOCK_MONOTONIC,&b);"
-            'printf("%.0f\\n",((b.tv_sec-a.tv_sec)*1e9+(b.tv_nsec-a.tv_nsec))/100000);return 0;}\n'
-        )
-    exe = os.path.join(ctx.work, "bench")
-    rc, out, err = run([wrapper(ctx, ctx.gcc), "-O2", src, "-o", exe], cwd=ctx.work, env=ctx.env)
-    expect(rc == 0, err)
-    rc, out, err = inside(ctx, exe)
-    expect(rc == 0, err)
-    return f"stat of an exclave path: {int(out.strip())} ns per call"

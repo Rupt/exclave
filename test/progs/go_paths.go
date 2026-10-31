@@ -17,9 +17,6 @@ import (
 	"syscall"
 )
 
-// big reaches past 0x3f0000 when the test links the program from 0x10000, as Go's aarch64 linker does (13 item 24)
-var big [8 << 20]byte
-
 func env(name, dflt string) string {
 	if v := os.Getenv(name); v != "" {
 		return v
@@ -30,7 +27,6 @@ func env(name, dflt string) string {
 func main() {
 	fails := 0
 	fail := func(f string, a ...interface{}) { fails++; fmt.Printf("FAIL "+f+"\n", a...) }
-	big[len(big)-1] = 1
 	marker := "/usr/share/exclave-test-marker"
 	sh, shExe, truep := env("EXCLAVE_TEST_SH", "/usr/bin/sh"), env("EXCLAVE_TEST_SH_EXE", "/usr/bin/dash"), env("EXCLAVE_TEST_TRUE", "/usr/bin/true")
 

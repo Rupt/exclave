@@ -411,12 +411,9 @@ def relink_if_stale(ex: str, launcher: str = BUILD_LAUNCHER) -> bool:
     return False
 
 
-# the Go regression's programs (17.4): as go links for the machine, and from 0x10000 as its
-# aarch64 linker does, an image reaching past the syscall page's former address (13 item 24)
-GO_BUILDS: tuple[tuple[str, list[str]], ...] = (
-    ("go_paths", []),
-    ("go_paths_low", ["-ldflags=-T 0x11000"]),
-)
+# the Go regression's programs (17.4), as go links them for the machine; low_image is the image
+# from 0x10000 that Go's aarch64 linker lays out (13 item 24)
+GO_BUILDS: tuple[tuple[str, list[str]], ...] = (("go_paths", []),)
 GOARCH = {"x86_64": "amd64", "aarch64": "arm64"}
 
 
@@ -464,19 +461,3 @@ def go_build(go: str, out_dir: str, machine: str, work: str) -> list[tuple[str, 
             raise RuntimeError(msg)
         out.append((name, path))
     return out
-
-
-def load_span(path: str) -> tuple[int, int]:
-    """Return the lowest and highest addresses an ELF64 file's PT_LOAD segments cover, with bss."""
-    with open(path, "rb") as f:
-        h = f.read(64)
-        phoff, phentsize, phnum = (
-            struct.unpack_from("<Q", h, 32)[0],
-            struct.unpack_from("<H", h, 54)[0],
-            struct.unpack_from("<H", h, 56)[0],
-        )
-        f.seek(phoff)
-        ph = f.read(phentsize * phnum)
-    headers = [struct.unpack_from("<IIQQQQQQ", ph, i * phentsize) for i in range(phnum)]
-    loads = [(h[3], h[3] + h[6]) for h in headers if h[0] == 1]
-    return min(a for a, _ in loads), max(b for _, b in loads)

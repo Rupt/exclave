@@ -115,11 +115,12 @@ def go_paths(ctx: Ctx) -> str | None:
     """17.4: a Go program doing path syscalls from goroutines.
 
     Go issues syscalls raw, makes threads with clone, installs its own handler for every signal,
-    SIGSYS included (7.5.2), and runs on small stacks; built static by go with cgo off and run
-    inside as a host program, twice: as go links it for the machine, and from 0x10000 as its aarch64
-    linker does, an image reaching past the syscall page's former address (13 item 24). Built here
-    by the host's go, or taken from build/go/<machine>, where the matrix puts the ones it built for
-    a VM without go; skips with the reason when there is neither.
+    SIGSYS included (7.5.2), and runs on small stacks, beside a goroutine collecting garbage, whose
+    preemption signal lands in the launcher's handler mid-trap (7.5.3); built static by go with cgo
+    off and run inside as a host program. The image from 0x10000 that Go's aarch64 linker lays out
+    is low_image's (13 item 24). Built here by the host's go, or taken from build/go/<machine>,
+    where the matrix puts the one it built for a VM without go; skips with the reason when there is
+    neither.
     """
     go, prebuilt = tree.go_toolchain(), os.path.join(REPO, "build", "go", platform.machine())
     if go:
@@ -137,12 +138,6 @@ def go_paths(ctx: Ctx) -> str | None:
     else:
         skip("no go toolchain (golang-go) and nothing in build/go/" + platform.machine())
     for name, exe in exes:
-        if name == "go_paths_low":
-            lo, hi = tree.load_span(exe)
-            expect(
-                lo < 0x3F0000 and hi > 0x3F1000,
-                f"{name} spans {lo:#x}-{hi:#x}, not across 0x3f0000",
-            )
         rc, out, err = inside(ctx, exe)
         expect(rc == 0 and "FAIL" not in out, f"{name}: {out}{err}")
     return None

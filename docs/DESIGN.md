@@ -170,7 +170,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 86 named tests, most of them programs that
+- **The regression suite**: 83 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -2432,7 +2432,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 86 named regressions and every oracle its kernel can run; 17
+suite's 83 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -3893,7 +3893,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus five of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `unix_socket` and `magic_links` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 86 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 83 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -4124,9 +4124,10 @@ the input itself, and every later run would test a tree no exclave has.
 
 The Go regression is built static with cgo off, by the host's `go`, or
 on the reference machine for a matrix VM's machine. It runs as a host
-program, twice: once as `go` links it, and once linked from `0x10000`,
-as Go's aarch64 linker lays an image out (13 item 24). It skips where
-neither build exists.
+program, its goroutines trapping beside one that collects garbage, so
+that Go's preemption signal lands in the handler mid-trap (7.5.3); the
+image from `0x10000` that Go's aarch64 linker lays out is `low_image`'s
+(13 item 24). It skips where no build exists.
 
 **The fixture.** The suite runs on the exclave pruned to what the suite
 itself touches. The first run on an exclave logs every invocation it
@@ -4341,7 +4342,10 @@ stated here.
   directory's mtime, and the tree's files are hard links to the fixture
   or the given exclave, so a write that escaped the read-only refusal
   would outlast the run. A test that puts files in a tree does so in a
-  copy of its own (`copy_exclave`). `-k NAME` passes like the whole
+  copy of its own (`copy_exclave`); one that relinks an exclave or
+  rewrites its manifest copies a small exclave setup makes too, the
+  shared one pruned to what a shell, `cat`, `grep` and a test program
+  touch. `-k NAME` passes like the whole
   run. Suites run side by side in the gate, so a name
   in a shared namespace (an abstract socket, a file in `/tmp`) carries
   the pid.

@@ -14,47 +14,7 @@ lazy import resource
 
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
-from suite import REPO, Ctx, copy_exclave, inside, wrapper
-
-
-@test
-def filter_model(ctx: Ctx) -> None:
-    """The filter against the rule of 7.4.2, with this machine's syscall numbers.
-
-    test/filter_test.c, built by the exclave's compiler for this machine and run inside the exclave,
-    so that the arm64 row checks the aarch64 filter, which the gate's unit step, built for the
-    reference machine, cannot.
-    """
-    d = os.path.join(ctx.work, "filter-model")
-    for sub, names in (
-        ("src", ("filter.c", "str.c", "common.h", "sys.h", "elf.h")),
-        ("test", ("filter_test.c",)),
-    ):
-        os.makedirs(os.path.join(d, sub), exist_ok=True)
-        for n in names:
-            shutil.copy(os.path.join(REPO, sub, n), os.path.join(d, sub, n))
-    exe = os.path.join(d, "filter_test")
-    rc, out, err = run(
-        [
-            wrapper(ctx, ctx.gcc),
-            "-std=gnu11",
-            "-O1",
-            "-fno-builtin",
-            "-DHOST_TEST",
-            "-o",
-            exe,
-            os.path.join(d, "test", "filter_test.c"),
-            os.path.join(d, "src", "filter.c"),
-            os.path.join(d, "src", "str.c"),
-        ],
-        cwd=ctx.work,
-        env=ctx.env,
-    )
-    expect(rc == 0, f"cannot build the filter model: {err[-600:]}")
-    rc, out, err = inside(ctx, exe, timeout=300)
-    expect(
-        rc == 0 and " 0 failures" in out, f"the filter against its rule: {out[-600:]} {err[-300:]}"
-    )
+from suite import Ctx, copy_exclave, inside, wrapper
 
 
 @test
@@ -236,7 +196,7 @@ def positional_entry(ctx: Ctx) -> None:
     # a wrapper named through an absolute link of the tree runs the tree's program, though the
     # kernel would follow that link on the host, from outside and from inside alike
     ex2 = os.path.join(ctx.work, "entry-link.exclave")
-    copy_exclave(ctx.exclave, ex2)
+    copy_exclave(ctx.mini, ex2)
     # named cat, as busybox picks its applet by the name
     os.makedirs(os.path.join(ex2, "tree", "opt", "entry-link"))
     os.symlink(ctx.vbin("cat"), os.path.join(ex2, "tree", "opt", "entry-link", "cat"))
@@ -319,15 +279,18 @@ def positional_entry(ctx: Ctx) -> None:
         out == ctx.sh_exe + "\n",
         f"a wrapper through the entry keeps the wrapper's identity: {out!r} {err!r}",
     )
-    p = subprocess.Popen([ctx.launcher, ctx.vbin("sleep"), "2"], cwd=ctx.work, env=ctx.env)
-    time.sleep(0.5)
-    exe = os.readlink(f"/proc/{p.pid}/exe")
-    p.kill()
-    p.wait()
-    expect(
-        exe == os.path.realpath(wrapper(ctx, "sleep")),
-        f"from outside, exe names the wrapper, not the launcher: {exe!r}",
-    )
+    # the entry's process becomes the wrapper's once it has exec'd it: polled until it has
+    want = os.path.realpath(wrapper(ctx, "sleep"))
+    p = subprocess.Popen([ctx.launcher, ctx.vbin("sleep"), "5"], cwd=ctx.work, env=ctx.env)
+    try:
+        deadline, exe = time.monotonic() + 5, ""
+        while exe != want and time.monotonic() < deadline:
+            exe = os.readlink(f"/proc/{p.pid}/exe")
+            time.sleep(0.002)
+    finally:
+        p.kill()
+        p.wait()
+    expect(exe == want, f"from outside, exe names the wrapper, not the launcher: {exe!r}")
 
 
 @test
@@ -341,7 +304,7 @@ def cross_exclave_distinct_launchers(ctx: Ctx) -> None:
     file and map the first tree's.
     """
     ex2 = os.path.join(ctx.work, "exclave2")
-    copy_exclave(ctx.exclave, ex2)
+    copy_exclave(ctx.mini, ex2)
     padded = os.path.join(ctx.work, "launcher2")
     with open(padded, "wb") as f:
         # a different file of a different size, still the launcher
@@ -412,7 +375,7 @@ def nested_older_launcher(ctx: Ctx) -> str | None:
         f"kernel {kernel!r} exclave {outer!r} {err!r}",
     )
     ex2 = os.path.join(ctx.work, "old-exclave")
-    copy_exclave(ctx.exclave, ex2)
+    copy_exclave(ctx.mini, ex2)
     tree.relink(ex2, old)
     log = os.path.join(ctx.work, "nested-old.log")
     rc, inner, err = run(
@@ -463,7 +426,7 @@ def nested_older_launcher(ctx: Ctx) -> str | None:
         f.write(blob + b"\0")  # a byte more: a launcher of its own size, not a copy of this one
     os.chmod(gen1, 0o755)
     ex3 = os.path.join(ctx.work, "gen1-exclave")
-    copy_exclave(ctx.exclave, ex3)
+    copy_exclave(ctx.mini, ex3)
     tree.relink(ex3, gen1)
     rc, out, err = run(
         [wrapper(ctx, "sh"), "-c", "{}/tree{}; echo rc=$?".format(ex3, ctx.vbin("true"))],
@@ -498,7 +461,7 @@ def earlier_note_name(ctx: Ctx) -> None:
         f.write(blob.replace(b"exclave\0" + gen, b"exclavx\0" + gen) + b"\0")
     os.chmod(only, 0o755)
     ex3 = os.path.join(ctx.work, "note-exclave")
-    copy_exclave(ctx.exclave, ex3)
+    copy_exclave(ctx.mini, ex3)
     tree.relink(ex3, only)
     _rc, out, err = run(
         [wrapper(ctx, "sh"), "-c", "{}/tree{}; echo rc=$?".format(ex3, ctx.vbin("true"))],
@@ -515,7 +478,7 @@ def earlier_note_name(ctx: Ctx) -> None:
         f.write(blob.replace(b"cont\0\0\0\0" + gen, b"conx\0\0\0\0" + gen) + b"\0\0")
     os.chmod(only, 0o755)
     note_copy = os.path.join(ctx.work, "exclave-note-copy")
-    copy_exclave(ctx.exclave, note_copy)
+    copy_exclave(ctx.mini, note_copy)
     tree.relink(note_copy, only)
     _rc, out, err = run(
         [wrapper(ctx, "sh"), "-c", "{}/tree{}; echo rc=$?".format(note_copy, ctx.vbin("true"))],

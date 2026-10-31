@@ -66,6 +66,7 @@ class Ctx:
     cwd_given: bool
     gcc: str
     progs: str
+    mini: str
     shared: Shared
     machine: str
     triplet: str
@@ -525,6 +526,33 @@ def compile_progs(ctx: Ctx) -> None:
             sys.exit(f"cannot compile {name} with the exclave's compiler:\n{err}")
 
 
+def make_mini(ctx: Ctx) -> None:
+    """Make the small exclave a test copies when it relinks one or alters its manifest or tree.
+
+    It is the shared exclave pruned (10.4) to what a shell, cat, grep and a compiled test program
+    touch, so that a copy and a relink take milliseconds; like the shared exclave, no test changes
+    it.
+    """
+    log = os.path.join(ctx.work, "mini.log")
+    # by their paths, which a shell's builtins do not shadow
+    true, cat, grep = (ctx.vbin(n) for n in ("true", "cat", "grep"))
+    rc, _out, err = run(
+        [
+            wrapper(ctx, "sh"),
+            "-c",
+            f"{true}; {cat} </dev/null; {grep} -c x </dev/null; {ctx.progs}/exec child",
+        ],
+        cwd=ctx.work,
+        env=dict(ctx.env, EXCLAVE_LOG=log),
+    )
+    if rc:
+        sys.exit(f"the mini exclave's commands failed: {err}")
+    ctx.mini = copy_exclave(ctx.exclave, os.path.join(ctx.work, "mini.exclave"))
+    rc, out, err = run([*TOOL, "prune", ctx.mini, log])
+    if rc:
+        sys.exit(f"cannot prune the mini exclave: {out}{err}")
+
+
 def prepare(args: argparse.Namespace, tree_: str, work: str, *, logging: bool) -> Ctx:
     """Make the fixtures every test is given: the exclave wrapped from tree_, the programs."""
     ctx = Ctx()
@@ -545,6 +573,7 @@ def prepare(args: argparse.Namespace, tree_: str, work: str, *, logging: bool) -
         # first
         ctx.env["EXCLAVE_LOG"] = os.path.join(ctx.work, "fixture.log")
     compile_progs(ctx)
+    make_mini(ctx)
     ctx.shared = shared_state(ctx)
     print(f"exclave made and programs compiled in {time.time() - t0:.1f}s")
     return ctx

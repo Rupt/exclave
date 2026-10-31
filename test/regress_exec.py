@@ -512,7 +512,7 @@ def data_directory(ctx: Ctx) -> None:
     entry; a script whose #! names an interpreter there is EACCES, as the interpreter itself is.
     """
     dp = os.path.join(ctx.work, "data-dir.exclave")
-    copy_exclave(ctx.exclave, dp)
+    copy_exclave(ctx.mini, dp)
     sdk = os.path.join(dp, "tree", "opt", "sdk")
     os.makedirs(sdk)
     p = os.path.join(ctx.progs, "exec")
