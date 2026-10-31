@@ -58,7 +58,8 @@ def figures() -> dict[str, int | None]:
         "matrix rows": len(re.findall(r"^    VmRow\(", read("test/matrix.py"), re.MULTILINE)),
         # scripts/build names this machine's command build/exclave and another's by its machine
         "command KB": kb(built("exclave", "x86_64")),
-        "command KB aarch64": kb(built("exclave", "aarch64")),
+        # the cross build's, as the document says; a native aarch64 build is a few KB apart
+        "command KB aarch64": kb("build/exclave-aarch64"),
     }
 
 
