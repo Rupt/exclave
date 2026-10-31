@@ -15,72 +15,43 @@ import tree
 from harness import expect, read_bytes, read_text, run, skip, test
 from suite import VOLATILE, Ctx, check, copy_exclave, hello_source, inside, wrapper
 
-# the path syscalls the isolation test traces; the legacy forms exist on x86-64 only and strace says
-# so elsewhere
-TRACED = (
-    "open",
-    "stat",
-    "lstat",
-    "access",
-    "execve",
-    "readlink",
-    "openat",
-    "newfstatat",
-    "readlinkat",
-    "faccessat",
-    "faccessat2",
-    "statx",
-    "execveat",
-    "chdir",
-    "mkdir",
-    "mkdirat",
-    "unlink",
-    "unlinkat",
-    "rename",
-    "renameat",
-    "renameat2",
-    "link",
-    "linkat",
-    "symlink",
-    "symlinkat",
-)
-
-
 PATH_MAX = 4096
 
 
 @test
 def isolation(ctx: Ctx) -> str | None:
+    """8.1: a compile under strace names no path of the exclave's to the kernel untranslated.
+
+    Every syscall strace counts as taking a file name is judged, failed ones too, since a leaked
+    lookup that fails on the host (a compiler probing its directories) is a leak all the same: a
+    path the program gave is the exclave's own only in the trapped call, which its SIGSYS line
+    marks, and the handler's re-issue names the tree's real path.
+    """
     if not shutil.which("strace"):
         skip("no strace")
     tr = os.path.join(ctx.work, "trace")
     src = hello_source(ctx)
-    names = list(TRACED)
-    while True:  # an older strace may not know the newest names
-        rc, _out, err = run(
-            [
-                "strace",
-                "-f",
-                "-s",
-                "4096",
-                "-o",
-                tr,
-                "-e",
-                "trace=" + ",".join(names),
-                wrapper(ctx, ctx.gcc),
-                "-O1",
-                src,
-                "-o",
-                os.path.join(ctx.work, "hello2"),
-            ],
-            cwd=ctx.work,
-            env=ctx.env,
-        )
-        m = re.search(r"invalid system call '(\w+)'", err)
-        if m and m.group(1) in names:
-            names.remove(m.group(1))
-            continue
-        break
+    rc, _out, err = run(
+        [
+            "strace",
+            "-f",
+            "-s",
+            "4096",
+            "-o",
+            tr,
+            "-e",
+            "trace=%file",
+            wrapper(ctx, ctx.gcc),
+            "-O1",
+            src,
+            "-o",
+            os.path.join(ctx.work, "hello2"),
+        ],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    if rc and "invalid system call '%file'" in err:
+        skip("this strace has no %file class")
     expect(rc == 0, "compile under strace failed: " + err)
     bad, seen = [], 0
     # 8.1 as the launcher computes it: a top-level name outside it is the host's
@@ -119,14 +90,15 @@ def isolation(ctx: Ctx) -> str | None:
         m = re.match(r"^\d+\s+(\w+)\((.*)\)\s+=\s+(-?\d+)", line)
         if not m:
             continue
-        name, args, res = m.group(1), m.group(2), int(m.group(3))
-        if res < 0:
-            continue
+        name, args = m.group(1), m.group(2)
         paths = re.findall(r'"((?:[^"\\]|\\.)*)"', args)
         if name in ("execve", "execveat", "readlink", "readlinkat") and paths:
             # the rest are argv strings, or the link's text (Fedora's /usr/bin/ld ->
             # /etc/alternatives/ld)
             paths = paths[:1]
+        elif name in ("symlink", "symlinkat") and paths:
+            # the link's text is stored as written; only the link's own name is looked up
+            paths = paths[-1:]
         for given in paths:
             seen += 1
             p = os.path.normpath(given) if given.startswith("/") else given
