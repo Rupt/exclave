@@ -396,7 +396,7 @@ D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave 
 D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # beyond the gate, when asked: the suite, the debug launcher, the oracles and the probe on every exclave given, the plain-label suite, the fuzz budget and the release test on the first; about 96 s
 scripts/test --exclave gcc.exclave       # the suite alone; -k NAME
 scripts/matrix --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix, due when the gate says a change reaches the VMs: cloud images under QEMU/KVM, one at a time (--jobs N), about sixteen minutes
-gh workflow run ci.yml -f matrix=true    # the gate and the matrix on GitHub's hosted runners, x86-64 and aarch64 (.github/workflows/ci.yml), for the pushed main; -f matrix=false the gate alone; gh run list --workflow ci.yml, then gh run watch ID --exit-status and gh run view ID --log-failed
+gh workflow run ci.yml -f matrix=true    # the gate on GitHub's x86-64 and aarch64 runners and the x86-64 rows under KVM (.github/workflows/ci.yml), for the pushed main; -f matrix=false the gate alone; gh run list --workflow ci.yml, then gh run watch ID --exit-status and gh run view ID --log-failed
 scripts/exercise --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the launcher, side by side
 scripts/examples ~/.cache/exclave-inputs/realsoft.exclave   # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_ARM64 (the emulated aarch64 row, on the arm64 gcc exclave), EXCLAVE_TEST_DOCKER (its Docker profile run)
 ```
@@ -411,7 +411,7 @@ scripts/check        the code checks; scripts/gate the commit gate; scripts/extr
 scripts/release      a signed release of exclaves with the command beside them; test/release_test.py, a step of scripts/extra, takes one as a consumer would
 scripts/reproduce    the launcher and the command built inside a gcc exclave, the same bytes wherever it runs
 scripts/test         the suite; scripts/matrix, exercise and sysroot the other test drivers
-.github/workflows/ci.yml  the gate and the matrix on GitHub's hosted runners, x86-64 and aarch64, when dispatched by hand
+.github/workflows/ci.yml  the gate on GitHub's x86-64 and aarch64 runners and the x86-64 rows under KVM, when dispatched by hand
 pyproject.toml       the Python project, unpack: no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python
 scripts/build        the launchers, build/launcher, build/launcher-old for the nesting regression and build/launcher-debug with UBSan's checks; the command, build/exclave, and build/exclave-asan for the gate; the aarch64 ones with a cross compiler; nothing when they are up to date
 src/sys.h            syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset

@@ -7,9 +7,11 @@
 # opened to the runner, and the AppArmor sysctl that denies user namespaces on Ubuntu 24.04.
 #
 # The gate runs on x86-64 and, natively, on aarch64, whose runner's kernel is the one the
-# emulated noble-arm64 row boots; so that row has no job, the 64 KB-page row does, emulated as on
-# the reference machine, since no hosted runner boots such a kernel. The matrix's x86-64 rows run
-# under KVM, two VMs at a time. Each action is pinned by commit, as uv is by checksum.
+# emulated noble-arm64 row boots, so that row has no job here. The matrix's x86-64 rows run
+# under KVM, two VMs at a time. The 64 KB-page arm64 row has no job either: no hosted runner
+# boots such a kernel or offers KVM on aarch64, and under TCG the row took two hours, so it runs
+# from the reference machine when asked (scripts/matrix --only noble-arm64-64k). Each action is
+# pinned by commit, as uv is by checksum.
 name: gate and matrix
 on:
   workflow_dispatch:
@@ -73,38 +75,22 @@ jobs:
             ~/inputs/log/*.log
           if-no-files-found: ignore
   matrix:
-    name: ${{ matrix.row.name }}
+    name: kernel matrix, the x86-64 rows
     needs: gate
     if: ${{ inputs.matrix }}
-    strategy:
-      fail-fast: false
-      matrix:
-        row:
-          - name: kernel matrix, the x86-64 rows
-            runner: ubuntu-24.04
-            packages: qemu-system-x86 qemu-utils cloud-image-utils
-            exclave: gcc13.exclave
-            only: ""
-          - name: kernel matrix, the 64 KB-page arm64 row
-            runner: ubuntu-24.04-arm
-            packages: qemu-system-arm qemu-efi-aarch64 qemu-utils cloud-image-utils
-            exclave: gcc13-arm64.exclave
-            only: --only noble-arm64-64k
-    runs-on: ${{ matrix.row.runner }}
-    timeout-minutes: 330
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: packages the matrix needs
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ${{ matrix.row.packages }}
-      - name: the KVM device, opened to the runner, where the kernel offers it
+          sudo apt-get install -y -q --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils
+      - name: the KVM device, opened to the runner
         run: |
-          if [ -e /dev/kvm ]; then
-            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
-            sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
-          fi
-          ls -l /dev/kvm || echo "no /dev/kvm: an aarch64 row runs under TCG"
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
       - name: the runner's second disk, for the VMs' overlays; the images stay on the first
         run: |
           sudo mkdir -p /mnt/matrix && sudo chown "$(id -u):$(id -g)" /mnt/matrix
@@ -127,14 +113,14 @@ jobs:
         run: scripts/inputs "$INPUTS"
       - name: the matrix
         run: >
-          scripts/matrix --exclave "$INPUTS/${{ matrix.row.exclave }}" ${{ matrix.row.only }}
+          scripts/matrix --exclave "$INPUTS/gcc13.exclave"
           --jobs 2 --work /mnt/matrix/work
           --docker-profile "$INPUTS/src/docker-seccomp.json"
       - name: the rows' results and logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: matrix-${{ matrix.row.runner }}
+          name: matrix
           path: |
             build/matrix-results.md
             /mnt/matrix/work/*.log

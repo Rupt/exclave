@@ -57,8 +57,8 @@ The loop that has served well, in the order it pays:
    the workflow `.github/workflows/ci.yml`, dispatched from the
    Actions tab or as `gh workflow run ci.yml -f matrix=true` (`false`:
    the gate alone) on the pushed `main`, which runs the gate on x86-64
-   and natively on aarch64, the x86-64 rows under KVM and the 64 KB-page
-   row emulated, and never runs at a push. Reading a run is always
+   and natively on aarch64 and the x86-64 rows under KVM, and never
+   runs at a push; the emulated arm64 rows run only here. Reading a run is always
    fine (`gh run list --workflow ci.yml`, `gh run watch ID
    --exit-status` in the background, `gh run view ID --log-failed`),
    reported as failures and the end. A commit does not wait for any of

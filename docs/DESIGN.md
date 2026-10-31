@@ -2436,7 +2436,7 @@ October 2026:
 | Fedora 42 | 6.14 | 84 of 84 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
 | Ubuntu 26.10 | 7.3 | 84 of 84 | all pass | glibc 2.44 |
 | Ubuntu 24.04 arm64 | 6.8 | 84 of 84 | all pass | aarch64: natively on GitHub's aarch64 runner, where the gate runs this kernel (17), and under TCG on the reference machine, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed, where the suite takes 17 minutes and the row 36; the exclave is made on the reference machine and only run here (10.1) |
-| Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | 84 of 84 | all pass | aarch64 under TCG on GitHub's aarch64 runner: the VM installs the 64 KB kernel and reboots into it; the row takes about two hours there (17); reproduced |
+| Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | 84 of 84 | all pass | aarch64 under TCG: the VM installs the 64 KB kernel and reboots into it; the row takes about two hours on a 2-core aarch64 machine (17), and runs when asked, from the reference machine; reproduced |
 | reference machine | 7.0 | 84 of 84 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
@@ -2790,8 +2790,8 @@ and stay fixed.
     resolution oracle's 3 000 paths, the namespace oracle's 21 workloads,
     the probe's 18 293 cases with no unexplained difference, and both
     Docker profiles; the suite's two failures were the tests' own 4 KB
-    assumptions, since corrected, and the row now passes in full on
-    GitHub's aarch64 runner (12.1).
+    assumptions, since corrected, and the row now passes in full
+    (12.1).
 
 44. **Two handlers never share a scratch chunk**: a rule, not a
     limitation (7.5.4).
@@ -4203,11 +4203,12 @@ aarch64 build gets the unit tests and the stack budget,
 which the emulated row never ran (its code checks go without
 shellcheck and taplo, which have no aarch64 wheel; the shell and the
 TOML are text, checked on x86-64). The x86-64 rows run under KVM, two
-VMs at a time; the 64 KB-page row runs emulated on the aarch64 runner,
-since no hosted runner boots such a kernel, and remains the long job,
-about two hours (measured October 2026).
-The results are the jobs' logs and each matrix job's results table,
-kept as the run's artifacts; the figures the documents quote stay
+VMs at a time, in about twenty minutes. The 64 KB-page row has no job:
+no hosted runner boots such a kernel or offers KVM on aarch64, and
+under TCG there the row took two hours (measured October 2026), so it
+runs from the reference machine when asked, like the other emulated
+row. The results are the jobs' logs and the matrix job's results
+table, kept as the run's artifacts; the figures the documents quote stay
 those measured on the reference machine.
 
 `test/vm_run.py --script SH FILE...` boots the same x86-64 rows and
@@ -4323,8 +4324,9 @@ questions.
    when asked rather than at every commit; the exclave they run is made
    on the reference machine (10.1). On GitHub's aarch64 runner the gate
    runs natively on the 4 KB-page kernel that row boots (17); the
-   64 KB-page row stays emulated there too, since no hosted runner
-   boots such a kernel, and a lighter fixture is what would shorten it.
+   64 KB-page row would be emulated there too, since no hosted runner
+   boots such a kernel, so it has no job, and a lighter fixture is
+   what would shorten it.
 5. **Hosts the matrix has not covered.** Snap-confined terminals,
    gVisor-based CI, WSL1 and SELinux `execmem` policies are listed as
    untested in the portability envelope (12); each is a matrix row to
