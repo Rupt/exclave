@@ -992,7 +992,9 @@ kernel has added has a libc fallback and a re-issue would be an
 untranslated host access.
 
 The version moves whenever the trap set grows or the syscall page
-moves, and is 6. Filters before 6 allow a page at another address, so
+moves, and is 6; `test/syscalls.py` records a digest of the set and the
+page each version shipped with and fails when either changes under the
+same version. Filters before 6 allow a page at another address, so
 neither launcher can run under the other's filter: a launcher under a
 filter older than 6 refuses by name at startup, and a handler sends a
 launcher whose note carries a page generation older than the present
@@ -3890,8 +3892,11 @@ this machine (x86-64's `unistd_64.h`, or the generic table aarch64
 uses) up to the filter's ceiling. It fails on one it does not know. It
 names any syscall above the ceiling as a note, since the filter traps it
 and the handler answers `ENOSYS` until it is classified (7.4.2). It
-requires the trap list in `src/filter.c` to equal its own, and the
-syscall numbers in `src/sys.h` to be the kernel's.
+requires the trap list in `src/filter.c` to equal its own, the
+syscall numbers in `src/sys.h` to be the kernel's, the trap set and the
+syscall page to be those the filter's version shipped with (7.4.2), and
+every path and descriptor syscall the filter traps to have a case in the
+probe of item 7.
 
 `test/docker_profile.py` assembles Docker's default profile into BPF
 and installs it with `bwrap` around a workload in the exclave, the way

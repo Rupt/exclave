@@ -5,12 +5,16 @@ the generic table aarch64 uses. One at or below the filter's ceiling that this f
 fails the test; one above it, which the running kernel is probed for, is a note, since the filter
 traps it and the handler answers ENOSYS until it is classified here and the ceiling moves (7.4.2).
 The launcher's trap list (src/filter.c) must equal TRAP, and its refusals must cover DENIED; the
-numbers in src/sys.h's block for this machine must be the kernel's.
+numbers in src/sys.h's block for this machine must be the kernel's. The filter's trap set and the
+syscall page must be the ones its FILTER_VERSION shipped with (SHIPPED), and every path and
+descriptor syscall the filter traps must have a case in the syscall probe (test/oracle_syscalls.py).
 
     test/syscalls.py [unistd.h]     default: the host's table for this machine
 """
 
+import ast
 import errno
+import hashlib
 import os
 import platform
 import re
@@ -444,6 +448,13 @@ EXTRA = {
 HIGHEST_KNOWN = 471
 
 
+# The digest of the trap set and the syscall page each filter version shipped with (7.4.2), as
+# trap_digest computes it. A launcher reuses an inherited filter of its own version, so a set or a
+# page changed under the same version would send a nested launcher's new trap to the host
+# untranslated: a change moves FILTER_VERSION (src/common.h) and records the new digest here.
+SHIPPED = {6: "98bd90f1e7eeffbb"}
+
+
 HEADERS = (
     f"usr/include/{MACHINE}-linux-gnu/asm/unistd_64.h",
     "usr/include/asm/unistd_64.h",
@@ -558,8 +569,8 @@ def kernel_probe(lo: int, hi: int) -> list[int]:
     return present
 
 
-def launcher_lists() -> tuple[set[str], set[str], dict[str, int]]:
-    """The trap list and the refusal lists of src/filter.c, by name."""
+def launcher_lists() -> tuple[set[str], set[str], set[str], dict[str, int]]:
+    """The trap list, the refusal lists and the descriptor syscalls of src/filter.c, by name."""
     with open(os.path.join(REPO, "src", "filter.c")) as f:
         src = f.read()
     with open(os.path.join(REPO, "src", "sys.h")) as f:
@@ -581,13 +592,82 @@ def launcher_lists() -> tuple[set[str], set[str], dict[str, int]]:
 
     trap = block("path_syscalls")
     denied = block("enosys_syscalls") | block("eperm_syscalls")
+    fd = block("fd_syscalls")
     m = re.search(r"#define HIGHEST_KNOWN_SYSCALL (\d+)", src)
     if m and int(m.group(1)) != HIGHEST_KNOWN:
         print(
             f"FAIL src/filter.c's HIGHEST_KNOWN_SYSCALL is {m.group(1)}, "
             f"this table's is {HIGHEST_KNOWN:d}"
         )
-    return trap, denied, numbers
+    return trap, denied, fd, numbers
+
+
+def trap_digest() -> tuple[int, str]:
+    """The filter's version and the digest of what its version stands for (SHIPPED).
+
+    That is every syscall the filter singles out, by its table in src/filter.c and by name, with
+    the argument an argument trap reads; the ioctl requests it traps; and the syscall page's
+    address in src/sys.h.
+    """
+    with open(os.path.join(REPO, "src", "filter.c")) as f:
+        src = f.read()
+    with open(os.path.join(REPO, "src", "common.h")) as f:
+        m = re.search(r"#define FILTER_VERSION (\d+)", f.read())
+        assert m, "no FILTER_VERSION in src/common.h"
+        version = int(m.group(1))
+    with open(os.path.join(REPO, "src", "sys.h")) as f:
+        page = re.search(r"#define SC_PAGE (0x[0-9a-f]+)UL", f.read())
+        assert page, "no SC_PAGE in src/sys.h"
+    lines = [f"page {page.group(1)}"]
+    lines += [f"ioctl {r}" for r in set(re.findall(r"\(uint32_t\)(FS_IOC_\w+)", src))]
+    for table in (
+        "path_syscalls",
+        "fd_syscalls",
+        "mask_syscalls",
+        "enosys_syscalls",
+        "eperm_syscalls",
+        "arg_traps",
+    ):
+        body = re.search(table + r"\[\](?:\[2\])? = \{(.*?)\};", src, re.DOTALL)
+        assert body, f"no {table} in src/filter.c"
+        text = re.sub(r"^#.*$", "", body.group(1), flags=re.MULTILINE)  # every build's entries
+        for nr, arg, _number, name in re.findall(
+            r"NR_(\w+)(?:, (\d+)\})?|(\d+) /\* (\w+) \*/", text
+        ):
+            lines.append(f"{table} {nr or name}" + (f" {arg}" if arg else ""))
+    blob = "".join(x + "\n" for x in sorted(lines)).encode()
+    return version, hashlib.blake2b(blob, digest_size=8).hexdigest()
+
+
+def probed() -> set[str]:
+    """The syscalls test/oracle_syscalls.py makes cases of.
+
+    Each is the first argument of a call of its add(), a name or the variable of a for loop over
+    names.
+    """
+    with open(os.path.join(HERE, "oracle_syscalls.py"), "rb") as f:
+        module = ast.parse(f.read())
+    loops: dict[str, set[str]] = {}
+    for node in ast.walk(module):
+        if (
+            isinstance(node, ast.For)
+            and isinstance(node.target, ast.Name)
+            and isinstance(node.iter, ast.Tuple | ast.List)
+        ):
+            loops.setdefault(node.target.id, set()).update(
+                e.value
+                for e in node.iter.elts
+                if isinstance(e, ast.Constant) and isinstance(e.value, str)
+            )
+    names: set[str] = set()
+    for node in ast.walk(module):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "add":
+            first = node.args[0] if node.args else None
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                names.add(first.value)
+            elif isinstance(first, ast.Name):
+                names |= loops.get(first.id, set())
+    return names
 
 
 def main() -> int:
@@ -633,7 +713,7 @@ def main() -> int:
         if nr <= HIGHEST_KNOWN and name not in known:
             print(f"FAIL unclassified syscall {nr:d} {name} below the filter's ceiling")
             fails += 1
-    trap, denied, numbers = launcher_lists()
+    trap, denied, fd, numbers = launcher_lists()
     trap_fixed = {"newfstatat" if n == "fstatat" else n for n in trap}
     for n in sorted(TRAP - trap_fixed):
         print(f"FAIL path syscall {n} is not in the launcher's trap list")
@@ -648,6 +728,17 @@ def main() -> int:
         if n in table and n in numbers and numbers[n] != table[n]:
             print(f"FAIL {n}: launcher number {numbers[n]:d}, kernel {table[n]:d}")
             fails += 1
+    version, digest = trap_digest()
+    if SHIPPED.get(version) != digest:
+        print(
+            f"FAIL the trap set or the syscall page is not the one filter version {version:d} "
+            f"shipped with ({SHIPPED.get(version, 'none recorded')}; the sources give {digest}): "
+            "move FILTER_VERSION and record the new digest in SHIPPED (7.4.2)"
+        )
+        fails += 1
+    for n in sorted((TRAP | fd) - probed()):
+        print(f"FAIL the filter traps {n}, which has no case in the syscall probe")
+        fails += 1
     names = set(table)
     print(
         f"{len(table):d} syscalls in the table: {len(TRAP & names):d} trapped, "
