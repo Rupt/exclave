@@ -4,7 +4,8 @@
  * Mode "pathless DIR": for stdin (a pipe the caller gives), a pipe, a memfd, an inotify descriptor and a file unlinked
  * from DIR, stat, statx and faccessat2 through /proc/self/fd/N, and stat of /dev/stdin, must find the object fstat
  * finds; an O_TMPFILE file in DIR is linked into DIR through its magic link. Each line names a case and ends "ok", or
- * "n/a" where this kernel lacks the call, or says what differed.
+ * "errno N" where a call failed, which the driver accepts only where the kernel natively lacks the call, or says what
+ * differed.
  *
  * Mode "deleted-name DIR": DIR, a directory of the tree named "... (deleted)", is a path, so a descriptor on it is
  * the exclave's and creating under it answers EROFS. One line per call: its errno, or "created". */
@@ -31,11 +32,11 @@ static void check(const char *name, int fd)
 {
     struct stat want, got;
     char link[64];
-    snprintf(link, sizeof link, "/proc/self/fd/%d", fd);
     if (fd < 0) {
-        printf("%s n/a\n", name);
+        printf("%s errno %d\n", name, errno);
         return;
     }
+    snprintf(link, sizeof link, "/proc/self/fd/%d", fd);
     fstat(fd, &want);
     if (stat(link, &got) < 0) printf("%s stat errno %d\n", name, errno);
     else if (got.st_dev != want.st_dev || got.st_ino != want.st_ino)
@@ -47,13 +48,12 @@ static void check(const char *name, int fd)
     long r = syscall(SYS_statx, AT_FDCWD, link, 0, 0x100 /* STATX_INO */, sx);
     unsigned long long ino;
     memcpy(&ino, sx + 32, sizeof ino);
-    if (r < 0 && errno == ENOSYS) printf("%s statx n/a\n", name);
-    else if (r < 0) printf("%s statx errno %d\n", name, errno);
+    if (r < 0) printf("%s statx errno %d\n", name, errno);
     else printf("%s statx %s\n", name, ino == (unsigned long long)want.st_ino ? "ok" : "differs");
 
     r = syscall(SYS_faccessat2, AT_FDCWD, link, F_OK, 0);
-    if (r < 0 && errno == ENOSYS) printf("%s faccessat2 n/a\n", name);
-    else printf("%s faccessat2 %s\n", name, r == 0 ? "ok" : strerror(errno));
+    if (r < 0) printf("%s faccessat2 errno %d\n", name, errno);
+    else printf("%s faccessat2 ok\n", name);
 }
 
 static int pathless(const char *dir)
@@ -77,7 +77,7 @@ static int pathless(const char *dir)
     check("unlinked", u);
 
     int t = open(dir, O_TMPFILE | O_WRONLY, 0644);
-    if (t < 0) printf("tmpfile n/a\n");
+    if (t < 0) printf("tmpfile errno %d\n", errno);
     else {
         char link[64];
         snprintf(link, sizeof link, "/proc/self/fd/%d", t);

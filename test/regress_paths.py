@@ -454,12 +454,13 @@ def magic_links_to_pathless(ctx: Ctx) -> None:
 
     stat, statx and faccessat2 through /proc/self/fd/N find the pipe, memfd, inotify descriptor or
     unlinked file fstat finds, /dev/stdin is the caller's pipe, and an O_TMPFILE file is linked by
-    its magic link. A tree directory named "... (deleted)" is a path all the same: creating under a
-    descriptor on it is EROFS.
+    its magic link; a call fails only where the kernel itself, asked here, fails it. A tree
+    directory named "... (deleted)" is a path all the same: creating under a descriptor on it is
+    EROFS.
     """
     prog = os.path.join(ctx.progs, "magic_links")
     rc, out, err = inside(ctx, prog, ["pathless", ctx.work], inp=b"piped\n")
-    bad = kernel_answers.magic_links_wrong(out)
+    bad = kernel_answers.magic_links_wrong(out, kernel_answers.magic_links_missing(ctx.work))
     expect(rc == 0 and out and not bad, f"magic links: rc={rc} {bad!r} {err!r}")
     ex2 = os.path.join(ctx.work, "deleted-name.exclave")
     copy_exclave(ctx.exclave, ex2)

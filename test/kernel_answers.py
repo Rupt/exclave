@@ -6,6 +6,11 @@ expectation written by hand is checked against the kernel at every run (DESIGN.m
 and 4).
 """
 
+import errno
+import os
+import platform
+lazy import ctypes
+
 # creat_slash HOSTDIR: one line per case, the case and the errno text
 CREAT_SLASH = (
     "creat through a link to a missing name with a slash: Is a directory",
@@ -67,6 +72,43 @@ def creat_slash_wrong(out: str) -> list[str]:
     )
 
 
-def magic_links_wrong(out: str) -> list[str]:
-    """The lines of magic_links pathless that do not find the object: each ends ok, or n/a."""
-    return [line for line in out.splitlines() if not line.endswith((" ok", " n/a"))]
+# magic_links pathless: the descriptors it checks, and the syscalls it makes that a kernel may lack
+MAGIC_LINKS_FDS = ("stdin", "pipe", "memfd", "inotify", "unlinked")
+SYS_STATX = {"x86_64": 332, "aarch64": 291}
+SYS_FACCESSAT2 = 439
+AT_FDCWD = -100
+
+
+def magic_links_missing(hostdir: str) -> set[str]:
+    """The failure lines of magic_links pathless DIR that this kernel answers natively.
+
+    Each call the program makes that can be missing is asked of the kernel here, outside any
+    exclave: a memfd, an O_TMPFILE file in hostdir, statx and faccessat2. A line for a call it
+    answers with an error is the kernel's own answer, and the only failure the program may print.
+    """
+    lines = set()
+    try:
+        os.close(os.memfd_create("magic"))
+    except OSError as e:
+        lines.add(f"memfd errno {e.errno}")
+    try:
+        os.close(os.open(hostdir, os.O_TMPFILE | os.O_WRONLY, 0o644))
+    except OSError as e:
+        lines.add(f"tmpfile errno {e.errno}")
+    libc = ctypes.CDLL(None, use_errno=True)
+    buf = ctypes.create_string_buffer(256)
+    for call, args in (
+        ("statx", (SYS_STATX[platform.machine()], AT_FDCWD, b"/proc/self/fd/0", 0, 0x100, buf)),
+        ("faccessat2", (SYS_FACCESSAT2, AT_FDCWD, b"/proc/self/fd/0", os.F_OK, 0)),
+    ):
+        if libc.syscall(*args) < 0 and ctypes.get_errno() == errno.ENOSYS:
+            lines |= {f"{fd} {call} errno {errno.ENOSYS}" for fd in MAGIC_LINKS_FDS}
+    return lines
+
+
+def magic_links_wrong(out: str, missing: set[str]) -> list[str]:
+    """The lines of magic_links pathless that do not find the object.
+
+    Each line ends ok, or is the failure of a call the kernel lacks natively (magic_links_missing).
+    """
+    return [line for line in out.splitlines() if not line.endswith(" ok") and line not in missing]

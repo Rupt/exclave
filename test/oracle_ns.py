@@ -278,8 +278,11 @@ def worlds(given: str, work: str) -> tuple[str, str]:
 PROGRAMS = ("ro_matrix", "openat2", "creat_slash", "unix_socket", "magic_links")
 
 
-def judge(name: str, rc: int, out: str) -> list[str]:
-    """What the kernel answered that the suite's expectation for program name does not say."""
+def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
+    """What the kernel answered that the suite's expectation for program name does not say.
+
+    hostdir is the writable host directory the program was given.
+    """
     if name == "ro_matrix":
         # under bwrap there is no wrapper, so the program's redirect line is not meaningful there;
         # it exits 1 on any FAIL line, the wrapper's included
@@ -289,11 +292,13 @@ def judge(name: str, rc: int, out: str) -> list[str]:
         # 3: the kernel has no openat2, which the suite skips on too
         bad = [x for x in out.splitlines() if x.startswith("FAIL")]
         return bad or ([] if rc in (0, 3) else [out])
-    wrong = {
-        "creat_slash": kernel_answers.creat_slash_wrong,
-        "unix_socket": kernel_answers.unix_socket_wrong,
-        "magic_links": kernel_answers.magic_links_wrong,
-    }[name](out)
+    if name == "magic_links":
+        wrong = kernel_answers.magic_links_wrong(out, kernel_answers.magic_links_missing(hostdir))
+    else:
+        wrong = {
+            "creat_slash": kernel_answers.creat_slash_wrong,
+            "unix_socket": kernel_answers.unix_socket_wrong,
+        }[name](out)
     return wrong or ([] if rc == 0 and out else [out])
 
 
@@ -346,7 +351,7 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
             rc, out, err = run_bwrap(root, work, cmds[name], sp, timeout=TIMEOUT)
         except subprocess.TimeoutExpired:
             rc, out, err = -9, "", f"killed after {TIMEOUT} s"
-        bad = judge(name, rc, out) + ([err.strip()] if err else [])
+        bad = judge(name, rc, out, hostdir) + ([err.strip()] if err else [])
         if bad:
             fails += 1
             print(
