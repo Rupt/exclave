@@ -3,6 +3,7 @@
 Run by test/run.py, on the fixtures test/suite.py makes.
 """
 
+import errno
 import os
 import platform
 import re
@@ -166,7 +167,7 @@ def exclave_readme(ctx: Ctx) -> None:
 
 
 @test
-def unpack_and_wrap(ctx: Ctx) -> None:
+def unpack_and_wrap(ctx: Ctx) -> str | None:
     """10.1 as files: unpack, wrap, unwrap and check on package files.
 
     Unpack takes package files and nothing else, records every input by hash, reports what the set's
@@ -174,8 +175,8 @@ def unpack_and_wrap(ctx: Ctx) -> None:
     package, and adds no launcher, manifest or placeholder; wrap adds them, wraps the tree and
     records the manifest, launcher and tree hashes, each the BLAKE2b-256 of what it names, and
     relink records its launcher's; unwrap, check and a second wrap keep the hashes file; a
-    tree assembled by hand becomes an exclave by wrap alone; the tree hash refuses a directory it
-    cannot read, as it does a file.
+    tree assembled by hand becomes an exclave by wrap alone; the tree hash is 6.4's on odd names,
+    modes and link texts, and refuses a directory it cannot read, as it does a file.
     """
     d = os.path.join(ctx.work, "updebs")
     os.makedirs(d, exist_ok=True)
@@ -304,6 +305,31 @@ def unpack_and_wrap(ctx: Ctx) -> None:
         rc != 0 and "one version of a package" in e,
         f"two files of one package must be refused: {o} {e}",
     )
+    # 6.4's tree hash at its edges, against the statement of it in tree.py: an executable bit for
+    # the group alone, names with a newline and a byte that is not UTF-8, a link's text that is not
+    # UTF-8, and names whose order is the bytes', a/b after a-b and a\x01, not a directory's walk
+    odd = os.path.join(ctx.work, "odd-names.exclave")
+    os.makedirs(os.path.join(odd, ".exclave"))
+    oroot = os.path.join(odd, "tree")
+    os.makedirs(os.path.join(oroot, "a"))
+    for name, mode in (("a/b", 0o644), ("a-b", 0o654), ("a\x01", 0o644), ("new\nline", 0o601)):
+        with open(os.path.join(oroot, name), "w") as f:
+            f.write(name)
+        os.chmod(os.path.join(oroot, name), mode)
+    note = None
+    try:
+        with open(os.path.join(oroot.encode(), b"\xff"), "wb") as f:
+            f.write(b"\xff")
+    except OSError as err:  # ZFS with utf8only, the reference machine's, refuses such a name
+        if err.errno != errno.EILSEQ:
+            raise
+        note = "this filesystem takes no name that is not UTF-8: the tree hash of one is untested"
+    os.symlink(b"\xfe/x", os.path.join(oroot.encode(), b"link"))
+    rc, o, e = run([*TOOL, "hash", odd])
+    expect(
+        rc == 0 and o.strip() == tree.tree_hash(oroot),
+        f"the tree hash of odd names and modes: {o}{e}, stated {tree.tree_hash(oroot)}",
+    )
     # a hand-made tree becomes an exclave by wrap alone: no manifest, no inputs in the hashes file
     hand = os.path.join(ctx.work, "hand.exclave")
     os.makedirs(os.path.join(hand, "tree", "usr", "bin"))
@@ -364,6 +390,7 @@ def unpack_and_wrap(ctx: Ctx) -> None:
     shutil.copy2(os.path.join(out, ".exclave", "hashes"), lockcopy)
     rc, o, e = run([*TOOL, "format", "--check", lockcopy])
     expect(rc == 0, "format recognises a hashes file by its first record, not its name: " + o + e)
+    return note
 
 
 @test
