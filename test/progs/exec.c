@@ -1,5 +1,5 @@
 /* exec.c — exec fidelity: /proc/self/exe, own ELF header, fexecve of a wrapper and of an original, execvp past a
- * non-executable PATH hit, a program with its own seccomp filter, personality. Mode in argv[1]. */
+ * non-executable PATH hit, a program with its own seccomp filter, the persona an exec keeps. Mode in argv[1]. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -13,6 +13,7 @@
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
 extern char **environ;
@@ -105,10 +106,18 @@ int main(int argc, char **argv)
         perror("execl");
         return 1;
     }
-    if (!strcmp(mode, "personality")) {
-        personality(ADDR_NO_RANDOMIZE);
-        execl("/proc/self/exe", argv[0], "child", (char *)0);
-        perror("execl");
+    /* the persona an exec keeps (begin_new_exec clears only PER_CLEAR_ON_SETID, and that for setid), and where the
+     * program's own code landed, the same in every run without randomisation */
+    if (!strcmp(mode, "persona")) {
+        struct utsname u;
+        uname(&u);
+        printf("personality %#x machine %s main %p\n", personality(0xffffffff), u.machine, (void *)main);
+        return 0;
+    }
+    if (!strcmp(mode, "personality") && argc > 3) { /* personality FLAGS PROGRAM ARGS... */
+        personality(strtoul(argv[2], 0, 0));
+        execv(argv[3], argv + 3);
+        perror("execv");
         return 1;
     }
     if (!strcmp(mode, "script")) {

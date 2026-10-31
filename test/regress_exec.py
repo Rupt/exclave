@@ -6,10 +6,14 @@ Run by test/run.py, on the fixtures test/suite.py makes.
 import os
 import shlex
 import shutil
+import sys
+lazy import ctypes
 
 import tree
 from harness import expect, read_text, run, skip, test
 from suite import Ctx, inside, wrapper
+
+PER_LINUX32 = 0x8  # personality(2)
 
 
 @test
@@ -30,8 +34,41 @@ def exec_modes(ctx: Ctx) -> None:
     for mode in ("fexecve", "fexecve_opath", "fexecve_payload", "seccomp"):
         rc, out, err = inside(ctx, p, [mode])
         expect(rc == 0, f"{mode}: rc={rc} {out!r} {err!r}")
-    rc, out, err = inside(ctx, p, ["personality"])
-    expect(rc == 0 and out.startswith("child ok"), f"personality: {out!r} {err!r}")
+    # the persona an exec keeps (begin_new_exec clears only PER_CLEAR_ON_SETID, on a setid exec):
+    # ADDR_NO_RANDOMIZE on the loader path, where two runs then place the program alike, and
+    # through a wrapper; PER_LINUX32's machine as the kernel reports it natively
+    runs = [
+        inside(ctx, p, ["personality", "0x40000", "/proc/self/exe", "persona"]) for _ in range(2)
+    ]
+    expect(
+        runs[0][1].startswith("personality 0x40000 machine ") and runs[0][1] == runs[1][1],
+        f"ADDR_NO_RANDOMIZE across an exec, twice: {runs!r}",
+    )
+    rc, out, err = inside(
+        ctx, p, ["personality", "0x40000", ctx.vbin("sh"), "-c", "cat /proc/self/personality"]
+    )
+    expect(out == "00040000\n", f"ADDR_NO_RANDOMIZE across an exec of a wrapper: {out!r} {err!r}")
+
+    def linux32() -> None:
+        ctypes.CDLL(None).personality(PER_LINUX32)
+
+    _rc, native, err = run(
+        [sys.executable, "-c", "import os; print(os.uname().machine)"], preexec=linux32
+    )
+    expect(native.strip(), f"no machine natively under PER_LINUX32: {err!r}")
+    rc, out, err = inside(ctx, p, ["personality", str(PER_LINUX32), "/proc/self/exe", "persona"])
+    expect(
+        out.startswith(f"personality {PER_LINUX32:#x} machine {native.strip()} main "),
+        f"PER_LINUX32 across an exec: {out!r} {err!r}, natively {native.strip()}",
+    )
+    rc, out, err = inside(
+        ctx,
+        p,
+        ["personality", str(PER_LINUX32), ctx.vbin("sh"), "-c", "cat /proc/self/personality"],
+    )
+    expect(
+        out == f"{PER_LINUX32:08x}\n", f"PER_LINUX32 across an exec of a wrapper: {out!r} {err!r}"
+    )
     rc, out, err = inside(ctx, p, ["nofollow"])
     expect(rc == 0, f"execveat AT_SYMLINK_NOFOLLOW on a symlink: {out!r} {err!r}")
     log = os.path.join(ctx.work, "closefds.log")
