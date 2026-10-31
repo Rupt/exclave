@@ -26,6 +26,9 @@
 #define MAX_DATA_RECORDS 32
 #define MAX_TOP_LEVEL 256
 #define N_IDENTITY 8
+/* a manifest record's most fields, and the most bytes a field holds, a string's decoded (6.2) */
+#define MANIFEST_FIELDS 8
+#define MANIFEST_FIELD_MAX (PATH_MAX - 1)
 
 /* ---------- open / at flags ---------- */
 #define O_ACCMODE 03

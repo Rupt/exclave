@@ -117,6 +117,49 @@ int main(int argc, char **argv)
     BAD("empty", "", "end with LF");
     BAD("only blank", "\n", "empty manifest");
     BAD("bare quote field", "exclave 1\nown \"/a\" x\n", "field count");
+    BAD("nine fields", "exclave 1\nown \"/a\" \"/b\" \"/c\" \"/d\" \"/e\" \"/f\" \"/g\" \"/h\" \"/i\"\n",
+        "too many fields");
+    BAD("31-character key", "exclave 1\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \"/x\"\n", "unknown key");
+    BAD("32-character key", "exclave 1\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \"/x\"\n", "key too long");
+    BAD("second exclave", "exclave 1\nexclave 1\n", "exclave must be the first record");
+    BAD("exclave as a string", "exclave \"1\"\n", "field type");
+    BAD("truncated \\x", "exclave 1\nown \"/\\x\n", "truncated \\x escape");
+    /* a field's limit, a string's decoded bytes and a token's (6.2) */
+    {
+        static char text[2 * PATH_MAX + 64];
+        char *v = text + snprintf(text, 64, "exclave 1\nown \"/");
+        memset(v, 'a', MANIFEST_FIELD_MAX - 1);
+        memcpy(v + MANIFEST_FIELD_MAX - 1, "\"\n", 3);
+        OK("the longest string", text);
+        v = text + snprintf(text, 64, "exclave 1\nown \"/");
+        memset(v, 'a', MANIFEST_FIELD_MAX - 2);
+        memcpy(v + MANIFEST_FIELD_MAX - 2, "\\x61\\x62\"\n", 11);
+        BAD("a string a byte too long", text, "line 2 col 4104: string too long");
+        v = text + snprintf(text, 64, "exclave 1\ncpu ");
+        memset(v, '1', MANIFEST_FIELD_MAX + 1);
+        memcpy(v + MANIFEST_FIELD_MAX + 1, "\n", 2);
+        BAD("a token a byte too long", text, "line 2 col 4100: token too long");
+    }
+    /* the largest manifest the limits allow, and a record of the most fields, each the longest, refused after it: the
+     * arena holds them all, so the refusal names its line rather than the launcher dying of a full arena (exit 99) */
+    {
+        size_t cap =
+            (size_t)(2 + MAX_OWN_RECORDS + MAX_HOST_RECORDS + MAX_DATA_RECORDS + MANIFEST_FIELDS) * (PATH_MAX + 16);
+        char *text = malloc(cap), *t = text, *field = malloc(PATH_MAX);
+        memset(field, 'a', MANIFEST_FIELD_MAX);
+        field[0] = '/';
+        field[MANIFEST_FIELD_MAX] = 0;
+        t += sprintf(t, "exclave 1\ncpu \"%s\"\n", field);
+        for (int i = 0; i < MAX_DATA_RECORDS; i++) t += sprintf(t, "data \"%s\"\n", field);
+        for (int i = 0; i < MAX_HOST_RECORDS; i++) t += sprintf(t, "host \"%s\"\n", field);
+        for (int i = 0; i < MAX_OWN_RECORDS; i++) t += sprintf(t, "own \"%s\"\n", field);
+        t += sprintf(t, "own");
+        for (int i = 0; i < MANIFEST_FIELDS; i++) t += sprintf(t, " \"%s\"", field);
+        sprintf(t, "\n");
+        BAD("the largest manifest", text, "line 323 col 1: wrong field count");
+        free(field);
+        free(text);
+    }
     /* decoded values, and the CPU level default */
     {
         struct exclave c;

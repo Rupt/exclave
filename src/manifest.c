@@ -76,10 +76,11 @@ struct field {
     size_t n;
 };
 
-/* parse one string literal starting at the opening quote; the decoded string goes to f, in the arena */
+/* parse one string literal starting at the opening quote; the decoded string goes to f, in the arena. Each character,
+ * raw or escaped, is checked before its bytes are counted against the field's limit, as the command checks them. */
 static int parse_string(struct cur *c, char *err, size_t errn, struct field *f)
 {
-    static char dec[PATH_MAX * 2];
+    static char dec[MANIFEST_FIELD_MAX];
     size_t dn = 0;
     c->p++;
     c->col++;                                          /* opening quote */
@@ -92,47 +93,35 @@ static int parse_string(struct cur *c, char *err, size_t errn, struct field *f)
             break;
         }
         if (b == '\n') return fail(err, errn, c, "unterminated string");
-        if (dn + 4 >= sizeof dec) return fail(err, errn, c, "string too long");
         if (b == '\\') {
             if (c->p + 1 >= c->end) return fail(err, errn, c, "unterminated escape");
-            unsigned char e = c->p[1];
-            if (e == '\\' || e == '"') {
-                dec[dn++] = (char)e;
-                c->p += 2;
-                c->col += 2;
-                continue;
-            }
-            if (e == 'n') {
-                dec[dn++] = '\n';
-                c->p += 2;
-                c->col += 2;
-                continue;
-            }
-            if (e == 't') {
-                dec[dn++] = '\t';
-                c->p += 2;
-                c->col += 2;
-                continue;
-            }
-            if (e == 'x') {
+            unsigned char e = c->p[1], one;
+            int step = 2;
+            if (e == '\\' || e == '"') one = e;
+            else if (e == 'n') one = '\n';
+            else if (e == 't') one = '\t';
+            else if (e == 'x') {
                 if (c->p + 3 >= c->end) return fail(err, errn, c, "truncated \\x escape");
                 int h = hexval(c->p[2]), l = hexval(c->p[3]);
                 if (h < 0 || l < 0) return fail(err, errn, c, "\\x needs two lowercase hex digits");
-                dec[dn++] = (char)(h * 16 + l);
-                c->p += 4;
-                c->col += 4;
-                continue;
-            }
-            return fail(err, errn, c, "unknown escape");
+                one = (unsigned char)(h * 16 + l);
+                step = 4;
+            } else return fail(err, errn, c, "unknown escape");
+            if (dn + 1 > sizeof dec) return fail(err, errn, c, "string too long");
+            dec[dn++] = (char)one;
+            c->p += step;
+            c->col += step;
+            continue;
         }
         int l = utf8_len(c->p, (size_t)(c->end - c->p));
         if (!l) return fail(err, errn, c, "malformed UTF-8 in string");
         unsigned cp = cp_of(c->p, l);
         if (cp < 0x20 || (cp >= 0x7F && cp <= 0x9F)) return fail(err, errn, c, "control character must be escaped");
+        if (dn + (size_t)l > sizeof dec) return fail(err, errn, c, "string too long");
         xmemcpy(dec + dn, c->p, (size_t)l);
         dn += (size_t)l;
         c->p += l;
-        c->col += 1;
+        c->col += 1;                                       /* a column is a character (6.2) */
     }
     f->kind = F_STR;
     f->s = arena_str(dec, dn);
@@ -144,6 +133,7 @@ static int parse_token(struct cur *c, char *err, size_t errn, struct field *f)
 {
     const unsigned char *s = c->p;
     while (c->p < c->end && is_token_char(*c->p)) {
+        if (c->p - s == MANIFEST_FIELD_MAX) return fail(err, errn, c, "token too long");
         c->p++;
         c->col++;
     }
@@ -228,7 +218,7 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
         if (kl >= sizeof key) return fail(err, errn, K, "key too long");
         xmemcpy(key, ks, kl);
         key[kl] = 0;
-        struct field f[8];
+        struct field f[MANIFEST_FIELDS];
         int nf = 0;
         for (;;) {
             if (K->p >= K->end) return fail(err, errn, K, "missing LF");
@@ -243,7 +233,7 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
             K->col++;
             if (K->p >= K->end || *K->p == '\n') return fail(err, errn, K, "trailing space");
             if (*K->p == ' ') return fail(err, errn, K, "multiple spaces");
-            if (nf == 8) return fail(err, errn, K, "too many fields");
+            if (nf == MANIFEST_FIELDS) return fail(err, errn, K, "too many fields");
             r = (*K->p == '"') ? parse_string(K, err, errn, &f[nf]) : parse_token(K, err, errn, &f[nf]);
             if (r) return r;
             nf++;

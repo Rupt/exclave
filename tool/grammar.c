@@ -4,6 +4,7 @@
  * double-quoted string. grammar_parse accepts exactly one spelling of each file and grammar_dump produces it, so a
  * file that grammar_parse accepts and grammar_dump reproduces byte for byte is canonical. The launcher's own parser
  * (src/manifest.c) reads the manifest into its tables; test/grammar_test.py holds the two to the same answers. */
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +39,9 @@ static const struct {
     const char *key;
     int most;
 } LIMITS[] = {{"own", 256}, {"host", 32}, {"data", 32}};
+/* the most bytes a field holds, a string's decoded: a path the launcher's buffers hold, which a longer one would not
+ * fit in the kernel's either (6.2) */
+#define FIELD_MAX (PATH_MAX - 1)
 
 const char *kind_name(enum kind kind) { return kind == KIND_HASHES ? "hashes" : "exclave"; }
 
@@ -95,6 +99,15 @@ static int failed(char err[GRAMMAR_ERR], int line, size_t col, const char *why)
     return -1;
 }
 
+/* the column of raw[i], counted in characters from 1 as the launcher counts it (6.2); the line is well-formed UTF-8,
+ * so every byte that is not a continuation byte starts a character */
+static size_t column(const unsigned char *raw, size_t i)
+{
+    size_t c = 1;
+    for (size_t j = 0; j < i; j++) c += (raw[j] & 0xC0) != 0x80;
+    return c;
+}
+
 static int is_token_char(unsigned char c)
 {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.' ||
@@ -107,34 +120,37 @@ static int parse_string(const unsigned char *raw, size_t len, size_t *col, int l
     struct buf v = {0};
     size_t c = *col + 1;
     for (;;) {
-        if (c >= len) return free(v.p), failed(err, line, c + 1, "unterminated string");
+        if (c >= len) return free(v.p), failed(err, line, column(raw, c), "unterminated string");
         unsigned char ch = raw[c];
         if (ch == '"') break;
         if (ch == '\\') {
-            unsigned char e = c + 1 < len ? raw[c + 1] : 0;
+            unsigned char e = c + 1 < len ? raw[c + 1] : 0, b;
+            size_t step = 2;
             if (e == '\\' || e == '"') {
-                buf_add(&v, &e, 1);
-                c += 2;
+                b = e;
             } else if (e == 'n' || e == 't') {
-                buf_add(&v, e == 'n' ? "\n" : "\t", 1);
-                c += 2;
+                b = e == 'n' ? '\n' : '\t';
             } else if (e == 'x') {
                 static const char hex[] = "0123456789abcdef";
                 const char *h1 = c + 2 < len && raw[c + 2] ? strchr(hex, raw[c + 2]) : NULL;
                 const char *h2 = c + 3 < len && raw[c + 3] ? strchr(hex, raw[c + 3]) : NULL;
-                if (!h1 || !h2) return free(v.p), failed(err, line, c + 1, "\\x needs two lowercase hex digits");
-                unsigned char b = (unsigned char)((h1 - hex) * 16 + (h2 - hex));
-                buf_add(&v, &b, 1);
-                c += 4;
+                if (!h1 || !h2)
+                    return free(v.p), failed(err, line, column(raw, c), "\\x needs two lowercase hex digits");
+                b = (unsigned char)((h1 - hex) * 16 + (h2 - hex));
+                step = 4;
             } else {
-                return free(v.p), failed(err, line, c + 1, "unknown escape");
+                return free(v.p), failed(err, line, column(raw, c), "unknown escape");
             }
+            if (v.n + 1 > FIELD_MAX) return free(v.p), failed(err, line, column(raw, c), "string too long");
+            buf_add(&v, &b, 1);
+            c += step;
             continue;
         }
         size_t k = utf8_len(raw, c, len);
         unsigned o = code_point(raw + c, k);
         if (o < 0x20 || (o >= 0x7F && o <= 0x9F))
-            return free(v.p), failed(err, line, c + 1, "control character must be escaped");
+            return free(v.p), failed(err, line, column(raw, c), "control character must be escaped");
+        if (v.n + k > FIELD_MAX) return free(v.p), failed(err, line, column(raw, c), "string too long");
         buf_add(&v, raw + c, k);
         c += k;
     }
@@ -249,19 +265,24 @@ int grammar_parse(const char *text, size_t n, enum kind kind, struct records *ou
         while (col < len) {
             if (raw[col] != ' ')
                 return records_free(out),
-                       failed(err, line, col + 1,
+                       failed(err, line, column(raw, col),
                               raw[col] == '\t' ? "tab outside a string" : "expected a single space between fields");
             col++;
-            if (col >= len) return records_free(out), failed(err, line, col + 1, "trailing space");
-            if (raw[col] == ' ') return records_free(out), failed(err, line, col + 1, "multiple spaces");
+            if (col >= len) return records_free(out), failed(err, line, column(raw, col), "trailing space");
+            if (raw[col] == ' ') return records_free(out), failed(err, line, column(raw, col), "multiple spaces");
             r->f = xrealloc(r->f, (size_t)(r->nf + 1) * sizeof *r->f);
             struct field *f = &r->f[r->nf];
             if (raw[col] == '"') {
                 if (parse_string(raw, len, &col, line, f, err)) return records_free(out), -1;
             } else {
                 size_t start = col;
-                while (col < len && is_token_char(raw[col])) col++;
-                if (col == start) return records_free(out), failed(err, line, col + 1, "expected a string or token");
+                while (col < len && is_token_char(raw[col])) {
+                    if (col - start == FIELD_MAX)
+                        return records_free(out), failed(err, line, column(raw, col), "token too long");
+                    col++;
+                }
+                if (col == start)
+                    return records_free(out), failed(err, line, column(raw, col), "expected a string or token");
                 f->type = 't';
                 f->v = xrealloc(NULL, col - start + 1);
                 memcpy(f->v, raw + start, col - start);
@@ -271,6 +292,18 @@ int grammar_parse(const char *text, size_t n, enum kind kind, struct records *ou
             r->nf++;
         }
         if (check_record(r, kind, err)) return records_free(out), -1;
+        /* each record's errors in the file's order, as the launcher meets them, so the two name the same line */
+        if (out->n == 1 && (strcmp(r->key, kind_name(kind)) != 0 || r->nf < 1 || strcmp(r->f[0].v, "1") != 0)) {
+            char why[64];
+            snprintf(why, sizeof why, "first record must be %s 1", kind_name(kind));
+            return records_free(out), failed(err, line, 1, why);
+        }
+        for (size_t j = 0; SCHEMA[schema_of(r->key, kind)].once && j + 1 < out->n; j++)
+            if (!strcmp(out->r[j].key, r->key)) {
+                char why[64];
+                snprintf(why, sizeof why, "duplicate %s", r->key);
+                return records_free(out), failed(err, line, 1, why);
+            }
         /* refused here where the launcher's tables would refuse it (8.1) */
         for (size_t l = 0; kind == KIND_MANIFEST && l < sizeof LIMITS / sizeof *LIMITS; l++)
             if (!strcmp(r->key, LIMITS[l].key) && ++counts[l] > LIMITS[l].most) {
@@ -281,26 +314,6 @@ int grammar_parse(const char *text, size_t n, enum kind kind, struct records *ou
     }
     if (comments.n) return free(comments.p), records_free(out), failed(err, line, 1, "comment after the last record");
     if (!out->n) return failed(err, line, 1, "empty file");
-    const struct record *first = &out->r[0];
-    if (strcmp(first->key, kind_name(kind)) != 0 || first->nf < 1 || first->f[0].type != 't' ||
-        strcmp(first->f[0].v, "1") != 0) {
-        char why[64];
-        snprintf(why, sizeof why, "first record must be %s 1", kind_name(kind));
-        int at = first->line;
-        records_free(out);
-        return failed(err, at, 1, why);
-    }
-    for (size_t i = 0; i < out->n; i++) {
-        if (!SCHEMA[schema_of(out->r[i].key, kind)].once) continue;
-        for (size_t j = 0; j < i; j++)
-            if (!strcmp(out->r[j].key, out->r[i].key)) {
-                char why[64];
-                int at = out->r[i].line;
-                snprintf(why, sizeof why, "duplicate %s", out->r[i].key);
-                records_free(out);
-                return failed(err, at, 1, why);
-            }
-    }
     return 0;
 }
 

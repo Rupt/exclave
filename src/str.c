@@ -60,8 +60,18 @@ int starts_dir(const char *s, const char *pfx)
     return xstrncmp(s, pfx, l) == 0 && (s[l] == '/' || s[l] == 0);
 }
 
-/* arena: the manifest's strings, the ownership and host tables, the environment, the entry's buffers; never freed */
-static char arena[512 * 1024];
+/* arena: the manifest's strings, the ownership and host tables, the entry's buffers; never freed. It holds the most
+ * the limits allow (common.h), so that "arena full" is a broken invariant and never an input's doing: every field of
+ * the records a manifest keeps, the exclave and cpu records with them, and of the record that fails (6.2); a name for
+ * each top-level entry of the tree and a real path and a link for each host record and identity file (vis.c); the
+ * border's four fixed variables, the positional entry's three buffers, and the #! line, script and interpreter of each
+ * of the six levels of an interpreter chain (launcher.c). Each block is rounded up to 16 bytes. An array as long as
+ * the environment or the arguments is mapped instead, since nothing bounds it here. */
+#define ARENA_SIZE                                                                                                     \
+    ((2 + MAX_OWN_RECORDS + MAX_HOST_RECORDS + MAX_DATA_RECORDS + MANIFEST_FIELDS) * (MANIFEST_FIELD_MAX + 17) +       \
+     MAX_TOP_LEVEL * (NAME_MAX + 18) + (MAX_HOST_RECORDS + N_IDENTITY) * 2 * (PATH_MAX + 16) + 4 * 64 +                \
+     3 * (PATH_MAX + 32) + 6 * (BINPRM_BUF_SIZE + 17 + 2 * (PATH_MAX + 16)))
+static char arena[ARENA_SIZE];
 static size_t arena_used;
 void *arena_alloc(size_t n)
 {

@@ -156,7 +156,7 @@ What is built and tested:
   exclave it runs is made on x86-64 (10.1).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The command as one file**: `build/exclave`, 1 018 KB, statically
+- **The command as one file**: `build/exclave`, 1 014 KB, statically
   linked, carrying its launcher, wraps, checks and prunes an exclave
   with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
@@ -492,10 +492,17 @@ wrong field count, a wrong field type, a duplicate of a key that may
 appear once, a path that is not absolute, contains NUL, ends in a
 slash other than `/` itself or has an empty, `.` or `..` component,
 more than 256 `own` records, more than 32 `host` records or more than
-32 `data` records, which are the sizes of the launcher's tables (8.1).
-A path has one spelling because the visibility rule matches a path by
-it and would silently match nothing else (13 item 34). Any error names
-the line and column; nothing is guessed.
+32 `data` records, which are the sizes of the launcher's tables (8.1),
+and a field of more than 4095 bytes, a string's counted as it decodes:
+a path that long is `ENAMETOOLONG` to the kernel anyway, and the bound
+lets the launcher hold the largest manifest the limits allow. A path
+has one spelling because the visibility rule matches a path by it and
+would silently match nothing else (13 item 34). Any error names the
+line and the column, counting characters from 1, so that a column is
+the same whatever the bytes before it; a field too long is named by
+the character that takes it past the bound. Records are checked in the
+file's order, each as it is read, so the launcher and the tool name the
+same place for every error; nothing is guessed.
 
 Canonical form, produced by `exclave format`, required by `exclave
 format --check`, and enforced by `exclave wrap` before it wraps an
@@ -2328,7 +2335,7 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, 1 018 KB and 860 KB, with nothing beside it to run: no
+the cross compiler, 1 014 KB and 795 KB, with nothing beside it to run: no
 interpreter, no library, no file of the checkout. It carries its
 architecture's launcher and the text of every exclave's `README` as data
 (`tool/blobs.S`), so `wrap` and `relink` install the launcher it

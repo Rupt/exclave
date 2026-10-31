@@ -8,7 +8,8 @@ escaped is rewritten to that canonical form (decode, then encode, is the identit
 form is quote below, the rule of 6.2 written out here. And the two implementations of the grammar,
 the command's and the launcher's C parser (built by scripts/gate's unit step, run with the files as
 arguments), accept and reject the same inputs: manifests and their malformed variants (MUTATIONS);
-and both name the line of an error on a known line (POSITIONS). The launcher's parser decodes each
+and both name the same line and column of an error, which on a known line (POSITIONS) is the
+one expected. The launcher's parser decodes each
 value of the properties to the bytes it was made from, in canonical form and with every byte
 escaped. Each parser reads every file of a batch in one run.
 """
@@ -16,6 +17,7 @@ escaped. Each parser reads every file of a batch in one run.
 import argparse
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -192,27 +194,46 @@ def near_manifest(rng: random.Random) -> bytes:
     return text
 
 
+def where(msg: str) -> str:
+    """The `line L col C` an error message names, or `ok` for a message that names none."""
+    m = re.match(r"line \d+ col \d+(?=: )", msg)
+    return m.group(0) if m else "ok"
+
+
 def compare(rng: random.Random, cases: int, c_parser: str) -> int:
     diverge = 0
     texts = [near_manifest(rng) for _ in range(cases)]
     said, _ = format_files(texts, check=True)
     for i, (text, line) in enumerate(zip(texts, c_parse(c_parser, texts), strict=True)):
-        tool = not said.get(i, "").startswith("line ")
-        c = line.startswith("ok")
-        if tool != c:
+        tool, c = said.get(i, ""), line
+        if where(tool) != where(c):
             diverge += 1
-            print(f"DIVERGE command={tool} launcher={c} on {text!r}")
+            print(f"DIVERGE command {tool or 'ok'!r}, launcher {c!r} on {text!r}")
     return diverge
 
 
-POSITIONS = [  # an error on a known line, which both parsers must name (6.2)
-    (b'exclave 1\n\ncpu "x86-64"\n\nown "/x"\nbogus 1\n', 6),
-    (b'exclave 1\n\nown "/x"\nown "x"\n', 4),
-    (b'exclave 1\n\nown "/x"\r\n', 3),
-    (b'exclave 1\n\nown "/\xff"\n', 3),
-    (b'exclave 1\n\nown "/x" \n', 3),
-    (b'exclave 1\n\nown "/x"\n# after\n', 5),
-    (b"exclave 1\n\n" + b"".join(b'own "/c%03d"\n' % i for i in range(257)), 259),
+def records(key: str, n: int) -> bytes:
+    """Return n records of key, each a path of its own."""
+    return b"".join(b'%s "/c%03d"\n' % (key.encode(), i) for i in range(n))
+
+
+# an error at a known place, which both parsers must name (6.2): line, and column in characters
+POSITIONS = [
+    (b'exclave 1\n\ncpu "x86-64"\n\nown "/x"\nbogus 1\n', "line 6 col 1"),
+    (b'exclave 1\n\nown "/x"\nown "x"\n', "line 4 col 1"),
+    (b'exclave 1\n\nown "/x"\r\n', "line 3 col 1"),
+    (b'exclave 1\n\nown "/\xff"\n', "line 3 col 1"),
+    (b'exclave 1\n\nown "/x" \n', "line 3 col 10"),
+    (b'exclave 1\n\nown "/x"\n# after\n', "line 5 col 1"),
+    (b"exclave 1\n\n" + records("own", 257), "line 259 col 1"),
+    (b"exclave 1\n\n" + records("host", 33), "line 35 col 1"),
+    (b"exclave 1\n\n" + records("data", 33), "line 35 col 1"),
+    # two-byte characters before an error
+    ('exclave 1\n\nown "/\u00e9\u00e9\\q"\n'.encode(), "line 3 col 9"),
+    # a field's limit of 4095 bytes: a string's decoded, past it by its 4096th byte's character
+    (b'exclave 1\n\nown "/' + b"a" * 9000 + b'"\n', "line 3 col 4101"),
+    (b'exclave 1\n\nown "/' + "\u00e9".encode() * 3000 + b'"\n', "line 3 col 2054"),
+    (b"exclave 1\n\ncpu " + b"1" * 5000 + b"\n", "line 3 col 4100"),
 ]
 
 
@@ -222,10 +243,10 @@ def positions(c_parser: str) -> int:
     said, _ = format_files(texts, check=True)
     for i, ((text, want), c) in enumerate(zip(POSITIONS, c_parse(c_parser, texts), strict=True)):
         for who, msg in (("command", said.get(i, "accepted")), ("launcher", c)):
-            if not msg.startswith(f"line {want:d} col "):
+            if where(msg) != want:
                 bad += 1
                 print(
-                    f"FAIL the {who}'s parser says {msg!r} of an error on line {want:d} "
+                    f"FAIL the {who}'s parser says {msg[:80]!r} of an error at {want} "
                     f"of {text[:50]!r}"
                 )
     return bad
@@ -253,7 +274,7 @@ def main() -> int:
     div = compare(rng, args.cases // 3, c_parser)
     print(f"{args.cases // 3:d} near-manifests through both C parsers: {div:d} divergences")
     bad += positions(c_parser)
-    print(f"{len(POSITIONS):d} errors on known lines: both parsers name the line")
+    print(f"{len(POSITIONS):d} errors at known places: both parsers name the line and column")
     return 1 if bad or div else 0
 
 
