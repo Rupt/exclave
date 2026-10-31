@@ -10,6 +10,7 @@ import shutil
 import subprocess
 lazy import ctypes
 
+import kernel_answers
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
 from suite import VOLATILE, Ctx, check, copy_exclave, hello_source, inside, wrapper
@@ -486,7 +487,7 @@ def magic_links_to_pathless(ctx: Ctx) -> None:
     """
     prog = os.path.join(ctx.progs, "magic_links")
     rc, out, err = inside(ctx, prog, ["pathless", ctx.work], inp=b"piped\n")
-    bad = [line for line in out.splitlines() if not line.endswith((" ok", " n/a"))]
+    bad = kernel_answers.magic_links_wrong(out)
     expect(rc == 0 and out and not bad, f"magic links: rc={rc} {bad!r} {err!r}")
     ex2 = os.path.join(ctx.work, "deleted-name.exclave")
     copy_exclave(ctx.exclave, ex2)
@@ -624,10 +625,10 @@ def openat2_resolve(ctx: Ctx) -> str | None:
     """7.4.3: openat2 in the exclave's world.
 
     RESOLVE_IN_ROOT and RESOLVE_BENEATH scope the walk to the descriptor's directory,
-    RESOLVE_NO_SYMLINKS refuses the tree's own links as a bind mount would, magic links are refused
-    by the scoped flags, RESOLVE_NO_XDEV refuses the exclave-to-host crossing, the read-only rule
-    holds, and the struct's own rules answer EINVAL before any lookup. Skips on a kernel without
-    openat2.
+    RESOLVE_NO_SYMLINKS refuses the tree's own links as a bind mount would, a magic link is ELOOP
+    under RESOLVE_NO_MAGICLINKS and EXDEV under the scoped flags, RESOLVE_NO_XDEV refuses the
+    exclave-to-host crossing, the read-only rule holds, and the struct's own rules answer EINVAL
+    before any lookup. Skips on a kernel without openat2.
     """
     d = os.path.join(ctx.work, "o2host")
     os.makedirs(d, exist_ok=True)
@@ -826,11 +827,11 @@ def unix_socket(ctx: Ctx) -> None:
     """7.4.3, 13 item 31: a sockaddr_un's path is a path.
 
     bind and connect at a path of every class answer what the kernel answers on a read-only bind
-    mount (the namespace oracle measured these): a bind on an exclave path is EADDRINUSE for an
-    existing name and EROFS otherwise, from a working directory inside the tree too; a connect to an
-    exclave path is ENOENT, ENOTDIR or ECONNREFUSED; host paths and abstract names work; the
-    structure's own limits are EINVAL. A datagram destination in sendto stays as written (13), so
-    only its host case is asserted.
+    mount, as the namespace oracle asserts of the kernel: a bind on an exclave path is EADDRINUSE
+    for an existing name and EROFS otherwise, from a working directory inside the tree too; a
+    connect to an exclave path is ENOENT, ENOTDIR or ECONNREFUSED; host paths and abstract names
+    work; the structure's own limits are EINVAL. A datagram destination in sendto stays as
+    written (13), so only its host case is asserted.
     """
     # absolute host names a program can write in sun_path's 108 bytes
     d = f"/tmp/exclave-sockhost-{os.getpid()}"
@@ -850,40 +851,7 @@ def unix_socket(ctx: Ctx) -> None:
     finally:
         shutil.rmtree(d, ignore_errors=True)
     expect(rc == 0, f"unix_socket: {out!r} {err!r}")
-    got = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
-    want = {
-        "bind host dir": "ret=0 errno=0",
-        "bind /tmp": "ret=0 errno=0",
-        "bind exclave dir": "ret=-1 errno=30",
-        "bind existing exclave file": "ret=-1 errno=98",
-        "bind existing exclave socket": "ret=-1 errno=98",
-        "bind missing exclave parent": "ret=-1 errno=2",
-        "bind under an exclave file": "ret=-1 errno=20",
-        "bind exclave dir itself": "ret=-1 errno=98",
-        "bind exclave dir trailing slash name": "ret=-1 errno=2",
-        "bind abstract": "ret=0 errno=0",
-        "bind relative in host cwd": "ret=0 errno=0",
-        "bind relative in exclave cwd": "ret=-1 errno=30",
-        "connect host listener": "ret=0 errno=0",
-        "connect host socket no listener": "ret=-1 errno=111",
-        "connect exclave file": "ret=-1 errno=111",
-        "connect exclave socket": "ret=-1 errno=111",
-        "connect missing exclave path": "ret=-1 errno=2",
-        "connect exclave dir": "ret=-1 errno=111",
-        "connect under an exclave file": "ret=-1 errno=20",
-        "connect missing host path": "ret=-1 errno=2",
-        "sendto host dgram": "ret=1 errno=0",
-        "bind through /proc/self/cwd": "ret=0 errno=0",
-        "connect through /proc/self/cwd": "ret=0 errno=0",
-        "bind addrlen too long": "ret=-1 errno=22",
-        "bind addrlen too short": "ret=-1 errno=22",
-        "bind wrong family": "ret=-1 errno=22",
-        "bind exclave path of 107 bytes": "ret=-1 errno=30",
-        "connect exclave path of 107 bytes": "ret=-1 errno=2",
-    }
-    bad = [
-        f"{k}: got {got.get(k)}, the kernel says {v}" for k, v in want.items() if got.get(k) != v
-    ]
+    bad = kernel_answers.unix_socket_wrong(out)
     expect(not bad, "; ".join(bad))
     expect(
         not os.path.exists(os.path.join(ctx.root, "usr", "share", "sock-rel")),
@@ -903,13 +871,4 @@ def create_through_a_slashed_link(ctx: Ctx) -> None:
     d = os.path.join(ctx.work, "slashed")
     os.makedirs(d, exist_ok=True)
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "creat_slash"), [d])
-    expect(rc == 0, out + err)
-    want = (
-        "creat through a link to a missing name with a slash: Is a directory",
-        "creat for writing through the same link: Is a directory",
-        "creat through a link to a directory with a slash: Is a directory",
-        "creat through a link whose text has .. and a slash: Is a directory",
-        "open through a link to a missing name with a slash: No such file or directory",
-        "creat with O_EXCL through the link: File exists",
-    )
-    expect(out.splitlines() == list(want), out + err)
+    expect(rc == 0 and not kernel_answers.creat_slash_wrong(out), out + err)

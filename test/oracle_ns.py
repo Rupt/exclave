@@ -1,14 +1,16 @@
 """Compare an exclave under the launcher with its tree under bwrap: the namespace oracle (17).
 
 The same tree runs twice: under `bwrap` with the unwrapped tree bound read-only at `/`, and under
-the launcher. Exit status, stdout and stderr are compared, and the read-only matrix program of
-test/progs is run under bwrap so that its expectations are checked against the kernel itself rather
-than against the launcher. Needs user namespaces and bwrap; says so and exits 0 when it cannot run.
+the launcher. Exit status, stdout and stderr are compared, and the suite's path programs whose
+answers the kernel can give, the read-only matrix among them, run under bwrap so that their
+expectations are checked against the kernel itself rather than against the launcher. Needs user
+namespaces and bwrap; says so and exits 0 when it cannot run.
 
     test/oracle_ns.py --exclave EXCLAVE [--work DIR] [--keep]
 """
 
 import argparse
+import concurrent.futures
 import dataclasses
 import os
 import platform
@@ -18,6 +20,7 @@ import subprocess
 import sys
 lazy from collections.abc import Iterable
 
+import kernel_answers
 import tree
 from harness import run
 
@@ -270,6 +273,92 @@ def worlds(given: str, work: str) -> tuple[str, str]:
     return ex, root
 
 
+# the suite's path programs whose expectations the kernel can check (17 item 4), each judged here as
+# the suite judges the launcher's answers
+PROGRAMS = ("ro_matrix", "openat2", "creat_slash", "unix_socket", "magic_links")
+
+
+def judge(name: str, rc: int, out: str) -> list[str]:
+    """What the kernel answered that the suite's expectation for program name does not say."""
+    if name == "ro_matrix":
+        # under bwrap there is no wrapper, so the program's redirect line is not meaningful there;
+        # it exits 1 on any FAIL line, the wrapper's included
+        bad = [x for x in out.splitlines() if x.startswith("FAIL") and "wrapper" not in x]
+        return bad or ([] if "ro_matrix:" in out and rc == (1 if "FAIL" in out else 0) else [out])
+    if name == "openat2":
+        # 3: the kernel has no openat2, which the suite skips on too
+        bad = [x for x in out.splitlines() if x.startswith("FAIL")]
+        return bad or ([] if rc in (0, 3) else [out])
+    wrong = {
+        "creat_slash": kernel_answers.creat_slash_wrong,
+        "unix_socket": kernel_answers.unix_socket_wrong,
+        "magic_links": kernel_answers.magic_links_wrong,
+    }[name](out)
+    return wrong or ([] if rc == 0 and out else [out])
+
+
+def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> int:
+    """Run PROGRAMS under bwrap, where the kernel answers, and judge them; the number that fail.
+
+    Each is compiled with the exclave's compiler and run with the arguments the suite gives it; a
+    program says nothing on stderr.
+    """
+    tr = os.path.join(ex, "tree")
+    gcc = os.path.join(tr, tree.vbin(tr, sp.gcc).lstrip("/"))
+
+    def build(name: str) -> str | None:
+        r = subprocess.run(
+            [gcc, "-O1", "-o", os.path.join(work, name), os.path.join(HERE, "progs", name + ".c")],
+            cwd=work,
+            env={"PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            check=False,
+        )
+        return r.stderr.decode(errors="replace") if r.returncode else None
+
+    with concurrent.futures.ThreadPoolExecutor(4) as pool:
+        for name, e in zip(PROGRAMS, pool.map(build, PROGRAMS), strict=True):
+            if e is not None:
+                sys.exit(f"cannot compile {name} with the exclave's compiler: {e}")
+    hostdir = os.path.join(work, "hostdir")
+    os.makedirs(hostdir, exist_ok=True)
+    tree.socket_file(os.path.join(root, "usr", "share", "exclave-test.sock"))
+    true = tree.vbin(root, "true")
+    # unix_socket's: an absolute host directory in bwrap's own /tmp, short enough for sun_path, and
+    # a working directory deeper than sun_path holds
+    sockhost = f"/tmp/exclave-sockhost-{os.getpid()}"
+    deep = os.path.join(work, "sockhost")
+    deep = os.path.join(deep, "d" * max(1, 120 - len(deep)))
+    os.makedirs(deep, exist_ok=True)
+    cmds = {
+        "ro_matrix": f"{work}/ro_matrix {hostdir} /usr/bin/dash",
+        "openat2": f"EXCLAVE_TEST_TRUE={true} {work}/openat2 {hostdir}",
+        "creat_slash": f"{work}/creat_slash {hostdir}",
+        "unix_socket": (
+            f"mkdir {sockhost} && {work}/unix_socket {sockhost} /usr/share {true} "
+            f"/usr/share/exclave-test.sock {deep}"
+        ),
+        "magic_links": f"echo piped | {work}/magic_links pathless {hostdir}",
+    }
+    fails = 0
+    for name in PROGRAMS:
+        try:
+            rc, out, err = run_bwrap(root, work, cmds[name], sp, timeout=TIMEOUT)
+        except subprocess.TimeoutExpired:
+            rc, out, err = -9, "", f"killed after {TIMEOUT} s"
+        bad = judge(name, rc, out) + ([err.strip()] if err else [])
+        if bad:
+            fails += 1
+            print(
+                f"FAIL {name} under the kernel's read-only bind (rc {rc}): the suite expects "
+                "otherwise\n     " + "\n     ".join(x.strip() for x in bad)
+            )
+        else:
+            last = out.strip().splitlines()[-1] if out.strip() else ""
+            print(f"PASS {name}: the kernel agrees with the suite's expectations ({last})")
+    return fails
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -294,43 +383,10 @@ def main() -> int:
             "#include <stdio.h>\n"
             'int main(int c, char **v) { printf("hello %d\\n", c); return 0; }\n'
         )
-    fails = 0
-    # 1. the read-only matrix against the kernel: the same program, the same expectations, a real
-    # read-only bind
     sp = Spellings.of(os.path.join(ex, "tree"))
-    gcc = os.path.join(ex, "tree", tree.vbin(os.path.join(ex, "tree"), sp.gcc).lstrip("/"))
-    prog = os.path.join(work, "ro_matrix")
-    r = subprocess.run(
-        [gcc, "-O1", "-o", prog, os.path.join(HERE, "progs", "ro_matrix.c")],
-        cwd=work,
-        env={"PATH": "/usr/bin:/bin"},
-        capture_output=True,
-        check=False,
-    )
-    if r.returncode:
-        sys.exit(
-            "cannot compile ro_matrix with the exclave's gcc: " + r.stderr.decode(errors="replace")
-        )
-    hostdir = os.path.join(work, "hostdir")
-    os.makedirs(hostdir, exist_ok=True)
-    try:
-        rc, out, err = run_bwrap(root, work, f"{prog} {hostdir} /usr/bin/dash", sp, timeout=TIMEOUT)
-    except subprocess.TimeoutExpired:
-        rc, out, err = -9, "", f"killed after {TIMEOUT} s"
-    # under bwrap there is no wrapper, so the redirect line of the program is not meaningful there
-    bad = [line for line in out.splitlines() if line.startswith("FAIL") and "wrapper" not in line]
-    # the program exits 1 on any FAIL line, the wrapper's included, and says nothing on stderr
-    if bad or "ro_matrix:" not in out or err or rc != (1 if "FAIL" in out else 0):
-        fails += 1
-        print(
-            f"FAIL read-only matrix under the kernel's read-only bind (rc {rc}):\n     "
-            + "\n     ".join(bad or [err.strip() or out.strip()])
-        )
-    else:
-        print(
-            "PASS read-only matrix: the kernel agrees with every expectation of 8.2 "
-            f"({out.strip().splitlines()[-1]})"
-        )
+    # 1. the suite's path programs against the kernel: the same programs, the same expectations, a
+    # real read-only bind
+    fails = programs_under_the_kernel(ex, root, work, sp)
     # 2. workloads twice
     for cmd in WORKLOADS:
         shown = cmd
@@ -380,7 +436,7 @@ def main() -> int:
                 f"     bwrap : rc={bn[0]} out={bn[1][:300]!r} err={bn[2][:200]!r}\n"
                 f"     launcher: rc={on[0]} out={on[1][:300]!r} err={on[2][:200]!r}"
             )
-    print(f"{len(WORKLOADS) + 1} workloads, {fails} failures")
+    print(f"{len(WORKLOADS) + len(PROGRAMS)} workloads, {fails} failures")
     if not args.keep and not fails:
         shutil.rmtree(work, ignore_errors=True)
     return fails

@@ -1070,9 +1070,11 @@ dropped from the re-issue:
   that is not followed is excepted, and the host's own mount boundaries
   are not seen (13 item 22).
 - `RESOLVE_NO_SYMLINKS` is `ELOOP` at any link the walk would follow,
-  the tree's own links and an identity file's host link included; the
-  scoped flags and `RESOLVE_NO_MAGICLINKS` are `ELOOP` at a link below
-  `/proc/<pid>/`.
+  the tree's own links and an identity file's host link included. A
+  magic link, one below `/proc/<pid>/`, is `ELOOP` under
+  `RESOLVE_NO_MAGICLINKS` and `RESOLVE_NO_SYMLINKS`, and otherwise
+  `EXDEV` under the scoped flags, in the kernel's order
+  (`nd_jump_link`).
 - `RESOLVE_CACHED` is dropped, since a resolved path is opened without
   it and openat2(2) permits a caller to see success where the kernel
   might have said `EAGAIN`.
@@ -3861,7 +3863,7 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus the read-only matrix program (`test/progs/ro_matrix.c`) under `bwrap` against its own expectations |
+| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus five of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `unix_socket` and `magic_links` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it); the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
 | 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 84 named tests |

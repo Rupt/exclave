@@ -261,7 +261,7 @@ struct walk {
     char *rp;           /* the rest of the path, in S->rest */
     const char *base;   /* a scoped walk's root, S->v2; "" otherwise */
     unsigned rf;        /* openat2's resolve flags (7.4.3) */
-    unsigned nomagic;   /* those of them that refuse magic links */
+    int magic_err;      /* the answer at a magic link the flags refuse (nd_jump_link), or 0 */
     int dom;            /* RESOLVE_NO_XDEV: the domain the walk is in, the exclave's (1) or the host's (0) */
     int hops;           /* links followed, at most 40 */
     int chain_failed;   /* a one-step host check that could not vouch: not tried again until a link */
@@ -383,7 +383,7 @@ static int host_component(struct scratch *S, struct walk *w, int last, int *err)
     tmp[n] = 0;
     /* a link below /proc/<pid>/ is a magic link; one at /proc/ is not */
     int magic = xstrncmp(cur, "/proc/", 6) == 0 && xstrchr(cur + 6, '/');
-    if (magic && w->nomagic) return -ELOOP;
+    if (magic && w->magic_err) return w->magic_err;
     if (magic && pathless(real, tmp, n)) {
         /* reachable only through the link itself: the walk ends here, and the re-issue follows it */
         if (!last) return -ENOTDIR;
@@ -436,12 +436,15 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
     size_t pl = xstrlen(path);
     int trailing = pl > 1 && path[pl - 1] == '/';
     /* openat2's resolve flags (7.4.3): a scoped walk (RESOLVE_IN_ROOT, RESOLVE_BENEATH) cannot leave S->v2, the
-     * descriptor's directory; NO_SYMLINKS and the scoped flags refuse magic links; NO_XDEV refuses to cross between
-     * the exclave's domain and the host's, which is where the kernel under a bind mount changes mounts */
+     * descriptor's directory; a magic link is ELOOP under NO_MAGICLINKS and NO_SYMLINKS and then EXDEV under the
+     * scoped flags (nd_jump_link); NO_XDEV refuses to cross between the exclave's domain and the host's, which is where
+     * the kernel under a bind mount changes mounts */
     struct walk w = {.rf = S->resolve, .base = "", .dom = 1};
     if (w.rf & (RESOLVE_IN_ROOT | RESOLVE_BENEATH)) w.base = S->v2;
     if (w.base[0] == '/' && w.base[1] == 0) w.base = "";
-    w.nomagic = w.rf & (RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS | RESOLVE_BENEATH | RESOLVE_IN_ROOT);
+    w.magic_err = (w.rf & (RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS)) ? -ELOOP
+                  : (w.rf & (RESOLVE_BENEATH | RESOLVE_IN_ROOT))         ? -EXDEV
+                                                                         : 0;
     /* a walk that stays in the host's domain is the kernel's own to make (7.4.3) */
     S->touched_exclave = 0;
     S->magic_end = 0;
@@ -496,7 +499,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         /* the process's own exe names the program, not the launcher (7.6), on the loader path and for a script whose
          * exe is its interpreter */
         if ((C.loader_mode || xstrcmp(C.exe, C.program) != 0) && is_self_exe(cur, S->pid)) {
-            if (w.nomagic) return -ELOOP; /* a magic link, refused by the resolve flags */
+            if (w.magic_err) return w.magic_err; /* a magic link, refused by the resolve flags */
             if (++w.hops > 40) return -ELOOP;
             S->touched_exclave = 1;
             if ((r = walk_splice(S, &w, C.exe)) < 0) return r;

@@ -77,9 +77,16 @@ int main(int argc, char **argv)
     CHECK(o2(AT_FDCWD, sh, O_RDONLY, 0, RESOLVE_NO_SYMLINKS), ELOOP);
     CHECK(o2(AT_FDCWD, sh, O_PATH | O_NOFOLLOW, 0, RESOLVE_NO_SYMLINKS), 0); /* the link itself, not followed */
     CHECK(o2(AT_FDCWD, sh, O_RDONLY, 0, 0), 0);
-    /* magic links */
+    /* magic links: NO_MAGICLINKS and NO_SYMLINKS refuse one with ELOOP, then the scoped flags with EXDEV
+     * (nd_jump_link), for the process's exe and a descriptor alike */
     CHECK(o2(AT_FDCWD, "/proc/self/exe", O_RDONLY, 0, RESOLVE_NO_MAGICLINKS), ELOOP);
-    CHECK(o2(root, "proc/self/exe", O_RDONLY, 0, RESOLVE_IN_ROOT), ELOOP);
+    CHECK(o2(AT_FDCWD, "/proc/self/exe", O_RDONLY, 0, RESOLVE_NO_SYMLINKS), ELOOP);
+    CHECK(o2(root, "proc/self/exe", O_RDONLY, 0, RESOLVE_IN_ROOT), EXDEV);
+    CHECK(o2(root, "proc/self/exe", O_RDONLY, 0, RESOLVE_BENEATH), EXDEV);
+    CHECK(o2(root, "proc/self/exe", O_RDONLY, 0, RESOLVE_IN_ROOT | RESOLVE_NO_MAGICLINKS), ELOOP);
+    CHECK(o2(root, "proc/self/fd/0", O_RDONLY, 0, RESOLVE_IN_ROOT), EXDEV);
+    CHECK(o2(root, "proc/self/fd/0", O_RDONLY, 0, RESOLVE_BENEATH), EXDEV);
+    CHECK(o2(root, "proc/self/fd/0", O_RDONLY, 0, RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS), ELOOP);
     CHECK(o2(AT_FDCWD, "/proc/self/exe", O_RDONLY, 0, 0), 0);
     /* no xdev: the exclave and the host are different mounts; an identity file is the host's */
     CHECK(o2(root, truep + 1, O_RDONLY, 0, RESOLVE_NO_XDEV), 0);
