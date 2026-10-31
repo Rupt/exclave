@@ -134,11 +134,19 @@ static int env_denied(const char *e)
     }
     return 0;
 }
+/* an array of n pointers, mapped: as long as the environment or the arguments, which no limit of the arena's bounds */
+static char **pointers(long n)
+{
+    long m = sys_mmap(0, ((size_t)n * sizeof(char *) + 0xfff) & ~(size_t)0xfff, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (m < 0 && m > -4096) die("out of memory", 0, ENOMEM);
+    return (char **)m;
+}
 static char **env_prepare(char **envp, int boundary)
 {
     long n = 0;
     while (envp[n]) n++;
-    char **out = (char **)arena_alloc((size_t)(n + 6) * sizeof(char *));
+    char **out = pointers(n + 6);
     long k = 0;
     for (long i = 0; i < n; i++) {
         if (boundary ? env_denied(envp[i]) : internal_var(envp[i])) continue;
@@ -244,7 +252,7 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
     scat(fn, argv[1], PATH_MAX + 15);
     long n = 0;
     while (envp[n]) n++;
-    char **env = (char **)arena_alloc((size_t)(n + 3) * sizeof(char *));
+    char **env = pointers(n + 3);
     long k = 0;
     env[k++] = var;
     env[k++] = fn;
@@ -317,11 +325,7 @@ static __attribute__((noreturn)) void run(const char *v, const char *given, long
     if (n < 0) n = 0;
     /* a script: the kernel's argv convention, with buffers that outlive this level of the interpreter chain */
     long cap = argc + 4;
-    long m = sys_mmap(0, ((size_t)cap * sizeof(char *) + 0xfff) & ~(size_t)0xfff, PROT_READ | PROT_WRITE,
-                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m < 0 && m > -4096) die("out of memory", 0, ENOMEM);
-    /* sized from argc, never from a fixed pool */
-    char **nargv = (char **)m;
+    char **nargv = pointers(cap);
     char *script = arena_alloc(PATH_MAX);
     /* the script's path as it was spelt, as the kernel passes it (7.4.5); a wrapped script run from outside the
      * exclave gets its own virtual path instead, since the spelling names the file in the host's world, where "$0.bin"

@@ -157,6 +157,19 @@ def environment(ctx: Ctx) -> None:
     expect(out == "4\na\n", f"C.UTF-8 counts characters and sorts by code point: {out!r}")
     rc, out, _err = inside(ctx, ctx.vbin("env"))
     expect(rc == 0 and "EXCLAVE_EXEC" not in out, "EXCLAVE_EXEC leaked: " + out)
+    # an environment of 100 000 variables, which the kernel takes, passes whole at the border,
+    # through the positional entry and across an exec inside: nothing the launcher sizes from it
+    # has a fixed bound
+    big = {f"V{i}": "1" for i in range(100_000)}
+    for how, cmd in (
+        ("a wrapper", [wrapper(ctx, "env"), ctx.vbin("env")]),
+        ("the positional entry", [ctx.launcher, ctx.vbin("env"), ctx.vbin("env")]),
+    ):
+        rc, out, err = run(cmd, cwd=ctx.work, env=big)
+        lost = {f"V{i}=1" for i in range(100_000)} - set(out.splitlines())
+        expect(
+            rc == 0 and not lost, f"100 000 variables through {how}: {rc}, {len(lost)} lost {err}"
+        )
 
 
 @test
