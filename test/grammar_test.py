@@ -6,10 +6,11 @@ Two statements hold for every byte sequence b, asked of the exclave command's fo
 spelt in canonical form is canonical (format is idempotent), and a value spelt with every byte
 escaped is rewritten to that canonical form (decode, then encode, is the identity). The canonical
 form is quote below, the rule of 6.2 written out here. And the two implementations of the grammar,
-the command's and the launcher's C parser (built by scripts/gate's unit step, run with a file
-argument), accept and reject the same inputs: manifests and their malformed variants (MUTATIONS);
-and both name the line of an error on a known line (POSITIONS). The command reads every file of a
-check in one run.
+the command's and the launcher's C parser (built by scripts/gate's unit step, run with the files as
+arguments), accept and reject the same inputs: manifests and their malformed variants (MUTATIONS);
+and both name the line of an error on a known line (POSITIONS). The launcher's parser decodes each
+value of the properties to the bytes it was made from, in canonical form and with every byte
+escaped. Each parser reads every file of a batch in one run.
 """
 
 import argparse
@@ -53,16 +54,40 @@ def _well_formed(b: bytes) -> bool:
         return False
 
 
+def write_files(d: str, texts: list[bytes]) -> list[str]:
+    """Write the texts as files under d, named by their index; returns their paths."""
+    paths = [os.path.join(d, f"f{i:06d}") for i in range(len(texts))]
+    for p, t in zip(paths, texts, strict=True):
+        with open(p, "wb") as f:
+            f.write(t)
+    return paths
+
+
+def c_parse(c_parser: str, texts: list[bytes]) -> list[str]:
+    """Run the launcher's parser once over the texts as files.
+
+    Returns its line for each: `ok` and each own value in hex, or the error.
+    """
+    with tempfile.TemporaryDirectory(prefix="grammar-") as d:
+        p = subprocess.run([c_parser, *write_files(d, texts)], capture_output=True, check=False)
+    lines = p.stdout.decode(errors="replace").splitlines()
+    if p.returncode != 0 or len(lines) != len(texts):
+        # 99 is a sanitiser's finding (test/sanitize.c), on the file after the last line printed
+        on = repr(texts[len(lines)][:200]) if len(lines) < len(texts) else "its output"
+        sys.exit(
+            f"FAIL the C parser exited {p.returncode} after {len(lines)} of {len(texts)} files, on "
+            f"{on}: {p.stderr.decode(errors='replace')}"
+        )
+    return lines
+
+
 def format_files(texts: list[bytes], *, check: bool) -> tuple[dict[int, str], list[bytes]]:
     """Run the command's format once over the texts as files.
 
     Returns the line it printed for each file that has one, by index, and the files' bytes after.
     """
     with tempfile.TemporaryDirectory(prefix="grammar-") as d:
-        paths = [os.path.join(d, f"f{i:06d}") for i in range(len(texts))]
-        for p, t in zip(paths, texts, strict=True):
-            with open(p, "wb") as f:
-                f.write(t)
+        paths = write_files(d, texts)
         p_ = subprocess.run(
             [*tree.TOOL, "format", *(["--check"] if check else []), *paths],
             capture_output=True,
@@ -96,7 +121,7 @@ def rand_bytes(rng: random.Random, *, path: bool = False) -> bytes:
     return b.replace(b"\0", b"\1") if path else b
 
 
-def properties(rng: random.Random, cases: int) -> int:
+def properties(rng: random.Random, cases: int, c_parser: str | None) -> int:
     bad = 0
     values, canonical, escaped = [], [], []
     for _ in range(cases):
@@ -117,6 +142,13 @@ def properties(rng: random.Random, cases: int) -> int:
         if after[i] != canonical[i]:  # decode(encode(b)) == b
             bad += 1
             print(f"FAIL every byte of {b!r} escaped: {said.get(i)} -> {after[i]!r}")
+    # the launcher's decoding, which a wrong hex digit or code point would leave accepting all
+    if c_parser:
+        for spelt, texts in (("canonical", canonical), ("every byte escaped", escaped)):
+            for b, line in zip(values, c_parse(c_parser, texts), strict=True):
+                if line != f"ok {(b'/' + b).hex()}":
+                    bad += 1
+                    print(f"FAIL the C parser decodes {b!r} {spelt} as {line!r}")
     return bad
 
 
@@ -164,21 +196,12 @@ def compare(rng: random.Random, cases: int, c_parser: str) -> int:
     diverge = 0
     texts = [near_manifest(rng) for _ in range(cases)]
     said, _ = format_files(texts, check=True)
-    with tempfile.TemporaryDirectory(prefix="grammar-") as d:
-        path = os.path.join(d, "manifest")
-        for i, text in enumerate(texts):
-            with open(path, "wb") as f:
-                f.write(text)
-            tool = not said.get(i, "").startswith("line ")
-            rc = subprocess.run([c_parser, path], capture_output=True, check=False).returncode
-            if rc not in (0, 1):  # 99 is a sanitiser's finding (test/sanitize.c)
-                diverge += 1
-                print(f"FAIL the C parser exited {rc} on {text!r}")
-                continue
-            c = rc == 0
-            if tool != c:
-                diverge += 1
-                print(f"DIVERGE command={tool} launcher={c} on {text!r}")
+    for i, (text, line) in enumerate(zip(texts, c_parse(c_parser, texts), strict=True)):
+        tool = not said.get(i, "").startswith("line ")
+        c = line.startswith("ok")
+        if tool != c:
+            diverge += 1
+            print(f"DIVERGE command={tool} launcher={c} on {text!r}")
     return diverge
 
 
@@ -195,22 +218,16 @@ POSITIONS = [  # an error on a known line, which both parsers must name (6.2)
 
 def positions(c_parser: str) -> int:
     bad = 0
-    said, _ = format_files([text for text, _ in POSITIONS], check=True)
-    with tempfile.TemporaryDirectory(prefix="grammar-") as d:
-        path = os.path.join(d, "manifest")
-        for i, (text, want) in enumerate(POSITIONS):
-            with open(path, "wb") as f:
-                f.write(text)
-            c = subprocess.run(
-                [c_parser, path], capture_output=True, text=True, check=False
-            ).stderr.strip()
-            for who, msg in (("command", said.get(i, "accepted")), ("launcher", c)):
-                if not msg.startswith(f"line {want:d} col "):
-                    bad += 1
-                    print(
-                        f"FAIL the {who}'s parser says {msg!r} of an error on line {want:d} "
-                        f"of {text[:50]!r}"
-                    )
+    texts = [text for text, _ in POSITIONS]
+    said, _ = format_files(texts, check=True)
+    for i, ((text, want), c) in enumerate(zip(POSITIONS, c_parse(c_parser, texts), strict=True)):
+        for who, msg in (("command", said.get(i, "accepted")), ("launcher", c)):
+            if not msg.startswith(f"line {want:d} col "):
+                bad += 1
+                print(
+                    f"FAIL the {who}'s parser says {msg!r} of an error on line {want:d} "
+                    f"of {text[:50]!r}"
+                )
     return bad
 
 
@@ -225,18 +242,19 @@ def main() -> int:
     )
     args = ap.parse_args()
     rng = random.Random(args.seed)
-    bad = properties(rng, args.cases)
+    c_parser = args.c_parser if os.path.exists(args.c_parser) else None
+    bad = properties(rng, args.cases, c_parser)
     print(
         f"{args.cases:d} byte strings: format idempotent, decode(encode(b)) == b: {bad:d} problems"
     )
-    div = compare(rng, args.cases // 3, args.c_parser) if os.path.exists(args.c_parser) else -1
-    if div < 0:
+    if not c_parser:
         print(f"no C parser at {args.c_parser}: the two-parser comparison did not run")
-    else:
-        print(f"{args.cases // 3:d} near-manifests through both C parsers: {div:d} divergences")
-        bad += positions(args.c_parser)
-        print(f"{len(POSITIONS):d} errors on known lines: both parsers name the line")
-    return 1 if bad or div > 0 else 0
+        return 1 if bad else 0
+    div = compare(rng, args.cases // 3, c_parser)
+    print(f"{args.cases // 3:d} near-manifests through both C parsers: {div:d} divergences")
+    bad += positions(c_parser)
+    print(f"{len(POSITIONS):d} errors on known lines: both parsers name the line")
+    return 1 if bad or div else 0
 
 
 if __name__ == "__main__":

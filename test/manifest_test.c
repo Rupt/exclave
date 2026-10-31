@@ -30,25 +30,41 @@ static void expect(const char *name, const char *text, int want_ok, const char *
 #define OK(name, text) expect(name, text, 1, 0)
 #define BAD(name, text, why) expect(name, text, 0, why)
 
-/* with a file argument: parse it and exit 0 or 1, for test/grammar_test.py's comparison with the Python parser */
-static int parse_file(const char *path)
+/* with file arguments: parse each and print one line for it, "ok" and each own value in hex, or the error, for
+ * test/grammar_test.py's comparison with the command's parser; a line each as it goes, so that the file a sanitiser's
+ * finding stopped on is the one after the last line */
+void arena_reset(void);
+static int parse_files(int n, char **paths)
 {
     static char buf[1 << 20];
-    FILE *f = fopen(path, "rb");
-    if (!f) return 2;
-    size_t n = fread(buf, 1, sizeof buf, f);
-    fclose(f);
-    char err[256] = "";
-    struct exclave c;
-    memset(&c, 0, sizeof c);
-    int r = manifest_parse(buf, n, &c, err, sizeof err);
-    if (r) fprintf(stderr, "%s\n", err);
-    return r ? 1 : 0;
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    for (int i = 0; i < n; i++) {
+        FILE *f = fopen(paths[i], "rb");
+        if (!f) return fprintf(stderr, "cannot open %s\n", paths[i]), 2;
+        size_t len = fread(buf, 1, sizeof buf, f);
+        fclose(f);
+        if (len == sizeof buf) return fprintf(stderr, "%s fills the buffer\n", paths[i]), 2;
+        char err[256] = "";
+        struct exclave c;
+        memset(&c, 0, sizeof c);
+        arena_reset();
+        if (manifest_parse(buf, len, &c, err, sizeof err)) {
+            printf("%s\n", err);
+            continue;
+        }
+        printf("ok");
+        for (int k = 0; k < c.nown; k++) {
+            putchar(' ');
+            for (const unsigned char *b = (const unsigned char *)c.own[k]; *b; b++) printf("%02x", *b);
+        }
+        putchar('\n');
+    }
+    return 0;
 }
 
 int main(int argc, char **argv)
 {
-    if (argc == 2) return parse_file(argv[1]);
+    if (argc > 1) return parse_files(argc - 1, argv + 1);
     OK("minimal", "exclave 1\n");
     OK("full", "# an exclave\nexclave 1\n\ncpu \"x86-64-v2\"\n\ndata \"/opt/musl-sysroot\"\n\nhost "
                "\"/usr/local/share/fonts\"\n\nown \"/etc/hosts\"\nown \"/usr\"\n");
