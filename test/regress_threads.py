@@ -144,16 +144,21 @@ def go_paths(ctx: Ctx) -> str | None:
 
 @test
 def working_directory_races(ctx: Ctx) -> str:
-    """Relative lookups while another thread changes the working directory (13 item 14).
+    """8.2, 13 item 14: relative creates while another thread changes the working directory.
 
-    A change between two directories that both hold the file fails no lookup, as natively. A
-    rename of the working directory's parent meanwhile fails some under the launcher, which reads
-    the directory's name and walks it, where the kernel fails none: a stated limitation, whose
-    rate the PASS line reports.
+    The working directory moves back and forth between a host directory and /usr/share while four
+    threads create the same name relative to it: each create succeeds or is EROFS, as it resolves
+    against one or the other, and the tree is never written, which it would be if a relative path
+    were re-issued as given and resolved against the directory current by then. The program stops
+    once it has seen each answer a thousand times.
     """
     d = os.path.join(ctx.work, f"hostdir-cwd-race-{os.getpid()}")
     os.makedirs(d, exist_ok=True)
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "cwd_race"), [d], timeout=120)
-    lines = out.splitlines()
-    expect(rc == 0 and "chdir ok" in lines and "FAIL" not in out, out + err)
-    return next((x for x in lines if x.startswith("rename ")), "")
+    written = os.path.join(ctx.root, "usr", "share", "cwdrace-x")
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "cwd_race"), [d], timeout=60)
+    in_tree = os.path.lexists(written)
+    if in_tree:
+        os.remove(written)
+    expect(not in_tree, f"a relative create wrote {written}: {out}{err}")
+    expect(rc == 0 and "FAIL" not in out and out.endswith(" 0 other\n"), out + err)
+    return out.strip().splitlines()[-1]

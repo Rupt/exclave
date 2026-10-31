@@ -2569,11 +2569,15 @@ and stay fixed.
     syscall can resolve against the older directory, and a rename of
     an ancestor of the working directory meanwhile can make it fail
     where the kernel, resolving from the directory itself, would not.
-    Measured by `test/progs/cwd_race.c`, four threads making a million
-    relative lookups: with a fifth changing directory between two that
-    both hold the file, none fails, as natively; with it renaming the
-    working directory's parent back and forth without pause, about 13%
-    fail under the launcher and none natively.
+    A create relative to a working directory that another thread moves
+    back and forth between a host directory and an exclave one answers
+    as one or the other, success or `EROFS`, and never writes the tree
+    (`test/progs/cwd_race.c`). With a thread renaming the
+    working directory's parent back and forth without pause, a share of
+    four threads' million relative lookups fails under the launcher,
+    which varies with the machine's load, and none natively;
+    `scripts/exercise` with `test/progs/cwd_rename.c` measures it in
+    both worlds.
     A path relative to a descriptor has neither problem: one whose walk
     never touched the exclave is re-issued as given (7.4.3). `..` above
     a working directory that was handed to the host stays in the
