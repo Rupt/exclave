@@ -144,7 +144,8 @@ def root_listing_is_the_tree(ctx: Ctx) -> None:
     """8.3: the root directory itself is the tree's.
 
     ls / lists the tree's entries, and cd into a placeholder works whether or not the host has the
-    name.
+    name; a new top-level name is the host's (8.1.2), so creating one is the host's refusal,
+    Permission denied, not the exclave's read-only one.
     """
     rc, out, err = run([wrapper(ctx, "ls"), "-A", "/"], cwd=ctx.work, env=ctx.env)
     expect(
@@ -162,7 +163,11 @@ def root_listing_is_the_tree(ctx: Ctx) -> None:
     )
     expect(
         out.startswith("/srv\n/\n") and "refused" in out,
-        f"cd into a placeholder and the read-only root: {out!r} {err!r}",
+        f"cd into a placeholder and a create at the root: {out!r} {err!r}",
+    )
+    expect(
+        "Permission denied" in out,
+        f"a new top-level name is the host's, refused as the host refuses it: {out!r}",
     )
 
 
@@ -333,7 +338,7 @@ def ownership_from_tree(ctx: Ctx) -> None:
         env=ctx.env,
     )
     expect(
-        out.startswith("probe\n") and "refused" in out,
+        out.startswith("probe\n") and "Read-only file system" in out and "refused" in out,
         f"after: /opt is the exclave's, read-only, with no index refreshed: {out!r} {err!r}",
     )
     _rc, out, err = run(
