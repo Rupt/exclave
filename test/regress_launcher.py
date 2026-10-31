@@ -85,22 +85,44 @@ def speculation_unchanged(ctx: Ctx) -> None:
     )
 
 
+# 6.2: the variables the border drops, which steer the loader or libc to host files; LD_ is a
+# prefix, the rest whole names
+DROPPED = (
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "LD_BIND_NOW",
+    "LD_",
+    "GLIBC_TUNABLES",
+    "GCONV_PATH",
+    "LOCPATH",
+    "NLSPATH",
+    "RESOLV_HOST_CONF",
+    "HOSTALIASES",
+    "TZDIR",
+    "GCC_EXEC_PREFIX",
+    "COMPILER_PATH",
+    "LIBRARY_PATH",
+)
+# names beside them that pass: no LD_ prefix, or a dropped name with more after it
+PASSED = ("LDFLAGS", "GCONV_PATHS", "LIBRARY_PATHX", "TZDIRX", "EXCLAVE_TESTVAR")
+
+
 @test
 def environment(ctx: Ctx) -> None:
-    env = dict(
-        ctx.env,
-        LD_PRELOAD="/nonexistent",
-        LD_LIBRARY_PATH="/x",
-        GCONV_PATH="/x",
-        LOCPATH="/x",
-        EXCLAVE_TESTVAR="1",
-    )
-    rc, out, _err = run([wrapper(ctx, "env")], cwd=ctx.work, env=env)
+    """6.2: the border drops each variable of its list by its whole name, or LD_ by its prefix.
+
+    Every other variable passes through, four are the exclave's own values, and inside the border
+    nothing is touched.
+    """
+    env = dict(ctx.env, **dict.fromkeys(DROPPED, "/x"), **dict.fromkeys(PASSED, "kept"))
+    rc, out, err = run([wrapper(ctx, "env")], cwd=ctx.work, env=env)
+    names = {line.split("=", 1)[0] for line in out.splitlines()}
+    expect(rc == 0, f"env at the border: rc={rc} {err!r}")
+    expect(not names & set(DROPPED), f"dropped variables passed: {sorted(names & set(DROPPED))}")
     expect(
-        rc == 0 and "LD_" not in out and "GCONV_PATH" not in out and "LOCPATH" not in out,
-        "denied variables leaked: " + out,
+        {f"{n}=kept" for n in PASSED} <= set(out.splitlines()),
+        f"variables to pass were lost: {sorted(set(PASSED) - names)}",
     )
-    expect("EXCLAVE_TESTVAR=1" in out, "pass-through lost")
     rc, out, _err = run([wrapper(ctx, "env")], cwd=ctx.work, env={})
     expect("PATH=/usr/local/bin:/usr/bin:/bin\n" in out, f"default PATH: {out!r}")
     rc, out, _err = run(
