@@ -293,9 +293,16 @@ def check(ex: str, *logs: str) -> tuple[list[str], list[str], str]:
     """Run exclave check on ex with the given EXCLAVE_LOG files (10.3).
 
     Returns its error lines and its warning lines, each without its prefix, and its whole output.
+    A status but 0 or 1, or no summary line, fails the test: a crash or a refusal before the report
+    is never an empty list of errors.
     """
-    _rc, out, err = run([*TOOL, "check", ex, *logs])
+    rc, out, err = run([*TOOL, "check", ex, *logs])
     lines = out.splitlines()
+    if rc not in (0, 1) or not any(
+        x.startswith("static check: ") and x.endswith(" errors") for x in lines
+    ):
+        msg = f"check {ex} exited {rc} without its summary: {(out + err)[-600:]}"
+        raise AssertionError(msg)
     errors = [x.removeprefix("error: ") for x in lines if x.startswith("error: ")]
     warnings = [x.removeprefix("warning: ") for x in lines if x.startswith("warning: ")]
     return errors, warnings, out + err

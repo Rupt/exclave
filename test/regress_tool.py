@@ -144,21 +144,25 @@ def exclave_readme(ctx: Ctx) -> None:
         rc == 0 and read_text(os.path.join(bare, "README")) == "notes\n",
         "wrap replaced the maker's README: " + o + e,
     )
-    run([*TOOL, "relink", bare, ctx.launcher])
+    rc, o, e = run([*TOOL, "relink", bare, ctx.launcher])
     expect(
-        read_text(os.path.join(bare, "README")) == "notes\n", "relink replaced the maker's README"
+        rc == 0 and read_text(os.path.join(bare, "README")) == "notes\n",
+        "relink replaced the maker's README: " + o + e,
     )
     os.remove(os.path.join(bare, "README"))
     # a shortcut by that name stays a shortcut
     os.symlink("tree/usr/share/x", os.path.join(bare, "README"))
-    run([*TOOL, "relink", bare, ctx.launcher])
+    rc, o, e = run([*TOOL, "relink", bare, ctx.launcher])
     expect(
-        os.readlink(os.path.join(bare, "README")) == "tree/usr/share/x",
-        "relink replaced a shortcut named README",
+        rc == 0 and os.readlink(os.path.join(bare, "README")) == "tree/usr/share/x",
+        "relink replaced a shortcut named README: " + o + e,
     )
     os.remove(os.path.join(bare, "README"))
-    run([*TOOL, "relink", bare, ctx.launcher])  # relink writes a README where the exclave has none
-    expect(read_bytes(os.path.join(bare, "README")) == readme, "relink wrote no README")
+    rc, o, e = run([*TOOL, "relink", bare, ctx.launcher])  # a README where the exclave has none
+    expect(
+        rc == 0 and read_bytes(os.path.join(bare, "README")) == readme,
+        "relink wrote no README: " + o + e,
+    )
 
 
 @test
