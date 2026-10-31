@@ -4028,7 +4028,9 @@ its time, ok, SKIP or FAIL:
   URL on a repository of one package made and signed there, with keys
   made there; the signed repository yields its package, and one signed
   by another key, altered after signing, with its package altered, or
-  unsigned is refused in one line with nothing fetched;
+  unsigned is refused in one line with nothing fetched, as is one whose
+  signature holds but whose index or package does not match a digest or
+  a size the chain from the signature records;
 - on the exclave given: the suite, the resolution oracle, the
   namespace oracle and the syscall probe;
 - when `EXCLAVE_TEST_INPUTS` names the directory `scripts/inputs`

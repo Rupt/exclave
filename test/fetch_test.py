@@ -6,7 +6,9 @@ Each test makes a repository of one package under its work directory, signed wit
 (an OpenPGP key from gpg, an RSA key from openssl), and runs a fetcher on it through a file:// URL,
 as scripts/fetch-debs, fetch-rpms and fetch-apks run it. The signed repository must yield its
 package; the same repository signed by another key, with its signed text altered, with the
-package altered, or without its signature, must be refused in one line with nothing fetched.
+package altered, or without its signature, must be refused in one line with nothing fetched, and
+so must one whose signed text is intact but a digest below it, of an index or of a package, does
+not match.
 Needs gpg, gpgv and openssl, and says so and exits 0 without them. Prints one line per test; the
 exit status is the number of failures, at most 255.
 """
@@ -123,19 +125,27 @@ def write(path: str, data: bytes) -> None:
         f.write(data)
 
 
-def deb_mirror(d: str, sign: Callable[[bytes], bytes] | None, *, tamper: bool = False) -> str:
-    """A Debian-style archive of one package, its InRelease signed by sign, or unsigned."""
+def deb_mirror(d: str, sign: Callable[[bytes], bytes] | None, *, tamper: str = "") -> str:
+    """A Debian-style archive of one package, its InRelease signed by sign, or unsigned.
+
+    tamper: what is altered after the digest that covers it was written: "signed" the InRelease
+    text, "index" the Packages.gz the Release file lists, "deb" a byte of the package the index
+    lists; "size" gives the index a size one byte off, signed with the rest.
+    """
     pkg = os.path.join(d, "pool", f"x_1_{DEB_ARCH}.deb")
     os.makedirs(os.path.dirname(pkg), exist_ok=True)
     make_deb(pkg, "x", [("./usr", "dir", None, 0o755), ("./usr/x", "file", b"x\n", 0o644)])
     with open(pkg, "rb") as f:
         deb = f.read()
-    packages = gzip.compress(
+    stanza = (
         f"Package: x\nVersion: 1\nArchitecture: {DEB_ARCH}\nFilename: pool/x_1_{DEB_ARCH}.deb\n"
-        f"Size: {len(deb)}\nSHA256: {hashlib.sha256(deb).hexdigest()}\n\n".encode(),
-        mtime=0,
+        f"Size: {len(deb) + (tamper == 'size')}\nSHA256: {hashlib.sha256(deb).hexdigest()}\n\n"
     )
-    write(os.path.join(d, "dists", "noble", "main", f"binary-{DEB_ARCH}", "Packages.gz"), packages)
+    packages = gzip.compress(stanza.encode(), mtime=0)
+    index = os.path.join(d, "dists", "noble", "main", f"binary-{DEB_ARCH}", "Packages.gz")
+    write(index, gzip.compress(stanza.encode(), mtime=1) if tamper == "index" else packages)
+    if tamper == "deb":
+        write(pkg, deb[:-10] + bytes([deb[-10] ^ 1]) + deb[-9:])
     release = (
         "Suite: noble\nCodename: noble\nAcquire-By-Hash: no\nSHA256:\n"
         f" {hashlib.sha256(packages).hexdigest()} {len(packages)}"
@@ -145,7 +155,7 @@ def deb_mirror(d: str, sign: Callable[[bytes], bytes] | None, *, tamper: bool = 
         write(os.path.join(d, "dists", "noble", "Release"), release)
         return d
     signed = sign(release)
-    if tamper:
+    if tamper == "signed":
         signed = signed.replace(b"Codename: noble", b"Codename: nobel")
     write(os.path.join(d, "dists", "noble", "InRelease"), signed)
     return d
@@ -190,8 +200,13 @@ def rpm_mirror(
     sign_payload: bool = False,
     flip: bool = False,
     repomd_sign: Callable[[bytes], bytes] | None = None,
+    tamper: str = "",
 ) -> str:
-    """A yum-style repository of one package, signed as rpm signs, its repomd.xml signed or not."""
+    """A yum-style repository of one package, signed as rpm signs, its repomd.xml signed or not.
+
+    flip alters a byte of the package before the index is written, so that only its signature can
+    tell; tamper alters "rpm" a byte of it after, or "primary" the index after repomd.xml lists it.
+    """
     pkg = os.path.join(d, "Packages", f"x-1.0-1.{MACHINE}.rpm")
     os.makedirs(os.path.dirname(pkg), exist_ok=True)
     make_rpm(
@@ -224,6 +239,8 @@ def rpm_mirror(
         ).encode(),
         mtime=0,
     )
+    if tamper == "rpm":
+        write(pkg, rpm[:-100] + bytes([rpm[-100] ^ 1]) + rpm[-99:])
     write(os.path.join(d, "repodata", "primary.xml.gz"), primary)
     repomd = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -232,6 +249,8 @@ def rpm_mirror(
         '</checksum><location href="repodata/primary.xml.gz"/></data>\n</repomd>\n'
     ).encode()
     write(os.path.join(d, "repodata", "repomd.xml"), repomd)
+    if tamper == "primary":
+        write(os.path.join(d, "repodata", "primary.xml.gz"), gzip.decompress(primary))
     if repomd_sign is not None:
         write(os.path.join(d, "repodata", "repomd.xml.asc"), repomd_sign(repomd))
     return d
@@ -271,17 +290,29 @@ def first_gzip_member(data: bytes) -> bytes:
     return data[: len(data) - len(stream.unused_data)]
 
 
-def apk_mirror(d: str, key: RsaKey, signer: str, *, kind: str = "RSA", tamper: bool = False) -> str:
-    """An Alpine repository of one package, its index signed by key under the name signer."""
+def apk_mirror(d: str, key: RsaKey, signer: str, *, kind: str = "RSA", tamper: str = "") -> str:
+    """An Alpine repository of one package, its index signed by key under the name signer.
+
+    tamper: "signed" alters the index after signing; "control" gives the index the checksum of
+    another package's control section, and "data" gives .PKGINFO the datahash of other data.
+    """
     rel = os.path.join("v3.21", "main", MACHINE)
     pkg = os.path.join(d, rel, "x-1.0-r0.apk")
     os.makedirs(os.path.dirname(pkg), exist_ok=True)
     members = [("usr", "dir", None, 0o755), ("usr/x", "file", b"x\n", 0o644)]
     data = gzip.compress(tar_bytes(members), mtime=0)
-    make_apk(pkg, "x", members, f"datahash = {hashlib.sha256(data).hexdigest()}\n", data=data)
+    hashed = gzip.compress(tar_bytes(members), mtime=1) if tamper == "data" else data
+    make_apk(pkg, "x", members, f"datahash = {hashlib.sha256(hashed).hexdigest()}\n", data=data)
     with open(pkg, "rb") as f:
         apk = f.read()
-    control_sha1 = hashlib.sha1(first_gzip_member(apk)).digest()  # noqa: S324 -- apk's own checksum
+    if tamper == "control":
+        make_apk(pkg + ".other", "x", members, "pkgdesc = another\n", data=data)
+        with open(pkg + ".other", "rb") as f:
+            listed = f.read()
+        os.remove(pkg + ".other")
+    else:
+        listed = apk
+    control_sha1 = hashlib.sha1(first_gzip_member(listed)).digest()  # noqa: S324 -- apk's checksum
     index = (
         f"C:Q1{base64.b64encode(control_sha1).decode()}\nP:x\nV:1.0-r0\nA:{MACHINE}\n"
         f"S:{len(apk)}\nI:4096\nT:x\nU:x\nL:MIT\nD:\n\n"
@@ -294,7 +325,7 @@ def apk_mirror(d: str, key: RsaKey, signer: str, *, kind: str = "RSA", tamper: b
     )
     digest = {"RSA": "sha1", "RSA256": "sha256", "RSA512": "sha512"}[kind]
     signature = key.sign(rest, digest)
-    if tamper:
+    if tamper == "signed":
         rest = bytearray(rest)
         rest[len(rest) // 2] ^= 1
         rest = bytes(rest)
@@ -358,6 +389,8 @@ def debs_check_inrelease(work: str) -> None:
     Signed: fetched, with a binary keyring or one in ASCII armour, and when the file carries two
     signatures, as the archives' do, with a keyring holding either key. Signed by another key,
     altered after signing, or with a Release file alone: refused, nothing fetched.
+    Below the signature, an index the Release file does not list, a package its index does not
+    list, by its SHA256 or its size: refused.
     """
     right, wrong, second = PgpKey(work, "right"), PgpKey(work, "wrong"), PgpKey(work, "second")
     keyring = right.export(work, "right.gpg")
@@ -380,8 +413,15 @@ def debs_check_inrelease(work: str) -> None:
     refused("two keys, neither", fetch_debs(work, both, wrong_ring, "both3"), "no good signature")
     other = deb_mirror(os.path.join(work, "other"), wrong.clearsign)
     refused("other key", fetch_debs(work, other, keyring, "other"), "signature does not verify")
-    altered = deb_mirror(os.path.join(work, "altered"), right.clearsign, tamper=True)
+    altered = deb_mirror(os.path.join(work, "altered"), right.clearsign, tamper="signed")
     refused("altered", fetch_debs(work, altered, keyring, "altered"), "signature does not verify")
+    for tamper, why in (
+        ("index", "the index does not match the Release file"),
+        ("deb", f"x_1_{DEB_ARCH}.deb: SHA256 does not match the index"),
+        ("size", f"x_1_{DEB_ARCH}.deb: size does not match the index"),
+    ):
+        mirror = deb_mirror(os.path.join(work, tamper), right.clearsign, tamper=tamper)
+        refused(f"{tamper} altered", fetch_debs(work, mirror, keyring, tamper), why)
     unsigned = deb_mirror(os.path.join(work, "unsigned"), None)
     refused("unsigned", fetch_debs(work, unsigned, keyring, "unsigned"), "InRelease")
 
@@ -392,7 +432,8 @@ def rpms_check_packages_and_repomd(work: str) -> None:
 
     A header signature with the payload's digest, or a signature over header and payload: fetched.
     Unsigned, signed by another key, or altered after signing: refused. repomd.xml.asc signed by
-    another key: refused; absent: fetched, and the log says the index is the mirror's.
+    another key: refused; absent: fetched, and the log says the index is the mirror's. Below the
+    signatures, an index repomd.xml does not list, or a package its index does not: refused.
     """
     right, wrong = PgpKey(work, "right"), PgpKey(work, "wrong")
     keyring = right.export(work, "RPM-GPG-KEY-right", armor=True)
@@ -424,6 +465,12 @@ def rpms_check_packages_and_repomd(work: str) -> None:
         repomd_sign=lambda d: wrong.detach(d, armor=True),
     )
     refused("bad repomd", fetch_rpms(work, bad_md, keyring, "bad-md"), "repomd.xml's signature")
+    for tamper, why in (
+        ("primary", "the index does not match repomd.xml"),
+        ("rpm", f"{rpm}: SHA-256 does not match the index"),
+    ):
+        mirror = rpm_mirror(os.path.join(work, tamper), right.detach, tamper=tamper)
+        refused(f"{tamper} altered", fetch_rpms(work, mirror, keyring, tamper), why)
 
 
 @test
@@ -431,7 +478,9 @@ def apks_check_index(work: str) -> None:
     """10: fetch-apks takes an index only when the key its signature names verifies it.
 
     Signed by the key given, SHA-1 as Alpine signs or SHA-256: fetched. Signed under a name no
-    --key has, by another key under the same name, or altered after signing: refused.
+    --key has, by another key under the same name, or altered after signing: refused. Below the
+    signature, a package whose control section the index's checksum does not name, or whose data
+    its .PKGINFO's datahash does not: refused.
     """
     right, wrong = RsaKey(work, "right.rsa.pub"), RsaKey(work, "wrong.rsa.pub")
     apk = "x-1.0-r0.apk"
@@ -443,8 +492,14 @@ def apks_check_index(work: str) -> None:
     refused("unknown", fetch_apks(work, unknown, right.public, "unknown"), "which no --key gives")
     other = apk_mirror(os.path.join(work, "other"), wrong, "right.rsa.pub")
     refused("other key", fetch_apks(work, other, right.public, "other"), "does not verify")
-    altered = apk_mirror(os.path.join(work, "altered"), right, "right.rsa.pub", tamper=True)
+    altered = apk_mirror(os.path.join(work, "altered"), right, "right.rsa.pub", tamper="signed")
     refused("altered", fetch_apks(work, altered, right.public, "altered"), "does not verify")
+    for tamper, why in (
+        ("control", f"{apk}: checksum does not match the index"),
+        ("data", f"{apk}: the data section does not match the datahash of .PKGINFO"),
+    ):
+        mirror = apk_mirror(os.path.join(work, tamper), right, "right.rsa.pub", tamper=tamper)
+        refused(f"{tamper} altered", fetch_apks(work, mirror, right.public, tamper), why)
 
 
 # ---------------------------------------------------------------- the runner
