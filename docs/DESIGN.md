@@ -1088,8 +1088,11 @@ dropped from the re-issue:
   `RESOLVE_NO_MAGICLINKS` and `RESOLVE_NO_SYMLINKS`, and otherwise
   `EXDEV` under the scoped flags, in the kernel's order
   (`nd_jump_link`).
-- `RESOLVE_CACHED` is dropped, since a resolved path is opened without
-  it and openat2(2) permits a caller to see success where the kernel
+- `RESOLVE_CACHED` with `O_CREAT`, `O_TRUNC` or `O_TMPFILE` is
+  `EAGAIN` before any lookup, after the struct's other checks
+  (`build_open_flags`), since no cached lookup can create or truncate.
+  Otherwise it is dropped, since a resolved path is opened without it
+  and openat2(2) permits a caller to see success where the kernel
   might have said `EAGAIN`.
 
 The resolved path is re-issued as `openat2` itself, so that a kernel
@@ -2637,9 +2640,10 @@ and stay fixed.
     exclave, enters it, or restarts at the root, which is the tree's,
     through an absolute path, a link target or `..`, sees two mounts
     under `RESOLVE_NO_XDEV`, the exclave and the host, and not the
-    host's own mount boundaries (7.4.3). `RESOLVE_CACHED` is dropped. A
-    scoped `..` under `RESOLVE_IN_ROOT` or `RESOLVE_BENEATH` never
-    answers `EAGAIN`, which the kernel returns when a rename or a mount
+    host's own mount boundaries (7.4.3). `RESOLVE_CACHED` is dropped
+    where the kernel would look the path up. A scoped `..` under
+    `RESOLVE_IN_ROOT` or `RESOLVE_BENEATH` never answers `EAGAIN`,
+    which the kernel returns when a rename or a mount
     anywhere on the system raced its walk (`handle_dots` in
     `fs/namei.c`): the launcher walks in user space and sees no such
     race, so a program that retries gets the retry's answer at once.

@@ -288,6 +288,7 @@ int main(void)
         int err = 0, opened = 0;
         char out[4096], at[4096];
         long nout = 0, nat = -1;
+        int cached_retry = 0;
         for (int i = 0; i < na; i++)
             if (args[i].kind == 'f' && args[i].open_errno) opened = args[i].open_errno;
         if (nr == SYS_execve || nr == SYS_execveat) {
@@ -324,12 +325,24 @@ int main(void)
             ret = syscall(nr, args[0].v, args[1].v, args[2].v, args[3].v, args[4].v, args[5].v);
             /* openat2(2): a scoped walk (RESOLVE_BENEATH, RESOLVE_IN_ROOT) answers EAGAIN when a rename or a mount
              * anywhere on the system raced it, and tells the caller to retry; this caller does, so the kernel's answer
-             * is the retry's. RESOLVE_CACHED's EAGAIN is not a race and is not retried. */
+             * is the retry's. RESOLVE_CACHED's EAGAIN says the lookup needs more than the cache, and openat2(2) tells
+             * the caller to retry without the flag; this caller does, once, and says so with cached_retry. */
             for (int tries = 0;
                  nr == SYS_openat2 && ret < 0 && errno == EAGAIN && tries < 1000 && scoped_uncached(&args[2]);
                  tries++) {
                 errno = 0;
                 ret = syscall(nr, args[0].v, args[1].v, args[2].v, args[3].v, args[4].v, args[5].v);
+            }
+            if (nr == SYS_openat2 && ret < 0 && errno == EAGAIN && args[2].kind == 'h' && args[2].buf &&
+                (((unsigned long long *)args[2].buf)[2] & RESOLVE_CACHED)) {
+                ((unsigned long long *)args[2].buf)[2] &= ~(unsigned long long)RESOLVE_CACHED;
+                cached_retry = 1;
+                errno = 0;
+                ret = syscall(nr, args[0].v, args[1].v, args[2].v, args[3].v, args[4].v, args[5].v);
+                for (int tries = 0; ret < 0 && errno == EAGAIN && tries < 1000 && scoped_uncached(&args[2]); tries++) {
+                    errno = 0;
+                    ret = syscall(nr, args[0].v, args[1].v, args[2].v, args[3].v, args[4].v, args[5].v);
+                }
             }
             err = ret < 0 ? errno : 0;
             if (ret >= 0 && (nr == SYS_open || nr == SYS_openat || nr == SYS_creat || nr == SYS_openat2)) {
@@ -364,6 +377,7 @@ int main(void)
             printf(" at=");
             hex(at, nat);
         }
+        if (cached_retry) printf(" cached_retry");
         printf("\n");
         for (int i = 0; i < na; i++) {
             if (args[i].fd >= 0) close(args[i].fd);

@@ -385,7 +385,8 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
 
 /* openat2 (7.4.3): the kernel's checks on struct open_how first, in its order (build_open_flags), then the
  * same open as openat with the resolve flags honoured by the walk (canon.c) and dropped from the re-issue;
- * RESOLVE_CACHED is dropped, which openat2(2) permits, since a resolved path is opened without it */
+ * RESOLVE_CACHED refuses what no cached lookup can do, and is otherwise dropped, which openat2(2) permits,
+ * since a resolved path is opened without it */
 static long do_openat2(struct scratch *S, long *a)
 {
     unsigned long how[3];
@@ -415,6 +416,8 @@ static long do_openat2(struct scratch *S, long *a)
         if ((flags & O_ACCMODE) == O_RDONLY) return -EINVAL;
     }
     if ((flags & O_PATH) && (flags & ~(unsigned long)O_PATH_FLAGS)) return -EINVAL;
+    /* a create, a truncate or a temporary file under RESOLVE_CACHED: EAGAIN before any lookup (5.12) */
+    if ((rf & RESOLVE_CACHED) && (flags & (O_TRUNC | O_CREAT | (O_TMPFILE & ~O_DIRECTORY)))) return -EAGAIN;
     /* the scope: the descriptor's directory, a directory it must be */
     if (rf & (RESOLVE_IN_ROOT | RESOLVE_BENEATH)) {
         int dfd = (int)a[0];

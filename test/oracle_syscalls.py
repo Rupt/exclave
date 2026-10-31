@@ -57,8 +57,12 @@ openat2 and EAGAIN. A scoped walk (RESOLVE_BENEATH, RESOLVE_IN_ROOT) answers EAG
 a mount anywhere on the system raced it (handle_dots in fs/namei.c), and openat2(2) tells the caller
 to retry; probe.c does, so the kernel's answer is the retry's. Measured natively under 170 000
 renames a second, 4 900 of a million such walks answered EAGAIN and every one succeeded on its first
-retry; with no renames, none of a million did. RESOLVE_CACHED's EAGAIN is not a race and is not
-retried.
+retry; with no renames, none of a million did. RESOLVE_CACHED's EAGAIN says the lookup needs more
+than the cache, and openat2(2) tells the caller to retry without the flag; probe.c does, once, and
+appends " cached_retry" to the answer. The kernel answers EAGAIN there for a create, a truncate and
+a temporary file before any lookup (build_open_flags), and otherwise where its cache is cold, as in
+bwrap's fresh mount namespace; the handler answers the first as the kernel does and drops the flag
+for the rest, so its answer is the retry's.
 
 Accepted differences. EXPECTED is part of the design (DESIGN.md 17 item 7): each entry names the
 rule that makes a difference right, and a difference no entry names fails. The entries are of two
@@ -67,14 +71,15 @@ kinds, and each names the syscalls and the answers its reason covers:
     there; uid 0 is unmapped in bwrap's user namespace; a new top-level name is the host's (8.1),
     whose / answers EACCES where bwrap's root says EROFS; an identity symlink whose host target is
     on a tmpfs gives other xattr answers than the tree copy; RESOLVE_CACHED answers EAGAIN under
-    bwrap's cold cache;
+    bwrap's cold cache where the handler answers the retry's answer itself;
   - for the kernel matrix (12.1), what an older kernel lacks or decided differently, each with the
     kernel change, the handler answering as the newest kernel does: ENOSYS for a syscall added after
     3.10, named with its release; EISDIR for O_CREAT|O_EXCL on ., .. or / before 5.8; linkat with
     AT_EMPTY_PATH refused with ENOENT before 6.10; RENAME_WHITEOUT's capability check in the initial
     user namespace; O_DIRECTORY|O_CREAT opening or creating before 6.3; RHEL 8's 4.18 openat2
-    answering EXDEV for a create through a symlink under RESOLVE_NO_XDEV; RESOLVE_CACHED unknown
-    before 5.12; utimensat refusing AT_EMPTY_PATH and checking the nanoseconds first before 5.9; an
+    answering EXDEV for a create through a symlink under RESOLVE_NO_XDEV and RESOLVE_CACHED unknown
+    before 5.12, where the launcher must answer what the kernel answers without the flag;
+    utimensat refusing AT_EMPTY_PATH and checking the nanoseconds first before 5.9; an
     exec of a socket answered ENXIO before 5.9; truncate checking the mount before the permission on
     6.1 and earlier (6.14 checks the permission first).
 More differences are accepted on older kernels, where more of the kernel entries apply.
@@ -85,7 +90,7 @@ one whose answers agree fails until its entry is removed.
 
 Counts. The last line of the output gives the number of cases, of groups (one per syscall, plus
 the cases run after a chdir into the exclave) and of path forms, then the differences and those
-accepted. Most accepted differences are RESOLVE_CACHED's EAGAIN, whose count moves by a few between
+accepted. Most accepted differences are RESOLVE_CACHED's retries, whose count moves by a few between
 runs. The number of cases depends on the machine and the work directory: a syscall missing from the
 machine's table is left out, and so is a host-area socket address longer than sun_path's 107 bytes,
 which no program could write whole, so a deeper work directory gives fewer cases.
@@ -1177,16 +1182,20 @@ def exec_errnos(b: str, o: str) -> tuple[int, int]:
 
 
 # differences with a reason: (syscall name or None, predicate on (label, bwrap answer, launcher
-# answer), reason). The list is part of the design (17): each entry names the rule that makes the
-# difference right.
+# answer, the kernel's answers in the group by label), reason). The list is part of the design (17):
+# each entry names the rule that makes the difference right.
+# openat2's flag words (generate) that create: RESOLVE_CACHED refuses them before any lookup
+CREATING = ("wr_creat", "tmpfile")
 # bound from the host into the read-only root under bwrap
 BOUND = {"passwd", "resolv", "tmp", "home", "opt", "dev_null", "rel_etc_by_dotdot"}
-EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
+EXPECTED: list[tuple[str | None, Callable[[str, str, str, dict[str, str]], object], str]] = [
     # the kernel matrix (12): what this kernel lacks or decided differently, each entry naming the
     # kernel change
     (
         None,
-        lambda label, b, o: KERNEL < (5, 8) and "creat_excl" in label and errnos(b, o) == (21, 17),
+        lambda label, b, o, _k: (
+            KERNEL < (5, 8) and "creat_excl" in label and errnos(b, o) == (21, 17)
+        ),
         (
             "O_CREAT|O_EXCL on '.', '..' or '/': EISDIR before the lookup rework of 5.8, EEXIST "
             "since; the handler answers as the newer kernels do"
@@ -1194,7 +1203,7 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
     ),
     (
         "linkat",
-        lambda label, b, o: KERNEL < (6, 10) and "empty" in label and errnos(b, o)[0] == 2,
+        lambda label, b, o, _k: KERNEL < (6, 10) and "empty" in label and errnos(b, o)[0] == 2,
         (
             "linkat with AT_EMPTY_PATH needed CAP_DAC_READ_SEARCH (ENOENT without it) until 6.10 "
             "allowed it for files with a link; the handler answers as the newer kernels do"
@@ -1202,16 +1211,23 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
     ),
     (
         "openat2",
-        lambda label, b, o: "cached" in label and errnos(b, o)[0] == 11,
+        lambda label, b, o, _k: (
+            label.endswith("/cached")
+            and label.split("/")[-2] not in CREATING
+            and b.endswith(" cached_retry")
+            and b.removesuffix(" cached_retry") == o
+        ),
         (
-            "RESOLVE_CACHED: the kernel answers EAGAIN where the lookup would need I/O, and "
-            "bwrap's fresh mount namespace has a cold cache; the handler drops the flag, as "
-            "openat2(2) permits, and resolves"
+            "RESOLVE_CACHED: the kernel answers EAGAIN where the lookup would need I/O, as in "
+            "bwrap's fresh mount namespace with its cold cache, and the probe retries without the "
+            "flag as openat2(2) tells it to; the handler drops the flag, as openat2(2) permits, "
+            "so it answers what the retry does. A create or a temporary file is EAGAIN before "
+            "any lookup, in both worlds"
         ),
     ),
     (
         "openat2",
-        lambda label, b, o: KERNEL < (6, 3) and "dir_creat" in label and errnos(b, o)[1] == 22,
+        lambda label, b, o, _k: KERNEL < (6, 3) and "dir_creat" in label and errnos(b, o)[1] == 22,
         (
             "O_DIRECTORY|O_CREAT is EINVAL since 6.3 (open.c); this kernel opens or creates "
             "instead; the handler answers as the newer kernels do"
@@ -1219,25 +1235,35 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
     ),
     (
         "openat2",
-        lambda label, b, o: (
-            KERNEL < (5, 6) and "no_xdev" in label and "creat" in label and errnos(b, o)[0] == 18
+        lambda label, b, o, k: (
+            KERNEL < (5, 6)
+            and label.endswith("_creat/no_xdev")
+            and errnos(b, o)[0] == errno.EXDEV
+            and o == k.get(label.removesuffix("no_xdev") + "plain")
         ),
         (
             "RHEL 8's 4.18 backport of openat2 answers EXDEV for a create through a symlink under "
-            "RESOLVE_NO_XDEV; 5.6 and later resolve it"
+            "RESOLVE_NO_XDEV; 5.6 and later resolve it, as the handler does, so it answers what "
+            "the call without the flag does"
         ),
     ),
     (
         "openat2",
-        lambda label, b, o: KERNEL < (5, 12) and "cached" in label and errnos(b, o)[0] == 22,
+        lambda label, b, o, k: (
+            KERNEL < (5, 12)
+            and label.endswith("/cached")
+            and errnos(b, o)[0] == errno.EINVAL
+            and o.removesuffix(" cached_retry") == k.get(label.removesuffix("cached") + "plain")
+        ),
         (
-            "RESOLVE_CACHED is 5.12+: EINVAL before; the handler drops it, as openat2(2) permits, "
-            "and answers from the walk"
+            "RESOLVE_CACHED is 5.12+: EINVAL before; the handler answers as 5.12 does, EAGAIN for "
+            "a create, a truncate or a temporary file, retried without it, and otherwise drops "
+            "it, as openat2(2) permits, so it answers what the call without the flag does"
         ),
     ),
     (
         None,
-        lambda label, b, o: "whiteout" in label and errnos(b, o)[0] == 1,
+        lambda label, b, o, _k: "whiteout" in label and errnos(b, o)[0] == 1,
         (
             "RENAME_WHITEOUT: this kernel checks a capability in the initial user namespace "
             "before any lookup (EPERM); later kernels check the caller's, which bwrap's namespace "
@@ -1246,7 +1272,7 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
     ),
     (
         None,
-        lambda label, b, o: "resolv" in forms_in(label) and errnos(b, o) == (61, 95),
+        lambda label, b, o, _k: "resolv" in forms_in(label) and errnos(b, o) == (61, 95),
         (
             "the host's identity symlink resolves to a file on another filesystem (a tmpfs under "
             "/run) whose xattr answers differ from the tree copy's symlink"
@@ -1254,7 +1280,7 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
     ),
     (
         None,
-        lambda label, b, o: (
+        lambda label, b, o, _k: (
             forms_in(label) & BOUND and errnos(b, o)[0] == 30 and errnos(b, o)[1] in (1, 13)
         ),
         (
@@ -1265,12 +1291,12 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
     ),
     (
         None,
-        lambda label, b, o: "to_root" in forms_in(label) and errnos(b, o) == (22, 1),
+        lambda label, b, o, _k: "to_root" in forms_in(label) and errnos(b, o) == (22, 1),
         "uid 0 is not mapped in bwrap's user namespace (EINVAL); the launcher runs in none (EPERM)",
     ),
     (
         "bind",
-        lambda label, b, o: (
+        lambda label, b, o, _k: (
             label.startswith(("root/", "root_dotdot/", "rel_root_by_dotdot/"))
             and "after_chdir_rel" in label
             and errnos(b, o) == (30, 13)
@@ -1282,7 +1308,7 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
     ),
     (
         None,
-        lambda label, b, o: (
+        lambda label, b, o, _k: (
             KERNEL < (6, 14) and "ro_file" in forms_in(label) and errnos(b, o) == (30, 13)
         ),
         (
@@ -1293,7 +1319,7 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
     ),
     (
         "utimensat",
-        lambda label, b, o: (
+        lambda label, b, o, _k: (
             KERNEL < (5, 9) and ("empty" in label or "bad_nsec" in label) and errnos(b, o)[0] == 22
         ),
         (
@@ -1304,7 +1330,7 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
     ),
     (
         "execve",
-        lambda label, b, o: (
+        lambda label, b, o, _k: (
             KERNEL < (5, 9)
             and "sock" in forms_in(label)
             and b.startswith("ret=27136")
@@ -1317,7 +1343,7 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str], object], str]] = [
     ),
     (
         "execveat",
-        lambda label, b, o: (
+        lambda label, b, o, _k: (
             KERNEL < (5, 9)
             and "sock" in forms_in(label)
             and b.startswith("ret=27136")
@@ -1350,7 +1376,7 @@ ADDED = {
 EXPECTED.extend(
     (
         call,
-        lambda _label, b, o, since=since: since > KERNEL and errnos(b, o)[0] == errno.ENOSYS,
+        lambda _label, b, o, _k, since=since: since > KERNEL and errnos(b, o)[0] == errno.ENOSYS,
         (
             f"{call} is {since[0]}.{since[1]}+: this kernel lacks it (ENOSYS); the handler "
             "answers what it can from its own rule and re-issues the rest"
@@ -1366,7 +1392,7 @@ EXPECTED.extend(
     [
         (
             "execveat",
-            lambda label, b, o: (
+            lambda label, b, o, _k: (
                 KERNEL < (6, 14)
                 and label.endswith("/check")
                 and exec_errnos(b, o)[0] == errno.EINVAL
@@ -1379,7 +1405,7 @@ EXPECTED.extend(
         ),
         (
             "execveat",
-            lambda label, b, o: (
+            lambda label, b, o, _k: (
                 KERNEL < (7, 0)
                 and label.endswith("/bad_flag")
                 and exec_errnos(b, o)[1] == errno.EINVAL
@@ -1397,7 +1423,7 @@ EXPECTED.extend(
 EXPECTED.extend(
     (
         call,
-        lambda label, b, o: (
+        lambda label, b, o, _k: (
             KERNEL < (6, 13)
             and label.endswith(("/empty_name", "/bad_flags", "/too_big"))
             and errnos(b, o)[1] in (errno.E2BIG, errno.EINVAL, errno.ERANGE)
@@ -1447,9 +1473,10 @@ DEFECTS: set[tuple[str, str, str, str]] = {
 }
 
 
-def expected(name: str, label: str, b: str, o: str) -> str | None:
+def expected(name: str, label: str, b: str, o: str, kernel: dict[str, str]) -> str | None:
+    """The reason EXPECTED gives for a difference; kernel holds the group's kernel answers."""
     for n, pred, reason in EXPECTED:
-        if (n is None or n == name) and pred(label, b, o):
+        if (n is None or n == name) and pred(label, b, o, kernel):
             return reason
     return None
 
@@ -1608,6 +1635,7 @@ def main() -> int:
             differ += 1
             continue
         d = 0
+        kernel = {c[0]: bline.split(" ", 1)[1] for c, bline in zip(mine, bl, strict=True)}
         for (label, n, toks, _), bline, oline in zip(mine, bl, ol, strict=False):
             total += 1
             b, o = bline.split(" ", 1)[1], oline.split(" ", 1)[1]
@@ -1621,7 +1649,7 @@ def main() -> int:
                 known += 1
                 print(f"DEFECT {n} {label}\n     kernel: {b}\n     launcher: {o}")
                 continue
-            why = expected(n, label, b, o)
+            why = expected(n, label, b, o, kernel)
             if why:
                 accepted += 1
                 if args.expected:

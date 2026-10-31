@@ -217,6 +217,7 @@ long __sc6_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define E2BIG 7
 #define ENOEXEC 8
 #define EBADF 9
+#define EAGAIN 11
 #define ENOMEM 12
 #define EACCES 13
 #define EFAULT 14
