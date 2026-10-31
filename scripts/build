@@ -23,7 +23,8 @@
 #                   is built after it
 #   exclave-asan    the same under ASan and UBSan, linked dynamically, a
 #                   finding exiting 99 (test/sanitize.c), which the gate's
-#                   unit step runs on hostile input
+#                   unit step runs on hostile input; left out of a copy of
+#                   the sources without the tests, as scripts/reproduce makes
 #
 # and, on x86-64 with the cross compiler, launcher-aarch64,
 # launcher-old-aarch64 and exclave-aarch64. Nothing is built when every output
@@ -43,13 +44,15 @@ version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)+$commit
 cross=$(c_arches | grep -vx "$native")
 
 fresh=${fresh:-true}
-for f in "$stamp" build/launcher build/launcher-old build/launcher-debug build/exclave build/exclave-asan; do
+sanitized=test/sanitize.c
+[ -f "$sanitized" ] || sanitized=
+for f in "$stamp" build/launcher build/launcher-old build/launcher-debug build/exclave ${sanitized:+build/exclave-asan}; do
     [ -e "$f" ] || fresh=false
 done
 for arch in $cross; do
     [ -e "build/launcher-$arch" ] && [ -e "build/launcher-old-$arch" ] && [ -e "build/exclave-$arch" ] || fresh=false
 done
-if $fresh && [ -z "$(find src tool test/sanitize.c LICENSE scripts/build scripts/lib.sh -newer "$stamp" | head -n 1)" ]; then
+if $fresh && [ -z "$(find src tool $sanitized LICENSE scripts/build scripts/lib.sh -newer "$stamp" | head -n 1)" ]; then
     exit 0
 fi
 
@@ -128,8 +131,10 @@ launcher "$native" build/launcher-debug -fsanitize=undefined -fsanitize-trap=und
 pids="$pids $!"
 tool "$native" build/exclave -static -s &
 pids="$pids $!"
-tool "$native" build/exclave-asan -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer test/sanitize.c &
-pids="$pids $!"
+if [ -n "$sanitized" ]; then
+    tool "$native" build/exclave-asan -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer "$sanitized" &
+    pids="$pids $!"
+fi
 for arch in $cross; do
     # the command carries the launcher, so is built after it
     { launcher "$arch" "build/launcher-$arch" -fcallgraph-info=su -dumpdir "build/launcher-$arch.debug-" &&
