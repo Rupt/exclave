@@ -59,10 +59,10 @@ jobs:
       - name: the gate
         run: |
           case $(uname -m) in
-          x86_64) set -- "$INPUTS/gcc13.exclave" "$INPUTS/alpine.exclave" "$INPUTS/f42.exclave" "$INPUTS/clang.exclave" ;;
-          *) set -- "$INPUTS/gcc13-arm64.exclave" ;;
+          x86_64) ex=$INPUTS/gcc13.exclave ;;
+          *) ex=$INPUTS/gcc13-arm64.exclave ;;
           esac
-          EXCLAVE_TEST_INPUTS=$INPUTS scripts/gate --full --jobs "$(nproc)" "$@"
+          EXCLAVE_TEST_INPUTS=$INPUTS scripts/gate --full --jobs "$(nproc)" "$ex"
       - name: the gate's logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -40,27 +40,34 @@ The loop that has served well, in the order it pays:
    the regression list (17 item 4), performance (16) and section 19 are
    where a change is recorded; figures there are measured rather than
    guessed, because the documents are what a reader trusts.
-5. **Gate, commit; the matrix when the user approves.** `scripts/gate
-   EXCLAVE...` on the gcc, Alpine, Fedora and clang exclaves at zero
-   failures, then the commit: the gate runs the steps the change can
-   affect, in seconds for a document or a script, and says when the
-   change reaches the VMs (a launcher source, the command, the pinned
-   Python or the matrix itself). The matrix, `scripts/matrix --exclave
-   EXCLAVE`, costs this laptop about sixteen minutes, so it runs only when
-   the user approves it, usually once before a series is pushed; a
-   commit does not wait for it, and asking names the commits it has not
-   seen. `--full` runs every gate step, worth it before a series of
-   commits is pushed. Both also run on GitHub's hosted runners when the
-   user dispatches `.github/workflows/ci.yml`, from the Actions tab or
-   as `gh workflow run ci.yml -f matrix=true` (`false`: the gate
-   alone) on the pushed `main`: the gate on x86-64 and natively on
-   aarch64, the x86-64 rows under KVM and the 64 KB-page row emulated,
-   about an hour. It never runs at a push, and a dispatch is the
-   user's to ask for in so many words, as a matrix run is; reading a
-   run is always fine (`gh run list --workflow ci.yml`, `gh run watch
-   ID --exit-status` in the background, `gh run view ID
-   --log-failed`), reported as failures and the end. One commit per
-   item.
+5. **Gate, commit; the rest when the user asks.** `scripts/gate
+   EXCLAVE` on the gcc exclave at zero failures, then the commit. It is
+   the one gate, and it is fast: every step is a test, which fails on a
+   case with the answer expected, in seconds (the code checks, the
+   unit tests, the stack budget, unpack's and the fetchers' tests, the
+   suite once, the oracles, the syscall probe and the Docker profile
+   run); it runs the steps the change can affect, in seconds for a
+   document or a script, `--full` all of them, and says when the
+   change reaches the VMs. Everything else is separate, optional and
+   discretionary, run only when the user asks for it in so many words:
+   `scripts/extra EXCLAVE...` (the suite on the other exclaves, on the
+   debug launcher and under the plain terminal's label, the fuzz
+   budget, the release test), `scripts/matrix --exclave EXCLAVE` (the
+   kernels, about sixteen minutes on this laptop), the examples, and
+   the workflow `.github/workflows/ci.yml`, dispatched from the
+   Actions tab or as `gh workflow run ci.yml -f matrix=true` (`false`:
+   the gate alone) on the pushed `main`, which runs the gate on x86-64
+   and natively on aarch64, the x86-64 rows under KVM and the 64 KB-page
+   row emulated, and never runs at a push. Reading a run is always
+   fine (`gh run list --workflow ci.yml`, `gh run watch ID
+   --exit-status` in the background, `gh run view ID --log-failed`),
+   reported as failures and the end. A commit does not wait for any of
+   them, and asking names the commits they have not seen. When one of
+   them finds a bug, the bug gets a fast reproduction as a test in the
+   gate, an exerciser and then a named test; the run that found it
+   stays where it is and never becomes a gate step, since a long
+   integrated run fails slowly and names a stage, not a cause. One
+   commit per item.
 
 ## Preferences
 
@@ -160,8 +167,8 @@ The loop that has served well, in the order it pays:
   input: a refusal is an answer, an exit or a crash is not. An invariant
   of the code's own, as opposed to an input, is asserted and allowed to
   fail loudly, never checked and papered over, since a quiet wrong
-  answer hides the next defect. The gate's fuzz step (`test/fuzz.c`)
-  mutates the gate's inputs through every parser under the sanitisers,
+  answer hides the next defect. The fuzz step of `scripts/extra`
+  (`test/fuzz.c`) mutates an exclave's files through every parser under the sanitisers,
   and a new parser gets a line in its target (`test/tool_fuzz.c`,
   `test/launcher_fuzz.c`).
 - **The C is clang-formatted and clean under gcc's strict warnings,
@@ -184,14 +191,16 @@ The loop that has served well, in the order it pays:
   and measured on the reference machine; a change that moves one
   measures it again, and a number the current code has not produced is
   better left out than quoted.
-- **The gate.** `scripts/gate EXCLAVE...` (`EXCLAVE_TEST_INPUTS=DIR`,
+- **The gate.** `scripts/gate EXCLAVE` (`EXCLAVE_TEST_INPUTS=DIR`,
   the directory `scripts/inputs` filled, adds the Docker profile) runs,
-  of the code checks, the unit tests, the stack budget,
-  the suite on every exclave in two orders and, for the first exclave,
-  under the plain terminal's AppArmor label, the oracles and the syscall
-  probe, the ones the changed paths can affect (`--full`: all of them),
-  two steps at a time (`--jobs N`; this laptop is in use
-  meanwhile) on copies with its time printed, and a 30 s budget per test. Every driver runs `build/launcher`
+  of the code checks, the unit tests, the stack budget, unpack's and
+  the fetchers' tests, the suite, the oracles and the syscall probe on
+  the one exclave, the ones the changed paths can affect (`--full`: all
+  of them), two steps at a time (`--jobs N`; this laptop is in use
+  meanwhile) on copies with its time printed, and a 30 s budget per
+  test. `scripts/extra EXCLAVE...` runs the same step runner
+  (`scripts/steps.sh`) over the broader and slower set. Every driver
+  runs `build/launcher`
   on a copy of its own, the suite an exclave it wraps from the given
   exclave's tree and the others `tree.fresh_exclave`, a copy relinked
   with `build/launcher`, since the launcher an exclave carries is the
@@ -208,10 +217,9 @@ The loop that has served well, in the order it pays:
   `.exclave/launcher` alone leaves the wrappers linked to the old file.
 - **Tests are independent.** A test of `test/run.py` makes what it
   needs and leaves the shared context alone; the fixtures are the exclave,
-  the compiled programs and the environment made at setup. `--order
-  random` and `--order reverse` are expected to pass like the given
-  order, and `-k NAME` to run any single test. Several suites run at
-  once in the gate, so a name in a shared namespace, an abstract socket
+  the compiled programs and the environment made at setup, so `-k
+  NAME` runs any single test. Several suites run at once in
+  `scripts/extra`, so a name in a shared namespace, an abstract socket
   or a file in `/tmp`, carries the pid.
 - **Shell commands with absolute paths.** The shell's working directory
   persists between commands and has drifted into scratch directories

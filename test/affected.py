@@ -2,7 +2,7 @@
 
     test/affected.py [--explain] PATH...
 
-Prints one step name per line: those of STEPS a changed path reaches, `plain` and every step
+Prints one step name per line: those of STEPS a changed path reaches, `every` and every step
 when a path reaches everything, and `matrix` when the change reaches the VMs. A step reaches a
 path when the path is one the step runs or builds from, or one its Python drivers import or name:
 a sibling module in test/ is followed, `unpack` is the package, and a path under the repository
@@ -33,20 +33,9 @@ STEPS: dict[str, tuple[str, ...]] = {
         "tool/blake2b.c",
     ),
     "stack": ("test/stackcheck.py", "src/*"),
-    "fuzz": (
-        "test/fuzz.c",
-        "test/fuzz.h",
-        "test/*_fuzz.c",
-        "test/fuzz.py",
-        "test/sanitize.c",
-        "src/*",
-        "tool/*",
-    ),
     "unpack": ("test/unpack_test.py",),
     "fetch": ("test/fetch_test.py",),
-    "release": ("test/release_test.py", "scripts/release", "tool/*"),
     "suite": ("test/run.py",),
-    "random": ("test/run.py",),
     "oracles": (
         "test/oracle_resolve.py",
         "test/oracle_ns.py",
@@ -195,7 +184,7 @@ def main() -> int:
         ):
             every = True
             why.setdefault("every", f"nothing names {path}")
-    chosen = [*STEPS, "plain"] if every else [s for s in STEPS if s in why]
+    chosen = [*STEPS, "every"] if every else [s for s in STEPS if s in why]
     if "matrix" in why:
         chosen.append("matrix")
     for step in chosen:

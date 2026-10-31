@@ -1,0 +1,72 @@
+#!/bin/sh
+# scripts/extra [--jobs N] EXCLAVE... — the checks beyond the gate (DESIGN.md 17), run when the user asks for them,
+# not before a commit: on every exclave given, the suite, the suite on build/launcher-debug (the launcher with gcc's
+# undefined-behaviour checks), the resolution oracle, the namespace oracle, the syscall probe and, when
+# EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled, the Docker profile run; and on the first exclave, the
+# suite under the plain terminal's AppArmor label (aa-exec -p unconfined, where there is one), the parsers fuzzed from
+# its files under the sanitisers for ten seconds a harness (test/fuzz.py), and a release of it made and taken as a
+# consumer takes it (test/release_test.py). These are broader than the gate or slower, or are budgets and
+# integration runs rather than tests: a bug one of them finds gets a fast reproduction as a test in the gate; the
+# run that found it stays here. The randomised oracles take a seed of the moment, printed with a difference. The
+# steps run two at a time, or N with --jobs; one line per step with its time; logs under build/extra/. Exit status:
+# the number of failed steps.
+set -u
+. "$(dirname -- "$0")/lib.sh"
+here=$ROOT/test
+repo=$ROOT
+out=$repo/build/extra
+jobs=2
+while :; do
+    case ${1-} in
+    --jobs)
+        jobs=${2-}
+        shift
+        ;;
+    *) break ;;
+    esac
+    shift
+done
+case $jobs in '' | *[!0-9]* | 0) jobs=0 ;; esac
+[ $# -ge 1 ] && [ "$jobs" -gt 0 ] || {
+    echo "usage: scripts/extra [--jobs N] EXCLAVE..." >&2
+    exit 2
+}
+"$ROOT/scripts/build" || exit 2
+rm -rf "$out" && mkdir -p "$out" || exit 2
+. "$ROOT/scripts/steps.sh"
+start=$(date +%s)
+seed=$(($(date +%s) % 100000))
+
+# shellcheck disable=SC2329  # run through step, by name
+# the parsers of the command (every module but its entry, with the files it carries) and of the launcher, each built
+# with test/fuzz.c under the sanitisers, under mutation of EXCLAVE's own files
+fuzz() { # fuzz EXCLAVE
+    ex=$1
+    set --
+    for f in "$repo"/tool/*.c; do [ "$f" = "$repo/tool/main.c" ] || set -- "$@" "$f"; done
+    (cd "$repo" && sanitized "$out/tool_fuzz" -D_GNU_SOURCE "-DLAUNCHER=\"$repo/build/launcher\"" "$here/fuzz.c" \
+        "$here/tool_fuzz.c" "$@" "$repo/tool/blobs.S") &&
+        sanitized "$out/launcher_fuzz" -DHOST_TEST "$here/fuzz.c" "$here/launcher_fuzz.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
+        py "$here/fuzz.py" --exclave "$ex" --work "$out/fuzz" --tool "$out/tool_fuzz" --launcher "$out/launcher_fuzz"
+}
+
+step fuzz fuzz "$1"
+step release py "$here/release_test.py" --exclave "$1" --work "$out/release"
+if command -v aa-exec >/dev/null 2>&1 && aa-exec -p unconfined true 2>/dev/null; then # the plain terminal's label (12)
+    n=$(basename "$1" .exclave)
+    step "suite-$n-plain" aa-exec -p unconfined "$UV" run --quiet --project "$ROOT" python "$here/run.py" --exclave "$1" --work "$out/w-$n-plain"
+else echo "plain: no aa-exec here; the plain-label suite skipped"; fi
+for ex in "$@"; do
+    n=$(basename "$ex" .exclave)
+    step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"
+    step "suite-$n-debug" py "$here/run.py" --exclave "$ex" --work "$out/w-$n-debug" --launcher "$repo/build/launcher-debug"
+    step "resolve-$n" py "$here/oracle_resolve.py" --exclave "$ex" --work "$out/r-$n" --seed "$seed"
+    step "ns-$n" py "$here/oracle_ns.py" --exclave "$ex" --work "$out/n-$n"
+    step "syscalls-$n" py "$here/oracle_syscalls.py" --exclave "$ex" --work "$out/s-$n" --seed "$seed"
+    if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
+        step "docker-$n" py "$here/docker_profile.py" --exclave "$ex" --profile "$EXCLAVE_TEST_INPUTS/src/docker-seccomp.json" --work "$out/d-$n"
+    fi
+done
+[ -n "${EXCLAVE_TEST_INPUTS:-}" ] || echo "docker: EXCLAVE_TEST_INPUTS not set; skipped"
+wait
+report extra "$start"

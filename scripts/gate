@@ -1,27 +1,24 @@
 #!/bin/sh
-# scripts/gate [--full] [--since REV] [--jobs N] EXCLAVE... — the commit gate (DESIGN.md 17), run on the change at hand.
+# scripts/gate [--full] [--since REV] [--jobs N] EXCLAVE — the commit gate (DESIGN.md 17), run on the change at hand.
 #
-# It builds the launchers first (scripts/build), which takes no time when they are up to date. Then
-# by default it runs the steps the changed paths can affect: the uncommitted changes, or, in a clean
-# tree, the last commit; --since REV takes the commits after REV too, so that a series is gated
-# once. test/affected.py derives the steps from what each step runs, through the drivers'
-# imports and the paths they name: a launcher source or its build runs everything; the tool, a test
-# or a helper runs the steps that use it; documents, scripts and settings run the code checks alone;
-# a path nothing names runs everything. --full runs every step, whatever changed.
+# It is the one gate, and it is fast: every step is a test that fails on a case with the answer expected, in
+# seconds. It builds the launchers first (scripts/build), which takes no time when they are up to date. Then by
+# default it runs the steps the changed paths can affect: the uncommitted changes, or, in a clean tree, the last
+# commit; --since REV takes the commits after REV too, so that a series is gated once. test/affected.py derives
+# the steps from what each step runs, through the drivers' imports and the paths they name: a launcher source or
+# its build runs everything; the tool, a test or a helper runs the steps that use it; documents, scripts and
+# settings run the code checks alone; a path nothing names runs everything. --full runs every step, whatever
+# changed.
 #
-# The steps: the code checks (scripts/check), the unit tests under ASan and UBSan, the stack budget,
-# and for every exclave given the suite in the given and a random order (and, for the first
-# exclave, under the plain terminal's AppArmor label and on build/launcher-debug), the resolution
-# oracle, the namespace oracle and the syscall probe; the parsers fuzzed from the first exclave's own files under
-# the sanitisers (test/fuzz.py); unpack's tests on hostile package files (test/unpack_test.py); the fetchers'
-# signature checks (test/fetch_test.py); a release of the first exclave made and taken as a consumer takes it
-# (test/release_test.py); and when EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled,
-# the Docker profile run on its src/docker-seccomp.json. No step
-# touches the network. The steps run two at a time, or N with --jobs, so
-# that the machine stays usable meanwhile; every driver runs
-# build/launcher on a copy of its own (the suite wraps one from the exclave's tree, the others take
-# test/tree.py's fresh_exclave), so the exclaves given are never run as they are nor written. One
-# line per step with its time, SKIP for an oracle that could not run here; logs under build/gate/.
+# The steps: the code checks (scripts/check), the unit tests under ASan and UBSan, the stack budget, unpack's
+# tests on hostile package files (test/unpack_test.py), the fetchers' signature checks (test/fetch_test.py), and
+# on the exclave given the suite, the resolution oracle, the namespace oracle, the syscall probe and, when
+# EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled, the Docker profile run on its
+# src/docker-seccomp.json. No step touches the network. Everything slower or broader is scripts/extra's and
+# scripts/matrix's, run when the user asks. The steps run two at a time, or N with --jobs, so that the machine
+# stays usable meanwhile; every driver runs build/launcher on a copy of its own (the suite wraps one from the
+# exclave's tree, the others take test/tree.py's fresh_exclave), so the exclave given is never run as it is nor
+# written. One line per step with its time, SKIP for an oracle that could not run here; logs under build/gate/.
 # Exit status: the number of failed steps.
 set -u
 . "$(dirname -- "$0")/lib.sh"
@@ -45,36 +42,19 @@ while :; do
     shift
 done
 case $jobs in '' | *[!0-9]* | 0) jobs=0 ;; esac
-[ $# -ge 1 ] && [ "$jobs" -gt 0 ] || {
-    echo "usage: scripts/gate [--full] [--since REV] [--jobs N] EXCLAVE..." >&2
+[ $# -eq 1 ] && [ "$jobs" -gt 0 ] || {
+    echo "usage: scripts/gate [--full] [--since REV] [--jobs N] EXCLAVE" >&2
     exit 2
 }
+ex=$1
 "$ROOT/scripts/build" || exit 2 # the launchers, unless they are up to date
 rm -rf "$out" && mkdir -p "$out" || exit 2
+. "$ROOT/scripts/steps.sh"
 start=$(date +%s)
 
-started=0
-step() { # step NAME CMD...: in the background once fewer than $jobs run, its status and log kept
-    name=$1
-    shift
-    while [ $((started - $(find "$out" -maxdepth 1 -name '*.rc' | wc -l))) -ge "$jobs" ]; do sleep 1; done
-    started=$((started + 1))
-    (
-        t=$(date +%s)
-        "$@" >"$out/$name.log" 2>&1
-        echo "$? $(($(date +%s) - t))" >"$out/$name.rc"
-    ) &
-}
-# shellcheck disable=SC2329  # run by unit and fuzz, which run through step
-sanitized() { # sanitized OUT ARGS...: a host program built under ASan and UBSan, a finding fatal (test/sanitize.c)
-    o=$1
-    shift
-    host_cc -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -o "$o" "$@" "$here/sanitize.c"
-}
 # shellcheck disable=SC2329  # run through step, by name
 # the parser, the filter, the scratch pool, the cache's lock, the CPU check, the #! rules and the command's BLAKE2b,
-# just built for the host
-# under the sanitisers
+# just built for the host under the sanitisers
 unit() {
     sanitized "$out/manifest_test" -DHOST_TEST "$here/manifest_test.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
         "$out/manifest_test" && py "$here/grammar_test.py" --c-parser "$out/manifest_test" &&
@@ -90,22 +70,6 @@ unit() {
         "$out/str_test" &&
         sanitized "$out/tool_test" "$here/tool_test.c" "$repo/tool/blake2b.c" &&
         "$out/tool_test"
-}
-# shellcheck disable=SC2329  # run through step, by name
-# the parsers of the command (every module but its entry, with the files it carries) and of the launcher, each built
-# with test/fuzz.c under the sanitisers, under mutation of EXCLAVE's own files
-fuzz() { # fuzz EXCLAVE
-    ex=$1
-    set --
-    for f in "$repo"/tool/*.c; do [ "$f" = "$repo/tool/main.c" ] || set -- "$@" "$f"; done
-    (cd "$repo" && sanitized "$out/tool_fuzz" -D_GNU_SOURCE "-DLAUNCHER=\"$repo/build/launcher\"" "$here/fuzz.c" \
-        "$here/tool_fuzz.c" "$@" "$repo/tool/blobs.S") &&
-        sanitized "$out/launcher_fuzz" -DHOST_TEST "$here/fuzz.c" "$here/launcher_fuzz.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
-        py "$here/fuzz.py" --exclave "$ex" --work "$out/fuzz" --tool "$out/tool_fuzz" --launcher "$out/launcher_fuzz"
-}
-# shellcheck disable=SC2329  # run through step, by name
-debug_suite() { # debug_suite EXCLAVE NAME: the suite on the launcher with its undefined-behaviour checks
-    py "$here/run.py" --exclave "$1" --work "$out/w-$2-debug" --launcher "$repo/build/launcher-debug"
 }
 # shellcheck disable=SC2329  # run through step, by name
 stack() {
@@ -127,8 +91,8 @@ has() {
     case " $steps " in *" $1 "*) return 0 ;; esac
     return 1
 } # has STEP: whether the change reaches it
-if $full || has plain; then
-    steps="unit stack fuzz unpack fetch release suite random oracles plain $steps"
+if $full || has every; then
+    steps="unit stack unpack fetch suite oracles $steps"
     # the randomised oracles' mazes and cases from a seed of the moment, which each prints on a failure
     $full && seed=$(($(date +%s) % 100000))
     echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
@@ -137,44 +101,20 @@ else
 fi
 has matrix && echo "gate: the change reaches the VMs: scripts/matrix is due, and runs when approved"
 
+n=$(basename "$ex" .exclave)
 step check "$ROOT/scripts/check" # ruff, ty, shellcheck, shfmt and taplo, silent when clean
 has unit && step unit unit
 has stack && step stack stack
-has fuzz && step fuzz fuzz "$1"                                                             # the parsers under mutation of the first exclave's files
-has unpack && step unpack py "$here/unpack_test.py" --work "$out/unpack"                    # unpack's rules on hostile package files
-has fetch && step fetch py "$here/fetch_test.py" --work "$out/fetch"                        # the fetchers' signature checks
-has release && step release py "$here/release_test.py" --exclave "$1" --work "$out/release" # a release, taken as a consumer takes it
-for ex in "$@"; do
-    n=$(basename "$ex" .exclave)
-    has suite && step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"
-    has random && step "suite-$n-random" py "$here/run.py" --exclave "$ex" --work "$out/w-$n-random" --order random
-    if has plain && [ "$ex" = "$1" ] && command -v aa-exec >/dev/null 2>&1 && aa-exec -p unconfined true 2>/dev/null; then                             # the plain terminal's
-        step "suite-$n-plain" aa-exec -p unconfined "$UV" run --quiet --project "$ROOT" python "$here/run.py" --exclave "$ex" --work "$out/w-$n-plain" # AppArmor label (12), once
-    fi
-    if has plain && [ "$ex" = "$1" ]; then step "suite-$n-debug" debug_suite "$ex" "$n"; fi
-    has oracles || continue
+has unpack && step unpack py "$here/unpack_test.py" --work "$out/unpack" # unpack's rules on hostile package files
+has fetch && step fetch py "$here/fetch_test.py" --work "$out/fetch"     # the fetchers' signature checks
+has suite && step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"
+if has oracles; then
     step "resolve-$n" py "$here/oracle_resolve.py" --exclave "$ex" --work "$out/r-$n" --seed "$seed"
     step "ns-$n" py "$here/oracle_ns.py" --exclave "$ex" --work "$out/n-$n"
     step "syscalls-$n" py "$here/oracle_syscalls.py" --exclave "$ex" --work "$out/s-$n" --seed "$seed"
     if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
         step "docker-$n" py "$here/docker_profile.py" --exclave "$ex" --profile "$EXCLAVE_TEST_INPUTS/src/docker-seccomp.json" --work "$out/d-$n"
-    fi
-done
-[ -n "${EXCLAVE_TEST_INPUTS:-}" ] || echo "docker: EXCLAVE_TEST_INPUTS not set; skipped"
+    else echo "docker: EXCLAVE_TEST_INPUTS not set; skipped"; fi
+fi
 wait
-
-fails=0 skips=0
-for rc in "$out"/*.rc; do
-    name=$(basename "$rc" .rc)
-    read -r r secs <"$rc"
-    last=$(grep -v '^$' "$out/$name.log" | tail -1 | cut -c1-110)
-    if [ "$r" != 0 ]; then
-        printf '%-22s FAIL %4ss  %s\n' "$name" "$secs" "$last"
-        fails=$((fails + 1))
-    elif case $name in resolve-* | ns-* | syscalls-* | docker-*) grep -q 'cannot run' "$out/$name.log" ;; *) false ;; esac then
-        printf '%-22s SKIP %4ss  %s\n' "$name" "$secs" "$last"
-        skips=$((skips + 1)) # an oracle without bwrap, namespaces or openat2
-    else printf '%-22s ok   %4ss  %s\n' "$name" "$secs" "$last"; fi
-done
-echo "gate: $fails failed, $skips skipped, $(($(date +%s) - start)) s"
-exit $fails
+report gate "$start"

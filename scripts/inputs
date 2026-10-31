@@ -5,7 +5,8 @@
 # continuous-integration run has no business fetching. Nothing is kept anywhere but DIR and the fetchers'
 # caches under ~/.cache, and both may be empty at any time: whatever is missing is fetched again, and an item
 # DIR already has is skipped, so a rerun costs nothing. Afterwards:
-#   EXCLAVE_TEST_INPUTS=DIR scripts/gate DIR/gcc13.exclave DIR/alpine.exclave DIR/f42.exclave DIR/clang.exclave
+#   EXCLAVE_TEST_INPUTS=DIR scripts/gate DIR/gcc13.exclave
+#   EXCLAVE_TEST_INPUTS=DIR scripts/extra DIR/gcc13.exclave DIR/alpine.exclave DIR/f42.exclave DIR/clang.exclave
 #   EXCLAVE_TEST_INPUTS=DIR EXCLAVE_TEST_SRC=DIR/src EXCLAVE_TEST_SQLITE=DIR/src/sqlite3.c EXCLAVE_TEST_RPMS=DIR/el7 EXCLAVE_TEST_ARM64=DIR/gcc13-arm64.exclave scripts/examples DIR/realsoft.exclave
 # The package sets are the ones DESIGN.md measures (10.1, 12, 16.8): the noble gcc-13 and clang-18 closures,
 # Alpine 3.21's gcc, Fedora 42's gcc, the noble gcc, g++, make and python3 that test/realsoft.py builds with,

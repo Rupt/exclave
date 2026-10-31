@@ -360,8 +360,8 @@ chmod +x exclave && ./exclave check gcc.exclave           # the tree against the
 ./exclave version                                         # which build made it; the launcher inside says the same
 ```
 
-The gate runs exactly this on a release of its first exclave
-(`test/release_test.py`).
+`test/release_test.py`, a step of `scripts/extra`, runs exactly this on
+a release of the gcc exclave.
 
 ## Development
 
@@ -390,10 +390,11 @@ the design decisions a change is expected to respect.
 
 ```
 scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, clang-format and clang-tidy from uv.lock, and gcc's strict warnings; --fix lets them correct
-scripts/inputs ~/.cache/exclave-inputs   # the gate's inputs: its four exclaves, the arm64 gcc exclave and Docker's seccomp profile, from the package archives and GitHub; skips what is present
+scripts/inputs ~/.cache/exclave-inputs   # the test inputs: the four exclaves, the arm64 gcc exclave and Docker's seccomp profile, from the package archives and GitHub; skips what is present
 scripts/inputs ~/.cache/exclave-inputs examples   # the examples' inputs too, some from their authors' sites
-D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # the commit gate: the steps the change can affect, of the code checks, unit tests, stack budget, the suite in two orders and under the plain terminal's label, the oracles, the syscall probe and the Docker profile, four at a time (--jobs N); --full runs all of them, about 80 s
-scripts/test --exclave gcc.exclave       # the suite alone; -k NAME, --order random
+D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave   # the commit gate, fast: the steps the change can affect, of the code checks, unit tests, stack budget, unpack's and the fetchers' tests, the suite, the oracles, the syscall probe and the Docker profile, two at a time (--jobs N); --full runs all of them, about 47 s
+D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # beyond the gate, when asked: the suite, the debug launcher, the oracles and the probe on every exclave given, the plain-label suite, the fuzz budget and the release test on the first; about 96 s
+scripts/test --exclave gcc.exclave       # the suite alone; -k NAME
 scripts/matrix --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix, due when the gate says a change reaches the VMs: cloud images under QEMU/KVM, one at a time (--jobs N), about sixteen minutes
 gh workflow run ci.yml -f matrix=true    # the gate and the matrix on GitHub's hosted runners, x86-64 and aarch64 (.github/workflows/ci.yml), for the pushed main; -f matrix=false the gate alone; gh run list --workflow ci.yml, then gh run watch ID --exit-status and gh run view ID --log-failed
 scripts/exercise --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the launcher, side by side
@@ -406,8 +407,8 @@ The repository's layout:
 scripts/install-uv   the pinned uv into .uv/, checked against a committed checksum per architecture; scripts/lib.sh what every script sources
 scripts/exclave      the exclave command; scripts/unpack, fetch-debs, fetch-apks and fetch-rpms the steps before it
 scripts/example      the first run: from the build to a program built inside an exclave that runs on any glibc since 2.17, every command shown
-scripts/check        the code checks; scripts/gate the commit gate; scripts/inputs the development inputs; scripts/examples the example runs
-scripts/release      a signed release of exclaves with the command beside them; test/release_test.py takes one as a consumer would
+scripts/check        the code checks; scripts/gate the commit gate; scripts/extra the checks beyond it (scripts/steps.sh their step runner); scripts/inputs the development inputs; scripts/examples the example runs
+scripts/release      a signed release of exclaves with the command beside them; test/release_test.py, a step of scripts/extra, takes one as a consumer would
 scripts/reproduce    the launcher and the command built inside a gcc exclave, the same bytes wherever it runs
 scripts/test         the suite; scripts/matrix, exercise and sysroot the other test drivers
 .github/workflows/ci.yml  the gate and the matrix on GitHub's hosted runners, x86-64 and aarch64, when dispatched by hand
@@ -476,7 +477,7 @@ test/tables_test.py  the tables the launcher, the command, unpack and the tests 
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule
 test/scratch_test.c  the scratch pool's sweep under the interleaving that once shared a chunk; test/cache_test.c the cache's lock across fork
 test/isa_test.c      the CPU level check against made-up cpuid and XCR0 values and against gcc's own answer
-test/fuzz.c          mutation fuzzing of the parsers; test/tool_fuzz.c and test/launcher_fuzz.c its targets, test/fuzz.py the gate's step
+test/fuzz.c          mutation fuzzing of the parsers; test/tool_fuzz.c and test/launcher_fuzz.c its targets, test/fuzz.py the step of scripts/extra
 LICENSE              the MIT licence; the launcher carries its text
 docs/DESIGN.md       the design and specification
 CLAUDE.md            working notes for contributors and coding agents
@@ -487,9 +488,10 @@ CLAUDE.md            working notes for contributors and coding agents
 A problem report is most useful with the failing lines of an
 `EXCLAVE_LOG=/tmp/x.log` run, `uname -r` and the distribution, the
 exclave's `.exclave/hashes` file and the output of `exclave check` on
-it. Contributions are welcome: a change passes the gate on the four
-exclaves above, a launcher change the kernel matrix too (both run on
-GitHub's hosted runners when the workflow is dispatched), and the
+it. Contributions are welcome: a change passes the gate on the gcc
+exclave above and `scripts/extra` on the four, a launcher change the
+kernel matrix too (the gate and the matrix run on GitHub's hosted
+runners when the workflow is dispatched), and the
 design decisions in section 19 of `docs/DESIGN.md` stand unless the
 change argues otherwise.
 

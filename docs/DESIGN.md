@@ -185,9 +185,11 @@ How it is tested (17):
   under it, standing for a CI container where user namespaces are
   blocked (17 item 5).
 - **The commit gate**, `scripts/gate`, which runs the unit tests, the
-  suite, the oracles and the probe on the four exclaves in under a
-  minute; an oracle that cannot run on the machine, for want of `bwrap`
-  or user namespaces, is reported as SKIP, not as passing (17).
+  suite, the oracles and the probe on the gcc exclave in under a
+  minute, and `scripts/extra`, the broader and slower checks on the
+  four exclaves, run when asked; an oracle that cannot run on the
+  machine, for want of `bwrap` or user namespaces, is reported as
+  SKIP, not as passing (17).
 - **The kernel matrix**: the gcc exclave passes the suite in QEMU
   virtual machines of ten distributions, from CentOS 7 at kernel 3.10
   to Ubuntu 26.10 at 7.3, Alpine 3.20's musl userland and Fedora's
@@ -1824,7 +1826,7 @@ before a user does.
   inputs' clang exclave has none, and the test suite finds its compiler
   as `clang-18`. C and C++ compile and run inside; the sanitizer
   runtimes are in a package that set does not include. It is one of
-  the gate's four exclaves (17).
+  the four test exclaves (17).
 - **An Alpine exclave**: `gcc musl-dev binutils make linux-headers`
   and the base, 20 packages from Alpine 3.21 fetched with
   `fetch/apks.py`, unpacked and wrapped: 87 ELF files, no error
@@ -1832,8 +1834,8 @@ before a user does.
   files. Its gcc 14.2 compiles and runs C inside, dynamically linked
   on musl 1.2.5 and statically linked. The static output runs on a
   glibc host; the dynamic one does not, since such a host has no musl
-  loader. A compile touches no host path, and it is one of the gate's
-  four exclaves (17).
+  loader. A compile touches no host path, and it is one of the four
+  test exclaves (17).
 - **A Fedora exclave**: `gcc glibc-devel binutils make` and the base,
   87 packages from Fedora 42 fetched with `fetch/rpms.py`, with
   `glibc-minimal-langpack` chosen for the langpack, unpacked and
@@ -1841,7 +1843,7 @@ before a user does.
   hash that reproduces from the same files. Its gcc 15 compiles and
   runs C inside on glibc 2.41; a static link needs `glibc-static`,
   which the set does not include. A compile touches no host path, and
-  it is one of the gate's four exclaves (17).
+  it is one of the four test exclaves (17).
 - **Targeting the host's own libraries** is not a manifest setting. A
   `host` record over the exclave's library directory takes the
   exclave's loader and libc with it, so no dynamic program in the
@@ -2368,10 +2370,10 @@ checkout: the signature is verified against the releaser's public key,
 obtained through a channel the consumer trusts; the sums are checked;
 the archive is unpacked; and the release's own `exclave check` compares
 the tree with the hashes file and runs the static check, so what runs
-is what was released. The README gives the commands, and the gate's
-release step (`test/release_test.py`) runs them on a release of its
-first exclave, with a tampered archive and a tampered sums file
-refused (17).
+is what was released. The README gives the commands, and
+`test/release_test.py`, a step of `scripts/extra`, runs them on a
+release of the gcc exclave, with a tampered archive and a tampered
+sums file refused (17).
 
 The step before it, `unpack` (10.1), is a Python package run by the
 pinned Python, like the fetchers and the tests; nothing of it is in the
@@ -3896,8 +3898,8 @@ same way; none is taken from the machine. The namespace oracle, the syscall prob
 Docker profile run and the exerciser need `bwrap` (bubblewrap) and
 unprivileged user namespaces; the resolution oracle needs `openat2`
 (Linux 5.6). The suite uses `strace`, `gdb`, Go and `rustc`; a test
-whose tool is missing skips and names it. The gate's plain-label run
-needs AppArmor's `aa-exec` and is left out without it. Optionally,
+whose tool is missing skips and names it. The plain-label run of
+`scripts/extra` needs AppArmor's `aa-exec` and is left out without it. Optionally,
 `aarch64-linux-gnu-gcc` builds the aarch64 launcher and command, and the matrix
 needs QEMU with KVM and `cloud-image-utils` (`qemu-system-arm` and the
 AAVMF firmware for the emulated row). Where `bwrap` cannot create a user namespace (Ubuntu
@@ -3913,12 +3915,13 @@ scripts/install-uv
 scripts/build
 scripts/inputs ~/.cache/exclave-inputs
 D=~/.cache/exclave-inputs
-EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave
+EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave
 ```
 
-`scripts/inputs DIR` makes the gate's inputs: its four exclaves, Ubuntu
-24.04's gcc-13 closure, Alpine 3.21's gcc, Fedora 42's gcc and Ubuntu
-24.04's clang-18 closure; the arm64 gcc-13 exclave; and Docker's
+`scripts/inputs DIR` makes the test inputs: the four exclaves, Ubuntu
+24.04's gcc-13 closure, which is the gate's, Alpine 3.21's gcc, Fedora
+42's gcc and Ubuntu 24.04's clang-18 closure, which `scripts/extra`
+takes beside it; the arm64 gcc-13 exclave; and Docker's
 default seccomp profile, from the distributions' package archives and
 GitHub alone, which is all a continuous-integration run fetches.
 `scripts/inputs DIR examples` makes what the example runs take as
@@ -3932,8 +3935,15 @@ file is pinned by its BLAKE2b-256 in the script. An item `DIR` already
 has is skipped, and whatever is missing is fetched again. The
 repository holds no third-party input.
 
-**The gate** (`scripts/gate [--full] [--since REV] [--jobs N] EXCLAVE...`) is the check run
-before a commit. It runs the steps below that the change can affect, the
+**The gate** (`scripts/gate [--full] [--since REV] [--jobs N] EXCLAVE`)
+is the one check run before a commit, and it is fast: every step is a
+test, which fails on a case with the answer expected, in seconds.
+What is broader or slower, a budget or an integrated run rather than
+a test, is `scripts/extra`'s and the matrix's, run when the maintainer
+asks; a bug one of them finds gets a fast reproduction as a test in
+the gate, and the run that found it stays where it is, since a long
+integrated run fails slowly and names a stage, not a cause. The gate
+runs the steps below that the change can affect, the
 uncommitted paths or, in a clean tree, the last commit's, and with
 `--since REV` the commits after `REV` as well, so that a series is gated
 once before it is pushed.
@@ -3982,22 +3992,6 @@ its time, ok, SKIP or FAIL:
   (8.4), the volatile directories (8.1) and the names the launcher
   logs for the syscalls the filter traps, from each source and fails
   when they differ;
-- the fuzz step (`test/fuzz.py`): the parsers under mutation of the
-  first exclave's own files, each harness built under the same
-  sanitisers and run for ten seconds. `test/fuzz.c` is the driver;
-  with `test/tool_fuzz.c` its target is the command's parsers, the
-  grammar of the manifest and the hashes file, the ELF reader, the
-  ld.so.cache reader and the log reader, and with
-  `test/launcher_fuzz.c` the launcher's, the manifest parser and the
-  `#!` line. The seeds are the manifest, the hashes file, the launcher,
-  a few small ELF files of the tree, the tree's ld.so.cache and a log
-  and `#!` lines the step writes. Each seed is run as it is and then
-  mutated, bits and bytes, runs inserted, deleted and copied, integers
-  set to boundaries, cuts and splices, the input in a block of exactly
-  its size, so that a read past it is the sanitiser's to report. A
-  parser answers every input: a refusal is an answer, and a
-  sanitiser's finding, a signal or an exit is not, and then the input
-  is kept with the number that remakes it;
 - the stack budget of both launchers (the aarch64 one when it is
   built);
 - unpack's tests (`test/unpack_test.py`), which need no exclave: each
@@ -4017,37 +4011,66 @@ its time, ok, SKIP or FAIL:
   made there; the signed repository yields its package, and one signed
   by another key, altered after signing, with its package altered, or
   unsigned is refused in one line with nothing fetched;
-- for every exclave given: the suite in the given order and in a
-  random order, the resolution oracle, the namespace oracle and the
-  syscall probe;
-- for the first exclave, the suite once more under the plain
-  terminal's AppArmor label (`aa-exec -p unconfined`), where user
-  namespaces are denied (12), and once on `build/launcher-debug`,
-  the launcher with gcc's undefined-behaviour checks,
-  each a trap instruction, since the launcher links no runtime to
-  report one;
+- on the exclave given: the suite, the resolution oracle, the
+  namespace oracle and the syscall probe;
 - when `EXCLAVE_TEST_INPUTS` names the directory `scripts/inputs`
-  filled, the Docker profile run on every exclave.
+  filled, the Docker profile run on it.
 
-Every driver runs `build/launcher` on a copy of its own, so an exclave
+Every driver runs `build/launcher` on a copy of its own, so the exclave
 given to the gate is never run as it is nor written. The suite wraps a
 copy from the given exclave's tree. The other drivers take
 `tree.fresh_exclave`, a copy relinked with `build/launcher`, because an
 exclave carries the launcher it was wrapped with. Each test has a
 budget of 30 s, against a slowest test of about 2 s natively, so a test
 that crawls fails instead of stalling the gate. The exit status is the
-number of failed steps. On the reference machine the whole gate, on the
-four exclaves with their fixtures and with the Docker profile, four
-steps at a time, takes 76 s (measured October 2026).
+number of failed steps. On the reference machine the whole gate
+(`--full`), on the gcc exclave with its fixture and with the Docker
+profile, two steps at a time, takes 47 s (measured October 2026).
+
+**Beyond the gate** (`scripts/extra [--jobs N] EXCLAVE...`) runs, with
+the gate's step runner (`scripts/steps.sh`) and when the maintainer
+asks, what is broader than the gate or slower, or a budget or an
+integration run rather than a test: on every exclave given, the suite,
+the suite once more on `build/launcher-debug`, the launcher with gcc's
+undefined-behaviour checks, each a trap instruction, since the launcher
+links no runtime to report one, the resolution oracle, the namespace
+oracle, the syscall probe and the Docker profile run; and on the first
+exclave, the suite under the plain terminal's AppArmor label (`aa-exec
+-p unconfined`), where user namespaces are denied (12), and two more
+steps:
+
+- the fuzz step (`test/fuzz.py`): the parsers under mutation of the
+  exclave's own files, each harness built under the sanitisers of the
+  unit step and run for ten seconds. `test/fuzz.c` is the driver;
+  with `test/tool_fuzz.c` its target is the command's parsers, the
+  grammar of the manifest and the hashes file, the ELF reader, the
+  ld.so.cache reader and the log reader, and with
+  `test/launcher_fuzz.c` the launcher's, the manifest parser and the
+  `#!` line. The seeds are the manifest, the hashes file, the launcher,
+  a few small ELF files of the tree, the tree's ld.so.cache and a log
+  and `#!` lines the step writes. Each seed is run as it is and then
+  mutated, bits and bytes, runs inserted, deleted and copied, integers
+  set to boundaries, cuts and splices, the input in a block of exactly
+  its size, so that a read past it is the sanitiser's to report. A
+  parser answers every input: a refusal is an answer, and a
+  sanitiser's finding, a signal or an exit is not, and then the input
+  is kept with the number that remakes it;
+- the release test (`test/release_test.py`): a release of the exclave
+  made by `scripts/release`, the command and the launcher built inside
+  it by `scripts/reproduce`, signed with a key made there, and taken
+  as a consumer takes it, the README's recipe step by step, with a
+  tampered archive and a tampered sums file refused (10.5).
+
+On the reference machine, on the four exclaves, four steps at a time,
+it takes 96 s (measured October 2026).
 
 **The suite** (`scripts/test --exclave EXCLAVE`, or `--tree DIR` for an
 unwrapped tree) makes an exclave under its work directory, compiles
 `test/progs/` with the tree's own C compiler, and runs the named tests.
 `-k NAME` runs one test, or every test whose name contains a substring.
-`--order reverse` and `--order random` (with `--seed`) change the
-order. `--budget` sets the per-test limit. `--keep` keeps the work
+`--budget` sets the per-test limit. `--keep` keeps the work
 directory. `--launcher` tests another build in place of
-`build/launcher`, `build/launcher-debug` in the gate. The exit status is the number of failures.
+`build/launcher`, `build/launcher-debug` in `scripts/extra`. The exit status is the number of failures.
 
 The Go regression is built static with cgo off, by the host's `go`, or
 on the reference machine for a matrix VM's machine. It runs as a host
@@ -4172,11 +4195,11 @@ archives and GitHub (cached between runs, keyed on the inputs script
 and the fetchers), `scripts/gate --full` and
 `scripts/matrix`, adding only what a runner lacks and the reference
 machine has: packages, the KVM device opened to the runner, and the
-AppArmor sysctl. The gate runs on an x86-64 runner on the four
-exclaves and, natively, on an aarch64 runner on the arm64 gcc exclave
+AppArmor sysctl. The gate runs on an x86-64 runner on the gcc exclave
+and, natively, on an aarch64 runner on the arm64 gcc exclave
 made there, whose kernel is Ubuntu 24.04's 6.8, the one the emulated
 `noble-arm64` row boots: so that row has no job there, and the
-aarch64 build gets the unit tests, the fuzzer and the stack budget,
+aarch64 build gets the unit tests and the stack budget,
 which the emulated row never ran (its code checks go without
 shellcheck and taplo, which have no aarch64 wheel; the shell and the
 TOML are text, checked on x86-64). The x86-64 rows run under KVM, two

@@ -22,8 +22,8 @@ fix=false
 export UV_NO_SYNC=1
 
 # The shell scripts, in the positional parameters: every file under scripts/
-# that starts as a POSIX shell script, and lib.sh, which is sourced.
-set -- scripts/lib.sh
+# that starts as a POSIX shell script, and lib.sh and steps.sh, which are sourced.
+set -- scripts/lib.sh scripts/steps.sh
 for path in scripts/*; do
     case "$(head -n 1 "$path")" in
     '#!/bin/sh'*) set -- "$@" "$path" ;;
