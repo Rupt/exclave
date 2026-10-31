@@ -5,11 +5,12 @@ and descriptor syscall of src/filter.c, and the two chattr ioctls, with every pa
 and every flag that changes resolution, over a fixed maze. It runs under two projections of the
 same tree: the kernel's, a bwrap read-only bind of the unwrapped tree at /, and the launcher's.
 Return value, errno, what a buffer holds afterwards and the path an opened descriptor names must
-agree case by case; every file of the maze and the host area has a size of its own and the process
-keeps one inotify descriptor, so a stat's size and a watch descriptor also tell which object a path
-reached. A difference fails unless EXPECTED names its reason, so the expectations come from the
-kernel, not from a test's author. Like oracle_ns, the probe needs user namespaces and bwrap; without
-them it says so ("cannot run") and exits 0, and the gate prints that step as SKIP.
+agree case by case; every file of the maze and the host area has a size and a user.probe value of
+its own and the process keeps one inotify descriptor, so a stat's size, an attribute's value and a
+watch descriptor also tell which object a path reached. A difference fails unless EXPECTED names
+its reason, so the expectations come from the kernel, not from a test's author. Like oracle_ns, the
+probe needs user namespaces and bwrap; without them it says so ("cannot run") and exits 0, and the
+gate prints that step as SKIP.
 
     test/oracle_syscalls.py --exclave EXCLAVE [--work DIR] [--only NAME] [--keep]
         [--show N] [--expected]
@@ -20,8 +21,8 @@ buffer holds afterwards, the path an opened descriptor names and what an exec'd 
 argument is one of: a path (s:), or a descriptor opened on a named path before the call (f:); an
 integer (i:) or a buffer of a named kind; a string that ends at an unmapped page (e:), a null
 pointer (n:) or a pointer into an unmapped page (u:); a string vector or a struct xattr_args; the
-process's inotify descriptor, a unix socket (k:) or a sockaddr_un (A:); a struct open_how. execve
-runs in a forked child whose exit status and output are the answer.
+process's inotify descriptor, a fanotify descriptor (N:), a unix socket (k:) or a sockaddr_un (A:);
+a struct open_how. execve runs in a forked child whose exit status and output are the answer.
 
 Cases. The table covers the trapped path syscalls and the descriptor-addressed ones (fchmod, fchown,
 fsetxattr, fremovexattr, fstatfs, and ioctl with FS_IOC_SETFLAGS and FS_IOC_FSSETXATTR), crossed
@@ -31,9 +32,10 @@ lookup, and with the path forms of class Forms over the maze of make_maze, the s
     absolute, relative), a wrapper, the shell's link, an identity file, a placeholder,
     /proc/self/exe, and an exclave link to a host file and to a host directory, the latter also
     crossed in the middle of a path and followed by ..;
-  - on the host: files, directories and links of every kind, links into the exclave's file, its
-    directory and its wrapper, the directory link also crossed in the middle of a path and followed
-    by .., and relative paths from the host side, up to the root and back into the tree;
+  - on the host: files, directories (an empty one among them, for an rmdir that succeeds) and
+    links of every kind, links into the exclave's file, its directory and its wrapper, the
+    directory link also crossed in the middle of a path and followed by .., and relative paths
+    from the host side, up to the root and back into the tree;
   - spellings: ., .. and / as the last component, a trailing slash, also after a link on either
     side, //, empty, overlong, a 256-byte component, bytes that are not UTF-8, and a newline;
   - the symlink limit: 40 links in one walk and 41, in a chain inside the tree, in one that crosses
@@ -93,8 +95,9 @@ covers:
 More differences are accepted on older kernels, where more of the kernel entries apply.
 
 Open defects. DEFECTS lists the differences that are the launcher's defects, found and not yet
-fixed, each by its syscall, label and the two exact answers. Every run prints them, and a case of
-one whose answers agree fails until its entry is removed.
+fixed, each entry by what the kernel does and the cases and exact answers it covers. Every run
+prints each entry with its count of cases (--expected prints the cases), and on the kernel they
+were measured on, a whole run in which an entry covers no case fails until the entry is removed.
 
 Counts. The last line of the output gives the number of cases, of groups (one per syscall, plus
 the cases run after a chdir into the exclave) and of path forms, then the differences and those
@@ -141,6 +144,8 @@ AT_FDCWD, AT_SYMLINK_NOFOLLOW, AT_REMOVEDIR, AT_SYMLINK_FOLLOW, AT_EMPTY_PATH, A
 )
 RENAME_NOREPLACE, RENAME_EXCHANGE, RENAME_WHITEOUT = 1, 2, 4
 AT_EXECVE_CHECK = 0x10000  # execveat's check that runs nothing, 6.14
+AT_NO_AUTOMOUNT = 0x800
+FAN_MARK_ADD, FAN_MARK_DONT_FOLLOW, FAN_OPEN = 1, 4, 0x20
 (
     RESOLVE_NO_XDEV,
     RESOLVE_NO_MAGICLINKS,
@@ -308,6 +313,22 @@ def chain_links(host: str) -> list[tuple[str, str]]:
     return links
 
 
+def set_probe_xattrs(top: str, values: tuple[tuple[str, str], ...]) -> None:
+    """Give files under top a user.probe attribute of their own.
+
+    Then a get or a remove of it succeeds somewhere and says which file it reached. A filesystem
+    without user attributes, or a Python without os.setxattr (a musl build), leaves them out in
+    both worlds alike.
+    """
+    setxattr = getattr(os, "setxattr", None)
+    for path, value in values:
+        try:
+            if setxattr:
+                setxattr(top + path, "user.probe", value.encode())
+        except OSError:
+            pass
+
+
 def make_maze(root: str, host: str) -> None:
     """Make the probe's maze under root's /maze, every form's target named explicitly.
 
@@ -341,6 +362,9 @@ def make_maze(root: str, host: str) -> None:
         if link.startswith("/maze/"):
             os.makedirs(os.path.dirname(os.path.join(root, link.lstrip("/"))), exist_ok=True)
             os.symlink(target, os.path.join(root, link.lstrip("/")))
+    set_probe_xattrs(
+        root, ((MAZE_FILE, "f0"), ("/maze/d0/f1", "f1"), ("/maze/f2", "f2"), (MAZE_DIR, "d1"))
+    )
     # a socket file in the tree, for bind and connect
     tree.socket_file(os.path.join(maze, "sock"))
     # a file its owner cannot write: access(W_OK) is EACCES before EROFS
@@ -425,6 +449,7 @@ class Forms:
         hostf = [
             ("host_file", h + "/hfile"),
             ("host_dir", h + "/hdir"),
+            ("host_empty_dir", h + "/hempty"),
             ("host_to_exclave", h + "/hlink"),
             ("host_to_exclave_dir", h + "/hlnkdir"),
             ("host_dangling", h + "/hdang"),
@@ -582,6 +607,7 @@ def generate(
         ("path_nofollow", O_PATH | O_NOFOLLOW),
         ("rd_nofollow", O_RDONLY | O_NOFOLLOW),
         ("rd_dir", O_RDONLY | O_DIRECTORY),
+        ("wr_dir", O_WRONLY | O_DIRECTORY),
         ("tmpfile", O_RDWR | O_TMPFILE),
     ]
     stat_flags = [
@@ -589,6 +615,8 @@ def generate(
         ("nofollow", AT_SYMLINK_NOFOLLOW),
         ("empty_path", AT_EMPTY_PATH),
         ("nofollow_empty_path", AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH),
+        # coreutils' stat and ls pass it; nothing in an exclave is an automount point
+        ("no_automount", AT_NO_AUTOMOUNT),
     ]
     # a bound host directory the kernel's world can write to, /tmp aside, is left as it is: the
     # two worlds would share what one of them changed there (an xattr set, a socket bound), and
@@ -642,7 +670,6 @@ def generate(
             add("removexattr", n, p, S("user.probe"))
             add("lremovexattr", n, p, S("user.probe"))
         add("inotify_add_watch", n, "I:", p, I(IN_MODIFY))
-        add("fanotify_mark", n, I(-1), I(0), I(0), I(AT_FDCWD), p)
         # the arguments the kernel checks before the lookup (13 item 11)
         if n != "proc_exe":
             add("truncate", n + "/negative", p, I(-1))
@@ -735,6 +762,19 @@ def generate(
         add("newfstatat", n + "/bad_flags", d, p, B("stat", 256), I(1))
         add("statx", n + "/reserved_mask", d, p, I(0), I(0x80000000), B("statx", 256))
         add("statx", n + "/both_syncs", d, p, I(0x6000), I(STATX_BASIC_STATS), B("statx", 256))
+        add("statx", n + "/force_sync", d, p, I(0x2000), I(STATX_BASIC_STATS), B("statx", 256))
+        add("statx", n + "/dont_sync", d, p, I(0x4000), I(STATX_BASIC_STATS), B("statx", 256))
+        # a mark through a real fanotify descriptor, which an unprivileged one reports by file id
+        add("fanotify_mark", n, "N:", I(FAN_MARK_ADD), I(FAN_OPEN), d, p)
+        add(
+            "fanotify_mark",
+            n + "/dont_follow",
+            "N:",
+            I(FAN_MARK_ADD | FAN_MARK_DONT_FOLLOW),
+            I(FAN_OPEN),
+            d,
+            p,
+        )
         add("statx", n + "/bad_flags", d, p, I(1), I(STATX_BASIC_STATS), B("statx", 256))
         add("faccessat", n + "/bad_mode", d, p, I(8))
         add("faccessat2", n + "/bad_flags", d, p, I(4), I(1))
@@ -1034,6 +1074,12 @@ def generate(
     add("chdir", "back", S(forms.host))
     add("getcwd", "back", B("cwd", 4096), I(4096))
     group = None
+    # O_DIRECTORY|O_CREAT, EINVAL since 6.3, last in its groups: before 6.3 it creates a file, which
+    # the cases after it would see in one world only
+    for n, p in forms.paths:
+        add("open", n + "/dir_creat", p, I(O_DIRECTORY | O_CREAT), I(0o644))
+    for n, d, p in forms.at:
+        add("openat", n + "/dir_creat", d, p, I(O_DIRECTORY | O_CREAT), I(0o644))
     return out
 
 
@@ -1069,10 +1115,12 @@ def host_reset(host: str, forms: Forms, probe: str) -> None:
     if os.path.lexists("/tmp/" + REL_SOCK):  # a relative bind after a chdir into /tmp
         os.remove("/tmp/" + REL_SOCK)
     os.makedirs(host + "/hdir")
+    os.makedirs(host + "/hempty")  # for an rmdir that succeeds
     with open(host + "/hfile", "w") as f:
         f.write("hello\n")
     with open(host + "/hdir/inner", "w") as f:
         f.write("inner text\n")
+    set_probe_xattrs(host, (("/hfile", "hfile"), ("/hdir", "hdir"), ("/hdir/inner", "inner")))
     for name, target in (
         ("hlink", forms.file),
         ("hlnkdir", forms.dir),
@@ -1366,15 +1414,18 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
             "any lookup, in both worlds"
         ),
     ),
-    (
-        "openat2",
-        lambda label, b, o, _c: (
-            KERNEL < (6, 3) and label.endswith("/dir_creat") and errnos(b, o)[1] == errno.EINVAL
-        ),
+    *(
         (
-            "O_DIRECTORY|O_CREAT is EINVAL since 6.3 (open.c); this kernel opens or creates "
-            "instead; the handler answers as the newer kernels do"
-        ),
+            call,
+            lambda label, b, o, _c: (
+                KERNEL < (6, 3) and label.endswith("/dir_creat") and errnos(b, o)[1] == errno.EINVAL
+            ),
+            (
+                "O_DIRECTORY|O_CREAT is EINVAL since 6.3 (open.c); this kernel opens or creates "
+                "instead; the handler answers as the newer kernels do"
+            ),
+        )
+        for call in ("open", "openat", "openat2")
     ),
     (
         "openat2",
@@ -1598,45 +1649,92 @@ EXPECTED.extend(
 
 
 # Launcher defects the probe has found and the handler has yet to fix: differences no rule makes
-# right, each (syscall, label, the kernel's answer, the launcher's answer). An entry accepts that
-# exact pair and nothing else, every run prints it, and a case of one that agrees fails, so that the
-# fix removes the entry.
-DEFECTS: set[tuple[str, str, str, str]] = {
-    # a no-follow call on an identity symlink (8.4) is the host's own on its link, as natively:
-    # EPERM for a user xattr on a link, EOPNOTSUPP for a link's mode; the handler answers otherwise
-    ("lsetxattr", "resolv", "ret=-1 errno=30", "ret=-1 errno=13"),
-    ("lremovexattr", "resolv", "ret=-1 errno=30", "ret=-1 errno=13"),
-    ("setxattrat", "cwd/resolv/nofollow", "ret=-1 errno=30", "ret=-1 errno=13"),
-    ("fchmodat2", "cwd/resolv/nofollow", "ret=-1 errno=30", "ret=-1 errno=1"),
-    # a trailing slash after a host symlink, for a call that does not follow the last component:
-    # the kernel looks the link itself up (EEXIST for a create, ENOTDIR for rmdir); the handler
-    # follows it, and mkdir creates the dangling link's target
-    ("mkdir", "host_dangling_slash", "ret=-1 errno=17", "ret=0 errno=0"),
-    ("mkdir", "host_missing", "ret=0 errno=0", "ret=-1 errno=17"),
-    ("mkdirat", "cwd/host_dangling_slash", "ret=-1 errno=17", "ret=0 errno=0"),
-    ("mkdirat", "cwd/host_missing", "ret=0 errno=0", "ret=-1 errno=17"),
-    ("rmdir", "host_link_slash", "ret=-1 errno=20", "ret=-1 errno=30"),
-    ("rmdir", "host_link_dir_slash", "ret=-1 errno=20", "ret=-1 errno=30"),
-    ("rmdir", "host_dangling_slash", "ret=-1 errno=20", "ret=-1 errno=2"),
-    ("symlink", "host_dangling_slash", "ret=-1 errno=17", "ret=-1 errno=2"),
-    ("symlinkat", "cwd/host_dangling_slash", "ret=-1 errno=17", "ret=-1 errno=2"),
-    ("mknod", "host_dangling_slash/fifo", "ret=-1 errno=17", "ret=-1 errno=2"),
-    ("mknod", "host_dangling_slash/reg", "ret=-1 errno=17", "ret=-1 errno=2"),
-    ("mknodat", "cwd/host_dangling_slash", "ret=-1 errno=17", "ret=-1 errno=2"),
-    ("bind", "host_dangling_slash", "ret=-1 errno=98", "ret=-1 errno=2"),
-    # O_CREAT with a trailing slash is EISDIR before the last component is looked up
-    # (open_last_lookups), so before RESOLVE_NO_SYMLINKS meets the link there; the handler: ELOOP
-    *(
-        ("openat2", f"cwd/{n}/wr_creat/no_symlinks", "ret=-1 errno=21", "ret=-1 errno=40")
-        for n in (
-            "link_dir_slash",
-            "link_file_slash",
-            "host_link_slash",
-            "host_link_dir_slash",
-            "host_dangling_slash",
-        )
+# right. Each entry is (what the kernel does, a predicate on (syscall, label, bwrap answer, launcher
+# answer, Ctx)) naming the cases and the exact answers it covers. Every run prints each entry with
+# its count of cases, and on the kernel they were measured on, 7.0 and later, a whole run in which
+# an entry matches no case fails, so that the fix removes the entry.
+DEFECTS_MEASURED = (7, 0)
+DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object]]] = [
+    (
+        (
+            "a no-follow call on an identity symlink (8.4) is the host's own on its link, as "
+            "the native run answers: EPERM for a user attribute on a link, EOPNOTSUPP for a "
+            "link's mode; the handler answers EACCES and EPERM"
+        ),
+        lambda n, label, b, o, _c: (
+            (n, label, b, o)
+            in {
+                ("lsetxattr", "resolv", "ret=-1 errno=30", "ret=-1 errno=13"),
+                ("lremovexattr", "resolv", "ret=-1 errno=30", "ret=-1 errno=13"),
+                ("setxattrat", "cwd/resolv/nofollow", "ret=-1 errno=30", "ret=-1 errno=13"),
+                ("fchmodat2", "cwd/resolv/nofollow", "ret=-1 errno=30", "ret=-1 errno=1"),
+            }
+        ),
     ),
-}
+    (
+        (
+            "a trailing slash after a host symlink, for a call that does not follow the last "
+            "component: the kernel looks the link itself up (EEXIST for a create, ENOTDIR for "
+            "rmdir); the handler follows it, and mkdir creates the dangling link's target"
+        ),
+        lambda n, label, b, o, _c: (
+            (n, label, b, o)
+            in {
+                ("mkdir", "host_dangling_slash", "ret=-1 errno=17", "ret=0 errno=0"),
+                ("mkdir", "host_missing", "ret=0 errno=0", "ret=-1 errno=17"),
+                ("mkdirat", "cwd/host_dangling_slash", "ret=-1 errno=17", "ret=0 errno=0"),
+                ("mkdirat", "cwd/host_missing", "ret=0 errno=0", "ret=-1 errno=17"),
+                ("rmdir", "host_link_slash", "ret=-1 errno=20", "ret=-1 errno=30"),
+                ("rmdir", "host_link_dir_slash", "ret=-1 errno=20", "ret=-1 errno=30"),
+                ("rmdir", "host_dangling_slash", "ret=-1 errno=20", "ret=-1 errno=2"),
+                ("symlink", "host_dangling_slash", "ret=-1 errno=17", "ret=-1 errno=2"),
+                ("symlinkat", "cwd/host_dangling_slash", "ret=-1 errno=17", "ret=-1 errno=2"),
+                ("mknod", "host_dangling_slash/fifo", "ret=-1 errno=17", "ret=-1 errno=2"),
+                ("mknod", "host_dangling_slash/reg", "ret=-1 errno=17", "ret=-1 errno=2"),
+                ("mknodat", "cwd/host_dangling_slash", "ret=-1 errno=17", "ret=-1 errno=2"),
+                ("bind", "host_dangling_slash", "ret=-1 errno=98", "ret=-1 errno=2"),
+            }
+        ),
+    ),
+    (
+        (
+            "O_CREAT with a trailing slash is EISDIR before the last component is looked up "
+            "(open_last_lookups), so before RESOLVE_NO_SYMLINKS meets a link there; the handler "
+            "says ELOOP"
+        ),
+        lambda n, label, b, o, _c: (
+            n == "openat2"
+            and label.endswith("_slash/wr_creat/no_symlinks")
+            and (b, o) == ("ret=-1 errno=21", "ret=-1 errno=40")
+        ),
+    ),
+    (
+        (
+            "O_WRONLY|O_DIRECTORY on what is not a directory: the lookup wants a directory "
+            "(LOOKUP_DIRECTORY, ENOTDIR) before may_open; the handler answers the read-only rules "
+            "first (EROFS, EACCES, ETXTBSY)"
+        ),
+        lambda n, label, b, o, _c: (
+            n in ("open", "openat")
+            and label.endswith("/wr_dir")
+            and errnos(b, o)[0] == errno.ENOTDIR
+            and errnos(b, o)[1] in (errno.EROFS, errno.EACCES, errno.ETXTBSY)
+        ),
+    ),
+    (
+        (
+            "O_DIRECTORY|O_CREAT is EINVAL in open and openat as in openat2 since 6.3 "
+            "(build_open_flags), before any lookup; the handler checks it for openat2 alone, and "
+            "answers the others from its walk"
+        ),
+        lambda n, label, b, o, _c: (
+            n in ("open", "openat")
+            and label.endswith("/dir_creat")
+            and errnos(b, o)[0] == errno.EINVAL
+            and failed(o)
+        ),
+    ),
+]
 
 
 def expected(name: str, label: str, b: str, o: str, ctx: Ctx) -> str | None:
@@ -1771,9 +1869,9 @@ def main() -> int:
             + ("is off as root" if native_off else f"leaves out {', '.join(sorted(unsafe))}")
             + "; a difference there that only the host can answer fails"
         )
-    total = differ = accepted = known = 0
+    total = differ = accepted = 0
+    known = [0] * len(DEFECTS)
     shown = 0
-    open_defects = {(n, label) for n, label, _b, _o in DEFECTS}
     for name in names:  # one run per group, the host area reset before each world
         mine = [c for c in cases if c[3] == name]
         path = os.path.join(bindir, "cases-" + name)
@@ -1831,17 +1929,16 @@ def main() -> int:
             total += 1
             b, o = bline.split(" ", 1)[1], oline.split(" ", 1)[1]
             if b == o:
-                if (n, label) in open_defects:
-                    differ += 1
-                    d += 1
-                    print(f"FIXED {n} {label}: both answer {b}; remove its DEFECTS entry")
-                continue
-            if (n, label, b, o) in DEFECTS:
-                known += 1
-                print(f"DEFECT {n} {label}\n     kernel: {b}\n     launcher: {o}")
                 continue
             raw = named_paths(n, toks, host)
-            why = expected(n, label, b, o, Ctx(raw, tuple(lexical(r) for r in raw), kernel, native))
+            ctx = Ctx(raw, tuple(lexical(r) for r in raw), kernel, native)
+            which = [i for i, (_why, pred) in enumerate(DEFECTS) if pred(n, label, b, o, ctx)]
+            if which:
+                known[which[0]] += 1
+                if args.expected:
+                    print(f"DEFECT {n} {label}\n     kernel: {b}\n     launcher: {o}")
+                continue
+            why = expected(n, label, b, o, ctx)
             if why:
                 accepted += 1
                 if args.expected:
@@ -1862,10 +1959,15 @@ def main() -> int:
                     + (f"\n     native: {native[label]}" if label in native else "")
                 )
         print(f"{name:<18} {len(mine):5d} cases, {d} differ")
+    for (why, _pred), count in zip(DEFECTS, known, strict=True):
+        print(f"DEFECT {count} cases: {why}")
+        if not count and not args.only and KERNEL >= DEFECTS_MEASURED:
+            print("FAIL no case shows this defect any more: remove its DEFECTS entry")
+            differ += 1
     print(
         f"{total} cases over {len(names)} groups and {len(forms.paths)} path forms: "
         f"{differ} differ, {accepted} differences expected"
-        + (f", {known} open launcher defects" if known else "")
+        + (f", {sum(known)} open launcher defects" if sum(known) else "")
     )
     rmtree(f"/tmp/exclave-probe-{os.getpid()}")
     if not args.keep and not differ:

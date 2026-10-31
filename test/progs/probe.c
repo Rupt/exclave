@@ -20,6 +20,8 @@
  *   x:<hex>:<flags>      a struct xattr_args whose value is the bytes (setxattrat, getxattrat)
  *   I:                   the process's one inotify descriptor, made at its first use and kept, so that a watch
  *                        descriptor names an inode: two cases that reach one inode answer the same wd
+ *   N:                   a descriptor from fanotify_init(FAN_CLASS_NOTIF | FAN_REPORT_FID, O_RDONLY), which an
+ *                        unprivileged process may make (5.13), closed after the call
  *   k:<type>             a unix socket of that type, opened before the call (-1 when it fails)
  *   A:<hex>              a struct sockaddr_un, AF_UNIX, whose sun_path holds those bytes (at most 108, unterminated
  *                        at 108)
@@ -110,6 +112,10 @@ static void decode(struct arg *a, char *tok)
     case 'I':
         if (inotify_fd < 0) inotify_fd = (int)syscall(SYS_inotify_init1, 0);
         a->v = inotify_fd;
+        break;
+    case 'N':
+        a->fd = (int)syscall(SYS_fanotify_init, 0x200 /* FAN_REPORT_FID */, O_RDONLY);
+        a->v = a->fd;
         break;
     case 'k':
         a->fd = socket(AF_UNIX, (int)strtol(p, 0, 10), 0);
