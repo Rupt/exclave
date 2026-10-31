@@ -2,14 +2,14 @@
 
 This is the differential syscall probe. One program (test/progs/probe.c) issues every trapped path
 and descriptor syscall of src/filter.c, and the two chattr ioctls, with every path form of 7.4.4
-and every flag that changes resolution, over a random maze. It runs under two projections of the
+and every flag that changes resolution, over a fixed maze. It runs under two projections of the
 same tree: the kernel's, a bwrap read-only bind of the unwrapped tree at /, and the launcher's.
 Return value, errno and what a buffer holds afterwards must agree case by case, and a difference
 fails unless EXPECTED names its reason, so the expectations come from the kernel, not from a test's
 author. Like oracle_ns, the probe needs user namespaces and bwrap; without them it says so ("cannot
 run") and exits 0, and the gate prints that step as SKIP.
 
-    test/oracle_syscalls.py --exclave EXCLAVE [--work DIR] [--seed S] [--only NAME] [--keep]
+    test/oracle_syscalls.py --exclave EXCLAVE [--work DIR] [--only NAME] [--keep]
         [--show N] [--expected]
 
 Arguments. probe.c reads cases, each a syscall number and encoded arguments, and issues each through
@@ -23,7 +23,7 @@ execve runs in a forked child whose exit status is the answer.
 Cases. The table covers the trapped path syscalls and the descriptor-addressed ones (fchmod, fchown,
 fsetxattr, fremovexattr, fstatfs, and ioctl with FS_IOC_SETFLAGS and FS_IOC_FSSETXATTR), crossed
 with every flag that changes resolution, with the invalid arguments the kernel checks before the
-lookup, and with the path forms of class Forms over a random maze:
+lookup, and with the path forms of class Forms over the maze of make_maze, the same in every run:
   - inside the exclave: a file, a directory and a symlink of every kind (loop, chained, dangling,
     absolute, relative), a wrapper, the shell's link, an identity file, a placeholder,
     /proc/self/exe, and an exclave link to a host file and to a host directory, the latter also
@@ -89,7 +89,6 @@ import argparse
 import errno
 import os
 import platform
-import random
 import re
 import shutil
 import subprocess
@@ -98,7 +97,6 @@ lazy from collections.abc import Callable
 
 import tree
 from harness import run
-from oracle_resolve import make_maze
 from syscalls import kernel_table
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -247,31 +245,61 @@ def decode(tok: str) -> str:
     return tok
 
 
+# The probe's maze, the same in every run (make_maze): a file two directories down and the directory
+# that holds it, and a symlink of every kind
+MAZE_FILE, MAZE_DIR = "/maze/d0/d1/f0", "/maze/d0/d1"
+MAZE_LINKS = {
+    "abs": ("/maze/labs", MAZE_FILE),
+    "rel": ("/maze/d0/d1/lrel", "../f1"),  # up a directory, to /maze/d0/f1
+    "link": ("/maze/lchain", "/maze/labs"),  # a link to a link
+    "dangling": ("/maze/d0/ldang", "/maze/d0/missing"),
+    "loop": ("/maze/d0/lloop", "/maze/d0/lloop"),
+}
+
+
+def make_maze(root: str, host: str) -> None:
+    """Make the probe's maze under root's /maze, every form's target named explicitly.
+
+    The forms are fixed, so that no run can lose one; the resolution oracle's maze is the random
+    one (17 item 2).
+    """
+    maze = os.path.join(root, "maze")
+    rmtree(maze)
+    os.makedirs(os.path.join(root, MAZE_DIR.lstrip("/")))
+    for f in (MAZE_FILE, "/maze/d0/f1", "/maze/f2"):
+        with open(os.path.join(root, f.lstrip("/")), "w") as fh:
+            fh.write("x")
+    links = [
+        *MAZE_LINKS.values(),
+        # an exclave link to a host file, and to a host directory
+        ("/maze/lH", host + "/hfile"),
+        ("/maze/lHD", host + "/hdir"),
+        # a link whose text ends in a slash, to a missing name and to a file: the kernel walks the
+        # text as the rest of the path, so the slash is the path's trailing slash (8.1)
+        ("/maze/lS", "/maze/absent/"),
+        ("/maze/lFS", "/maze/ro444/"),
+        # links to the forms' directory and file, for a trailing slash after a link
+        ("/maze/lD", MAZE_DIR),
+        ("/maze/lF", MAZE_FILE),
+    ]
+    for link, target in links:
+        os.symlink(target, os.path.join(root, link.lstrip("/")))
+    # a socket file in the tree, for bind and connect
+    tree.socket_file(os.path.join(maze, "sock"))
+    # a file its owner cannot write: access(W_OK) is EACCES before EROFS
+    with open(os.path.join(maze, "ro444"), "w") as f:
+        f.write("ro\n")
+    os.chmod(os.path.join(maze, "ro444"), 0o444)
+
+
 class Forms:
     """The path forms of 7.4.4 over this maze, this tree and the host area."""
 
-    def __init__(
-        self, root: str, host: str, links: list[str], _dirs: list[str], files: list[str]
-    ) -> None:
+    def __init__(self, root: str, host: str) -> None:
         self.host = host
-        by_kind: dict[str, str] = {}
-        for link in links:
-            t = os.readlink(os.path.join(root, link.lstrip("/")))
-            if t == link:
-                kind = "loop"
-            elif t.startswith("/maze/l"):
-                kind = "link"
-            elif "missing" in t:
-                kind = "dangling"
-            elif t.startswith("/"):
-                kind = "abs"
-            else:
-                kind = "rel"
-            by_kind.setdefault(kind, link)
-        self.link = by_kind
-        # a file in a subdirectory, and a directory that has a file child
-        self.file = min(files, key=lambda f: -f.count("/"))
-        self.dir = os.path.dirname(self.file)
+        self.link = {kind: link for kind, (link, _target) in MAZE_LINKS.items()}
+        by_kind = self.link
+        self.file, self.dir = MAZE_FILE, MAZE_DIR
         self.true = tree.vbin(root, "true")
         self.sh = tree.vbin(root, "sh")
         h = host
@@ -395,8 +423,8 @@ class Forms:
             "../" + os.path.basename(self.file),
             os.path.basename(self.file),
             "nonexistent",
-            "../../etc/passwd",
-            "../../../../tmp",
+            "../../../etc/passwd",  # up to the root, and an identity file
+            "../../../../tmp",  # above the root
             self.file,
         ]
         rel_host = ["", ".", "..", "inner", "../hfile", "../hlink", "nonexistent", self.file]
@@ -917,7 +945,7 @@ def generate(
         "nonexistent",
         "../../..",
         "../../../../etc/passwd",
-        "../../home",
+        "../../../home",
         "./",
     ]
     group = "cwd_in_exclave"
@@ -1377,7 +1405,6 @@ def main() -> int:
     )
     ap.add_argument("--exclave", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "syscalls-work"))
-    ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--only", help="only this syscall")
     ap.add_argument("--show", type=int, default=40, help="differences to print")
     ap.add_argument("--keep", action="store_true")
@@ -1412,7 +1439,6 @@ def main() -> int:
                 rmtree(os.path.join("/tmp", d))
             except PermissionError:
                 pass
-    rng = random.Random(args.seed)
     # the kernel's world: an unwrapped copy of the tree; the launcher's: a copy of the exclave; the
     # same maze in both
     root = os.path.join(work, "bare", "tree")
@@ -1422,24 +1448,10 @@ def main() -> int:
     tree.unwrap_tree(os.path.join(work, "bare"))
     # the launcher's world: a copy relinked with the build (17)
     ex = tree.fresh_exclave(given, os.path.join(work, "exclave"))
-    dirs, files, links = make_maze(root, rng)
     # ".." from the host area is a directory the reset owns
     host = os.path.join(work, "area", "host")
-    # an exclave link to a host file, and to a host directory
-    os.symlink(host + "/hfile", os.path.join(root, "maze", "lH"))
-    os.symlink(host + "/hdir", os.path.join(root, "maze", "lHD"))
-    # a link whose text ends in a slash, to a missing name and to a file: the kernel walks the
-    # text as the rest of the path, so the slash is the path's trailing slash (8.1)
-    os.symlink("/maze/absent/", os.path.join(root, "maze", "lS"))
-    os.symlink("/maze/ro444/", os.path.join(root, "maze", "lFS"))
-    shutil.copytree(os.path.join(root, "maze"), os.path.join(ex, "tree", "maze"), symlinks=True)
-    # a socket file in the tree, for bind and connect (copytree cannot carry one)
     for r in (root, os.path.join(ex, "tree")):
-        tree.socket_file(os.path.join(r, "maze", "sock"))
-        # a file its owner cannot write: access(W_OK) is EACCES before EROFS
-        with open(os.path.join(r, "maze", "ro444"), "w") as f:
-            f.write("ro\n")
-        os.chmod(os.path.join(r, "maze", "ro444"), 0o444)
+        make_maze(r, host)
     for f in IDENTITY:  # as oracle_ns: the host's link text in the copy, its target bound
         p_ = os.path.join(root, f.lstrip("/"))
         if os.path.islink(f) and os.path.lexists(p_):
@@ -1451,11 +1463,7 @@ def main() -> int:
                 os.makedirs(os.path.dirname(tp), exist_ok=True)
                 with open(tp, "wb"):
                     pass
-    forms = Forms(root, host, links, dirs, files)
-    # links to the forms' directory and file, for a trailing slash after a link
-    for r in (root, os.path.join(ex, "tree")):
-        os.symlink(forms.dir, os.path.join(r, "maze", "lD"))
-        os.symlink(forms.file, os.path.join(r, "maze", "lF"))
+    forms = Forms(root, host)
     # a tree file the probe names has a copy of its own in the kernel's world, not a hard link to
     # the given exclave's: another gate step may be running that program, and a write-open of it
     # would be ETXTBSY there, an answer about the gate rather than the rule
@@ -1582,7 +1590,6 @@ def main() -> int:
         f"{total} cases over {len(names)} groups and {len(forms.paths)} path forms: "
         f"{differ} differ, {accepted} differences expected"
         + (f", {known} open launcher defects" if known else "")
-        + (f"; seed {args.seed}" if differ else "")
     )
     rmtree(f"/tmp/exclave-probe-{os.getpid()}")
     if not args.keep and not differ:

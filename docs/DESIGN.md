@@ -3882,17 +3882,19 @@ meaning items 4 and 7.
    after the matrix's oldest kernel, each with its release. The tree's
    files the probe names are copies of their own in the kernel's world,
    not hard links to the given exclave's, which another gate step may
-   be running. The two randomised oracles take a seed, fixed in the
-   gate and of the moment under `--full`, and print it with any
-   difference. A limitation is measured the same way before it is
-   fixed, by an exerciser run in both worlds.
+   be running. The probe's maze is fixed, so that no run can lose a
+   form; the resolution oracle's mazes are random, from the commit's
+   seed in the gate and one of the moment under `--full` and in
+   `scripts/extra`, printed with any difference. A limitation is
+   measured the same way before it is fixed, by an exerciser run in
+   both worlds.
 
 **What implements each item.**
 
 | Item | Implementation |
 |---|---|
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus five of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `unix_socket` and `magic_links` (`test/kernel_answers.py`) |
-| 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
+| 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
 | 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 83 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
@@ -4161,7 +4163,7 @@ or a symlink to one, originals included. On the fixture one suite takes
 **The probe** (`test/progs/probe.c`, `test/oracle_syscalls.py`) puts the
 whole trapped-syscall surface in front of the kernel. It crosses the 61
 trapped path syscalls and six descriptor-addressed ones with every flag
-that changes resolution, 77 path forms over a random maze and the `*at`
+that changes resolution, 77 path forms over a fixed maze and the `*at`
 descriptors. One program issues each case through `syscall(2)` under
 `bwrap`, with 8.1's visibility rule spelt in `bwrap`'s terms, and under
 the launcher, and the answers are compared line by line. Each group's

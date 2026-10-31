@@ -3,9 +3,14 @@
 A random maze of directories, files and symlinks (relative, absolute, dangling, looping, with `..`
 and trailing slashes) is added to a copy of an exclave under /maze. Every generated path is resolved
 twice: by the kernel with openat2(RESOLVE_IN_ROOT) on the tree, which has chroot semantics, and by
-the launcher from inside the exclave. The resulting paths and errnos must agree.
+the launcher from inside the exclave. The resulting paths and errnos must agree. The paths are
+spread over mazes of MAZE_PATHS each, made one after another in the same copy.
 
     test/oracle_resolve.py --exclave EXCLAVE [--work DIR] [--paths N] [--seed S] [--keep]
+
+The seed is the commit's, the hex of `git rev-parse --short=8 HEAD`, when none is given, so that
+each commit explores new mazes and a run is reproduced from its commit; outside a git checkout, as
+in the matrix's VMs, it is 1. It is printed with any difference.
 """
 
 import argparse
@@ -28,8 +33,10 @@ SYS_openat2 = 437
 # this machine's bits: aarch64's O_NOFOLLOW is not x86-64's
 O_PATH, O_NOFOLLOW = os.O_PATH, os.O_NOFOLLOW
 RESOLVE_IN_ROOT = 0x10
-# seconds the launcher's run of every path may take, a few hundred times what it takes
+# seconds the launcher's run of one maze's paths may take, a few hundred times what it takes
 TIMEOUT = 60
+# paths asked of each maze
+MAZE_PATHS = 3000
 libc = ctypes.CDLL(None, use_errno=True)
 
 
@@ -142,17 +149,32 @@ def gen_paths(
     return out
 
 
+def head_seed() -> int:
+    """The commit's seed: HEAD's short hash as a number, or 1 outside a git checkout."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", REPO, "rev-parse", "--short=8", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return 1
+    return int(r.stdout.strip(), 16) if r.returncode == 0 else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--exclave", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "resolve-work"))
-    ap.add_argument("--paths", type=int, default=3000)
-    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--paths", type=int, default=30000)
+    ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--keep", action="store_true")
     args = ap.parse_args()
-    rng = random.Random(args.seed)
+    seed = head_seed() if args.seed is None else args.seed
+    rng = random.Random(seed)
     probe = OpenHow(O_PATH, 0, RESOLVE_IN_ROOT)
     if (
         libc.syscall(SYS_openat2, -100, b".", ctypes.byref(probe), ctypes.sizeof(probe)) < 0
@@ -169,7 +191,6 @@ def main() -> int:
     # a copy relinked with the build (17)
     ex = tree.fresh_exclave(os.path.abspath(args.exclave), os.path.join(work, "exclave"))
     root = os.path.join(ex, "tree")
-    dirs, files, links = make_maze(root, rng)
     with open(os.path.join(ex, ".exclave", "manifest"), "w") as f:
         # /maze is a non-empty top-level directory: the exclave's by the tree alone (8.1)
         f.write("exclave 1\n")
@@ -187,43 +208,52 @@ def main() -> int:
     )
     if r.returncode:
         sys.exit("cannot compile resolve.c: " + r.stderr.decode(errors="replace"))
-    paths = gen_paths(rng, dirs, files, links, args.paths)
-    try:
-        rc, out, stderr = run(
-            [os.path.join(ex, ".exclave", "launcher"), prog],
-            inp="\n".join(paths).encode() + b"\n",
-            cwd=work,
-            env={"PATH": "/usr/bin:/bin"},
-            timeout=TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        sys.exit(
-            f"the launcher's run of {len(paths)} paths killed after {TIMEOUT} s; seed {args.seed}"
-        )
-    answers = out.splitlines()
-    if len(answers) != len(paths):
-        sys.exit(f"the launcher answered {len(answers)} of {len(paths)} paths: {stderr[-500:]}")
-    # the program answers every path on stdout and exits 0 with nothing on stderr
-    failed_run = bool(rc or stderr)
-    if failed_run:
-        print(f"FAIL the launcher's run: rc {rc}, stderr {stderr.strip()[-300:]!r}")
     rootfd = os.open(root, os.O_PATH)
-    fails, agree = 0, 0
-    for path, ans in zip(paths, answers, strict=False):
-        follow = not path.startswith("nofollow ")
-        bare = path[9:] if not follow else path
-        want, err = kernel_resolve(rootfd, root, bare, follow=follow)
-        k = f"ERR {err}" if err is not None else f"OK {want}"
-        if k == ans:
-            agree += 1
-        else:
-            fails += 1
-            if fails <= 25:
-                print(f"DIFF {path[:60]:<60} kernel={k} launcher={ans}")
+    fails = agree = asked = 0
+    failed_run = False
+    for m in range((args.paths + MAZE_PATHS - 1) // MAZE_PATHS):
+        shutil.rmtree(os.path.join(root, "maze"), ignore_errors=True)
+        dirs, files, links = make_maze(root, rng)
+        paths = gen_paths(rng, dirs, files, links, min(MAZE_PATHS, args.paths - asked))
+        asked += len(paths)
+        try:
+            rc, out, stderr = run(
+                [os.path.join(ex, ".exclave", "launcher"), prog],
+                inp="\n".join(paths).encode() + b"\n",
+                cwd=work,
+                env={"PATH": "/usr/bin:/bin"},
+                timeout=TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            sys.exit(
+                f"the launcher's run of maze {m}'s {len(paths)} paths killed after {TIMEOUT} s; "
+                f"seed {seed}"
+            )
+        answers = out.splitlines()
+        if len(answers) != len(paths):
+            sys.exit(
+                f"the launcher answered {len(answers)} of maze {m}'s {len(paths)} paths: "
+                f"{stderr[-500:]}; seed {seed}"
+            )
+        # the program answers every path on stdout and exits 0 with nothing on stderr
+        if rc or stderr:
+            failed_run = True
+            print(f"FAIL the launcher's run of maze {m}: rc {rc}, stderr {stderr.strip()[-300:]!r}")
+        for path, ans in zip(paths, answers, strict=True):
+            follow = not path.startswith("nofollow ")
+            bare = path[9:] if not follow else path
+            want, err = kernel_resolve(rootfd, root, bare, follow=follow)
+            k = f"ERR {err}" if err is not None else f"OK {want}"
+            if k == ans:
+                agree += 1
+            else:
+                fails += 1
+                if fails <= 25:
+                    print(f"DIFF maze {m} {path[:60]:<60} kernel={k} launcher={ans}")
     print(
-        f"{len(paths)} paths: {agree} agree, {fails} differ"
-        + ("; the run failed" if failed_run else "")
-        + (f"; seed {args.seed}" if fails or failed_run else "")
+        f"{asked} paths: {agree} agree, {fails} differ"
+        + ("; a run failed" if failed_run else "")
+        + (f"; seed {seed}" if fails or failed_run else "")
     )
     if not args.keep and not fails and not failed_run:
         shutil.rmtree(work, ignore_errors=True)

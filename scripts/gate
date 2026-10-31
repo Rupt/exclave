@@ -25,7 +25,7 @@ set -u
 here=$ROOT/test
 repo=$ROOT
 out=$repo/build/gate
-full=false jobs=2 since='' seed=1
+full=false jobs=2 since='' seed=''
 while :; do
     case ${1-} in
     --full) full=true ;;
@@ -98,7 +98,7 @@ has() {
 } # has STEP: whether the change reaches it
 if $full || has every; then
     steps="unit stack unpack fetch suite oracles $steps"
-    # the randomised oracles' mazes and cases from a seed of the moment, which each prints on a failure
+    # the resolution oracle's mazes from a seed of the moment rather than the commit's, printed on a failure
     $full && seed=$(($(date +%s) % 100000))
     echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
 else
@@ -114,9 +114,9 @@ has unpack && step unpack py "$here/unpack_test.py" --work "$out/unpack" # unpac
 has fetch && step fetch py "$here/fetch_test.py" --work "$out/fetch"     # the fetchers' signature checks
 has suite && step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"
 if has oracles; then
-    step "resolve-$n" py "$here/oracle_resolve.py" --exclave "$ex" --work "$out/r-$n" --seed "$seed"
+    step "resolve-$n" py "$here/oracle_resolve.py" --exclave "$ex" --work "$out/r-$n" ${seed:+--seed "$seed"}
     step "ns-$n" py "$here/oracle_ns.py" --exclave "$ex" --work "$out/n-$n"
-    step "syscalls-$n" py "$here/oracle_syscalls.py" --exclave "$ex" --work "$out/s-$n" --seed "$seed"
+    step "syscalls-$n" py "$here/oracle_syscalls.py" --exclave "$ex" --work "$out/s-$n"
     if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
         step "docker-$n" py "$here/docker_profile.py" --exclave "$ex" --profile "$EXCLAVE_TEST_INPUTS/src/docker-seccomp.json" --work "$out/d-$n"
     else echo "docker: EXCLAVE_TEST_INPUTS not set; skipped"; fi
