@@ -20,9 +20,14 @@ extern char **environ;
 
 int main(int argc, char **argv)
 {
-    const char *mode = argc > 1 ? argv[1] : "";
-    if (!strcmp(mode, "child") || argc == 1) {
-        printf("child ok argv0=%s\n", argc ? argv[0] : "(none)");
+    /* run with an empty or a NULL argv (vectors): what the kernel made of it */
+    if (argc <= 1) {
+        printf("argc %d argv0 '%s'\n", argc, argc ? argv[0] : "(null)");
+        return 0;
+    }
+    const char *mode = argv[1];
+    if (!strcmp(mode, "child")) {
+        printf("child ok argv0=%s\n", argv[0]);
         return 0;
     }
     if (!strcmp(mode, "self")) {
@@ -53,11 +58,19 @@ int main(int argc, char **argv)
         printf("header ok %s\n", exe);
         return 0;
     }
+    /* fexecve_payload PATH ARGV...: an original's descriptor, which the handler maps back to its wrapper */
+    if (!strcmp(mode, "fexecve_payload") && argc > 3) {
+        int fd = open(argv[2], O_RDONLY);
+        if (fd < 0) {
+            perror(argv[2]);
+            return 1;
+        }
+        fexecve(fd, argv + 3, environ);
+        perror("fexecve");
+        return 1;
+    }
     if (!strncmp(mode, "fexecve", 7)) {
-        const char *p =
-            !strcmp(mode, "fexecve_payload")
-                ? (getenv("EXCLAVE_TEST_TRUE_PAYLOAD") ? getenv("EXCLAVE_TEST_TRUE_PAYLOAD") : "/usr/bin/.real/true")
-                : (getenv("EXCLAVE_TEST_TRUE") ? getenv("EXCLAVE_TEST_TRUE") : "/usr/bin/true");
+        const char *p = getenv("EXCLAVE_TEST_TRUE") ? getenv("EXCLAVE_TEST_TRUE") : "/usr/bin/true";
         int fd = open(p, !strcmp(mode, "fexecve_opath") ? O_PATH : O_RDONLY);
         if (fd < 0) {
             perror(p);
@@ -147,7 +160,9 @@ int main(int argc, char **argv)
         perror("execve");
         return 1;
     }
-    if (!strcmp(mode, "vectors")) { /* NULL and bad vectors behave as the kernel makes them */
+    /* NULL and bad vectors behave as the kernel makes them: the errno, and a line "TARGET CASE: OUTPUT" with the first
+     * line the program wrote */
+    if (!strcmp(mode, "vectors")) {
         int fails = 0;
         for (int t = 2; t < argc; t++) {
             struct {
@@ -161,11 +176,28 @@ int main(int argc, char **argv)
                          {"bad argv", (char **)1, environ, EFAULT},
                          {"bad envp", (char *[]){"x", "child", 0}, (char **)1, EFAULT}};
             for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+                int o[2];
+                if (pipe(o)) {
+                    perror("pipe");
+                    return 1;
+                }
+                fflush(stdout);
                 pid_t p = fork();
                 if (p == 0) {
+                    dup2(o[1], 1);
+                    close(o[0]);
+                    close(o[1]);
                     execve(argv[t], cases[i].av, cases[i].ev);
                     _exit(errno == EFAULT ? 77 : 78);
                 }
+                close(o[1]);
+                char out[512];
+                ssize_t n = 0, m;
+                while (n < (ssize_t)sizeof out - 1 && (m = read(o[0], out + n, sizeof out - 1 - (size_t)n)) > 0) n += m;
+                close(o[0]);
+                out[n] = 0;
+                out[strcspn(out, "\n")] = 0;
+                printf("%s %s: %s\n", argv[t], cases[i].name, out);
                 int st;
                 waitpid(p, &st, 0);
                 int got = WIFSIGNALED(st)         ? -WTERMSIG(st)

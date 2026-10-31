@@ -4,6 +4,7 @@ Run by test/run.py, on the fixtures test/suite.py makes.
 """
 
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -31,9 +32,24 @@ def exec_modes(ctx: Ctx) -> None:
     expect(rc == 0 and out == f"child ok argv0={p}\n", f"self: {out!r} {err!r}")
     rc, out, err = inside(ctx, p, ["header", p])
     expect(rc == 0 and out.startswith("header ok"), f"header: {out!r} {err!r}")
-    for mode in ("fexecve", "fexecve_opath", "fexecve_payload", "seccomp"):
+    for mode in ("fexecve", "fexecve_opath", "seccomp"):
         rc, out, err = inside(ctx, p, [mode])
         expect(rc == 0, f"{mode}: rc={rc} {out!r} {err!r}")
+    # an original's descriptor is mapped back to its wrapper (7.4.5): the shell runs as a wrapper,
+    # whose environment as the kernel holds it has no EXCLAVE_EXEC, which the loader path's has
+    payload = "/" + os.path.relpath(ctx.payload("sh"), ctx.root)
+    rc, out, err = inside(
+        ctx,
+        p,
+        [
+            "fexecve_payload",
+            payload,
+            "sh",
+            "-c",
+            "tr '\\0' '\\n' < /proc/$$/environ | grep -c ^EXCLAVE_EXEC=",
+        ],
+    )
+    expect(out == "0\n", f"fexecve of {payload} runs its wrapper: {out!r} {err!r}")
     # the persona an exec keeps (begin_new_exec clears only PER_CLEAR_ON_SETID, on a setid exec):
     # ADDR_NO_RANDOMIZE on the loader path, where two runs then place the program alike, and
     # through a wrapper; PER_LINUX32's machine as the kernel reports it natively
@@ -340,15 +356,26 @@ def executable_stack(ctx: Ctx) -> str | None:
 def exec_vectors(ctx: Ctx) -> None:
     """7.5.6 for argument vectors: NULL is empty, a bad pointer is EFAULT.
 
-    For a wrapper, a host ELF and a host script.
+    For a wrapper, a host ELF and a host script; a NULL argv reaches the program and the script's
+    interpreter as the kernel makes it.
     """
     p = os.path.join(ctx.progs, "exec")
     hs = os.path.join(ctx.work, "vec-script.sh")
     with open(hs, "w") as f:
-        f.write("#!/bin/sh\nexit 0\n")
+        f.write('#!/bin/sh\necho "$0 $#"\n')
     os.chmod(hs, 0o755)
     rc, out, err = inside(ctx, p, ["vectors", ctx.vbin("true"), p, hs], timeout=60)
     expect(rc == 0 and "FAIL" not in out, out + err)
+    # from 5.18 an empty argv is one empty string (fs/exec.c); a script's interpreter is given the
+    # script's path either way
+    release = re.match(r"(\d+)\.(\d+)", os.uname().release)
+    new = release is not None and (int(release[1]), int(release[2])) >= (5, 18)
+    argc = "argc 1 argv0 ''" if new else "argc 0 argv0 '(null)'"
+    lines = set(out.splitlines())
+    want = {
+        f"{t} {c}: {o}" for t, o in ((p, argc), (hs, f"{hs} 0")) for c in ("null/null", "null/env")
+    }
+    expect(want <= lines, f"an exec with a NULL argv: {sorted(want - lines)} not in {out!r}")
     rc, out, err = inside(ctx, p, ["envedge", p], timeout=60)
     expect(
         rc == 0 and out == "A=1 B=2 EXCLAVE_COMMX=keep\n",
