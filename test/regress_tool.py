@@ -618,7 +618,8 @@ def ld_so_cache_as_ldconfig_writes_it(ctx: Ctx) -> str | None:
     truncated file. The tree's ldconfig runs on one, inside the exclave as a program of the tree,
     and unpack's writer on the other; the caches and the directories' links must agree. The
     loader's directories the writer reads from the loader file must be those `--list-diagnostics`
-    prints.
+    prints. And the command reads such a cache: a hand-made tree whose libc only the cache names
+    wraps, and with the cache cut short its check finds no libc.
     """
     if ctx.musl or not ctx.libc:
         skip("musl reads no ld.so.cache")
@@ -726,6 +727,37 @@ def ld_so_cache_as_ldconfig_writes_it(ctx: Ctx) -> str | None:
         rc == 0 and "assumed" not in out and "not found" not in out,
         f"libc in the table's first directory {table[0]} must be found: {out[-500:]}{err}",
     )
+    shutil.rmtree(hand, ignore_errors=True)
+    # and the tool reads the cache: libc only in /opt/testlib, which /etc/ld.so.conf names, is found
+    # through the cache unpack's writer makes there; with the cache cut inside its first entry, 60
+    # bytes, it lists nothing, and no search finds libc
+    hand = os.path.join(ctx.work, f"cache-only-{os.getpid()}.exclave")
+    shutil.rmtree(hand, ignore_errors=True)
+    root = os.path.join(hand, "tree")
+    for vpath, src in (
+        (ctx.interp, ctx.payload(ctx.interp)),
+        ("/opt/testlib/libc.so.6", ctx.payload(ctx.libc)),
+        ("/usr/bin/true", ctx.payload("true")),
+        (ldconfig, ctx.payload(ldconfig)),
+    ):
+        os.makedirs(os.path.dirname(os.path.join(root, vpath.lstrip("/"))), exist_ok=True)
+        shutil.copy2(src, os.path.join(root, vpath.lstrip("/")))
+    os.makedirs(os.path.join(root, "etc"))
+    with open(os.path.join(root, "etc", "ld.so.conf"), "w") as f:
+        f.write("/opt/testlib\n")
+    with Root(root) as r:
+        expect(ldcache.write(r, ldconfig, logs.append), f"no cache for the hand tree: {logs}")
+    rc, out, err = run([*TOOL, "wrap", hand])
+    unfound = "/usr/bin/true needs libc.so.6, which"  # no search finds, or does not resolve
+    expect(rc == 0 and unfound not in out, f"libc through the cache: {out[-500:]}{err}")
+    cache_file = os.path.join(root, "etc", "ld.so.cache")
+    data = read_bytes(cache_file)
+    os.remove(cache_file)
+    with open(cache_file, "wb") as f:
+        f.write(data[:60])
+    errors, warnings, out = check(hand)
+    said = any(w.startswith(unfound) for w in errors + warnings)
+    expect(said, f"a cache cut short: {out[-600:]}")
     shutil.rmtree(hand, ignore_errors=True)
     for root in copies:
         shutil.rmtree(os.path.dirname(root), ignore_errors=True)
