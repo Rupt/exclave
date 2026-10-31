@@ -188,8 +188,9 @@ def main() -> int:
     work = os.path.abspath(args.work)
     if os.path.exists(work):
         shutil.rmtree(work)
-    # a copy relinked with the build (17)
-    ex = tree.fresh_exclave(os.path.abspath(args.exclave), os.path.join(work, "exclave"))
+    os.makedirs(work)
+    # a copy relinked with the build (17), kept between runs; its maze and manifest made anew
+    ex, _bare = tree.kept_worlds(os.path.abspath(args.exclave), "resolve")
     root = os.path.join(ex, "tree")
     with open(os.path.join(ex, ".exclave", "manifest"), "w") as f:
         # /maze is a non-empty top-level directory: the exclave's by the tree alone (8.1)

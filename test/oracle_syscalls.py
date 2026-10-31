@@ -1850,15 +1850,9 @@ def main() -> int:
                 rmtree(os.path.join("/tmp", d))
             except PermissionError:
                 pass
-    # the kernel's world: an unwrapped copy of the tree; the launcher's: a copy of the exclave; the
-    # same maze in both
-    root = os.path.join(work, "bare", "tree")
-    shutil.copytree(
-        os.path.join(given, "tree"), root, symlinks=True, copy_function=tree.link_or_copy
-    )
-    tree.unwrap_tree(os.path.join(work, "bare"))
-    # the launcher's world: a copy relinked with the build (17)
-    ex = tree.fresh_exclave(given, os.path.join(work, "exclave"))
+    # the launcher's world, a copy of the exclave relinked with the build (17), and the kernel's,
+    # an unwrapped copy of the tree, kept between runs; the same maze, made anew, in both
+    ex, root = tree.kept_worlds(given, "syscalls")
     # ".." from the host area is a directory the reset owns
     host = os.path.join(work, "area", "host")
     for r in (root, os.path.join(ex, "tree")):

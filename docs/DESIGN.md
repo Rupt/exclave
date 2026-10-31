@@ -4063,7 +4063,12 @@ Every driver runs `build/launcher` on a copy of its own, so the exclave
 given to the gate is never run as it is nor written. The suite wraps a
 copy from the given exclave's tree. The other drivers take
 `tree.fresh_exclave`, a copy relinked with `build/launcher`, because an
-exclave carries the launcher it was wrapped with. Each test has a
+exclave carries the launcher it was wrapped with. The three oracles
+keep theirs between runs (`tree.kept_worlds`, under `build/kept/`),
+with the unwrapped tree `bwrap` binds, keyed by the input's hashes file
+and relinked whenever the build has changed, and make anew only what
+they add; copying the tree on every run was a third of their time, and
+together they take 3.5 s rather than 4.5 s. Each test has a
 budget of 30 s, against a slowest test of about 5 s on the fixture, so a
 test that crawls fails instead of stalling the gate: every program a
 test runs is started in a session of its own, its timeout is cut to what

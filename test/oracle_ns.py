@@ -250,14 +250,23 @@ def worlds(given: str, work: str) -> tuple[str, str]:
 
     Returns the launcher's exclave, a copy relinked with the build (17), and the kernel's root, an
     unwrapped copy of its tree for run_bwrap: hard links, then the originals moved back over the
-    wrappers. An identity file that is a host symlink gets a symlink with the host's text in the
-    copy, since a bind of the host's file would hide the link text the launcher reports (8.4), and
-    run_bwrap binds its target.
+    wrappers, and the host's identity links (identity_links). The oracle itself keeps its worlds
+    between runs (tree.kept_worlds); test/workloads.py makes them anew.
     """
     ex = tree.fresh_exclave(given, os.path.join(work, "exclave"))
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=tree.link_or_copy)
     tree.unwrap_tree(os.path.join(work, "bare"))
+    identity_links(root)
+    return ex, root
+
+
+def identity_links(root: str) -> None:
+    """Give the kernel's root the host's link text for each identity file that is a host symlink.
+
+    A bind of the host's file would hide the link text the launcher reports (8.4); run_bwrap binds
+    the target, which needs a mount point in the read-only root. Done again on a kept root.
+    """
     for f in IDENTITY:
         p_ = os.path.join(root, f.lstrip("/"))
         if os.path.islink(f) and os.path.lexists(p_):
@@ -270,7 +279,6 @@ def worlds(given: str, work: str) -> tuple[str, str]:
                 os.makedirs(os.path.dirname(tp), exist_ok=True)
                 with open(tp, "wb"):
                     pass
-    return ex, root
 
 
 # the suite's path programs whose expectations the kernel can check (17 item 4), each judged here as
@@ -380,7 +388,9 @@ def main() -> int:
     if os.path.exists(work):
         shutil.rmtree(work)
     os.makedirs(work)
-    ex, root = worlds(os.path.abspath(args.exclave), work)
+    # the two worlds, kept between runs (tree.kept_worlds)
+    ex, root = tree.kept_worlds(os.path.abspath(args.exclave), "ns")
+    identity_links(root)
     with open(os.path.join(root, "usr", "share", "exclave-test-marker"), "w") as f:
         f.write("marker\n")
     with open(os.path.join(work, "hello.c"), "w") as f:

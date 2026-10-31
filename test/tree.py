@@ -5,11 +5,12 @@ each take a tree's root directory and answer a question about it. The next read 
 exclave's files as the format states them (6.1, 6.4), so that the drivers judge the exclave command
 only through its commands, whatever language answers them. The rest serve the drivers:
 copy_exclave and fresh_exclave give a driver a copy of an exclave relinked with the build, so the
-launcher under test is always build/launcher and never the one the exclave was wrapped with; and
-go_build makes the Go regression's programs, which the matrix builds on the host for VMs that have
-no go.
+launcher under test is always build/launcher and never the one the exclave was wrapped with, and
+kept_worlds keeps such a copy and an unwrapped tree between a driver's runs; and go_build makes the
+Go regression's programs, which the matrix builds on the host for VMs that have no go.
 """
 
+import fcntl
 import filecmp
 import hashlib
 import os
@@ -409,6 +410,46 @@ def relink_if_stale(ex: str, launcher: str = BUILD_LAUNCHER) -> bool:
         relink(ex, launcher)
         return True
     return False
+
+
+# the locks kept_worlds holds until the process exits
+_KEPT_LOCKS: list[int] = []
+
+
+def kept_worlds(src: str, driver: str) -> tuple[str, str]:
+    """The two worlds an oracle runs in, kept between its runs.
+
+    Returns the launcher's exclave and the kernel's root, under
+    build/kept/DRIVER/<exclave>-<hashes file's hash>: a copy of src relinked with the build,
+    and relinked again whenever the build has changed since, and an unwrapped copy of its tree for
+    bwrap, both hard links to src's tree. They are made once per input, whole or not at all, and the
+    caller holds them, locked, until it exits; what a driver adds to either is its own to redo on
+    every run. A copy made on every run cost the oracles about half their time.
+    """
+    with open(os.path.join(src, ".exclave", "hashes"), "rb") as f:
+        key = hashlib.blake2b(f.read(), digest_size=6).hexdigest()
+    top = os.path.join(REPO, "build", "kept", driver)
+    os.makedirs(top, exist_ok=True)
+    name = os.path.basename(os.path.normpath(src)).removesuffix(".exclave") + "-" + key
+    lock = os.open(os.path.join(top, name + ".lock"), os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    _KEPT_LOCKS.append(lock)
+    kept = os.path.join(top, name)
+    if not os.path.isdir(kept):
+        part = kept + ".part"
+        shutil.rmtree(part, ignore_errors=True)
+        ex = fresh_exclave(src, os.path.join(part, "exclave"))
+        shutil.copytree(
+            os.path.join(ex, "tree"),
+            os.path.join(part, "bare", "tree"),
+            symlinks=True,
+            copy_function=link_or_copy,
+        )
+        unwrap_tree(os.path.join(part, "bare"))
+        os.rename(part, kept)
+    else:
+        relink_if_stale(os.path.join(kept, "exclave"))
+    return os.path.join(kept, "exclave"), os.path.join(kept, "bare", "tree")
 
 
 # the Go regression's programs (17.4), as go links them for the machine; low_image is the image

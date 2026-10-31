@@ -17,8 +17,9 @@
 # src/docker-seccomp.json. No step touches the network. Everything slower or broader is scripts/extra's and
 # scripts/matrix's, run when the user asks. The steps run two at a time, or N with --jobs, so that the machine
 # stays usable meanwhile; every driver runs build/launcher on a copy of its own (the suite wraps one from the
-# exclave's tree, the others take test/tree.py's fresh_exclave), so the exclave given is never run as it is nor
-# written. One line per step with its time, SKIP for an oracle that could not run here; logs under build/gate/.
+# exclave's tree, the oracles keep test/tree.py's kept_worlds, the others take its fresh_exclave), so the exclave
+# given is never run as it is nor written. One line per step with its time, SKIP for an oracle that could not run
+# here; logs under build/gate/.
 # Exit status: the number of failed steps.
 set -u
 . "$(dirname -- "$0")/lib.sh"
