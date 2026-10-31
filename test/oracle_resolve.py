@@ -19,6 +19,7 @@ import subprocess
 import sys
 
 import tree
+from harness import run
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -27,6 +28,8 @@ SYS_openat2 = 437
 # this machine's bits: aarch64's O_NOFOLLOW is not x86-64's
 O_PATH, O_NOFOLLOW = os.O_PATH, os.O_NOFOLLOW
 RESOLVE_IN_ROOT = 0x10
+# seconds the launcher's run of every path may take, a few hundred times what it takes
+TIMEOUT = 60
 libc = ctypes.CDLL(None, use_errno=True)
 
 
@@ -185,20 +188,25 @@ def main() -> int:
     if r.returncode:
         sys.exit("cannot compile resolve.c: " + r.stderr.decode(errors="replace"))
     paths = gen_paths(rng, dirs, files, links, args.paths)
-    p = subprocess.run(
-        [os.path.join(ex, ".exclave", "launcher"), prog],
-        input="\n".join(paths).encode() + b"\n",
-        cwd=work,
-        env={"PATH": "/usr/bin:/bin"},
-        capture_output=True,
-        check=False,
-    )
-    answers = p.stdout.decode(errors="replace").splitlines()
-    if len(answers) != len(paths):
-        sys.exit(
-            f"the launcher answered {len(answers)} of {len(paths)} paths: "
-            f"{p.stderr.decode(errors='replace')[-500:]}"
+    try:
+        rc, out, stderr = run(
+            [os.path.join(ex, ".exclave", "launcher"), prog],
+            inp="\n".join(paths).encode() + b"\n",
+            cwd=work,
+            env={"PATH": "/usr/bin:/bin"},
+            timeout=TIMEOUT,
         )
+    except subprocess.TimeoutExpired:
+        sys.exit(
+            f"the launcher's run of {len(paths)} paths killed after {TIMEOUT} s; seed {args.seed}"
+        )
+    answers = out.splitlines()
+    if len(answers) != len(paths):
+        sys.exit(f"the launcher answered {len(answers)} of {len(paths)} paths: {stderr[-500:]}")
+    # the program answers every path on stdout and exits 0 with nothing on stderr
+    failed_run = bool(rc or stderr)
+    if failed_run:
+        print(f"FAIL the launcher's run: rc {rc}, stderr {stderr.strip()[-300:]!r}")
     rootfd = os.open(root, os.O_PATH)
     fails, agree = 0, 0
     for path, ans in zip(paths, answers, strict=False):
@@ -214,11 +222,12 @@ def main() -> int:
                 print(f"DIFF {path[:60]:<60} kernel={k} launcher={ans}")
     print(
         f"{len(paths)} paths: {agree} agree, {fails} differ"
-        + (f"; seed {args.seed}" if fails else "")
+        + ("; the run failed" if failed_run else "")
+        + (f"; seed {args.seed}" if fails or failed_run else "")
     )
-    if not args.keep and not fails:
+    if not args.keep and not fails and not failed_run:
         shutil.rmtree(work, ignore_errors=True)
-    return 1 if fails else 0
+    return 1 if fails or failed_run else 0
 
 
 if __name__ == "__main__":

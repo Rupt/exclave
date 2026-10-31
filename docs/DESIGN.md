@@ -4124,7 +4124,12 @@ trapped path syscalls and six descriptor-addressed ones with every flag
 that changes resolution, 68 path forms over a random maze and the `*at`
 descriptors. One program issues each case through `syscall(2)` under
 `bwrap`, with 8.1's visibility rule spelt in `bwrap`'s terms, and under
-the launcher, and the answers are compared line by line. A difference
+the launcher, and the answers are compared line by line. Each group's
+run must also exit 0 with nothing on stderr in both worlds, as must the
+resolution oracle's run and the read-only matrix under `bwrap`, so a
+diagnostic or a crash after the last answer fails too; a run of the
+oracles that passes 60 s, a few hundred times the slowest's 0.2 s, is
+killed with its process group and fails by its group's name. A difference
 fails unless the list `EXPECTED` names its reason: the oracle's own
 construction, a stated limitation (13 items 29 and 41), or what an
 older kernel lacks or decided differently, such as `truncate` checking

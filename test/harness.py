@@ -14,7 +14,7 @@ import os
 import signal
 import subprocess
 import time
-from typing import TYPE_CHECKING, Any, NoReturn, Protocol
+from typing import IO, TYPE_CHECKING, Any, NoReturn, Protocol
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -126,23 +126,27 @@ def run(
     cwd: str | None = None,
     env: Mapping[str, str] | None = None,
     inp: bytes | None = None,
-    timeout: float = 300,
+    stdin: IO[bytes] | None = None,
+    timeout: float | None = 300,
     executable: str | None = None,
     preexec: Callable[[], object] | None = None,
 ) -> tuple[int, str, str]:
     """Run cmd and return its status, stdout and stderr.
 
-    It runs in a session of its own, and when timeout seconds pass, or the running test's budget
-    runs out first, its whole process group is killed, so that a launcher's children die with it,
-    and TimeoutExpired is raised.
+    Its standard input is inp through a pipe, or the file stdin, or else this process's own.
+
+    It runs in a session of its own, and when timeout seconds pass (None: no limit), or the running
+    test's budget runs out first, its whole process group is killed, so that a launcher's children
+    die with it, and TimeoutExpired is raised.
     """
     if _Clock.deadline is not None:
-        timeout = max(min(timeout, _Clock.deadline - time.monotonic()), 0.01)
+        left = _Clock.deadline - time.monotonic()
+        timeout = max(left if timeout is None else min(timeout, left), 0.01)
     with subprocess.Popen(
         cmd,
         cwd=cwd,
         env=env,
-        stdin=None if inp is None else subprocess.PIPE,
+        stdin=stdin if inp is None else subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         executable=executable,

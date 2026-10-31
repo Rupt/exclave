@@ -19,12 +19,15 @@ import sys
 lazy from collections.abc import Iterable
 
 import tree
+from harness import run
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
 # the identity files the launcher answers from the host (8.4)
 IDENTITY = tree.IDENTITY_FILES
+# seconds a run of either world may take; the slowest workload, a compile, takes well under one
+TIMEOUT = 60
 
 
 @dataclasses.dataclass(frozen=True)
@@ -113,13 +116,20 @@ def norm(text: str, work: str) -> str:
 
 
 def run_bwrap(
-    root: str, work: str, cmd: str, spellings: Spellings, extra: Iterable[str] = ()
+    root: str,
+    work: str,
+    cmd: str,
+    spellings: Spellings,
+    extra: Iterable[str] = (),
+    *,
+    timeout: float | None = None,
 ) -> tuple[int, str, str]:
     """Run a shell command under bwrap with root read-only at /, where the kernel answers.
 
     The work directory is bound at its own path. Its top-level directory becomes a tmpfs, so that
     bwrap can make the mount point inside the read-only root, where the tree ships that directory as
-    an empty placeholder.
+    an empty placeholder. After timeout seconds the run is killed with its process group and
+    TimeoutExpired raised.
     """
     top = "/" + work.split("/")[1]
     args = [
@@ -177,19 +187,22 @@ def run_bwrap(
             else:
                 args += ["--ro-bind", f, f]
     # no "--": bwrap 0.2 rejects it; the setenv values are the whole environment
-    p = subprocess.run(
-        args + EXTRA_BINDS + list(extra) + ["/bin/sh", "-c", cmd],
-        env={},
-        capture_output=True,
-        check=False,
-    )
-    return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
+    return run(args + EXTRA_BINDS + list(extra) + ["/bin/sh", "-c", cmd], env={}, timeout=timeout)
 
 
 def run_launcher(
-    ex: str, work: str, cmd: str | list[str], spellings: Spellings, prog: str | None = None
+    ex: str,
+    work: str,
+    cmd: str | list[str],
+    spellings: Spellings,
+    prog: str | None = None,
+    *,
+    timeout: float | None = None,
 ) -> tuple[int, str, str]:
-    """Run a workload under the launcher: cmd by the tree's shell, or prog with arguments cmd."""
+    """Run a workload under the launcher: cmd by the tree's shell, or prog with arguments cmd.
+
+    After timeout seconds the run is killed with its process group and TimeoutExpired raised.
+    """
     env = {
         "PATH": "/usr/bin:/bin",
         "HOME": work,
@@ -200,23 +213,19 @@ def run_launcher(
         "TZ": "Asia/Tokyo",
     }
     if prog:
-        p = subprocess.run(
+        return run(
             [os.path.join(ex, ".exclave", "launcher"), prog, *cmd],
             cwd=work,
             env=env,
-            capture_output=True,
-            check=False,
+            timeout=timeout,
         )
-    else:
-        assert isinstance(cmd, str)
-        p = subprocess.run(
-            [os.path.join(ex, "tree", spellings.sh.lstrip("/")), "-c", cmd],
-            cwd=work,
-            env=env,
-            capture_output=True,
-            check=False,
-        )
-    return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
+    assert isinstance(cmd, str)
+    return run(
+        [os.path.join(ex, "tree", spellings.sh.lstrip("/")), "-c", cmd],
+        cwd=work,
+        env=env,
+        timeout=timeout,
+    )
 
 
 def bwrap_unusable() -> str | None:
@@ -304,13 +313,17 @@ def main() -> int:
         )
     hostdir = os.path.join(work, "hostdir")
     os.makedirs(hostdir, exist_ok=True)
-    _rc, out, err = run_bwrap(root, work, f"{prog} {hostdir} /usr/bin/dash", sp)
+    try:
+        rc, out, err = run_bwrap(root, work, f"{prog} {hostdir} /usr/bin/dash", sp, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        rc, out, err = -9, "", f"killed after {TIMEOUT} s"
     # under bwrap there is no wrapper, so the redirect line of the program is not meaningful there
     bad = [line for line in out.splitlines() if line.startswith("FAIL") and "wrapper" not in line]
-    if bad or "ro_matrix:" not in out:
+    # the program exits 1 on any FAIL line, the wrapper's included, and says nothing on stderr
+    if bad or "ro_matrix:" not in out or err or rc != (1 if "FAIL" in out else 0):
         fails += 1
         print(
-            "FAIL read-only matrix under the kernel's read-only bind:\n     "
+            f"FAIL read-only matrix under the kernel's read-only bind (rc {rc}):\n     "
             + "\n     ".join(bad or [err.strip() or out.strip()])
         )
     else:
@@ -325,12 +338,27 @@ def main() -> int:
             p = os.path.join(work, f)
             if os.path.lexists(p):
                 os.remove(p)
-        b = run_bwrap(root, work, cmd, sp)
-        for f in ("moved", "linked", "symlinked", "dashcopy", "hello", "hello.o", "s.sh", "lnk"):
-            p = os.path.join(work, f)
-            if os.path.lexists(p):
-                os.remove(p)
-        o = run_launcher(ex, work, cmd, sp)
+        try:
+            b = run_bwrap(root, work, cmd, sp, timeout=TIMEOUT)
+            for f in (
+                "moved",
+                "linked",
+                "symlinked",
+                "dashcopy",
+                "hello",
+                "hello.o",
+                "s.sh",
+                "lnk",
+            ):
+                p = os.path.join(work, f)
+                if os.path.lexists(p):
+                    os.remove(p)
+            o = run_launcher(ex, work, cmd, sp, timeout=TIMEOUT)
+        except subprocess.TimeoutExpired as e:
+            fails += 1
+            world = "bwrap" if e.cmd[0] == "bwrap" else "the launcher"
+            print(f"FAIL {shown[:70]}\n     {world} killed after {TIMEOUT} s")
+            continue
         bn = (
             b[0],
             norm(b[1], work),

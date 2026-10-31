@@ -91,6 +91,7 @@ import sys
 lazy from collections.abc import Callable
 
 import tree
+from harness import run
 from oracle_resolve import make_maze
 from syscalls import kernel_table
 
@@ -131,6 +132,8 @@ IN_MODIFY = 2
 STATX_BASIC_STATS = 0x7FF
 # the identity files the launcher answers from the host (8.4)
 IDENTITY = tree.IDENTITY_FILES
+# seconds one world's run of one group may take, many times the slowest group's
+TIMEOUT = 60
 
 
 def hx(s: str | bytes) -> str:
@@ -1009,9 +1012,8 @@ def run_bwrap(root: str, host: str, _bindir: str, probe: str, cases: str) -> tup
         "SHELL",
         "/bin/sh",
     ]
-    with open(cases, "rb") as inp:
-        p = subprocess.run([*args, probe], env={}, stdin=inp, capture_output=True, check=False)
-    return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
+    with open(cases, "rb") as f:
+        return run([*args, probe], env={}, stdin=f, timeout=TIMEOUT)
 
 
 def writable_in_bwrap(forms: Forms, root: str, host: str, bindir: str) -> set[str]:
@@ -1035,16 +1037,14 @@ def writable_in_bwrap(forms: Forms, root: str, host: str, bindir: str) -> set[st
 
 
 def run_launcher(ex: str, host: str, probe: str, cases: str) -> tuple[int, str, str]:
-    with open(cases, "rb") as inp:
-        p = subprocess.run(
+    with open(cases, "rb") as f:
+        return run(
             [os.path.join(ex, ".exclave", "launcher"), probe],
             cwd=host,
-            stdin=inp,
             env={"PATH": "/usr/bin:/bin", "HOME": host},
-            capture_output=True,
-            check=False,
+            stdin=f,
+            timeout=TIMEOUT,
         )
-    return p.returncode, p.stdout.decode(errors="replace"), p.stderr.decode(errors="replace")
 
 
 def forms_in(label: str) -> set[str]:
@@ -1448,10 +1448,24 @@ def main() -> int:
             f.writelines(
                 f"{i} {nr[n]} {' '.join(toks)}\n" for i, (label, n, toks, _) in enumerate(mine)
             )
-        host_reset(host, os.path.join(ex, "tree"), probe)
-        bw = run_bwrap(root, host, bindir, probe, path)
-        host_reset(host, os.path.join(ex, "tree"), probe)
-        op = run_launcher(ex, host, probe, path)
+        world = "bwrap"
+        try:
+            host_reset(host, os.path.join(ex, "tree"), probe)
+            bw = run_bwrap(root, host, bindir, probe, path)
+            world = "the launcher"
+            host_reset(host, os.path.join(ex, "tree"), probe)
+            op = run_launcher(ex, host, probe, path)
+        except subprocess.TimeoutExpired:
+            print(f"FAIL {name}: {len(mine)} cases, {world} killed after {TIMEOUT} s")
+            differ += 1
+            continue
+        # the probe answers every case on stdout and exits 0 with nothing on stderr, in both worlds
+        if bw[0] or bw[2] or op[0] or op[2]:
+            print(
+                f"FAIL {name}: bwrap rc {bw[0]} stderr {bw[2].strip()[-200:]!r}, "
+                f"the launcher rc {op[0]} stderr {op[2].strip()[-200:]!r}"
+            )
+            differ += 1
         bl, ol = bw[1].splitlines(), op[1].splitlines()
         if len(bl) != len(mine) or len(ol) != len(mine):
             stopped = mine[min(len(bl), len(ol))][0]
