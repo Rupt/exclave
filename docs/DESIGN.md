@@ -3525,7 +3525,9 @@ batch cannot read it whole, at the end of a mapping.
 A spawn traps little: glibc 2.39's `posix_spawn` makes two trapping
 `rt_sigaction` calls and one trapping `rt_sigprocmask`, since queries
 of a signal action do not trap (7.5.5). 100 000 spawns from one process
-leave its RSS flat, +152 kB against +200 kB natively (17 item 4).
+leave its RSS flat, +152 kB against +200 kB natively (`test/bench.py`),
+and the regression of 17 item 4 fails when 300 in a row grow the
+address space by more than 256 kB, where it measures no growth at all.
 
 ### 16.5 Speculative Store Bypass
 
@@ -3795,7 +3797,8 @@ meaning items 4 and 7.
      the failed walk was re-issued as given), the scratch pool under contention
      (`test/scratch_test.c`), and the cache's lock across `fork`
      (`test/cache_test.c`);
-   - *spawning and exec*: 100 000 `posix_spawn`s with RSS measured (16),
+   - *spawning and exec*: 300 `posix_spawn`s in a row, which must leave
+     the address space as it was (16),
      `fexecve`, `memfd`
      and unlinked files, scripts with and without `#!` and with `#!` lines
      the kernel's buffer cuts, a program, a loader or an interpreter

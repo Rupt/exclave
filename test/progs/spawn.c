@@ -1,4 +1,4 @@
-/* spawn.c — posix_spawn (clone3 refused, vfork path), system(), threads spawning, many spawns without RSS growth,
+/* spawn.c — posix_spawn (clone3 refused, vfork path), system(), threads spawning, many spawns without memory growth,
  * a large argv. Prints FAIL lines; exit 1 on any. */
 #define _GNU_SOURCE
 #include <pthread.h>
@@ -10,13 +10,16 @@
 #include <unistd.h>
 extern char **environ;
 static int fails;
-static long rss(void)
+/* a field of /proc/self/status in kB: VmSize counts every mapping, touched or not, so a mapping left behind per spawn
+ * shows whole */
+static long status_kb(const char *field)
 {
     FILE *f = fopen("/proc/self/status", "r");
     char l[256];
     long v = -1;
+    size_t n = strlen(field);
     while (f && fgets(l, 256, f))
-        if (!strncmp(l, "VmRSS:", 6)) v = atol(l + 6);
+        if (!strncmp(l, field, n) && l[n] == ':') v = atol(l + n + 1);
     if (f) fclose(f);
     return v;
 }
@@ -71,20 +74,21 @@ int main(int argc, char **argv)
                    v & 0xffff);
         }
     }
+    /* in a serial loop after a warm-up the handler's pool and the program's heap stay as they are: growth is a leak */
     for (int i = 0; i < 50; i++) spawn_true();
-    long before = rss();
-    for (int i = 0; i < 1000; i++)
+    long before = status_kb("VmSize"), rss = status_kb("VmRSS");
+    for (int i = 0; i < 300; i++)
         if (spawn_true()) {
             fails++;
             printf("FAIL spawn %d\n", i);
             break;
         }
-    long after = rss();
-    if (after - before > 4096) {
+    long after = status_kb("VmSize");
+    if (before < 0 || after - before > 256) {
         fails++;
-        printf("FAIL RSS grew %ld kB over 1000 spawns\n", after - before);
+        printf("FAIL VmSize grew %ld kB over 300 spawns\n", after - before);
     }
-    printf("rss before %ld kB after %ld kB\n", before, after);
+    printf("VmSize before %ld kB after %ld kB, VmRSS %ld kB to %ld kB\n", before, after, rss, status_kb("VmRSS"));
     enum { N = 20000 };
     static char *big[N + 3];
     big[0] = "true";
