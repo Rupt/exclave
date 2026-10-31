@@ -124,6 +124,19 @@ def accepted(ctx: Ctx, name: str, pkgs: Sequence[str]) -> tuple[str, str]:
     return os.path.join(out, "tree"), o
 
 
+def landing(root: str, host_path: str) -> str | None:
+    """Where in the tree an absolute link to host_path leads, or None if the step strips it.
+
+    The volatile step (8.1) leaves nothing there to read, as when the work directory is under /tmp.
+    """
+    if any(host_path == v or host_path.startswith(v + "/") for v in steps.VOLATILE):
+        return None
+    return os.path.join(root, host_path.lstrip("/"))
+
+
+UNREAD = "the work directory is under a volatile prefix: where an absolute link lands was not read"
+
+
 # ---------------------------------------------------------------- the readers by format
 @test
 def rpm_unpack(ctx: Ctx) -> None:
@@ -469,7 +482,7 @@ def busybox_links_stay_in_the_tree(ctx: Ctx) -> None:
 
 # ---------------------------------------------------------------- hostile package files
 @test
-def escapes_stay_in_the_tree(ctx: Ctx) -> None:
+def escapes_stay_in_the_tree(ctx: Ctx) -> str | None:
     """10.1: no member reaches outside the tree, in any format.
 
     `..` in a member's name or a hard link's, and the reserved name .real, are refused. A symlink
@@ -479,6 +492,7 @@ def escapes_stay_in_the_tree(ctx: Ctx) -> None:
     refused. A name with a leading slash lands in the tree.
     """
     secret = os.path.join(ctx.host, "secret")
+    note = None
     for fmt in FORMATS:
         for name, members, why in (
             ("dotdot", [("usr/../../host/x", "file", b"x", 0o644)], "escapes the tree"),
@@ -494,12 +508,16 @@ def escapes_stay_in_the_tree(ctx: Ctx) -> None:
         absolute: list[Member] = [("opt", "sym", ctx.host, 0o777), ("opt/x", "file", b"x", 0o644)]
         slash: list[Member] = [("/abs/x", "file", b"x", 0o644)]
         for name, members, lands in (
-            ("climb", climb, "host/x"),
-            ("absolute", absolute, ctx.host.lstrip("/") + "/x"),
-            ("slash", slash, "abs/x"),
+            ("climb", climb, "/host"),
+            ("absolute", absolute, ctx.host),
+            ("slash", slash, "/abs"),
         ):
             root, _ = accepted(ctx, f"{fmt}-{name}", [package(ctx, fmt, f"{fmt}-{name}", members)])
-            expect(read_text(os.path.join(root, lands)) == "x", f"{fmt} {name}: not at /{lands}")
+            at = landing(root, lands)
+            if at is None:
+                note = UNREAD
+                continue
+            expect(read_text(os.path.join(at, "x")) == "x", f"{fmt} {name}: not at {lands}/x")
     for fmt in ("deb", "apk"):  # the rpm builder makes no hard links
         hard_dotdot: list[Member] = [
             ("f", "file", b"f", 0o644),
@@ -516,6 +534,7 @@ def escapes_stay_in_the_tree(ctx: Ctx) -> None:
         ):
             refused(ctx, f"{fmt}-{name}", [package(ctx, fmt, f"{fmt}-{name}", members)], why)
     expect(os.stat(secret).st_nlink == 1, "a hard link to the host's file was made")
+    return note
 
 
 @test
@@ -615,7 +634,7 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
 
 
 @test
-def synthesis_stays_in_the_tree(ctx: Ctx) -> None:
+def synthesis_stays_in_the_tree(ctx: Ctx) -> str | None:
     """10.1, 8.1: synthesis reads and writes the tree as its root, and so does the volatile step.
 
     A set that ships /etc, /usr/share/base-passwd or /var as absolute links to a host directory
@@ -632,8 +651,13 @@ def synthesis_stays_in_the_tree(ctx: Ctx) -> None:
     ]
     etc_out: list[Member] = [("etc", "sym", ctx.host, 0o777)]
     root, _ = accepted(ctx, "write-through", [package(ctx, "deb", "base-passwd", master + etc_out)])
-    written = os.path.join(root, ctx.host.lstrip("/"), "passwd")
-    expect(read_text(written).startswith("root:x:0:0"), "/etc/passwd is not in the tree")
+    at = landing(root, ctx.host)
+    note = None if at else UNREAD
+    if at:
+        expect(
+            read_text(os.path.join(at, "passwd")).startswith("root:x:0:0"),
+            "/etc/passwd is not in the tree",
+        )
     shutil.rmtree(os.path.join(ctx.work, "pkgs"))  # the second base-passwd, by the same name
     master_out: list[Member] = [("usr/share/base-passwd", "sym", ctx.host, 0o777)]
     root, _ = accepted(ctx, "read-through", [package(ctx, "deb", "base-passwd", master_out)])
@@ -644,6 +668,7 @@ def synthesis_stays_in_the_tree(ctx: Ctx) -> None:
     for fmt in FORMATS:
         var_out: list[Member] = [("var", "sym", ctx.host, 0o777), ("usr/x", "file", b"x", 0o644)]
         accepted(ctx, f"{fmt}-volatile", [package(ctx, fmt, f"{fmt}-volatile", var_out)])
+    return note
 
 
 @test
