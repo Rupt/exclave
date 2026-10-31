@@ -36,6 +36,9 @@ lookup, and with the path forms of class Forms over the maze of make_maze, the s
     by .., and relative paths from the host side, up to the root and back into the tree;
   - spellings: ., .. and / as the last component, a trailing slash, also after a link on either
     side, //, empty, overlong, a 256-byte component, bytes that are not UTF-8, and a newline;
+  - the symlink limit: 40 links in one walk and 41, in a chain inside the tree, in one that crosses
+    between the tree and the host area at every link, and as 20 links walked as directories before
+    a chain of 20 at the end, since the kernel counts over the whole walk;
   - the three fault forms, and a socket file in the tree.
 The *at forms add descriptors opened O_PATH or O_RDONLY on exclave and host directories, files and
 symlinks, a wrapper, /dev/null, AT_FDCWD, a closed descriptor and a negative one. The two-path forms
@@ -260,6 +263,37 @@ MAZE_LINKS = {
 }
 
 
+# the kernel follows at most 40 links in one walk (MAXSYMLINKS), counted over the whole of it
+MAXSYMLINKS = 40
+
+
+def chain_links(host: str) -> list[tuple[str, str]]:
+    """The links of the chains at the symlink limit: (link, absolute target), a file at the end.
+
+    /maze/chain/c0 to c40 lie in the tree; n0 to n40 alternate between the tree (/maze/xchain, the
+    even ones) and the host area (hchain, the odd ones); /maze/dl/a is a link to its own directory,
+    to be walked through as often as a path names it, and /maze/dl/e0 to e19 a chain at the end.
+    """
+
+    def node(i: int) -> str:
+        return f"/maze/xchain/n{i}" if i % 2 == 0 else f"{host}/hchain/n{i}"
+
+    links = [
+        (f"/maze/chain/c{i}", f"/maze/chain/c{i + 1}" if i < MAXSYMLINKS else "/maze/f2")
+        for i in range(MAXSYMLINKS + 1)
+    ]
+    links += [
+        (node(i), node(i + 1) if i < MAXSYMLINKS else "/maze/d0/f1") for i in range(MAXSYMLINKS + 1)
+    ]
+    half = MAXSYMLINKS // 2
+    links.append(("/maze/dl/a", "/maze/dl"))
+    links += [
+        (f"/maze/dl/e{i}", f"/maze/dl/e{i + 1}" if i < half - 1 else "/maze/f2")
+        for i in range(half)
+    ]
+    return links
+
+
 def make_maze(root: str, host: str) -> None:
     """Make the probe's maze under root's /maze, every form's target named explicitly.
 
@@ -289,6 +323,10 @@ def make_maze(root: str, host: str) -> None:
     ]
     for link, target in links:
         os.symlink(target, os.path.join(root, link.lstrip("/")))
+    for link, target in chain_links(host):
+        if link.startswith("/maze/"):
+            os.makedirs(os.path.dirname(os.path.join(root, link.lstrip("/"))), exist_ok=True)
+            os.symlink(target, os.path.join(root, link.lstrip("/")))
     # a socket file in the tree, for bind and connect
     tree.socket_file(os.path.join(maze, "sock"))
     # a file its owner cannot write: access(W_OK) is EACCES before EROFS
@@ -359,6 +397,14 @@ class Forms:
             ("long_ok", "/maze/" + "c" * 255),
             ("non_utf8", "/maze/\udcff\udcfe"),
             ("newline", "/maze/a\nb"),
+            # at the symlink limit and one past it: a chain in the tree, one that crosses between
+            # the tree and the host area at every link, and links walked as directories first
+            ("chain_40", "/maze/chain/c1"),
+            ("chain_41", "/maze/chain/c0"),
+            ("cross_chain_40", h + "/hchain/n1"),
+            ("cross_chain_41", "/maze/xchain/n0"),
+            ("dir_links_40", "/maze/dl/" + "a/" * (MAXSYMLINKS // 2) + "e0"),
+            ("dir_links_41", "/maze/dl/" + "a/" * (MAXSYMLINKS // 2 + 1) + "e0"),
         ]
         for kind, link in sorted(by_kind.items()):
             ex.append(("link_" + kind, link))
@@ -1018,6 +1064,10 @@ def host_reset(host: str, forms: Forms, probe: str) -> None:
         ("hrel", "hdir/inner"),
     ):
         os.symlink(target, os.path.join(host, name))
+    os.makedirs(host + "/hchain")
+    for link, target in chain_links(host):
+        if link.startswith(host + "/"):
+            os.symlink(target, link)
     os.makedirs(f"/tmp/exclave-probe-{os.getpid()}")
 
 

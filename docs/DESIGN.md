@@ -179,7 +179,7 @@ How it is tested (17):
   and 2).
 - **The syscall probe**: every trapped path and descriptor syscall,
   with every flag and path form, run under `bwrap` and under the
-  launcher; 24 088 cases per exclave, each difference from the kernel
+  launcher; 25 258 cases per exclave, each difference from the kernel
   fixed, accepted under a named reason or listed as an open defect
   (17 item 7).
 - **Docker's default seccomp profile**: a workload in each exclave runs
@@ -4163,8 +4163,11 @@ or a symlink to one, originals included. On the fixture one suite takes
 **The probe** (`test/progs/probe.c`, `test/oracle_syscalls.py`) puts the
 whole trapped-syscall surface in front of the kernel. It crosses the 61
 trapped path syscalls and six descriptor-addressed ones with every flag
-that changes resolution, 77 path forms over a fixed maze and the `*at`
-descriptors. One program issues each case through `syscall(2)` under
+that changes resolution, 83 path forms over a fixed maze and the `*at`
+descriptors. The forms include 40 links in one walk and 41, in the
+tree, across the border at every link and through links walked as
+directories, since the kernel counts links over the whole walk. One
+program issues each case through `syscall(2)` under
 `bwrap`, with 8.1's visibility rule spelt in `bwrap`'s terms, and under
 the launcher, and the answers are compared line by line. An answer
 says which object a path reached, not only that it reached one: a
@@ -4185,7 +4188,7 @@ permission first). The handler answers as the newest kernel does. A
 difference that is a launcher defect, found and not yet fixed, is
 listed apart by its two exact answers, printed by every run, and fails
 once the answers agree until its entry goes. On the reference machine
-24 088 cases run on each of the gate's four exclaves and none differ
+25 258 cases run on each of the gate's four exclaves and none differ
 unexplained; 18 are open defects at a trailing slash after a host
 symlink and at `O_CREAT` with a trailing slash under
 `RESOLVE_NO_SYMLINKS`.
