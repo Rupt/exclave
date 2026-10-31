@@ -527,17 +527,8 @@ def wrap_refusals(ctx: Ctx) -> None:
         and not os.path.exists(os.path.join(e_, "tree", "usr", "bin", ".real")),
         "a refused wrap must leave the tree unwrapped: " + o[-400:],
     )
-    # the launcher's tables
-    f_ = hand(
-        "lim.exclave",
-        [("/usr/bin/hi", script, 0o755)],
-        b"exclave 1\n\n" + b"".join(b'own "/own%03d"\n' % i for i in range(300)),
-    )
-    rc, o, e = run([*TOOL, "wrap", f_])
-    expect(
-        rc != 0 and "line 259 col 1: more than 256 own records" in o + e,
-        "300 own records must be refused at the 257th: " + (o + e)[-300:],
-    )
+    # the launcher's tables: wrap reads the manifest through the grammar test's parser
+    # (test/grammar_test.py's POSITIONS), and the tree's top-level entries itself
     g = hand(
         "lim2.exclave",
         [("/usr/bin/hi", script, 0o755)],

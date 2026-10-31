@@ -57,10 +57,11 @@ def wrap_refuses_unreadable(ctx: Ctx) -> None:
 def prune_and_check_with_logs(ctx: Ctx) -> str:
     """10.3 and 10.4 take files.
 
-    The dynamic check reads EXCLAVE_LOG files a workload wrote; prune keeps what the logs touched
-    plus the libraries kept ELF files need and the packages' licence texts, those the tree has and
-    two planted where Debian and RPM put them, and drops the rest, and the pruned exclave still
-    compiles.
+    The shared exclave passes the check, its wrappers, its tree against its hashes, the static
+    check and the dynamic check of the EXCLAVE_LOG files a workload wrote, and its manifest is
+    canonical; prune keeps what the logs touched plus the libraries kept ELF files need and the
+    packages' licence texts, those the tree has and two planted where Debian and RPM put them, and
+    drops the rest, and the pruned exclave still compiles.
     """
     log = os.path.join(ctx.work, "prune.log")
     if os.path.exists(log):
@@ -74,9 +75,17 @@ def prune_and_check_with_logs(ctx: Ctx) -> str:
     expect(rc == 0, err)
     rc, out, err = run([*TOOL, "check", ctx.exclave, log])
     expect(
-        rc == 0 and "0 errors" in out and "dynamic check:" in out and "log lines" in out,
+        rc == 0
+        and "0 wrapper problems" in out
+        and "0 errors" in out
+        and "dynamic check:" in out
+        and "log lines" in out,
         "check with a log: " + out[-500:] + err,
     )
+    rc, out, err = run(
+        [*TOOL, "format", "--check", os.path.join(ctx.exclave, ".exclave", "manifest")]
+    )
+    expect(rc == 0, "manifest not canonical: " + out + err)
     ex2 = os.path.join(ctx.work, "pruned.exclave")
     copy_exclave(ctx.exclave, ex2)
     planted = [
@@ -425,16 +434,6 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
         )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-
-
-@test
-def tool_check(ctx: Ctx) -> None:
-    rc, out, err = run([*TOOL, "check", ctx.exclave])
-    expect(rc == 0 and "0 wrapper problems" in out and "0 errors" in out, out + err)
-    rc, out, err = run(
-        [*TOOL, "format", "--check", os.path.join(ctx.exclave, ".exclave", "manifest")]
-    )
-    expect(rc == 0, "manifest not canonical: " + out + err)
 
 
 @test

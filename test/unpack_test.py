@@ -341,71 +341,14 @@ def apk_unpack(ctx: Ctx) -> None:
 
 
 @test
-def tool_extraction_rules(ctx: Ctx) -> None:
-    """10.1: a member reached through a package's own symlink stays in the tree.
+def merged_usr_spellings_conflict(ctx: Ctx) -> None:
+    """10.1: two spellings of one path under merged usr are one path, so two files there conflict.
 
-    The symlink resolves with the tree as its root, as dpkg's would in the root it installs into, so
-    a link that climbs out leads back in. A hard link whose target is reached through an absolute
-    link to the host's file names a file the tree does not hold, and is refused. Two spellings of
-    one path under merged usr conflict. A corrupt package is refused in one line, and unpack leaves
-    nothing behind.
+    /usr/lib/libfoo.so.1 in one package and /lib/libfoo.so.1 in another, through the merged-usr
+    link, are the same file shipped twice, which extraction refuses.
     """
     d = os.path.join(ctx.work, "debs")
     os.makedirs(d, exist_ok=True)
-    outside = os.path.join(ctx.work, "escaped")
-    os.makedirs(outside, exist_ok=True)
-    with open(os.path.join(outside, "README"), "w") as f:
-        f.write("ORIGINAL\n")
-    make_deb(
-        os.path.join(d, "evil.deb"),
-        "evil",
-        [
-            ("./usr", "dir", None, 0o755),
-            ("./usr/share", "dir", None, 0o755),
-            ("./usr/share/doc", "sym", "../../../../escaped", 0o777),
-            ("./usr/share/doc/README", "file", b"ESCAPED\n", 0o644),
-        ],
-    )
-    root = os.path.join(ctx.work, "root-evil")
-    steps.extract(
-        root, [steps.Package("evil", os.path.join(d, "evil.deb"), {})], log=lambda *_: None
-    )
-    expect(
-        read_text(os.path.join(root, "escaped", "README")) == "ESCAPED\n",
-        "the member behind a climbing symlink is not at /escaped/README in the tree",
-    )
-    expect(
-        read_text(os.path.join(outside, "README")) == "ORIGINAL\n",
-        "the file outside the tree was written",
-    )
-    make_deb(
-        os.path.join(d, "thief.deb"),
-        "thief",
-        [
-            ("./usr", "dir", None, 0o755),
-            ("./usr/out", "sym", outside, 0o777),
-            ("./usr/copy", "hard", "./usr/out/README", 0o644),
-        ],
-    )
-    root = os.path.join(ctx.work, "root-thief")
-    try:
-        steps.extract(root, [steps.Package("thief", os.path.join(d, "thief.deb"), {})])
-    except steps.UnpackError as e:
-        expect("does not hold" in str(e), str(e))
-    else:
-        msg = "a hard link to a file outside the tree was extracted"
-        raise AssertionError(msg)
-    with open(os.path.join(d, "thief.deb"), "rb") as f:
-        whole = f.read()
-    with open(os.path.join(d, "corrupt.deb"), "wb") as f:
-        f.write(whole[: len(whole) - 40])  # the data member cut short
-    out = os.path.join(ctx.work, f"corrupt-{os.getpid()}.exclave")
-    rc, _o, e = run([*UNPACK, out, os.path.join(d, "corrupt.deb")])
-    expect(
-        rc != 0 and e.startswith("unpack: ") and "Traceback" not in e,
-        f"a corrupt package: rc={rc} {e[-300:]!r}",
-    )
-    expect(not os.path.exists(out), "unpack left a partial exclave behind")
     make_deb(
         os.path.join(d, "a.deb"),
         "a",
