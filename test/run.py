@@ -1,7 +1,7 @@
 """Run the regression suite: the part of DESIGN.md 17.4 that a single machine can run.
 
     scripts/test [--tree DIR | --exclave EXCLAVE] [--work DIR] [--keep] [-k NAME|SUBSTRING]
-                 [--order given|reverse|random] [--seed N] [--budget SECONDS]
+                 [--launcher FILE] [--budget SECONDS]
 
 The suite makes an exclave under WORK (default build/test-work) from TREE (default
 $EXCLAVE_TEST_TREE) or from the unwrapped tree of an existing EXCLAVE, adds a few test files to its
@@ -17,8 +17,7 @@ The tests are in eight files, one per group of DESIGN.md 17 item 4, test/regress
 fixtures are made in test/suite.py, and test/harness.py runs them.
 
 Tests are independent. Every test makes what it needs: the fixtures made at setup are the exclave,
-the compiled programs and the environment, never another test's output. Any subset therefore runs
-in any order, and `--order reverse` and `--order random` check that.
+the compiled programs and the environment, never another test's output, so any one runs alone.
 """
 
 import argparse
@@ -26,9 +25,7 @@ import contextlib
 import os
 import shutil
 import sys
-import time
 from typing import TYPE_CHECKING, Any
-lazy import random
 
 import regress_check
 import regress_exec
@@ -77,13 +74,6 @@ def main() -> int:
         help="run the test of this name, or else every test whose name contains it",
     )
     ap.add_argument(
-        "--order",
-        default="given",
-        choices=["given", "reverse", "random"],
-        help="run order; reverse and random expose tests that depend on one another",
-    )
-    ap.add_argument("--seed", type=int, default=None)
-    ap.add_argument(
         "--budget",
         type=float,
         default=30,
@@ -120,12 +110,6 @@ def main() -> int:
         print("fixture: none yet for this exclave; this run makes it")
     ctx = prepare(args, tree_, os.path.abspath(args.work), logging=logging)
     order = select(TESTS, args.k)
-    if args.order == "reverse":
-        order.reverse()
-    elif args.order == "random":
-        seed = args.seed if args.seed is not None else int(time.time()) % 100000
-        random.Random(seed).shuffle(order)
-        print(f"random order, seed {seed}")
     failed = suite_run(ctx, order, args.budget)
     if stale and failed and fixture:
         # A fixture made with other sources may lack a file these sources touch. The failures run
