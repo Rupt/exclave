@@ -110,8 +110,8 @@ def unpack(ctx: Ctx, name: str, pkgs: Sequence[str]) -> tuple[int, str, str, str
     return rc, o, e, out
 
 
-def refused(ctx: Ctx, name: str, pkgs: Sequence[str], why: str = "") -> None:
-    """The set must be refused, naming why, with nothing left at the output."""
+def refused(ctx: Ctx, name: str, pkgs: Sequence[str], why: str) -> None:
+    """The set must be refused, naming why, the reason measured, with nothing left at the output."""
     rc, o, e, out = unpack(ctx, name, pkgs)
     expect(rc == 1 and why in e, f"{name}: wanted a refusal naming {why!r}: rc={rc} {o}{e}")
     expect(not os.path.lexists(out), f"{name}: the refusal left {out} behind")
@@ -816,7 +816,8 @@ def payload_forms(members: Sequence[Member]) -> list[tuple[str, str, bytes]]:
 def damaged_payloads(ctx: Ctx) -> None:
     """10.1: a payload cut short, flipped, empty or not compressed is refused in one line.
 
-    Each compression a reader takes checks its data: gzip's and xz's CRCs, zstd's checksum.
+    Each compression a reader takes checks its data: gzip's and xz's CRCs, zstd's checksum. The
+    reason names the payload and what its decompressor found.
     """
     members: list[Member] = [
         ("usr", "dir", None, 0o755),
@@ -824,6 +825,24 @@ def damaged_payloads(ctx: Ctx) -> None:
         ("usr/share/f", "file", bytes(range(256)) * 64, 0o644),
     ]
     os.makedirs(os.path.join(ctx.work, "pkgs"))
+    ended = "Compressed file ended before the end-of-stream marker was reached"
+    why = {  # by the compression and the case, as each decompressor says it
+        ("gz", "cut"): ended,
+        ("gz", "flipped"): "CRC check failed",
+        ("gz", "plain"): "Not a gzipped file",
+        ("gz", "empty"): "empty file",
+        ("xz", "cut"): ended,
+        ("xz", "flipped"): "Corrupt input data",
+        ("xz", "plain"): "Input format not supported by decoder",
+        ("xz", "empty"): ended,
+        ("zst", "cut"): ended,
+        (
+            "zst",
+            "flipped",
+        ): "Unable to decompress Zstandard data: Restored data doesn't match checksum",
+        ("zst", "plain"): "Unable to decompress Zstandard data: Unknown frame descriptor",
+        ("zst", "empty"): ended,
+    }
     for fmt, suffix, good in payload_forms(members):
         flipped = bytearray(good)
         flipped[len(good) // 2] ^= 0x10
@@ -838,12 +857,20 @@ def damaged_payloads(ctx: Ctx) -> None:
                 make_deb(pkg, name, members, suffix=suffix, data=data)
             else:
                 pkg = package(ctx, fmt, name, members, data=data)
-            refused(ctx, name, [pkg])
-    for fmt in FORMATS:
+            prefix = {"deb": f"corrupt data.tar{suffix}: ", "apk": "not an apk: "}
+            reason = why[suffix.lstrip(".") or "gz", case]
+            if fmt == "rpm" and case == "empty":  # gzip of nothing: a cpio payload without its end
+                reason = "the cpio payload has no trailer"
+            refused(ctx, name, [pkg], prefix.get(fmt, "corrupt gzip payload: ") + reason)
+    for fmt, reason in (
+        ("deb", "not an ar archive"),
+        ("apk", "not an apk: "),  # random bytes begin as gzip once in 65 536 runs
+        ("rpm", "not an rpm"),
+    ):
         path = os.path.join(ctx.work, "pkgs", f"noise.{fmt}")
         with open(path, "wb") as f:
             f.write(os.urandom(4096))
-        refused(ctx, f"noise-{fmt}", [path])
+        refused(ctx, f"noise-{fmt}", [path], reason)
 
 
 @test
@@ -876,7 +903,12 @@ def tar_structure(ctx: Ctx) -> None:
             expect(os.readlink(os.path.join(root, "usr", "l")) == target, f"{fmt} {case}: the link")
         root, _ = accepted(ctx, f"{fmt}-base256", [pkg("base256", base256)])
         expect(os.lstat(os.path.join(root, "usr", "early")).st_mtime == -1, f"{fmt}: base-256 time")
-        refused(ctx, f"{fmt}-cut-data", [pkg("cut-data", head[: len(head) - 300])])
+        refused(
+            ctx, f"{fmt}-cut-head", [pkg("cut-head", head[: len(head) - 300])], "truncated header"
+        )
+        big = tar_bytes([("usr/big", "file", b"b" * 5000, 0o644)], trailer=False)
+        cut = big[: len(big) - 3000]  # the cut inside the member's data
+        refused(ctx, f"{fmt}-cut-data", [pkg("cut-data", cut)], "unexpected end of data")
         after = tar_bytes([("usr/hidden", "file", b"h", 0o644)])
         refused(ctx, f"{fmt}-bad-header", [pkg("bad-header", head + b"x" * 512 + after)], "after")
         refused(
@@ -894,13 +926,18 @@ def cpio_structure(ctx: Ctx) -> None:
     members: list[Member] = [("usr", "dir", None, 0o755), ("usr/f", "file", b"x" * 1000, 0o644)]
     whole = cpio(members)
     trailer = whole.index(b"TRAILER!!!") - 110
-    for case, raw in (
-        ("no-trailer", whole[:trailer]),
-        ("cut-entry", whole[: trailer - 600]),
-        ("after-trailer", whole + b"junk"),
+    for case, raw, why in (
+        ("no-trailer", whole[:trailer], "the cpio payload has no trailer: it is cut short"),
+        (
+            "cut-entry",
+            whole[: trailer - 600],
+            "cpio entry 'usr/f' runs past the end of the payload",
+        ),
+        ("after-trailer", whole + b"junk", "data after the archive's end"),
     ):
         data = gzip.compress(raw, mtime=0)
-        refused(ctx, f"rpm-{case}", [package(ctx, "rpm", f"cpio-{case}", members, data=data)])
+        pkg = package(ctx, "rpm", f"cpio-{case}", members, data=data)
+        refused(ctx, f"rpm-{case}", [pkg], "corrupt gzip payload: " + why)
     accepted(
         ctx,
         "rpm-padded",
