@@ -6,7 +6,8 @@
 A figure in a document is measured, never guessed (CLAUDE.md), and the ones here come from the tree
 without running anything: the suite's count of named tests, the resolution oracle's default number
 of paths, the matrix's rows, and the command's size when it is built. The probe's case count needs
-an exclave and is checked by the gate's syscalls step instead. scripts/check runs --check.
+an exclave and a run: the gate's syscalls step prints it on its last line, and the documents quote
+the reference machine's. scripts/check runs --check.
 """
 
 import argparse
