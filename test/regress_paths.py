@@ -532,20 +532,7 @@ def new_xattr_syscalls(ctx: Ctx) -> str | None:
 
     On older kernels they are ENOSYS either way.
     """
-    src = os.path.join(ctx.work, "xat.c")
-    with open(src, "w") as f:
-        f.write(
-            "#include <stdio.h>\n#include <errno.h>\n#include <unistd.h>\n"
-            "#include <sys/syscall.h>\n#include <fcntl.h>\n"
-            "int main(void){char b[64];errno=0;"
-            'long r=syscall(465,AT_FDCWD,"/etc/hostname",0,b,sizeof b);printf("%ld %d\\n",r,errno);'
-            'errno=0;r=syscall(465,AT_FDCWD,"/usr/share/exclave-test-marker",0,b,sizeof b);'
-            'printf("%ld %d\\n",r,errno);return 0;}\n'
-        )
-    exe = os.path.join(ctx.work, "xat")
-    rc, out, err = run([wrapper(ctx, ctx.gcc), "-O1", src, "-o", exe], cwd=ctx.work, env=ctx.env)
-    expect(rc == 0, err)
-    rc, out, err = inside(ctx, exe)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "xattrat"))
     lines = out.splitlines()
     if lines and lines[0].endswith(" 38"):
         skip("kernel has no listxattrat")
@@ -553,7 +540,8 @@ def new_xattr_syscalls(ctx: Ctx) -> str | None:
     own = os.path.lexists(os.path.join(ctx.root, "etc", "hostname"))
     # SELinux hosts label every file
     ok = (
-        len(lines) == 2
+        rc == 0
+        and len(lines) == 2
         and (lines[0] == "-1 2" if not own else int(lines[0].split()[0]) >= 0)
         and lines[1].endswith(" 0")
         and int(lines[1].split()[0]) >= 0
@@ -609,19 +597,13 @@ def bind_mount_alias(ctx: Ctx) -> str | None:
 @test
 def readlink_bad_buffer(ctx: Ctx) -> None:
     """7.5.6: an unwritable readlink buffer answers EFAULT, not SIGSEGV."""
-    src = os.path.join(ctx.work, "rl.c")
-    with open(src, "w") as f:
-        f.write(
-            "#include <unistd.h>\n#include <errno.h>\n#include <stdio.h>\n"
-            "int main(int c, char **v) { for (int i = 1; i < c; i++) { errno = 0; "
-            'long r = readlink(v[i], (char *)8, 64); printf("%ld %d\\n", r, errno); } return 0; }\n'
-        )
-    exe = os.path.join(ctx.work, "rl")
-    rc, out, err = run([wrapper(ctx, ctx.gcc), "-O1", src, "-o", exe], cwd=ctx.work, env=ctx.env)
-    expect(rc == 0, err)
     # a link in the tree; a directory would be EINVAL before the copy
     lib = "/lib" if os.path.islink(os.path.join(ctx.root, "lib")) else ctx.vbin("sh")
-    rc, out, err = inside(ctx, exe, [lib, "/proc/self/exe", ctx.vbin("sh"), "/nonexistent"])
+    rc, out, err = inside(
+        ctx,
+        os.path.join(ctx.progs, "readlink_fault"),
+        [lib, "/proc/self/exe", ctx.vbin("sh"), "/nonexistent"],
+    )
     expect(rc == 0 and out == "-1 14\n-1 14\n-1 14\n-1 2\n", f"bad buffer: rc={rc} {out!r} {err!r}")
 
 

@@ -5,6 +5,7 @@ environment, made once by `prepare` and given to every test as a `Ctx`, which no
 the pruned fixture kept under build/fixtures/ is made and keyed here too.
 """
 
+import concurrent.futures
 import os
 import platform
 import shutil
@@ -436,8 +437,36 @@ def tree_facts(ctx: Ctx) -> None:
     )
 
 
+# the test programs compile_progs builds, each from test/progs/NAME.c
+PROGS = (
+    "ro_matrix",
+    "signals",
+    "threads",
+    "spawn",
+    "exec",
+    "fifo",
+    "execstack",
+    "ljmp",
+    "fdpress",
+    "openat2",
+    "unix_socket",
+    "openat2_xdev",
+    "fexec",
+    "exec_identity",
+    "path_length",
+    "spawn_threads",
+    "adversarial",
+    "magic_links",
+    "rename_race",
+    "cwd_race",
+    "creat_slash",
+    "xattrat",
+    "readlink_fault",
+)
+
+
 def compile_progs(ctx: Ctx) -> None:
-    """Compile the test programs with the tree's own C compiler.
+    """Compile the test programs with the tree's own C compiler, four at a time.
 
     The sources are copied into the work directory: with the work directory's top-level directory
     owned by the exclave (8.1), only the working directory's subtree is the host's.
@@ -447,76 +476,46 @@ def compile_progs(ctx: Ctx) -> None:
     shutil.copytree(os.path.join(HERE, "progs"), src)
     os.makedirs(ctx.progs, exist_ok=True)
     gcc = wrapper(ctx, ctx.gcc)
-    for name in (
-        "ro_matrix",
-        "signals",
-        "threads",
-        "spawn",
-        "exec",
-        "fifo",
-        "execstack",
-        "ljmp",
-        "fdpress",
-        "openat2",
-        "unix_socket",
-        "openat2_xdev",
-        "fexec",
-        "exec_identity",
-        "path_length",
-        "spawn_threads",
-        "adversarial",
-        "magic_links",
-        "rename_race",
-        "cwd_race",
-        "creat_slash",
-    ):
-        rc, _out, err = run(
-            [
-                gcc,
+
+    def build(name: str) -> str | None:
+        """Build one program, or the origin test's library and program; the error, or None."""
+        if name != "origin":
+            out = os.path.join(ctx.progs, name)
+            cmd = [
                 "-O1",
                 "-g",
                 "-pthread",
                 "-o",
-                os.path.join(ctx.progs, name),
+                out,
                 os.path.join(src, name + ".c"),
                 "-lm",
                 "-ldl",
-            ],
+            ]
+            rc, _out, err = run([gcc, *cmd], cwd=ctx.work, env=ctx.env)
+            # nested functions are gcc's; clang has none
+            return None if not rc or (name == "execstack" and "not allowed here" in err) else err
+        lib = os.path.join(ctx.progs, "liborigin.so")
+        rc, _out, err = run(
+            [gcc, "-shared", "-fPIC", "-o", lib, os.path.join(src, "origin_lib.c")],
             cwd=ctx.work,
             env=ctx.env,
         )
-        # nested functions are gcc's; clang has none
-        if rc and name == "execstack" and "not allowed here" in err:
-            continue
         if rc:
-            sys.exit(f"cannot compile {name} with the exclave's gcc:\n{err}")
-    rc, _out, err = run(
-        [
-            gcc,
-            "-shared",
-            "-fPIC",
-            "-o",
-            os.path.join(ctx.progs, "liborigin.so"),
-            os.path.join(src, "origin_lib.c"),
-        ],
-        cwd=ctx.work,
-        env=ctx.env,
-    )
-    rc2, _out, err2 = run(
-        [
-            gcc,
-            "-o",
-            os.path.join(ctx.progs, "origin_main"),
-            os.path.join(src, "origin_main.c"),
-            "-L" + ctx.progs,
-            "-lorigin",
-            "-Wl,-rpath,$ORIGIN",
-        ],
-        cwd=ctx.work,
-        env=ctx.env,
-    )
-    if rc or rc2:
-        sys.exit(f"cannot build the origin test:\n{err}{err2}")
+            return err
+        main = os.path.join(src, "origin_main.c")
+        out = os.path.join(ctx.progs, "origin_main")
+        rc, _out, err = run(
+            [gcc, "-o", out, main, "-L" + ctx.progs, "-lorigin", "-Wl,-rpath,$ORIGIN"],
+            cwd=ctx.work,
+            env=ctx.env,
+        )
+        return err if rc else None
+
+    with concurrent.futures.ThreadPoolExecutor(4) as pool:
+        errors = dict(zip((*PROGS, "origin"), pool.map(build, (*PROGS, "origin")), strict=True))
+    for name, err in errors.items():
+        if err is not None:
+            sys.exit(f"cannot compile {name} with the exclave's compiler:\n{err}")
 
 
 def prepare(args: argparse.Namespace, tree_: str, work: str, *, logging: bool) -> Ctx:

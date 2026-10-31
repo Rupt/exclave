@@ -4069,7 +4069,9 @@ it takes 96 s (measured October 2026).
 
 **The suite** (`scripts/test --exclave EXCLAVE`, or `--tree DIR` for an
 unwrapped tree) makes an exclave under its work directory, compiles
-`test/progs/` with the tree's own C compiler, and runs the named tests.
+`test/progs/` with the tree's own C compiler, four programs at a time
+(on the reference machine the gcc fixture's exclave is made and its
+programs compiled in 0.7 s), and runs the named tests.
 `-k NAME` runs one test, or every test whose name contains a substring.
 `--budget` sets the per-test limit. `--keep` keeps the work
 directory. `--launcher` tests another build in place of
