@@ -26,7 +26,8 @@
  *                        default) whose byte 24 is <tail> when given: the extensible-struct rules
  *
  * execve and execveat run in a forked child (ret is the wait status: the exec'd program's exit, or
- * 100 + errno when the exec returned); a descriptor that open, openat or creat returned is closed.
+ * 100 + errno when the exec returned), and what the program writes on stdout and stderr, its first 4096 bytes,
+ * is answered as out=<hex>; a descriptor that open, openat or creat returned is closed.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -282,21 +283,35 @@ int main(void)
         }
         long ret;
         int err = 0, opened = 0;
+        char out[4096];
+        long nout = 0;
         for (int i = 0; i < na; i++)
             if (args[i].kind == 'f' && args[i].open_errno) opened = args[i].open_errno;
         if (nr == SYS_execve || nr == SYS_execveat) {
             fflush(stdout);
+            int po[2];
+            if (pipe(po)) return 1;
             pid_t pid = fork();
             if (pid == 0) {
-                /* a shell exec'd here must not eat the cases */
+                /* a shell exec'd here must not eat the cases, and its output is part of the answer */
                 int dn = open("/dev/null", O_RDONLY);
                 if (dn >= 0) {
                     dup2(dn, 0);
                     close(dn);
                 }
+                dup2(po[1], 1);
+                dup2(po[1], 2);
+                close(po[0]);
+                close(po[1]);
                 syscall(nr, args[0].v, args[1].v, args[2].v, args[3].v, args[4].v, args[5].v);
                 _exit(100 + (errno & 0xff));
             }
+            close(po[1]);
+            for (long k; nout < (long)sizeof out && (k = read(po[0], out + nout, sizeof out - (size_t)nout)) > 0;)
+                nout += k;
+            /* the rest is read and dropped, so that the program never blocks on a full pipe */
+            for (char sink[512]; read(po[0], sink, sizeof sink) > 0;) continue;
+            close(po[0]);
             int st = -1;
             waitpid(pid, &st, 0);
             ret = st;
@@ -322,6 +337,10 @@ int main(void)
         printf("%s ret=%ld errno=%d", id, ret, err);
         if (opened) printf(" open=%d", opened);
         for (int i = 0; i < na; i++) show(&args[i], ret);
+        if (nout) {
+            printf(" out=");
+            hex(out, nout);
+        }
         printf("\n");
         for (int i = 0; i < na; i++) {
             if (args[i].fd >= 0) close(args[i].fd);
