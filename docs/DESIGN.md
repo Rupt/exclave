@@ -4178,17 +4178,24 @@ which object a path reached, not only that it reached one: a
 successful open answers the path its descriptor names, every file of
 the maze and the host area has a size and a `user.probe` value of its
 own, and the process keeps one inotify descriptor, so two paths to one
-inode answer one watch descriptor. Where the host is the truth, on a
-host entry bound into `bwrap`'s read-only root and for a `chown` to
-root, a third run, the probe on the host itself through the tree's own
-loader, answers the cases that name such a path, and the launcher must
-answer as it does. Each group's run must also exit 0 with nothing on
-stderr in every world, as must the resolution oracle's run and the
-read-only matrix under `bwrap`, so a diagnostic or a crash after the
-last answer fails too; a run of the oracles that passes 60 s, a few
-hundred times the slowest's 0.2 s, is killed with its process group
-and fails by its group's name. A difference fails unless the list
-`EXPECTED` names its reason: the oracle's own
+inode answer one watch descriptor. What the calls leave behind is
+compared too: after each group, the host area, the probe's `/tmp`
+directory and the launcher's maze, entry by entry with its type,
+permissions, size, link count, link text, `user.probe` and mtime, must
+be the same in both worlds, the maze as the kernel's read-only root
+keeps it, so a call that answers 0 and does nothing, a symlink that
+stores the translated text or a write that escaped the read-only
+refusal fails even when its answer is right. Where the host is the
+truth, on a host entry bound into `bwrap`'s read-only root and for a
+`chown` to root, a third run, the probe on the host itself through the
+tree's own loader, answers the cases that name such a path, and the
+launcher must answer as it does. Each group's run must also exit 0
+with nothing on stderr in every world, as must the resolution oracle's
+run and the read-only matrix under `bwrap`, so a diagnostic or a crash
+after the last answer fails too; a run of the oracles that passes
+60 s, a few hundred times the slowest's 0.2 s, is killed with its
+process group and fails by its group's name. A difference fails unless
+the list `EXPECTED` names its reason: the oracle's own
 construction, a stated limitation (13 items 29 and 41), or what an
 older kernel lacks or decided differently, such as `truncate` checking
 the mount before the permission on 6.1 and earlier (6.14 checks the

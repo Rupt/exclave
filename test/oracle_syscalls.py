@@ -50,6 +50,13 @@ run in one group, in order, such as the relative forms after a chdir into the ex
 runs one process per group, with the host area reset before each world, and the answers are compared
 line by line.
 
+Effects. After each world's run of a group, what the calls left is compared too: the host area, the
+probe's /tmp directory and the launcher's maze, entry by entry (type and permissions, a file's size
+and link count, a link's text, user.probe and the mtime, "now" unless a case set it), the two
+worlds' alike and the launcher's maze as the kernel's read-only root keeps its own. A call that
+answers 0 and does nothing, a symlink that stores the translated text, and a write that escaped the
+read-only refusal fail there even when the answer is right.
+
 The two worlds. The same binary, compiled by the exclave's compiler, runs under bwrap, with the
 unwrapped tree read-only at / and the visibility rule of 8.1 spelt in bwrap's terms (the identity
 files and the host's top-level directories bound from the host), and under the launcher, with a copy
@@ -113,6 +120,7 @@ import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from typing import NamedTuple
@@ -1191,6 +1199,63 @@ def run_bwrap(root: str, host: str, _bindir: str, probe: str, cases: str) -> tup
         return run([*args, probe], env={}, stdin=f, timeout=TIMEOUT)
 
 
+def snapshot(top: str) -> dict[str, str]:
+    """What a tree holds, by path relative to top.
+
+    Each entry's type and permissions, a file's size and link count, a link's text, its user.probe
+    attribute and its mtime, "now" for any time past 10 000 s, which no case sets.
+    """
+    getxattr = getattr(os, "getxattr", None)
+    out: dict[str, str] = {}
+    if not os.path.lexists(top):
+        return out
+    todo = [""]
+    while todo:
+        rel = todo.pop()
+        full = os.path.join(top, rel) if rel else top
+        try:
+            st = os.lstat(full)
+        except PermissionError:  # under a directory a chmod case took the search bit from
+            out[rel] = "unreachable"
+            continue
+        desc = [f"{st.st_mode:o}"]
+        if stat.S_ISREG(st.st_mode):
+            desc.append(f"size={st.st_size},nlink={st.st_nlink}")
+        elif stat.S_ISLNK(st.st_mode):
+            desc.append("link=" + hx(os.readlink(full)))
+        try:
+            if getxattr:
+                desc.append("user.probe=" + hx(getxattr(full, "user.probe", follow_symlinks=False)))
+        except OSError:
+            pass
+        desc.append("mtime=" + ("now" if st.st_mtime_ns > 10**13 else str(st.st_mtime_ns)))
+        out[rel or "."] = " ".join(desc)
+        if stat.S_ISDIR(st.st_mode):
+            try:
+                todo += [os.path.join(rel, n) for n in os.listdir(full)]
+            except PermissionError:
+                out[rel or "."] += " unreadable"
+    return out
+
+
+def prefixed(prefix: str, snap: dict[str, str]) -> dict[str, str]:
+    return {f"{prefix}/{k}": v for k, v in snap.items()}
+
+
+def effects(host: str) -> dict[str, str]:
+    """What a world's run of a group left behind.
+
+    The host area, /tmp/exclave-probe-PID and, for a relative bind after a chdir into /tmp,
+    /tmp/probe-sock-PID.
+    """
+    rel_sock = "/tmp/" + REL_SOCK
+    return (
+        prefixed("area", snapshot(os.path.dirname(host)))
+        | prefixed("tmp", snapshot(f"/tmp/exclave-probe-{os.getpid()}"))
+        | ({REL_SOCK: snapshot(rel_sock)["."]} if os.path.lexists(rel_sock) else {})
+    )
+
+
 def run_native(root: str, host: str, probe: str, cases: str) -> tuple[int, str, str]:
     """The host's own answers: the probe run on the host, neither under bwrap nor the launcher.
 
@@ -1859,6 +1924,8 @@ def main() -> int:
     for c in cases:
         if c[3] not in names:
             names.append(c[3])
+    # the kernel's maze, which its read-only root keeps as made: the launcher's must stay the same
+    maze = prefixed("maze", snapshot(os.path.join(root, "maze")))
     # the native run: never as root, whom nothing refuses, and never on a bound path whose
     # directory this user can write
     native_off = os.geteuid() == 0
@@ -1887,9 +1954,13 @@ def main() -> int:
         try:
             host_reset(host, forms, probe)
             bw = run_bwrap(root, host, bindir, probe, path)
+            bw_effects = effects(host)
             world = "the launcher"
             host_reset(host, forms, probe)
             op = run_launcher(ex, host, probe, path)
+            op_effects = effects(host) | prefixed(
+                "maze", snapshot(os.path.join(ex, "tree", "maze"))
+            )
             if here:
                 world = "the native run"
                 host_reset(host, forms, probe)
@@ -1906,6 +1977,15 @@ def main() -> int:
                 f"the native run rc {nat[0]} stderr {nat[2].strip()[-200:]!r}"
             )
             differ += 1
+        # what the calls left behind: the same in both worlds, and the tree's maze untouched
+        for where in sorted(set(bw_effects) | set(op_effects)):
+            k_, l_ = (
+                bw_effects.get(where, maze.get(where, "absent")),
+                op_effects.get(where, "absent"),
+            )
+            if k_ != l_:
+                differ += 1
+                print(f"EFFECT {name} {where}\n     kernel: {k_}\n     launcher: {l_}")
         native = {
             mine[int(i)][0]: a for i, _, a in (line.partition(" ") for line in nat[1].splitlines())
         }
