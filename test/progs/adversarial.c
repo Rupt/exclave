@@ -7,8 +7,9 @@
  * and one past it, odd spellings of the self magic links; the read-only rule from mknod, ftruncate and a shared
  * writable mapping; CLONE_FS, CLONE_FILES, not dumpable, PER_LINUX32, a vfork child and a handler on an alternate
  * stack; io_uring and clone3 refused; a saturated cache, a huge environment, bad pointers; execute-only files and
- * interpreters spelt oddly. usage: adversarial HOSTDIR [SHORTDIR], or "adversarial HOSTDIR --child"; SHORTDIR (default
- * HOSTDIR) holds the interpreter chains, whose #! lines a deep HOSTDIR would outgrow.
+ * interpreters spelt oddly; and (16) the deepest handler paths on Rust's alternate stack, with its guard page. usage:
+ * adversarial HOSTDIR [SHORTDIR], or "adversarial HOSTDIR --child"; SHORTDIR (default HOSTDIR) holds the interpreter
+ * chains, whose #! lines a deep HOSTDIR would outgrow.
  * Prints one line per case, "<case>: <answer>", the same in every world where the kernel is the oracle, so the
  * exerciser shows what differs; the named regression asserts the kernel's answers, and for the cases the launcher
  * decides for itself (its variables stripped, mounts refused) the launcher's. Exit 0 always. */
@@ -18,6 +19,7 @@
 #include <poll.h>
 #include <sched.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +31,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/un.h>
+#include <sys/auxv.h>
 #include <sys/mman.h>
 #include <sys/sysmacros.h>
 #include <sys/prctl.h>
@@ -38,6 +41,9 @@
 
 extern char **environ;
 #define HI (1UL << 32) /* a bit the kernel never sees in an int argument */
+#ifndef AT_MINSIGSTKSZ
+#define AT_MINSIGSTKSZ 51 /* the kernel's signal frame, for a C library whose headers predate it */
+#endif
 /* the newest syscall numbers this test names, for an exclave whose headers predate them; each is stable per arch */
 #if defined(__x86_64__)
 #ifndef SYS_io_uring_setup
@@ -821,6 +827,46 @@ int main(int argc, char **argv)
         static char *none[] = {0};
         struct ex x = {sh, av, 0, 0, none};
         printf("exec of a wrapper with an empty environment: %s\n", exec_answer(&x));
+    }
+    /* 16. Rust's alternate stack (13 item 30): std gives every thread one of max(SIGSTKSZ, AT_MINSIGSTKSZ) bytes
+     * above a PROT_NONE guard page, every trap's handler runs there (SA_ONSTACK), and a vfork child shares it; the
+     * deepest paths of 7.5.4 run on it, the answers those of a process without it */
+    {
+        size_t ps = (size_t)sysconf(_SC_PAGESIZE),
+               sz = getauxval(AT_MINSIGSTKSZ) > 8192 ? getauxval(AT_MINSIGSTKSZ) : 8192;
+        char *m = mmap(0, ps + sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
+        if (m == MAP_FAILED || mprotect(m, ps, PROT_NONE)) {
+            perror("Rust's alternate stack");
+            return 2;
+        }
+        stack_t ss = {.ss_sp = m + ps, .ss_size = sz}, was;
+        if (sigaltstack(&ss, &was)) {
+            perror("Rust's alternate stack");
+            return 2;
+        }
+        snprintf(p, sizeof p, "%s/l2", hd);
+        P("on Rust's alternate stack, a chain of 40 symlinks", stat(p, &st));
+        snprintf(p, sizeof p, "%s/c5_1.sh", sd);
+        {
+            char *const av[] = {"c", 0};
+            struct ex x = {p, av, 0, 0, 0};
+            printf("on Rust's alternate stack, exec of a chain of 5 scripts: %s\n", exec_answer(&x));
+        }
+        char tp[4096];
+        snprintf(tp, sizeof tp, "%s", sh);
+        *strrchr(tp, '/') = 0;
+        strcat(tp, "/true");
+        char *const av[] = {"true", 0};
+        pid_t c;
+        int e = posix_spawn(&c, tp, 0, 0, av, environ), st2 = -1;
+        if (e == 0) waitpid(c, &st2, 0);
+        errno = e;
+        printf("on Rust's alternate stack, posix_spawn of a wrapper: %s\n", e ? en(-1)
+                                                                            : WIFEXITED(st2) && WEXITSTATUS(st2) == 0
+                                                                                ? "ran, exit 0"
+                                                                                : "ran, failed");
+        sigaltstack(&was, 0);
+        munmap(m, ps + sz);
     }
     close(hfd);
     return 0;

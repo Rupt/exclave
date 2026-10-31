@@ -4,6 +4,7 @@ Run by test/run.py, on the fixtures test/suite.py makes.
 """
 
 import os
+import re
 import shutil
 import signal
 import struct
@@ -561,9 +562,11 @@ def adversarial(ctx: Ctx) -> None:
     descriptor, a device node), odd process shapes (CLONE_FS, CLONE_FILES, not dumpable,
     PER_LINUX32, a vfork child, a handler on an alternate stack), the cache saturated and a huge
     environment, io_uring and clone3 refused by the filter, and an execute-only file the loader
-    cannot read (EACCES, a limitation). The kernel under bwrap measured the answers, but for the
-    variables, the mounts, the hard limit, the filter's refusals and the execute-only files, which
-    are the launcher's own.
+    cannot read (EACCES, a limitation). Last, the deepest handler paths on Rust's alternate stack,
+    8 KB or AT_MINSIGSTKSZ above a guard page, which a vfork child shares: rustc is absent from
+    most rows of the matrix, and this stands for the rust test there. The kernel under bwrap
+    measured the answers, but for the variables, the mounts, the hard limit, the filter's refusals
+    and the execute-only files, which are the launcher's own.
     """
     d = os.path.join(ctx.work, "advhost")
     # the interpreter chains' #! lines, which a deep work directory would outgrow
@@ -682,6 +685,9 @@ def adversarial(ctx: Ctx) -> None:
         # the #! remainder is one argument, not two
         "exec of a script whose #! has two options: one argument, the shell rejected it",
         "exec of a wrapper with an empty environment: ran, exit 0",
+        "on Rust's alternate stack, a chain of 40 symlinks: ok",
+        "on Rust's alternate stack, exec of a chain of 5 scripts: ran, exit 0",
+        "on Rust's alternate stack, posix_spawn of a wrapper: ran, exit 0",
     ]
     if os.getuid() == 0:
         # root follows init's links and reads an execute-only file
@@ -726,6 +732,47 @@ def adversarial(ctx: Ctx) -> None:
         f"a wrapper run through the entry under a soft limit of 8 sees {out.strip()!r} "
         f"(rc={rc} {err!r}): the borrowed room was not given back",
     )
+
+
+@test
+def x28_kept_mid_trap(ctx: Ctx) -> str:
+    """7.5.3: on aarch64 a signal landing in the launcher's handler finds the program's x28.
+
+    Go without cgo keeps its goroutine in x28 and its preemption signal reads the register as it
+    finds it. A program built -ffixed-x28, as Go's code is, holds a sentinel in x28 while bare svc
+    calls trap under a 200 us timer; the timer's handler counts the reads that find another value,
+    which the kernel's answer makes none, and the signals that landed outside the program, which
+    must be some for the test to have tested anything. On x86-64 Go reloads its goroutine from
+    thread-local storage, and the rule has nothing to keep.
+    """
+    if ctx.machine != "aarch64":
+        skip("aarch64 only: x86-64's Go reloads its goroutine from thread-local storage")
+    exe = os.path.join(ctx.work, "x28")
+    rc, _out, err = run(
+        [
+            wrapper(ctx, ctx.gcc),
+            "-O1",
+            "-ffixed-x28",
+            "-o",
+            exe,
+            os.path.join(ctx.work, "src", "x28.c"),
+        ],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    expect(rc == 0, "compile with x28 reserved: " + err[-600:])
+    rc, out, err = inside(ctx, exe)
+    m = re.fullmatch(
+        r"x28: (\d+) signals, (\d+) outside the program, (\d+) read another value, "
+        r"(\d+) traps failed\n",
+        out,
+    )
+    expect(
+        rc == 0 and m is not None and m[3] == "0" and m[4] == "0" and int(m[2]) > 0,
+        f"x28 across signals that land mid-trap: rc={rc} {out!r} {err!r}",
+    )
+    assert m is not None  # for the type checker: expect has failed otherwise
+    return f"{m[1]} signals, {m[2]} of them outside the program"
 
 
 @test

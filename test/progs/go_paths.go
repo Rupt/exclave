@@ -1,4 +1,5 @@
-// go_paths.go — the Go regression of DESIGN.md 17.4: a static Go program doing path syscalls from goroutines.
+// go_paths.go — the Go regression of DESIGN.md 17.4: a static Go program doing path syscalls from goroutines while
+// another collects garbage.
 // Go issues its syscalls raw, creates threads with clone, installs its own handler for every signal, SIGSYS
 // included (7.5.2), and runs goroutines on small stacks with a signal stack per thread. Built by the host's
 // go with cgo off, run inside an exclave as a host program.
@@ -9,8 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 )
 
@@ -36,6 +39,16 @@ func main() {
 	if err != nil {
 		fail("pipe: %v", err)
 	}
+	// a collector beside them, so that Go's preemption signal lands in the launcher's handler mid-trap (7.5.3)
+	var collecting atomic.Bool
+	collecting.Store(true)
+	collected := make(chan struct{})
+	go func() {
+		for collecting.Load() {
+			runtime.GC()
+		}
+		close(collected)
+	}()
 	var wg sync.WaitGroup
 	errs := make(chan string, 64)
 	for i := 0; i < 16; i++ {
@@ -62,6 +75,8 @@ func main() {
 	}
 	go func() { buf := make([]byte, 4); pr.Read(buf); pr.Close() }()
 	wg.Wait()
+	collecting.Store(false)
+	<-collected
 	pw.Write([]byte("done"))
 	pw.Close()
 	close(errs)

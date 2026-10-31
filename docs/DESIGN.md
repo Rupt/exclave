@@ -170,7 +170,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 85 named tests, most of them programs that
+- **The regression suite**: 86 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -2432,7 +2432,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 85 named regressions and every oracle its kernel can run; 17
+suite's 86 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -2694,7 +2694,9 @@ and stay fixed.
     whatever stack the trap lands on, and needs the kernel's frame
     (`AT_MINSIGSTKSZ`, 3.4 KB on the reference machine) plus its own
     3 KB budget (7.5.4). Rust's 8 KB stack is enough; a stack of exactly
-    `MINSIGSTKSZ` is not.
+    `MINSIGSTKSZ` is not. `adversarial` runs the deepest paths on
+    Rust's layout, a guard page below, on every row of the matrix: on
+    the reference machine they pass on 5 KB and fail on 4.4 KB.
 
 31. **Some paths inside structures are not translated.** A datagram
     destination in `sendto`, `sendmsg` or `sendmmsg` reaches the kernel
@@ -3789,7 +3791,7 @@ meaning items 4 and 7.
    `test/regress_*.py`:
    - *signals and threads*: `SA_ONSTACK` handlers that trap, a FIFO
      `open` interrupted by `SIGINT` or left by `siglongjmp`, Go's
-     goroutines, 64 threads trapping at once and threads trapping while
+     goroutines beside a collector, 64 threads trapping at once and threads trapping while
      another spawns, a descriptor-relative path looked up while its
      directory's parent is renamed, in both forms of the walk (16.6
      item 5; the walk from the root under a second mount of the
@@ -3809,8 +3811,10 @@ meaning items 4 and 7.
      shadow-stack tunable set, reporting whether glibc enabled one (13
      item 49), a blocked or sent `SIGSYS`, older
      and newer launchers nested and side by side, a program installing
-     its own filter, the speculation state, and an adversarial program
-     (`adversarial`);
+     its own filter, the speculation state, `x28` as a signal landing
+     mid-trap finds it on aarch64 (7.5.3), and an adversarial program
+     (`adversarial`), which runs the handler's deepest paths on Rust's
+     alternate stack too;
    - *paths and the border*: working directories on either side, host
      symlinks, the read-only matrix of 8.2, unix sockets, `PATH_MAX`,
      `openat2`'s `resolve` flags, `/proc` magic links, those to objects
@@ -3889,7 +3893,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus five of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `unix_socket` and `magic_links` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 85 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 86 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
