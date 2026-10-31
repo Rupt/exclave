@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -36,6 +37,24 @@ static void h_exe(int s)
     char b[256];
     (void)s;
     if (readlink("/proc/self/exe", b, 255) > 0) hits++;
+}
+
+/* one of the three waits that carry a mask, 20 ms with mask; epoll through syscall, since the suite's pruned tree may
+ * lack <sys/epoll.h>, and so with the kernel's eight-byte mask */
+static int wait_with(int which, const sigset_t *mask)
+{
+    struct timespec ts = {0, 20000000};
+    if (which == 0) return pselect(0, 0, 0, 0, &ts, mask);
+    if (which == 1) {
+        struct pollfd p = {-1, 0, 0};
+        return ppoll(&p, 1, &ts, mask);
+    }
+    int ep = (int)syscall(SYS_epoll_create1, 0);
+    char events[64];
+    int rc = (int)syscall(SYS_epoll_pwait, ep, events, 1, 20, mask, 8), e = errno;
+    close(ep);
+    errno = e;
+    return rc;
 }
 
 int main(void)
@@ -99,26 +118,33 @@ int main(void)
         fails++;
         printf("FAIL SA_ONSTACK handler: hits=%d\n", hits);
     }
-    /* 4. pselect and ppoll with a full mask time out normally, and the process survives a trap afterwards */
-    sigfillset(&s);
+    /* 4. pselect, ppoll and epoll_pwait hand their mask to the kernel: with SIGUSR1 blocked and pending, a full mask
+     * keeps it blocked, so the wait times out and no handler runs, and an empty one lets it in, EINTR and one run of
+     * the handler, which traps; the process survives a trap afterwards */
     {
-        struct timespec ts = {0, 20000000};
-        fd_set r;
-        FD_ZERO(&r);
-        FD_SET(0, &r);
-        int rc = pselect(1, 0, 0, 0, &ts, &s);
-        if (rc != 0) {
-            fails++;
-            printf("FAIL pselect rc=%d errno=%d\n", rc, errno);
-        }
-    }
-    {
-        struct timespec ts = {0, 20000000};
-        struct pollfd p = {-1, 0, 0};
-        int rc = ppoll(&p, 1, &ts, &s);
-        if (rc != 0) {
-            fails++;
-            printf("FAIL ppoll rc=%d errno=%d\n", rc, errno);
+        static const char *const waits[] = {"pselect", "ppoll", "epoll_pwait"};
+        sigset_t full, empty, usr1, before;
+        sigfillset(&full);
+        sigemptyset(&empty);
+        sigemptyset(&usr1);
+        sigaddset(&usr1, SIGUSR1);
+        for (int i = 0; i < 3; i++) {
+            sigprocmask(SIG_BLOCK, &usr1, &before);
+            hits = 0;
+            raise(SIGUSR1);
+            errno = 0;
+            int rc = wait_with(i, &full);
+            if (rc != 0 || hits != 0) {
+                fails++;
+                printf("FAIL %s with a full mask: rc=%d errno=%d hits=%d\n", waits[i], rc, errno, hits);
+            }
+            errno = 0;
+            rc = wait_with(i, &empty);
+            if (rc != -1 || errno != EINTR || hits != 1) {
+                fails++;
+                printf("FAIL %s with an empty mask: rc=%d errno=%d hits=%d\n", waits[i], rc, errno, hits);
+            }
+            sigprocmask(SIG_SETMASK, &before, 0);
         }
     }
     if (stat("/usr/share", &st)) {
