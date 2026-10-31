@@ -21,6 +21,7 @@ def signals(ctx: Ctx) -> None:
 
 @test
 def threads(ctx: Ctx) -> None:
+    """7.5.5: threads, TLS and dlopen; 64 threads trapping at once, each answered for its path."""
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "threads"))
     expect(rc == 0 and "FAIL" not in out, out + err)
 
@@ -101,7 +102,9 @@ def spawn_threads(ctx: Ctx) -> str:
         ctx, os.path.join(ctx.progs, "spawn_threads"), [d, ctx.vbin("true")], timeout=120
     )
     expect(
-        rc == 0 and "0 failures" in out and "hung" not in out,
+        rc == 0
+        and "spawns beside trapping threads: 200 spawned, 0 failures" in out.splitlines()
+        and "hung" not in out,
         f"spawn_threads: rc={rc} {out!r} {err!r}",
     )
     return out.strip().splitlines()[-1]

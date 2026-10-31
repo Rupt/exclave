@@ -1,13 +1,17 @@
 /* threads.c — threads and floating point (the clone3 regression), TLS, dlopen, chdir and relative paths, 64 threads
- * calling stat concurrently. Prints FAIL lines; exit 1 on any. */
+ * calling stat concurrently, each on a directory and a file of the tree of its own, found by their directory entries'
+ * types without a stat, so that the launcher's cache takes new components while it answers for others; each answer
+ * must be the kind its path names. Prints FAIL lines; exit 1 on any. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 static int fails;
@@ -26,12 +30,42 @@ static void *fp(void *a)
     tl += (int)n;
     return (s == want && tl == 5 + (int)n) ? 0 : (void *)2;
 }
+/* the tree's directories and regular files for the stat threads, the suite's two first */
+static char dirs[64][512] = {"/usr/share"}, files[64][512] = {"/usr/share/exclave-test-marker"};
+static int ndirs = 1, nfiles = 1;
+static void find_paths(void)
+{
+    static const char *const in[] = {"/usr/include", "/usr/share", "/usr/lib", "/usr/bin"};
+    /* getdents64 through syscall, since the suite's pruned tree may lack <dirent.h>: struct linux_dirent64 has the
+     * record's length at 16, its type at 18 and its name at 19 */
+    static char buf[32768];
+    for (unsigned i = 0; i < sizeof in / sizeof *in; i++) {
+        int d = open(in[i], O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        long n;
+        while (d >= 0 && (n = syscall(SYS_getdents64, d, buf, sizeof buf)) > 0)
+            for (long off = 0; off < n;) {
+                unsigned short len;
+                memcpy(&len, buf + off + 16, sizeof len);
+                unsigned char type = (unsigned char)buf[off + 18];
+                const char *name = buf + off + 19;
+                off += len;
+                if (name[0] == '.') continue;
+                if (type == 4 /* DT_DIR */ && ndirs < 64) snprintf(dirs[ndirs++], sizeof *dirs, "%s/%s", in[i], name);
+                if (type == 8 /* DT_REG */ && nfiles < 64)
+                    snprintf(files[nfiles++], sizeof *files, "%s/%s", in[i], name);
+            }
+        if (d >= 0) close(d);
+    }
+}
 static void *many(void *a)
 {
-    (void)a;
+    long t = (long)a;
     struct stat st;
-    for (int i = 0; i < 2000; i++)
-        if (stat(i & 1 ? "/usr/share" : "/usr/share/exclave-test-marker", &st)) return (void *)1;
+    for (int i = 0; i < 2000; i++) {
+        const char *p = i & 1 ? dirs[t % ndirs] : files[t % nfiles];
+        if (stat(p, &st)) return (void *)1;
+        if (!S_ISDIR(st.st_mode) != !(i & 1)) return (void *)2;
+    }
     return 0;
 }
 
@@ -51,12 +85,14 @@ int main(void)
         fails++;
         printf("FAIL main tl=%d\n", tl);
     }
-    for (int i = 0; i < 64; i++) pthread_create(&t[i], 0, many, 0);
+    find_paths();
+    for (long i = 0; i < 64; i++) pthread_create(&t[i], 0, many, (void *)i);
     for (int i = 0; i < 64; i++) {
         pthread_join(t[i], &r);
         if (r) {
             fails++;
-            printf("FAIL stat thread %d\n", i);
+            printf("FAIL stat thread %d on %s and %s: %s\n", i, dirs[i % ndirs], files[i % nfiles],
+                   r == (void *)1 ? "failed" : "the other kind answered");
         }
     }
     void *h = dlopen("libm.so.6", RTLD_NOW);

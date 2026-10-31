@@ -3,7 +3,8 @@
  * thread's own; and a forked child whose traps nest, a timer's handler trapping inside a trapped stat, while every
  * chunk the pool had is held by threads blocked in the parent, so that the child's pool must grow under nesting.
  * usage: spawn_threads HOSTDIR PROGRAM (a program to spawn, the exclave's true). Prints one line per part; exit 0 when
- * both pass, which the second does only when a timer's trap landed and every stat, nested or not, succeeded. */
+ * both pass: the first when all 200 spawns happened and exited 0 and every trap answered right, the second only when a
+ * timer's trap landed and every stat, nested or not, succeeded. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -80,19 +81,20 @@ int main(int argc, char **argv)
     /* part 1: four threads trapping throughout 200 spawns from the main thread */
     pthread_t t[4];
     for (int i = 0; i < 4; i++) pthread_create(&t[i], 0, trapper, 0);
-    int spawned = 0;
+    int spawned = 0, exited_badly = 0;
     for (int i = 0; i < 200; i++) {
         pid_t pid;
         char *av[] = {prog, 0};
         if (posix_spawn(&pid, prog, 0, 0, av, environ) == 0) {
-            int st;
-            waitpid(pid, &st, 0);
+            int st = -1;
+            if (waitpid(pid, &st, 0) != pid || !WIFEXITED(st) || WEXITSTATUS(st)) exited_badly++;
             spawned++;
         }
     }
     stop = 1;
     for (int i = 0; i < 4; i++) pthread_join(t[i], 0);
-    printf("spawns beside trapping threads: %d spawned, %d failures\n", spawned, fails);
+    printf("spawns beside trapping threads: %d spawned, %d failures\n", spawned, fails + exited_badly);
+    if (exited_badly) printf("  %d spawned children did not exit 0\n", exited_badly);
     for (int i = 0; i < fails && i < 8; i++) printf("  wrong answer: %s\n", seen[i]);
     /* part 2: eight threads hold chunks in a FIFO open; a forked child traps, and so does its 1 ms timer's handler */
     char fifo[4096];
@@ -138,5 +140,5 @@ int main(int argc, char **argv)
                                                                               ? "no timer trap landed"
                                                                           : WIFEXITED(st) ? "a stat failed"
                                                                                           : "hung");
-    return fails == 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0 ? 0 : 1;
+    return spawned == 200 && fails + exited_badly == 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0 ? 0 : 1;
 }
