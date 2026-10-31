@@ -88,8 +88,12 @@ changed=$(cd "$ROOT" && { git diff --name-only "${since:-HEAD}" && git ls-files 
 what=${since:+"the changes since $since"}
 what=${what:-"uncommitted changes"}
 if [ -z "$changed" ]; then
-    changed=$(cd "$ROOT" && git diff --name-only HEAD~1 HEAD)
-    what="the last commit"
+    if (cd "$ROOT" && git rev-parse -q --verify HEAD~1 >/dev/null); then
+        changed=$(cd "$ROOT" && git diff --name-only HEAD~1 HEAD)
+        what="the last commit"
+    else
+        full=true what="a checkout without the last commit's parent, as a shallow clone is"
+    fi
 fi
 # shellcheck disable=SC2086  # the changed paths, one word each
 steps=$(py "$here/affected.py" $changed | tr '\n' ' ') || exit 2
