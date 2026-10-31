@@ -3897,7 +3897,7 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus five of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `unix_socket` and `magic_links` (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus five of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `unix_socket` and `magic_links` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
 | 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 83 named tests |

@@ -1,10 +1,11 @@
 """Compare an exclave under the launcher with its tree under bwrap: the namespace oracle (17).
 
 The same tree runs twice: under `bwrap` with the unwrapped tree bound read-only at `/`, and under
-the launcher. Exit status, stdout and stderr are compared, and the suite's path programs whose
-answers the kernel can give, the read-only matrix among them, run under bwrap so that their
-expectations are checked against the kernel itself rather than against the launcher. Needs user
-namespaces and bwrap; says so and exits 0 when it cannot run.
+the launcher. Exit status, stdout and stderr are compared, a workload meant to succeed must show
+under bwrap what it is meant to, so that one that fails alike in both worlds is not taken for a
+pass, and the suite's path programs whose answers the kernel can give, the read-only matrix among
+them, run under bwrap so that their expectations are checked against the kernel itself rather than
+against the launcher. Needs user namespaces and bwrap; says so and exits 0 when it cannot run.
 
     test/oracle_ns.py --exclave EXCLAVE [--work DIR] [--keep]
 """
@@ -18,7 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
-lazy from collections.abc import Iterable
+lazy from collections.abc import Callable, Iterable
 
 import kernel_answers
 import tree
@@ -69,44 +70,119 @@ class Spellings:
         }
 
 
-# shell workloads by virtual path; $W is the host work directory, writable in both worlds
-WORKLOADS = [
-    "cat /etc/passwd | head -3",
+def lines(out: str) -> list[str]:
+    return out.splitlines()
+
+
+def number(line: str) -> bool:
+    """Whether line is a positive whole number, as wc prints one."""
+    return line.strip().isdigit() and int(line) > 0
+
+
+def has(root: str, name: str) -> bool:
+    """Whether the tree has a tool of that name, in /usr/bin or /bin."""
+    return os.path.lexists(os.path.join(root, tree.vbin(root, name).lstrip("/")))
+
+
+# Shell workloads by virtual path, $W the host work directory, writable in both worlds, each with
+# what it is meant to show when it does its job, asked of the kernel's world: a predicate on
+# (stdout, the tree's root) for a workload meant to succeed, which must also exit 0 and say nothing
+# on stderr, or None for one that is about failures. A workload that fails the same way in both
+# worlds compares equal and tests nothing, as one on a tool or a file the tree lacks would.
+WORKLOADS: list[tuple[str, Callable[[str, str], bool] | None]] = [
     (
-        "for f in /etc/resolv.conf /etc/hosts /etc/nsswitch.conf; "
-        "do test -L $f && readlink $f; done; "
-        "head -c 40 /etc/resolv.conf | wc -c; readlink $SH"
-    ),
-    "pwd; cd /usr/lib && pwd; cd gcc && pwd",
-    "mkdir -p /usr/lib; echo $?; install -d /usr/lib; echo $?; mkdir /usr/lib; echo $?",
-    (
-        "touch /usr/x; echo $?; touch /usr/lib/x; echo $?; rm $SH; echo $?; "
-        "rm /usr/nonexistent; echo $?"
+        "cat /etc/passwd | head -3",
+        lambda out, _root: len(lines(out)) == 3 and all(":" in x for x in lines(out)),
     ),
     (
-        "mv $SH $W/moved; echo $?; ln $SHX $W/linked; echo $?; ln -s $SHX $W/symlinked; echo $?; "
-        "ln $W/hello.c /usr/newlink; echo $?"
+        (
+            "for f in /etc/resolv.conf /etc/hosts /etc/nsswitch.conf; "
+            "do test -L $f && readlink $f; done; "
+            "head -c 40 /etc/resolv.conf | wc -c; readlink $SH"
+        ),
+        lambda out, _root: any(number(x) for x in lines(out)),
     ),
-    "cp $SHX $W/dashcopy; echo $?; cmp $SHX $W/dashcopy; echo $?",
-    "stat -c '%s %F %a' $SHX $SH $LIBC; stat -c '%F %a' /usr/lib",
-    "ls /usr/lib/gcc/*/* | grep -v '^\\.real$' | head -20",  # the tree's own triplet and version
-    "find /usr/lib/gcc -name '*.o' | sort | head -30",
-    "cd $W && $CC -O1 hello.c -o hello && ./hello a b; echo $?",
-    "cd $W && $CC -O0 -c hello.c -o hello.o && ls -l hello.o | cut -d' ' -f5",
-    "cat /nonexistent; echo $?; cat /usr/lib; echo $?; cd $SHX; echo $?",
     (
-        f"echo x > /dev/null; echo $?; : > /tmp/oracle-file-{os.getpid()}; echo $?; "
-        f"ls /tmp/oracle-file-{os.getpid()}; rm /tmp/oracle-file-{os.getpid()}"
+        "pwd; cd /usr/lib && pwd; cd gcc && pwd",
+        lambda out, _root: lines(out)[1:] == ["/usr/lib", "/usr/lib/gcc"],
     ),
-    "stat -f -c '%T' /usr; touch /usr/bin/true 2>&1; chmod 600 /usr/bin/true 2>&1; echo $?",
-    "date +%Z; TZ=Asia/Tokyo date +%Z; ls /etc/localtime 2>&1 | wc -l",
-    "test -w $SHX; echo $?; test -x $SHX; echo $?; test -w $W; echo $?",
+    ("mkdir -p /usr/lib; echo $?; install -d /usr/lib; echo $?; mkdir /usr/lib; echo $?", None),
     (
-        "cd $W && echo '#!/bin/sh' > s.sh && echo 'echo script $1' >> s.sh && chmod +x s.sh "
-        "&& ./s.sh q; echo $?"
+        (
+            "touch /usr/x; echo $?; touch /usr/lib/x; echo $?; rm $SH; echo $?; "
+            "rm /usr/nonexistent; echo $?"
+        ),
+        None,
     ),
-    "cd $W && ln -sf /usr/share lnk && cat lnk/../bin/../share/doc/dash/copyright | head -2",
-    "getent passwd root | cut -d: -f1; hostname 2>&1 | head -1 | wc -l",
+    (
+        (
+            "mv $SH $W/moved; echo $?; ln $SHX $W/linked; echo $?; ln -s $SHX $W/symlinked; "
+            "echo $?; ln $W/hello.c /usr/newlink; echo $?"
+        ),
+        None,
+    ),
+    (
+        (
+            "cp $SHX $W/dashcopy; echo $?; "
+            'test "$(cksum < $SHX)" = "$(cksum < $W/dashcopy)"; echo $?'
+        ),
+        lambda out, _root: lines(out) == ["0", "0"],
+    ),
+    (
+        "stat -c '%s %F %a' $SHX $SH $LIBC; stat -c '%F %a' /usr/lib",
+        lambda out, _root: len(lines(out)) == 4,
+    ),
+    (
+        # the tree's own triplet and version
+        "ls /usr/lib/gcc/*/* | grep -v '^\\.real$' | head -20",
+        lambda out, _root: any(x.endswith(".o") for x in lines(out)),
+    ),
+    (
+        "find /usr/lib/gcc -name '*.o' | sort | head -30",
+        lambda out, _root: bool(lines(out)) and all(x.endswith(".o") for x in lines(out)),
+    ),
+    (
+        "cd $W && $CC -O1 hello.c -o hello && ./hello a b; echo $?",
+        lambda out, _root: lines(out) == ["hello 3", "0"],
+    ),
+    (
+        "cd $W && $CC -O0 -c hello.c -o hello.o && wc -c < hello.o",
+        lambda out, _root: len(lines(out)) == 1 and number(out),
+    ),
+    ("cat /nonexistent; echo $?; cat /usr/lib; echo $?; cd $SHX; echo $?", None),
+    (
+        (
+            f"echo x > /dev/null; echo $?; : > /tmp/oracle-file-{os.getpid()}; echo $?; "
+            f"ls /tmp/oracle-file-{os.getpid()}; rm /tmp/oracle-file-{os.getpid()}"
+        ),
+        lambda out, _root: lines(out) == ["0", "0", f"/tmp/oracle-file-{os.getpid()}"],
+    ),
+    ("stat -f -c '%T' /usr; touch /usr/bin/true 2>&1; chmod 600 /usr/bin/true 2>&1; echo $?", None),
+    ("date +%Z; TZ=Asia/Tokyo date +%Z; ls /etc/localtime 2>&1 | wc -l", None),
+    ("test -w $SHX; echo $?; test -x $SHX; echo $?; test -w $W; echo $?", None),
+    (
+        (
+            "cd $W && echo '#!/bin/sh' > s.sh && echo 'echo script $1' >> s.sh && chmod +x s.sh "
+            "&& ./s.sh q; echo $?"
+        ),
+        lambda out, _root: lines(out) == ["script q", "0"],
+    ),
+    (
+        # .. after a host link into the tree is the parent of the link's target, in the tree
+        (
+            "cd $W && ln -sf /usr/share lnk && "
+            "head -c 4 lnk/../lib/../bin/$(basename $(command -v $CC)) | od -An -c"
+        ),
+        lambda out, _root: out.split()[1:4] == ["E", "L", "F"],
+    ),
+    (
+        (
+            "if command -v getent >/dev/null; then getent passwd root | cut -d: -f1; fi; "
+            "hostname 2>&1 | head -1 | wc -l"
+        ),
+        # musl has no getent
+        lambda out, root: lines(out) == (["root", "1"] if has(root, "getent") else ["1"]),
+    ),
 ]
 
 
@@ -403,7 +479,7 @@ def main() -> int:
     # real read-only bind
     fails = programs_under_the_kernel(ex, root, work, sp)
     # 2. workloads twice
-    for cmd in WORKLOADS:
+    for cmd, meant in WORKLOADS:
         shown = cmd
         for f in ("moved", "linked", "symlinked", "dashcopy", "hello", "hello.o", "s.sh", "lnk"):
             p = os.path.join(work, f)
@@ -442,7 +518,14 @@ def main() -> int:
         )
         # the launcher names programs by their real path when the host invoked them; bwrap by the
         # virtual one
-        if bn == on:
+        # a workload meant to succeed does under the kernel, or the comparison tests nothing
+        if meant is not None and (b[0] or b[2] or not meant(b[1], root)):
+            fails += 1
+            print(
+                f"FAIL {shown[:70]}\n     bwrap does not show what the workload is meant to: "
+                f"rc={bn[0]} out={bn[1][:300]!r} err={bn[2][:200]!r}"
+            )
+        elif bn == on:
             print(f"PASS {shown[:70]}")
         else:
             fails += 1
