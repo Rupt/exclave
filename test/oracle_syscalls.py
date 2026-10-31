@@ -26,11 +26,13 @@ with every flag that changes resolution, with the invalid arguments the kernel c
 lookup, and with the path forms of class Forms over a random maze:
   - inside the exclave: a file, a directory and a symlink of every kind (loop, chained, dangling,
     absolute, relative), a wrapper, the shell's link, an identity file, a placeholder,
-    /proc/self/exe, and an exclave link to a host file and to a host directory;
-  - on the host: files, directories and links of every kind, and relative paths from the host side,
-    up to the root and back into the tree;
-  - spellings: ., .. and / as the last component, a trailing slash, //, empty, overlong, a 256-byte
-    component, bytes that are not UTF-8, and a newline;
+    /proc/self/exe, and an exclave link to a host file and to a host directory, the latter also
+    crossed in the middle of a path and followed by ..;
+  - on the host: files, directories and links of every kind, links into the exclave's file, its
+    directory and its wrapper, the directory link also crossed in the middle of a path and followed
+    by .., and relative paths from the host side, up to the root and back into the tree;
+  - spellings: ., .. and / as the last component, a trailing slash, also after a link on either
+    side, //, empty, overlong, a 256-byte component, bytes that are not UTF-8, and a newline;
   - the three fault forms, and a socket file in the tree.
 The *at forms add descriptors opened O_PATH or O_RDONLY on exclave and host directories, files and
 symlinks, a wrapper, /dev/null, AT_FDCWD, a closed descriptor and a negative one. The two-path forms
@@ -70,6 +72,10 @@ kinds, and each names the syscalls and the answers its reason covers:
     exec of a socket answered ENXIO before 5.9; truncate checking the mount before the permission on
     6.1 and earlier (6.14 checks the permission first).
 More differences are accepted on older kernels, where more of the kernel entries apply.
+
+Open defects. DEFECTS lists the differences that are the launcher's defects, found and not yet
+fixed, each by its syscall, label and the two exact answers. Every run prints them, and a case of
+one whose answers agree fails until its entry is removed.
 
 Counts. The last line of the output gives the number of cases, of groups (one per syscall, plus
 the cases run after a chdir into the exclave) and of path forms, then the differences and those
@@ -306,6 +312,13 @@ class Forms:
             ("opt", "/opt"),
             ("exclave_to_host", "/maze/lH"),
             ("exclave_to_host_dir", "/maze/lHD"),
+            # through an exclave link to a host directory, then into it or back out of it: .. after
+            # a link is the parent of its target, not of the link
+            ("exclave_link_mid", "/maze/lHD/inner"),
+            ("exclave_link_dotdot", "/maze/lHD/../hfile"),
+            # a trailing slash after a link follows it, even for lstat and the no-follow calls
+            ("link_dir_slash", "/maze/lD/"),
+            ("link_file_slash", "/maze/lF/"),
             ("link_slash_absent", "/maze/lS"),
             ("link_slash_file", "/maze/lFS"),
             ("overlong", "/maze/" + "a" * 5000),
@@ -322,6 +335,14 @@ class Forms:
             ("host_to_exclave", h + "/hlink"),
             ("host_to_exclave_dir", h + "/hlnkdir"),
             ("host_dangling", h + "/hdang"),
+            ("host_link_mid", h + "/hlnkdir/" + os.path.basename(self.file)),
+            (
+                "host_link_dotdot",
+                h + "/hlnkdir/../" + os.path.basename(self.dir) + "/" + os.path.basename(self.file),
+            ),
+            ("host_link_slash", h + "/hlink/"),
+            ("host_link_dir_slash", h + "/hlnkdir/"),
+            ("host_dangling_slash", h + "/hdang/"),
             ("host_loop", h + "/hloop"),
             ("host_rel_link", h + "/hrel"),
             ("host_missing", h + "/missing"),
@@ -593,7 +614,7 @@ def generate(
     add("execve", "true", S(forms.true), V("true"), V())
     add("execve", "sh_exit3", S(forms.sh), V("sh", "-c", "exit 3"), V("PATH=/usr/bin:/bin"))
     add("execve", "argv_null", S(forms.true), "n:", V())
-    add("execve", "rel_true", S("hlink"), V("x"), V())
+    add("execve", "rel_true", S("htrue"), V("true"), V())
     for n, d, p in forms.at:
         changes = n.partition("/")[2] not in mutable  # cwd/NAME: the path form's own name
         for fn, fl in open_flags:
@@ -931,8 +952,12 @@ def rmtree(d: str) -> None:
     shutil.rmtree(d)
 
 
-def host_reset(host: str, _ex_tree: str, probe: str) -> None:
-    """The host area both worlds see at the same path, identical before every run."""
+def host_reset(host: str, forms: Forms, probe: str) -> None:
+    """The host area both worlds see at the same path, identical before every run.
+
+    Its links into the exclave name the forms' file, directory and wrapper, so that the forms that
+    cross from the host into the tree reach something in both worlds.
+    """
     # a chmod of /proc/self/exe takes the probe's own x bit, and an xattr case leaves an attribute
     # on it: the probe written again as a new file has neither, on any Python (a musl build has no
     # os.listxattr), and the default label
@@ -952,8 +977,9 @@ def host_reset(host: str, _ex_tree: str, probe: str) -> None:
     with open(host + "/hdir/inner", "w") as f:
         f.write("inner\n")
     for name, target in (
-        ("hlink", "/maze/f0"),
-        ("hlnkdir", "/maze/d0"),
+        ("hlink", forms.file),
+        ("hlnkdir", forms.dir),
+        ("htrue", forms.true),
         ("hdang", "missing"),
         ("hloop", "hloop"),
         ("hrel", "hdir/inner"),
@@ -1302,6 +1328,42 @@ EXPECTED.extend(
 )
 
 
+# Launcher defects the probe has found and the handler has yet to fix: differences no rule makes
+# right, each (syscall, label, the kernel's answer, the launcher's answer). An entry accepts that
+# exact pair and nothing else, every run prints it, and a case of one that agrees fails, so that the
+# fix removes the entry.
+DEFECTS: set[tuple[str, str, str, str]] = {
+    # a trailing slash after a host symlink, for a call that does not follow the last component:
+    # the kernel looks the link itself up (EEXIST for a create, ENOTDIR for rmdir); the handler
+    # follows it, and mkdir creates the dangling link's target
+    ("mkdir", "host_dangling_slash", "ret=-1 errno=17", "ret=0 errno=0"),
+    ("mkdir", "host_missing", "ret=0 errno=0", "ret=-1 errno=17"),
+    ("mkdirat", "cwd/host_dangling_slash", "ret=-1 errno=17", "ret=0 errno=0"),
+    ("mkdirat", "cwd/host_missing", "ret=0 errno=0", "ret=-1 errno=17"),
+    ("rmdir", "host_link_slash", "ret=-1 errno=20", "ret=-1 errno=30"),
+    ("rmdir", "host_link_dir_slash", "ret=-1 errno=20", "ret=-1 errno=30"),
+    ("rmdir", "host_dangling_slash", "ret=-1 errno=20", "ret=-1 errno=2"),
+    ("symlink", "host_dangling_slash", "ret=-1 errno=17", "ret=-1 errno=2"),
+    ("symlinkat", "cwd/host_dangling_slash", "ret=-1 errno=17", "ret=-1 errno=2"),
+    ("mknod", "host_dangling_slash/fifo", "ret=-1 errno=17", "ret=-1 errno=2"),
+    ("mknod", "host_dangling_slash/reg", "ret=-1 errno=17", "ret=-1 errno=2"),
+    ("mknodat", "cwd/host_dangling_slash", "ret=-1 errno=17", "ret=-1 errno=2"),
+    ("bind", "host_dangling_slash", "ret=-1 errno=98", "ret=-1 errno=2"),
+    # O_CREAT with a trailing slash is EISDIR before the last component is looked up
+    # (open_last_lookups), so before RESOLVE_NO_SYMLINKS meets the link there; the handler: ELOOP
+    *(
+        ("openat2", f"cwd/{n}/wr_creat/no_symlinks", "ret=-1 errno=21", "ret=-1 errno=40")
+        for n in (
+            "link_dir_slash",
+            "link_file_slash",
+            "host_link_slash",
+            "host_link_dir_slash",
+            "host_dangling_slash",
+        )
+    ),
+}
+
+
 def expected(name: str, label: str, b: str, o: str) -> str | None:
     for n, pred, reason in EXPECTED:
         if (n is None or n == name) and pred(label, b, o):
@@ -1390,6 +1452,10 @@ def main() -> int:
                 with open(tp, "wb"):
                     pass
     forms = Forms(root, host, links, dirs, files)
+    # links to the forms' directory and file, for a trailing slash after a link
+    for r in (root, os.path.join(ex, "tree")):
+        os.symlink(forms.dir, os.path.join(r, "maze", "lD"))
+        os.symlink(forms.file, os.path.join(r, "maze", "lF"))
     # a tree file the probe names has a copy of its own in the kernel's world, not a hard link to
     # the given exclave's: another gate step may be running that program, and a write-open of it
     # would be ETXTBSY there, an answer about the gate rather than the rule
@@ -1439,8 +1505,9 @@ def main() -> int:
     for c in cases:
         if c[3] not in names:
             names.append(c[3])
-    total = differ = accepted = 0
+    total = differ = accepted = known = 0
     shown = 0
+    open_defects = {(n, label) for n, label, _b, _o in DEFECTS}
     for name in names:  # one run per group, the host area reset before each world
         mine = [c for c in cases if c[3] == name]
         path = os.path.join(bindir, "cases-" + name)
@@ -1450,10 +1517,10 @@ def main() -> int:
             )
         world = "bwrap"
         try:
-            host_reset(host, os.path.join(ex, "tree"), probe)
+            host_reset(host, forms, probe)
             bw = run_bwrap(root, host, bindir, probe, path)
             world = "the launcher"
-            host_reset(host, os.path.join(ex, "tree"), probe)
+            host_reset(host, forms, probe)
             op = run_launcher(ex, host, probe, path)
         except subprocess.TimeoutExpired:
             print(f"FAIL {name}: {len(mine)} cases, {world} killed after {TIMEOUT} s")
@@ -1482,6 +1549,14 @@ def main() -> int:
             total += 1
             b, o = bline.split(" ", 1)[1], oline.split(" ", 1)[1]
             if b == o:
+                if (n, label) in open_defects:
+                    differ += 1
+                    d += 1
+                    print(f"FIXED {n} {label}: both answer {b}; remove its DEFECTS entry")
+                continue
+            if (n, label, b, o) in DEFECTS:
+                known += 1
+                print(f"DEFECT {n} {label}\n     kernel: {b}\n     launcher: {o}")
                 continue
             why = expected(n, label, b, o)
             if why:
@@ -1506,6 +1581,7 @@ def main() -> int:
     print(
         f"{total} cases over {len(names)} groups and {len(forms.paths)} path forms: "
         f"{differ} differ, {accepted} differences expected"
+        + (f", {known} open launcher defects" if known else "")
         + (f"; seed {args.seed}" if differ else "")
     )
     rmtree(f"/tmp/exclave-probe-{os.getpid()}")

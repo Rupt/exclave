@@ -179,8 +179,9 @@ How it is tested (17):
   and 2).
 - **The syscall probe**: every trapped path and descriptor syscall,
   with every flag and path form, run under `bwrap` and under the
-  launcher; 21 732 cases per exclave, each difference from the kernel
-  either fixed or accepted under a named reason (17 item 7).
+  launcher; 24 088 cases per exclave, each difference from the kernel
+  fixed, accepted under a named reason or listed as an open defect
+  (17 item 7).
 - **Docker's default seccomp profile**: a workload in each exclave runs
   under it, standing for a CI container where user namespaces are
   blocked (17 item 5).
@@ -4160,7 +4161,7 @@ or a symlink to one, originals included. On the fixture one suite takes
 **The probe** (`test/progs/probe.c`, `test/oracle_syscalls.py`) puts the
 whole trapped-syscall surface in front of the kernel. It crosses the 61
 trapped path syscalls and six descriptor-addressed ones with every flag
-that changes resolution, 68 path forms over a random maze and the `*at`
+that changes resolution, 77 path forms over a random maze and the `*at`
 descriptors. One program issues each case through `syscall(2)` under
 `bwrap`, with 8.1's visibility rule spelt in `bwrap`'s terms, and under
 the launcher, and the answers are compared line by line. Each group's
@@ -4173,9 +4174,14 @@ fails unless the list `EXPECTED` names its reason: the oracle's own
 construction, a stated limitation (13 items 29 and 41), or what an
 older kernel lacks or decided differently, such as `truncate` checking
 the mount before the permission on 6.1 and earlier (6.14 checks the
-permission first). The handler answers as the newest kernel does. On
-the reference machine 21 732 cases run on each of the gate's four
-exclaves and none differ; no matrix row has a difference either.
+permission first). The handler answers as the newest kernel does. A
+difference that is a launcher defect, found and not yet fixed, is
+listed apart by its two exact answers, printed by every run, and fails
+once the answers agree until its entry goes. On the reference machine
+24 088 cases run on each of the gate's four exclaves and none differ
+unexplained; 18 are open defects at a trailing slash after a host
+symlink and at `O_CREAT` with a trailing slash under
+`RESOLVE_NO_SYMLINKS`.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.
 
