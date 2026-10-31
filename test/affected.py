@@ -27,6 +27,7 @@ STEPS: dict[str, tuple[str, ...]] = {
         "test/*_test.c",
         "test/sanitize.c",
         "test/grammar_test.py",
+        "test/readers_test.py",
         "test/syscalls.py",
         "test/tables_test.py",
         "src/*",

@@ -21,8 +21,9 @@
 #   exclave         the exclave command, linked statically, so that the file
 #                   runs with nothing beside it; it carries the launcher, and
 #                   is built after it
-#   exclave-asan    the same under ASan and UBSan, linked dynamically, for the
-#                   gate
+#   exclave-asan    the same under ASan and UBSan, linked dynamically, a
+#                   finding exiting 99 (test/sanitize.c), which the gate's
+#                   unit step runs on hostile input
 #
 # and, on x86-64 with the cross compiler, launcher-aarch64,
 # launcher-old-aarch64 and exclave-aarch64. Nothing is built when every output
@@ -48,7 +49,7 @@ done
 for arch in $cross; do
     [ -e "build/launcher-$arch" ] && [ -e "build/launcher-old-$arch" ] && [ -e "build/exclave-$arch" ] || fresh=false
 done
-if $fresh && [ -z "$(find src tool LICENSE scripts/build scripts/lib.sh -newer "$stamp" | head -n 1)" ]; then
+if $fresh && [ -z "$(find src tool test/sanitize.c LICENSE scripts/build scripts/lib.sh -newer "$stamp" | head -n 1)" ]; then
     exit 0
 fi
 
@@ -127,7 +128,7 @@ launcher "$native" build/launcher-debug -fsanitize=undefined -fsanitize-trap=und
 pids="$pids $!"
 tool "$native" build/exclave -static -s &
 pids="$pids $!"
-tool "$native" build/exclave-asan -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer &
+tool "$native" build/exclave-asan -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer test/sanitize.c &
 pids="$pids $!"
 for arch in $cross; do
     # the command carries the launcher, so is built after it

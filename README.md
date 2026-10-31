@@ -475,6 +475,7 @@ test/syscalls.py     every kernel syscall classified; test/stackcheck.py the sta
 test/affected.py     the gate's steps a change reaches, derived from what each step runs; test/figures.py the figures the documents quote, checked against the tree
 test/tables_test.py  the tables the launcher, the command, unpack and the tests each carry, read from every source and compared
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule
+test/readers_test.py the command's ELF, ld.so.cache and log readers on hostile files, under ASan and UBSan
 test/scratch_test.c  the scratch pool's sweep under the interleaving that once shared a chunk; test/cache_test.c the cache's lock across fork
 test/isa_test.c      the CPU level check against made-up cpuid and XCR0 values and against gcc's own answer
 test/fuzz.c          mutation fuzzing of the parsers; test/tool_fuzz.c and test/launcher_fuzz.c its targets, test/fuzz.py the step of scripts/extra

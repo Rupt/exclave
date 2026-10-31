@@ -54,7 +54,8 @@ start=$(date +%s)
 
 # shellcheck disable=SC2329  # run through step, by name
 # the parser, the filter, the scratch pool, the cache's lock, the CPU check, the #! rules and the command's BLAKE2b,
-# just built for the host under the sanitisers, the seven builds at once
+# just built for the host under the sanitisers, the seven builds at once; the command's grammar and readers run under
+# them too, as build/exclave-asan
 unit() {
     pids=''
     spawn() { # spawn CMD...: in the background, its pid kept for the wait
@@ -71,6 +72,7 @@ unit() {
     built=true
     for p in $pids; do wait "$p" || built=false; done
     $built && "$out/manifest_test" && py "$here/grammar_test.py" --c-parser "$out/manifest_test" &&
+        py "$here/readers_test.py" --work "$out/readers" &&
         "$out/filter_test" && py "$here/syscalls.py" && py "$here/tables_test.py" && "$out/scratch_test" &&
         "$out/cache_test" && "$out/isa_test" && "$out/str_test" && "$out/tool_test"
 }

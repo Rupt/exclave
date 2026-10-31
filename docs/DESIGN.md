@@ -2346,8 +2346,10 @@ of either architecture is wrapped on either (10.1).
 It is ordinary C on the C library, glibc linked statically, unlike the
 launcher, which is freestanding because it runs inside other programs'
 processes (7.1) and the command never does. The scripts build it with
-the same strict warnings as the launcher, and the gate runs a build
-under ASan and UBSan, `build/exclave-asan`. Its BLAKE2b is written from
+the same strict warnings as the launcher, and the gate's unit step runs
+a build under ASan and UBSan, `build/exclave-asan`, on the grammar
+test's files and on hand-made trees whose ELF files, `ld.so.cache` and
+logs lie about themselves (`test/readers_test.py`). Its BLAKE2b is written from
 RFC 7693 and tested against the RFC's vector and Python's `hashlib`
 (17). The tree hash (6.4) walks the tree in order and then hashes the
 files' contents on up to eight threads, each writing only its own
@@ -4001,7 +4003,9 @@ its time, ok, SKIP or FAIL:
   lock across `fork` (`test/cache_test.c`), the `#!` line
   test, the CPU level test and the command's BLAKE2b test, each built from the current sources for the host under
   AddressSanitizer and UndefinedBehaviorSanitizer, where a finding
-  exits 99, which no test answers; and `test/tables_test.py`, which
+  exits 99, which no test answers; the command's ELF, `ld.so.cache` and
+  log readers on hostile files, and its grammar, under the same
+  sanitisers (`test/readers_test.py`, `build/exclave-asan`); and `test/tables_test.py`, which
   reads the tables more than one part carries, the identity files
   (8.4), the volatile directories (8.1) and the names the launcher
   logs for the syscalls the filter traps, from each source and fails

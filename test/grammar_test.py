@@ -23,9 +23,10 @@ import sys
 import tempfile
 lazy from collections.abc import Callable
 
-import tree
-
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+# the command under ASan and UBSan, whose finding exits 99 (test/sanitize.c)
+TOOL = os.path.join(REPO, "build", "exclave-asan")
 
 
 def quote(b: bytes) -> str:
@@ -91,7 +92,7 @@ def format_files(texts: list[bytes], *, check: bool) -> tuple[dict[int, str], li
     with tempfile.TemporaryDirectory(prefix="grammar-") as d:
         paths = write_files(d, texts)
         p_ = subprocess.run(
-            [*tree.TOOL, "format", *(["--check"] if check else []), *paths],
+            [TOOL, "format", *(["--check"] if check else []), *paths],
             capture_output=True,
             check=False,
         )
@@ -258,9 +259,7 @@ def main() -> int:
     )
     ap.add_argument("--cases", type=int, default=3000)
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument(
-        "--c-parser", default=os.path.join(os.path.dirname(HERE), "build", "gate", "manifest_test")
-    )
+    ap.add_argument("--c-parser", default=os.path.join(REPO, "build", "gate", "manifest_test"))
     args = ap.parse_args()
     rng = random.Random(args.seed)
     c_parser = args.c_parser if os.path.exists(args.c_parser) else None

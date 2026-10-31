@@ -72,6 +72,21 @@ int main(void)
     memset(want + 1, 'x', BINPRM_BUF_SIZE - 4);
     expect("newline in the last byte", buf, BINPRM_BUF_SIZE, want);
 
+    /* nargv of cap entries, on the heap so that a write past it is ASan's: the interpreter, its argument, the script,
+     * argv[1] and the NULL take argc + 3, and one fewer is refused (-2) */
+    for (long cap = 4; cap <= 5; cap++) {
+        static char line[BINPRM_BUF_SIZE + 1], script[] = "/s", arg0[] = "script", arg1[] = "a1";
+        char *argv[] = {arg0, arg1, 0}, **nargv = (char **)malloc((size_t)cap * sizeof *nargv);
+        snprintf(line, sizeof line, "#!/bin/sh -e\n");
+        long k = shebang_argv(line, 13, script, argv, 2, nargv, cap), w = cap == 4 ? -2 : 4;
+        runs++;
+        if (k != w || (k == 4 && nargv[4] != NULL)) {
+            fails++;
+            printf("FAIL nargv of %ld entries for argc 2: k=%ld, wanted %ld\n", cap, k, w);
+        }
+        free((void *)nargv);
+    }
+
     printf("%s #! lines: %d cases, %d failures\n", fails ? "FAIL" : "PASS", runs, fails);
     return fails != 0;
 }
