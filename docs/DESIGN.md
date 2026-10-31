@@ -4099,11 +4099,19 @@ never makes a partial fixture. There is one fixture per exclave, named
 by its hashes file and stamped with a hash of the sources that decide
 what the tests touch: the suite's own files, `test/tree.py`,
 `test/packages.py`, `test/progs/`, the command's and the launcher's. A run with no fixture uses the full
-exclave and makes one, removing that exclave's older ones. A fixture
+exclave and makes one, removing that exclave's older ones and any a run
+left half made when it was interrupted. The stamp also names the tests
+that skipped when the fixture was made. A fixture
 with another stamp is still used, since a change to the sources rarely
 changes what the tests touch: when every test passes the stamp is
-renewed, and a test that fails runs again on the whole exclave, whose
-answer decides, and the stale fixture goes for the next run to remake. On
+renewed. The whole exclave decides for a test the fixture may have
+misled, which runs again there, printed `RECHECK` with the reason: one
+that fails on a fixture made with other sources, and one that skips on
+any fixture though it did not when the fixture was made, since a test can
+skip for a file the prune left out. A recheck that passes says so in a
+line of its own, since the fixture lacked what the test needs or the
+test is flaky, and the summary line counts the rechecks; the fixture
+then goes for the next run to remake. On
 the reference machine the fixtures of the gcc, clang, Fedora and Alpine
 exclaves hold 1 070, 1 062, 1 269 and 548 files, a sixth to a quarter of
 each exclave's, counting every entry of `tree/` that is not a directory

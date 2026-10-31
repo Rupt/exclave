@@ -210,7 +210,26 @@ def fixture_keys(ex: str) -> tuple[str, str] | None:
     return hashlib.blake2b(read_bytes(hashes), digest_size=6).hexdigest(), sources.hexdigest()
 
 
-STAMP = ".sources"  # in a fixture: the sources' key it was made with
+# in a fixture: the key of the sources it was made with, then the name of each test that skipped
+# when it was made, one a line
+STAMP = ".sources"
+
+
+def read_stamp(fixture: str) -> tuple[str, set[str]]:
+    """Return the key of the sources fixture was made with and the tests that skipped then.
+
+    A fixture without a stamp has the empty key, which no sources have.
+    """
+    try:
+        lines = read_bytes(os.path.join(fixture, STAMP)).decode().splitlines()
+    except OSError:
+        return "", set()
+    return (lines[0] if lines else ""), set(lines[1:])
+
+
+def write_stamp(fixture: str, sources: str, skipped: set[str]) -> None:
+    with open(os.path.join(fixture, STAMP), "w") as f:
+        f.write("".join(n + "\n" for n in [sources, *sorted(skipped)]))
 
 
 def input_drift(ex: str) -> str | None:
@@ -230,12 +249,13 @@ def input_drift(ex: str) -> str | None:
     return None
 
 
-def make_fixture(ctx: Ctx, dst: str, sources: str) -> None:
+def make_fixture(ctx: Ctx, dst: str, sources: str, skipped: set[str]) -> None:
     """Keep the shared exclave, pruned to what this run touched, for the next run (17).
 
     The prune is the tool's own, from every EXCLAVE_LOG file the run wrote, so the fixture is the
     tree the tests just passed on. Call it only after a run with no failure, so that a partial log
-    never makes a partial fixture.
+    never makes a partial fixture; skipped names the tests that skipped in it, which a run on the
+    fixture expects to skip.
     """
     logs = sorted(
         os.path.join(dp, f) for dp, dn, fn in os.walk(ctx.work) for f in fn if f.endswith(".log")
@@ -254,8 +274,7 @@ def make_fixture(ctx: Ctx, dst: str, sources: str) -> None:
         print("fixture not kept: the pruned exclave does not pass the static check")
         shutil.rmtree(tmp, ignore_errors=True)
         return
-    with open(os.path.join(tmp, STAMP), "w") as f:
-        f.write(sources + "\n")
+    write_stamp(tmp, sources, skipped)
     try:
         os.rename(tmp, dst)
     except OSError:  # another run made it meanwhile

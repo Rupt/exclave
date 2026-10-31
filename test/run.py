@@ -35,8 +35,17 @@ import regress_paths
 import regress_programs
 import regress_threads
 import regress_tool
-from harness import TESTS, read_text, run_tests, select
-from suite import REPO, STAMP, fixture_keys, input_drift, left_alone, make_fixture, prepare
+from harness import TESTS, run_tests, select
+from suite import (
+    REPO,
+    fixture_keys,
+    input_drift,
+    left_alone,
+    make_fixture,
+    prepare,
+    read_stamp,
+    write_stamp,
+)
 
 if TYPE_CHECKING:
     from harness import Test
@@ -92,7 +101,7 @@ def main() -> int:
         sys.exit(drift)
     # The pruned fixture (17) is the given exclave pruned to what the suite touches. The first run
     # on an exclave makes it, and every later run uses it until the exclave changes.
-    fixture, sources, stale, logging = None, "", False, False
+    fixture, sources, made, made_skips, logging = None, "", "", set[str](), False
     keys = fixture_keys(args.exclave) if args.exclave else None
     tree_ = os.path.abspath(args.tree)
     if keys:
@@ -100,40 +109,62 @@ def main() -> int:
         fixture, sources = os.path.join(REPO, "build", "fixtures", f"{name}-{keys[0]}"), keys[1]
     if fixture and os.path.isdir(os.path.join(fixture, "tree")):
         tree_ = os.path.join(fixture, "tree")
-        try:
-            stale = read_text(os.path.join(fixture, STAMP)).strip() != sources
-        except OSError:
-            stale = True
+        made, made_skips = read_stamp(fixture)
         print(
             f"fixture: {fixture}"
-            + (" (made with other sources: a failure is rechecked)" if stale else "")
+            + (" (made with other sources: a failure is rechecked)" if made != sources else "")
         )
     elif fixture:
         logging = True
         print("fixture: none yet for this exclave; this run makes it")
+    on_fixture = tree_ != os.path.abspath(args.tree)
+    stale = on_fixture and made != sources
     ctx = prepare(args, tree_, os.path.abspath(args.work), logging=logging)
     order = select(TESTS, args.k)
     failed, skipped = suite_run(ctx, order, args.budget)
-    if stale and failed and fixture:
-        # A fixture made with other sources may lack a file these sources touch. The failures run
-        # again on the whole exclave, whose answer stands, and the fixture is removed for the next
-        # run to make afresh.
-        print(f"rechecking {len(failed)} on the whole exclave, the fixture predating these sources")
+    # The whole exclave decides for a test the fixture may have misled: one that fails on a fixture
+    # made with other sources, which may lack a file these sources touch, and one that skips on the
+    # fixture but ran when the fixture was made, since a test can skip for what the prune left out.
+    recheck = [t for t in order if t in failed and stale]
+    # a test that skipped when the fixture was made and passes now is expected to skip no more
+    ran = {t.__name__ for t in order if t not in failed and t not in skipped} & made_skips
+    made_skips -= ran
+    recheck += [t for t in skipped if on_fixture and t.__name__ not in made_skips]
+    if recheck and fixture:
+        for t in recheck:
+            what = "failed on a fixture made with other sources" if t in failed else "skipped"
+            print(f"RECHECK {t.__name__} {what}: run again on the whole exclave")
         whole = prepare(
             args, os.path.abspath(args.tree), os.path.abspath(args.work) + "-whole", logging=False
         )
-        failed, also = suite_run(whole, failed, args.budget)
-        skipped += also
-        shutil.rmtree(fixture, ignore_errors=True)
-        if not args.keep and not failed:
+        again, also = suite_run(whole, recheck, args.budget)
+        passed = [t for t in recheck if t not in again and t not in also]
+        for t in passed:
+            print(
+                f"RECHECK {t.__name__} passed on the whole exclave, which decides: the fixture "
+                "lacks what it needs, or the test is flaky"
+            )
+        failed = [t for t in failed if t not in recheck] + again
+        skipped = [t for t in skipped if t not in recheck] + also
+        # a test that skips on the whole exclave too skips for this machine, not for the fixture
+        made_skips |= {t.__name__ for t in also}
+        if passed or again:
+            # the fixture goes, for the next run to make afresh
+            shutil.rmtree(fixture, ignore_errors=True)
+        if not args.keep and not again:
             shutil.rmtree(whole.work, ignore_errors=True)
-    elif stale and not args.k and fixture and os.path.isdir(os.path.join(fixture, "tree")):
-        # still enough for these sources, unless another run has found otherwise and removed it
-        with contextlib.suppress(FileNotFoundError), open(os.path.join(fixture, STAMP), "w") as f:
-            f.write(sources + "\n")
-    print(f"{len(order)} tests, {len(failed)} failures, {len(skipped)} skipped")
+    if on_fixture and fixture and os.path.isdir(fixture) and (stale or recheck or ran):
+        # A fixture made with other sources is still enough for these when every test passes, and
+        # the stamp is renewed after a whole run; unless another run has found otherwise and
+        # removed it.
+        with contextlib.suppress(FileNotFoundError):
+            write_stamp(fixture, sources if not failed and not args.k else made, made_skips)
     if logging and fixture and not failed and not args.k:
-        make_fixture(ctx, fixture, sources)
+        make_fixture(ctx, fixture, sources, {t.__name__ for t in skipped})
+    print(
+        f"{len(order)} tests, {len(failed)} failures, {len(skipped)} skipped"
+        + (f", {len(recheck)} rechecked" if recheck else "")
+    )
     if not args.keep and not failed:
         shutil.rmtree(ctx.work, ignore_errors=True)
     return min(len(failed), 255)
