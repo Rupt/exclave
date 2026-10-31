@@ -1845,7 +1845,7 @@ def main() -> int:
     for d in os.listdir("/tmp"):
         if d.startswith("exclave-probe-"):
             try:
-                os.kill(int(d[11:]), 0)
+                os.kill(int(d.removeprefix("exclave-probe-")), 0)
             except ValueError, ProcessLookupError:
                 rmtree(os.path.join("/tmp", d))
             except PermissionError:
