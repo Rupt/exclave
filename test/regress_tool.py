@@ -172,7 +172,8 @@ def unpack_and_wrap(ctx: Ctx) -> None:
     Unpack takes package files and nothing else, records every input by hash, reports what the set's
     own control files say it lacks, strips the volatile directories, refuses two versions of one
     package, and adds no launcher, manifest or placeholder; wrap adds them, wraps the tree and
-    records the manifest and tree hashes; unwrap, check and a second wrap keep the hashes file; a
+    records the manifest, launcher and tree hashes, each the BLAKE2b-256 of what it names, and
+    relink records its launcher's; unwrap, check and a second wrap keep the hashes file; a
     tree assembled by hand becomes an exclave by wrap alone; the tree hash refuses a directory it
     cannot read, as it does a file.
     """
@@ -267,6 +268,26 @@ def unpack_and_wrap(ctx: Ctx) -> None:
         o.strip() == lock["tree"][0][0] == tree.tree_hash(os.path.join(out, "tree")),
         "hash agrees with the hashes file and with the tree hash as 6.4 states it",
     )
+    # 6.4: the manifest and launcher records are the BLAKE2b-256 of the files' bytes, as wrap wrote
+    # them and as relink recomputes the launcher's, for a launcher of other bytes and back again
+    launcher = os.path.join(out, ".exclave", "launcher")
+    first = read_bytes(launcher)
+    other, back = os.path.join(ctx.work, "up-other-launcher"), os.path.join(ctx.work, "up-launcher")
+    for path, data in ((other, first + b"\0" * 16), (back, first)):
+        with open(path, "wb") as f:
+            f.write(data)
+    for given in (None, other, back):
+        if given:
+            rc, o, e = run([*TOOL, "relink", out, given])
+            expect(rc == 0 and read_bytes(launcher) == read_bytes(given), "relink: " + o + e)
+        lock = tree.records(os.path.join(out, ".exclave", "hashes"))
+        manifest = read_bytes(os.path.join(out, ".exclave", "manifest"))
+        expect(
+            lock.get("manifest") == [[tree.b2(manifest)]]
+            and lock.get("launcher") == [[tree.b2(read_bytes(launcher))]]
+            and lock.get("tree") == [[tree.tree_hash(os.path.join(out, "tree"))]],
+            f"the hashes file against the files' own hashes, relinked to {given}: {lock!r}",
+        )
     expect(
         tree.is_wrapper(os.path.join(out, "tree", "usr", "bin", "tool"), out),
         "the script was wrapped",
