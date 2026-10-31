@@ -4,7 +4,6 @@ Run by test/run.py, on the fixtures test/suite.py makes.
 """
 
 import os
-import re
 import shlex
 import shutil
 import sys
@@ -376,15 +375,14 @@ def exec_vectors(ctx: Ctx) -> None:
     os.chmod(hs, 0o755)
     rc, out, err = inside(ctx, p, ["vectors", ctx.vbin("true"), p, hs], timeout=60)
     expect(rc == 0 and "FAIL" not in out, out + err)
-    # from 5.18 an empty argv is one empty string (fs/exec.c); a script's interpreter is given the
-    # script's path either way
-    release = re.match(r"(\d+)\.(\d+)", os.uname().release)
-    new = release is not None and (int(release[1]), int(release[2])) >= (5, 18)
-    argc = "argc 1 argv0 ''" if new else "argc 0 argv0 '(null)'"
+    # a NULL argv reaches the program as this kernel makes it (one empty string, fs/exec.c since
+    # 5.18 and the stable trees), and a script's interpreter is given the script's path: the native
+    # run of the same cases is the expectation
+    rc, nat, err = run([p, "vectors", p, hs], timeout=60)
+    expect(rc == 0 and "FAIL" not in nat, nat + err)
+    want = {line for line in nat.splitlines() if line.startswith((p + " ", hs + " "))}
+    expect(len(want) == 10, f"the native run's cases: {sorted(want)}")
     lines = set(out.splitlines())
-    want = {
-        f"{t} {c}: {o}" for t, o in ((p, argc), (hs, f"{hs} 0")) for c in ("null/null", "null/env")
-    }
     expect(want <= lines, f"an exec with a NULL argv: {sorted(want - lines)} not in {out!r}")
     rc, out, err = inside(ctx, p, ["envedge", p], timeout=60)
     expect(
