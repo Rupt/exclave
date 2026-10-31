@@ -6,8 +6,8 @@
 The suite makes an exclave under WORK (default build/test-work) from TREE (default
 $EXCLAVE_TEST_TREE) or from the unwrapped tree of an existing EXCLAVE, adds a few test files to its
 tree, compiles test/progs/*.c with the tree's own C compiler (test/tree.py), and runs every named
-test. Given --exclave, it runs on the pruned fixture kept under build/fixtures/ when there is one
-(17).
+test. Given --exclave, it refuses an exclave whose tree is not the one its hashes file records, and
+runs on the pruned fixture kept under build/fixtures/ when there is one (17).
 
 It runs on the pinned Python (scripts/test) and needs a tree with a C compiler (see README.md).
 strace is optional, for the isolation test, and so is /usr/bin/gcc-13, for the identical-object
@@ -36,7 +36,7 @@ import regress_programs
 import regress_threads
 import regress_tool
 from harness import TESTS, read_text, run_tests, select
-from suite import REPO, STAMP, fixture_keys, left_alone, make_fixture, prepare
+from suite import REPO, STAMP, fixture_keys, input_drift, left_alone, make_fixture, prepare
 
 if TYPE_CHECKING:
     from harness import Test
@@ -87,6 +87,9 @@ def main() -> int:
             "need --tree DIR (or $EXCLAVE_TEST_TREE) or --exclave EXCLAVE: a gcc tree to wrap; "
             "see README.md"
         )
+    drift = input_drift(args.exclave) if args.exclave else None
+    if drift:
+        sys.exit(drift)
     # The pruned fixture (17) is the given exclave pruned to what the suite touches. The first run
     # on an exclave makes it, and every later run uses it until the exclave changes.
     fixture, sources, stale, logging = None, "", False, False

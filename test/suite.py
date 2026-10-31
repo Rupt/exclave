@@ -196,6 +196,23 @@ def fixture_keys(ex: str) -> tuple[str, str] | None:
 STAMP = ".sources"  # in a fixture: the sources' key it was made with
 
 
+def input_drift(ex: str) -> str | None:
+    """Why ex's tree is not the tree its hashes file records (6.4), or None when it is.
+
+    A write through a hard-linked copy changes the input itself: the suite would then test a tree
+    no exclave has, and the fixture, keyed by the hashes file, would never notice.
+    """
+    hashes = os.path.join(ex, ".exclave", "hashes")
+    recorded = tree.records(hashes).get("tree", [[""]])[0][0] if os.path.isfile(hashes) else ""
+    rc, out, err = run([*TOOL, "hash", ex])
+    if rc or not recorded or out.strip() != recorded:
+        return (
+            f"{ex}: its tree hashes to {out.strip() or err.strip()}, but its hashes file records "
+            f"{recorded or 'no tree hash'}; scripts/inputs DIR remakes it"
+        )
+    return None
+
+
 def make_fixture(ctx: Ctx, dst: str, sources: str) -> None:
     """Keep the shared exclave, pruned to what this run touched, for the next run (17).
 
@@ -206,10 +223,15 @@ def make_fixture(ctx: Ctx, dst: str, sources: str) -> None:
     logs = sorted(
         os.path.join(dp, f) for dp, dn, fn in os.walk(ctx.work) for f in fn if f.endswith(".log")
     )
-    # two runs may make the same fixture at once (scripts/gate)
+    # two runs may make the same fixture at once (scripts/gate), each in a directory named by its
+    # pid; one whose process has gone was interrupted, and its leftover goes
     tmp = f"{dst}.tmp{os.getpid()}"
     shutil.rmtree(tmp, ignore_errors=True)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
+    for left in os.listdir(os.path.dirname(dst)):
+        pid = left.rpartition(".tmp")[2]
+        if ".tmp" in left and pid.isdigit() and not os.path.exists(f"/proc/{pid}"):
+            shutil.rmtree(os.path.join(os.path.dirname(dst), left), ignore_errors=True)
     copy_exclave(ctx.exclave, tmp)
     if subprocess.run([*TOOL, "prune", tmp, *logs], capture_output=True, check=False).returncode:
         print("fixture not kept: the pruned exclave does not pass the static check")

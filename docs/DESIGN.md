@@ -4071,6 +4071,10 @@ unwrapped tree) makes an exclave under its work directory, compiles
 `--budget` sets the per-test limit. `--keep` keeps the work
 directory. `--launcher` tests another build in place of
 `build/launcher`, `build/launcher-debug` in `scripts/extra`. The exit status is the number of failures.
+Given an exclave, the suite first hashes its tree and refuses to run
+unless the hash is the hashes file's `tree` record: the suite's copies
+hard-link the input's files, so a write that escaped one would change
+the input itself, and every later run would test a tree no exclave has.
 
 The Go regression is built static with cgo off, by the host's `go`, or
 on the reference machine for a matrix VM's machine. It runs as a host
