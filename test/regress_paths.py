@@ -504,12 +504,13 @@ def proc_magic_links(ctx: Ctx) -> None:
 def new_xattr_syscalls(ctx: Ctx) -> str | None:
     """The *at xattr syscalls of 6.13 are translated.
 
-    On older kernels they are ENOSYS either way.
+    Skips where the kernel, asked here natively, has no listxattrat.
     """
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.syscall(465, -100, b"/", 0, None, 0) < 0 and ctypes.get_errno() == errno.ENOSYS:
+        skip("the kernel has no listxattrat (6.13 and later)")
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "xattrat"))
     lines = out.splitlines()
-    if lines and lines[0].endswith(" 38"):
-        skip("kernel has no listxattrat")
     # an exclave that ships the file shows its own
     own = os.path.lexists(os.path.join(ctx.root, "etc", "hostname"))
     # SELinux hosts label every file
@@ -694,10 +695,11 @@ def path_length(ctx: Ctx) -> str | None:
 
     An exclave path whose real spelling, the root prefix and the virtual path, would not fit
     PATH_MAX is refused with ENAMETOOLONG and never cut to a shorter name, which would answer
-    ENOENT for the cut; its parent, which fits, is fine. And a relative path from a working
-    directory so deep that the two together pass PATH_MAX is ENAMETOOLONG too, where the kernel,
-    walking relatively, succeeds: the stated limitation. On a private copy of the exclave, since the
-    chain is made in the tree.
+    ENOENT for the cut; its parent, and a sibling whose real spelling is a byte shorter and so
+    fits with its terminating NUL, are fine. And a relative path from a working directory so deep
+    that the two together pass PATH_MAX is ENAMETOOLONG too, where the kernel, walking
+    relatively, succeeds: the stated limitation. On a private copy of the exclave, since the chain
+    is made in the tree.
     """
     copy = os.path.join(ctx.work, "lengthexclave")
     shutil.rmtree(copy, ignore_errors=True)
@@ -720,18 +722,21 @@ def path_length(ctx: Ctx) -> str | None:
         fd = nfd
         v += "/" + "a" * 200
     parent = v
-    # a directory whose real spelling is exactly PATH_MAX long
+    # a directory whose real spelling is exactly PATH_MAX long, and one a byte shorter, which fits
     last = "b" * (PATH_MAX - rootlen - len(v) - 1)
     os.mkdir(last, dir_fd=fd)
+    os.mkdir(last[1:], dir_fd=fd)
     nfd = os.open(last, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
     os.close(fd)
     fd = nfd
     with os.fdopen(os.open("f", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=fd), "w") as f:
         f.write("deep\n")
     os.close(fd)
-    deep, dfile = v + "/" + last, v + "/" + last + "/f"
+    deep, dfile, fits = v + "/" + last, v + "/" + last + "/f", v + "/" + last[1:]
     expect(
-        len(dfile) < PATH_MAX and rootlen + len(deep) == PATH_MAX,
+        len(dfile) < PATH_MAX
+        and rootlen + len(deep) == PATH_MAX
+        and rootlen + len(fits) == PATH_MAX - 1,
         f"the window: root {rootlen}, dir {len(deep)}, file {len(dfile)}",
     )
     # the deep working directory on the host: 14 components of 200 below the work directory, then 7
@@ -768,6 +773,7 @@ def path_length(ctx: Ctx) -> str | None:
             os.path.join(copy, ".exclave", "launcher"),
             os.path.join(ctx.progs, "path_length"),
             parent,
+            fits,
             deep,
             dfile,
             "cd:" + hostdeep,
@@ -780,14 +786,16 @@ def path_length(ctx: Ctx) -> str | None:
     expect(rc == 0, f"path_length: rc={rc} {out!r} {err!r}")
     want = [
         "1: stat=ok open=ok",
-        "2: stat=ENAMETOOLONG open=ENAMETOOLONG",
+        "2: stat=ok open=ok",
         "3: stat=ENAMETOOLONG open=ENAMETOOLONG",
         "4: stat=ENAMETOOLONG open=ENAMETOOLONG",
-        "5: stat=ok open=ok",
+        "5: stat=ENAMETOOLONG open=ENAMETOOLONG",
+        "6: stat=ok open=ok",
     ]
     expect(
         out.splitlines() == want,
-        "the parent fits, the directory at the limit and its file are ENAMETOOLONG, a relative "
+        "the parent and a directory a byte under the limit fit, the directory at the limit and its "
+        "file are ENAMETOOLONG, a relative "
         "path past PATH_MAX from a deep working directory is ENAMETOOLONG (13), a short one is "
         f"fine: {out!r}",
     )
