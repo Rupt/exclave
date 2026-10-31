@@ -4166,7 +4166,12 @@ trapped path syscalls and six descriptor-addressed ones with every flag
 that changes resolution, 77 path forms over a fixed maze and the `*at`
 descriptors. One program issues each case through `syscall(2)` under
 `bwrap`, with 8.1's visibility rule spelt in `bwrap`'s terms, and under
-the launcher, and the answers are compared line by line. Each group's
+the launcher, and the answers are compared line by line. An answer
+says which object a path reached, not only that it reached one: a
+successful open answers the path its descriptor names, every file of
+the maze and the host area has a size of its own for `stat`, and the
+process keeps one inotify descriptor, so two paths to one inode answer
+one watch descriptor. Each group's
 run must also exit 0 with nothing on stderr in both worlds, as must the
 resolution oracle's run and the read-only matrix under `bwrap`, so a
 diagnostic or a crash after the last answer fails too; a run of the

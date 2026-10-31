@@ -4,21 +4,24 @@ This is the differential syscall probe. One program (test/progs/probe.c) issues 
 and descriptor syscall of src/filter.c, and the two chattr ioctls, with every path form of 7.4.4
 and every flag that changes resolution, over a fixed maze. It runs under two projections of the
 same tree: the kernel's, a bwrap read-only bind of the unwrapped tree at /, and the launcher's.
-Return value, errno and what a buffer holds afterwards must agree case by case, and a difference
-fails unless EXPECTED names its reason, so the expectations come from the kernel, not from a test's
-author. Like oracle_ns, the probe needs user namespaces and bwrap; without them it says so ("cannot
-run") and exits 0, and the gate prints that step as SKIP.
+Return value, errno, what a buffer holds afterwards and the path an opened descriptor names must
+agree case by case; every file of the maze and the host area has a size of its own and the process
+keeps one inotify descriptor, so a stat's size and a watch descriptor also tell which object a path
+reached. A difference fails unless EXPECTED names its reason, so the expectations come from the
+kernel, not from a test's author. Like oracle_ns, the probe needs user namespaces and bwrap; without
+them it says so ("cannot run") and exits 0, and the gate prints that step as SKIP.
 
     test/oracle_syscalls.py --exclave EXCLAVE [--work DIR] [--only NAME] [--keep]
         [--show N] [--expected]
 
 Arguments. probe.c reads cases, each a syscall number and encoded arguments, and issues each through
-syscall(2), so no libc wrapper stands in between; it prints the return value, the errno and what a
-buffer holds afterwards. An argument is one of: a path (s:), or a descriptor opened on a named path
-before the call (f:); an integer (i:) or a buffer of a named kind; a string that ends at an unmapped
-page (e:), a null pointer (n:) or a pointer into an unmapped page (u:); a string vector or a struct
-xattr_args; an inotify descriptor, a unix socket (k:) or a sockaddr_un (A:); a struct open_how.
-execve runs in a forked child whose exit status is the answer.
+syscall(2), so no libc wrapper stands in between; it prints the return value, the errno, what a
+buffer holds afterwards, the path an opened descriptor names and what an exec'd program wrote. An
+argument is one of: a path (s:), or a descriptor opened on a named path before the call (f:); an
+integer (i:) or a buffer of a named kind; a string that ends at an unmapped page (e:), a null
+pointer (n:) or a pointer into an unmapped page (u:); a string vector or a struct xattr_args; the
+process's inotify descriptor, a unix socket (k:) or a sockaddr_un (A:); a struct open_how. execve
+runs in a forked child whose exit status and output are the answer.
 
 Cases. The table covers the trapped path syscalls and the descriptor-addressed ones (fchmod, fchown,
 fsetxattr, fremovexattr, fstatfs, and ioctl with FS_IOC_SETFLAGS and FS_IOC_FSSETXATTR), crossed
@@ -266,9 +269,11 @@ def make_maze(root: str, host: str) -> None:
     maze = os.path.join(root, "maze")
     rmtree(maze)
     os.makedirs(os.path.join(root, MAZE_DIR.lstrip("/")))
-    for f in (MAZE_FILE, "/maze/d0/f1", "/maze/f2"):
+    # every file a size of its own, as the host area's (host_reset), so that a stat tells which
+    # file a path reached
+    for f, size in ((MAZE_FILE, 7), ("/maze/d0/f1", 8), ("/maze/f2", 9)):
         with open(os.path.join(root, f.lstrip("/")), "w") as fh:
-            fh.write("x")
+            fh.write("x" * size)
     links = [
         *MAZE_LINKS.values(),
         # an exclave link to a host file, and to a host directory
@@ -1003,7 +1008,7 @@ def host_reset(host: str, forms: Forms, probe: str) -> None:
     with open(host + "/hfile", "w") as f:
         f.write("hello\n")
     with open(host + "/hdir/inner", "w") as f:
-        f.write("inner\n")
+        f.write("inner text\n")
     for name, target in (
         ("hlink", forms.file),
         ("hlnkdir", forms.dir),

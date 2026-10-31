@@ -2,7 +2,7 @@
  *
  * Reads cases from stdin, one per line: an id, a syscall number, then up to six encoded arguments. Each case
  * is issued through syscall(2), so that no libc wrapper stands between the case and the kernel (or the
- * launcher), and answered on stdout as "<id> ret=<r> errno=<e>[ open=<errno>][ data=<...>]". The same binary
+ * launcher), and answered on stdout as "<id> ret=<r> errno=<e>[ open=<errno>][ data=<...>][ at=<hex>]". The same binary
  * runs under bwrap and under the launcher; the driver (test/oracle_syscalls.py) compares the two answers.
  *
  *   i:<decimal>          an integer, passed as a long
@@ -18,7 +18,8 @@
  *   t:<s>,<ns>,<s>,<ns>  a struct timespec[2]; T: the same as struct timeval[2]; U:<s>,<s> a struct utimbuf
  *   v:<hex>,<hex>,...    a NULL-terminated vector of strings (execve's argv and envp); v: is the empty vector
  *   x:<hex>:<flags>      a struct xattr_args whose value is the bytes (setxattrat, getxattrat)
- *   I:                   a descriptor from inotify_init1(0), closed after the call
+ *   I:                   the process's one inotify descriptor, made at its first use and kept, so that a watch
+ *                        descriptor names an inode: two cases that reach one inode answer the same wd
  *   k:<type>             a unix socket of that type, opened before the call (-1 when it fails)
  *   A:<hex>              a struct sockaddr_un, AF_UNIX, whose sun_path holds those bytes (at most 108, unterminated
  *                        at 108)
@@ -27,7 +28,9 @@
  *
  * execve and execveat run in a forked child (ret is the wait status: the exec'd program's exit, or
  * 100 + errno when the exec returned), and what the program writes on stdout and stderr, its first 4096 bytes,
- * is answered as out=<hex>; a descriptor that open, openat or creat returned is closed.
+ * is answered as out=<hex>. A descriptor that open, openat, openat2 or creat returned is answered as at=<hex>, the
+ * path /proc/self/fd names for it (without the last component, "#<ino> (deleted)", for an O_TMPFILE file), and closed,
+ * and ret is 0: which object a path reached, not only that it reached one.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -77,6 +80,7 @@ static int unhex(const char *h, char *out)
 }
 
 static long page;
+static int inotify_fd = -1;
 
 static void decode(struct arg *a, char *tok)
 {
@@ -104,9 +108,8 @@ static void decode(struct arg *a, char *tok)
     }
     case 'n': a->v = 0; break;
     case 'I':
-        a->fd = (int)syscall(SYS_inotify_init1, 0);
-        a->open_errno = a->fd < 0 ? errno : 0;
-        a->v = a->fd;
+        if (inotify_fd < 0) inotify_fd = (int)syscall(SYS_inotify_init1, 0);
+        a->v = inotify_fd;
         break;
     case 'k':
         a->fd = socket(AF_UNIX, (int)strtol(p, 0, 10), 0);
@@ -283,8 +286,8 @@ int main(void)
         }
         long ret;
         int err = 0, opened = 0;
-        char out[4096];
-        long nout = 0;
+        char out[4096], at[4096];
+        long nout = 0, nat = -1;
         for (int i = 0; i < na; i++)
             if (args[i].kind == 'f' && args[i].open_errno) opened = args[i].open_errno;
         if (nr == SYS_execve || nr == SYS_execveat) {
@@ -330,6 +333,22 @@ int main(void)
             }
             err = ret < 0 ? errno : 0;
             if (ret >= 0 && (nr == SYS_open || nr == SYS_openat || nr == SYS_creat || nr == SYS_openat2)) {
+                char l[64];
+                snprintf(l, sizeof l, "/proc/self/fd/%ld", ret);
+                nat = readlink(l, at, sizeof at - 1);
+                if (nat > 0) {
+                    at[nat] = 0;
+                    char *slash = strrchr(at, '/');
+                    if (strstr(at, " (deleted)") && slash) nat = slash - at;
+                    /* a magic link opened itself names this process, whose pid differs between the worlds */
+                    char self[64];
+                    int ns = snprintf(self, sizeof self, "/proc/%d/", (int)getpid());
+                    if (!strncmp(at, self, (size_t)ns)) {
+                        memmove(at + 11, at + ns, (size_t)(nat - ns + 1));
+                        memcpy(at, "/proc/self/", 11);
+                        nat += 11 - ns;
+                    }
+                }
                 close((int)ret);
                 ret = 0;
             }
@@ -340,6 +359,10 @@ int main(void)
         if (nout) {
             printf(" out=");
             hex(out, nout);
+        }
+        if (nat >= 0) {
+            printf(" at=");
+            hex(at, nat);
         }
         printf("\n");
         for (int i = 0; i < na; i++) {
