@@ -13,7 +13,7 @@ lazy import resource
 
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
-from suite import REPO, TOOL, Ctx, copy_exclave, inside, wrapper
+from suite import REPO, Ctx, copy_exclave, inside, wrapper
 
 
 @test
@@ -329,7 +329,10 @@ def cross_exclave_distinct_launchers(ctx: Ctx) -> None:
     """7.4.5: a program in another exclave is exec'd as that exclave's launcher.
 
     A program in another exclave, whose launcher is a different file, is exec'd as that launcher,
-    which then serves its own tree inside the first exclave's filter.
+    which then serves its own tree inside the first exclave's filter: it reads a file only the
+    second tree has, and /proc/self/maps names the second tree's files, by an absolute path and by
+    a relative one. A program served by the first exclave's launcher or tree would find no such
+    file and map the first tree's.
     """
     ex2 = os.path.join(ctx.work, "exclave2")
     copy_exclave(ctx.exclave, ex2)
@@ -339,34 +342,30 @@ def cross_exclave_distinct_launchers(ctx: Ctx) -> None:
         f.write(read_bytes(ctx.launcher) + b"\0" * 64)
     os.chmod(padded, 0o755)
     tree.relink(ex2, padded)
-    rc, out, err = run([*TOOL, "check", ex2])
-    expect(rc == 0, "exclave2 check: " + out[-300:] + err[-300:])
+    # a new file, not a write through the hard links the copy shares with the first tree
+    which = "/usr/share/exclave-test-which"
+    with open(os.path.join(ex2, "tree", which.lstrip("/")), "w") as f:
+        f.write("second\n")
+    tree2 = os.path.realpath(os.path.join(ex2, "tree"))
     true2 = os.path.join(ex2, "tree", ctx.vbin("true").lstrip("/"))
     sh2 = ex2 + "/tree" + ctx.vbin("sh")
-    rc, out, err = run(
-        [
-            wrapper(ctx, "sh"),
-            "-c",
-            f"{true2} && {sh2} -c 'echo cross $0 && readlink /proc/self/exe'",
-        ],
-        cwd=ctx.work,
-        env=ctx.env,
-    )
-    expect(
-        rc == 0 and out == "cross {}\n{}\n".format(sh2, ctx.vreal(ctx.vbin("readlink"))),
-        f"cross-exclave exec: rc={rc} {out!r} {err!r}",
-    )
-    rc, out, err = run(
-        [wrapper(ctx, "sh"), "-c", f"cd {ex2} && tree{ctx.vbin(ctx.gcc)} --version | head -1"],
-        cwd=ctx.work,
-        env=ctx.env,
-    )
-    _rc0, out0, _ = run([wrapper(ctx, ctx.gcc), "--version"], cwd=ctx.work, env=ctx.env)
-    # gcc prints argv[0] first
-    expect(
-        rc == 0 and out.split("(", 1)[-1] == out0.split("\n", 1)[0].split("(", 1)[-1] + "\n",
-        f"gcc of the other exclave: rc={rc} {out!r} {err!r}",
-    )
+    show = f"cat {which}; grep -c {tree2}/ /proc/self/maps"
+    for how, cmd, argv0 in (
+        ("by its absolute path", f"{true2} && {sh2} -c 'echo $0; {show}'", sh2),
+        (
+            "by a relative path",
+            f"cd {ex2} && tree{ctx.vbin('sh')} -c 'echo $0; {show}'",
+            "tree" + ctx.vbin("sh"),
+        ),
+    ):
+        rc, out, err = run([wrapper(ctx, "sh"), "-c", cmd], cwd=ctx.work, env=ctx.env)
+        lines = out.splitlines()
+        maps = lines[2] if len(lines) == 3 else ""
+        expect(
+            rc == 0 and lines[:2] == [argv0, "second"] and maps.isdigit() and int(maps) > 0,
+            f"the other exclave's shell {how} reads its own tree's file and maps its own tree's "
+            f"files: rc={rc} {out!r} {err!r}",
+        )
 
 
 @test
