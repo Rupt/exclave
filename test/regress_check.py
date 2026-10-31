@@ -131,9 +131,12 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
     musl's, which does not; a soname no search finds is a warning naming where the tree has it,
     as the JVM's libjvm.so, which it opens by path before the libraries that need it.
     """
-    x = os.path.join(ctx.root, "usr", "local", "x")
+    # the libraries are placed in a copy's tree, which the shared exclave's must not see
+    model = os.path.join(ctx.work, f"loader-model-{os.getpid()}.exclave")
+    shutil.rmtree(model, ignore_errors=True)
+    copy_exclave(ctx.exclave, model)
+    x = os.path.join(model, "tree", "usr", "local", "x")
     base = os.path.join(x, "lib")
-    made_local = not os.path.exists(os.path.dirname(x))
     os.makedirs(base, exist_ok=True)
     src = os.path.join(ctx.work, "rp")
     os.makedirs(src, exist_ok=True)
@@ -241,7 +244,7 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
         for d, f in (("server", "libjvmish.so"), ("jvmlib", "libneed.so")):
             os.makedirs(os.path.join(x, d), exist_ok=True)
             shutil.copy2(os.path.join(built, f), os.path.join(x, d, f))
-        errors, warnings, _out = check(ctx.exclave)
+        errors, warnings, _out = check(model)
         expect(
             not [e for e in errors if "libjvmish" in e]
             and any(
@@ -269,9 +272,7 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
             ),
         )
     finally:
-        shutil.rmtree(x, ignore_errors=True)
-        if made_local:
-            os.rmdir(os.path.dirname(x))  # the shared exclave is left as it was (17)
+        shutil.rmtree(model, ignore_errors=True)
     # a hand-made tree with the loader at /usr/lib64 and no ld.so.cache is wrapped; the loader
     # satisfies its own soname and its default directories come from the loader itself. without /lib
     # the host's would be searched.

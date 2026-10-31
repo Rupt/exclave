@@ -4283,10 +4283,15 @@ stated here.
 - *Tests are independent and pass in any order.* Setup makes the
   exclave, the compiled programs and the environment; every test makes
   what it needs beyond those. After every test the harness compares the
-  shared exclave's manifest, hashes file, and every tree entry's path,
-  size, mode and mtime with what setup made, and fails a test that
-  changed them. `--order random`, `--order reverse` and `-k NAME` pass
-  like the given order. Suites run side by side in the gate, so a name
+  shared exclave's manifest, hashes file and launcher (its inode, size
+  and mtime), the environment, and every tree entry's path, size, mode
+  and mtime, directories' included, with what setup made, and fails a
+  test that changed them: a file made and removed again moves its
+  directory's mtime, and the tree's files are hard links to the fixture
+  or the given exclave, so a write that escaped the read-only refusal
+  would outlast the run. A test that puts files in a tree does so in a
+  copy of its own (`copy_exclave`). `-k NAME` passes like the whole
+  run. Suites run side by side in the gate, so a name
   in a shared namespace (an abstract socket, a file in `/tmp`) carries
   the pid.
 - *Nothing downloads during a test.* A test, an oracle and the gate

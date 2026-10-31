@@ -39,6 +39,18 @@ GCC = "x86_64-linux-gnu-gcc-13"
 VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
 
 
+# what every test shares and none may change: the exclave's manifest, its hashes file, its
+# launcher's (inode, size, mtime), the environment the tests are given, and its tree's entries
+type Shared = tuple[
+    bytes,
+    bytes,
+    tuple[int, int, int],
+    tuple[tuple[str, str], ...],
+    tuple[tuple[str, int, int, int], ...],
+]
+SHARED_PARTS = ("manifest", "hashes", "launcher", "environment", "tree")
+
+
 class Ctx:
     """The fixtures made at setup, which every test is given and none may change."""
 
@@ -53,7 +65,7 @@ class Ctx:
     cwd_given: bool
     gcc: str
     progs: str
-    shared: tuple[bytes, bytes, tuple[tuple[str, int, int, int], ...]]
+    shared: Shared
     machine: str
     triplet: str
     vbin: Callable[[str], str]
@@ -109,33 +121,37 @@ def inside(
 copy_exclave = tree.copy_exclave
 
 
-def shared_state(ctx: Ctx) -> tuple[bytes, bytes, tuple[tuple[str, int, int, int], ...]]:
-    """Return what every test shares and none may change.
+def shared_state(ctx: Ctx) -> Shared:
+    """Return what every test shares and none may change (SHARED_PARTS).
 
-    That is the exclave's manifest, its hashes file, and the path, size, mode and mtime of every
-    entry of its tree. An added file, a removed one or a write through a hard link changes these.
-    The walk is one lstat per entry, cheap enough to repeat after every test.
+    That is the exclave's manifest, its hashes file, its launcher's inode, size and mtime, the
+    environment, and the path, size, mode and mtime of every entry of its tree, directories
+    included. An added file, a removed one, one made and removed again, or a write through a hard
+    link changes these: the tree is hard-linked to the fixture or to the given exclave, so a write
+    that escaped the read-only refusal would outlast the run. The walk is one lstat per entry,
+    cheap enough to repeat after every test.
     """
     ex = ctx.exclave
     entries = []
     for dirpath, dirnames, filenames in os.walk(ctx.root):
         for n in dirnames + filenames:
             st = os.lstat(os.path.join(dirpath, n))
-            # a directory's mtime moves when a test makes and removes a file there: not a residue
-            isdir = stat.S_ISDIR(st.st_mode)
             entries.append(
                 (
                     os.path.relpath(os.path.join(dirpath, n), ctx.root),
-                    0 if isdir else st.st_size,
+                    0 if stat.S_ISDIR(st.st_mode) else st.st_size,
                     st.st_mode,
-                    0 if isdir else st.st_mtime_ns,
+                    st.st_mtime_ns,
                 )
             )
+    ls = os.lstat(ctx.launcher)
     return (
         read_bytes(os.path.join(ex, ".exclave", "manifest")),
         read_bytes(os.path.join(ex, ".exclave", "hashes"))
         if os.path.exists(os.path.join(ex, ".exclave", "hashes"))
         else b"",
+        (ls.st_ino, ls.st_size, ls.st_mtime_ns),
+        tuple(sorted(ctx.env.items())),
         tuple(sorted(entries)),
     )
 
@@ -146,15 +162,16 @@ def left_alone(ctx: Ctx) -> str | None:
     The changed state becomes the new baseline, so that one test's residue fails only that test.
     """
     now = shared_state(ctx)
-    changed = [
-        n
-        for n, a, b in zip(("manifest", "hashes", "tree"), ctx.shared, now, strict=False)
-        if a != b
-    ]
+    changed = [n for n, a, b in zip(SHARED_PARTS, ctx.shared, now, strict=True) if a != b]
     if not changed:
         return None
+    if "environment" in changed:
+        d = sorted(set(now[3]) ^ set(ctx.shared[3]))
+        changed[changed.index("environment")] = "environment: " + ", ".join(
+            sorted({e[0] for e in d})
+        )
     if "tree" in changed:
-        d = sorted(set(now[2]) ^ set(ctx.shared[2]))
+        d = sorted(set(now[4]) ^ set(ctx.shared[4]))
         changed[changed.index("tree")] = "tree: " + ", ".join(sorted({e[0] for e in d})[:6])
     ctx.shared = now
     return f"the test changed the shared exclave: {', '.join(changed)}"
