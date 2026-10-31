@@ -1,5 +1,6 @@
-/* ljmp.c — the textbook timeout: a blocking open on a FIFO, an interval timer, siglongjmp out of the handler,
- * many times over. usage: ljmp FIFO ROUNDS */
+/* ljmp.c — the textbook timeout: a blocking open on a FIFO, a 1 ms timer, siglongjmp out of the handler, ROUNDS times;
+ * a launcher that kept what a round left behind would pass its nesting limit of 64 (DESIGN.md 7.5.4). usage: ljmp FIFO
+ * ROUNDS */
 #define _GNU_SOURCE
 #include <fcntl.h>
 #include <setjmp.h>
@@ -31,7 +32,7 @@ int main(int argc, char **argv)
     int rounds = atoi(argv[2]), done = 0;
     for (int i = 0; i < rounds; i++) {
         if (sigsetjmp(env, 1) == 0) {
-            struct itimerval it = {{0, 0}, {0, 5000}};
+            struct itimerval it = {{0, 0}, {0, 1000}};
             setitimer(ITIMER_REAL, &it, 0);
             int fd = open(argv[1], O_RDONLY);
             if (fd >= 0) close(fd);

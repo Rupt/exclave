@@ -69,15 +69,18 @@ def fifo(ctx: Ctx) -> None:
 
 @test
 def longjmp_out_of_trapped_open(ctx: Ctx) -> None:
-    """7.5.4: siglongjmp out of a handler that interrupted a trapped blocking open, 200 times."""
+    """7.5.4: siglongjmp out of a handler that interrupted a trapped blocking open, 80 times.
+
+    Each round leaves the handler's frame behind; 80 rounds pass the handler's nesting limit of
+    64, which a launcher that did not release what a left frame held would reach.
+    """
     d = os.path.join(ctx.work, "hostdir")
     os.makedirs(d, exist_ok=True)
     rc, out, err = inside(
-        ctx, os.path.join(ctx.progs, "ljmp"), [os.path.join(d, "ljfifo"), "200"], timeout=120
+        ctx, os.path.join(ctx.progs, "ljmp"), [os.path.join(d, "ljfifo"), "80"], timeout=60
     )
     expect(
-        rc == 0 and out == "timed out 200 of 200 rounds\n",
-        f"longjmp rounds: rc={rc} {out!r} {err!r}",
+        rc == 0 and out == "timed out 80 of 80 rounds\n", f"longjmp rounds: rc={rc} {out!r} {err!r}"
     )
 
 
