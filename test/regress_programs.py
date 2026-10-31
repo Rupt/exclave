@@ -40,6 +40,13 @@ def hello(ctx: Ctx) -> str | None:
 
 @test
 def identical_object(ctx: Ctx) -> str | None:
+    """The exclave's gcc-13 through the launcher writes the object the host's writes natively.
+
+    It measures that translation changes nothing a compile reads or writes, where the host has the
+    same compiler: a byte read short or a write lost would change the object. It cannot tell a file
+    served from the host from the tree's, which are the same files on such a host, and skips where
+    the host has no gcc-13.
+    """
     host = "/usr/bin/gcc-13"
     if "gcc-13" not in ctx.gcc:
         skip(f"the exclave's compiler is {ctx.gcc}: no host twin")
@@ -122,6 +129,12 @@ def interp_from_original(ctx: Ctx) -> str | None:
 
 @test
 def ld_so(ctx: Ctx) -> str | None:
+    """7.3: the exclave's ld.so run as a program lists and verifies inside the exclave.
+
+    --list names the exclave's libc, never a path below the tree; --verify, run from inside and
+    through the entry, succeeds on the compiler's original under .real/, a path the host lacks, so
+    its lookup happened inside.
+    """
     ld = ctx.interp
     rc, out, err = run(
         [wrapper(ctx, "sh"), "-c", f"{ld} --list {ctx.vbin(ctx.gcc)}"], cwd=ctx.work, env=ctx.env
@@ -132,16 +145,14 @@ def ld_so(ctx: Ctx) -> str | None:
     )
     if ctx.musl:
         return "musl's loader has no --verify"
-    rc, out, err = run(
-        [wrapper(ctx, "sh"), "-c", f"{ld} --verify {ctx.vbin(ctx.gcc)}"], cwd=ctx.work, env=ctx.env
-    )
-    expect(rc == 0, f"ld.so --verify rc={rc}")
-    rc, out, err = run(
-        [os.path.join(ctx.root, ctx.interp.lstrip("/")), "--verify", ctx.vbin(ctx.gcc)],
-        cwd=ctx.work,
-        env=ctx.env,
-    )
-    expect(rc == 0, f"ld.so run by its real path from the host: rc={rc} {err!r}")
+    original = "/" + os.path.relpath(ctx.payload(ctx.gcc), ctx.root)
+    expect(not os.path.lexists(original), f"{original} is on the host too: no proof")
+    for how, cmd in (
+        ("from inside", [wrapper(ctx, "sh"), "-c", f"{ld} --verify {original}"]),
+        ("through the entry", [ctx.launcher, ld, "--verify", original]),
+    ):
+        rc, out, err = run(cmd, cwd=ctx.work, env=ctx.env)
+        expect(rc == 0, f"ld.so --verify {original} {how}: rc={rc} {out!r} {err!r}")
     return None
 
 
