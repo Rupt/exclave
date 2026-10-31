@@ -355,6 +355,93 @@ def ownership_from_tree(ctx: Ctx) -> None:
 
 
 @test
+def host_and_own_records(ctx: Ctx) -> str | None:
+    """8.1: host and own records at run time, in the decision order.
+
+    On a copy whose manifest holds both kinds, run from / so that the working directory gives the
+    host nothing: a host record on a directory gives the host its subtree, read and refused as the
+    host's own directory is; a host record wins over the tree's top-level directory of the same
+    length; a volatile directory stays the host's whatever an own record says; own on an identity
+    file gives the name back to the tree; a host record whose path the host lacks is dropped and
+    the exclave answers, read-only; and a host record on a file stands for that file. Each answer
+    is taken from the host or from the tree.
+    """
+    pid = os.getpid()
+    ex2 = os.path.join(ctx.work, "records.exclave")
+    copy_exclave(ctx.exclave, ex2)
+    absent = f"/usr/share/zz-absent-{pid}"
+    expect(not os.path.lexists(absent), f"{absent} exists on the host")
+    records = [
+        'host "/etc/hostname"',
+        'host "/usr/share/doc"',
+        f'host "{absent}"',
+        'host "/var"',
+        "",
+        'own "/etc/hosts"',
+        'own "/home"',
+        'own "/tmp"',
+    ]
+    with open(os.path.join(ex2, ".exclave", "manifest"), "w") as f:
+        f.write("exclave 1\n\n" + "".join(r + "\n" for r in records))
+    # the tree's own /etc/hosts, unlike the host's; a new file, since the copy's are hard links
+    hosts = os.path.join(ex2, "tree", "etc", "hosts")
+    if os.path.lexists(hosts):
+        os.remove(hosts)
+    with open(hosts, "w") as f:
+        f.write(f"the exclave's hosts {pid}\n")
+    sh = os.path.join(ex2, "tree", ctx.vbin("sh").lstrip("/"))
+
+    def at_root(cmd: str) -> tuple[int, str, str]:
+        return run([sh, "-c", cmd], cwd="/", env=ctx.env)
+
+    rc, out, err = at_root("ls -A /var")
+    expect(
+        rc == 0 and sorted(out.split("\n")[:-1]) == sorted(os.listdir("/var")),
+        f'host "/var" wins over the tree\'s /var at equal length: {out[:200]!r} {err!r}',
+    )
+    if os.path.isdir("/usr/share/doc"):
+        rc, out, err = at_root("ls -A /usr/share/doc")
+        expect(
+            rc == 0 and sorted(out.split("\n")[:-1]) == sorted(os.listdir("/usr/share/doc")),
+            f'host "/usr/share/doc", the longer prefix, is the host\'s: {out[:200]!r} {err!r}',
+        )
+        if not os.access("/usr/share/doc", os.W_OK):
+            rc, out, err = at_root(f"touch /usr/share/doc/x-{pid}")
+            expect(
+                rc and "Permission denied" in err,
+                f"a create in the host's /usr/share/doc is the host's refusal: {err!r}",
+            )
+    tmp = f"/tmp/exclave-records-{pid}"
+    try:
+        rc, out, err = at_root(f"touch {tmp}")
+        expect(
+            rc == 0 and os.path.exists(tmp),
+            f"/tmp stays the host's whatever own says (8.1.3): {err!r}",
+        )
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    rc, out, err = at_root("cat /etc/hosts")
+    expect(
+        out == f"the exclave's hosts {pid}\n",
+        f"own on an identity file gives it back to the tree: {out[:200]!r} {err!r}",
+    )
+    rc, out, err = at_root(f"mkdir {absent}")
+    expect(
+        rc and "Read-only file system" in err and not os.path.lexists(absent),
+        f"a host record the host lacks is dropped and the exclave answers: {err!r}",
+    )
+    if not os.path.isfile("/etc/hostname"):
+        return 'host "/etc/hostname" not run: the host has no /etc/hostname'
+    rc, out, err = at_root("cat /etc/hostname")
+    expect(
+        rc == 0 and out == read_text("/etc/hostname"),
+        f'host "/etc/hostname" stands for the host\'s file: {out!r} {err!r}',
+    )
+    return None
+
+
+@test
 def nested_and_log(ctx: Ctx) -> None:
     log = os.path.join(ctx.work, "exclave.log")
     if os.path.exists(log):
