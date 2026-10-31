@@ -4171,19 +4171,23 @@ that changes resolution, 83 path forms over a fixed maze and the `*at`
 descriptors. The forms include 40 links in one walk and 41, in the
 tree, across the border at every link and through links walked as
 directories, since the kernel counts links over the whole walk. One
-program issues each case through `syscall(2)` under
-`bwrap`, with 8.1's visibility rule spelt in `bwrap`'s terms, and under
-the launcher, and the answers are compared line by line. An answer
-says which object a path reached, not only that it reached one: a
+program issues each case through `syscall(2)` under `bwrap`, with
+8.1's visibility rule spelt in `bwrap`'s terms, and under the
+launcher, and the answers are compared line by line. An answer says
+which object a path reached, not only that it reached one: a
 successful open answers the path its descriptor names, every file of
 the maze and the host area has a size of its own for `stat`, and the
 process keeps one inotify descriptor, so two paths to one inode answer
-one watch descriptor. Each group's
-run must also exit 0 with nothing on stderr in both worlds, as must the
-resolution oracle's run and the read-only matrix under `bwrap`, so a
-diagnostic or a crash after the last answer fails too; a run of the
-oracles that passes 60 s, a few hundred times the slowest's 0.2 s, is
-killed with its process group and fails by its group's name. A difference
+one watch descriptor. Where the host is the truth, on a host entry
+bound into `bwrap`'s read-only root and for a `chown` to root, a third
+run, the probe on the host itself through the tree's own loader,
+answers the cases that name such a path, and the launcher must answer
+as it does. Each group's run must also exit 0 with nothing on stderr
+in every world, as must the resolution oracle's run and the read-only
+matrix under `bwrap`, so a diagnostic or a crash after the last answer
+fails too; a run of the oracles that passes 60 s, a few hundred times
+the slowest's 0.2 s, is killed with its process group and fails by its
+group's name. A difference
 fails unless the list `EXPECTED` names its reason: the oracle's own
 construction, a stated limitation (13 items 29 and 41), or what an
 older kernel lacks or decided differently, such as `truncate` checking
@@ -4193,9 +4197,9 @@ difference that is a launcher defect, found and not yet fixed, is
 listed apart by its two exact answers, printed by every run, and fails
 once the answers agree until its entry goes. On the reference machine
 25 258 cases run on each of the gate's four exclaves and none differ
-unexplained; 18 are open defects at a trailing slash after a host
-symlink and at `O_CREAT` with a trailing slash under
-`RESOLVE_NO_SYMLINKS`.
+unexplained; 22 are open defects: a trailing slash after a host
+symlink, `O_CREAT` with a trailing slash under `RESOLVE_NO_SYMLINKS`,
+and no-follow calls on an identity symlink.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.
 

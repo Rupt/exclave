@@ -64,11 +64,19 @@ a temporary file before any lookup (build_open_flags), and otherwise where its c
 bwrap's fresh mount namespace; the handler answers the first as the kernel does and drops the flag
 for the rest, so its answer is the retry's.
 
+The host's own answers. Where the kernel's world cannot be the oracle, on a host entry bound into
+bwrap's read-only root and for a chown to root, the host is: a third run, the probe on the host
+itself through the tree's loader (run_native), answers the cases of each group that name such a
+path and nothing in the tree, a descriptor on a maze directory with a path that climbs out of the
+tree spelt as the host names it, and the launcher must answer as it does.
+
 Accepted differences. EXPECTED is part of the design (DESIGN.md 17 item 7): each entry names the
 rule that makes a difference right, and a difference no entry names fails. The entries are of two
-kinds, and each names the syscalls and the answers its reason covers:
+kinds, and each names the syscalls, the cases by their flag and form, and the answers its reason
+covers:
   - the oracle's own construction: a host entry bound into bwrap's read-only root answers EROFS
-    there; uid 0 is unmapped in bwrap's user namespace; a new top-level name is the host's (8.1),
+    there, where the launcher answers as the native run; uid 0 is unmapped in bwrap's user
+    namespace; a new top-level name is the host's (8.1),
     whose / answers EACCES where bwrap's root says EROFS; an identity symlink whose host target is
     on a tmpfs gives other xattr answers than the tree copy; RESOLVE_CACHED answers EAGAIN under
     bwrap's cold cache where the handler answers the retry's answer itself;
@@ -104,6 +112,7 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import NamedTuple
 lazy from collections.abc import Callable
 
 import tree
@@ -578,8 +587,8 @@ def generate(
     stat_flags = [
         ("follow", 0),
         ("nofollow", AT_SYMLINK_NOFOLLOW),
-        ("empty", AT_EMPTY_PATH),
-        ("nofollow_empty", AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH),
+        ("empty_path", AT_EMPTY_PATH),
+        ("nofollow_empty_path", AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH),
     ]
     # a bound host directory the kernel's world can write to, /tmp aside, is left as it is: the
     # two worlds would share what one of them changed there (an xattr set, a socket bound), and
@@ -705,7 +714,11 @@ def generate(
             add("openat", f"{n}/{fn}", d, p, I(fl), I(0o644))
         add("mkdirat", n, d, p, I(0o755))
         add("mknodat", n, d, p, I(0o10644), I(0))
-        for fn, fl in (("follow", 0), ("nofollow", AT_SYMLINK_NOFOLLOW), ("empty", AT_EMPTY_PATH)):
+        for fn, fl in (
+            ("follow", 0),
+            ("nofollow", AT_SYMLINK_NOFOLLOW),
+            ("empty_path", AT_EMPTY_PATH),
+        ):
             if changes:
                 add("fchownat", f"{n}/{fn}", d, p, I(uid), I(gid), I(fl))
         if changes:
@@ -748,10 +761,10 @@ def generate(
         add("utimensat", n + "/bad_nsec", d, p, "t:0,1000000000,0,0", I(0))
         add("utimensat", n + "/bad_flags", d, p, "t:1000,0,2000,0", I(0x8000))
         add("utimensat", n + "/hi_flags", d, p, "t:1000,0,2000,0", I(1 << 32))
-        add("utimensat", n + "/empty", d, p, "t:1000,0,2000,0", I(AT_EMPTY_PATH))
+        add("utimensat", n + "/empty_path", d, p, "t:1000,0,2000,0", I(AT_EMPTY_PATH))
         add("futimesat", n + "/bad_usec", d, p, "T:1000,0,2000,-1")
         add("execveat", n, d, p, V("x"), V(), I(0))
-        add("execveat", n + "/empty", d, p, V("x"), V(), I(AT_EMPTY_PATH))
+        add("execveat", n + "/empty_path", d, p, V("x"), V(), I(AT_EMPTY_PATH))
         # a check that runs nothing (6.14), and a flag no kernel knows
         add("execveat", n + "/check", d, p, V("x"), V(), I(AT_EXECVE_CHECK))
         add("execveat", n + "/bad_flag", d, p, V("x"), V(), I(0x40000))
@@ -914,7 +927,7 @@ def generate(
             for fn, fl in (
                 ("plain", 0),
                 ("follow", AT_SYMLINK_FOLLOW),
-                ("empty", AT_EMPTY_PATH),
+                ("empty_path", AT_EMPTY_PATH),
                 ("bad_flags", 1),
             ):
                 add("linkat", f"{lab}/{fn}", I(AT_FDCWD), p1, I(AT_FDCWD), p2, I(fl))
@@ -1130,6 +1143,69 @@ def run_bwrap(root: str, host: str, _bindir: str, probe: str, cases: str) -> tup
         return run([*args, probe], env={}, stdin=f, timeout=TIMEOUT)
 
 
+def run_native(root: str, host: str, probe: str, cases: str) -> tuple[int, str, str]:
+    """The host's own answers: the probe run on the host, neither under bwrap nor the launcher.
+
+    It runs through the unwrapped tree's loader and libc, which the host need not have, so the
+    same binary answers in all three worlds.
+    """
+    interp = tree.interp(probe)
+    cmd = [probe]
+    if interp:
+        loader = os.path.join(root, tree.resolve(root, interp).lstrip("/"))
+        libc = os.path.join(root, tree.resolve(root, tree.libc(root, MACHINE)).lstrip("/"))
+        cmd = [loader, "--library-path", os.path.dirname(libc), probe]
+    with open(cases, "rb") as f:
+        return run(
+            cmd, cwd=host, env={"PATH": "/usr/bin:/bin", "HOME": host}, stdin=f, timeout=TIMEOUT
+        )
+
+
+def as_the_host_sees(toks: list[str]) -> list[str]:
+    """A case's arguments as the host names them.
+
+    A descriptor on a directory of the maze, with a relative path that climbs out of the tree, is
+    AT_FDCWD with the path's lexical form: the host has no /maze, and the walk out of it crosses no
+    link.
+    """
+    out = []
+    base: str | None = None
+    for t in toks:
+        if t.startswith("f:"):
+            fp = bytes.fromhex(t[2:].partition(":")[2]).decode("utf-8", "surrogateescape")
+            if fp.startswith("/maze"):
+                base = fp
+                out.append(I(AT_FDCWD))
+                continue
+        r = raw_of(t)
+        climbs = base is not None and r is not None and not r.startswith("/")
+        out.append(S(lexical(f"{base}/{r}")) if climbs else t)
+        base = None
+    return out
+
+
+def native_cases(
+    mine: list[tuple[str, str, list[str], str]], host: str, unsafe: set[str]
+) -> list[tuple[int, list[str]]]:
+    """A group's cases the native run answers, as the host names them (as_the_host_sees).
+
+    Those whose truth is the host's: a case that names a bound host path, or a chown to root, and no
+    path of the tree's, nor one of unsafe, the bound paths whose directory this user can write:
+    there a call the other worlds refuse could succeed, which the host is not the probe's to change.
+    """
+    out = []
+    for i, (label, n, toks, group) in enumerate(mine):
+        if group != n:
+            continue  # a group of cases that depend on one another runs whole or not at all
+        host_toks = as_the_host_sees(toks)
+        paths = {lexical(r) for r in named_paths(n, host_toks, host)}
+        if paths & unsafe or any(p == "/maze" or p.startswith("/maze/") for p in paths):
+            continue
+        if paths & BOUND_PATHS or label.endswith("/to_root"):
+            out.append((i, host_toks))
+    return out
+
+
 def writable_in_bwrap(forms: Forms, root: str, host: str, bindir: str) -> set[str]:
     """The names of the bound host directories (BOUND) the kernel's world can write to.
 
@@ -1161,10 +1237,6 @@ def run_launcher(ex: str, host: str, probe: str, cases: str) -> tuple[int, str, 
         )
 
 
-def forms_in(label: str) -> set[str]:
-    return set(label.replace("->", "/").split("/"))
-
-
 def errnos(b: str, o: str) -> tuple[int, int]:
     return int(b.split("errno=")[1].split(maxsplit=1)[0]), int(
         o.split("errno=")[1].split(maxsplit=1)[0]
@@ -1181,20 +1253,80 @@ def exec_errnos(b: str, o: str) -> tuple[int, int]:
     return one(b), one(o)
 
 
-# differences with a reason: (syscall name or None, predicate on (label, bwrap answer, launcher
-# answer, the kernel's answers in the group by label), reason). The list is part of the design (17):
-# each entry names the rule that makes the difference right.
+# The bound host paths, the host's entries bound into bwrap's read-only root: there the host's own
+# answer is the expectation (8.1, 8.4)
+BOUND = {
+    "passwd": "/etc/passwd",
+    "resolv": "/etc/resolv.conf",
+    "tmp": "/tmp",
+    "home": "/home",
+    "opt": "/opt",
+    "dev_null": "/dev/null",
+    "rel_etc_by_dotdot": "/etc/passwd",
+}
+BOUND_PATHS = frozenset(BOUND.values())
 # openat2's flag words (generate) that create: RESOLVE_CACHED refuses them before any lookup
 CREATING = ("wr_creat", "tmpfile")
-# bound from the host into the read-only root under bwrap
-BOUND = {"passwd", "resolv", "tmp", "home", "opt", "dev_null", "rel_etc_by_dotdot"}
-EXPECTED: list[tuple[str | None, Callable[[str, str, str, dict[str, str]], object], str]] = [
+
+
+class Ctx(NamedTuple):
+    """What a rule may ask of a case beyond its two answers."""
+
+    raw: tuple[str, ...]  # the paths it names, from its directory as given (named_paths)
+    paths: tuple[str, ...]  # the same, made absolute and normal lexically (lexical)
+    kernel: dict[str, str]  # the kernel's answers in its group, by label
+    native: dict[str, str]  # the native run's answers in its group, by label (run_native)
+
+
+def named_paths(name: str, toks: list[str], host: str) -> tuple[str, ...]:
+    """The paths a case names, and every descriptor's path.
+
+    Each path argument is joined to its directory descriptor's path, or to the host area, the
+    working directory. A symlink's target is text, not a path the call names.
+    """
+    base: str | None = host
+    out = []
+    for i, t in enumerate(toks):
+        if t.startswith("i:"):
+            base = host if t == I(AT_FDCWD) else None
+        elif t.startswith("f:"):
+            base = bytes.fromhex(t[2:].partition(":")[2]).decode("utf-8", "surrogateescape")
+            out.append(base)
+        elif (r := raw_of(t)) and not (i == 0 and name in ("symlink", "symlinkat")):
+            if r.startswith("/"):
+                out.append(r)
+            elif base is not None:
+                out.append(base + "/" + r)
+    return tuple(out)
+
+
+def lexical(path: str) -> str:
+    """A path made absolute and normal by its text alone.
+
+    The kernel's walk gives the same where no component is a link, as on the probe's way out of
+    the tree through its directories.
+    """
+    return os.path.normpath("/" + path.lstrip("/"))
+
+
+def failed(answer: str) -> bool:
+    return answer.startswith("ret=-1 ")
+
+
+# differences with a reason: (syscall name or None, predicate on (label, bwrap answer, launcher
+# answer, Ctx), reason). The list is part of the design (17): each entry names the rule that makes
+# the difference right, the cases it covers by their flag and form, and the launcher's answer it
+# allows.
+EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] = [
     # the kernel matrix (12): what this kernel lacks or decided differently, each entry naming the
     # kernel change
     (
         None,
-        lambda label, b, o, _k: (
-            KERNEL < (5, 8) and "creat_excl" in label and errnos(b, o) == (21, 17)
+        lambda label, b, o, c: (
+            KERNEL < (5, 8)
+            and label.endswith("/wr_creat_excl")
+            and any(r == "/" or r.endswith(("/.", "/..")) for r in c.raw)
+            and errnos(b, o) == (errno.EISDIR, errno.EEXIST)
         ),
         (
             "O_CREAT|O_EXCL on '.', '..' or '/': EISDIR before the lookup rework of 5.8, EEXIST "
@@ -1203,15 +1335,24 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, dict[str, str]], objec
     ),
     (
         "linkat",
-        lambda label, b, o, _k: KERNEL < (6, 10) and "empty" in label and errnos(b, o)[0] == 2,
+        lambda label, b, o, _c: (
+            KERNEL < (6, 10)
+            and (
+                label.endswith("/empty_path")
+                or label in ("fd_empty", "hostfd_empty", "hostfd_empty_to_exclave")
+            )
+            and errnos(b, o)[0] == errno.ENOENT
+            and failed(o)
+        ),
         (
             "linkat with AT_EMPTY_PATH needed CAP_DAC_READ_SEARCH (ENOENT without it) until 6.10 "
-            "allowed it for files with a link; the handler answers as the newer kernels do"
+            "allowed it for files with a link; the handler answers as the newer kernels do, and "
+            "what it re-issues this kernel refuses, so it links nothing"
         ),
     ),
     (
         "openat2",
-        lambda label, b, o, _k: (
+        lambda label, b, o, _c: (
             label.endswith("/cached")
             and label.split("/")[-2] not in CREATING
             and b.endswith(" cached_retry")
@@ -1227,7 +1368,9 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, dict[str, str]], objec
     ),
     (
         "openat2",
-        lambda label, b, o, _k: KERNEL < (6, 3) and "dir_creat" in label and errnos(b, o)[1] == 22,
+        lambda label, b, o, _c: (
+            KERNEL < (6, 3) and label.endswith("/dir_creat") and errnos(b, o)[1] == errno.EINVAL
+        ),
         (
             "O_DIRECTORY|O_CREAT is EINVAL since 6.3 (open.c); this kernel opens or creates "
             "instead; the handler answers as the newer kernels do"
@@ -1235,11 +1378,11 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, dict[str, str]], objec
     ),
     (
         "openat2",
-        lambda label, b, o, k: (
+        lambda label, b, o, c: (
             KERNEL < (5, 6)
             and label.endswith("_creat/no_xdev")
             and errnos(b, o)[0] == errno.EXDEV
-            and o == k.get(label.removesuffix("no_xdev") + "plain")
+            and o == c.kernel.get(label.removesuffix("no_xdev") + "plain")
         ),
         (
             "RHEL 8's 4.18 backport of openat2 answers EXDEV for a create through a symlink under "
@@ -1249,11 +1392,12 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, dict[str, str]], objec
     ),
     (
         "openat2",
-        lambda label, b, o, k: (
+        lambda label, b, o, c: (
             KERNEL < (5, 12)
             and label.endswith("/cached")
             and errnos(b, o)[0] == errno.EINVAL
-            and o.removesuffix(" cached_retry") == k.get(label.removesuffix("cached") + "plain")
+            and o.removesuffix(" cached_retry")
+            == c.kernel.get(label.removesuffix("cached") + "plain")
         ),
         (
             "RESOLVE_CACHED is 5.12+: EINVAL before; the handler answers as 5.12 does, EAGAIN for "
@@ -1262,17 +1406,25 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, dict[str, str]], objec
         ),
     ),
     (
-        None,
-        lambda label, b, o, _k: "whiteout" in label and errnos(b, o)[0] == 1,
+        "renameat2",
+        lambda label, b, o, _c: (
+            KERNEL < (5, 8)
+            and label.endswith("/whiteout")
+            and errnos(b, o)[0] == errno.EPERM
+            and failed(o)
+        ),
         (
-            "RENAME_WHITEOUT: this kernel checks a capability in the initial user namespace "
-            "before any lookup (EPERM); later kernels check the caller's, which bwrap's namespace "
-            "grants"
+            "RENAME_WHITEOUT: this kernel wants CAP_MKNOD in the initial user namespace before any "
+            "lookup (EPERM), which bwrap's namespace cannot grant; 5.8 dropped the check (vfs: "
+            "allow unprivileged whiteout creation). The handler answers as 5.8 does, and what it "
+            "re-issues this kernel refuses, so it renames nothing"
         ),
     ),
     (
         None,
-        lambda label, b, o, _k: "resolv" in forms_in(label) and errnos(b, o) == (61, 95),
+        lambda _label, b, o, c: (
+            "/etc/resolv.conf" in c.paths and errnos(b, o) == (errno.ENODATA, errno.EOPNOTSUPP)
+        ),
         (
             "the host's identity symlink resolves to a file on another filesystem (a tmpfs under "
             "/run) whose xattr answers differ from the tree copy's symlink"
@@ -1280,26 +1432,39 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, dict[str, str]], objec
     ),
     (
         None,
-        lambda label, b, o, _k: (
-            forms_in(label) & BOUND and errnos(b, o)[0] == 30 and errnos(b, o)[1] in (1, 13)
+        lambda label, b, o, c: (
+            BOUND_PATHS & set(c.paths)
+            and errnos(b, o)[0] == errno.EROFS
+            and o == c.native.get(label)
         ),
         (
             "a host entry bound into bwrap's read-only root: its parent directory, or the "
             "identity symlink itself, is read-only there (EROFS); the launcher answers with the "
-            "host's permissions (8.1, 8.4)"
+            "host's permissions (8.1, 8.4), as the probe does run natively"
         ),
     ),
     (
-        None,
-        lambda label, b, o, _k: "to_root" in forms_in(label) and errnos(b, o) == (22, 1),
-        "uid 0 is not mapped in bwrap's user namespace (EINVAL); the launcher runs in none (EPERM)",
+        "chown",
+        lambda label, b, o, c: (
+            label.endswith("/to_root")
+            and errnos(b, o) == (errno.EINVAL, errno.EPERM)
+            and c.native.get(label, o) == o
+        ),
+        (
+            "uid 0 is not mapped in bwrap's user namespace (EINVAL); the launcher runs in none, "
+            "and answers as the probe does run natively (EPERM) wherever the host names the path"
+        ),
     ),
     (
         "bind",
-        lambda label, b, o, _k: (
-            label.startswith(("root/", "root_dotdot/", "rel_root_by_dotdot/"))
-            and "after_chdir_rel" in label
-            and errnos(b, o) == (30, 13)
+        lambda label, b, o, _c: (
+            label
+            in (
+                "root/after_chdir_rel",
+                "root_dotdot/after_chdir_rel",
+                "rel_root_by_dotdot/after_chdir_rel",
+            )
+            and errnos(b, o) == (errno.EROFS, errno.EACCES)
         ),
         (
             "a new top-level name is the host's (8.1 rule 2): the host's / answers EACCES for a "
@@ -1307,9 +1472,11 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, dict[str, str]], objec
         ),
     ),
     (
-        None,
-        lambda label, b, o, _k: (
-            KERNEL < (6, 14) and "ro_file" in forms_in(label) and errnos(b, o) == (30, 13)
+        "truncate",
+        lambda _label, b, o, c: (
+            KERNEL < (6, 14)
+            and "/maze/ro444" in c.paths
+            and errnos(b, o) == (errno.EROFS, errno.EACCES)
         ),
         (
             "a truncate of a file its owner cannot write on a read-only mount: this kernel wants "
@@ -1319,40 +1486,33 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, dict[str, str]], objec
     ),
     (
         "utimensat",
-        lambda label, b, o, _k: (
-            KERNEL < (5, 9) and ("empty" in label or "bad_nsec" in label) and errnos(b, o)[0] == 22
+        lambda label, b, o, _c: (
+            KERNEL < (5, 9)
+            and label.endswith(("/empty_path", "/bad_nsec"))
+            and errnos(b, o)[0] == errno.EINVAL
+            and failed(o)
         ),
         (
             "utimensat before 5.9 refused AT_EMPTY_PATH and checked the nanoseconds before the "
             "lookup (EINVAL); since 5.9 (vfs_utimes) it takes the flag and the lookup's answer "
-            "comes first, as the handler answers"
+            "comes first, as the handler answers, and what it re-issues this kernel refuses"
         ),
     ),
-    (
-        "execve",
-        lambda label, b, o, _k: (
-            KERNEL < (5, 9)
-            and "sock" in forms_in(label)
-            and b.startswith("ret=27136")
-            and o.startswith("ret=28928")
-        ),
+    *(
         (
-            "an exec of a socket: ENXIO from its open before 5.9, EACCES from may_open since "
-            "(fs/namei.c); the handler answers as the newer kernels do"
-        ),
-    ),
-    (
-        "execveat",
-        lambda label, b, o, _k: (
-            KERNEL < (5, 9)
-            and "sock" in forms_in(label)
-            and b.startswith("ret=27136")
-            and o.startswith("ret=28928")
-        ),
-        (
-            "an exec of a socket: ENXIO from its open before 5.9, EACCES from may_open since "
-            "(fs/namei.c); the handler answers as the newer kernels do"
-        ),
+            call,
+            lambda _label, b, o, c: (
+                KERNEL < (5, 9)
+                and "/maze/sock" in c.paths
+                and b.startswith("ret=27136")
+                and o.startswith("ret=28928")
+            ),
+            (
+                "an exec of a socket: ENXIO from its open before 5.9, EACCES from may_open since "
+                "(fs/namei.c); the handler answers as the newer kernels do"
+            ),
+        )
+        for call in ("execve", "execveat")
     ),
 ]
 
@@ -1376,7 +1536,7 @@ ADDED = {
 EXPECTED.extend(
     (
         call,
-        lambda _label, b, o, _k, since=since: since > KERNEL and errnos(b, o)[0] == errno.ENOSYS,
+        lambda _label, b, o, _c, since=since: since > KERNEL and errnos(b, o)[0] == errno.ENOSYS,
         (
             f"{call} is {since[0]}.{since[1]}+: this kernel lacks it (ENOSYS); the handler "
             "answers what it can from its own rule and re-issues the rest"
@@ -1392,7 +1552,7 @@ EXPECTED.extend(
     [
         (
             "execveat",
-            lambda label, b, o, _k: (
+            lambda label, b, o, _c: (
                 KERNEL < (6, 14)
                 and label.endswith("/check")
                 and exec_errnos(b, o)[0] == errno.EINVAL
@@ -1405,7 +1565,7 @@ EXPECTED.extend(
         ),
         (
             "execveat",
-            lambda label, b, o, _k: (
+            lambda label, b, o, _c: (
                 KERNEL < (7, 0)
                 and label.endswith("/bad_flag")
                 and exec_errnos(b, o)[1] == errno.EINVAL
@@ -1423,7 +1583,7 @@ EXPECTED.extend(
 EXPECTED.extend(
     (
         call,
-        lambda label, b, o, _k: (
+        lambda label, b, o, _c: (
             KERNEL < (6, 13)
             and label.endswith(("/empty_name", "/bad_flags", "/too_big"))
             and errnos(b, o)[1] in (errno.E2BIG, errno.EINVAL, errno.ERANGE)
@@ -1442,6 +1602,12 @@ EXPECTED.extend(
 # exact pair and nothing else, every run prints it, and a case of one that agrees fails, so that the
 # fix removes the entry.
 DEFECTS: set[tuple[str, str, str, str]] = {
+    # a no-follow call on an identity symlink (8.4) is the host's own on its link, as natively:
+    # EPERM for a user xattr on a link, EOPNOTSUPP for a link's mode; the handler answers otherwise
+    ("lsetxattr", "resolv", "ret=-1 errno=30", "ret=-1 errno=13"),
+    ("lremovexattr", "resolv", "ret=-1 errno=30", "ret=-1 errno=13"),
+    ("setxattrat", "cwd/resolv/nofollow", "ret=-1 errno=30", "ret=-1 errno=13"),
+    ("fchmodat2", "cwd/resolv/nofollow", "ret=-1 errno=30", "ret=-1 errno=1"),
     # a trailing slash after a host symlink, for a call that does not follow the last component:
     # the kernel looks the link itself up (EEXIST for a create, ENOTDIR for rmdir); the handler
     # follows it, and mkdir creates the dangling link's target
@@ -1473,10 +1639,10 @@ DEFECTS: set[tuple[str, str, str, str]] = {
 }
 
 
-def expected(name: str, label: str, b: str, o: str, kernel: dict[str, str]) -> str | None:
-    """The reason EXPECTED gives for a difference; kernel holds the group's kernel answers."""
+def expected(name: str, label: str, b: str, o: str, ctx: Ctx) -> str | None:
+    """The reason EXPECTED gives for a difference, or None."""
     for n, pred, reason in EXPECTED:
-        if (n is None or n == name) and pred(label, b, o, kernel):
+        if (n is None or n == name) and pred(label, b, o, ctx):
             return reason
     return None
 
@@ -1595,6 +1761,16 @@ def main() -> int:
     for c in cases:
         if c[3] not in names:
             names.append(c[3])
+    # the native run: never as root, whom nothing refuses, and never on a bound path whose
+    # directory this user can write
+    native_off = os.geteuid() == 0
+    unsafe = {p for p in BOUND_PATHS if os.access(os.path.dirname(p) or "/", os.W_OK)}
+    if native_off or unsafe:
+        print(
+            "the native run "
+            + ("is off as root" if native_off else f"leaves out {', '.join(sorted(unsafe))}")
+            + "; a difference there that only the host can answer fails"
+        )
     total = differ = accepted = known = 0
     shown = 0
     open_defects = {(n, label) for n, label, _b, _o in DEFECTS}
@@ -1605,23 +1781,38 @@ def main() -> int:
             f.writelines(
                 f"{i} {nr[n]} {' '.join(toks)}\n" for i, (label, n, toks, _) in enumerate(mine)
             )
+        here = [] if native_off else native_cases(mine, host, unsafe)
+        with open(path + ".native", "w") as f:
+            f.writelines(f"{i} {nr[mine[i][1]]} {' '.join(t)}\n" for i, t in here)
         world = "bwrap"
+        nat: tuple[int, str, str] = (0, "", "")
         try:
             host_reset(host, forms, probe)
             bw = run_bwrap(root, host, bindir, probe, path)
             world = "the launcher"
             host_reset(host, forms, probe)
             op = run_launcher(ex, host, probe, path)
+            if here:
+                world = "the native run"
+                host_reset(host, forms, probe)
+                nat = run_native(root, host, probe, path + ".native")
         except subprocess.TimeoutExpired:
             print(f"FAIL {name}: {len(mine)} cases, {world} killed after {TIMEOUT} s")
             differ += 1
             continue
-        # the probe answers every case on stdout and exits 0 with nothing on stderr, in both worlds
-        if bw[0] or bw[2] or op[0] or op[2]:
+        # the probe answers every case on stdout and exits 0 with nothing on stderr, in every world
+        if bw[0] or bw[2] or op[0] or op[2] or nat[0] or nat[2]:
             print(
                 f"FAIL {name}: bwrap rc {bw[0]} stderr {bw[2].strip()[-200:]!r}, "
-                f"the launcher rc {op[0]} stderr {op[2].strip()[-200:]!r}"
+                f"the launcher rc {op[0]} stderr {op[2].strip()[-200:]!r}, "
+                f"the native run rc {nat[0]} stderr {nat[2].strip()[-200:]!r}"
             )
+            differ += 1
+        native = {
+            mine[int(i)][0]: a for i, _, a in (line.partition(" ") for line in nat[1].splitlines())
+        }
+        if len(native) != len(here):
+            print(f"FAIL {name}: the native run answered {len(native)} of {len(here)} cases")
             differ += 1
         bl, ol = bw[1].splitlines(), op[1].splitlines()
         if len(bl) != len(mine) or len(ol) != len(mine):
@@ -1636,7 +1827,7 @@ def main() -> int:
             continue
         d = 0
         kernel = {c[0]: bline.split(" ", 1)[1] for c, bline in zip(mine, bl, strict=True)}
-        for (label, n, toks, _), bline, oline in zip(mine, bl, ol, strict=False):
+        for (label, n, toks, _), bline, oline in zip(mine, bl, ol, strict=True):
             total += 1
             b, o = bline.split(" ", 1)[1], oline.split(" ", 1)[1]
             if b == o:
@@ -1649,7 +1840,8 @@ def main() -> int:
                 known += 1
                 print(f"DEFECT {n} {label}\n     kernel: {b}\n     launcher: {o}")
                 continue
-            why = expected(n, label, b, o, kernel)
+            raw = named_paths(n, toks, host)
+            why = expected(n, label, b, o, Ctx(raw, tuple(lexical(r) for r in raw), kernel, native))
             if why:
                 accepted += 1
                 if args.expected:
@@ -1667,6 +1859,7 @@ def main() -> int:
                     "DIFF {} {}({})\n     kernel: {}\n     launcher: {}".format(
                         n, label, ", ".join(decode(t) for t in toks), b, o
                     )
+                    + (f"\n     native: {native[label]}" if label in native else "")
                 )
         print(f"{name:<18} {len(mine):5d} cases, {d} differ")
     print(
