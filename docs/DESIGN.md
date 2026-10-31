@@ -4207,7 +4207,9 @@ the mount before the permission on 6.1 and earlier (6.14 checks the
 permission first). The handler answers as the newest kernel does. A
 difference that is a launcher defect, found and not yet fixed, is
 listed apart by its two exact answers, printed by every run, and fails
-once the answers agree until its entry goes. On the reference machine
+once the answers agree until its entry goes, on a host whose files can
+show it (a host whose `/etc/resolv.conf` is no symlink shows no
+no-follow call on an identity symlink). On the reference machine
 26 521 cases run on each of the gate's four exclaves and none differ
 unexplained; 211 are open defects: `O_DIRECTORY` with `O_CREAT` or
 `O_WRONLY` in `open` and `openat`, a trailing slash after a host

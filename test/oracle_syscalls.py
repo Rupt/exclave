@@ -1715,11 +1715,12 @@ EXPECTED.extend(
 
 # Launcher defects the probe has found and the handler has yet to fix: differences no rule makes
 # right. Each entry is (what the kernel does, a predicate on (syscall, label, bwrap answer, launcher
-# answer, Ctx)) naming the cases and the exact answers it covers. Every run prints each entry with
-# its count of cases, and on the kernel they were measured on, 7.0 and later, a whole run in which
-# an entry matches no case fails, so that the fix removes the entry.
+# answer, Ctx)) naming the cases and the exact answers it covers, and whether this host can show
+# it at all. Every run prints each entry with its count of cases, and on the kernel they were
+# measured on, 7.0 and later, a whole run in which an entry the host can show matches no case
+# fails, so that the fix removes the entry.
 DEFECTS_MEASURED = (7, 0)
-DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object]]] = [
+DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[], bool]]] = [
     (
         (
             "a no-follow call on an identity symlink (8.4) is the host's own on its link, as "
@@ -1735,6 +1736,9 @@ DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object]]] = [
                 ("fchmodat2", "cwd/resolv/nofollow", "ret=-1 errno=30", "ret=-1 errno=1"),
             }
         ),
+        # a GitHub runner's /etc/resolv.conf is a regular file, and then no case is a no-follow
+        # call on a link
+        lambda: os.path.islink(BOUND["resolv"]),
     ),
     (
         (
@@ -1760,6 +1764,7 @@ DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object]]] = [
                 ("bind", "host_dangling_slash", "ret=-1 errno=98", "ret=-1 errno=2"),
             }
         ),
+        lambda: True,
     ),
     (
         (
@@ -1772,6 +1777,7 @@ DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object]]] = [
             and label.endswith("_slash/wr_creat/no_symlinks")
             and (b, o) == ("ret=-1 errno=21", "ret=-1 errno=40")
         ),
+        lambda: True,
     ),
     (
         (
@@ -1785,6 +1791,7 @@ DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object]]] = [
             and errnos(b, o)[0] == errno.ENOTDIR
             and errnos(b, o)[1] in (errno.EROFS, errno.EACCES, errno.ETXTBSY)
         ),
+        lambda: True,
     ),
     (
         (
@@ -1798,6 +1805,7 @@ DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object]]] = [
             and errnos(b, o)[0] == errno.EINVAL
             and failed(o)
         ),
+        lambda: True,
     ),
 ]
 
@@ -2006,7 +2014,7 @@ def main() -> int:
                 continue
             raw = named_paths(n, toks, host)
             ctx = Ctx(raw, tuple(lexical(r) for r in raw), kernel, native)
-            which = [i for i, (_why, pred) in enumerate(DEFECTS) if pred(n, label, b, o, ctx)]
+            which = [i for i, (_why, pred, _s) in enumerate(DEFECTS) if pred(n, label, b, o, ctx)]
             if which:
                 known[which[0]] += 1
                 if args.expected:
@@ -2033,11 +2041,14 @@ def main() -> int:
                     + (f"\n     native: {native[label]}" if label in native else "")
                 )
         print(f"{name:<18} {len(mine):5d} cases, {d} differ")
-    for (why, _pred), count in zip(DEFECTS, known, strict=True):
+    for (why, _pred, shown), count in zip(DEFECTS, known, strict=True):
         print(f"DEFECT {count} cases: {why}")
         if not count and not args.only and KERNEL >= DEFECTS_MEASURED:
-            print("FAIL no case shows this defect any more: remove its DEFECTS entry")
-            differ += 1
+            if shown():
+                print("FAIL no case shows this defect any more: remove its DEFECTS entry")
+                differ += 1
+            else:
+                print("(this host cannot show it)")
     print(
         f"{total} cases over {len(names)} groups and {len(forms.paths)} path forms: "
         f"{differ} differ, {accepted} differences expected"
