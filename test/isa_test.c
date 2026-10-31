@@ -17,11 +17,26 @@ void die(const char *what, const char *detail, long err)
 
 #if defined(__x86_64__)
 #define BIT(n) (1U << (n))
-/* every feature bit of v2, v3 and v4, in the words isa.c reads */
-static const unsigned C1 =
-    BIT(13) | BIT(23) | BIT(0) | BIT(19) | BIT(20) | BIT(9) | BIT(28) | BIT(29) | BIT(12) | BIT(22) | BIT(27);
-static const unsigned B7 = BIT(5) | BIT(3) | BIT(8) | BIT(16) | BIT(30) | BIT(28) | BIT(17) | BIT(31);
-static const unsigned CX = BIT(0) | BIT(5);
+/* every feature of v2, v3 and v4 as the psABI lists them, by the cpuid word and bit that report it: leaf 1's ecx (C1),
+ * leaf 7's ebx (B7) and leaf 0x80000001's ecx (CX); and the XCR0 state each vector level needs */
+enum word { C1W, B7W, CXW, XCR0W };
+static const struct {
+    const char *name;
+    enum word word;
+    int bit, level;
+} FEATURES[] = {
+    /* clang-format off */
+    {"CMPXCHG16B", C1W, 13, 2}, {"LAHF-SAHF", CXW, 0, 2}, {"POPCNT", C1W, 23, 2}, {"SSE3", C1W, 0, 2},
+    {"SSE4.1", C1W, 19, 2}, {"SSE4.2", C1W, 20, 2}, {"SSSE3", C1W, 9, 2},
+    {"AVX", C1W, 28, 3}, {"AVX2", B7W, 5, 3}, {"BMI1", B7W, 3, 3}, {"BMI2", B7W, 8, 3}, {"F16C", C1W, 29, 3},
+    {"FMA", C1W, 12, 3}, {"LZCNT", CXW, 5, 3}, {"MOVBE", C1W, 22, 3}, {"OSXSAVE", C1W, 27, 3},
+    {"SSE state", XCR0W, 1, 3}, {"AVX state", XCR0W, 2, 3},
+    {"AVX512F", B7W, 16, 4}, {"AVX512BW", B7W, 30, 4}, {"AVX512CD", B7W, 28, 4}, {"AVX512DQ", B7W, 17, 4},
+    {"AVX512VL", B7W, 31, 4}, {"opmask state", XCR0W, 5, 4}, {"ZMM_Hi256 state", XCR0W, 6, 4},
+    {"Hi16_ZMM state", XCR0W, 7, 4},
+    /* clang-format on */
+};
+#define NFEATURES (sizeof FEATURES / sizeof *FEATURES)
 
 static int fails, cases;
 static void expect(int level, unsigned c1, unsigned b7, unsigned cx, unsigned long xcr0, int want, const char *what)
@@ -36,16 +51,30 @@ static void expect(int level, unsigned c1, unsigned b7, unsigned cx, unsigned lo
 
 int main(void)
 {
-    expect(2, C1, B7, CX, 0, 1, "needs no vector state");
-    expect(3, C1, B7, CX, 0x7, 1, "SSE and AVX state enabled");
-    expect(3, C1, B7, CX, 0x3, 0, "AVX state disabled by the kernel");
-    expect(3, C1, B7, CX, 0x5, 0, "SSE state disabled");
-    expect(3, C1 & ~BIT(27), B7, CX, 0x7, 0, "no OSXSAVE");
-    expect(3, C1, B7 & ~BIT(5), CX, 0x7, 0, "no AVX2");
-    expect(4, C1, B7, CX, 0xe7, 1, "AVX-512 state enabled");
-    expect(4, C1, B7, CX, 0x7, 0, "AVX-512 state disabled by the kernel");
-    expect(4, C1, B7, CX, 0x67, 0, "Hi16_ZMM state disabled");
-    expect(4, C1, B7 & ~BIT(16), CX, 0xe7, 0, "no AVX512F");
+    unsigned all[3] = {0, 0, 0};
+    unsigned long xcr0 = 0x1; /* x87 state, which no level asks about */
+    for (size_t i = 0; i < NFEATURES; i++)
+        if (FEATURES[i].word == XCR0W) xcr0 |= 1UL << FEATURES[i].bit;
+        else all[FEATURES[i].word] |= BIT(FEATURES[i].bit);
+    for (int level = 2; level <= 4; level++) expect(level, all[C1W], all[B7W], all[CXW], xcr0, 1, "every feature");
+    /* each feature missing alone: the lowest level that needs it fails, and so does every level above it, while the
+     * levels below hold */
+    for (size_t i = 0; i < NFEATURES; i++) {
+        unsigned w[3] = {all[0], all[1], all[2]};
+        unsigned long x = xcr0;
+        if (FEATURES[i].word == XCR0W) x &= ~(1UL << FEATURES[i].bit);
+        else w[FEATURES[i].word] &= ~BIT(FEATURES[i].bit);
+        char what[64];
+        snprintf(what, sizeof what, "without %s", FEATURES[i].name);
+        for (int level = 2; level <= 4; level++)
+            expect(level, w[C1W], w[B7W], w[CXW], x, level < FEATURES[i].level, what);
+    }
+    expect(2, all[C1W], all[B7W], all[CXW], 0, 1, "needs no vector state");
+    cases += 2;
+    if (isa_supported("x86-64-v5", 0) != -1 || isa_supported("", 0) != -1) {
+        printf("FAIL an unknown level is not -1\n");
+        fails++;
+    }
     __builtin_cpu_init();
     int real[3] = {__builtin_cpu_supports("x86-64-v2") ? 1 : 0, __builtin_cpu_supports("x86-64-v3") ? 1 : 0,
                    __builtin_cpu_supports("x86-64-v4") ? 1 : 0};
