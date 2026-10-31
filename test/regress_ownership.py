@@ -6,7 +6,7 @@ Run by test/run.py, on the fixtures test/suite.py makes.
 import os
 
 import tree
-from harness import expect, read_bytes, read_text, run, test
+from harness import expect, read_bytes, read_text, run, skip, test
 from suite import TOOL, Ctx, copy_exclave, hello_source, inside, wrapper
 
 
@@ -76,7 +76,7 @@ def identity_link_consistency(ctx: Ctx) -> str | None:
         None,
     )
     if not link:
-        return "no host identity file is a symlink"
+        skip("no host identity file is a symlink")
     target = os.readlink(link)
     # the content is reached through the identity name; its host target is not an exclave path (8.4)
     head = read_bytes(link, 8)

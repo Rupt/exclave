@@ -8,7 +8,7 @@ import shlex
 import shutil
 
 import tree
-from harness import expect, read_text, run, test
+from harness import expect, read_text, run, skip, test
 from suite import Ctx, inside, wrapper
 
 
@@ -293,7 +293,7 @@ def executable_stack(ctx: Ctx) -> str | None:
     It is built by the exclave's gcc.
     """
     if not os.path.exists(os.path.join(ctx.progs, "execstack")):
-        return f"{ctx.gcc} has no nested functions: no trampoline program"
+        skip(f"{ctx.gcc} has no nested functions: no trampoline program")
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "execstack"))
     expect(rc == 0 and out == "result 12\n", f"nested function trampoline: rc={rc} {out!r} {err!r}")
     return None

@@ -113,7 +113,7 @@ def main() -> int:
         print("fixture: none yet for this exclave; this run makes it")
     ctx = prepare(args, tree_, os.path.abspath(args.work), logging=logging)
     order = select(TESTS, args.k)
-    failed = suite_run(ctx, order, args.budget)
+    failed, skipped = suite_run(ctx, order, args.budget)
     if stale and failed and fixture:
         # A fixture made with other sources may lack a file these sources touch. The failures run
         # again on the whole exclave, whose answer stands, and the fixture is removed for the next
@@ -122,7 +122,8 @@ def main() -> int:
         whole = prepare(
             args, os.path.abspath(args.tree), os.path.abspath(args.work) + "-whole", logging=False
         )
-        failed = suite_run(whole, failed, args.budget)
+        failed, also = suite_run(whole, failed, args.budget)
+        skipped += also
         shutil.rmtree(fixture, ignore_errors=True)
         if not args.keep and not failed:
             shutil.rmtree(whole.work, ignore_errors=True)
@@ -130,7 +131,7 @@ def main() -> int:
         # still enough for these sources, unless another run has found otherwise and removed it
         with contextlib.suppress(FileNotFoundError), open(os.path.join(fixture, STAMP), "w") as f:
             f.write(sources + "\n")
-    print(f"{len(order)} tests, {len(failed)} failures")
+    print(f"{len(order)} tests, {len(failed)} failures, {len(skipped)} skipped")
     if logging and fixture and not failed and not args.k:
         make_fixture(ctx, fixture, sources)
     if not args.keep and not failed:
@@ -138,9 +139,18 @@ def main() -> int:
     return min(len(failed), 255)
 
 
-def suite_run(ctx: Ctx, order: list[Test[Any]], budget: float) -> list[Test[Any]]:
-    """Run the tests on the fixtures, each checked for leaving the shared exclave alone (17)."""
-    return run_tests(order, lambda t: t(ctx), budget=budget, after=lambda _t: left_alone(ctx))
+def suite_run(
+    ctx: Ctx, order: list[Test[Any]], budget: float
+) -> tuple[list[Test[Any]], list[Test[Any]]]:
+    """Run the tests on the fixtures, each checked for leaving the shared exclave alone (17).
+
+    Returns the tests that failed and those that skipped.
+    """
+    skipped: list[Test[Any]] = []
+    failed = run_tests(
+        order, lambda t: t(ctx), budget=budget, after=lambda _t: left_alone(ctx), skipped=skipped
+    )
+    return failed, skipped
 
 
 if __name__ == "__main__":

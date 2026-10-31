@@ -11,7 +11,7 @@ import subprocess
 lazy import ctypes
 
 import tree
-from harness import expect, read_bytes, read_text, run, test
+from harness import expect, read_bytes, read_text, run, skip, test
 from suite import VOLATILE, Ctx, check, copy_exclave, hello_source, inside, wrapper
 
 # the path syscalls the isolation test traces; the legacy forms exist on x86-64 only and strace says
@@ -51,7 +51,7 @@ PATH_MAX = 4096
 @test
 def isolation(ctx: Ctx) -> str | None:
     if not shutil.which("strace"):
-        return "no strace"
+        skip("no strace")
     tr = os.path.join(ctx.work, "trace")
     src = hello_source(ctx)
     names = list(TRACED)
@@ -306,7 +306,7 @@ def casefold_alias(ctx: Ctx) -> str | None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     ).returncode:
-        return "no user namespaces"
+        skip("no user namespaces")
     mnt = os.path.join(ctx.work, f"casefold-{os.getpid()}")
     os.makedirs(mnt, exist_ok=True)
     sh = wrapper(ctx, "sh")
@@ -332,7 +332,7 @@ def casefold_alias(ctx: Ctx) -> str | None:
         ["unshare", "-Urm", "sh", "-c", cmd], cwd=ctx.work, env=dict(ctx.env, PATH="/usr/bin:/bin")
     )
     if rc == 99:
-        return f"no casefold tmpfs here: {err.strip()[-120:]}"
+        skip(f"no casefold tmpfs here: {err.strip()[-120:]}")
     expect(rc != 98, f"the exclave's shell did not copy onto the casefold tmpfs: {err[-300:]!r}")
     expect(
         out == "rc=1\nmarker\nrc=1\n" and err.count("Read-only") >= 2,
@@ -548,7 +548,7 @@ def new_xattr_syscalls(ctx: Ctx) -> str | None:
     rc, out, err = inside(ctx, exe)
     lines = out.splitlines()
     if lines and lines[0].endswith(" 38"):
-        return "kernel has no listxattrat"
+        skip("kernel has no listxattrat")
     # an exclave that ships the file shows its own
     own = os.path.lexists(os.path.join(ctx.root, "etc", "hostname"))
     # SELinux hosts label every file
@@ -571,7 +571,7 @@ def bind_mount_alias(ctx: Ctx) -> str | None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     ).returncode:
-        return "no user namespaces"
+        skip("no user namespaces")
     alias = os.path.join(ctx.work, "alias")
     os.makedirs(alias, exist_ok=True)
     cmd = (
@@ -651,7 +651,7 @@ def openat2_resolve(ctx: Ctx) -> str | None:
     os.makedirs(d, exist_ok=True)
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "openat2"), [d])
     if rc == 3:
-        return "no openat2 on this kernel (5.6 and later)"
+        skip("no openat2 on this kernel (5.6 and later)")
     expect(rc == 0 and "FAIL" not in out, out + err)
     return None
 
@@ -671,7 +671,7 @@ def openat2_xdev(ctx: Ctx) -> str | None:
     os.makedirs(d)
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "openat2_xdev"), [d])
     if rc == 3:
-        return "no openat2 on this kernel (5.6 and later)"
+        skip("no openat2 on this kernel (5.6 and later)")
     expect(rc == 0, out + err)
     got = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
 
@@ -748,7 +748,7 @@ def path_length(ctx: Ctx) -> str | None:
     copy_exclave(ctx.exclave, copy)
     rootlen = len(os.path.join(copy, "tree"))
     if rootlen > 200:
-        return "the work directory's path is too long for the window: skipped"
+        skip("the work directory's path is too long for the window")
     base = "/usr/share/exclave-deep"
     # /usr/share
     fd = os.open(os.path.join(copy, "tree", base.lstrip("/")[:9]), os.O_RDONLY | os.O_DIRECTORY)

@@ -1,14 +1,17 @@
 """The harness the test drivers share: a registry, a runner and the checks a test makes.
 
 A test is a function of one fixture, registered with `@test`. It fails by raising AssertionError,
-through `expect`, and returns a note for its PASS line or None. `run_tests` prints one PASS or FAIL
-line per test, any exception a FAIL, and returns the failures. test/run.py and
-test/unpack_test.py run on it, each with its own fixture.
+through `expect`; it skips through `skip`, which raises Skip with the reason it cannot run here (a
+missing tool, a tree or a kernel that cannot answer); otherwise it returns a note for its PASS line
+or None. A test that asserted part of what it states and cannot run the rest passes, with a note
+naming the rest.
+`run_tests` prints one PASS, SKIP or FAIL line per test, any other exception a FAIL, and returns
+the failures. test/run.py and test/unpack_test.py run on it, each with its own fixture.
 """
 
 import subprocess
 import time
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -23,6 +26,15 @@ class Test[C](Protocol):
 
 
 TESTS: list[Test[Any]] = []
+
+
+class Skip(Exception):  # noqa: N818 -- an outcome, like a pass, not an error
+    """Raised by a test that cannot run here, with the reason; printed SKIP and counted apart."""
+
+
+def skip(why: str) -> NoReturn:
+    """Skip the test: it cannot run here, for the reason why."""
+    raise Skip(why)
 
 
 def test[T: Test[Any]](f: T) -> T:
@@ -45,12 +57,13 @@ def run_tests[T: Test[Any]](
     *,
     budget: float | None = None,
     after: Callable[[T], str | None] | None = None,
+    skipped: list[T] | None = None,
 ) -> list[T]:
-    """Run each test by call(test), print a PASS or FAIL line for it and return the failures.
+    """Run each test by call(test), print a PASS, SKIP or FAIL line for it and return the failures.
 
     A test over budget seconds fails: one that hangs is caught by run()'s timeouts, one that
-    crawls here (DESIGN.md 17). after(test), when given, runs whether the test passed or not, and a
-    message from it fails the test too.
+    crawls here (DESIGN.md 17). after(test), when given, runs whether the test passed, skipped or
+    failed, and a message from it fails the test too. The tests that skip are added to skipped.
     """
     width = max((len(t.__name__) for t in order), default=0)
     failed: list[T] = []
@@ -62,6 +75,10 @@ def run_tests[T: Test[Any]](
             if budget is not None:
                 expect(took <= budget, f"took {took:.1f} s, over the budget of {budget:g} s")
             print(f"PASS {t.__name__:<{width}} {took:5.1f}s {note or ''}")
+        except Skip as e:
+            if skipped is not None:
+                skipped.append(t)
+            print(f"SKIP {t.__name__:<{width}} {time.monotonic() - t0:5.1f}s {e}")
         except AssertionError as e:
             failed.append(t)
             why = str(e).strip().replace("\n", "\n     ")
@@ -76,6 +93,8 @@ def run_tests[T: Test[Any]](
             print(f"FAIL {t.__name__:<{width}} {time.monotonic() - t0:5.1f}s {why}")
             if t not in failed:
                 failed.append(t)
+            if skipped is not None and t in skipped:
+                skipped.remove(t)
     return failed
 
 

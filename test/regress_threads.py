@@ -9,7 +9,7 @@ import shutil
 import subprocess
 
 import tree
-from harness import expect, run, test
+from harness import expect, run, skip, test
 from suite import REPO, Ctx, inside
 
 
@@ -26,7 +26,7 @@ def threads(ctx: Ctx) -> None:
 
 
 @test
-def relative_to_a_renamed_directory(ctx: Ctx) -> None:
+def relative_to_a_renamed_directory(ctx: Ctx) -> str | None:
     """A descriptor-relative host path resolves while the directory's parent is renamed (7.4.3).
 
     In both forms of the walk: from the directory itself, where the one-step host check vouches
@@ -48,7 +48,7 @@ def relative_to_a_renamed_directory(ctx: Ctx) -> None:
             stderr=subprocess.DEVNULL,
         ).returncode
     ):
-        return
+        return "the walk from the root not run: no bwrap or user namespaces"
     rc, out, err = run(
         ["bwrap", "--dev-bind", "/", "/", "--bind", ctx.exclave, "/mnt", ctx.launcher, prog, d],
         cwd=ctx.work,
@@ -56,6 +56,7 @@ def relative_to_a_renamed_directory(ctx: Ctx) -> None:
         timeout=120,
     )
     expect(rc == 0 and "FAIL" not in out, "from the root: " + out + err)
+    return None
 
 
 @test
@@ -128,7 +129,7 @@ def go_paths(ctx: Ctx) -> str | None:
             for n, f in tree.GO_BUILDS
         ]
     else:
-        return "no go toolchain (golang-go) and nothing in build/go/" + platform.machine()
+        skip("no go toolchain (golang-go) and nothing in build/go/" + platform.machine())
     for name, exe in exes:
         if name == "go_paths_low":
             lo, hi = tree.load_span(exe)

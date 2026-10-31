@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 
-from harness import expect, read_bytes, run, test
+from harness import expect, read_bytes, run, skip, test
 from suite import Ctx, copy_exclave, hello_source, inside, wrapper
 
 
@@ -42,9 +42,9 @@ def hello(ctx: Ctx) -> str | None:
 def identical_object(ctx: Ctx) -> str | None:
     host = "/usr/bin/gcc-13"
     if "gcc-13" not in ctx.gcc:
-        return f"the exclave's compiler is {ctx.gcc}: no host twin"
+        skip(f"the exclave's compiler is {ctx.gcc}: no host twin")
     if not os.path.exists(host):
-        return "no host gcc-13"
+        skip("no host gcc-13")
     src = hello_source(ctx)
     a, b = os.path.join(ctx.work, "h_host.o"), os.path.join(ctx.work, "h_exclave.o")
     run([host, "-O2", "-c", src, "-o", a], cwd=ctx.work)
@@ -179,6 +179,8 @@ def gconv_and_locale(ctx: Ctx) -> str:
         expect(out.strip() == "4", f"wc -m under C.UTF-8: {out!r}")
     else:
         notes.append("no C.utf8 locale in the tree")
+    if len(notes) == 2:
+        skip("; ".join(notes))
     return "; ".join(notes)
 
 
@@ -186,9 +188,9 @@ def gconv_and_locale(ctx: Ctx) -> str:
 def rust(ctx: Ctx) -> str | None:
     rustc = shutil.which("rustc") or shutil.which("rustc", path=os.path.expanduser("~/.cargo/bin"))
     if not rustc:
-        return "no rustc"
+        skip("no rustc")
     if ctx.musl:
-        return "the host's rustc targets glibc; the exclave has musl"
+        skip("the host's rustc targets glibc; the exclave has musl")
     exe = os.path.join(ctx.progs, "rs")
     rc, out, err = run(
         [rustc, "-O", "-o", exe, os.path.join(ctx.work, "src", "rs.rs")], cwd=ctx.work
@@ -209,10 +211,10 @@ def gdb_hooks(ctx: Ctx) -> str | None:
     """
     gdb = shutil.which("gdb")
     if not gdb:
-        return "no gdb"
+        skip("no gdb")
     rc, out, err = run([gdb, "-batch", "-nx", "-ex", "python print(gdb.VERSION)"])
     if rc or not out.strip():
-        return "gdb without Python"
+        skip("gdb without Python")
     src = hello_source(ctx)
     exe = os.path.join(ctx.work, "hello-g")
     rc, out, err = run(
@@ -231,7 +233,7 @@ def gdb_hooks(ctx: Ctx) -> str | None:
         "set breakpoint pending on",
     ]
     if ctx.musl:
-        return "gdb's breakpoints in a musl libc do not hit, the program's own do (13 item 1)"
+        skip("gdb's breakpoints in a musl libc do not hit, the program's own do (13 item 1)")
     wr = "write"
     rc, out, err = run(
         [

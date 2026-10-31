@@ -15,7 +15,7 @@ from packages import make_apk, make_deb
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-from harness import expect, read_bytes, read_text, run, test
+from harness import expect, read_bytes, read_text, run, skip, test
 from suite import REPO, TOOL, Ctx, check, copy_exclave, inside
 
 from unpack import ldcache
@@ -349,7 +349,7 @@ def tree_by_hand(ctx: Ctx) -> str | None:
     an exclave: the tool needs no package reader. Skips where ar is missing.
     """
     if not shutil.which("ar"):
-        return "no ar"
+        skip("no ar")
     d = os.path.join(ctx.work, "hand-debs")
     os.makedirs(d, exist_ok=True)
     make_deb(
@@ -596,7 +596,7 @@ def ld_so_cache_as_ldconfig_writes_it(ctx: Ctx) -> str | None:
     prints.
     """
     if ctx.musl or not ctx.libc:
-        return "musl reads no ld.so.cache"
+        skip("musl reads no ld.so.cache")
     copies = []
     for which in ("ldconfig", "writer"):
         ex = os.path.join(ctx.work, f"cache-{which}-{os.getpid()}.exclave")
@@ -621,7 +621,7 @@ def ld_so_cache_as_ldconfig_writes_it(ctx: Ctx) -> str | None:
                 sample = name
                 break
     if not sample:
-        return "no library with a soname beside libc"
+        skip("no library with a soname beside libc")
     hwcaps = os.path.join(libdir.lstrip("/"), "glibc-hwcaps", "x86-64-v3")
     for root in copies:
         ld = os.path.join(root, libdir.lstrip("/"))
@@ -722,7 +722,7 @@ def wrap_takes_a_launcher(ctx: Ctx) -> str | None:
         not os.path.exists(other)
         or read_bytes(other, 20)[18:20] == read_bytes(ctx.launcher, 20)[18:20]
     ):
-        return "no launcher of another machine built here"
+        skip("no launcher of another machine built here")
     ex = os.path.join(ctx.work, f"foreign-{os.getpid()}.exclave")
     shutil.rmtree(ex, ignore_errors=True)
     os.makedirs(os.path.join(ex, "tree", "usr", "bin"))

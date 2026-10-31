@@ -4071,7 +4071,12 @@ unwrapped tree) makes an exclave under its work directory, compiles
 `--budget` sets the per-test limit. `--keep` keeps the work
 directory. `--launcher` tests another build in place of
 `build/launcher`, `build/launcher-debug` in `scripts/extra`. The exit status is the number of failures.
-Given an exclave, the suite first hashes its tree and refuses to run
+A test prints one line, PASS, FAIL or SKIP: SKIP, with its reason, for
+a test that cannot run here at all, for a missing tool or a tree or
+kernel that cannot answer, while one that ran part of what it states
+passes with a note naming the rest. The summary line counts the skips
+apart (`N tests, F failures, S skipped`), so a matrix row that lost a
+tool shows it. Given an exclave, the suite first hashes its tree and refuses to run
 unless the hash is the hashes file's `tree` record: the suite's copies
 hard-link the input's files, so a write that escaped one would change
 the input itself, and every later run would test a tree no exclave has.

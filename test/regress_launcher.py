@@ -12,7 +12,7 @@ import time
 lazy import resource
 
 import tree
-from harness import expect, read_bytes, read_text, run, test
+from harness import expect, read_bytes, read_text, run, skip, test
 from suite import REPO, TOOL, Ctx, copy_exclave, inside, wrapper
 
 
@@ -369,7 +369,7 @@ def nested_older_launcher(ctx: Ctx) -> str | None:
     """
     old = os.path.join(os.path.dirname(ctx.launcher_src), "launcher-old")
     if not os.path.exists(old):
-        return "no build/launcher-old"
+        skip("no build/launcher-old")
     src = os.path.join(ctx.work, "nb.c")
     sock = f"nest-sock-{os.getpid()}"  # relative to the work directory, whatever its depth
     with open(src, "w") as f:  # a bind at a fresh host path: 0 from the kernel
@@ -722,9 +722,9 @@ def shadow_stack_if_glibc_enables_it(ctx: Ctx) -> str | None:
     handler's paths run on a shadow stack here.
     """
     if ctx.machine != "x86_64":
-        return "x86-64 only"
+        skip("x86-64 only")
     if ctx.musl:
-        return "musl enables no shadow stack"
+        skip("musl enables no shadow stack")
     prog = os.path.join(ctx.progs, "shstk")
     rc, _out, err = run(
         [
@@ -740,7 +740,7 @@ def shadow_stack_if_glibc_enables_it(ctx: Ctx) -> str | None:
         env=ctx.env,
     )
     if rc:
-        return "the exclave's compiler takes no -fcf-protection: " + err[-100:]
+        skip("the exclave's compiler takes no -fcf-protection: " + err[-100:])
     rc, out, err = inside(ctx, "/usr/bin/env", ["GLIBC_TUNABLES=glibc.cpu.x86_shstk=on", prog])
     expect(
         rc == 0 and out.count(" ok\n") == 4 and "FAIL" not in out,
