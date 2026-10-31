@@ -170,7 +170,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 84 named tests, most of them programs that
+- **The regression suite**: 85 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -813,7 +813,8 @@ The kernel has executed the launcher at some path. The launcher:
    version or newer is inherited, which is reused (7.4.2).
 10. Loads the original and its loader (7.3) and jumps. A wrapper whose
     original is a script parses its `#!` line as 7.4.5 does and loads
-    the interpreter's original.
+    the interpreter's original, after the checks an exec of the
+    interpreter makes (below).
 
 A wrapper run directly from outside any exclave goes through exactly
 these steps; shortcuts (6.1) point at wrappers and add nothing.
@@ -826,8 +827,10 @@ taken as `execve` would take it, so that the program's `argv`,
 `cmdline` and `comm` are its own. The re-exec'd launcher resolves the
 target and makes an inside exec's checks in their order: a program in
 a data directory, a directory or a special file is refused, and the
-kernel's `X_OK` answer is final. The exit status is a shell's, 126 for
-a file that exists and cannot run, 127 for one that does not. A target
+kernel's `X_OK` answer is final; each interpreter a script names is
+checked the same way before it is loaded, as the kernel opens it to
+run. The exit status is a shell's, 126 for a file that exists and
+cannot run, 127 for one that does not. A target
 that is a wrapper is exec'd as itself, by the name the caller spelt,
 so that the kernel gives the program its identity, when the kernel
 would reach that wrapper by that name. An absolute link of the tree on
@@ -2429,7 +2432,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 84 named regressions and every oracle its kernel can run; 17
+suite's 85 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -3795,7 +3798,8 @@ meaning items 4 and 7.
    - *spawning and exec*: 100 000 `posix_spawn`s with RSS measured (16),
      `fexecve`, `memfd`
      and unlinked files, scripts with and without `#!` and with `#!` lines
-     the kernel's buffer cuts, `PATH` search,
+     the kernel's buffer cuts, a program, a loader or an interpreter
+     under a data directory, `PATH` search,
      faulty argument vectors, unusual images, and the identity a program
      exec'd from inside gets;
    - *the launcher and its filter*: a CET-marked program inside with the
@@ -3882,7 +3886,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, plus five of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `unix_socket` and `magic_links` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 3 000 paths over a random maze, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 84 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 85 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

@@ -268,23 +268,6 @@ def positional_entry(ctx: Ctx) -> None:
     )
     rc, out, err = run([ctx.launcher, ctx.work], cwd=ctx.work, env=ctx.env)
     expect(rc == 126 and "Permission denied" in err, f"a directory: rc={rc} {err!r}")
-    dp = os.path.join(ctx.work, "dp-entry.exclave")
-    copy_exclave(ctx.exclave, dp)
-    os.makedirs(os.path.join(dp, "tree", "opt", "sdk", "bin"))
-    shutil.copy2(
-        os.path.join(ctx.progs, "exec"), os.path.join(dp, "tree", "opt", "sdk", "bin", "prog")
-    )
-    with open(os.path.join(dp, ".exclave", "manifest"), "wb") as f:
-        f.write(b'exclave 1\n\ndata "/opt/sdk"\n')
-    rc, out, err = run(
-        [os.path.join(dp, ".exclave", "launcher"), "/opt/sdk/bin/prog", "self"],
-        cwd=ctx.work,
-        env=ctx.env,
-    )
-    expect(
-        rc == 126 and "Permission denied" in err and "child ok" not in out,
-        f"a program under a data directory is never executed (6.2): rc={rc} {out!r} {err!r}",
-    )
     # EXCLAVE_EXEC in anyone's environment is inert for a wrapper, from outside and from inside
     rc, out, err = run(
         [wrapper(ctx, "echo"), "still echo"],

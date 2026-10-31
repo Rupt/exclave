@@ -2,9 +2,9 @@
  * script's $0 as the kernel spells them, for a host ELF exec'd by an absolute and by a relative path with argv[0]
  * renamed, a host script exec'd relative to a descriptor and through a descriptor alone (/dev/fd/N/name and /dev/fd/N),
  * a host ELF through a descriptor, and execve's own answers for a close-on-exec script descriptor, a header the loader
- * cannot load and a loader the exclave lacks. usage: exec_identity HOSTDIR, or "exec_identity HOSTDIR --child LABEL" as
- * the program it copies and re-executes. Prints one line per case, "<case>: <answer>", the same in every world, so the
- * kernel under bwrap is the oracle; a descriptor number is printed as N. Exit 0 always. */
+ * cannot load, a loader the exclave lacks and another machine's ELF. usage: exec_identity HOSTDIR, or "exec_identity
+ * HOSTDIR --child LABEL" as the program it copies and re-executes. Prints one line per case, "<case>: <answer>", the
+ * same in every world, so the kernel under bwrap is the oracle; a descriptor number is printed as N. Exit 0 always. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -205,5 +205,17 @@ int main(int argc, char **argv)
     copy_self(p);
     if (break_interp(p) == 0) child_lines("no loader", AT_FDCWD, p, b_av, 0);
     else printf("no loader: static (no PT_INTERP to break)\n");
+    /* another machine's 64-bit ELF, which no binfmt handler takes */
+    snprintf(p, sizeof p, "%s/foreign", hd);
+    copy_self(p);
+    {
+        int o = open(p, O_WRONLY);
+        if (o < 0 || pwrite(o, "\x34\x12", 2, 18) != 2) {
+            perror(p);
+            return 2;
+        }
+        close(o);
+    }
+    child_lines("foreign machine", AT_FDCWD, p, b_av, 0);
     return 0;
 }

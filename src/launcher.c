@@ -264,11 +264,26 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
     die("cannot re-exec the launcher", C.launcher, r);
 }
 
+/* 7.4.5: what exec_target checks of a resolved file before it reads it, in its order: a data directory is EACCES (6.2),
+ * then the name's own error, a directory or a special file EACCES, and the kernel's own answer to X_OK is final. The
+ * exit status is a shell's: 126 for a file that exists and cannot run, 127 for one that does not. real receives the
+ * file's real path. */
+static void exec_checks(const char *v, char *real)
+{
+    if (vis_in_data(v)) die_status(126, "cannot execute", v, EACCES);
+    to_real_exec(v, real);
+    struct kstat st;
+    long e = sys_stat(real, &st);
+    if (e < 0) die_status(e == -ENOENT ? 127 : 126, "cannot execute", v, e);
+    if ((st.st_mode & S_IFMT) != S_IFREG) die_status(126, "cannot execute", v, EACCES);
+    long ok = sys_faccessat(AT_FDCWD, real, X_OK);
+    if (ok < 0) die_status(126, "cannot execute", v, ok);
+}
+
 /* 7.4.5 for a target that arrived by EXCLAVE_EXEC, the positional entry's or a handler's: the checks exec_target makes
- * before loading anything, in its order, so that the entry refuses what an exec inside refuses: the target is resolved
- * as an exec resolves it, a data directory is EACCES, a directory or a special file EACCES, the kernel's own answer to
- * X_OK is final, and a wrapper is exec'd as itself so that the kernel gives the program its identity. The exit status
- * is a shell's: 126 for a file that exists and cannot run, 127 for one that does not. */
+ * before loading anything, so that the entry refuses what an exec inside refuses: the target is resolved as an exec
+ * resolves it and checked (exec_checks), and a wrapper is exec'd as itself so that the kernel gives the program its
+ * identity. */
 static void loader_mode_check(char **argv, char **env2)
 {
     struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0);
@@ -277,15 +292,7 @@ static void loader_mode_check(char **argv, char **env2)
     long r = canon(S, C.program, AT_FDCWD, 1, S->v);
     if (r < 0) die_status(r == -ENOENT ? 127 : 126, "cannot execute", C.program, r);
     scpy(C.program, S->v, PATH_MAX);
-    /* 6.2: a data directory is never executed */
-    if (vis_in_data(C.program)) die_status(126, "cannot execute", C.program, EACCES);
-    to_real_exec(C.program, S->real);
-    struct kstat st;
-    long e = sys_stat(S->real, &st);
-    if (e < 0) die_status(e == -ENOENT ? 127 : 126, "cannot execute", C.program, e);
-    if ((st.st_mode & S_IFMT) != S_IFREG) die_status(126, "cannot execute", C.program, EACCES);
-    long ok = sys_faccessat(AT_FDCWD, S->real, X_OK);
-    if (ok < 0) die_status(126, "cannot execute", C.program, ok);
+    exec_checks(C.program, S->real);
     /* a wrapper: the kernel runs the launcher under the program's name, exec'd by the name the caller spelt, /bin/sh,
      * so that comm is the kernel's answer for that name, and the kernel follows the last link. It follows it on the
      * host, though, where an absolute link of the tree leads to the host's file: the spelling is exec'd only when it
@@ -298,7 +305,7 @@ static void loader_mode_check(char **argv, char **env2)
         if (fd >= 0) sys_close((int)fd);
         if (n < 0 || xstrcmp(S->cur, S->real) != 0) scpy(S->real2, S->real, PATH_MAX);
         unborrow();
-        e = sys_execve(S->real2, argv, env2);
+        long e = sys_execve(S->real2, argv, env2);
         die("cannot exec the wrapper", C.program, e);
     }
     scratch_put(S);
@@ -339,6 +346,8 @@ static __attribute__((noreturn)) void run(const char *v, const char *given, long
     char *iv = arena_alloc(PATH_MAX);
     if (canon(S, nargv[0], AT_FDCWD, 1, iv) < 0) die_status(127, "cannot resolve interpreter", nargv[0], 0);
     scratch_put(S);
+    /* the interpreter is checked as an exec of it would be: one under a data directory is never run (6.2) */
+    exec_checks(iv, real);
     run(iv, nargv[0], k, nargv, envp, auxv, depth + 1);
 }
 

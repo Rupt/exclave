@@ -11,8 +11,8 @@ import sys
 lazy import ctypes
 
 import tree
-from harness import expect, read_text, run, skip, test
-from suite import Ctx, inside, wrapper
+from harness import expect, read_bytes, read_text, run, skip, test
+from suite import Ctx, copy_exclave, inside, wrapper
 
 PER_LINUX32 = 0x8  # personality(2)
 
@@ -316,15 +316,25 @@ def shebang_buffer_rules(ctx: Ctx) -> None:
 
     With no newline in the buffer, an interpreter path that runs past the first 255 bytes is
     ENOEXEC, never a shorter path; an argument may be cut, and trailing blanks go. A newline in the
-    256th byte still ends the line. Both the handler's exec and the launcher's own entry hold.
+    256th byte still ends the line, and only a space or a tab is a blank, so a CR stays in the name.
+    The interpreter must be executable, as any file an exec runs. Both the handler's exec and the
+    launcher's own entry hold.
     """
     exe = os.path.join(ctx.progs, "exec")
+    noexec = os.path.join(ctx.work, "shebang-interp644")
+    shutil.copy2(exe, noexec)
+    os.chmod(noexec, 0o644)
     cases = (
         ("long-interp", "#!/" + "x" * 300, "Exec format error", 126),
         ("newline-256", "#!/" + "x" * 252 + "\n", "No such file or directory", 127),
         ("long-blanks", "#!/bin/sh -e" + " " * 300, "", 0),
         # an empty interpreter name, looked up as the working directory
         ("blank-interp", "#!   ", "Permission denied", 126),
+        # only a space or a tab ends the name (binfmt_script.c's spacetab): /bin/sh\r is absent
+        ("crlf", "#!/bin/sh\r\n", "No such file or directory", 127),
+        ("tabs", "#!\t/bin/sh\t-e\t\n", "", 0),
+        # an interpreter is opened as an exec opens a file: one without execute permission is EACCES
+        ("noexec-interp", f"#!{noexec}\n", "Permission denied", 126),
     )
     for name, text, want, entry_rc in cases:
         p = os.path.join(ctx.work, f"shebang-{name}")
@@ -390,8 +400,9 @@ def exec_identity(ctx: Ctx) -> None:
     comm and AT_EXECFN from the path the program was exec'd by, not from argv[0]; a script's $0,
     AT_EXECFN and comm spelt /dev/fd/N/name relative to a descriptor and /dev/fd/N through one, comm
     then the file's own name; a close-on-exec script descriptor refused with ENOENT before anything
-    runs; a header the loader cannot load ENOEXEC and a loader the exclave lacks ENOENT from execve
-    itself, rather than a child that dies after a successful exec. The kernel under bwrap measured
+    runs; a header the loader cannot load, of the 32-bit class or another machine, ENOEXEC and a
+    loader the exclave lacks ENOENT from execve itself, rather than a child that dies after a
+    successful exec. The kernel under bwrap measured
     these answers (test/exercise.py).
     """
     d = os.path.join(ctx.work, "identhost")
@@ -417,6 +428,7 @@ def exec_identity(ctx: Ctx) -> None:
         "fd elf argv0": "renamed",
         "elf32": "ENOEXEC",
         "no loader": "ENOENT",
+        "foreign machine": "ENOEXEC",
     }
     bad = [
         f"{k}: got {got.get(k)}, the kernel says {v}" for k, v in want.items() if got.get(k) != v
@@ -489,3 +501,51 @@ def low_image(ctx: Ctx) -> None:
         rc == 0 and out.startswith("text 0x") and out.rstrip().endswith("marker 0"),
         f"a program from 0x10000 past 0x3f0000: rc={rc} {out!r} {err!r}",
     )
+
+
+@test
+def data_directory(ctx: Ctx) -> None:
+    """6.2, 7.3, 7.4.5: nothing under a data directory runs: a program, a loader or an interpreter.
+
+    A program there is EACCES from inside and 126 through the entry; a program whose PT_INTERP names
+    a loader there is refused by name with 127 before anything runs, from inside and through the
+    entry; a script whose #! names an interpreter there is EACCES, as the interpreter itself is.
+    """
+    dp = os.path.join(ctx.work, "data-dir.exclave")
+    copy_exclave(ctx.exclave, dp)
+    sdk = os.path.join(dp, "tree", "opt", "sdk")
+    os.makedirs(sdk)
+    p = os.path.join(ctx.progs, "exec")
+    shutil.copy2(p, os.path.join(sdk, "prog"))
+    shutil.copy2(ctx.payload(ctx.interp), os.path.join(sdk, "ld.so"))
+    with open(os.path.join(dp, ".exclave", "manifest"), "wb") as f:
+        f.write(b'exclave 1\n\ndata "/opt/sdk"\n')
+    entry, sh = os.path.join(dp, ".exclave", "launcher"), dp + "/tree" + ctx.vbin("sh")
+    # the program's own loader named in its header, moved to the data directory
+    src = read_bytes(p)
+    interp = ctx.interp.encode() + b"\0"
+    i = src.index(interp)
+    moved = os.path.join(ctx.work, "sdk-loader")
+    with open(moved, "wb") as f:
+        f.write(src[:i] + b"/opt/sdk/ld.so".ljust(len(interp), b"\0") + src[i + len(interp) :])
+    os.chmod(moved, 0o755)
+    script = os.path.join(ctx.work, "sdk-script")
+    with open(script, "w") as f:
+        f.write("#!/opt/sdk/prog child\n")
+    os.chmod(script, 0o755)
+    for target, refusal, what in (
+        ("/opt/sdk/prog", "Permission denied", "a program under a data directory"),
+        (moved, "/opt/sdk/ld.so", "a program whose loader is under a data directory"),
+        (script, "Permission denied", "a script whose interpreter is under a data directory"),
+    ):
+        status = 127 if target == moved else 126
+        rc, out, err = run([entry, target, "self"], cwd=ctx.work, env=ctx.env)
+        expect(
+            rc == status and refusal in err and "child ok" not in out,
+            f"{what} through the entry: rc={rc}, not {status} naming {refusal!r}: {out!r} {err!r}",
+        )
+        rc, out, err = run([sh, "-c", f"{target} self"], cwd=ctx.work, env=ctx.env)
+        expect(
+            rc == status and refusal in err and "child ok" not in out,
+            f"{what} from inside: rc={rc}, not {status} naming {refusal!r}: {out!r} {err!r}",
+        )
