@@ -1726,7 +1726,8 @@ DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[
         (
             "a no-follow call on an identity symlink (8.4) is the host's own on its link, as "
             "the native run answers: EPERM for a user attribute on a link, EOPNOTSUPP for a "
-            "link's mode; the handler answers EACCES and EPERM"
+            "link's mode, and a fanotify mark on the link; the handler answers EACCES and EPERM, "
+            "and marks the link's target (ENODEV on 5.10, where its tmpfs has no fsid)"
         ),
         lambda n, label, b, o, _c: (
             (n, label, b, o)
@@ -1735,6 +1736,7 @@ DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[
                 ("lremovexattr", "resolv", "ret=-1 errno=30", "ret=-1 errno=13"),
                 ("setxattrat", "cwd/resolv/nofollow", "ret=-1 errno=30", "ret=-1 errno=13"),
                 ("fchmodat2", "cwd/resolv/nofollow", "ret=-1 errno=30", "ret=-1 errno=1"),
+                ("fanotify_mark", "cwd/resolv/dont_follow", "ret=0 errno=0", "ret=-1 errno=19"),
             }
         ),
         # a GitHub runner's /etc/resolv.conf is a regular file, and then no case is a no-follow
