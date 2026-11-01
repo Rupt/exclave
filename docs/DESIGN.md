@@ -859,7 +859,10 @@ the kernel's own `mmap` refuses, one with more file than memory or past
 the address space (`EINVAL` in `load_elf_binary`), one at an address the
 kernel will not map, zero or one already in use, no `PT_LOAD` at all,
 and a `.bss` the kernel cannot give; the oracle's `exec_elf` measures
-each against the kernel (17 item 4). The loader zeroes the tail of the last
+each against the kernel (17 item 4). An address already in use is
+refused on every machine, as x86-64's kernel refuses it; aarch64's
+kernel maps a second, identical `PT_LOAD` over the first and runs the
+image. The loader zeroes the tail of the last
 file-backed page, maps anonymous memory for the rest of `.bss`, and
 makes the stack executable where `PT_GNU_STACK` asks. It builds the
 initial stack with `argc`, `argv`, `envp` and a copy of the launcher's
@@ -3039,7 +3042,9 @@ and stay fixed.
     would run on the main stack; `sigaltstack(NULL, &old)` in it
     reports `SS_ONSTACK`. A 5 KB handler beside an 8 KB alternate stack
     armed for `SIGSEGV`, Rust's shape, reaches the guard page under the
-    launcher and runs natively (`test/progs/sigstack.c`). A handler
+    launcher and runs natively (`test/progs/sigstack.c`); on aarch64,
+    whose signal frame is larger, the `SIGSEGV` handler has no room
+    either and the program is killed. A handler
     that uses more than a few hundred bytes beside a small alternate
     stack is the shape to avoid.
 

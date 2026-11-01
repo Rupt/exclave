@@ -546,7 +546,8 @@ def sigstack_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     by_the_kernel: the kernel itself answered. Otherwise the launcher did, and a handler that traps
     on an alternate stack smaller than 8 KB is its stated limitation (13 item 30), 8 KB too where
     the kernel's frame passes 3.5 KB; and a 5 KB handler without SA_ONSTACK landing during a trap
-    exits 9 from the SIGSEGV handler, since it runs on the 8 KB alternate stack (13 item 51).
+    exits 9 from the SIGSEGV handler, since it runs on the 8 KB alternate stack (13 item 51), or
+    is killed where that handler has no room either, as on aarch64.
     """
     got = out.splitlines()
     wrong = []
@@ -565,7 +566,13 @@ def sigstack_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
                 or ("of 8 KB," in case and minsigstksz() > 3500)
             ):
                 continue
-            if case.startswith("5 KB handler") and g == w.replace("exit 0", "exit 9"):
+            if case.startswith("5 KB handler") and (
+                g == w.replace("exit 0", "exit 9")
+                or (
+                    platform.machine() == "aarch64"
+                    and g == w.replace("exit 0", "killed by Segmentation fault")
+                )
+            ):
                 continue
         wrong.append(f"got {g!r}, the kernel says {w!r}")
     if len(got) != len(SIGSTACK):
@@ -1114,6 +1121,9 @@ EXEC_ELF_LAUNCHER: dict[str, str] = {
     "PT_INTERP the base image": "status=127",
     "PT_INTERP itself": "status=127",
     "ET_DYN with PT_INTERP the base image": "status=127",
+    # the loader refuses a segment at an address already in use on every machine (7.3), as
+    # x86-64's kernel does; aarch64's maps the identical segment over the first and runs it
+    **({"two identical PT_LOADs": "signal=11"} if platform.machine() == "aarch64" else {}),
 }
 # exec_auxv HOSTDIR (test/progs/exec_auxv.c), measured under bwrap on 7.0; a value the kernel copies
 # as its own, the vector's entries, the page size, the hardware capabilities and the loader's name,

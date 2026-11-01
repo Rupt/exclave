@@ -154,7 +154,10 @@ static void child_wide(void)
 int main(void)
 {
     setvbuf(stdout, 0, _IOLBF, 0);
+    /* the least stack sigaltstack accepts: the constant MINSIGSTKSZ or the kernel's frame (AT_MINSIGSTKSZ, which
+     * sysconf answers), whichever is larger (sigaltstack_size_valid) */
     long minsz = sysconf(_SC_MINSIGSTKSZ);
+    if (minsz < MINSIGSTKSZ) minsz = MINSIGSTKSZ;
     printf("MINSIGSTKSZ: %ld bytes\n", minsz);
     /* 1. sizes: the handler on the stack does nothing, then traps (13 item 30: the handler's own frame is added) */
     static const struct {
