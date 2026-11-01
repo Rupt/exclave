@@ -359,7 +359,15 @@ def identity_links(root: str) -> None:
 
 # the suite's path programs whose expectations the kernel can check (17 item 4), each judged here as
 # the suite judges the launcher's answers
-PROGRAMS = ("ro_matrix", "openat2", "creat_slash", "slash_links", "unix_socket", "magic_links")
+PROGRAMS = (
+    "ro_matrix",
+    "openat2",
+    "creat_slash",
+    "slash_links",
+    "open_flags",
+    "unix_socket",
+    "magic_links",
+)
 
 
 def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
@@ -378,6 +386,8 @@ def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
         return bad or ([] if rc in (0, 3) else [out])
     if name == "magic_links":
         wrong = kernel_answers.magic_links_wrong(out, kernel_answers.magic_links_missing(hostdir))
+    elif name == "open_flags":
+        wrong = kernel_answers.open_flags_wrong(out, by_the_kernel=True)
     else:
         wrong = {
             "creat_slash": kernel_answers.creat_slash_wrong,
@@ -428,6 +438,7 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
             f"mkdir -p {hostdir}/slash_links && {work}/slash_links {hostdir}/slash_links {true} "
             f"/usr/share {tree.dir_link(root)}"
         ),
+        "open_flags": f"{work}/open_flags {hostdir}",
         "unix_socket": (
             f"mkdir {sockhost} && {work}/unix_socket {sockhost} /usr/share {true} "
             f"/usr/share/exclave-test.sock {deep}"

@@ -170,7 +170,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 85 named tests, most of them programs that
+- **The regression suite**: 86 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1054,6 +1054,12 @@ there stays the host's.
 to reverse-translate. A trailing slash is preserved through
 translation, so that `stat("/file/")` fails as the kernel would.
 `O_EXCL` without `O_CREAT` follows symlinks, as the kernel does.
+`open` and `openat` make the kernel's checks on the flag word before
+any lookup, as `openat2` does (`build_open_how`, `build_open_flags`):
+a flag the kernel does not know is dropped, `O_PATH` drops every
+companion but `O_DIRECTORY`, `O_NOFOLLOW` and `O_CLOEXEC`,
+`O_DIRECTORY` with `O_CREAT` is `EINVAL`, and so is `O_TMPFILE`
+without `O_DIRECTORY` or without write access.
 
 A program on the loader path answers `ETXTBSY` when the process that
 loaded it write-opens or truncates its file, before any read-only
@@ -2462,7 +2468,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 85 named regressions and every oracle its kernel can run; 17
+suite's 86 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -3850,7 +3856,8 @@ meaning items 4 and 7.
      (`adversarial`), which runs the handler's deepest paths on Rust's
      alternate stack too;
    - *paths and the border*: working directories on either side, host
-     symlinks, the read-only matrix of 8.2, unix sockets, `PATH_MAX`,
+     symlinks, the read-only matrix of 8.2, the open flags the kernel
+     judges before the walk, unix sockets, `PATH_MAX`,
      `openat2`'s `resolve` flags, `/proc` magic links, those to objects
      with no path among them, a link's text read as stored, and the
      `*xattrat` calls;
@@ -3927,10 +3934,10 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus six of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `unix_socket` and `magic_links` (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus seven of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket` and `magic_links` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 85 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 86 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -4243,8 +4250,8 @@ once the answers agree until its entry goes, on a host whose files can
 show it (an entry says which hosts can, such as one whose
 `/etc/resolv.conf` is a symlink). On the reference machine
 28 741 cases run on each of the gate's four exclaves and none differ
-unexplained; 209 are open defects: `O_DIRECTORY` with `O_CREAT` or
-`O_WRONLY` in `open` and `openat`.
+unexplained; the open defects are `O_WRONLY|O_DIRECTORY` on what is
+not a directory in `open` and `openat`.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.
 

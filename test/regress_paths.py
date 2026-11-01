@@ -841,6 +841,20 @@ def unix_socket(ctx: Ctx) -> None:
 
 
 @test
+def open_flags_order(ctx: Ctx) -> None:
+    """7.4.3: the open flags the kernel judges before any lookup, in open and openat as in openat2.
+
+    build_open_flags refuses O_DIRECTORY with O_CREAT and O_TMPFILE without O_DIRECTORY or write
+    access before getname, so before EFAULT and the read-only rules, and open's O_PATH drops every
+    companion but its own. Measured under bwrap; the launcher once answered these from its walk.
+    """
+    d = os.path.join(ctx.work, "open_flags")
+    os.makedirs(d, exist_ok=True)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "open_flags"), [d])
+    expect(rc == 0 and not kernel_answers.open_flags_wrong(out), out + err)
+
+
+@test
 def create_through_a_slashed_link(ctx: Ctx) -> None:
     """8.1: a slash ending the text of a final symlink is the path's trailing slash.
 

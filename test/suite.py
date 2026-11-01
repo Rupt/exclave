@@ -469,6 +469,7 @@ PROGS = (
     "cwd_race",
     "creat_slash",
     "slash_links",
+    "open_flags",
     "xattrat",
     "readlink_fault",
     "identity_nofollow",

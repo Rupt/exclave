@@ -1779,20 +1779,6 @@ DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[
         ),
         lambda: True,
     ),
-    (
-        (
-            "O_DIRECTORY|O_CREAT is EINVAL in open and openat as in openat2 since 6.3 "
-            "(build_open_flags), before any lookup; the handler checks it for openat2 alone, and "
-            "answers the others from its walk"
-        ),
-        lambda n, label, b, o, _c: (
-            n in ("open", "openat")
-            and label.endswith("/dir_creat")
-            and errnos(b, o)[0] == errno.EINVAL
-            and failed(o)
-        ),
-        lambda: True,
-    ),
 ]
 
 

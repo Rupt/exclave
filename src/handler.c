@@ -323,17 +323,35 @@ static long re_flag(const struct scratch *S, long flag) { return as_given(S) ? 0
 static int dfd_virtual(int fd, char *out);
 
 /* ---------- open ---------- */
+/* build_open_how and build_open_flags (fs/open.c): the flag word's own rules, before getname and any lookup. open and
+ * openat keep the flags the kernel knows and let O_PATH drop every companion but its own, where openat2 has refused
+ * the rest first (do_openat2); then O_DIRECTORY with O_CREAT is EINVAL (6.3), and O_TMPFILE wants O_DIRECTORY beside
+ * it and write access. */
+static long open_flags_check(long *flags, int nr)
+{
+    long f = *flags;
+    if (nr != NR_openat2) {
+        f &= (long)VALID_OPEN_FLAGS;
+        if (f & O_PATH) f &= O_PATH_FLAGS;
+    }
+    if ((f & (O_DIRECTORY | O_CREAT)) == (O_DIRECTORY | O_CREAT)) return -EINVAL;
+    if ((f & (O_TMPFILE & ~O_DIRECTORY)) && (!(f & O_DIRECTORY) || (f & O_ACCMODE) == O_RDONLY)) return -EINVAL;
+    *flags = f;
+    return 0;
+}
 /* open, creat, openat and openat2 of args[pi] relative to args[di], with the syscall's flags and mode: the read-only
  * answers, then the re-issue on the real path. Returns the descriptor or -errno. */
 static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long mode, int nr)
 {
+    long r = open_flags_check(&flags, nr);
+    if (r < 0) return r;
     /* build_open_flags: O_CREAT|O_EXCL is O_NOFOLLOW too, and O_PATH keeps no O_CREAT; a create looks the last name
      * up in its parent (lookup_fast_for_open: a trailing slash is EISDIR before the lookup, so before any link there,
      * RESOLVE_NO_SYMLINKS or not) and then follows what it found */
     int creat = (flags & O_CREAT) && !(flags & O_PATH);
     int follow = (flags & O_NOFOLLOW) || (creat && (flags & O_EXCL)) ? 0 : WALK_FOLLOW;
     if (creat) follow |= WALK_PARENT;
-    long r = resolve(S, a, pi, di, follow, 0);
+    r = resolve(S, a, pi, di, follow, 0);
     /* a walk that never touched the exclave is the kernel's own to make, with every
      * resolve flag, on the host's own mounts (13 item 22); RESOLVE_CACHED dropped */
     if (nr == NR_openat2 && r <= 0 && r != -EFAULT && r != -ENAMETOOLONG && !S->touched_exclave) {

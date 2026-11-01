@@ -68,6 +68,56 @@ def unix_socket_wrong(out: str) -> list[str]:
     ]
 
 
+# open_flags HOSTDIR: one line per case, the case and the errno text
+OPEN_FLAGS = (
+    "O_DIRECTORY|O_CREAT on a directory: Invalid argument",
+    "O_DIRECTORY|O_CREAT on a file: Invalid argument",
+    "O_DIRECTORY|O_CREAT on a missing name: Invalid argument",
+    "O_DIRECTORY|O_CREAT with a trailing slash: Invalid argument",
+    "O_DIRECTORY|O_CREAT on a bad pointer: Invalid argument",
+    "openat O_DIRECTORY|O_CREAT on a missing name: Invalid argument",
+    "the missing name afterwards: No such file or directory",
+    "O_TMPFILE without write access: Invalid argument",
+    "O_TMPFILE with O_CREAT: Invalid argument",
+    "O_TMPFILE without O_DIRECTORY: Invalid argument",
+    "O_TMPFILE on a missing name: No such file or directory",
+    "O_TMPFILE on a file: Not a directory",
+    "O_TMPFILE on a directory: Read-only file system",
+    "O_PATH|O_DIRECTORY|O_CREAT on a directory: ok",
+    "O_PATH|O_DIRECTORY|O_CREAT on a file: Not a directory",
+    "O_PATH|O_DIRECTORY|O_CREAT on a missing name: No such file or directory",
+    "the mode of an existing file after O_CREAT with mode 0: kept",
+)
+# the cases a kernel before 6.3 answers otherwise: open and openat opened or created with
+# O_DIRECTORY|O_CREAT until build_open_flags refused the pair (fs/open.c); the launcher answers as
+# the newer kernels do
+OPEN_FLAGS_SINCE_6_3 = "O_DIRECTORY|O_CREAT on "
+
+
+def kernel() -> tuple[int, int]:
+    """The running kernel's major and minor version."""
+    major, minor = os.uname().release.split(".")[:2]
+    return int(major), int(minor.split("-")[0])
+
+
+def open_flags_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
+    """The lines of open_flags's output that differ from the kernel's answers.
+
+    by_the_kernel: the kernel itself answered, so a kernel before 6.3 may answer the cases of
+    OPEN_FLAGS_SINCE_6_3 as it did then.
+    """
+    got = out.splitlines()
+    old = by_the_kernel and kernel() < (6, 3)
+    wrong = [
+        f"got {g!r}, the kernel says {w!r}"
+        for g, w in zip(got, OPEN_FLAGS, strict=False)
+        if g != w and not (old and OPEN_FLAGS_SINCE_6_3 in w)
+    ]
+    if len(got) != len(OPEN_FLAGS):
+        wrong.append(f"{len(got)} lines, the kernel gives {len(OPEN_FLAGS)}")
+    return wrong
+
+
 def creat_slash_wrong(out: str) -> list[str]:
     """The lines of creat_slash's output that differ from the kernel's answers."""
     got = out.splitlines()
