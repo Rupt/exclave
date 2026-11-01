@@ -40,5 +40,9 @@ int main(int argc, char **argv)
     try("creat through a link whose text has .. and a slash", "l_dotdot_slash", O_RDONLY | O_CREAT);
     try("open through a link to a missing name with a slash", "l_absent_slash", O_RDONLY);
     try("creat with O_EXCL through the link", "l_absent_slash", O_WRONLY | O_CREAT | O_EXCL);
+    /* "." or ".." as the last name is the directory itself, slash or not (handle_dots): O_EXCL's EEXIST comes first */
+    try("creat with O_EXCL of a directory's dot with a slash", "/usr/share/./", O_WRONLY | O_CREAT | O_EXCL);
+    try("creat of a directory's dot with a slash", "/usr/share/./", O_WRONLY | O_CREAT);
+    try("creat with O_EXCL of a directory's dotdot with a slash", "/usr/share/../", O_WRONLY | O_CREAT | O_EXCL);
     return 0;
 }

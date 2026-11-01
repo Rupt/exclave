@@ -343,8 +343,9 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     int wr = acc == O_WRONLY || acc == O_RDWR || (flags & O_TRUNC) || (flags & O_TMPFILE) == O_TMPFILE;
     if (flags & O_PATH) wr = 0;
     size_t vl = xstrlen(S->v);
-    /* open_last_lookups: O_CREAT with a trailing slash, before any lookup */
-    if (creat && vl > 1 && S->v[vl - 1] == '/') return -EISDIR;
+    /* lookup_fast_for_open: O_CREAT with a trailing slash, before any lookup; a last name that is "." or ".." is the
+     * directory itself (handle_dots), where do_open answers O_EXCL's EEXIST before EISDIR, as for any directory */
+    if (creat && vl > 1 && S->v[vl - 1] == '/' && !last_special(S->given)) return -EISDIR;
     /* the kernel protects a running program; the launcher protects the one it loaded (13 items 29 and 40) */
     if (wr && (flags & O_TMPFILE) != O_TMPFILE && C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;
     /* an identity file that is a host symlink (8.4) */

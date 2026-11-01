@@ -20,6 +20,9 @@ CREAT_SLASH = (
     "creat through a link whose text has .. and a slash: Is a directory",
     "open through a link to a missing name with a slash: No such file or directory",
     "creat with O_EXCL through the link: File exists",
+    "creat with O_EXCL of a directory's dot with a slash: File exists",
+    "creat of a directory's dot with a slash: Is a directory",
+    "creat with O_EXCL of a directory's dotdot with a slash: File exists",
 )
 
 # unix_socket HOSTDIR /usr/share EXFILE /usr/share/exclave-test.sock CWDDIR: the case and its answer

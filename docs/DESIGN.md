@@ -179,7 +179,7 @@ How it is tested (17):
   and 2).
 - **The syscall probe**: every trapped path and descriptor syscall,
   with every flag and path form, run under `bwrap` and under the
-  launcher; 26 521 cases per exclave, each difference from the kernel
+  launcher; 27 721 cases per exclave, each difference from the kernel
   fixed, accepted under a named reason or listed as an open defect
   (17 item 7).
 - **Docker's default seccomp profile**: a workload in each exclave runs
@@ -1686,7 +1686,9 @@ the references for the kernel's order.
     or ending the text of a final symlink that is followed (the kernel
     walks the text as the rest of the path), is `EISDIR` for
     `open` and `ENOENT` for a non-directory create, and a symlink
-    before it is the existing name itself, never followed (7.4.3);
+    before it is the existing name itself, never followed (7.4.3); a
+    last name that is `.` or `..`, slash or not, is the directory
+    itself, `EEXIST` under `O_EXCL` and `EISDIR` otherwise;
     and only then comes `EROFS`. `O_CREAT` without `O_EXCL` on an existing file opened
     read-only succeeds.
   - A write-open or `truncate` of a directory is `EISDIR`, `truncate`
@@ -4176,7 +4178,7 @@ or a symlink to one, originals included. On the fixture one suite takes
 **The probe** (`test/progs/probe.c`, `test/oracle_syscalls.py`) puts the
 whole trapped-syscall surface in front of the kernel. It crosses the 61
 trapped path syscalls and six descriptor-addressed ones with every flag
-that changes resolution, 84 path forms over a fixed maze and the `*at`
+that changes resolution, 88 path forms over a fixed maze and the `*at`
 descriptors. The forms include 40 links in one walk and 41, in the
 tree, across the border at every link and through links walked as
 directories, since the kernel counts links over the whole walk. One
@@ -4214,8 +4216,8 @@ listed apart by its two exact answers, printed by every run, and fails
 once the answers agree until its entry goes, on a host whose files can
 show it (a host whose `/etc/resolv.conf` is no symlink shows no
 no-follow call on an identity symlink). On the reference machine
-26 521 cases run on each of the gate's four exclaves and none differ
-unexplained; 193 are open defects: `O_DIRECTORY` with `O_CREAT` or
+27 721 cases run on each of the gate's four exclaves and none differ
+unexplained; 201 are open defects: `O_DIRECTORY` with `O_CREAT` or
 `O_WRONLY` in `open` and `openat`, and no-follow calls on an identity
 symlink.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,

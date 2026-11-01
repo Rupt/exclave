@@ -36,8 +36,10 @@ lookup, and with the path forms of class Forms over the maze of make_maze, the s
     links of every kind, links into the exclave's file, its directory and its wrapper, the
     directory link also crossed in the middle of a path and followed by .., and relative paths
     from the host side, up to the root and back into the tree;
-  - spellings: ., .. and / as the last component, a trailing slash, also after a link on either
-    side, //, empty, overlong, a 256-byte component, bytes that are not UTF-8, and a newline;
+  - spellings: ., .. and / as the last component, a trailing slash, also after . and .., after a
+    link on either side and on either name of a rename or a link, and a component after a host
+    link to a file, //, empty, overlong, a 256-byte component, bytes that are not UTF-8, and a
+    newline;
   - the symlink limit: 40 links in one walk and 41, in a chain inside the tree, in one that crosses
     between the tree and the host area at every link, and as 20 links walked as directories before
     a chain of 20 at the end, since the kernel counts over the whole walk;
@@ -411,6 +413,9 @@ class Forms:
             ("missing_mid", "/maze/missing/x"),
             ("dot_last", self.dir + "/."),
             ("dotdot_last", self.dir + "/.."),
+            # a slash after them: the same last component (filename_parentat's type)
+            ("dot_slash", self.dir + "/./"),
+            ("dotdot_slash", self.dir + "/../"),
             ("root_dotdot", "/.."),
             ("notdir_mid", self.file + "/x"),
             ("empty", ""),
@@ -469,6 +474,9 @@ class Forms:
             ("host_link_slash", h + "/hlink/"),
             ("host_link_dir_slash", h + "/hlnkdir/"),
             ("host_dangling_slash", h + "/hdang/"),
+            # through a host link to an exclave file, then on: ENOTDIR from the walk
+            ("host_link_notdir_mid", h + "/hlink/x"),
+            ("host_missing_slash", h + "/missing/"),
             ("host_loop", h + "/hloop"),
             ("host_rel_link", h + "/hrel"),
             ("host_missing", h + "/missing"),
@@ -1010,6 +1018,38 @@ def generate(
             lab = f"{n1}->{n2}"
             add("renameat", lab, d1, p1, d2, p2)
             add("linkat", lab, d1, p1, d2, p2, I(0))
+    # a trailing slash on either name of a rename or a link: the last name is looked up in its
+    # parent, a symlink included, and the slash is the call's to judge (filename_renameat2: ENOTDIR
+    # unless the source is a directory, EEXIST under RENAME_NOREPLACE first; filename_create for
+    # link's new name: EEXIST or ENOENT; a lookup for its old name, which follows)
+    slashed = [
+        ("host_link_slash", S(forms.host + "/hlink/")),
+        ("host_link_dir_slash", S(forms.host + "/hlnkdir/")),
+        ("host_dangling_slash", S(forms.host + "/hdang/")),
+        ("host_file_slash", S(forms.host + "/hfile/")),
+        ("host_dir_slash", S(forms.host + "/hdir/")),
+        ("host_missing_slash", S(forms.host + "/missing/")),
+        ("link_dir_slash", S("/maze/lD/")),
+        ("link_file_slash", S("/maze/lF/")),
+    ]
+    partners = [
+        ("host_file", S(forms.host + "/hfile")),
+        ("host_dir", S(forms.host + "/hdir")),
+        ("host_missing", S(forms.host + "/missing")),
+        ("exclave_file", S(forms.file)),
+    ]
+    for n1, p1 in slashed:
+        for n2, p2 in partners:
+            for lab, x, y in ((f"{n1}->{n2}", p1, p2), (f"{n2}->{n1}", p2, p1)):
+                add("rename", lab, x, y)
+                add("link", lab, x, y)
+                add("linkat", lab, I(AT_FDCWD), x, I(AT_FDCWD), y, I(0))
+                for fn, fl in (
+                    ("plain", 0),
+                    ("noreplace", RENAME_NOREPLACE),
+                    ("exchange", RENAME_EXCHANGE),
+                ):
+                    add("renameat2", f"{lab}/{fn}", I(AT_FDCWD), x, I(AT_FDCWD), y, I(fl))
     add(
         "linkat",
         "fd_empty",
