@@ -1705,6 +1705,22 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
     (
         None,
         lambda label, b, o, c: (
+            "dot_last" in label
+            and "tmp_new" in label
+            and errnos(b, o)[0] == errno.EXDEV
+            and errnos(b, o)[1] in (errno.EBUSY, errno.EEXIST)
+            and len({tree.mount_of(p) for p in c.paths}) == 1
+        ),
+        (
+            "a rename of . or .. between the host area and /tmp: under bwrap /tmp is a bind mount "
+            "of its own, so the kernel compares the mounts first (EXDEV); a host that keeps the "
+            "two on one mount, as GitHub's aarch64 runner does, judges the name instead (EBUSY, "
+            "or EEXIST under RENAME_NOREPLACE), and the launcher re-issues the name to that kernel"
+        ),
+    ),
+    (
+        None,
+        lambda label, b, o, c: (
             BOUND_PATHS & set(c.paths)
             and errnos(b, o)[0] == errno.EROFS
             and o == c.native.get(label)

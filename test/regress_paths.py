@@ -264,18 +264,6 @@ def mounted_once(path: str) -> bool:
     return mm is not None and lines.count(mm) == 1 and mm == f"{os.major(dev)}:{os.minor(dev)}"
 
 
-def mount_of(path: str) -> str:
-    """The mount point holding path, the longest in /proc/self/mountinfo."""
-    real = os.path.realpath(path)
-    best = "/"
-    with open("/proc/self/mountinfo") as mountinfo:
-        for entry in mountinfo:
-            mp = entry.split()[4].encode().decode("unicode_escape")
-            if (real == mp or real.startswith(mp.rstrip("/") + "/")) and len(mp) > len(best):
-                best = mp
-    return best
-
-
 @test
 def rename_dots_order(ctx: Ctx) -> None:
     """7.4.3, 8.2: a rename whose last name is . or .., in do_renameat2's order.
@@ -295,7 +283,7 @@ def rename_dots_order(ctx: Ctx) -> None:
         (
             c
             for c in ("/dev/shm", "/tmp", f"/run/user/{os.getuid()}")
-            if os.access(c, os.W_OK) and mount_of(c) != mount_of(d)
+            if os.access(c, os.W_OK) and tree.mount_of(c) != tree.mount_of(d)
         ),
         None,
     )

@@ -152,6 +152,18 @@ def glibc_version(root: str, machine: str) -> tuple[int, int] | None:
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
+def mount_of(path: str) -> str:
+    """The mount point holding path, the longest in /proc/self/mountinfo."""
+    real = os.path.realpath(path)
+    best = "/"
+    with open("/proc/self/mountinfo") as mountinfo:
+        for entry in mountinfo:
+            mp = entry.split()[4].encode().decode("unicode_escape")
+            if (real == mp or real.startswith(mp.rstrip("/") + "/")) and len(mp) > len(best):
+                best = mp
+    return best
+
+
 def interp(path: str) -> str | None:
     """Return the loader an ELF64 file's PT_INTERP names, or None when it names none."""
     with open(path, "rb") as f:
