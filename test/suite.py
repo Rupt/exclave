@@ -470,6 +470,7 @@ PROGS = (
     "slash_links",
     "xattrat",
     "readlink_fault",
+    "identity_nofollow",
 )
 
 

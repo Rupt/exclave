@@ -96,6 +96,101 @@ def identity_link_consistency(ctx: Ctx) -> str | None:
     return None
 
 
+def native_identity_run(ctx: Ctx, hostdir: str, paths: list[str]) -> list[str]:
+    """identity_nofollow's answers from the kernel itself: the program run natively.
+
+    Through the tree's own loader and libc, as the probe's native run goes, since the host's libc
+    is not the tree's. Returns the lines.
+    """
+    loader = ctx.payload(ctx.interp)
+    libdir = os.path.dirname(ctx.payload(ctx.libc)) if ctx.libc else os.path.dirname(loader)
+    prog = os.path.join(ctx.progs, "identity_nofollow")
+    rc, out, err = run([loader, "--library-path", libdir, prog, hostdir, *paths], cwd=ctx.work)
+    expect(rc == 0, f"identity_nofollow natively: rc={rc} {err!r}")
+    return out.splitlines()
+
+
+@test
+def identity_link_nofollow(ctx: Ctx) -> str | None:
+    """8.4: a call that does not follow the last component reaches an identity file's host link.
+
+    An identity file that is a host symlink is the host's own link, so a no-follow call on it is the
+    host's own call on that link, and the kernel answers for the link: EPERM for a user attribute,
+    EOPNOTSUPP for its mode, a watch on the link, a hard link to the link, and a delete of the link
+    that leaves its target. test/progs/identity_nofollow.c issues every such call, and the follow
+    calls beside them, and the native run of the same program, on the same files, is the
+    expectation line for line: on a link the test makes, given to a `host` record of a copy, which
+    the launcher resolves at startup like an identity file (8.1 rule 5), and on the host's own
+    identity files, which this user cannot write.
+    """
+    pid = os.getpid()
+    ex2 = os.path.join(ctx.work, "idlink.exclave")
+    copy_exclave(ctx.exclave, ex2)
+    link, target = (
+        os.path.join(ctx.work, f"idlink-{pid}"),
+        os.path.join(ctx.work, f"idtarget-{pid}"),
+    )
+    with open(os.path.join(ex2, ".exclave", "manifest"), "w") as f:
+        f.write(f'exclave 1\n\nhost "{link}"\n')
+    hostdir = os.path.join(ctx.work, f"idhost-{pid}")
+
+    def fresh() -> None:
+        for p in (link, target):
+            if os.path.lexists(p):
+                os.remove(p)
+        with open(target, "w") as f:
+            f.write("target\n")
+        os.symlink(target, link)
+        if os.path.isdir(hostdir):
+            for n in os.listdir(hostdir):
+                os.remove(os.path.join(hostdir, n))
+        else:
+            os.makedirs(hostdir)
+
+    def after(world: str) -> None:
+        expect(not os.path.lexists(link), f"{world}: the delete of the link left it")
+        expect(read_text(target) == "target\n", f"{world}: the delete of the link took its target")
+
+    fresh()
+    native = native_identity_run(ctx, hostdir, [link])
+    after("natively")
+    # the kernel's rules for a link, which the native run shows or the oracle is wrong
+    for want in (
+        f"{link} lstat: ret=0 errno=0 lnk",
+        f"{link} lsetxattr: ret=-1 errno=1",
+        f"{link} utimensat_nofollow: ret=0 errno=0 link_mtime=set",
+        f"{link} inotify_dont_follow: ret=0 errno=0 distinct_from_follow",
+        f"{link} linkat: ret=0 errno=0 new=lnk",
+        f"{link} renameat: ret=0 errno=0 new=lnk old=absent",
+        f"{link} unlink: ret=0 errno=0 after=absent",
+    ):
+        expect(want in native, f"the native run on the test's own link: {want!r} not in {native}")
+    fresh()
+    prog = os.path.join(ctx.progs, "identity_nofollow")
+    rc, out, err = run(
+        [os.path.join(ex2, ".exclave", "launcher"), prog, hostdir, link], cwd=ctx.work, env=ctx.env
+    )
+    expect(rc == 0, f"identity_nofollow on a host record's link: rc={rc} {err!r}")
+    after("the launcher")
+    got = out.splitlines()
+    bad = [f"{o!r}, the kernel says {n!r}" for n, o in zip(native, got, strict=True) if n != o]
+    expect(not bad, "a host record's link: " + "; ".join(bad))
+    # the host's identity files: the ones the host has and this user cannot change, since the
+    # native run changes what it may
+    files = [f for f in tree.IDENTITY_FILES if os.path.lexists(f) and not os.access(f, os.W_OK)]
+    if os.geteuid() == 0 or not files:
+        return "the host's identity files not compared: this user could change them"
+    fresh()
+    native = native_identity_run(ctx, hostdir, files)
+    fresh()
+    rc, out, err = inside(ctx, prog, [hostdir, *files])
+    expect(rc == 0, f"identity_nofollow on the host's identity files: rc={rc} {err!r}")
+    got = out.splitlines()
+    bad = [f"{o!r}, the kernel says {n!r}" for n, o in zip(native, got, strict=True) if n != o]
+    expect(not bad, "the host's identity files: " + "; ".join(bad))
+    return None if any(os.path.islink(f) for f in files) else "no host identity file is a symlink"
+
+
 @test
 def ownership_fails_closed(ctx: Ctx) -> None:
     """8.1: a top-level directory the launcher cannot list is the exclave's, not a placeholder.

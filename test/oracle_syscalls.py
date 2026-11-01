@@ -88,8 +88,7 @@ covers:
   - the oracle's own construction: a host entry bound into bwrap's read-only root answers EROFS
     there, where the launcher answers as the native run; uid 0 is unmapped in bwrap's user
     namespace; a new top-level name is the host's (8.1),
-    whose / answers EACCES where bwrap's root says EROFS; an identity symlink whose host target is
-    on a tmpfs gives other xattr answers than the tree copy; RESOLVE_CACHED answers EAGAIN under
+    whose / answers EACCES where bwrap's root says EROFS; RESOLVE_CACHED answers EAGAIN under
     bwrap's cold cache where the handler answers the retry's answer itself;
   - for the kernel matrix (12.1), what an older kernel lacks or decided differently, each with the
     kernel change, the handler answering as the newest kernel does: ENOSYS for a syscall added after
@@ -1579,16 +1578,6 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
     ),
     (
         None,
-        lambda _label, b, o, c: (
-            "/etc/resolv.conf" in c.paths and errnos(b, o) == (errno.ENODATA, errno.EOPNOTSUPP)
-        ),
-        (
-            "the host's identity symlink resolves to a file on another filesystem (a tmpfs under "
-            "/run) whose xattr answers differ from the tree copy's symlink"
-        ),
-    ),
-    (
-        None,
         lambda label, b, o, c: (
             BOUND_PATHS & set(c.paths)
             and errnos(b, o)[0] == errno.EROFS
@@ -1762,27 +1751,6 @@ EXPECTED.extend(
 # fails, so that the fix removes the entry.
 DEFECTS_MEASURED = (7, 0)
 DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[], bool]]] = [
-    (
-        (
-            "a no-follow call on an identity symlink (8.4) is the host's own on its link, as "
-            "the native run answers: EPERM for a user attribute on a link, EOPNOTSUPP for a "
-            "link's mode, and a fanotify mark on the link; the handler answers EACCES and EPERM, "
-            "and marks the link's target (ENODEV on 5.10, where its tmpfs has no fsid)"
-        ),
-        lambda n, label, b, o, _c: (
-            (n, label, b, o)
-            in {
-                ("lsetxattr", "resolv", "ret=-1 errno=30", "ret=-1 errno=13"),
-                ("lremovexattr", "resolv", "ret=-1 errno=30", "ret=-1 errno=13"),
-                ("setxattrat", "cwd/resolv/nofollow", "ret=-1 errno=30", "ret=-1 errno=13"),
-                ("fchmodat2", "cwd/resolv/nofollow", "ret=-1 errno=30", "ret=-1 errno=1"),
-                ("fanotify_mark", "cwd/resolv/dont_follow", "ret=0 errno=0", "ret=-1 errno=19"),
-            }
-        ),
-        # a GitHub runner's /etc/resolv.conf is a regular file, and then no case is a no-follow
-        # call on a link
-        lambda: os.path.islink(BOUND["resolv"]),
-    ),
     (
         (
             "O_WRONLY|O_DIRECTORY on what is not a directory: the lookup wants a directory "

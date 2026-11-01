@@ -1786,11 +1786,23 @@ final host path in the host table under the identity file's name.
 Inside the exclave the identity file then behaves as the host's link
 does: `readlink` answers the host's first link text, `lstat` and an
 `O_PATH | O_NOFOLLOW` open see the host's symlink itself, and an
-`O_NOFOLLOW` open fails with `ELOOP`. The directories on the way to an
-identity file are traversable in the path walk whether the exclave
-ships them or not (8.1 rule 5). The table is fixed for the process's
-life: a host retargeting `/etc/resolv.conf` under a running exclave is
-not seen (13 item 18).
+`O_NOFOLLOW` open fails with `ELOOP`. Every other call that does not
+follow the last component is the host's own call on the host's link,
+re-issued on the link by its host name with the no-follow flag kept, so
+that the kernel answers for the link as it answers the host: `lchown`,
+`fchownat`, `utimensat`, `faccessat2` and `fchmodat2` with
+`AT_SYMLINK_NOFOLLOW` (`EOPNOTSUPP` for a link's mode), the `l*` and
+`*at` attribute calls (`EPERM` for a user attribute set or removed on a
+link, `ENODATA` for one read), `inotify_add_watch` with `IN_DONT_FOLLOW`
+and `fanotify_mark` with `FAN_MARK_DONT_FOLLOW`, which watch the link,
+`link` with the link as its old name, `rename` of either name and
+`unlink`, which move or delete the link and leave its target, and
+`execveat` with `AT_SYMLINK_NOFOLLOW`, `ELOOP`. A call that follows
+reaches the host path recorded at startup. The directories on the way
+to an identity file are traversable in the path walk whether the
+exclave ships them or not (8.1 rule 5). The table is fixed for the
+process's life: a host retargeting `/etc/resolv.conf` under a running
+exclave is not seen (13 item 18).
 
 The translator never follows an identity file's host link in virtual
 space, where `/usr` is the exclave's; it uses the host path it recorded
@@ -2624,7 +2636,10 @@ and stay fixed.
     inside an exclave, which sees only the host's identity files (8.4).
 
 18. **Identity files are resolved once, at startup.** A host change to
-    `/etc/resolv.conf` under a running exclave is not seen.
+    `/etc/resolv.conf` under a running exclave is not seen, and a
+    delete or a rename of the link itself from inside, where the host
+    allows it, leaves the table as it was, so a call that follows the
+    name still reaches the target recorded at startup.
 
 19. **Per-user state under an exclave path has no target.** The tree is
     read-only and the visibility rule has no per-user directory, so
@@ -3837,9 +3852,10 @@ meaning items 4 and 7.
    - *ownership, identity files and the log*: ownership read from the
      tree and failing closed, `host` and `own` records in the order
      8.1 decides them, the root and the exclave's own directory as the
-     walk sees them, identity files, the log's names and
-     escapes, and the log's path refused when relative or inside the
-     exclave;
+     walk sees them, identity files, the no-follow calls on an
+     identity link against the native run of the same program, the
+     log's names and escapes, and the log's path refused when relative
+     or inside the exclave;
    - *the tool's unpack and wrap*: the three package readers, a tree
      made by hand, `wrap`'s refusals, `ld.so.cache` written as the
      tree's own `ldconfig` writes it, byte for byte on copies altered to
@@ -4214,12 +4230,11 @@ permission first). The handler answers as the newest kernel does. A
 difference that is a launcher defect, found and not yet fixed, is
 listed apart by its two exact answers, printed by every run, and fails
 once the answers agree until its entry goes, on a host whose files can
-show it (a host whose `/etc/resolv.conf` is no symlink shows no
-no-follow call on an identity symlink). On the reference machine
+show it (an entry says which hosts can, such as one whose
+`/etc/resolv.conf` is a symlink). On the reference machine
 27 721 cases run on each of the gate's four exclaves and none differ
-unexplained; 201 are open defects: `O_DIRECTORY` with `O_CREAT` or
-`O_WRONLY` in `open` and `openat`, and no-follow calls on an identity
-symlink.
+unexplained; 196 are open defects: `O_DIRECTORY` with `O_CREAT` or
+`O_WRONLY` in `open` and `openat`.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.
 
