@@ -1373,7 +1373,7 @@ the hard limit the exec is `EMFILE` (13 item 12).
 The three variables go after the program's own in the environment the
 launcher is exec'd with, so that the kernel lays the program's strings
 out contiguously after its arguments, as a program that writes its
-title over them expects; where they end up is 13 item 49.
+title over them expects; where they end up is 13 item 50.
 
 ### 7.5 Signals, threads and memory
 
@@ -2970,7 +2970,23 @@ and stay fixed.
     about four times the import time of the standard library's larger
     modules (10.1), and a GLib program finds no schemas.
 
-49. **On the loader path the kernel's image is the launcher's.** The
+49. **Shadow stacks are off, by glibc's choice.** The kernel offers
+    user shadow stacks on the reference machine (`user_shstk`, kernel
+    7.0 on a Zen 5) and Ubuntu's and Fedora's programs and loaders are
+    marked for them, but glibc 2.39 through 2.42 never mark `SHSTK`
+    usable (`sysdeps/x86/cpu-features.c`, `#if CET_ENABLED && 0`), so
+    the loader asks the kernel for none, with
+    `GLIBC_TUNABLES=glibc.cpu.x86_shstk=on` or without, natively or in
+    an exclave: measured October 2026 with `strace`, no
+    `ARCH_SHSTK_ENABLE` is issued. The border drops `GLIBC_TUNABLES`
+    (6.2), but a program inside sets it for the programs it runs, so
+    the suite runs a CET-marked program inside with the tunable set,
+    through a signal, a thread making trapped calls, a `longjmp` across
+    one and a `fork` and `exec`, and reports whether a shadow stack was
+    on (17); the day a glibc turns them on, the handler's paths run on
+    one there. Until then the handler has not run on a shadow stack.
+
+50. **On the loader path the kernel's image is the launcher's.** The
     fields of `/proc/<pid>/stat` the kernel fills at exec, the code's
     start and end, the stack's start and the end of the argument and
     environment areas, describe the launcher, which the kernel exec'd,
@@ -3027,21 +3043,6 @@ happens in `cc1`.
 functions. perf cannot read the maps of a process under a different
 AppArmor label, so run it under the same label as the program.
 
-49. **Shadow stacks are off, by glibc's choice.** The kernel offers
-    user shadow stacks on the reference machine (`user_shstk`, kernel
-    7.0 on a Zen 5) and Ubuntu's and Fedora's programs and loaders are
-    marked for them, but glibc 2.39 through 2.42 never mark `SHSTK`
-    usable (`sysdeps/x86/cpu-features.c`, `#if CET_ENABLED && 0`), so
-    the loader asks the kernel for none, with
-    `GLIBC_TUNABLES=glibc.cpu.x86_shstk=on` or without, natively or in
-    an exclave: measured October 2026 with `strace`, no
-    `ARCH_SHSTK_ENABLE` is issued. The border drops `GLIBC_TUNABLES`
-    (6.2), but a program inside sets it for the programs it runs, so
-    the suite runs a CET-marked program inside with the tunable set,
-    through a signal, a thread making trapped calls, a `longjmp` across
-    one and a `fork` and `exec`, and reports whether a shadow stack was
-    on (17); the day a glibc turns them on, the handler's paths run on
-    one there. Until then the handler has not run on a shadow stack.
 
 ## 14. Alternatives considered
 

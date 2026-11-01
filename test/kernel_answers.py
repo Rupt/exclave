@@ -1009,7 +1009,7 @@ EXEC_AUXV: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
 )
 # where the launcher answers otherwise by a stated rule: on the loader path the kernel's image is
 # the launcher's, so /proc/self/stat's code, stack and environment fields and the strings' places
-# are its (13 item 49); at the border the four fixed variables are the launcher's strings (6.2), so
+# are its (13 item 50); at the border the four fixed variables are the launcher's strings (6.2), so
 # the own run's environment is not the kernel's area; an exec under a hard descriptor limit of 3 is
 # EMFILE (13 item 12)
 EXEC_AUXV_LAUNCHER: dict[str, str] = {

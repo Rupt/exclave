@@ -564,7 +564,7 @@ def exec_auxv(ctx: Ctx) -> None:
     environment strings contiguous after its arguments with the launcher's own variables after
     them, cmdline and comm the program's, a setuid and a setgid copy (no_new_privs: AT_SECURE 0),
     and the descriptors an exec'd static program finds open under soft limits of 3, 4 and 8
-    lowered below its open descriptors, which the launcher borrows against; 13 item 49 for the
+    lowered below its open descriptors, which the launcher borrows against; 13 item 50 for the
     kernel's stat fields and item 12 for a hard limit of 3. The kernel under bwrap measured these
     answers.
     """
