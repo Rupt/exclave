@@ -51,6 +51,7 @@
 #define AT_STATX_SYNC_TYPE 0x6000
 
 /* ---------- signals ---------- */
+#define SIGSEGV 11
 #define SIGSYS 31
 #define SIGSYS_BIT (1UL << (SIGSYS - 1))
 #define SA_SIGINFO 4
@@ -221,6 +222,9 @@ void log_open(char **envp);
 void log_line(const char *what, long result, const char *path);
 void log_msg(const char *a, const char *b);
 __attribute__((noreturn)) void die(const char *what, const char *detail, long err);
+/* the message, then death by sig with its default disposition: what the kernel does to an image it cannot load once
+ * past its point of no return (SIGSEGV from bprm_execve, fs/exec.c) */
+__attribute__((noreturn)) void die_signal(int sig, const char *what, const char *detail, long err);
 /* 126 where a shell says so: found but not executable */
 __attribute__((noreturn)) void die_status(int status, const char *what, const char *detail, long err);
 
@@ -312,8 +316,15 @@ int other_exe(const struct scratch *S, const char *v, char *text);
 /* ---------- loader (loader.c) ---------- */
 __attribute__((noreturn)) void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp,
                                           const unsigned long *auxv);
-/* 1 has interp, 0 none, <0 error; buf >= 7680 bytes; is_launcher: the note's page generation, 0 for no launcher */
+/* real opened O_RDONLY|O_CLOEXEC, the soft descriptor limit raised to the hard one for the open when the program is at
+ * it (7.4.5): the descriptor or -errno */
+long open_borrowed(const char *real);
+/* 1 has interp, 0 none, <0 -errno as load_elf_binary answers before its point of no return; buf >= 7680 bytes;
+ * is_launcher: the note's page generation, 0 for no launcher */
 int elf_probe(const char *real, char *interp, int *is_launcher, void *buf);
+/* the kernel's checks of a program's interpreter once opened (load_elf_binary, before begin_new_exec): 0 or -errno,
+ * EIO for a header the file does not hold whole, ELIBBAD for one that is not this machine's ELF; buf >= 208 bytes */
+int elf_interp_probe(const char *real, void *buf);
 
 /* ---------- filter (filter.c) ---------- */
 /* 0: no filter of ours inherited; otherwise the newest inherited filter's version (7.4.2) */

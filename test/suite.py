@@ -476,6 +476,10 @@ PROGS = (
     "identity_nofollow",
     "rename_dots",
     "program_perm",
+    "exec_script",
+    "exec_elf",
+    "exec_auxv",
+    "exec_state",
 )
 
 

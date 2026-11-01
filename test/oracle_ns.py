@@ -370,6 +370,10 @@ PROGRAMS = (
     "rename_dots",
     "program_perm",
     "exe_link",
+    "exec_script",
+    "exec_elf",
+    "exec_auxv",
+    "exec_state",
 )
 
 
@@ -407,6 +411,13 @@ def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
         wrong = kernel_answers.exe_link_wrong(out)
     elif name == "creat_slash":
         wrong = kernel_answers.creat_slash_wrong(out, by_the_kernel=True)
+    elif name.startswith("exec_"):
+        wrong = {
+            "exec_script": kernel_answers.exec_script_wrong,
+            "exec_elf": kernel_answers.exec_elf_wrong,
+            "exec_auxv": kernel_answers.exec_auxv_wrong,
+            "exec_state": kernel_answers.exec_state_wrong,
+        }[name](out, by_the_kernel=True)
     else:
         wrong = {
             "slash_links": kernel_answers.slash_links_wrong,
@@ -471,6 +482,11 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
         "rename_dots": f"{work}/rename_dots {hostdir} /tmp",
         "program_perm": f"{work}/program_perm",
         "exe_link": f"{work}/exe_link",
+        # each in a host directory of its own: their files share names
+        "exec_script": f"mkdir -p {hostdir}/s && {work}/exec_script run {hostdir}/s",
+        "exec_elf": f"mkdir -p {hostdir}/e && {work}/exec_elf {hostdir}/e",
+        "exec_auxv": f"mkdir -p {hostdir}/a && {work}/exec_auxv {hostdir}/a",
+        "exec_state": f"mkdir -p {hostdir}/t && {work}/exec_state {hostdir}/t",
     }
     fails = 0
     for name in PROGRAMS:

@@ -97,6 +97,7 @@ enum {
 /* clang-format on */
 #define ARCH_NAME "x86_64"
 #define ARCH_ISA_DEFAULT "x86-64"
+#define TASK_SIZE 0x7ffffffff000UL /* the kernel's bound on a segment (load_elf_binary) */
 #define EM_NATIVE 62
 #define AUDIT_ARCH_NATIVE 0xC000003EU
 #define R_NATIVE_RELATIVE 8                 /* R_X86_64_RELATIVE */
@@ -170,6 +171,7 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
 /* clang-format on */
 #define ARCH_NAME "aarch64"
 #define ARCH_ISA_DEFAULT "aarch64"
+#define TASK_SIZE (1UL << 52) /* the widest arm64 address space; a tighter kernel refuses the mapping itself */
 #define EM_NATIVE 183
 #define AUDIT_ARCH_NATIVE 0xC00000B7U
 #define R_NATIVE_RELATIVE 1027              /* R_AARCH64_RELATIVE */
@@ -214,6 +216,7 @@ long __sc6_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define EPERM 1
 #define ENOENT 2
 #define ESRCH 3
+#define EIO 5
 #define E2BIG 7
 #define ENOEXEC 8
 #define EBADF 9
@@ -236,6 +239,7 @@ long __sc6_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define ENOSYS 38
 #define ENOTEMPTY 39
 #define ELOOP 40
+#define ELIBBAD 80
 #define EADDRINUSE 98
 #define ECONNREFUSED 111
 

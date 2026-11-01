@@ -254,10 +254,12 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
     while (envp[n]) n++;
     char **env = pointers(n + 3);
     long k = 0;
-    env[k++] = var;
-    env[k++] = fn;
     for (long i = 0; i < n; i++)
         if (!internal_var(envp[i])) env[k++] = envp[i];
+    /* after the program's own, as a handler places them (exec_env), so that the kernel lays the program's strings out
+     * contiguously after its arguments */
+    env[k++] = var;
+    env[k++] = fn;
     env[k] = 0;
     unborrow();
     long r = sys_execve(C.launcher, argv + 1, env);
@@ -381,10 +383,11 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
     unsigned long m = SIGSYS_BIT;                    /* 7.5.2: SIGSYS must never be blocked */
     sys_rt_sigprocmask(SIG_UNBLOCK, &m, 0, 8);
     /* a program at its descriptor limit may still exec, since the kernel's exec needs no descriptor (7.4.5): the
-     * launcher's own opens, the manifest, the tree's top level, the program and its loader, borrow two under the hard
-     * limit, given back in loader_run before the program runs */
+     * launcher's own opens, the manifest, the tree's top level, the program and its loader, borrow under the hard
+     * limit, the soft one raised to it since the lowest free number may lie anywhere above a limit the program lowered
+     * below its open descriptors, and given back in loader_run before the program runs */
     if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, C.rlim) == 0 && C.rlim[0] < 16 && C.rlim[0] < C.rlim[1]) {
-        unsigned long more[2] = {C.rlim[0] + 2 < C.rlim[1] ? C.rlim[0] + 2 : C.rlim[1], C.rlim[1]};
+        unsigned long more[2] = {C.rlim[1], C.rlim[1]};
         C.borrowed = SC4(NR_prlimit64, 0, RLIMIT_NOFILE, more, 0) == 0;
     }
     static char exe[PATH_MAX];

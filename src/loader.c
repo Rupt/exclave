@@ -39,8 +39,11 @@ static int open_elf(const char *real, Ehdr *eh, Phdr *ph, int maxph)
     if (fd < 0) die("cannot open program", real, fd);
     if (sys_pread((int)fd, eh, sizeof *eh, 0) != sizeof *eh || eh->e_ident[0] != 0x7f || eh->e_ident[1] != 'E')
         die("not an ELF file", real, 0);
-    if (eh->e_ident[4] != ELFCLASS64 || eh->e_machine != EM_NATIVE) die("not an ELF file for " ARCH_NAME, real, 0);
-    if (eh->e_phnum > maxph || eh->e_phentsize != sizeof(Phdr)) die("unsupported program headers", real, 0);
+    /* load_elf_binary's checks: the type, then the machine alone (elf_check_arch; the class byte is not read) */
+    if (eh->e_type != ET_EXEC && eh->e_type != ET_DYN) die("not an executable", real, ENOEXEC);
+    if (eh->e_machine != EM_NATIVE) die("not an ELF file for " ARCH_NAME, real, 0);
+    if (eh->e_phnum == 0 || eh->e_phnum > maxph || eh->e_phentsize != sizeof(Phdr))
+        die("unsupported program headers", real, 0);
     if (sys_pread((int)fd, ph, (size_t)eh->e_phnum * sizeof(Phdr), (long)eh->e_phoff) !=
         (long)(eh->e_phnum * sizeof(Phdr)))
         die("cannot read program headers", real, 0);
@@ -48,7 +51,9 @@ static int open_elf(const char *real, Ehdr *eh, Phdr *ph, int maxph)
 }
 
 /* Maps every PT_LOAD of fd as the kernel would; returns the load bias, and sets *entry, the program headers' address
- * and, when the file names an interpreter, its path in interp. Exits with a message naming name on any failure. */
+ * and, when the file names an interpreter, its path in interp. A failure here is one the kernel meets past its point
+ * of no return, where it kills the new image with SIGSEGV (bprm_execve): the message names the segment, then the
+ * process dies by that signal. */
 static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned long *entry, unsigned long *phdr_va,
                              int *has_interp, char *interp, const char *name)
 {
@@ -66,16 +71,19 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
         /* an address and an offset that differ within a page cannot be mapped at this page size, and the kernel refuses
          * such a program too (EINVAL from its mmap): a binary linked for 4 KB pages on a 16 KB or 64 KB kernel */
         if ((ph[i].p_vaddr - ph[i].p_offset) & mask)
-            die("a segment is not aligned to this kernel's page size", name, EINVAL);
+            die_signal(SIGSEGV, "a segment is not aligned to this kernel's page size", name, EINVAL);
+        /* load_elf_binary: a segment with more file than memory, or past the task's address space, is EINVAL */
+        if (ph[i].p_filesz > ph[i].p_memsz || ph[i].p_memsz > TASK_SIZE || ph[i].p_vaddr > TASK_SIZE - ph[i].p_memsz)
+            die_signal(SIGSEGV, "a segment does not fit its memory", name, EINVAL);
         unsigned long s = ph[i].p_vaddr & ~mask, e = (ph[i].p_vaddr + ph[i].p_memsz + mask) & ~mask;
         if (s < lo) lo = s;
         if (e > hi) hi = e;
     }
-    if (lo == ~0UL) die("no loadable segment", name, 0);
+    if (lo == ~0UL) die_signal(SIGSEGV, "no loadable segment", name, 0);
     unsigned long bias = 0;
     if (eh->e_type == ET_DYN) {
         long base = sys_mmap(0, hi - lo, 0, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (base < 0 && base > -4096) die("cannot reserve address space", name, base);
+        if (base < 0 && base > -4096) die_signal(SIGSEGV, "cannot reserve address space", name, base);
         bias = (unsigned long)base - lo;
     }
     for (int i = 0; i < eh->e_phnum; i++) {
@@ -87,17 +95,17 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
         int fixed = (eh->e_type == ET_DYN) ? MAP_FIXED : MAP_FIXED_NOREPLACE;
         if (flen) {
             long m = sys_mmap((void *)mstart, flen, prot, MAP_PRIVATE | fixed, fd, (long)(ph[i].p_offset - off));
-            if (m < 0 && m > -4096) die("cannot map segment", name, m);
+            if (m < 0 && m > -4096) die_signal(SIGSEGV, "cannot map segment", name, m);
             /* a kernel without MAP_FIXED_NOREPLACE treats the address as a hint and may map elsewhere */
-            if ((unsigned long)m != mstart) die("segment address already in use", name, EEXIST);
+            if ((unsigned long)m != mstart) die_signal(SIGSEGV, "segment address already in use", name, EEXIST);
         }
         if (mlen > flen) {
             unsigned long fend = mstart + flen, zend = (fend + mask) & ~mask;
             if ((ph[i].p_flags & PF_W) && flen) xmemset((void *)fend, 0, zend - fend);
             if (mstart + mlen > zend) {
                 long m = sys_mmap((void *)zend, mstart + mlen - zend, prot, MAP_PRIVATE | MAP_ANONYMOUS | fixed, -1, 0);
-                if (m < 0 && m > -4096) die("cannot map bss", name, m);
-                if ((unsigned long)m != zend) die("bss address already in use", name, EEXIST);
+                if (m < 0 && m > -4096) die_signal(SIGSEGV, "cannot map bss", name, m);
+                if ((unsigned long)m != zend) die_signal(SIGSEGV, "bss address already in use", name, EEXIST);
             }
         }
     }
@@ -132,47 +140,97 @@ static int note_gen(int fd, const Phdr *p, unsigned char *nb)
     return g;
 }
 
-/* 1: dynamic (interp filled), 0: static, <0: error; is_launcher: a launcher note's page generation, 0 without one */
+long open_borrowed(const char *real)
+{
+    long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
+    if (fd != -EMFILE) return fd;
+    /* a program at its descriptor limit: the kernel's exec needs no descriptor, the launcher's one; the soft limit is
+     * raised to the hard one for the open, since the lowest free number may lie anywhere above a limit a program
+     * lowered below its open descriptors (7.4.5) */
+    unsigned long lim[2], all[2];
+    if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, lim) < 0 || lim[0] >= lim[1]) return fd;
+    all[0] = all[1] = lim[1];
+    if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, all, 0) < 0) return fd;
+    fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
+    SC4(NR_prlimit64, 0, RLIMIT_NOFILE, lim, 0);
+    return fd;
+}
+
+/* the kernel's checks of an ELF header and its program headers' size (load_elf_binary, load_elf_phdrs): 0 or
+ * -ENOEXEC. The class byte is not read: the machine decides, as elf_check_arch does. */
+static int header_ok(const Ehdr *eh)
+{
+    if (eh->e_ident[0] != 0x7f || eh->e_ident[1] != 'E' || eh->e_ident[2] != 'L' || eh->e_ident[3] != 'F')
+        return -ENOEXEC;
+    if (eh->e_type != ET_EXEC && eh->e_type != ET_DYN) return -ENOEXEC;
+    if (eh->e_machine != EM_NATIVE) return -ENOEXEC;
+    if (eh->e_phentsize != sizeof(Phdr)) return -ENOEXEC;
+    if (eh->e_phnum == 0 || (size_t)eh->e_phnum * sizeof(Phdr) > 65536) return -ENOEXEC;
+    return 0;
+}
+
+/* 1: dynamic (interp filled), 0: static, <0: -errno as load_elf_binary answers before its point of no return (7.4.5),
+ * the program headers beyond the loader's own table counted as a header it cannot load; is_launcher: a launcher
+ * note's page generation, 0 without one */
 int elf_probe(const char *real, char *interp, int *is_launcher, void *buf)
 {
     *is_launcher = 0;
     interp[0] = 0;
-    long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
-    /* a program at its descriptor limit: borrow one for the read (7.4.5) */
-    if (fd == -EMFILE) {
-        unsigned long lim[2], one[2];
-        if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, lim) == 0 && lim[0] < lim[1]) {
-            one[0] = lim[0] + 1;
-            one[1] = lim[1];
-            SC4(NR_prlimit64, 0, RLIMIT_NOFILE, one, 0);
-            fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
-            SC4(NR_prlimit64, 0, RLIMIT_NOFILE, lim, 0);
-        }
-    }
+    long fd = open_borrowed(real);
     if (fd < 0) return (int)fd;
     /* 7168 + 512 bytes: the loader's own limit of headers */
     Ehdr eh;
     Phdr *ph = (Phdr *)buf;
     unsigned char *nb = (unsigned char *)buf + 128 * sizeof(Phdr);
     int ret = -ENOEXEC;
-    if (sys_pread((int)fd, &eh, sizeof eh, 0) == sizeof eh && eh.e_ident[0] == 0x7f && eh.e_ident[1] == 'E' &&
-        eh.e_ident[4] == ELFCLASS64 && eh.e_machine == EM_NATIVE && eh.e_phnum <= 128 &&
-        eh.e_phentsize == sizeof(Phdr) &&
+    if (sys_pread((int)fd, &eh, sizeof eh, 0) == sizeof eh && header_ok(&eh) == 0 && eh.e_phnum <= 128 &&
         sys_pread((int)fd, ph, (size_t)eh.e_phnum * sizeof(Phdr), (long)eh.e_phoff) ==
             (long)(eh.e_phnum * sizeof(Phdr))) {
         ret = 0;
         for (int i = 0; i < eh.e_phnum; i++) {
-            if (ph[i].p_type == PT_INTERP && ph[i].p_filesz < PATH_MAX) {
-                if (sys_pread((int)fd, interp, ph[i].p_filesz, (long)ph[i].p_offset) == (long)ph[i].p_filesz) {
-                    interp[ph[i].p_filesz] = 0;
-                    ret = 1;
+            if (ph[i].p_type == PT_INTERP && ret == 0) {
+                /* the first PT_INTERP, as the kernel takes it: a path of 2 to PATH_MAX bytes ending in NUL, read
+                 * whole, or ENOEXEC; one the file does not hold whole is EIO, elf_read's short read */
+                if (ph[i].p_filesz > PATH_MAX || ph[i].p_filesz < 2) {
+                    ret = -ENOEXEC;
+                    break;
                 }
+                if (sys_pread((int)fd, interp, ph[i].p_filesz, (long)ph[i].p_offset) != (long)ph[i].p_filesz) {
+                    ret = -EIO;
+                    break;
+                }
+                if (interp[ph[i].p_filesz - 1] != 0) {
+                    ret = -ENOEXEC;
+                    break;
+                }
+                ret = 1;
             } else if (ph[i].p_type == PT_NOTE && ph[i].p_filesz <= 512) {
                 int g = note_gen((int)fd, &ph[i], nb);
                 if (g) *is_launcher = g;
             }
         }
     }
+    sys_close((int)fd);
+    return ret;
+}
+
+int elf_interp_probe(const char *real, void *buf)
+{
+    long fd = open_borrowed(real);
+    if (fd < 0) return (int)fd;
+    Ehdr *eh = (Ehdr *)buf;
+    struct kstat *st = (struct kstat *)((char *)buf + sizeof *eh);
+    long n = sys_pread((int)fd, eh, sizeof *eh, 0);
+    int ret = 0;
+    if (n != (long)sizeof *eh) ret = n < 0 ? (int)n : -EIO;
+    /* the magic, the machine and the program headers' size and presence (load_elf_phdrs) are ELIBBAD, the type is not
+     * looked at: an ET_EXEC interpreter loads */
+    else if (eh->e_ident[0] != 0x7f || eh->e_ident[1] != 'E' || eh->e_ident[2] != 'L' || eh->e_ident[3] != 'F' ||
+             eh->e_machine != EM_NATIVE || eh->e_phentsize != sizeof(Phdr) || eh->e_phnum == 0 ||
+             (size_t)eh->e_phnum * sizeof(Phdr) > 65536 || SC2(NR_fstat, fd, st) < 0 ||
+             eh->e_phoff > (unsigned long)st->st_size ||
+             (unsigned long)st->st_size - eh->e_phoff < (size_t)eh->e_phnum * sizeof(Phdr))
+        ret = -ELIBBAD;
     sys_close((int)fd);
     return ret;
 }

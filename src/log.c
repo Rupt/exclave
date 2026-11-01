@@ -138,11 +138,13 @@ static const char *strerr(long e)
     case EISDIR: return "Is a directory";
     case EMFILE: return "Too many open files";
     case ELOOP: return "Too many levels of symbolic links";
+    case EIO: return "Input/output error";
+    case ELIBBAD: return "Accessing a corrupted shared library";
     default: return "error";
     }
 }
 
-void die_status(int status, const char *what, const char *detail, long err)
+static void say(const char *what, const char *detail, long err)
 {
     outs(2, "launcher: ");
     outs(2, what);
@@ -156,6 +158,25 @@ void die_status(int status, const char *what, const char *detail, long err)
     }
     outs(2, "\n");
     log_msg("fatal", what);
+}
+void die_status(int status, const char *what, const char *detail, long err)
+{
+    say(what, detail, err);
     sys_exit(status);
+}
+void die_signal(int sig, const char *what, const char *detail, long err)
+{
+    say(what, detail, err);
+    struct {
+        void *h;
+        unsigned long flags;
+        void *restorer;
+        unsigned long mask;
+    } dfl = {0, 0, 0, 0};
+    sys_rt_sigaction(sig, &dfl, 0, 8);
+    unsigned long m = 1UL << (sig - 1);
+    sys_rt_sigprocmask(SIG_UNBLOCK, &m, 0, 8);
+    sys_tgkill((pid_t)sys_getpid(), (pid_t)sys_gettid(), sig);
+    sys_exit(128 + sig); /* a disposition the signal could not reach */
 }
 void die(const char *what, const char *detail, long err) { die_status(127, what, detail, err); }

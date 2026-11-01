@@ -170,7 +170,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 90 named tests, most of them programs that
+- **The regression suite**: 94 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -793,8 +793,8 @@ The kernel has executed the launcher at some path. The launcher:
    syscall.
 3. Unblocks `SIGSYS` in the inherited mask, since a parent that blocks
    signals in its children would otherwise kill the first trap
-   (7.5.1); borrows two descriptors under a soft limit below 16
-   (7.4.5); opens `EXCLAVE_LOG` if set (6.2).
+   (7.5.1); raises a soft descriptor limit below 16 to the hard one for
+   its own opens (7.4.5); opens `EXCLAVE_LOG` if set (6.2).
 4. Reads `/proc/self/exe` and walks up until a directory holds
    `.exclave/manifest`; that directory is the exclave, and without one
    the launcher says so and exits.
@@ -844,13 +844,22 @@ argument and no flag.
 ### 7.3 The loader
 
 The loader replicates the kernel's `load_elf_binary` for the original
-and its loader. It maps each `PT_LOAD`, an `ET_EXEC` at its address with
+and its loader. It takes what the kernel takes, an `ET_EXEC` or an
+`ET_DYN` whose `e_machine` is its own, the class byte not read, as the
+kernel's `elf_check_arch` does not read it, with program headers of the
+kernel's size. It maps each `PT_LOAD`, an `ET_EXEC` at its address with
 `MAP_FIXED_NOREPLACE`, checked since an older kernel takes it as a hint,
 an `ET_DYN` at a base chosen by reserving its span. Segments are rounded
 to the kernel's page size from `AT_PAGESZ`, as the kernel rounds them,
-16 or 64 KB on some aarch64 kernels (13 item 43), and a segment whose
-address and offset differ within a page is refused by name, as the
-kernel's own `mmap` refuses it. The loader zeroes the tail of the last
+16 or 64 KB on some aarch64 kernels (13 item 43). What the kernel meets
+past its point of no return kills the new image with `SIGSEGV`
+(`bprm_execve`), and so does the loader, with a message naming the
+segment first: one whose address and offset differ within a page, which
+the kernel's own `mmap` refuses, one with more file than memory or past
+the address space (`EINVAL` in `load_elf_binary`), one at an address the
+kernel will not map, zero or one already in use, no `PT_LOAD` at all,
+and a `.bss` the kernel cannot give; the oracle's `exec_elf` measures
+each against the kernel (17 item 4). The loader zeroes the tail of the last
 file-backed page, maps anonymous memory for the rest of `.bss`, and
 makes the stack executable where `PT_GNU_STACK` asks. It builds the
 initial stack with `argc`, `argv`, `envp` and a copy of the launcher's
@@ -1290,15 +1299,22 @@ never replaced. Then:
   unchanged and the virtual target path in `EXCLAVE_EXEC`; the child
   launcher resolves the target as an exec would and loads it with
   whatever loader its own header names, resolved in the exclave (7.3).
-  Before that exec the handler answers what `execve` itself would:
-  `ENOEXEC` for a header the loader cannot load, a 32-bit class,
-  another machine or more program headers than it holds, and `ENOENT`
-  for a loader that is not there, as the kernel's `open_exec` of the
-  interpreter fails, so that a shell's `execvp` fallback and a
-  `posix_spawn` caller see the refusal rather than a child that dies. A
-  loader that exists but is not the exclave's own file, a host path or a
-  data directory, is left to the child launcher, which refuses it by
-  name (7.3).
+  Before that exec the handler answers what `execve` itself would,
+  `load_elf_binary`'s answers before its point of no return in its
+  order: `ENOEXEC` for a header the loader cannot load, a type that is
+  neither `ET_EXEC` nor `ET_DYN`, another machine, program headers of
+  another size, none, or more than it holds, and for a `PT_INTERP` of
+  under two bytes, over `PATH_MAX` or without its NUL, `EIO` for one
+  the file does not hold whole; then, for the loader the first
+  `PT_INTERP` names, the kernel's `open_exec` answer, `ENOENT` for one
+  that is not there, `EACCES` for a directory, a special file or one
+  without execute permission, then `EIO` for a header it does not hold
+  whole and `ELIBBAD` for one that is not this machine's ELF, so that a
+  shell's `execvp` fallback and a `posix_spawn` caller see the refusal
+  rather than a child that dies. A loader that passes those checks but
+  is not the exclave's own file, a host path or a data directory, is
+  left to the child launcher, which refuses it by name (7.3), where the
+  kernel would load it, an `ET_EXEC` included.
 
 **The launcher's own protocol.** `EXCLAVE_EXEC`, `EXCLAVE_EXECFN` and
 `EXCLAVE_COMM` are how one launcher tells the next what to run and under
@@ -1343,13 +1359,21 @@ bounded.
 
 The kernel's exec needs no descriptor, and the handler's does: it opens
 the target to read its first bytes. A program at its soft descriptor
-limit may still exec: the handler borrows one descriptor under the hard
-limit for the read and gives it back, and a child launcher started
-under a soft limit below 16 borrows two for its own opens, the
-manifest, the tree's top level, the program and its loader, and gives
-them back before the program runs. From a soft limit of 16 up the child
-needs a free descriptor, as a dynamically linked program's loader does
-natively. At the hard limit the exec is `EMFILE` (13 item 12).
+limit may still exec: the handler raises the soft limit to the hard one
+for the open and puts it back, and a child launcher started under a
+soft limit below 16 does the same for its own opens, the manifest, the
+tree's top level, the program and its loader, and restores the limit
+before the program runs. The soft limit is raised to the hard one rather
+than by the few descriptors needed because the lowest free number may
+lie anywhere above a limit a program lowered below its open
+descriptors. From a soft limit of 16 up the child needs a free
+descriptor, as a dynamically linked program's loader does natively. At
+the hard limit the exec is `EMFILE` (13 item 12).
+
+The three variables go after the program's own in the environment the
+launcher is exec'd with, so that the kernel lays the program's strings
+out contiguously after its arguments, as a program that writes its
+title over them expects; where they end up is 13 item 49.
 
 ### 7.5 Signals, threads and memory
 
@@ -2493,7 +2517,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 90 named regressions and every oracle its kernel can run; 17
+suite's 94 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -2625,9 +2649,10 @@ and stay fixed.
     from a program that has lowered its hard descriptor limit to the
     number it holds answers `EMFILE`, since the handler must open the
     file to read it where the kernel's exec needs no descriptor. A
-    lowered soft limit is borrowed against (7.4.5), and a child
-    launcher under a full soft limit of 16 or more needs one free
-    descriptor, as a dynamically linked program's loader does natively.
+    lowered soft limit is raised to the hard one for the launcher's
+    own opens (7.4.5), and a child launcher under a full soft limit of
+    16 or more needs one free descriptor, as a dynamically linked
+    program's loader does natively.
 
 13. **A path too long to re-issue answers `ENAMETOOLONG`.** An exclave
     path whose real spelling, the tree's prefix followed by the virtual
@@ -2944,6 +2969,21 @@ and stay fixed.
     does for Python. Without it, Python compiles each module on import,
     about four times the import time of the standard library's larger
     modules (10.1), and a GLib program finds no schemas.
+
+49. **On the loader path the kernel's image is the launcher's.** The
+    fields of `/proc/<pid>/stat` the kernel fills at exec, the code's
+    start and end, the stack's start and the end of the argument and
+    environment areas, describe the launcher, which the kernel exec'd,
+    not the program it loaded; `arg_start`, `cmdline` and `comm` are the
+    program's. The program's argument and environment strings lie where
+    the kernel put them for the launcher, the program's environment
+    contiguous after its arguments and the launcher's three variables
+    after that (item 46), and `AT_EXECFN` names a string of the
+    launcher's own rather than the top of the stack; at the border the
+    four fixed variables of 6.2 are the launcher's strings. Moving the
+    kernel's fields takes `PR_SET_MM`, which needs `CAP_SYS_RESOURCE`.
+    `exec_auxv` measures every other entry of the initial stack and the
+    auxiliary vector against the kernel (17 item 4).
 
 ### 13.1 Debugging and profiling recipe
 
@@ -3966,10 +4006,10 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus ten of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm` and `exe_link` (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus fourteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 90 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 94 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

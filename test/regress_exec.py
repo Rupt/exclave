@@ -503,6 +503,89 @@ def fexec(ctx: Ctx) -> None:
     expect(not bad, "; ".join(bad))
 
 
+def exerciser(ctx: Ctx, name: str, args: list[str]) -> str:
+    """Run test/progs/NAME in a fresh host directory of its own, HOSTDIR in args; its output."""
+    d = os.path.join(ctx.work, name + "-host")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(
+        ctx,
+        os.path.join(ctx.progs, name),
+        [d if a == "HOSTDIR" else a for a in args],
+        env={**ctx.env, "CC": ctx.vbin(ctx.gcc)},  # the programs some cases build
+    )
+    expect(rc == 0, f"{name}: rc={rc} {out!r} {err!r}")
+    return out
+
+
+@test
+def exec_script(ctx: Ctx) -> None:
+    """7.4.5: what execve makes of a #! line and of a file that is no program, as the kernel does.
+
+    Lines of 127, 128, 255 and 256 bytes with and without a newline, blanks, an argument with
+    spaces, a NUL in the line, an empty interpreter, "#!" alone, chains of three to six (the sixth
+    ELOOP), an interpreter that is a wrapper of the tree, a symlink, a directory, a FIFO or absent,
+    a script through a descriptor opened O_PATH, O_RDONLY and O_CLOEXEC, relative to a directory
+    descriptor and through a symlink, and execve of a directory, a FIFO, a socket, /dev/null, an
+    empty file, a file of one byte and files without an execute bit; an executable but unreadable
+    file is EACCES, the launcher's own answer (13 item 12). The kernel under bwrap measured these
+    answers (test/kernel_answers.py, checked again by the namespace oracle).
+    """
+    bad = kernel_answers.exec_script_wrong(exerciser(ctx, "exec_script", ["run", "HOSTDIR"]))
+    expect(not bad, "; ".join(bad))
+
+
+@test
+def exec_elf(ctx: Ctx) -> None:
+    """7.3, 7.4.5: an ELF image is judged as load_elf_binary judges it.
+
+    Before the kernel's point of no return, execve itself answers: ENOEXEC for a type, a machine or
+    program headers it cannot load (the class byte is not read: the machine decides), for an
+    interpreter path without its NUL, empty, of zero size or longer than PATH_MAX, EIO for one the
+    file does not hold whole, and for the interpreter the first PT_INTERP names, its own open's
+    error, ENOENT or EACCES, EIO for a header it does not hold whole and ELIBBAD for one that is not
+    this machine's ELF. Past it the kernel kills the new image with SIGSEGV, and so does the
+    loader, naming what it could not map: no PT_LOAD, overlapping segments, more file than memory
+    in a segment, a terabyte of bss, an address and an offset that differ within a page, a segment
+    at address zero. An ET_EXEC interpreter the kernel loads; one that is not the exclave's own
+    file the child launcher refuses by name (7.3). Static, static-pie and fixed-address programs
+    the tree's compiler builds run. The kernel under bwrap measured these answers.
+    """
+    bad = kernel_answers.exec_elf_wrong(exerciser(ctx, "exec_elf", ["HOSTDIR"]))
+    expect(not bad, "; ".join(bad))
+
+
+@test
+def exec_auxv(ctx: Ctx) -> None:
+    """7.3: the initial stack and the auxiliary vector are the kernel's, from the entry and an exec.
+
+    Every AT_ entry against the program's own header, entry and loader, AT_RANDOM fresh at each
+    exec, the vectors and strings placed as create_elf_tables places them, the program's
+    environment strings contiguous after its arguments with the launcher's own variables after
+    them, cmdline and comm the program's, a setuid and a setgid copy (no_new_privs: AT_SECURE 0),
+    and the descriptors an exec'd static program finds open under soft limits of 3, 4 and 8
+    lowered below its open descriptors, which the launcher borrows against; 13 item 49 for the
+    kernel's stat fields and item 12 for a hard limit of 3. The kernel under bwrap measured these
+    answers.
+    """
+    bad = kernel_answers.exec_auxv_wrong(exerciser(ctx, "exec_auxv", ["HOSTDIR"]))
+    expect(not bad, "; ".join(bad))
+
+
+@test
+def exec_state(ctx: Ctx) -> None:
+    """7.4.5: what a process keeps and loses across an exec is what the kernel keeps and loses.
+
+    The signal mask, ignored dispositions and pending signals kept, handlers and the alternate
+    stack reset, interval timers kept and a POSIX timer gone, the umask, the working directory,
+    nice, the affinity and the prctl settings exec keeps and clears, comm set anew, and an exec by
+    a second thread, with the thread's own mask and pending signals and the process's; SIGSYS is
+    the launcher's (7.5.1, 13 item 23). The kernel under bwrap measured these answers.
+    """
+    bad = kernel_answers.exec_state_wrong(exerciser(ctx, "exec_state", ["HOSTDIR"]))
+    expect(not bad, "; ".join(bad))
+
+
 @test
 def low_image(ctx: Ctx) -> None:
     """13 item 24: a program whose image starts at 0x10000 runs in an exclave.

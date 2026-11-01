@@ -505,21 +505,8 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
                         int cloexec);
 
 /* the first bytes of a file the exec must look at: the kernel needs no descriptor for its own exec, so a program at its
- * descriptor limit may still exec; the handler needs one and borrows it, the soft limit raised by one for the open when
- * the hard limit allows, then put back (7.4.5) */
-static long open_header(const char *real)
-{
-    long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
-    if (fd != -EMFILE) return fd;
-    unsigned long lim[2], one[2];
-    if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, lim) < 0 || lim[0] >= lim[1]) return fd;
-    one[0] = lim[0] + 1;
-    one[1] = lim[1];
-    if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, one, 0) < 0) return fd;
-    fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
-    SC4(NR_prlimit64, 0, RLIMIT_NOFILE, lim, 0);
-    return fd;
-}
+ * descriptor limit may still exec; the handler needs one and borrows it under the hard limit (7.4.5) */
+static long open_header(const char *real) { return open_borrowed(real); }
 
 /* A pointer vector of n entries: a scratch region when it fits, an anonymous mapping otherwise, set in *big; NULL
  * when the mapping fails. A mapping made by a vfork child stays in the parent, unused. */
@@ -618,20 +605,20 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
         vector_free(big, envc + 4);
         return -ENAMETOOLONG;
     }
-    int k = loader ? 3 : 2;
-    for (long i = n; i > 0; i--) env[i + k - 1] = env[i - 1];
+    /* after the program's own variables, so that the kernel lays the program's strings out contiguously after its
+     * arguments, as a program that writes its title over them expects, with the launcher's three at the end */
     scpy(S->cur, "EXCLAVE_EXECFN=", PATH_MAX);
     scat(S->cur, S->v2, PATH_MAX);
     scpy(S->rest, "EXCLAVE_COMM=", PATH_MAX);
     scat(S->rest, S->comm, PATH_MAX);
+    env[n++] = S->cur;
+    env[n++] = S->rest;
     if (loader) {
         scpy(S->tmp, "EXCLAVE_EXEC=", PATH_MAX); /* tmp's heads are read by now */
         scat(S->tmp, v, PATH_MAX);
-        env[0] = S->tmp;
+        env[n++] = S->tmp;
     }
-    env[k - 2] = S->cur;
-    env[k - 1] = S->rest;
-    env[n + k] = 0;
+    env[n] = 0;
     log_line("exec", 0, v);
     long r = RE5(NR_execve, path, argv, env, 0, 0);
     vector_free(big, envc + 4); /* only reached when execve failed */
@@ -725,25 +712,28 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     /* 7.4.5: a file carrying a launcher's note is another launcher: exec it as it is */
     int another;
     int pr = elf_probe(S->real, S->tmp, &another, S->extra);
-    /* a class, machine or header the loader (7.3) cannot load: the kernel's answer for a foreign file */
-    if (pr < 0) return -ENOEXEC;
+    /* load_elf_binary's answer before its point of no return: ENOEXEC for a type, a machine or program headers it
+     * cannot load, or an interpreter path without its NUL, EIO for one the file does not hold whole */
+    if (pr < 0) return pr;
     if (another >= PAGE_GENERATION) {
         log_line("exec", 0, v);
         return RE5(NR_execve, S->real, argv, envp, 0, 0);
     }
     /* a launcher whose page this filter traps: the child refuses it by name */
     if (another) return exec_env(S, C.launcher, argv, envp, v, 1);
-    /* the loader the header names, resolved as loader_run resolves it (7.3): one that is not there
-     * is ENOENT here, as the kernel's open_exec answers; one that exists but is not the exclave's own
-     * file, a host path or a data directory, is left to the child launcher, which refuses it by name */
+    /* the loader the header names, resolved as loader_run resolves it (7.3), checked as load_elf_binary checks it
+     * before its point of no return: open_exec's answer first, the name's own error, EACCES for a directory, a special
+     * file or one without execute permission, then its header, EIO for one the file does not hold whole and ELIBBAD
+     * for one that is not this machine's ELF; one that passes but is not the exclave's own file, a host path or a data
+     * directory, is left to the child launcher, which refuses it by name */
     if (pr == 1) {
         scpy(S->arg, S->tmp, PATH_MAX);
         if ((e = canon(S, S->arg, AT_FDCWD, 1, S->tmp)) < 0) return e;
-        if (is_exclave_path(S->tmp) && !vis_in_data(S->tmp)) {
-            if ((e = sys_stat(to_real(S->tmp, S->real, S->cur), st)) < 0) return e;
-            /* do_open_execat: a loader that is not a regular file */
-            if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
-        }
+        to_real(S->tmp, S->real, S->cur); /* through the wrapper redirect: ld.so is wrapped */
+        if ((e = sys_stat(S->real, st)) < 0) return e;
+        if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
+        if ((ok = sys_faccessat(AT_FDCWD, S->real, X_OK)) < 0) return ok;
+        if ((e = elf_interp_probe(S->real, S->extra)) < 0) return e;
     }
     return exec_env(S, C.launcher, argv, envp, v, 1);
 }
