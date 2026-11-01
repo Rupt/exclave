@@ -9,6 +9,7 @@ import shutil
 import sys
 lazy import ctypes
 
+import kernel_answers
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
 from suite import Ctx, copy_exclave, inside, wrapper
@@ -402,6 +403,20 @@ def exec_vectors(ctx: Ctx) -> None:
         rc == 0 and out == "A=1 B=2 EXCLAVE_COMMX=keep\n",
         f"a variable at the end of a mapping, among others: rc={rc} {out!r} {err!r}",
     )
+
+
+@test
+def another_process_exe_link(ctx: Ctx) -> None:
+    """7.6, 13 item 10: another exclave process's /proc/<pid>/exe names the program it runs.
+
+    A loader-path process is the launcher exec'd by its own path, so the kernel's link names the
+    launcher; a forked child reading, stating, opening or running its parent's link, by the pid
+    or through a descriptor on the parent's /proc/self, reaches the program the parent runs, the
+    one its EXCLAVE_EXEC names (13 item 46), as the kernel's link does natively. Measured under
+    bwrap; the launcher once named itself, and running the link ran it without a program.
+    """
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "exe_link"))
+    expect(rc == 0 and not kernel_answers.exe_link_wrong(out), out + err)
 
 
 @test

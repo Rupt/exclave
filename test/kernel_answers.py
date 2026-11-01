@@ -280,6 +280,29 @@ PROGRAM_PERM = (
 )
 
 
+# exe_link: one line per case; a forked child reads, stats, opens and runs its parent's exe link, by
+# the parent's pid and through a descriptor on the parent's /proc/self, and finds the program
+EXE_LINK = (
+    "readlink parent exe: the program",
+    "readlinkat procself exe: the program",
+    "stat parent exe: the program",
+    "open parent exe: the program",
+    "exec parent exe: ran",
+    "exec procself exe: ran",
+)
+
+
+def exe_link_wrong(out: str) -> list[str]:
+    """The lines of exe_link's output that differ from the kernel's answers."""
+    got = out.splitlines()
+    wrong = [
+        f"got {g!r}, the kernel says {w!r}" for g, w in zip(got, EXE_LINK, strict=False) if g != w
+    ]
+    if len(got) != len(EXE_LINK):
+        wrong.append(f"{len(got)} lines, the kernel gives {len(EXE_LINK)}")
+    return wrong
+
+
 def program_perm_wrong(out: str) -> list[str]:
     """The lines of program_perm's output that differ from the kernel's answers.
 

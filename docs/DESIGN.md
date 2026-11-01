@@ -170,7 +170,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 89 named tests, most of them programs that
+- **The regression suite**: 90 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1515,11 +1515,14 @@ own path, so `/proc/<pid>/exe`, `comm`, `cmdline`, audit records and
 core-dump names are the program's for every observer. For a program on
 the loader path, built outputs and host-path programs, the kernel's
 `exe` and `maps` name the launcher and `.real/` files, which is 13 item
-10 for outside observers; `cmdline` is the original `argv`, and `comm`
-and `AT_EXECFN` are what the kernel would have set, carried by the
-handler that exec'd it (7.4.5). From inside, `readlink` of
+10 for observers outside the exclave; `cmdline` is the original `argv`,
+and `comm` and `AT_EXECFN` are what the kernel would have set, carried
+by the handler that exec'd it (7.4.5). From inside, `readlink` of
 `/proc/self/exe` and of the process's own pid answers the program's
-virtual path while `open` and `stat` of it reach the real file, so
+virtual path while `open` and `stat` of it reach the real file, and
+another exclave process's `/proc/<pid>/exe` whose link is the launcher
+answers, and resolves to, the program that process runs, read from the
+`EXCLAVE_EXEC` the kernel keeps in its `environ` (13 item 46), so
 glibc's `$ORIGIN`, Go's `os.Executable`, Rust's `current_exe` and
 self-reading programs get the right file, and a built binary with
 `RUNPATH=$ORIGIN/../lib` finds its libraries inside the exclave.
@@ -2490,7 +2493,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 89 named regressions and every oracle its kernel can run; 17
+suite's 90 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -2605,12 +2608,10 @@ and stay fixed.
 
 10. **Loader-path programs look different from outside.** For built
     outputs and host-path programs, `/proc/<pid>/exe` and
-    `/proc/<pid>/maps` read from outside the process name the launcher
-    and `.real/` files; read from inside they are right (7.6). Read by
-    another process in the exclave, a forked child reading its parent's
-    included, `/proc/<pid>/exe` names the launcher too, and an exec of
-    that link runs the launcher without a program, which prints its
-    usage and exits 127; `/proc/self/exe` is the program's own.
+    `/proc/<pid>/maps` read from outside the exclave name the launcher
+    and `.real/` files; read from inside, by the process itself or by
+    another exclave process, `exe` is the program's (7.6), and `maps`
+    names `.real/` files still.
 
 11. **`/proc/mounts` shows the host's mounts.** The exclave is not a
     mount. Its read-only answers (8.2) are the kernel's own for every
@@ -3876,8 +3877,8 @@ meaning items 4 and 7.
      and unlinked files, scripts with and without `#!` and with `#!` lines
      the kernel's buffer cuts, a program, a loader or an interpreter
      under a data directory, `PATH` search,
-     faulty argument vectors, unusual images, and the identity a program
-     exec'd from inside gets;
+     faulty argument vectors, unusual images, the identity a program
+     exec'd from inside gets, and another process's `exe` link;
    - *the launcher and its filter*: a CET-marked program inside with the
      shadow-stack tunable set, reporting whether glibc enabled one (13
      item 49), a blocked or sent `SIGSYS`, older
@@ -3965,10 +3966,10 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus nine of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots` and `program_perm` (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus ten of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm` and `exe_link` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 89 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 90 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

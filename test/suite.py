@@ -461,6 +461,7 @@ PROGS = (
     "openat2_xdev",
     "fexec",
     "exec_identity",
+    "exe_link",
     "path_length",
     "spawn_threads",
     "adversarial",

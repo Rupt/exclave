@@ -369,6 +369,7 @@ PROGRAMS = (
     "magic_links",
     "rename_dots",
     "program_perm",
+    "exe_link",
 )
 
 
@@ -402,6 +403,8 @@ def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
         wrong = kernel_answers.rename_dots_wrong(out, across=True)
     elif name == "program_perm":
         wrong = kernel_answers.program_perm_wrong(out)
+    elif name == "exe_link":
+        wrong = kernel_answers.exe_link_wrong(out)
     else:
         wrong = {
             "creat_slash": kernel_answers.creat_slash_wrong,
@@ -466,6 +469,7 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
         ),
         "rename_dots": f"{work}/rename_dots {hostdir} /tmp",
         "program_perm": f"{work}/program_perm",
+        "exe_link": f"{work}/exe_link",
     }
     fails = 0
     for name in PROGRAMS:

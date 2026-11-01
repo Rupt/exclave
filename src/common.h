@@ -306,6 +306,8 @@ int through_magic(struct scratch *S, const char *path, int dfd, char *out);
 int fd_virtual(int fd, char *out);
 int cwd_virtual(char *out);
 int is_self_exe(const char *p, pid_t pid); /* /proc/self/exe in any spelling, for this process */
+/* another process's exe link v whose text is the launcher: text becomes the program it runs (PATH_MAX); 1 if so */
+int other_exe(const struct scratch *S, const char *v, char *text);
 
 /* ---------- loader (loader.c) ---------- */
 __attribute__((noreturn)) void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp,

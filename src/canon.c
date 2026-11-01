@@ -53,21 +53,72 @@ static int cwd_virtual_in(char *out, int *tree)
 int fd_virtual(int fd, char *out) { return fd_virtual_in(fd, out, 0); }
 int cwd_virtual(char *out) { return cwd_virtual_in(out, 0); }
 
-/* /proc/self/exe in any spelling: self, thread-self, <pid>, <pid>/task/<tid>; the walk has already resolved
- * the self link into a pid, so the numeric forms are the ones that occur */
-int is_self_exe(const char *p, pid_t mypid)
+/* the process whose exe link p is, in any spelling: self, thread-self, <pid>, <pid>/task/<tid>, as mypid for the
+ * first two; 0 for a path that is no exe link. The walk has already resolved the self link into a pid, so the
+ * numeric forms are the ones that occur there */
+static long exe_link_pid(const char *p, pid_t mypid)
 {
     if (xstrncmp(p, "/proc/", 6) != 0) return 0;
     p += 6;
-    if (xstrcmp(p, "self/exe") == 0 || xstrcmp(p, "thread-self/exe") == 0) return 1;
+    if (xstrcmp(p, "self/exe") == 0 || xstrcmp(p, "thread-self/exe") == 0) return mypid;
     long pid = 0;
     while (*p >= '0' && *p <= '9') pid = pid * 10 + (*p++ - '0');
-    if (!pid || pid != mypid) return 0;
-    if (xstrcmp(p, "/exe") == 0) return 1;
+    if (!pid) return 0;
+    if (xstrcmp(p, "/exe") == 0) return pid;
     if (xstrncmp(p, "/task/", 6) != 0) return 0;
     p += 6;
     while (*p >= '0' && *p <= '9') p++;
-    return xstrcmp(p, "/exe") == 0;
+    return xstrcmp(p, "/exe") == 0 ? pid : 0;
+}
+int is_self_exe(const char *p, pid_t mypid) { return exe_link_pid(p, mypid) == mypid; }
+
+/* EXCLAVE_EXEC of another process, from the kernel's copy of its environment (13 item 46), which /proc/<pid>/environ
+ * reads for a process of this user: 1 with the program's virtual path in out (PATH_MAX), 0 for a process without
+ * it or one this process may not read. The file is read through out itself, a variable at a time; one longer than
+ * the buffer, which EXCLAVE_EXEC never is, is skipped. */
+static int exec_of_pid(long pid, char *out)
+{
+    scpy(out, "/proc/", PATH_MAX);
+    ltoa_(pid, out + 6);
+    scat(out, "/environ", PATH_MAX);
+    long fd = sys_open(out, O_RDONLY | O_CLOEXEC, 0);
+    if (fd < 0) return 0;
+    size_t have = 0;
+    int found = 0, skipping = 0;
+    for (;;) {
+        long n = sys_read((int)fd, out + have, PATH_MAX - 1 - have);
+        if (n <= 0) break;
+        have += (size_t)n;
+        size_t start = 0;
+        for (size_t i = 0; i < have && !found; i++) {
+            if (out[i]) continue;
+            if (skipping) skipping = 0;
+            else if (i - start > 13 && xmemcmp(out + start, "EXCLAVE_EXEC=", 13) == 0 && out[start + 13] == '/') {
+                for (size_t k = 0; k <= i - start - 13; k++) out[k] = out[start + 13 + k];
+                found = 1;
+            }
+            start = i + 1;
+        }
+        if (found) break;
+        if (start == 0 && have == PATH_MAX - 1) {
+            skipping = 1; /* a variable longer than the buffer: dropped up to its end */
+            have = 0;
+            continue;
+        }
+        for (size_t k = start; k < have; k++) out[k - start] = out[k];
+        have -= start;
+    }
+    sys_close((int)fd);
+    return found;
+}
+
+/* Another process's exe link whose text names the launcher: that process runs a program on the loader path, the one
+ * its EXCLAVE_EXEC names (7.4.5), which the kernel would name natively (7.6, 13 item 10). 1 with text replaced by
+ * the program's virtual path; 0 leaves text as it is. */
+int other_exe(const struct scratch *S, const char *v, char *text)
+{
+    long pid = exe_link_pid(v, S->pid);
+    return pid && pid != S->pid && xstrcmp(text, C.launcher) == 0 && exec_of_pid(pid, text);
 }
 
 /* ---------- the one-step host check (DESIGN.md 16.6 item 4) ----------
@@ -526,6 +577,8 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         }
         if (w.rf & RESOLVE_NO_SYMLINKS) return -ELOOP;
         if (++w.hops > 40) return -ELOOP;
+        /* another process's exe that is the launcher names the program that process runs (7.6) */
+        if (other_exe(S, cur, tmp)) S->touched_exclave = 1;
         /* the kernel walks the final link's text as the rest of the path (link_path_walk), so a slash ending it is
          * the path's trailing slash: a directory is meant, and O_CREAT answers EISDIR (open_last_lookups) */
         if (last && tmp[0] && tmp[xstrlen(tmp) - 1] == '/') trailing = 1;

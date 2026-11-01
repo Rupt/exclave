@@ -895,7 +895,8 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
             if (r < 0) return r;
             S->tmp[r] = 0;
         }
-        if (xstrncmp(S->v, "/proc/", 6) == 0) from_real(S->tmp); /* /proc links report real paths */
+        /* another process's exe that is the launcher names the program that process runs (7.6) */
+        if (!other_exe(S, S->v, S->tmp) && xstrncmp(S->v, "/proc/", 6) == 0) from_real(S->tmp); /* real paths */
         ans = S->tmp;
         /* another process's exe link that names a wrapped script: that process runs the script's interpreter,
          * which is what the kernel would report natively */
