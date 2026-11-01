@@ -480,10 +480,10 @@ SIGRAIN = (
 
 def sigrain_wrong(out: str) -> list[str]:
     """The lines of sigrain's output that differ from the kernel's answers."""
-    return lines_wrong(out, SIGRAIN)
+    return same_lines_wrong(out, SIGRAIN)
 
 
-def lines_wrong(out: str, want: list[str] | tuple[str, ...]) -> list[str]:
+def same_lines_wrong(out: str, want: tuple[str, ...]) -> list[str]:
     """The lines of out that differ from want, line by line, and a count that differs."""
     got = out.splitlines()
     wrong = [f"got {g!r}, the kernel says {w!r}" for g, w in zip(got, want, strict=False) if g != w]
