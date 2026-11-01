@@ -2588,7 +2588,11 @@ and stay fixed.
 10. **Loader-path programs look different from outside.** For built
     outputs and host-path programs, `/proc/<pid>/exe` and
     `/proc/<pid>/maps` read from outside the process name the launcher
-    and `.real/` files; read from inside they are right (7.6).
+    and `.real/` files; read from inside they are right (7.6). Read by
+    another process in the exclave, a forked child reading its parent's
+    included, `/proc/<pid>/exe` names the launcher too, and an exec of
+    that link runs the launcher without a program, which prints its
+    usage and exits 127; `/proc/self/exe` is the program's own.
 
 11. **`/proc/mounts` shows the host's mounts.** The exclave is not a
     mount. Its read-only answers (8.2) are the kernel's own for every
@@ -2751,9 +2755,13 @@ and stay fixed.
     for a socket under an exclave path. `bpf` object pins, `quotactl`
     and `swapon` are likewise untranslated (`test/syscalls.py` lists
     them); `fsconfig` is refused with the rest of the mount API. `bind`
-    and `connect` translate their `sockaddr_un` (7.4.3) with two visible
-    differences: `getsockname` on a host socket whose real path passes
-    `sun_path`'s 107 bytes answers `/proc/self/fd/N/NAME`, and a socket
+    and `connect` translate their `sockaddr_un` (7.4.3) with three
+    visible differences: `getsockname` on a host socket whose real path
+    passes `sun_path`'s 107 bytes answers `/proc/self/fd/N/NAME`; one
+    bound by a name whose walk touched the exclave, a relative name from
+    a working directory in the tree, a path through a host symlink or
+    through a magic link, answers the resolved real path rather than the
+    name as given, since that is what the handler bound; and a socket
     file in the tree bound by a listener outside the exclave answers
     `ECONNREFUSED`.
 
