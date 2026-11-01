@@ -476,8 +476,18 @@ PROGS = (
 )
 
 
+class CompileError(Exception):
+    """A test program the tree's compiler cannot build: on a pruned fixture, a file it lacks."""
+
+    def __init__(self, name: str, err: str) -> None:
+        super().__init__(f"cannot compile {name} with the exclave's compiler:\n{err}")
+        self.name = name
+
+
 def compile_progs(ctx: Ctx) -> None:
     """Compile the test programs with the tree's own C compiler, one at a time.
+
+    Raises CompileError for a program that does not compile.
 
     One compiler at a time, as every build in the repository runs, so that the suite never loads
     the machine with more than one.
@@ -528,7 +538,7 @@ def compile_progs(ctx: Ctx) -> None:
     errors = {name: build(name) for name in (*PROGS, "origin")}
     for name, err in errors.items():
         if err is not None:
-            sys.exit(f"cannot compile {name} with the exclave's compiler:\n{err}")
+            raise CompileError(name, err)
 
 
 def make_mini(ctx: Ctx) -> None:

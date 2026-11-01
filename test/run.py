@@ -38,6 +38,7 @@ import regress_tool
 from harness import TESTS, run_tests, select
 from suite import (
     REPO,
+    CompileError,
     fixture_keys,
     input_drift,
     left_alone,
@@ -119,7 +120,24 @@ def main() -> int:
         print("fixture: none yet for this exclave; this run makes it")
     on_fixture = tree_ != os.path.abspath(args.tree)
     stale = on_fixture and made != sources
-    ctx = prepare(args, tree_, os.path.abspath(args.work), logging=logging)
+    try:
+        ctx = prepare(args, tree_, os.path.abspath(args.work), logging=logging)
+    except CompileError as e:
+        # a program needs what the prune left out of a fixture made before it existed (a header,
+        # say): the whole exclave decides, and this run makes the fixture afresh
+        if not on_fixture or not fixture:
+            sys.exit(str(e))
+        print(f"fixture: {e.name} does not compile on it; remade from the whole exclave")
+        shutil.rmtree(fixture, ignore_errors=True)
+        tree_, on_fixture, stale, made, made_skips, logging = (
+            os.path.abspath(args.tree),
+            False,
+            False,
+            "",
+            set(),
+            True,
+        )
+        ctx = prepare(args, tree_, os.path.abspath(args.work), logging=logging)
     order = select(TESTS, args.k)
     failed, skipped = suite_run(ctx, order, args.budget)
     # The whole exclave decides for a test the fixture may have misled: one that fails on a fixture
