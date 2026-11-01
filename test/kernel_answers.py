@@ -513,13 +513,24 @@ SIGSTACK = (
         "plain alternate stack: inside flags SS_ONSTACK, stat ok, rearm Operation not permitted, "
         "stat ok; after flags 0"
     ),
-    "SS_AUTODISARM: inside flags SS_DISABLE, stat ok, rearm ok, stat ok; after flags SS_DISABLE",
+    # queried inside the handler and after it, the disarmed stack's flags are SS_DISABLE on x86-64
+    # and SS_AUTODISARM on aarch64, measured in both worlds on each
+    "SS_AUTODISARM: inside flags SS_DISABLE, stat ok, rearm ok, stat ok; after flags SS_DISABLE"
+    if platform.machine() == "x86_64"
+    else (
+        "SS_AUTODISARM: inside flags SS_AUTODISARM, stat ok, rearm ok, stat ok; "
+        "after flags SS_AUTODISARM"
+    ),
     "nested handlers on the alternate stack: both trapped",
     "handler on the main stack beside an armed alternate stack: both trapped",
     "sigaltstack outside any handler: flags 0",
 )
 # the sizes whose answer the handler's own frame decides (13 item 30)
 SIGSTACK_SMALL = ("MINSIGSTKSZ", "4 KB", "5 KB", "6 KB")
+# the least alternate stack sigaltstack accepts (MINSIGSTKSZ, uapi signal.h), under which the
+# exerciser's child exits 3 in both worlds
+MINSIGSTKSZ_LEAST = {"x86_64": 2048, "aarch64": 5120}
+SIGSTACK_SIZES = {"4 KB": 4096, "5 KB": 5120, "6 KB": 6144}
 
 
 def minsigstksz() -> int:
@@ -539,9 +550,14 @@ def sigstack_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     """
     got = out.splitlines()
     wrong = []
+    least = MINSIGSTKSZ_LEAST.get(platform.machine(), 0)
     for g, w in zip(got, SIGSTACK, strict=False):
         if g == w or (w.startswith("MINSIGSTKSZ: ") and g.startswith("MINSIGSTKSZ: ")):
             continue
+        if g == w.replace("exit 1", "exit 3") and any(
+            f"of {name}," in w and size < least for name, size in SIGSTACK_SIZES.items()
+        ):
+            continue  # a stack the kernel refuses on this machine
         if not by_the_kernel:
             case = w.split(": ")[0]
             if case.endswith("handler traps") and (
@@ -1025,18 +1041,17 @@ EXEC_SCRIPT_LAUNCHER: dict[str, str] = {
     "unreadable script, elf interpreter": "EACCES",
 }
 # exec_elf HOSTDIR (test/progs/exec_elf.c), measured under bwrap on 7.0: the image's entry runs on
-# the stack on x86-64, so the two stack cases die there, and exits in place on aarch64
-# (STACK); the terabyte of bss depends on the host's overcommit rule; a program the tree
-# cannot build says so in both worlds what the stack cases answer: death on the stack on x86-64, an
-# exit in place elsewhere
+# the stack on x86-64, so the two stack cases die there, and exits in place on aarch64 (STACK),
+# as do the two images whose second PT_LOAD covers the first, measured alike in both worlds on
+# each machine; the terabyte of bss depends on the host's overcommit rule
 STACK = "signal=11" if platform.machine() == "x86_64" else "status=42"
 EXEC_ELF: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("base", "status=42"),
     ("no PT_GNU_STACK", STACK),
     ("PT_GNU_STACK without PF_X", STACK),
     ("no PT_LOAD", "signal=11"),
-    ("two identical PT_LOADs", "signal=11"),
-    ("PT_LOAD page overlapping the first", "signal=11"),
+    ("two identical PT_LOADs", STACK),
+    ("PT_LOAD page overlapping the first", STACK),
     ("PT_LOADs out of address order", "status=42"),
     ("p_memsz below p_filesz", "signal=11"),
     ("a terabyte of bss", None),

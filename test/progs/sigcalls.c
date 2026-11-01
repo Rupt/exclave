@@ -93,6 +93,7 @@ static void no_restorer(void)
     /* x86-64 needs SA_RESTORER: the kernel cannot build the frame and kills with SIGSEGV; aarch64 has the vdso's */
     struct ksa a = {(void *)h_count, SA_SIGINFO, 0, 0};
     RAW_SIGACTION(SIGUSR1, &a, 0, SETSZ);
+    hits = 0; /* this delivery's count alone: exit 1 where the handler ran */
     raise(SIGUSR1);
     _exit(hits);
 }

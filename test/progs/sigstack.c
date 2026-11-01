@@ -54,10 +54,10 @@ static void *guarded(size_t size)
     mprotect(m, 4096, PROT_NONE);
     return m + 4096 + rounded - size;
 }
-static void arm(void *sp, size_t size, int flags)
+static int arm(void *sp, size_t size, int flags) /* 0, or errno: ENOMEM for a size under MINSIGSTKSZ */
 {
     stack_t ss = {sp, flags, size};
-    if (sigaltstack(&ss, 0)) perror("sigaltstack");
+    return sigaltstack(&ss, 0) ? errno : 0;
 }
 static void handler_with(int sig, void (*h)(int), int flags)
 {
@@ -117,7 +117,8 @@ static void h_wide(int s)
 static void child_altstack(size_t size, int trap)
 {
     void *sp = guarded(size);
-    arm(sp, size, 0);
+    /* the kernel refuses a stack under its MINSIGSTKSZ (5 KB on aarch64, 2 KB on x86-64): exit 3 says so */
+    if (arm(sp, size, 0)) _exit(3);
     handler_with(SIGUSR1, trap ? h_trap : h_nothing, SA_ONSTACK);
     raise(SIGUSR1);
     _exit(hits);
@@ -189,7 +190,7 @@ int main(void)
     /* 3. queries and changes from inside a handler on the alternate stack, with and without SS_AUTODISARM */
     void *sp = guarded(65536);
     for (int autodisarm = 0; autodisarm < 2; autodisarm++) {
-        arm(sp, 65536, autodisarm ? (int)SS_AUTODISARM : 0);
+        if (arm(sp, 65536, autodisarm ? (int)SS_AUTODISARM : 0)) printf("sigaltstack of 64 KB: %s\n", strerror(errno));
         handler_with(SIGUSR1, h_query, SA_ONSTACK);
         raise(SIGUSR1);
         stack_t o;
