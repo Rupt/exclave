@@ -48,6 +48,18 @@ def vbin(root: str, name: str) -> str:
     return "/usr/bin/" + name
 
 
+def dir_link(root: str) -> str:
+    """Return the virtual path of a top-level symlink of the tree to a directory, or "-" for none.
+
+    /bin in a merged-usr tree; an unmerged one may have none.
+    """
+    for name in sorted(os.listdir(root)):
+        p = os.path.join(root, name)
+        if os.path.islink(p) and os.path.isdir(p):
+            return "/" + name
+    return "-"
+
+
 def compiler(root: str, machine: str) -> str | None:
     """Return the name of the tree's C compiler, or None if it has none.
 

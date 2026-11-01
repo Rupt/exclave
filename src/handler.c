@@ -178,6 +178,7 @@ static int as_given(const struct scratch *S) { return !S->touched_exclave && S->
 #define RE_DFD(S) (as_given(S) ? (S)->dfd : AT_FDCWD)
 #define RE_PATH(S) (as_given(S) ? (S)->given : (S)->real)
 /* args[pi] relative to args[di] (or the cwd when di < 0) into S->v; 1 means "empty path with AT_EMPTY_PATH: fd-based".
+ * follow is canon's rule for the last component: WALK_FOLLOW, WALK_PARENT, or 0 for a lookup that stops at a link.
  * allow_empty: 1 accepts the empty string, 2 also a NULL path, as getname_maybe_null does under AT_EMPTY_PATH for
  * newfstatat and statx (6.11+), the *xattrat calls and file_getattr and file_setattr; every other syscall answers
  * EFAULT for NULL, AT_EMPTY_PATH or not (oracle 17.7) */
@@ -1032,7 +1033,8 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
         r = sys_faccessat(AT_FDCWD, ".", X_OK);
         if (r < 0) return r;
     }
-    if ((r = canon(S, S->given, AT_FDCWD, nr == NR_connect, S->v)) < 0) {
+    /* unix_bind_bsd creates the name (start_creating_path); connect looks it up (LOOKUP_FOLLOW) */
+    if ((r = canon(S, S->given, AT_FDCWD, nr == NR_connect ? WALK_FOLLOW : WALK_PARENT, S->v)) < 0) {
         scpy(S->v, S->given, PATH_MAX);
         return r;
     }
@@ -1202,7 +1204,7 @@ static long do_unlink(struct scratch *S, int nr, long *a)
     int pi = nr == NR_unlinkat ? 1 : 0, di = nr == NR_unlinkat ? 0 : -1;
     long fl = nr == NR_rmdir ? AT_REMOVEDIR : nr == NR_unlinkat ? a[2] : 0;
     if ((unsigned)fl & ~(unsigned)AT_REMOVEDIR) return -EINVAL;
-    if ((r = resolve(S, a, pi, di, 0, 0)) < 0)
+    if ((r = resolve(S, a, pi, di, WALK_PARENT, 0)) < 0)
         return r == -ENAMETOOLONG ? delete_overlong(S, di < 0 ? AT_FDCWD : (int)a[di]) : r;
     int sp = last_special(S->given); /* do_rmdir, do_unlinkat: answered before any lookup */
     if (sp) return (fl & AT_REMOVEDIR) ? (sp == 1 ? -EINVAL : sp == 2 ? -ENOTEMPTY : -EBUSY) : -EISDIR;
@@ -1220,12 +1222,12 @@ static long do_rename(struct scratch *S, int nr, long *a)
     /* do_renameat2: the flags first */
     if (fl & ~(unsigned)(RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT)) return -EINVAL;
     if ((fl & (RENAME_NOREPLACE | RENAME_WHITEOUT)) && (fl & RENAME_EXCHANGE)) return -EINVAL;
-    if ((r = resolve(S, a, opi, odi, 0, 0)) < 0) return r;
+    if ((r = resolve(S, a, opi, odi, WALK_PARENT, 0)) < 0) return r;
     int osp = last_special(S->given);
     scpy(S->v2, S->v, PATH_MAX); /* old */
     scpy(S->given2, S->given, PATH_MAX);
     int old_given = as_given(S), odfd = S->dfd;
-    if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
+    if ((r = resolve(S, a, npi, ndi, WALK_PARENT, 0)) < 0) return r;
     int nsp = last_special(S->given);
     /* the kernel's order (do_renameat2, oracles 17.1 and 17.7): different mounts first, then a last component
      * that is "." or "..", then the write check, then the lookups */
@@ -1265,7 +1267,7 @@ static long do_link(struct scratch *S, int nr, long *a)
     /* do_linkat: the old name is looked up before the new one is read at all: its own error, ENOTDIR for a slash on
      * a file */
     if (!exists_exclave(S, S->v2, &st)) return absent_errno(S);
-    if ((r = resolve(S, a, npi, ndi, 0, 0)) < 0) return r;
+    if ((r = resolve(S, a, npi, ndi, WALK_PARENT, 0)) < 0) return r;
     /* then the new name, in either domain (EEXIST, the name's own error), then the read-only rule for a
      * new name the exclave owns, then EXDEV for an old one it owns */
     scpy(S->cur, S->v, PATH_MAX);
@@ -1519,7 +1521,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
     case NR_mkdir:
     case NR_mkdirat: {
         int pi = nr == NR_mkdir ? 0 : 1, di = nr == NR_mkdir ? -1 : 0;
-        if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
+        if ((r = resolve(S, a, pi, di, WALK_PARENT, 0)) < 0) return r;
         if ((r = ro_create(S, S->v, 1))) return r;
         return RE5(NR_mkdirat, RE_DFD(S), RE_PATH(S), a[pi + 1], 0, 0);
     }
@@ -1527,7 +1529,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
     case NR_mknodat: {
         int pi = nr == NR_mknod ? 0 : 1, di = nr == NR_mknod ? -1 : 0;
         if ((r = may_mknod((unsigned short)a[pi + 1]))) return r;
-        if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
+        if ((r = resolve(S, a, pi, di, WALK_PARENT, 0)) < 0) return r;
         if ((r = ro_create(S, S->v, 0))) return r;
         return RE5(NR_mknodat, RE_DFD(S), RE_PATH(S), a[pi + 1], a[pi + 2], 0);
     }
@@ -1540,7 +1542,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         /* do_symlinkat: the target is read before the new name */
         if ((r = copy_str_in(S->pid, S->extra, (const char *)a[0])) < 0) return r;
         if (S->extra[0] == 0) return -ENOENT;
-        if ((r = resolve(S, a, pi, di, 0, 0)) < 0) return r;
+        if ((r = resolve(S, a, pi, di, WALK_PARENT, 0)) < 0) return r;
         if ((r = ro_create(S, S->v, 0))) return r;
         return RE5(NR_symlinkat, S->extra, RE_DFD(S), RE_PATH(S), 0, 0);
     }

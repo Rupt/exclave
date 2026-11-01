@@ -489,13 +489,15 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
          * and its host target is not reached */
         if (w.rf & RESOLVE_NO_XDEV) {
             int d = is_exclave_path(cur);
-            if (d != w.dom && !(last && !follow_last && !trailing && vis_is_identity_file(cur) &&
+            if (d != w.dom && !(last && !(follow_last & WALK_FOLLOW) && !trailing && vis_is_identity_file(cur) &&
                                 vis_readlink_identity(cur, tmp) == 1))
                 return -EXDEV;
             w.dom = d;
         }
-        /* a trailing slash means "a directory": the kernel follows */
-        if (last && !follow_last && !trailing) break;
+        /* the last component is the caller's where the kernel leaves it to the call (WALK_FOLLOW, WALK_PARENT): a
+         * trailing slash means "a directory", which a lookup follows (lookup_last) and a call on the parent never
+         * looks up (filename_parentat) */
+        if (last && (trailing ? (follow_last & WALK_PARENT) != 0 : !(follow_last & WALK_FOLLOW))) break;
         /* the process's own exe names the program, not the launcher (7.6), on the loader path and for a script whose
          * exe is its interpreter */
         if ((C.loader_mode || xstrcmp(C.exe, C.program) != 0) && is_self_exe(cur, S->pid)) {

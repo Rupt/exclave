@@ -291,6 +291,15 @@ void cache_put(const char *v, int kind, const char *link);
 int cache_classify(const char *v, const char *real, char *tmp);
 
 /* ---------- canonicalisation (canon.c) ---------- */
+/* canon's rule for the last component, after the kernel's lookup flags (fs/namei.c). WALK_FOLLOW follows a final
+ * symlink (LOOKUP_FOLLOW); without it the walk stops at the link itself, unless a trailing slash asks for a directory,
+ * which the kernel follows (lookup_last). WALK_PARENT is a call that looks the last name up in its parent
+ * (filename_parentat: a create, a delete, a rename, link's new name, open with O_CREAT): the walk stops before the
+ * last component when a trailing slash ends it, whatever it is, and the caller judges the slash, as the kernel does
+ * after the parent's walk (EISDIR for O_CREAT before any lookup, EEXIST or ENOENT for a create, ENOTDIR for a delete);
+ * without a trailing slash WALK_FOLLOW decides, since O_CREAT follows what the lookup found (open_last_lookups) */
+#define WALK_FOLLOW 1
+#define WALK_PARENT 2
 int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *out); /* 0 or -errno */
 int through_magic(struct scratch *S, const char *path, int dfd, char *out);
 int fd_virtual(int fd, char *out);

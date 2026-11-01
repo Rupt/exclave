@@ -467,6 +467,7 @@ PROGS = (
     "rename_race",
     "cwd_race",
     "creat_slash",
+    "slash_links",
     "xattrat",
     "readlink_fault",
 )

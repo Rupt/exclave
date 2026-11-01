@@ -1745,32 +1745,6 @@ DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[
     ),
     (
         (
-            "a trailing slash after a host symlink, for a call that does not follow the last "
-            "component: the kernel looks the link itself up (EEXIST for a create, ENOTDIR for "
-            "rmdir); the handler follows it, and mkdir creates the dangling link's target"
-        ),
-        lambda n, label, b, o, _c: (
-            (n, label, b, o)
-            in {
-                ("mkdir", "host_dangling_slash", "ret=-1 errno=17", "ret=0 errno=0"),
-                ("mkdir", "host_missing", "ret=0 errno=0", "ret=-1 errno=17"),
-                ("mkdirat", "cwd/host_dangling_slash", "ret=-1 errno=17", "ret=0 errno=0"),
-                ("mkdirat", "cwd/host_missing", "ret=0 errno=0", "ret=-1 errno=17"),
-                ("rmdir", "host_link_slash", "ret=-1 errno=20", "ret=-1 errno=30"),
-                ("rmdir", "host_link_dir_slash", "ret=-1 errno=20", "ret=-1 errno=30"),
-                ("rmdir", "host_dangling_slash", "ret=-1 errno=20", "ret=-1 errno=2"),
-                ("symlink", "host_dangling_slash", "ret=-1 errno=17", "ret=-1 errno=2"),
-                ("symlinkat", "cwd/host_dangling_slash", "ret=-1 errno=17", "ret=-1 errno=2"),
-                ("mknod", "host_dangling_slash/fifo", "ret=-1 errno=17", "ret=-1 errno=2"),
-                ("mknod", "host_dangling_slash/reg", "ret=-1 errno=17", "ret=-1 errno=2"),
-                ("mknodat", "cwd/host_dangling_slash", "ret=-1 errno=17", "ret=-1 errno=2"),
-                ("bind", "host_dangling_slash", "ret=-1 errno=98", "ret=-1 errno=2"),
-            }
-        ),
-        lambda: True,
-    ),
-    (
-        (
             "O_CREAT with a trailing slash is EISDIR before the last component is looked up "
             "(open_last_lookups), so before RESOLVE_NO_SYMLINKS meets a link there; the handler "
             "says ELOOP"

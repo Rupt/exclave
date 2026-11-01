@@ -7,6 +7,7 @@ and 4).
 """
 
 import errno
+import itertools
 import os
 import platform
 lazy import ctypes
@@ -70,6 +71,155 @@ def creat_slash_wrong(out: str) -> list[str]:
     return (
         [] if got == list(CREAT_SLASH) else [f"got {got!r}, the kernel says {list(CREAT_SLASH)!r}"]
     )
+
+
+# slash_links HOSTDIR EXFILE EXDIR EXLINK: the case and its answer, measured under bwrap on 7.0; the
+# exlink lines are left out where the tree has no symlink to a directory ("exlink: skipped")
+SLASH_LINKS = (
+    "hdang mkdir: ret=-1 errno=17",
+    "hdang mkdirat: ret=-1 errno=17",
+    "hdang rmdir: ret=-1 errno=20",
+    "hdang unlink: ret=-1 errno=20",
+    "hdang symlink: ret=-1 errno=17",
+    "hdang symlinkat: ret=-1 errno=17",
+    "hdang mknod fifo: ret=-1 errno=17",
+    "hdang mknod reg: ret=-1 errno=17",
+    "hdang mknodat fifo: ret=-1 errno=17",
+    "hdang bind: ret=-1 errno=98",
+    "hdang open creat: ret=-1 errno=21",
+    "hdang open creat excl: ret=-1 errno=21",
+    "hdang open rdonly: ret=-1 errno=2",
+    "hdang link to it: ret=-1 errno=17",
+    "hdang renameat2 noreplace onto it: ret=-1 errno=17",
+    "hdang rename onto it: ret=-1 errno=20",
+    "hdang renameat2 exchange with it: ret=-1 errno=20",
+    "hdang rename it: ret=-1 errno=20",
+    "hlink mkdir: ret=-1 errno=17",
+    "hlink mkdirat: ret=-1 errno=17",
+    "hlink rmdir: ret=-1 errno=20",
+    "hlink unlink: ret=-1 errno=20",
+    "hlink symlink: ret=-1 errno=17",
+    "hlink symlinkat: ret=-1 errno=17",
+    "hlink mknod fifo: ret=-1 errno=17",
+    "hlink mknod reg: ret=-1 errno=17",
+    "hlink mknodat fifo: ret=-1 errno=17",
+    "hlink bind: ret=-1 errno=98",
+    "hlink open creat: ret=-1 errno=21",
+    "hlink open creat excl: ret=-1 errno=21",
+    "hlink open rdonly: ret=-1 errno=20",
+    "hlink link to it: ret=-1 errno=17",
+    "hlink renameat2 noreplace onto it: ret=-1 errno=17",
+    "hlink rename onto it: ret=-1 errno=20",
+    "hlink renameat2 exchange with it: ret=-1 errno=20",
+    "hlink rename it: ret=-1 errno=20",
+    "hlnkdir mkdir: ret=-1 errno=17",
+    "hlnkdir mkdirat: ret=-1 errno=17",
+    "hlnkdir rmdir: ret=-1 errno=20",
+    "hlnkdir unlink: ret=-1 errno=20",
+    "hlnkdir symlink: ret=-1 errno=17",
+    "hlnkdir symlinkat: ret=-1 errno=17",
+    "hlnkdir mknod fifo: ret=-1 errno=17",
+    "hlnkdir mknod reg: ret=-1 errno=17",
+    "hlnkdir mknodat fifo: ret=-1 errno=17",
+    "hlnkdir bind: ret=-1 errno=98",
+    "hlnkdir open creat: ret=-1 errno=21",
+    "hlnkdir open creat excl: ret=-1 errno=21",
+    "hlnkdir open rdonly: ok",
+    "hlnkdir link to it: ret=-1 errno=17",
+    "hlnkdir renameat2 noreplace onto it: ret=-1 errno=17",
+    "hlnkdir rename onto it: ret=-1 errno=20",
+    "hlnkdir renameat2 exchange with it: ret=-1 errno=20",
+    "hlnkdir rename it: ret=-1 errno=20",
+    "hdir mkdir: ret=-1 errno=17",
+    "hdir mkdirat: ret=-1 errno=17",
+    "hdir rmdir: ok",
+    "hdir unlink: ret=-1 errno=2",
+    "hdir symlink: ret=-1 errno=2",
+    "hdir symlinkat: ret=-1 errno=2",
+    "hdir mknod fifo: ret=-1 errno=2",
+    "hdir mknod reg: ret=-1 errno=2",
+    "hdir mknodat fifo: ret=-1 errno=2",
+    "hdir bind: ret=-1 errno=2",
+    "hdir open creat: ret=-1 errno=21",
+    "hdir open creat excl: ret=-1 errno=21",
+    "hdir open rdonly: ret=-1 errno=2",
+    "hdir link to it: ret=-1 errno=2",
+    "hdir renameat2 noreplace onto it: ret=-1 errno=20",
+    "hdir rename onto it: ret=-1 errno=20",
+    "hdir renameat2 exchange with it: ret=-1 errno=2",
+    "hdir rename it: ret=-1 errno=2",
+    "hfile mkdir: ret=-1 errno=17",
+    "hfile mkdirat: ret=-1 errno=17",
+    "hfile rmdir: ret=-1 errno=20",
+    "hfile unlink: ret=-1 errno=20",
+    "hfile symlink: ret=-1 errno=17",
+    "hfile symlinkat: ret=-1 errno=17",
+    "hfile mknod fifo: ret=-1 errno=17",
+    "hfile mknod reg: ret=-1 errno=17",
+    "hfile mknodat fifo: ret=-1 errno=17",
+    "hfile bind: ret=-1 errno=98",
+    "hfile open creat: ret=-1 errno=21",
+    "hfile open creat excl: ret=-1 errno=21",
+    "hfile open rdonly: ret=-1 errno=20",
+    "hfile link to it: ret=-1 errno=17",
+    "hfile renameat2 noreplace onto it: ret=-1 errno=17",
+    "hfile rename onto it: ret=-1 errno=20",
+    "hfile renameat2 exchange with it: ret=-1 errno=20",
+    "hfile rename it: ret=-1 errno=20",
+    "absent mkdir: ok",
+    "absent mkdirat: ret=-1 errno=17",
+    "absent rmdir: ok",
+    "absent unlink: ret=-1 errno=2",
+    "absent symlink: ret=-1 errno=2",
+    "absent symlinkat: ret=-1 errno=2",
+    "absent mknod fifo: ret=-1 errno=2",
+    "absent mknod reg: ret=-1 errno=2",
+    "absent mknodat fifo: ret=-1 errno=2",
+    "absent bind: ret=-1 errno=2",
+    "absent open creat: ret=-1 errno=21",
+    "absent open creat excl: ret=-1 errno=21",
+    "absent open rdonly: ret=-1 errno=2",
+    "absent link to it: ret=-1 errno=2",
+    "absent renameat2 noreplace onto it: ret=-1 errno=20",
+    "absent rename onto it: ret=-1 errno=20",
+    "absent renameat2 exchange with it: ret=-1 errno=2",
+    "absent rename it: ret=-1 errno=2",
+    "exlink mkdir: ret=-1 errno=17",
+    "exlink rmdir: ret=-1 errno=30",
+    "exlink unlink: ret=-1 errno=30",
+    "exlink symlink: ret=-1 errno=17",
+    "exlink mknod fifo: ret=-1 errno=17",
+    "exlink mknod reg: ret=-1 errno=17",
+    "exlink bind: ret=-1 errno=98",
+    "exlink open creat: ret=-1 errno=21",
+    "exlink open creat excl: ret=-1 errno=21",
+    "exlink open rdonly: ok",
+    "exlink link to it: ret=-1 errno=17",
+    "exlink renameat2 noreplace onto it: ret=-1 errno=18",
+    "exlink rename onto it: ret=-1 errno=18",
+    "exlink renameat2 exchange with it: ret=-1 errno=18",
+    "exlink rename it: ret=-1 errno=18",
+    "effect missing: absent",
+    "effect hdang: link",
+    "effect hlink: link",
+    "effect hlnkdir: link",
+    "effect hdir: absent",
+    "effect hfile: file",
+    "effect hfile2: file",
+    "effect renamed: absent",
+    "effect absent: absent",
+)
+
+
+def slash_links_wrong(out: str) -> list[str]:
+    """The lines of slash_links's output that differ from the kernel's answers."""
+    got = out.splitlines()
+    skipped = "exlink: skipped" in got
+    got = [x for x in got if x != "exlink: skipped"]
+    want = [x for x in SLASH_LINKS if not (skipped and x.startswith("exlink "))]
+    return [
+        f"got {g!r}, the kernel says {w!r}" for g, w in itertools.zip_longest(got, want) if g != w
+    ]
 
 
 # magic_links pathless: the descriptors it checks, and the syscalls it makes that a kernel may lack

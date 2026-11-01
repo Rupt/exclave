@@ -170,7 +170,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 83 named tests, most of them programs that
+- **The regression suite**: 84 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1013,7 +1013,8 @@ inside the current launcher.
 | Group | Syscalls | Treatment |
 |---|---|---|
 | Path, follow final symlink | `openat`, `openat2` (below), `newfstatat`, `statx`, `faccessat`, `faccessat2`, `truncate`, `chdir`, `statfs`, `utimensat`, `fchmodat`, `fchmodat2`, `fchownat`, `*xattr` and the `*xattrat` family, `file_getattr`, `file_setattr`, `inotify_add_watch`, `fanotify_mark`, `execve`, `execveat`, and their legacy forms | translate, apply the read-only rules, re-issue |
-| Path, no follow | `readlinkat`, `unlinkat`, `mkdirat`, `mknodat`, `symlinkat` (the link's path; its target is stored verbatim), `renameat2`, `linkat` unless `AT_SYMLINK_FOLLOW`, `l*xattr`, `lchown`, `lstat`, `open` with `O_NOFOLLOW`, `open` with `O_CREAT\|O_EXCL` | translate all but the final component |
+| Path, no follow | `readlinkat`, `l*xattr`, `lchown`, `lstat`, `linkat`'s old name unless `AT_SYMLINK_FOLLOW`, `open` with `O_NOFOLLOW` | translate all but the final component, which a trailing slash follows, since the slash asks for a directory (`lookup_last`) |
+| Path, on the parent | `unlinkat`, `mkdirat`, `mknodat`, `symlinkat` (the link's path; its target is stored verbatim), `renameat2`, `linkat`'s new name, `bind`, `open` with `O_CREAT` | translate all but the final component, which the kernel looks up by name in its parent and never follows (`filename_parentat`), a trailing slash included: the slash is the call's to judge, `EISDIR` for `O_CREAT` before any lookup, `EEXIST` for a create of what exists, a symlink included, `ENOENT` for a non-directory create of what does not, `ENOTDIR` for `rmdir` and `unlink` of what is not a directory, and `rename`'s own rules; `O_CREAT` without `O_EXCL` or `O_NOFOLLOW` then follows what the lookup found |
 | Descriptor-addressed | any of the above with an empty path and `AT_EMPTY_PATH`; a NULL path where the kernel accepts one (`fstatat` and `statx` since 6.11, the `*xattrat` family, `file_getattr` and `file_setattr` under `AT_EMPTY_PATH`, `utimensat(fd, NULL, ...)` behind `futimens`) and `EFAULT` elsewhere (the empty-path forms are behind Rust's `File::metadata` and `fexecve`); and `fchmod`, `fchown`, `fsetxattr`, `fremovexattr`, `fstatfs` and the `chattr` ioctls (`ftruncate` needs a writable descriptor, which an exclave file never has) | resolve the descriptor through `/proc/self/fd`, no component walk, no trailing-slash rule, and re-issue the call through the descriptor as given, so that the kernel's rule for `AT_EMPTY_PATH` is its own (`linkat` wants `CAP_DAC_READ_SEARCH` before 6.10); `AT_FDCWD` is the working directory; apply the read-only rules; an `O_PATH` descriptor is `EBADF` for the five attribute calls, as natively; for `execveat` a descriptor on a symlink itself is `ELOOP`, and one on anything but a regular file, a pipe or a socket included, is `EACCES`; an original's descriptor given to `execveat` is mapped back to its wrapper |
 | A path inside a structure | `bind` and `connect` with an `AF_UNIX` address whose path is not abstract | below |
 | Reverse-translate results | `getcwd`; `readlinkat` of `/proc/self/{exe,cwd,fd/*}` and of the process's own pid; `readlinkat` of an identity file; `statfs` and `fstatfs` on exclave paths | strip the tree's prefix, and the `.real/` of an original, which then names its wrapper; answer the program's virtual path for `exe` on the loader path (7.6); answer the host's link text for an identity file (8.4); report `ST_RDONLY`. Any other link's text is returned as stored, as the kernel returns it |
@@ -1143,7 +1144,7 @@ canon(path, dfd, follow_last):
         p = pop_front(parts)
         "." -> continue; ".." -> cur = parent(cur); continue
         cand = cur + "/" + p
-        if no parts left and not follow_last: cur = cand; break
+        if no parts left and (trailing slash ? on the parent : not follow_last): cur = cand; break
         if lstat(to_real(cand)) is a symlink:
             t = readlink(to_real(cand))
             if cand under /proc: t = from_real(t)    # procfs reports real paths
@@ -1682,8 +1683,9 @@ the references for the kernel's order.
     `EILSEQ`, is reported as it is; a trailing slash, spelt in the path
     or ending the text of a final symlink that is followed (the kernel
     walks the text as the rest of the path), is `EISDIR` for
-    `open` and `ENOENT` for a non-directory create; and only then comes
-    `EROFS`. `O_CREAT` without `O_EXCL` on an existing file opened
+    `open` and `ENOENT` for a non-directory create, and a symlink
+    before it is the existing name itself, never followed (7.4.3);
+    and only then comes `EROFS`. `O_CREAT` without `O_EXCL` on an existing file opened
     read-only succeeds.
   - A write-open or `truncate` of a directory is `EISDIR`, `truncate`
     of a special file `EINVAL`, `O_TMPFILE` on anything but a directory
@@ -2436,7 +2438,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 83 named regressions and every oracle its kernel can run; 17
+suite's 84 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -3897,10 +3899,10 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus five of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `unix_socket` and `magic_links` (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus six of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `unix_socket` and `magic_links` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 83 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 84 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -4211,10 +4213,10 @@ once the answers agree until its entry goes, on a host whose files can
 show it (a host whose `/etc/resolv.conf` is no symlink shows no
 no-follow call on an identity symlink). On the reference machine
 26 521 cases run on each of the gate's four exclaves and none differ
-unexplained; 211 are open defects: `O_DIRECTORY` with `O_CREAT` or
-`O_WRONLY` in `open` and `openat`, a trailing slash after a host
-symlink, `O_CREAT` with a trailing slash under `RESOLVE_NO_SYMLINKS`,
-and no-follow calls on an identity symlink.
+unexplained; 198 are open defects: `O_DIRECTORY` with `O_CREAT` or
+`O_WRONLY` in `open` and `openat`, `O_CREAT` with a trailing slash
+under `RESOLVE_NO_SYMLINKS`, and no-follow calls on an identity
+symlink.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.
 

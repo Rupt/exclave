@@ -853,3 +853,27 @@ def create_through_a_slashed_link(ctx: Ctx) -> None:
     os.makedirs(d, exist_ok=True)
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "creat_slash"), [d])
     expect(rc == 0 and not kernel_answers.creat_slash_wrong(out), out + err)
+
+
+@test
+def create_through_a_slashed_host_link(ctx: Ctx) -> None:
+    """7.4.3: a trailing slash after a final symlink, for a call on the parent.
+
+    A create, a delete, a rename, link's new name and open with O_CREAT walk the parent and look
+    the last name up in it (filename_parentat), never following a symlink there, so mkdir of a
+    dangling host link with a slash is EEXIST and creates nothing, rmdir and unlink of a link with
+    a slash ENOTDIR, a rename onto it ENOTDIR or EEXIST under RENAME_NOREPLACE; a plain open
+    follows the link, as lookup_last does. Measured under bwrap; the launcher once followed the
+    link, and mkdir made the dangling link's target.
+    """
+    d = os.path.join(ctx.work, "slashed_host")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(
+        ctx,
+        os.path.join(ctx.progs, "slash_links"),
+        [d, ctx.vbin("true"), "/usr/share", tree.dir_link(ctx.root)],
+    )
+    expect(rc == 0, out + err)
+    bad = kernel_answers.slash_links_wrong(out)
+    expect(not bad, "; ".join(bad))
