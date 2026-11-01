@@ -385,7 +385,11 @@ def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
         bad = [x for x in out.splitlines() if x.startswith("FAIL")]
         return bad or ([] if rc in (0, 3) else [out])
     if name == "magic_links":
-        wrong = kernel_answers.magic_links_wrong(out, kernel_answers.magic_links_missing(hostdir))
+        wrong = kernel_answers.magic_links_wrong(
+            out,
+            kernel_answers.magic_links_missing(hostdir)
+            | kernel_answers.link_empty_allowed(hostdir),
+        )
     elif name == "open_flags":
         wrong = kernel_answers.open_flags_wrong(out, by_the_kernel=True)
     else:
@@ -443,7 +447,10 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
             f"mkdir {sockhost} && {work}/unix_socket {sockhost} /usr/share {true} "
             f"/usr/share/exclave-test.sock {deep}"
         ),
-        "magic_links": f"echo piped | {work}/magic_links pathless {hostdir}",
+        "magic_links": (
+            f"echo piped | {work}/magic_links pathless {hostdir} && "
+            f"{work}/magic_links link-empty {hostdir}"
+        ),
     }
     fails = 0
     for name in PROGRAMS:

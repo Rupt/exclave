@@ -314,8 +314,49 @@ def slash_links_wrong(out: str) -> list[str]:
 # magic_links pathless: the descriptors it checks, and the syscalls it makes that a kernel may lack
 MAGIC_LINKS_FDS = ("stdin", "pipe", "memfd", "inotify", "unlinked")
 SYS_STATX = {"x86_64": 332, "aarch64": 291}
+SYS_LINKAT = {"x86_64": 265, "aarch64": 37}
 SYS_FACCESSAT2 = 439
 AT_FDCWD = -100
+AT_EMPTY_PATH = 0x1000
+
+# magic_links link-empty DIR: linkat with AT_EMPTY_PATH on a descriptor whose file has no path,
+# the kernel's answer for each, from do_linkat and vfs_link in fs/namei.c: the link made for an
+# O_TMPFILE file (6.10 and later), ENOENT for an unlinked file, whose link count is zero, EXDEV
+# for an object with no mount in common, EPERM for a directory, and EROFS for a new name in the
+# tree
+LINK_EMPTY = {
+    "tmpfile": "ok",
+    "unlinked": "errno 2",
+    "memfd": "errno 18",
+    "pipe": "errno 18",
+    "socket": "errno 18",
+    "gone": "errno 1",
+    "tmpfile into tree": "errno 30",
+}
+
+
+def link_empty_allowed(hostdir: str) -> set[str]:
+    """The lines magic_links link-empty DIR may print on this kernel.
+
+    Before 6.10 linkat with AT_EMPTY_PATH wanted CAP_DAC_READ_SEARCH and answered ENOENT without
+    it before any lookup; the kernel is asked natively, with an O_TMPFILE file in hostdir, and
+    then every case may answer ENOENT too, the launcher's own EROFS for a name in the tree aside.
+    """
+    allowed = {f"link-empty {k} {v}" for k, v in LINK_EMPTY.items()}
+    try:
+        fd = os.open(hostdir, os.O_TMPFILE | os.O_RDWR, 0o644)
+    except OSError:
+        return allowed
+    libc = ctypes.CDLL(None, use_errno=True)
+    dst = os.path.join(hostdir, f"link-empty-probe-{os.getpid()}").encode()
+    r = libc.syscall(SYS_LINKAT[platform.machine()], fd, b"", AT_FDCWD, dst, AT_EMPTY_PATH)
+    old = r < 0 and ctypes.get_errno() == errno.ENOENT
+    os.close(fd)
+    if r == 0:
+        os.unlink(dst)
+    if old:
+        allowed |= {f"link-empty {k} errno 2" for k in LINK_EMPTY}
+    return allowed
 
 
 def magic_links_missing(hostdir: str) -> set[str]:
@@ -346,8 +387,9 @@ def magic_links_missing(hostdir: str) -> set[str]:
 
 
 def magic_links_wrong(out: str, missing: set[str]) -> list[str]:
-    """The lines of magic_links pathless that do not find the object.
+    """The lines of magic_links pathless and link-empty that do not give the kernel's answer.
 
-    Each line ends ok, or is the failure of a call the kernel lacks natively (magic_links_missing).
+    Each line ends ok, or is the failure of a call the kernel lacks natively (magic_links_missing),
+    or a link-empty answer the kernel gives (link_empty_allowed).
     """
     return [line for line in out.splitlines() if not line.endswith(" ok") and line not in missing]

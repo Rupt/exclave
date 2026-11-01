@@ -454,14 +454,23 @@ def magic_links_to_pathless(ctx: Ctx) -> None:
 
     stat, statx and faccessat2 through /proc/self/fd/N find the pipe, memfd, inotify descriptor or
     unlinked file fstat finds, /dev/stdin is the caller's pipe, and an O_TMPFILE file is linked by
-    its magic link; a call fails only where the kernel itself, asked here, fails it. A tree
-    directory named "... (deleted)" is a path all the same: creating under a descriptor on it is
-    EROFS.
+    its magic link; a call fails only where the kernel itself, asked here, fails it. linkat with
+    AT_EMPTY_PATH on such a descriptor is the kernel's own: an O_TMPFILE file is linked, an
+    unlinked file is ENOENT, a memfd, a pipe and a socket are EXDEV, a removed directory EPERM,
+    and a name in the tree EROFS. A tree directory named "... (deleted)" is a path all the same:
+    creating under a descriptor on it is EROFS.
     """
     prog = os.path.join(ctx.progs, "magic_links")
     rc, out, err = inside(ctx, prog, ["pathless", ctx.work], inp=b"piped\n")
     bad = kernel_answers.magic_links_wrong(out, kernel_answers.magic_links_missing(ctx.work))
     expect(rc == 0 and out and not bad, f"magic links: rc={rc} {bad!r} {err!r}")
+    # linkat with AT_EMPTY_PATH on a descriptor whose file has no path: the kernel's own, as given
+    rc, out, err = inside(ctx, prog, ["link-empty", ctx.work])
+    bad = kernel_answers.magic_links_wrong(out, kernel_answers.link_empty_allowed(ctx.work))
+    expect(
+        rc == 0 and out.count("\n") == len(kernel_answers.LINK_EMPTY) and not bad,
+        f"linkat AT_EMPTY_PATH on pathless descriptors: rc={rc} {bad!r} {err!r}",
+    )
     ex2 = os.path.join(ctx.work, "deleted-name.exclave")
     copy_exclave(ctx.exclave, ex2)
     os.makedirs(os.path.join(ex2, "tree", "usr", "share", "x (deleted)"))

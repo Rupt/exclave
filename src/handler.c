@@ -1307,10 +1307,16 @@ static long do_link(struct scratch *S, int nr, long *a)
     long fl = nr == NR_linkat ? a[4] : 0;
     if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_FOLLOW | AT_EMPTY_PATH)) return -EINVAL; /* do_linkat: the flags first */
     struct kstat st;
+    int pathless = 0;
     if ((r = resolve(S, a, opi, odi, (fl & AT_SYMLINK_FOLLOW) != 0, (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
     if (r == 1) {
         r = dfd_virtual((int)a[odi], S->v);
-        if (r < 0) return r;
+        /* a descriptor whose file has no path, a pipe, a socket, an anonymous inode, an unlinked file or directory,
+         * names nothing the exclave owns: the old name is the descriptor's own, which the kernel links or refuses
+         * through the descriptor as given (EPERM for a directory, EXDEV across mounts, or the link itself since 6.10
+         * allowed AT_EMPTY_PATH under the opener's credentials; oracle 17.7) */
+        if (r == -ENOENT || (r == 0 && S->v[0] != '/')) pathless = 1;
+        else if (r < 0) return r;
     }
     scpy(S->v2, S->v, PATH_MAX); /* old */
     scpy(S->given2, S->given, PATH_MAX);
@@ -1319,7 +1325,7 @@ static long do_link(struct scratch *S, int nr, long *a)
     long old_follow = S->magic_end ? AT_SYMLINK_FOLLOW : 0;
     /* do_linkat: the old name is looked up before the new one is read at all: its own error, ENOTDIR for a slash on
      * a file */
-    if (!exists_exclave(S, S->v2, &st)) return absent_errno(S);
+    if (!pathless && !exists_exclave(S, S->v2, &st)) return absent_errno(S);
     if ((r = resolve(S, a, npi, ndi, WALK_PARENT, 0)) < 0) return r;
     /* then the new name, in either domain (EEXIST, the name's own error), then the read-only rule for a
      * new name the exclave owns, then EXDEV for an old one it owns */
@@ -1330,7 +1336,7 @@ static long do_link(struct scratch *S, int nr, long *a)
     }
     if (exists_exclave(S, S->cur, &st)) return -EEXIST;
     if ((r = ro_create(S, S->v, 0))) return r;
-    if (is_exclave_path(S->v2)) return -EXDEV;
+    if (!pathless && is_exclave_path(S->v2)) return -EXDEV;
     /* an old name that is an identity symlink is the host's link unless AT_SYMLINK_FOLLOW; a new name never follows */
     if (!identity_link_real(S, S->v2, S->real2, !(fl & AT_SYMLINK_FOLLOW))) to_real_exec(S->v2, S->real2);
     real_exec_nofollow(S, 1);

@@ -8,12 +8,18 @@
  * differed.
  *
  * Mode "deleted-name DIR": DIR, a directory of the tree named "... (deleted)", is a path, so a descriptor on it is
- * the exclave's and creating under it answers EROFS. One line per call: its errno, or "created". */
+ * the exclave's and creating under it answers EROFS. One line per call: its errno, or "created".
+ *
+ * Mode "link-empty DIR": linkat with AT_EMPTY_PATH on a descriptor whose file has no path: an O_TMPFILE file and an
+ * unlinked file in DIR, a memfd, a pipe, a socket and a directory removed after it was opened, each linked as
+ * DIR/NAME, and the O_TMPFILE file linked into the tree. One line per case, "link-empty NAME ok" where the link was
+ * made and is the descriptor's file, or "link-empty NAME errno N" (test/kernel_answers.py has the kernel's answers). */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -106,10 +112,51 @@ static int deleted_name(const char *dir)
     return 0;
 }
 
+/* one line: the link made at path from fd, and whether it is fd's file */
+static void link_empty_one(const char *name, int fd, const char *path)
+{
+    if (fd < 0) {
+        printf("link-empty %s errno %d\n", name, errno);
+        return;
+    }
+    if (linkat(fd, "", AT_FDCWD, path, AT_EMPTY_PATH) < 0) {
+        printf("link-empty %s errno %d\n", name, errno);
+        return;
+    }
+    struct stat want, got;
+    fstat(fd, &want);
+    int same = stat(path, &got) == 0 && got.st_dev == want.st_dev && got.st_ino == want.st_ino;
+    printf("link-empty %s %s\n", name, same ? "ok" : "differs");
+    unlink(path);
+}
+
+static int link_empty(const char *dir)
+{
+    char path[4096], target[4096];
+    snprintf(target, sizeof target, "%s/magic-link-%d", dir, (int)getpid());
+    link_empty_one("tmpfile", open(dir, O_TMPFILE | O_RDWR, 0644), target);
+    snprintf(path, sizeof path, "%s/magic-unlinked-%d", dir, (int)getpid());
+    int u = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    unlink(path);
+    link_empty_one("unlinked", u, target);
+    link_empty_one("memfd", (int)syscall(SYS_memfd_create, "magic", 0), target);
+    int p[2];
+    link_empty_one("pipe", pipe(p) == 0 ? p[0] : -1, target);
+    link_empty_one("socket", socket(AF_UNIX, SOCK_STREAM, 0), target);
+    snprintf(path, sizeof path, "%s/magic-gone-%d", dir, (int)getpid());
+    mkdir(path, 0755);
+    int d = open(path, O_PATH | O_DIRECTORY);
+    rmdir(path);
+    link_empty_one("gone", d, target);
+    link_empty_one("tmpfile into tree", open(dir, O_TMPFILE | O_RDWR, 0644), "/usr/share/magic-linked");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 3 && !strcmp(argv[1], "pathless")) return pathless(argv[2]);
     if (argc == 3 && !strcmp(argv[1], "deleted-name")) return deleted_name(argv[2]);
-    fprintf(stderr, "usage: magic_links pathless DIR | deleted-name DIR\n");
+    if (argc == 3 && !strcmp(argv[1], "link-empty")) return link_empty(argv[2]);
+    fprintf(stderr, "usage: magic_links pathless DIR | deleted-name DIR | link-empty DIR\n");
     return 2;
 }
