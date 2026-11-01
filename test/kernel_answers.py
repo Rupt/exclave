@@ -492,6 +492,71 @@ def lines_wrong(out: str, want: list[str] | tuple[str, ...]) -> list[str]:
     return wrong
 
 
+# sigstack: the alternate signal stack, one line per case; the first line is the machine's
+# MINSIGSTKSZ and is compared by its prefix
+SIGSTACK = (
+    "MINSIGSTKSZ: 3376 bytes",
+    "alternate stack of MINSIGSTKSZ, handler does nothing: exit 1",
+    "alternate stack of 4 KB, handler does nothing: exit 1",
+    "alternate stack of 5 KB, handler does nothing: exit 1",
+    "alternate stack of 6 KB, handler does nothing: exit 1",
+    "alternate stack of 8 KB, handler does nothing: exit 1",
+    "alternate stack of 16 KB, handler does nothing: exit 1",
+    "alternate stack of MINSIGSTKSZ, handler traps: exit 1",
+    "alternate stack of 4 KB, handler traps: exit 1",
+    "alternate stack of 5 KB, handler traps: exit 1",
+    "alternate stack of 6 KB, handler traps: exit 1",
+    "alternate stack of 8 KB, handler traps: exit 1",
+    "alternate stack of 16 KB, handler traps: exit 1",
+    "5 KB handler without SA_ONSTACK during traps, 8 KB alternate stack: exit 0",
+    (
+        "plain alternate stack: inside flags SS_ONSTACK, stat ok, rearm Operation not permitted, "
+        "stat ok; after flags 0"
+    ),
+    "SS_AUTODISARM: inside flags SS_DISABLE, stat ok, rearm ok, stat ok; after flags SS_DISABLE",
+    "nested handlers on the alternate stack: both trapped",
+    "handler on the main stack beside an armed alternate stack: both trapped",
+    "sigaltstack outside any handler: flags 0",
+)
+# the sizes whose answer the handler's own frame decides (13 item 30)
+SIGSTACK_SMALL = ("MINSIGSTKSZ", "4 KB", "5 KB", "6 KB")
+
+
+def minsigstksz() -> int:
+    """The kernel's signal frame size on this machine, AT_MINSIGSTKSZ from the auxiliary vector."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.getauxval.restype = ctypes.c_ulong
+    return int(libc.getauxval(51))
+
+
+def sigstack_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
+    """The lines of sigstack's output that differ from the kernel's answers.
+
+    by_the_kernel: the kernel itself answered. Otherwise the launcher did, and a handler that traps
+    on an alternate stack smaller than 8 KB is its stated limitation (13 item 30), 8 KB too where
+    the kernel's frame passes 3.5 KB; and a 5 KB handler without SA_ONSTACK landing during a trap
+    exits 9 from the SIGSEGV handler, since it runs on the 8 KB alternate stack (13 item 50).
+    """
+    got = out.splitlines()
+    wrong = []
+    for g, w in zip(got, SIGSTACK, strict=False):
+        if g == w or (w.startswith("MINSIGSTKSZ: ") and g.startswith("MINSIGSTKSZ: ")):
+            continue
+        if not by_the_kernel:
+            case = w.split(": ")[0]
+            if case.endswith("handler traps") and (
+                any(f"of {size}," in case for size in SIGSTACK_SMALL)
+                or ("of 8 KB," in case and minsigstksz() > 3500)
+            ):
+                continue
+            if case.startswith("5 KB handler") and g == w.replace("exit 0", "exit 9"):
+                continue
+        wrong.append(f"got {g!r}, the kernel says {w!r}")
+    if len(got) != len(SIGSTACK):
+        wrong.append(f"{len(got)} lines, the kernel gives {len(SIGSTACK)}")
+    return wrong
+
+
 def exe_link_wrong(out: str) -> list[str]:
     """The lines of exe_link's output that differ from the kernel's answers."""
     got = out.splitlines()

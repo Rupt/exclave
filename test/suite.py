@@ -451,6 +451,7 @@ PROGS = (
     "signals",
     "sigcalls",
     "sigrain",
+    "sigstack",
     "threads",
     "spawn",
     "exec",

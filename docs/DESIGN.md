@@ -170,7 +170,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 96 named tests, most of them programs that
+- **The regression suite**: 97 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1457,7 +1457,10 @@ whose `si_call_addr` lies inside the launcher's own text can only mean
 a foreign filter or a bug in the launcher, and kills the process with a
 message. `SA_ONSTACK` runs the handler on the program's alternate stack
 where one exists, which keeps Go's small goroutine stacks and Rust's
-guard pages safe; where none exists it is a no-op.
+guard pages safe; where none exists it is a no-op. A program's own
+handler whose signal lands during a trap runs where the launcher's
+handler is running, so on the alternate stack whether or not it asked
+for it (13 item 51).
 
 #### 7.5.4 Scratch memory and the stack budget
 
@@ -2535,7 +2538,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 96 named regressions and every oracle its kernel can run; 17
+suite's 97 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -2807,7 +2810,11 @@ and stay fixed.
     3 KB budget (7.5.4). Rust's 8 KB stack is enough; a stack of exactly
     `MINSIGSTKSZ` is not. `adversarial` runs the deepest paths on
     Rust's layout, a guard page below, on every row of the matrix: on
-    the reference machine they pass on 5 KB and fail on 4.4 KB.
+    the reference machine they pass on 5 KB and fail on 4.4 KB. A
+    handler on the alternate stack that traps adds the kernel's frame
+    a second time, its own: `test/progs/sigstack.c` passes on 8 KB and
+    is killed on 6 KB on the reference machine, where the kernel alone
+    passes on `MINSIGSTKSZ`.
 
 31. **Some paths inside structures are not translated.** A datagram
     destination in `sendto`, `sendmsg` or `sendmmsg` reaches the kernel
@@ -3018,6 +3025,19 @@ and stay fixed.
     kernel's fields takes `PR_SET_MM`, which needs `CAP_SYS_RESOURCE`.
     `exec_auxv` measures every other entry of the initial stack and the
     auxiliary vector against the kernel (17 item 4).
+
+51. **A handler that did not ask for the alternate stack runs on it
+    when its signal lands during a trap.** The launcher's handler runs
+    on the alternate stack where one is armed (7.5.3), and a signal
+    that lands while it runs is delivered where the stack pointer is,
+    so a program's handler installed without `SA_ONSTACK` runs on the
+    alternate stack, its frame counted against it, where natively it
+    would run on the main stack; `sigaltstack(NULL, &old)` in it
+    reports `SS_ONSTACK`. A 5 KB handler beside an 8 KB alternate stack
+    armed for `SIGSEGV`, Rust's shape, reaches the guard page under the
+    launcher and runs natively (`test/progs/sigstack.c`). A handler
+    that uses more than a few hundred bytes beside a small alternate
+    stack is the shape to avoid.
 
 ### 13.1 Debugging and profiling recipe
 
@@ -3924,7 +3944,9 @@ meaning items 4 and 7.
      `open` interrupted by `SIGINT` or left by `siglongjmp`, the
      trapped signal syscalls answered in the kernel's order, a timer,
      a child process and a sibling thread raining signals on loops of
-     trapped calls with every disposition and the restart rules, Go's
+     trapped calls with every disposition and the restart rules, the
+     alternate stack at each size with `SS_AUTODISARM` and a handler
+     landing on it (13 items 30 and 51), Go's
      goroutines beside a collector, 64 threads trapping at once and threads trapping while
      another spawns, a descriptor-relative path looked up while its
      directory's parent is renamed, in both forms of the walk (16.6
@@ -4028,10 +4050,10 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus sixteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls` and `sigrain` (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus seventeen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain` and `sigstack` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 96 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 97 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

@@ -60,6 +60,30 @@ def signals_during_traps(ctx: Ctx) -> None:
 
 
 @test
+def alternate_stacks(ctx: Ctx) -> str:
+    """7.5.3, 13 items 30 and 51: the alternate signal stack under the launcher.
+
+    A handler that traps on an alternate stack of each size from MINSIGSTKSZ to 16 KB above a
+    guard page: the kernel passes every size, the launcher 8 KB and up, since the trap adds the
+    kernel's frame and the handler's budget (item 30); a 5 KB handler without SA_ONSTACK landing
+    during traps beside an 8 KB alternate stack, which natively runs on the main stack and under
+    the launcher on the alternate stack, into the guard page (item 51); SS_AUTODISARM, sigaltstack
+    queried and changed inside a handler, traps nested on the alternate stack and from a handler
+    on the main stack while one is armed, all the kernel's answers (test/kernel_answers.py),
+    confirmed under bwrap by the namespace oracle.
+    """
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "sigstack"), timeout=60)
+    wrong = kernel_answers.sigstack_wrong(out)
+    expect(rc == 0 and not wrong, "\n".join(wrong) + err)
+    small = [
+        line.split(": ")[1]
+        for line in out.splitlines()
+        if line.startswith("alternate stack of 6 KB, handler traps")
+    ]
+    return "a handler trapping on 6 KB: " + (small[0] if small else "?")
+
+
+@test
 def threads(ctx: Ctx) -> None:
     """7.5.5: threads, TLS and dlopen; 64 threads trapping at once, each answered for its path."""
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "threads"))
