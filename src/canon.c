@@ -486,11 +486,13 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         if (C.rootlen + (long)(curl + 1 + cl) + (last ? trailing : 0) >= PATH_MAX && is_exclave_path(cur))
             return -ENAMETOOLONG;
         /* the mount changes where the domain does; an identity symlink that is not followed is the tree's own entry,
-         * and its host target is not reached */
+         * and its host target is not reached; a last name with a trailing slash that a create refuses before any
+         * lookup (open_last_lookups, EISDIR) is never stepped into, so its mount is not met */
         if (w.rf & RESOLVE_NO_XDEV) {
             int d = is_exclave_path(cur);
-            if (d != w.dom && !(last && !(follow_last & WALK_FOLLOW) && !trailing && vis_is_identity_file(cur) &&
-                                vis_readlink_identity(cur, tmp) == 1))
+            if (d != w.dom && !(last && trailing && (follow_last & WALK_PARENT)) &&
+                !(last && !(follow_last & WALK_FOLLOW) && !trailing && vis_is_identity_file(cur) &&
+                  vis_readlink_identity(cur, tmp) == 1))
                 return -EXDEV;
             w.dom = d;
         }

@@ -41,9 +41,9 @@ any filesystem tree.
   untested). One source builds both launchers.
 - **gdb** debugs a program in an exclave: the launcher carries the
   script gdb needs.
-- **Tested against the kernel.** A suite of 84 named tests, oracles that
+- **Tested against the kernel.** A suite of 85 named tests, oracles that
   compare the launcher's answers with the kernel's under a read-only
-  bind mount, and a differential probe of 27 721 syscall cases pass on
+  bind mount, and a differential probe of 28 741 syscall cases pass on
   gcc, clang, Alpine and Fedora exclaves. An exclave also runs under
   Docker's default seccomp profile, and the gcc exclave passes the suite
   in virtual machines from CentOS 7 at kernel 3.10 to Ubuntu 26.10 at 7.3 and an

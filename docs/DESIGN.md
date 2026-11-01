@@ -170,7 +170,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 84 named tests, most of them programs that
+- **The regression suite**: 85 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -179,7 +179,7 @@ How it is tested (17):
   and 2).
 - **The syscall probe**: every trapped path and descriptor syscall,
   with every flag and path form, run under `bwrap` and under the
-  launcher; 27 721 cases per exclave, each difference from the kernel
+  launcher; 28 741 cases per exclave, each difference from the kernel
   fixed, accepted under a named reason or listed as an open defect
   (17 item 7).
 - **Docker's default seccomp profile**: a workload in each exclave runs
@@ -1081,8 +1081,10 @@ dropped from the re-issue:
   host's domain and the exclave's, at a component or at a `..` that
   climbs out of one into the other (`follow_dotdot`), which is where
   the kernel under a bind mount changes mounts; an identity symlink
-  that is not followed is excepted, and the host's own mount boundaries
-  are not seen (13 item 22).
+  that is not followed is excepted, so is a last name with a trailing
+  slash that `O_CREAT` refuses before looking it up (`EISDIR`, as under
+  `RESOLVE_NO_SYMLINKS`), and the host's own mount boundaries are not
+  seen (13 item 22).
 - `RESOLVE_NO_SYMLINKS` is `ELOOP` at any link the walk would follow,
   the tree's own links and an identity file's host link included, after
   `O_CREAT`'s `EISDIR` for a trailing slash, which comes before the last
@@ -2460,7 +2462,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 84 named regressions and every oracle its kernel can run; 17
+suite's 85 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -3928,7 +3930,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus six of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `unix_socket` and `magic_links` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 84 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 85 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -4240,8 +4242,8 @@ listed apart by its two exact answers, printed by every run, and fails
 once the answers agree until its entry goes, on a host whose files can
 show it (an entry says which hosts can, such as one whose
 `/etc/resolv.conf` is a symlink). On the reference machine
-27 721 cases run on each of the gate's four exclaves and none differ
-unexplained; 196 are open defects: `O_DIRECTORY` with `O_CREAT` or
+28 741 cases run on each of the gate's four exclaves and none differ
+unexplained; 209 are open defects: `O_DIRECTORY` with `O_CREAT` or
 `O_WRONLY` in `open` and `openat`.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.
