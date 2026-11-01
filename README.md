@@ -43,7 +43,7 @@ any filesystem tree.
   script gdb needs.
 - **Tested against the kernel.** A suite of 86 named tests, oracles that
   compare the launcher's answers with the kernel's under a read-only
-  bind mount, and a differential probe of 30 541 syscall cases pass on
+  bind mount, and a differential probe of 39 716 syscall cases pass on
   gcc, clang, Alpine and Fedora exclaves. An exclave also runs under
   Docker's default seccomp profile, and the gcc exclave passes the suite
   in virtual machines from CentOS 7 at kernel 3.10 to Ubuntu 26.10 at 7.3 and an

@@ -169,9 +169,12 @@ UTIME_NOW, UTIME_OMIT = (1 << 30) - 1, (1 << 30) - 2
 FS_IOC_SETFLAGS = 0x40086602  # _IOW('f', 2, long), the same on both machines
 FS_IOC_FSSETXATTR = 0x401C5820  # _IOW('X', 32, struct fsxattr), the same on both machines
 IN_MODIFY = 2
+IN_ONLYDIR, IN_DONT_FOLLOW = 0x01000000, 0x02000000
 STATX_BASIC_STATS = 0x7FF
 # the identity files the launcher answers from the host (8.4)
 IDENTITY = tree.IDENTITY_FILES
+# a new top-level name: the host's (8.1 rule 2), where bwrap's read-only root refuses it
+NEW_TOP = "/exclave-probe-top"
 # seconds one world's run of one group may take, many times the slowest group's
 TIMEOUT = 60
 
@@ -190,6 +193,16 @@ SOCK_STREAM, SOCK_DGRAM = 1, 2
 def K(type_: int) -> str:  # noqa: N802 -- a token's constructor, named for its token's letter
     """Make a unix socket descriptor of this type."""
     return f"k:{type_}"
+
+
+def O(dir_: str) -> str:  # noqa: E743, N802 -- as K
+    """Make a descriptor on an O_TMPFILE file in dir_: a file with no path."""
+    return "o:" + hx(dir_)
+
+
+def D(dir_: str) -> str:  # noqa: N802 -- as K
+    """Make an O_PATH descriptor on a directory made under dir_ and removed: one with no path."""
+    return "d:" + hx(dir_)
 
 
 def A(path: str) -> str:  # noqa: N802 -- as K
@@ -295,6 +308,19 @@ MAZE_LINKS = {
 
 # the kernel follows at most 40 links in one walk (MAXSYMLINKS), counted over the whole of it
 MAXSYMLINKS = 40
+PATH_MAX = 4096
+
+
+def padded(head: str, tail: str, length: int) -> str:
+    """head, then "./" components, then tail: a path of exactly length bytes naming head + tail.
+
+    An odd remainder is made even by a doubled slash after head.
+    """
+    rest = length - len(head) - len(tail)
+    if rest % 2:
+        head += "/"
+        rest -= 1
+    return head + "./" * (rest // 2) + tail
 
 
 def chain_links(host: str) -> list[tuple[str, str]]:
@@ -366,6 +392,12 @@ def make_maze(root: str, host: str) -> None:
         # links to the forms' directory and file, for a trailing slash after a link
         ("/maze/lD", MAZE_DIR),
         ("/maze/lF", MAZE_FILE),
+        # a relative link that climbs above the root, which stays at the root; a link to its own
+        # directory and one to the root; a link whose text is as long as a text can be
+        ("/maze/lup", "../../.."),
+        ("/maze/ldot", "."),
+        ("/maze/lroot", "/"),
+        ("/maze/llong", padded("/maze/", "f2", PATH_MAX - 1)),
     ]
     for link, target in links:
         os.symlink(target, os.path.join(root, link.lstrip("/")))
@@ -466,6 +498,25 @@ class Forms:
             ("cross_chain_41", "/maze/xchain/n0"),
             ("dir_links_40", "/maze/dl/" + "a/" * (MAXSYMLINKS // 2) + "e0"),
             ("dir_links_41", "/maze/dl/" + "a/" * (MAXSYMLINKS // 2 + 1) + "e0"),
+            # spellings the walk must normalise: doubled slashes, "." runs, ".." above the root
+            ("double_slash_mid", "/maze//d0//d1//f0"),
+            ("double_slash_end", self.file + "//"),
+            ("dot_runs", "/./maze/./d0/./d1/./f0"),
+            ("root_dotdot_runs", "/../../maze/d0/d1/f0"),
+            # a new top-level name: the host's (8.1 rule 2)
+            ("new_top", NEW_TOP),
+            # the process's root, a magic link to /, and a climb out of it
+            ("proc_root", "/proc/self/root/maze/d0/d1/f0"),
+            ("proc_root_dotdot", "/proc/self/root/../maze/f2"),
+            ("proc_root_slash", "/proc/self/root/"),
+            # links that climb above the root, name their own directory, the root, or 4095 bytes
+            ("link_climb", "/maze/lup/maze/f2"),
+            ("link_dot", "/maze/ldot/f2"),
+            ("link_root", "/maze/lroot/maze/f2"),
+            ("link_text_4095", "/maze/llong"),
+            # a path of PATH_MAX - 1 bytes, the longest the kernel reads, and one of PATH_MAX
+            ("path_4095", padded("/maze/d0/d1/", "f0", PATH_MAX - 1)),
+            ("path_4096", padded("/maze/d0/d1/", "f0", PATH_MAX)),
         ]
         for kind, link in sorted(by_kind.items()):
             ex.append(("link_" + kind, link))
@@ -528,6 +579,10 @@ class Forms:
                 ("host_dir", h + "/hdir"),
                 ("host_missing", h + "/missing"),
                 ("host_to_exclave", h + "/hlink"),
+                ("host_to_exclave_dir", h + "/hlnkdir"),
+                ("host_dangling", h + "/hdang"),
+                ("exclave_to_host", "/maze/lH"),
+                ("link_dangling", by_kind["dangling"]),
                 ("rel_file", "hfile"),
             ]
         ] + [("fault_null", "n:")]
@@ -556,7 +611,10 @@ class Forms:
         ]
         self.at += [("ffd_host/" + r, F(O_RDONLY, h + "/hfile"), S(r)) for r in ("", "x")]
         self.at += [("ffd_host_w/", F(O_WRONLY, h + "/hfile"), S(""))]
-        self.at += [("lfd_exclave/", F(O_PATH | O_NOFOLLOW, by_kind.get("abs", self.file)), S(""))]
+        self.at += [
+            ("lfd_exclave/" + r, F(O_PATH | O_NOFOLLOW, by_kind.get("abs", self.file)), S(r))
+            for r in ("", "x", "..")
+        ]
         self.at += [
             ("lfd_sh/", F(O_PATH | O_NOFOLLOW, self.sh), S("")),
             ("lfd_dang/", F(O_PATH | O_NOFOLLOW, h + "/hdang"), S("")),
@@ -568,6 +626,30 @@ class Forms:
         self.at += [
             ("devnull_fd/", F(O_RDONLY, "/dev/null"), S("")),
             ("tmpfd/", F(O_PATH | O_DIRECTORY, "/tmp"), S(f"exclave-probe-{os.getpid()}")),
+        ]
+        # the root, and the process's own directory under /proc, whose magic links lead to the
+        # host's mounts
+        self.at += [
+            ("dfd_root/" + r, F(O_PATH | O_DIRECTORY, "/"), S(r))
+            for r in ("maze/d0/d1/f0", "..", "etc/passwd", NEW_TOP[1:])
+        ]
+        self.at += [
+            ("dfd_proc/" + r, F(O_PATH, "/proc/self"), S(r))
+            for r in ("cwd", "cwd/hfile", "cwd/missing", "root/maze/f2")
+        ]
+        # descriptors whose file has no path: a socket, a pipe, a memfd, an O_TMPFILE file and a
+        # directory removed after it was opened
+        self.pathless = [
+            ("sockfd", K(SOCK_STREAM)),
+            ("pipefd", "p:"),
+            ("memfd", "m:"),
+            ("tmpfilefd", O(h)),
+            ("gonefd", D(h)),
+        ]
+        self.at += [
+            (f"{n}/{r}", d, S(r))
+            for n, d in self.pathless
+            for r in (("", ".", "..", "x", "../hfile") if n == "gonefd" else ("", ".", "x"))
         ]
         self.at += [
             ("badfd/" + n, I(-1), p)
@@ -708,7 +790,14 @@ def generate(
         if n not in mutable:
             add("removexattr", n, p, S("user.probe"))
             add("lremovexattr", n, p, S("user.probe"))
+        # an identity file's watches in a group of their own: a watch descriptor names an inode
+        # within one process, so a watch on the link and one on its target are told apart by the
+        # follow and no-follow answers side by side, and the numbering of the others stays
+        group = "inotify_identity" if n in ("passwd", "resolv") else None
         add("inotify_add_watch", n, "I:", p, I(IN_MODIFY))
+        add("inotify_add_watch", n + "/dont_follow", "I:", p, I(IN_MODIFY | IN_DONT_FOLLOW))
+        add("inotify_add_watch", n + "/onlydir", "I:", p, I(IN_MODIFY | IN_ONLYDIR))
+        group = None
         # the arguments the kernel checks before the lookup (13 item 11)
         if n != "proc_exe":
             add("truncate", n + "/negative", p, I(-1))
@@ -1024,10 +1113,12 @@ def generate(
         ("host_dot_last", S(forms.host + "/hdir/.")),
         ("host_dotdot_last", S(forms.host + "/hdir/..")),
     ]
+    # and across the host's own mounts: /tmp is one of its own under bwrap and, as a rule, natively
+    tmp_new = ("tmp_new", S(f"/tmp/exclave-probe-{os.getpid()}/new"))
     for n1, p1 in dots:
         for n2, p2 in [
             (n, p) for n, p in two if n in ("exclave_file", "host_file", "host_missing")
-        ]:
+        ] + [tmp_new]:
             for lab, x, y in ((f"{n1}->{n2}", p1, p2), (f"{n2}->{n1}", p2, p1)):
                 add("rename", lab, x, y)
                 for fn, fl in (
@@ -1100,6 +1191,13 @@ def generate(
         S("/maze/hnew"),
         I(AT_EMPTY_PATH),
     )
+    # AT_EMPTY_PATH on a descriptor whose file has no path: the kernel's own answer through the
+    # descriptor (EXDEV, EPERM, or the link itself since 6.10)
+    for n, d in forms.pathless:
+        new = S(f"{forms.host}/hlinked_{n}")
+        add("linkat", n + "_empty", d, S(""), I(AT_FDCWD), new, I(AT_EMPTY_PATH))
+        new = S(f"/maze/hnew_{n}")
+        add("linkat", n + "_empty_to_exclave", d, S(""), I(AT_FDCWD), new, I(AT_EMPTY_PATH))
     for n, f in forms.fds:
         add("fchmod", n, f, I(0o644))
         add("fchown", n, f, I(uid), I(gid))
@@ -1518,7 +1616,7 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
         lambda label, b, o, _c: (
             KERNEL < (6, 10)
             and (
-                label.endswith("/empty_path")
+                label.endswith(("/empty_path", "_empty", "_empty_to_exclave"))
                 or label in ("fd_empty", "hostfd_empty", "hostfd_empty_to_exclave")
             )
             and errnos(b, o)[0] == errno.ENOENT
@@ -1634,15 +1732,58 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
         lambda label, b, o, _c: (
             label
             in (
+                "new_top",
                 "root/after_chdir_rel",
                 "root_dotdot/after_chdir_rel",
                 "rel_root_by_dotdot/after_chdir_rel",
+                "proc_root_slash/after_chdir_rel",
             )
             and errnos(b, o) == (errno.EROFS, errno.EACCES)
         ),
         (
             "a new top-level name is the host's (8.1 rule 2): the host's / answers EACCES for a "
             "create there, where the read-only root under bwrap says EROFS"
+        ),
+    ),
+    (
+        None,
+        lambda _label, b, o, c: (
+            NEW_TOP in c.paths
+            and errnos(b, o)[0] == errno.EROFS
+            and errnos(b, o)[1] in (errno.EACCES, errno.ENOENT, errno.EXDEV)
+        ),
+        (
+            "a new top-level name is the host's (8.1 rule 2): the host's / answers EACCES for a "
+            "create there, ENOENT for a delete of what it lacks and EXDEV for a link from another "
+            "filesystem, where the read-only root under bwrap says EROFS before any lookup"
+        ),
+    ),
+    (
+        "openat2",
+        lambda label, b, o, c: (
+            NEW_TOP in c.paths
+            and label.endswith("/no_xdev")
+            and errnos(b, o) == (errno.ENOENT, errno.EXDEV)
+        ),
+        (
+            "RESOLVE_NO_XDEV on a new top-level name, which is the host's (8.1 rule 2): the walk "
+            "crosses at the root from the exclave's domain into the host's (13 item 22), where the "
+            "kernel's one root mount sees no crossing and answers the lookup's ENOENT"
+        ),
+    ),
+    (
+        "openat2",
+        lambda label, b, o, c: (
+            label.startswith("dfd_proc/cwd")
+            and label.endswith("/no_xdev")
+            and errnos(b, o)[0] == errno.EXDEV
+            and o == c.kernel.get(label.removesuffix("no_xdev") + "plain")
+        ),
+        (
+            "RESOLVE_NO_XDEV through /proc/self/cwd from a descriptor on /proc/self: the kernel "
+            "crosses from procfs to the working directory's mount (EXDEV); the handler sees the "
+            "exclave's boundary and not the host's own mounts (13 item 22), and answers what the "
+            "walk without the flag does"
         ),
     ),
     (
@@ -1778,7 +1919,43 @@ EXPECTED.extend(
 # measured on, 7.0 and later, a whole run in which an entry the host can show matches no case
 # fails, so that the fix removes the entry.
 DEFECTS_MEASURED = (7, 0)
-DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[], bool]]] = []
+DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[], bool]]] = [
+    (
+        (
+            "a scoped openat2 (RESOLVE_BENEATH, RESOLVE_IN_ROOT) from a descriptor whose file "
+            "has no path, a removed directory, a memfd or an O_TMPFILE file: the kernel walks "
+            "from the descriptor itself, so '.' opens the removed directory, '..' stays in root or "
+            "is EXDEV beneath, a write of it is EISDIR and a file is ENOTDIR; the handler cannot "
+            "name the scope and answers ENOENT"
+        ),
+        lambda n, label, b, o, _c: (
+            n == "openat2"
+            and label.startswith(("gonefd/", "memfd/", "tmpfilefd/"))
+            and label.endswith(("/beneath", "/in_root"))
+            and o == "ret=-1 errno=2"
+            and (
+                b.startswith("ret=0 ")
+                or errnos(b, o)[0] in (errno.EXDEV, errno.EISDIR, errno.ENOTDIR)
+            )
+        ),
+        lambda: True,
+    ),
+    (
+        (
+            "a rename whose last name is . or .. with the two names on different host mounts, "
+            "the probe's /tmp among them: the kernel answers EXDEV for the mounts before EBUSY "
+            "for the name (do_renameat2); the handler sees the exclave's boundary alone and "
+            "answers EBUSY, or EEXIST under RENAME_NOREPLACE"
+        ),
+        lambda n, label, b, o, _c: (
+            n in ("rename", "renameat2")
+            and "tmp_new" in label
+            and errnos(b, o)[0] == errno.EXDEV
+            and errnos(b, o)[1] in (errno.EBUSY, errno.EEXIST)
+        ),
+        lambda: True,
+    ),
+]
 
 
 def expected(name: str, label: str, b: str, o: str, ctx: Ctx) -> str | None:

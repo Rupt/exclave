@@ -23,6 +23,9 @@
  *   N:                   a descriptor from fanotify_init(FAN_CLASS_NOTIF | FAN_REPORT_FID, O_RDONLY), which an
  *                        unprivileged process may make (5.13), closed after the call
  *   k:<type>             a unix socket of that type, opened before the call (-1 when it fails)
+ *   p:                   the read end of a pipe; m: a memfd; o:<hex>  an O_TMPFILE file in that directory;
+ *                        d:<hex>  a directory made under that one, opened O_PATH and removed: descriptors whose
+ *                        file has no path, each made before the call and closed after it
  *   A:<hex>              a struct sockaddr_un, AF_UNIX, whose sun_path holds those bytes (at most 108, unterminated
  *                        at 108)
  *   h:<flags>:<mode>:<resolve>[:<size>[:<tail>]]   a struct open_how (openat2), in a buffer of <size> bytes (24 by
@@ -32,7 +35,8 @@
  * 100 + errno when the exec returned), and what the program writes on stdout and stderr, its first 4096 bytes,
  * is answered as out=<hex>. A descriptor that open, openat, openat2 or creat returned is answered as at=<hex>, the
  * path /proc/self/fd names for it (without the last component, "#<ino> (deleted)", for an O_TMPFILE file), and closed,
- * and ret is 0: which object a path reached, not only that it reached one.
+ * and ret is 0: which object a path reached, not only that it reached one; fl=<hex> gives the descriptor's F_GETFL,
+ * the flags the open kept.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -56,6 +60,9 @@
 #endif
 #ifndef SYS_creat
 #define SYS_creat -1
+#endif
+#ifndef SYS_memfd_create
+#define SYS_memfd_create -1
 #endif
 
 struct arg {
@@ -122,6 +129,35 @@ static void decode(struct arg *a, char *tok)
         a->open_errno = a->fd < 0 ? errno : 0;
         a->v = a->fd;
         break;
+    case 'p': {
+        int pp[2];
+        a->fd = pipe(pp) == 0 ? pp[0] : -1;
+        if (a->fd >= 0) close(pp[1]);
+        a->open_errno = a->fd < 0 ? errno : 0;
+        a->v = a->fd;
+        break;
+    }
+    case 'm':
+        a->fd = (int)syscall(SYS_memfd_create, "probe", 0);
+        a->open_errno = a->fd < 0 ? errno : 0;
+        a->v = a->fd;
+        break;
+    case 'o':
+    case 'd': {
+        char dir[4096], gone[4096 + 8];
+        int n = unhex(p, dir);
+        dir[n] = 0;
+        if (tok[0] == 'o') a->fd = open(dir, O_TMPFILE | O_RDWR, 0644);
+        else {
+            snprintf(gone, sizeof gone, "%s/gone", dir);
+            mkdir(gone, 0755);
+            a->fd = open(gone, O_PATH | O_DIRECTORY);
+            rmdir(gone);
+        }
+        a->open_errno = a->fd < 0 ? errno : 0;
+        a->v = a->fd;
+        break;
+    }
     /* the driver keeps the path to 108 bytes */
     case 'A': {
         a->buf = calloc(1, 4096);
@@ -293,7 +329,7 @@ int main(void)
         long ret;
         int err = 0, opened = 0;
         char out[4096], at[4096];
-        long nout = 0, nat = -1;
+        long nout = 0, nat = -1, fl = -1;
         int cached_retry = 0;
         for (int i = 0; i < na; i++)
             if (args[i].kind == 'f' && args[i].open_errno) opened = args[i].open_errno;
@@ -354,6 +390,7 @@ int main(void)
             if (ret >= 0 && (nr == SYS_open || nr == SYS_openat || nr == SYS_creat || nr == SYS_openat2)) {
                 char l[64];
                 snprintf(l, sizeof l, "/proc/self/fd/%ld", ret);
+                fl = fcntl((int)ret, F_GETFL);
                 nat = readlink(l, at, sizeof at - 1);
                 if (nat > 0) {
                     at[nat] = 0;
@@ -383,6 +420,7 @@ int main(void)
             printf(" at=");
             hex(at, nat);
         }
+        if (fl >= 0) printf(" fl=%lx", fl);
         if (cached_retry) printf(" cached_retry");
         printf("\n");
         for (int i = 0; i < na; i++) {
