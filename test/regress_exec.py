@@ -375,12 +375,25 @@ def exec_vectors(ctx: Ctx) -> None:
     os.chmod(hs, 0o755)
     rc, out, err = inside(ctx, p, ["vectors", ctx.vbin("true"), p, hs], timeout=60)
     expect(rc == 0 and "FAIL" not in out, out + err)
-    # a NULL argv reaches the program as this kernel makes it (one empty string, fs/exec.c since
-    # 5.18 and the stable trees), and a script's interpreter is given the script's path: the native
-    # run of the same cases is the expectation
-    rc, nat, err = run([p, "vectors", p, hs], timeout=60)
+    # a NULL argv reaches the program as this kernel makes it, one empty string since 5.18 and in
+    # the stable trees that took the change, none before (fs/exec.c), which only a run on the
+    # kernel tells, and a script's interpreter is given the script's path: the native run of the
+    # same cases is the expectation, by a static build of the program, since the host's libc is
+    # not the tree's
+    ps = os.path.join(ctx.work, "vec-exec-static")
+    gcc = wrapper(ctx, ctx.gcc)
+    src = os.path.join(ctx.work, "src", "exec.c")
+    rc, _out, err = run(
+        [gcc, "-static", "-pthread", "-o", ps, src, "-lm", "-ldl"], cwd=ctx.work, env=ctx.env
+    )
+    if rc and "-lc" in err:
+        skip("the tree has no static libc")
+    expect(rc == 0, f"a static build of exec.c: {err}")
+    rc, nat, err = run([ps, "vectors", ps, hs], timeout=60)
     expect(rc == 0 and "FAIL" not in nat, nat + err)
-    want = {line for line in nat.splitlines() if line.startswith((p + " ", hs + " "))}
+    want = {
+        line.replace(ps, p, 1) for line in nat.splitlines() if line.startswith((ps + " ", hs + " "))
+    }
     expect(len(want) == 10, f"the native run's cases: {sorted(want)}")
     lines = set(out.splitlines())
     expect(want <= lines, f"an exec with a NULL argv: {sorted(want - lines)} not in {out!r}")
