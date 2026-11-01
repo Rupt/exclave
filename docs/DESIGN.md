@@ -170,7 +170,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 94 named tests, most of them programs that
+- **The regression suite**: 95 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1407,7 +1407,16 @@ block, unblock or set semantics and fill `oldset` with the pre-trap
 mask, then copies the resulting mask into the frame's `uc_sigmask` so
 that it survives the return. The mask-carrying waits are re-issued
 through the page with a scrubbed copy of their mask, six arguments and
-all.
+all. Each of these calls answers in the kernel's order: the timeout of
+`ppoll`, `pselect6` and `epoll_pwait2` is read and checked before the
+mask, as `poll_select_set_timeout` runs before `set_user_sigmask`, and
+`io_pgetevents` reads its timeout before its mask pair; the old mask of
+`rt_sigprocmask` is written after the new one is in force, so a bad
+`oldset` is `EFAULT` with the mask changed, as `sys_rt_sigprocmask`
+leaves it; and an install for `SIGSYS` reads its action before it is
+ignored, so a bad pointer is `EFAULT`. `test/progs/sigcalls.c` holds the
+cases and the kernel's answers (`test/kernel_answers.py`), which the
+namespace oracle confirms under `bwrap`.
 `rt_sigaction` on `SIGSYS` itself is accepted and ignored (13 item 23);
 its `oldact` and every query report the truth, the launcher's handler,
 since only installs trap. The frame is read at the offsets of the
@@ -2517,7 +2526,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 94 named regressions and every oracle its kernel can run; 17
+suite's 95 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -3903,7 +3912,8 @@ meaning items 4 and 7.
    or the rule's. They fall into eight groups, one file each,
    `test/regress_*.py`:
    - *signals and threads*: `SA_ONSTACK` handlers that trap, a FIFO
-     `open` interrupted by `SIGINT` or left by `siglongjmp`, Go's
+     `open` interrupted by `SIGINT` or left by `siglongjmp`, the
+     trapped signal syscalls answered in the kernel's order, Go's
      goroutines beside a collector, 64 threads trapping at once and threads trapping while
      another spawns, a descriptor-relative path looked up while its
      directory's parent is renamed, in both forms of the walk (16.6
@@ -4007,10 +4017,10 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus fourteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state` (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus fifteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 94 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 95 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

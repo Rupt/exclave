@@ -8,6 +8,7 @@ import platform
 import shutil
 import subprocess
 
+import kernel_answers
 import tree
 from harness import expect, run, skip, test
 from suite import REPO, Ctx, inside
@@ -17,6 +18,23 @@ from suite import REPO, Ctx, inside
 def signals(ctx: Ctx) -> None:
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "signals"))
     expect(rc == 0 and "FAIL" not in out, out + err)
+
+
+@test
+def signal_calls_in_order(ctx: Ctx) -> None:
+    """7.5.2: the trapped signal syscalls answer in the kernel's order.
+
+    rt_sigaction, rt_sigprocmask, rt_sigsuspend and the waits that carry a mask, each with a
+    wrong set size, a bad pointer, an invalid how or timeout, a signal the kernel owns, beside
+    another fault, so that the order of the checks shows: the timeout is read and checked before
+    the mask, the old mask is written after the new one is in force, an install for SIGSYS reads
+    its action before it is ignored; a restorer the program supplies, SA_RESETHAND, SA_NODEFER
+    and unknown flag bits round-trip. The kernel's answers (test/kernel_answers.py), which the
+    namespace oracle confirms under bwrap.
+    """
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "sigcalls"))
+    wrong = kernel_answers.sigcalls_wrong(out)
+    expect(rc == 0 and not wrong, "\n".join(wrong) + err)
 
 
 @test

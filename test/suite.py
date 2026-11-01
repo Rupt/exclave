@@ -449,6 +449,7 @@ def tree_facts(ctx: Ctx) -> None:
 PROGS = (
     "ro_matrix",
     "signals",
+    "sigcalls",
     "threads",
     "spawn",
     "exec",

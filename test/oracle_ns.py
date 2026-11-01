@@ -374,6 +374,7 @@ PROGRAMS = (
     "exec_elf",
     "exec_auxv",
     "exec_state",
+    "sigcalls",
 )
 
 
@@ -418,6 +419,8 @@ def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
             "exec_auxv": kernel_answers.exec_auxv_wrong,
             "exec_state": kernel_answers.exec_state_wrong,
         }[name](out, by_the_kernel=True)
+    elif name == "sigcalls":
+        wrong = kernel_answers.sigcalls_wrong(out)
     else:
         wrong = {
             "slash_links": kernel_answers.slash_links_wrong,
@@ -487,6 +490,7 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
         "exec_elf": f"mkdir -p {hostdir}/e && {work}/exec_elf {hostdir}/e",
         "exec_auxv": f"mkdir -p {hostdir}/a && {work}/exec_auxv {hostdir}/a",
         "exec_state": f"mkdir -p {hostdir}/t && {work}/exec_state {hostdir}/t",
+        "sigcalls": f"{work}/sigcalls",
     }
     fails = 0
     for name in PROGRAMS:

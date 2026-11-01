@@ -928,12 +928,12 @@ static long do_sigaction(struct scratch *S, long *a)
     void *old = (void *)a[2];
     long size = a[3];
     if (size != 8) return RE5(NR_rt_sigaction, sig, act, old, size, 0);
-    /* accepted, ignored; old reports the truth */
-    if (sig == SIGSYS) return old ? RE5(NR_rt_sigaction, sig, 0, old, size, 0) : 0;
     if (!act) return RE5(NR_rt_sigaction, sig, 0, old, size, 0);
     unsigned long k[4];
     long r = copy_exact(S->pid, k, act, sizeof k);
     if (r) return r;
+    /* accepted, ignored (13 item 23), once act has been read as sys_rt_sigaction reads it; old reports the truth */
+    if (sig == SIGSYS) return old ? RE5(NR_rt_sigaction, sig, 0, old, size, 0) : 0;
     k[3] &= ~SIGSYS_BIT;
     return RE5(NR_rt_sigaction, sig, k, old, size, 0);
 }
@@ -948,12 +948,13 @@ static long do_sigprocmask(struct scratch *S, long *a, void *uc)
     long r = copy_exact(S->pid, &m, set, 8);
     if (r) return r;
     if (how == SIG_BLOCK || how == SIG_SETMASK) m &= ~SIGSYS_BIT;
-    r = RE5(NR_rt_sigprocmask, how, &m, old, size, 0);
-    if (r == 0) {
-        unsigned long cur;
-        if (sys_rt_sigprocmask(SIG_BLOCK, 0, &cur, 8) == 0) *frame_mask(uc) = cur;
-    }
-    return r;
+    unsigned long was;
+    r = RE5(NR_rt_sigprocmask, how, &m, &was, size, 0);
+    if (r) return r;
+    unsigned long cur;
+    if (sys_rt_sigprocmask(SIG_BLOCK, 0, &cur, 8) == 0) *frame_mask(uc) = cur;
+    /* the old mask is written last, as sys_rt_sigprocmask writes it: a bad pointer is EFAULT with the mask changed */
+    return old ? copy_out(S->pid, old, &was, 8) : 0;
 }
 static long do_sigsuspend(struct scratch *S, long *a)
 {
@@ -965,11 +966,25 @@ static long do_sigsuspend(struct scratch *S, long *a)
     m &= ~SIGSYS_BIT;
     return RE5(NR_rt_sigsuspend, &m, size, 0, 0, 0);
 }
+/* The timeout of a wait that carries a mask, read and checked ahead of the mask: ppoll, do_pselect and epoll_pwait2
+ * call get_timespec64 and poll_select_set_timeout before set_user_sigmask, so a bad pointer is EFAULT and a bad
+ * timespec EINVAL before the mask's own answers, and io_pgetevents reads its timeout before its mask pair and
+ * never checks it. The re-issued syscall reads the program's timeout again. */
+static long check_timeout(struct scratch *S, const void *tsp, int valid)
+{
+    if (!tsp) return 0;
+    long ts[2];
+    long r = copy_exact(S->pid, ts, tsp, sizeof ts);
+    if (r) return r;
+    return valid && (ts[0] < 0 || ts[1] < 0 || ts[1] >= 1000000000L) ? -EINVAL : 0;
+}
 static long do_ppoll(struct scratch *S, long *a)
 {
     unsigned long m;
+    long r = check_timeout(S, (const void *)a[2], 1);
+    if (r) return r;
     if (a[4] != 8) return -EINVAL;
-    long r = copy_exact(S->pid, &m, (const void *)a[3], 8);
+    r = copy_exact(S->pid, &m, (const void *)a[3], 8);
     if (r) return r;
     m &= ~SIGSYS_BIT;
     return RE5(NR_ppoll, a[0], a[1], a[2], &m, a[4]);
@@ -984,6 +999,8 @@ static long do_pselect6(struct scratch *S, long *a)
     long r = copy_exact(S->pid, &sp, (const void *)a[5], sizeof sp);
     if (r) return r;
     if (!sp.ss) return RE6(NR_pselect6, a[0], a[1], a[2], a[3], a[4], a[5]);
+    r = check_timeout(S, (const void *)a[4], 1);
+    if (r) return r;
     if (sp.len != 8) return -EINVAL;
     r = copy_exact(S->pid, &m, sp.ss, 8);
     if (r) return r;
@@ -995,8 +1012,10 @@ static long do_pselect6(struct scratch *S, long *a)
 static long do_epoll_pwait(struct scratch *S, long *a, int nr)
 {
     unsigned long m;
+    long r = nr == NR_epoll_pwait2 ? check_timeout(S, (const void *)a[3], 1) : 0;
+    if (r) return r;
     if (a[5] != 8) return -EINVAL;
-    long r = copy_exact(S->pid, &m, (const void *)a[4], 8);
+    r = copy_exact(S->pid, &m, (const void *)a[4], 8);
     if (r) return r;
     m &= ~SIGSYS_BIT;
     return RE6(nr, a[0], a[1], a[2], a[3], &m, a[5]);
@@ -1008,7 +1027,9 @@ static long do_io_pgetevents(struct scratch *S, long *a)
         unsigned long len;
     } sp;
     unsigned long m;
-    long r = copy_exact(S->pid, &sp, (const void *)a[5], sizeof sp);
+    long r = check_timeout(S, (const void *)a[4], 0);
+    if (r) return r;
+    r = copy_exact(S->pid, &sp, (const void *)a[5], sizeof sp);
     if (r) return r;
     if (!sp.ss) return RE6(NR_io_pgetevents, a[0], a[1], a[2], a[3], a[4], a[5]);
     if (sp.len != 8) return -EINVAL;

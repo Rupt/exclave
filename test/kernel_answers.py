@@ -294,6 +294,155 @@ EXE_LINK = (
     "exec procself exe: ran",
 )
 
+# sigcalls: the trapped signal syscalls in the kernel's order, one line per case
+SIGCALLS = (
+    "rt_sigaction setsize 4: Invalid argument",
+    "rt_sigaction setsize 4, act bad: Invalid argument",
+    "rt_sigaction sig 0: Invalid argument",
+    "rt_sigaction sig 65: Invalid argument",
+    "rt_sigaction sig 64 install: ok",
+    "rt_sigaction sig 0 query: Invalid argument",
+    "rt_sigaction sig 0, act bad: Bad address",
+    "rt_sigaction SIGKILL query: ok",
+    "rt_sigaction SIGKILL install: Invalid argument",
+    "rt_sigaction SIGSTOP install: Invalid argument",
+    "rt_sigaction SIGKILL, act bad: Bad address",
+    "rt_sigaction act bad: Bad address",
+    "rt_sigaction act bad, oact bad: Bad address",
+    "rt_sigaction act ok, oact bad: Bad address",
+    "after oact bad, the handler: installed",
+    "rt_sigaction act NULL, oact bad: Bad address",
+    "own restorer: ran, hits 1",
+    "own restorer reported: yes, flags 0x4000000",
+    "rt_sigaction act and oact the same: ok",
+    "the same struct holds: the old handler",
+    "rt_sigaction unknown flag bit: ok",
+    "unknown flag bit reported: dropped",
+    "SA_RESETHAND: hits 1, then SIG_DFL",
+    "SA_NODEFER nesting: 3 deep, 3 runs",
+    "deferred nesting: 1 deep, 3 runs",
+    "sa_mask reported: USR2 yes, ALRM yes, HUP no",
+    "rt_sigaction SIGSYS setsize 4: Invalid argument",
+    "rt_sigaction SIGSYS act bad: Bad address",
+    "rt_sigaction SIGSYS act ok, oact bad: Bad address",
+    "rt_sigaction SIGSYS act NULL, oact bad: Bad address",
+    "handler without SA_RESTORER: killed by Segmentation fault",
+    "rt_sigprocmask setsize 4: Invalid argument",
+    "rt_sigprocmask setsize 4, set bad: Invalid argument",
+    "rt_sigprocmask how 99, set NULL: ok",
+    "rt_sigprocmask how 99, set NULL, oset NULL: ok",
+    "rt_sigprocmask how 99: Invalid argument",
+    "rt_sigprocmask how 99, set bad: Bad address",
+    "rt_sigprocmask set bad: Bad address",
+    "rt_sigprocmask set bad, oset bad: Bad address",
+    "rt_sigprocmask set NULL, oset bad: Bad address",
+    "rt_sigprocmask set ok, oset bad: Bad address",
+    "after oset bad, USR1: blocked",
+    "rt_sigprocmask set and oset the same: ok",
+    "the same set holds: USR1 yes, USR2 no",
+    "blocked after it: USR1 yes, USR2 yes",
+    "rt_sigprocmask block KILL, STOP, HUP: ok",
+    "blocked: KILL no, STOP no, HUP yes",
+    "rt_sigsuspend setsize 4: Invalid argument",
+    "rt_sigsuspend setsize 4, set bad: Invalid argument",
+    "rt_sigsuspend set bad: Bad address",
+    "rt_sigsuspend set NULL: Bad address",
+    "ppoll mask NULL, setsize 4: ok",
+    "ppoll setsize 4: Invalid argument",
+    "ppoll setsize 4, mask bad: Invalid argument",
+    "ppoll mask bad: Bad address",
+    "ppoll timeout bad: Bad address",
+    "ppoll timeout bad, mask bad: Bad address",
+    "ppoll timeout bad, setsize 4: Bad address",
+    "ppoll timeout invalid: Invalid argument",
+    "ppoll timeout invalid, mask bad: Invalid argument",
+    "ppoll timeout invalid, setsize 4: Invalid argument",
+    "ppoll fds bad: Bad address",
+    "ppoll fds bad, mask bad: Bad address",
+    "ppoll nfds huge: Invalid argument",
+    "ppoll nfds huge, mask bad: Bad address",
+    "ppoll nfds huge, setsize 4: Invalid argument",
+    "pselect6 pack bad: Bad address",
+    "pselect6 pack bad, timeout bad: Bad address",
+    "pselect6 pack bad, n -1: Bad address",
+    "pselect6 mask NULL, size 4: ok",
+    "pselect6 size 4: Invalid argument",
+    "pselect6 size 4, mask bad: Invalid argument",
+    "pselect6 mask bad: Bad address",
+    "pselect6 timeout bad: Bad address",
+    "pselect6 timeout bad, mask bad: Bad address",
+    "pselect6 timeout bad, size 4: Bad address",
+    "pselect6 timeout invalid: Invalid argument",
+    "pselect6 timeout invalid, mask bad: Invalid argument",
+    "pselect6 timeout invalid, size 4: Invalid argument",
+    "pselect6 n -1: Invalid argument",
+    "pselect6 n -1, mask bad: Bad address",
+    "pselect6 n -1, size 4: Invalid argument",
+    "pselect6 fds bad: Bad address",
+    "pselect6 fds bad, mask bad: Bad address",
+    "epoll_pwait mask NULL, setsize 4, epfd -1: Bad file descriptor",
+    "epoll_pwait setsize 4, epfd -1: Invalid argument",
+    "epoll_pwait mask bad, epfd -1: Bad address",
+    "epoll_pwait mask bad, maxevents 0: Bad address",
+    "epoll_pwait maxevents 0: Invalid argument",
+    "epoll_pwait events bad: ok",
+    "epoll_pwait events bad, epfd -1: Bad file descriptor",
+    "epoll_pwait epfd -1: Bad file descriptor",
+    "epoll_pwait epfd not epoll: Invalid argument",
+    "epoll_pwait ok, no events: ok",
+    "epoll_pwait2 timeout bad: Bad address",
+    "epoll_pwait2 timeout bad, mask bad: Bad address",
+    "epoll_pwait2 timeout bad, setsize 4: Bad address",
+    "epoll_pwait2 timeout invalid: Invalid argument",
+    "epoll_pwait2 timeout invalid, mask bad: Invalid argument",
+    "epoll_pwait2 timeout invalid, setsize 4: Invalid argument",
+    "epoll_pwait2 mask NULL, setsize 4, epfd -1: Bad file descriptor",
+    "epoll_pwait2 mask bad, epfd -1: Bad address",
+    "epoll_pwait2 ok, no events: ok",
+    "io_pgetevents pack bad: Bad address",
+    "io_pgetevents pack bad, timeout bad: Bad address",
+    "io_pgetevents mask NULL, size 4, ctx 0: Invalid argument",
+    "io_pgetevents size 4, ctx 0: Invalid argument",
+    "io_pgetevents mask bad, ctx 0: Bad address",
+    "io_pgetevents timeout bad, mask bad: Bad address",
+    "io_pgetevents timeout bad, size 4: Bad address",
+    "io_pgetevents timeout invalid, mask bad: Bad address",
+    "io_pgetevents timeout invalid, ctx 0: Invalid argument",
+    "io_pgetevents ctx 0: Invalid argument",
+)
+
+
+def sigcalls_wrong(out: str) -> list[str]:
+    """The lines of sigcalls's output that differ from the kernel's answers.
+
+    aarch64 delivers a handler installed without SA_RESTORER through the vdso's, where x86-64 kills
+    with SIGSEGV; a kernel before 5.11 keeps unknown sa_flags bits and has no epoll_pwait2, one
+    before 4.18 no io_pgetevents.
+    """
+    want = list(SIGCALLS)
+    if platform.machine() == "aarch64":
+        want = [
+            w.replace("SA_RESTORER: killed by Segmentation fault", "SA_RESTORER: exit 1")
+            for w in want
+        ]
+    k = kernel()
+    if k < (5, 11):
+        want = [w.replace("flag bit reported: dropped", "flag bit reported: kept") for w in want]
+        want = [
+            w.split(": ")[0] + ": Function not implemented" if w.startswith("epoll_pwait2 ") else w
+            for w in want
+        ]
+    if k < (4, 18):
+        want = [
+            w.split(": ")[0] + ": Function not implemented" if w.startswith("io_pgetevents ") else w
+            for w in want
+        ]
+    got = out.splitlines()
+    wrong = [f"got {g!r}, the kernel says {w!r}" for g, w in zip(got, want, strict=False) if g != w]
+    if len(got) != len(want):
+        wrong.append(f"{len(got)} lines, the kernel gives {len(want)}")
+    return wrong
+
 
 def exe_link_wrong(out: str) -> list[str]:
     """The lines of exe_link's output that differ from the kernel's answers."""
