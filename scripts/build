@@ -29,7 +29,9 @@
 # and, on x86-64 with the cross compiler, launcher-aarch64,
 # launcher-old-aarch64 and exclave-aarch64. Nothing is built when every output
 # is there and no source, LICENSE, this script or lib.sh is newer than the last
-# build; a line for each one built.
+# build; a line for each one built. The builds run one after the other, as
+# every build here does, so that building never loads the machine with more
+# than one compiler (the laptop is in use beside it).
 set -u
 . "$(dirname -- "$0")/lib.sh"
 cd "$ROOT" || exit 2
@@ -122,28 +124,20 @@ tool() { # tool ARCH OUT ARGS...: the exclave command for ARCH
 }
 
 rm -f "$stamp" build/launcher*.debug-*.ci
-# the machine's own launcher first and alone, so that a compile error is told once
+# the machine's own launcher first, so that a compile error is told once
 launcher "$native" build/launcher -fcallgraph-info=su -dumpdir build/launcher.debug- || exit 1
-pids=
-launcher "$native" build/launcher-old -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD &
-pids="$pids $!"
-launcher "$native" build/launcher-debug -fsanitize=undefined -fsanitize-trap=undefined -fsanitize=bounds-strict &
-pids="$pids $!"
-tool "$native" build/exclave -static -s &
-pids="$pids $!"
+status=0
+launcher "$native" build/launcher-old -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD || status=1
+launcher "$native" build/launcher-debug -fsanitize=undefined -fsanitize-trap=undefined -fsanitize=bounds-strict || status=1
+tool "$native" build/exclave -static -s || status=1
 if [ -n "$sanitized" ]; then
-    tool "$native" build/exclave-asan -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer "$sanitized" &
-    pids="$pids $!"
+    tool "$native" build/exclave-asan -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer "$sanitized" || status=1
 fi
 for arch in $cross; do
     # the command carries the launcher, so is built after it
     { launcher "$arch" "build/launcher-$arch" -fcallgraph-info=su -dumpdir "build/launcher-$arch.debug-" &&
-        tool "$arch" "build/exclave-$arch" -static -s; } &
-    pids="$pids $!"
-    launcher "$arch" "build/launcher-old-$arch" -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD &
-    pids="$pids $!"
+        tool "$arch" "build/exclave-$arch" -static -s; } || status=1
+    launcher "$arch" "build/launcher-old-$arch" -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD || status=1
 done
-status=0
-for pid in $pids; do wait "$pid" || status=1; done
 [ $status = 0 ] && touch "$stamp" && printf '%s\n' "$version" >build/.version
 exit $status

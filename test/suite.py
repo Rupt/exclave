@@ -5,7 +5,6 @@ environment, made once by `prepare` and given to every test as a `Ctx`, which no
 the pruned fixture kept under build/fixtures/ is made and keyed here too.
 """
 
-import concurrent.futures
 import os
 import platform
 import shutil
@@ -474,7 +473,10 @@ PROGS = (
 
 
 def compile_progs(ctx: Ctx) -> None:
-    """Compile the test programs with the tree's own C compiler, four at a time.
+    """Compile the test programs with the tree's own C compiler, one at a time.
+
+    One compiler at a time, as every build in the repository runs, so that the suite never loads
+    the machine with more than one.
 
     The sources are copied into the work directory: with the work directory's top-level directory
     owned by the exclave (8.1), only the working directory's subtree is the host's.
@@ -519,8 +521,7 @@ def compile_progs(ctx: Ctx) -> None:
         )
         return err if rc else None
 
-    with concurrent.futures.ThreadPoolExecutor(4) as pool:
-        errors = dict(zip((*PROGS, "origin"), pool.map(build, (*PROGS, "origin")), strict=True))
+    errors = {name: build(name) for name in (*PROGS, "origin")}
     for name, err in errors.items():
         if err is not None:
             sys.exit(f"cannot compile {name} with the exclave's compiler:\n{err}")
