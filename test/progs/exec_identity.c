@@ -1,9 +1,10 @@
 /* exec_identity.c — the identity a program exec'd from inside gets (DESIGN.md 7.4.5, 7.6, 17.4): comm, AT_EXECFN and a
  * script's $0 as the kernel spells them, for a host ELF exec'd by an absolute and by a relative path with argv[0]
  * renamed, a host script exec'd relative to a descriptor and through a descriptor alone (/dev/fd/N/name and /dev/fd/N),
- * a host ELF through a descriptor, and execve's own answers for a close-on-exec script descriptor, a header the loader
- * cannot load, a loader the exclave lacks and another machine's ELF. usage: exec_identity HOSTDIR, or "exec_identity
- * HOSTDIR --child LABEL" as the program it copies and re-executes. Prints one line per case, "<case>: <answer>", the
+ * a host ELF through a descriptor, a script of the tree through a descriptor alone when one is given, and execve's own
+ * answers for a close-on-exec script descriptor, a header the loader cannot load, a loader the exclave lacks and
+ * another machine's ELF. usage: exec_identity HOSTDIR [TREE-SCRIPT], or "exec_identity HOSTDIR --child LABEL" as the
+ * program it copies and re-executes. Prints one line per case, "<case>: <answer>", the
  * same in every world, so the kernel under bwrap is the oracle; a descriptor number is printed as N. Exit 0 always. */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -180,6 +181,13 @@ int main(int argc, char **argv)
     setenv("L", "fd script", 1);
     child_lines("fd script", sfd, "", s_av, AT_EMPTY_PATH);
     close(sfd);
+    /* a script of the tree, a wrapped one under the launcher, through a descriptor alone: comm its interpreter's */
+    if (argc >= 3) {
+        sfd = open(argv[2], O_RDONLY);
+        setenv("L", "fd tree script", 1);
+        child_lines("fd tree script", sfd, "", s_av, AT_EMPTY_PATH);
+        close(sfd);
+    }
     /* a host ELF through a descriptor: comm the file's own name, AT_EXECFN /dev/fd/N */
     snprintf(p, sizeof p, "%s/prog2", hd);
     int efd = open(p, O_RDONLY);

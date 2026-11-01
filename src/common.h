@@ -171,7 +171,8 @@ struct exclave {
     char exe[PATH_MAX]; /* what /proc/self/exe answers: the program, or a wrapped script's interpreter */
     /* the path the program was exec'd by, as the kernel spells it: AT_EXECFN, a script's $0 (7.6) */
     char execfn[PATH_MAX];
-    /* the name the kernel would set as comm: the exec'd path's last component, a descriptor's file (7.6) */
+    /* the name the kernel would set as comm: the exec'd path's last component, or empty for the name of the file
+     * finally run, after an exec through a bare descriptor (7.6) */
     char comm[NAME_MAX + 1];
     int loader_mode; /* 1: re-exec'd with EXCLAVE_EXEC; program is not a wrapper */
     /* loader mode for a descriptor with no path (13 item 25): the dup to close once the segments are mapped, else -1 */

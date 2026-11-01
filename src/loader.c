@@ -306,8 +306,9 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
     }
     *w++ = AT_NULL;
     *w++ = 0;
-    /* comm as the kernel sets it (7.6): the exec'd path's last component, never the interpreter's */
-    sys_prctl(PR_SET_NAME, (unsigned long)C.comm, 0, 0, 0);
+    /* comm as the kernel sets it (7.6): the exec'd path's last component, never the interpreter's, or, left empty by
+     * a handler for an exec through a bare descriptor, this file's own name, a wrapped script's interpreter's */
+    sys_prctl(PR_SET_NAME, (unsigned long)(C.comm[0] ? C.comm : base_name(vpath)), 0, 0, 0);
     log_line("load", 0, vpath);
     debug_hook();                                             /* 7.6: gdb, if present, learns the mappings here */
     /* the program's start: its stack, no rtld_fini in rdx (x0), as the kernel gives, and no frame to return to. The

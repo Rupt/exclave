@@ -410,16 +410,20 @@ def exec_identity(ctx: Ctx) -> None:
 
     comm and AT_EXECFN from the path the program was exec'd by, not from argv[0]; a script's $0,
     AT_EXECFN and comm spelt /dev/fd/N/name relative to a descriptor and /dev/fd/N through one, comm
-    then the file's own name; a close-on-exec script descriptor refused with ENOENT before anything
-    runs; a header the loader cannot load, of the 32-bit class or another machine, ENOEXEC and a
-    loader the exclave lacks ENOENT from execve itself, rather than a child that dies after a
-    successful exec. The kernel under bwrap measured
-    these answers (test/exercise.py).
+    then the name of the file finally run, an ELF's own and a script's interpreter's (the kernel
+    takes it from the file it loads when the name was empty, comm_from_dentry in fs/exec.c since
+    6.12, which the handler answers on every kernel), for a wrapped script of the tree too, whose
+    interpreter the child launcher resolves; a close-on-exec script descriptor refused with ENOENT
+    before anything runs; a header the loader cannot load, of the 32-bit class or another machine,
+    ENOEXEC and a loader the exclave lacks ENOENT from execve itself, rather than a child that dies
+    after a successful exec. The kernel under bwrap measured these answers (test/exercise.py).
     """
     d = os.path.join(ctx.work, "identhost")
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "exec_identity"), [d])
+    rc, out, err = inside(
+        ctx, os.path.join(ctx.progs, "exec_identity"), [d, ctx.vbin("exclave-test-comm")]
+    )
     expect(rc == 0, f"exec_identity: {out!r} {err!r}")
     got = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
     want = {
@@ -433,7 +437,8 @@ def exec_identity(ctx: Ctx) -> None:
         "dfd script comm": "s.sh",
         "cloexec script": "ENOENT",
         "fd script argv0": "/dev/fd/N",
-        "fd script comm": "s.sh",
+        "fd script comm": os.path.basename(ctx.sh_exe),
+        "fd tree script comm": os.path.basename(ctx.sh_exe),
         "fd elf comm": "prog2",
         "fd elf execfn": "/dev/fd/N",
         "fd elf argv0": "renamed",

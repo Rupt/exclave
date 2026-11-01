@@ -667,6 +667,8 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     int script = n >= 2 && h[0] == '#' && h[1] == '!',
         elf = n == 4 && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F';
     if (script && cloexec) return -ENOENT;
+    /* a comm left for the file finally run (7.6): this ELF's name; a wrapped script's interpreter is the child's */
+    if (!S->comm[0] && elf) scpy(S->comm, base_name(v), sizeof S->comm);
     if (wrapper) {
         if (!script && !elf) return -ENOEXEC;
         return exec_env(S, S->real, argv, envp, v, 0); /* the kernel runs the launcher under the program's name */
@@ -733,6 +735,7 @@ static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp)
         long fl = sys_fcntl(fd, F_GETFD, 0);
         if (fl < 0) return fl;
         if (fl & FD_CLOEXEC) return -ENOENT;
+        S->comm[0] = 0; /* a script's comm is its interpreter's, the file finally run (7.6) */
         /* S->real is read; /dev/fd/N, the kernel's spelling, is what the interpreter gets */
         scpy(S->v, S->v2, PATH_MAX);
         return exec_script(S, S->v, argv, envp, 0);
@@ -798,8 +801,9 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
         /* fd_virtual: the link ends " (deleted)": no path */
         if (r == -ENOENT) return exec_descriptor(S, dfd, argv, envp);
         if (r < 0) return r;
-        /* through a descriptor, comm is the file's own name (fs/exec.c since 6.12) */
-        scpy(S->comm, base_name(S->v), sizeof S->comm);
+        /* through a bare descriptor, comm is the name of the file finally run (comm_from_dentry, fs/exec.c since
+         * 6.12): an ELF's own, a script's interpreter's; left empty here and set where that file is found */
+        S->comm[0] = 0;
     } else {
         if (flags & AT_SYMLINK_NOFOLLOW) { /* the kernel refuses to run a symlink itself, an identity link included */
             struct kstat st;

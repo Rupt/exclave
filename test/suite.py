@@ -358,6 +358,7 @@ def make_exclave(ctx: Ctx) -> None:
         ("exclave-test-noshebang", "echo noshebang ok\n"),
         ("exclave-test-script2", "#!/usr/bin/exclave-test-script\n"),
         ("exclave-test-exe", "#!/bin/sh\nreadlink /proc/$$/exe\n"),
+        ("exclave-test-comm", '#!/bin/sh\nread c </proc/self/comm\necho "$L comm: $c"\n'),
     ):
         add(os.path.join(root, "usr", "bin", name), body, 0o755)
     top = "/" + ctx.work.split("/")[1]

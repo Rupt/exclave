@@ -1285,8 +1285,8 @@ program, never by a wrapper (7.2). The kernel spells the name a program
 is exec'd by as given, or `/dev/fd/N` for a descriptor and
 `/dev/fd/N/name` for a path relative to one (`alloc_bprm` in
 `fs/exec.c`), and from it sets `AT_EXECFN`, `comm` as its last
-component (from 6.12, the file's own name for a bare descriptor) and a
-script's `$0`. The handler spells the name the same way and carries it,
+component (from 6.12, for a bare descriptor the name of the file it
+finally loads, a script's interpreter's) and a script's `$0`. The handler spells the name the same way and carries it,
 with the `comm` it computed, in `EXCLAVE_EXECFN` and `EXCLAVE_COMM` on
 every exec it makes, of a wrapper or of the launcher, dropping any
 inherited copy of the three. The launcher it execs takes them for the
@@ -1513,7 +1513,13 @@ Its `comm` is the file's own name, `memfd:name` or the unlinked file's,
 and `AT_EXECFN` is `/dev/fd/N`. A script behind such a descriptor goes
 to its interpreter as `/dev/fd/N`, the kernel's spelling, and a
 close-on-exec script is `ENOENT`, as the kernel answers, since the
-interpreter could not open it (13 item 25).
+interpreter could not open it (13 item 25). For any program exec'd
+through a bare descriptor, `comm` is the name of the file the kernel
+finally loads, an ELF's own and a script's interpreter's, `dash` for
+`#!/bin/sh` (`comm_from_dentry` in `fs/exec.c`, since 6.12; the
+handler answers so on every kernel): the handler sets it where it finds
+that file, and leaves it to the child launcher for a wrapped script,
+whose interpreter the child resolves.
 
 gdb sees the launcher, the executable of every wrapper, so the
 launcher exports six names, the base, entry and real file of the
