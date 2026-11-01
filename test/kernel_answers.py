@@ -193,6 +193,72 @@ def openat2_pathless_wrong(out: str) -> list[str]:
     ]
 
 
+# rename_dots HOSTDIR OTHERDIR: one line per case, the case and the errno text, in do_renameat2's
+# order: the parents looked up, the two mounts compared (EXDEV), a last name of "." or ".." refused
+# (EBUSY, or EEXIST for the new name under RENAME_NOREPLACE), the mount wanted writable (EROFS). A
+# case against OTHERDIR has a second answer, the one where OTHERDIR shares HOSTDIR's mount.
+RENAME_DOTS = (
+    ("hdir/. to other", "Invalid cross-device link", "Device or resource busy"),
+    ("other to hdir/.", "Invalid cross-device link", "Device or resource busy"),
+    ("hdir/.. to other", "Invalid cross-device link", "Device or resource busy"),
+    ("other to hdir/..", "Invalid cross-device link", "Device or resource busy"),
+    ("other to hdir/. noreplace", "Invalid cross-device link", "File exists"),
+    ("hdir/. to other exchange", "Invalid cross-device link", "Device or resource busy"),
+    ("hlink/.. to other", "Invalid cross-device link", "Device or resource busy"),
+    ("hdir/. to hnew", "Device or resource busy"),
+    ("hnew to hdir/.", "Device or resource busy"),
+    ("hdir/.. to hnew", "Device or resource busy"),
+    ("hnew to hdir/.. noreplace", "File exists"),
+    ("hdir/. to hnew noreplace", "Device or resource busy"),
+    ("hdir/. to hnew exchange", "Device or resource busy"),
+    ("hlink/.. to hnew", "Device or resource busy"),
+    ("hfile/. to hnew", "Not a directory"),
+    ("hnew to hfile/.", "Not a directory"),
+    ("missing/. to other", "No such file or directory"),
+    ("/usr/share/. to other", "Invalid cross-device link"),
+    ("other to /usr/share/..", "Invalid cross-device link"),
+    ("/usr/share/. to hnew", "Invalid cross-device link"),
+    ("/usr/share/. to /usr/x", "Device or resource busy"),
+    ("/usr/x to /usr/share/.", "Device or resource busy"),
+    ("/usr/x to /usr/share/.. noreplace", "File exists"),
+    ("/usr/share/x to /usr/y", "Read-only file system"),
+    ("/ to other", "Invalid cross-device link"),
+    ("/ to /usr/x", "Device or resource busy"),
+    ("/proc/.. to /usr/x", "Invalid cross-device link"),
+    ("/proc/.. to hnew", "Invalid cross-device link"),
+    ("hnew to /proc/..", "Invalid cross-device link"),
+    ("hdir/.. from a descriptor to other", "Invalid cross-device link", "Device or resource busy"),
+    ("hdir/. from a descriptor to hnew", "Device or resource busy"),
+    (
+        "hdir/. from the working directory to other",
+        "Invalid cross-device link",
+        "Device or resource busy",
+    ),
+    ("hdir/.. from the working directory to hnew", "Device or resource busy"),
+    (
+        ".. from the working directory to other",
+        "Invalid cross-device link",
+        "Device or resource busy",
+    ),
+    ("hdir/./ from the working directory to hnew", "Device or resource busy"),
+    ("hnew afterwards", "No such file or directory"),
+    ("other afterwards", "No such file or directory"),
+)
+
+
+def rename_dots_wrong(out: str, *, across: bool) -> list[str]:
+    """The lines of rename_dots's output that differ from the kernel's answers.
+
+    across: OTHERDIR lies on a different mount from HOSTDIR.
+    """
+    want = [f"{c}: {a[0] if across or len(a) == 1 else a[1]}" for c, *a in RENAME_DOTS]
+    got = out.splitlines()
+    wrong = [f"got {g!r}, the kernel says {w!r}" for g, w in zip(got, want, strict=False) if g != w]
+    if len(got) != len(want):
+        wrong.append(f"{len(got)} lines, the kernel gives {len(want)}")
+    return wrong
+
+
 def creat_slash_wrong(out: str) -> list[str]:
     """The lines of creat_slash's output that differ from the kernel's answers."""
     got = out.splitlines()

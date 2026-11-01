@@ -367,6 +367,7 @@ PROGRAMS = (
     "open_flags",
     "unix_socket",
     "magic_links",
+    "rename_dots",
 )
 
 
@@ -395,6 +396,9 @@ def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
         )
     elif name == "open_flags":
         wrong = kernel_answers.open_flags_wrong(out, by_the_kernel=True)
+    elif name == "rename_dots":
+        # bwrap's /tmp is a tmpfs of its own, hostdir a bind of the host's
+        wrong = kernel_answers.rename_dots_wrong(out, across=True)
     else:
         wrong = {
             "creat_slash": kernel_answers.creat_slash_wrong,
@@ -457,6 +461,7 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
             f"echo piped | {work}/magic_links pathless {hostdir} && "
             f"{work}/magic_links link-empty {hostdir}"
         ),
+        "rename_dots": f"{work}/rename_dots {hostdir} /tmp",
     }
     fails = 0
     for name in PROGRAMS:

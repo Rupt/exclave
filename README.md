@@ -41,7 +41,7 @@ any filesystem tree.
   untested). One source builds both launchers.
 - **gdb** debugs a program in an exclave: the launcher carries the
   script gdb needs.
-- **Tested against the kernel.** A suite of 87 named tests, oracles that
+- **Tested against the kernel.** A suite of 88 named tests, oracles that
   compare the launcher's answers with the kernel's under a read-only
   bind mount, and a differential probe of 39 716 syscall cases pass on
   gcc, clang, Alpine and Fedora exclaves. An exclave also runs under

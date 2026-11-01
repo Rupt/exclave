@@ -264,6 +264,50 @@ def mounted_once(path: str) -> bool:
     return mm is not None and lines.count(mm) == 1 and mm == f"{os.major(dev)}:{os.minor(dev)}"
 
 
+def mount_of(path: str) -> str:
+    """The mount point holding path, the longest in /proc/self/mountinfo."""
+    real = os.path.realpath(path)
+    best = "/"
+    with open("/proc/self/mountinfo") as mountinfo:
+        for entry in mountinfo:
+            mp = entry.split()[4].encode().decode("unicode_escape")
+            if (real == mp or real.startswith(mp.rstrip("/") + "/")) and len(mp) > len(best):
+                best = mp
+    return best
+
+
+@test
+def rename_dots_order(ctx: Ctx) -> None:
+    """7.4.3, 8.2: a rename whose last name is . or .., in do_renameat2's order.
+
+    The parents are looked up, then the two mounts compared, EXDEV, then such a name refused,
+    EBUSY, or EEXIST for the new name under RENAME_NOREPLACE, then the mount wanted writable,
+    EROFS. Two names the host owns are the kernel's own, the name kept after its resolved parent,
+    so a parent on another of the host's mounts, /proc or a tmpfs, is EXDEV before EBUSY; the
+    launcher once answered EBUSY from the exclave's boundary alone. The other directory is a
+    writable one on a different mount from the work directory where the host has one (/dev/shm,
+    /tmp, /run/user/UID), and the answers follow it. Measured under bwrap, where /tmp is a mount
+    of its own.
+    """
+    d = os.path.join(ctx.work, "rename_dots")
+    os.makedirs(d, exist_ok=True)
+    other = next(
+        (
+            c
+            for c in ("/dev/shm", "/tmp", f"/run/user/{os.getuid()}")
+            if os.access(c, os.W_OK) and mount_of(c) != mount_of(d)
+        ),
+        None,
+    )
+    across = other is not None
+    if other is None:
+        other = os.path.join(ctx.work, "rename_dots_same")
+        os.makedirs(other, exist_ok=True)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "rename_dots"), [d, other])
+    bad = kernel_answers.rename_dots_wrong(out, across=across)
+    expect(rc == 0 and not bad, f"rename of . or .. (other {other}): {bad!r} {out + err}")
+
+
 @test
 def casefold_alias(ctx: Ctx) -> str | None:
     """The tree's other spellings on a case-insensitive filesystem stay the tree's.

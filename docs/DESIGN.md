@@ -170,7 +170,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 87 named tests, most of them programs that
+- **The regression suite**: 88 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1728,7 +1728,13 @@ the references for the kernel's order.
     a last component of `.`, `..` or `/`, which the kernel never looks
     up: `EINVAL`, `ENOTEMPTY` and `EBUSY` for `rmdir`, `EISDIR` for
     `unlink`. `rename` answers those with `EBUSY` on either side, or
-    `EEXIST` for the new name under `RENAME_NOREPLACE`.
+    `EEXIST` for the new name under `RENAME_NOREPLACE`, for two names
+    the exclave owns, after `EXDEV` for one of each domain; two names
+    the host owns are the kernel's own, such a name kept after its
+    resolved parent (`filename_parentat` leaves it to `do_renameat2`),
+    since the host's mounts may differ among themselves, `/proc` or a
+    tmpfs against the rest, and the kernel compares the parents' mounts
+    before it refuses the name.
   - Two `UTIME_OMIT`s are a no-op before any lookup.
 - `link` and `rename` between an exclave path and a host path fail with
   `EXDEV`, as they would across a mount boundary. Without this rule a
@@ -2480,7 +2486,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 87 named regressions and every oracle its kernel can run; 17
+suite's 88 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -3954,10 +3960,10 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus seven of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket` and `magic_links` (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus eight of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links` and `rename_dots` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 87 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 88 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -4270,8 +4276,7 @@ once the answers agree until its entry goes, on a host whose files can
 show it (an entry says which hosts can, such as one whose
 `/etc/resolv.conf` is a symlink). On the reference machine
 39 716 cases run on each of the gate's four exclaves and none differ
-unexplained; 16 are open defects: a rename whose last name is `.` or
-`..` across two host mounts.
+unexplained, and no defect is open.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.
 

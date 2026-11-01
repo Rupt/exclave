@@ -1274,6 +1274,28 @@ static long do_unlink(struct scratch *S, int nr, long *a)
     return RE5(NR_unlinkat, RE_DFD(S), RE_PATH(S), fl, 0, 0);
 }
 
+/* The parent of a name whose last component is "." or ".." (sp 1 or 2), kept for a rename: the kernel resolves every
+ * component before it (filename_parentat) and leaves the last one to do_renameat2, which compares the parent's mount
+ * before it refuses the name. v gets the parent's virtual path, walked from the given without its last component,
+ * the last of what remains followed as an intermediate component is; real gets the parent's real path with the
+ * component after it, for the re-issue. */
+static long parent_kept(struct scratch *S, const char *given, int dfd, int sp, char *v, char *real)
+{
+    scpy(real, given, PATH_MAX);
+    size_t n = xstrlen(real);
+    while (n > 1 && real[n - 1] == '/') n--;
+    while (n > 0 && real[n - 1] != '/') n--; /* the "." or ".." itself */
+    while (n > 1 && real[n - 1] == '/') n--;
+    if (n == 0) scpy(real, ".", PATH_MAX); /* the directory the name is relative to */
+    else real[n] = 0;
+    long r = canon(S, real, dfd, WALK_FOLLOW, v);
+    if (r < 0) return r;
+    to_real_exec(v, real);
+    if (xstrlen(real) + 3 >= PATH_MAX) return -ENAMETOOLONG;
+    scat(real, sp == 1 ? "/." : "/..", PATH_MAX);
+    return 0;
+}
+
 /* rename, renameat and renameat2, in do_renameat2's order */
 static long do_rename(struct scratch *S, int nr, long *a)
 {
@@ -1289,23 +1311,32 @@ static long do_rename(struct scratch *S, int nr, long *a)
     scpy(S->v2, S->v, PATH_MAX); /* old */
     scpy(S->given2, S->given, PATH_MAX);
     int old_given = as_given(S), odfd = S->dfd;
+    /* a last component that is "." or "..": the parent is what the kernel compares, and what it is given back; the
+     * root is the tree's */
+    if ((osp == 1 || osp == 2) && (r = parent_kept(S, S->given2, odfd, osp, S->v2, S->real2)) < 0) return r;
     if ((r = resolve(S, a, npi, ndi, WALK_PARENT, 0)) < 0) return r;
     int nsp = last_special(S->given);
-    /* the kernel's order (do_renameat2, oracles 17.1 and 17.7): different mounts first, then a last component
-     * that is "." or "..", then the write check, then the lookups */
+    int new_given = as_given(S), ndfd = S->dfd;
+    if ((nsp == 1 || nsp == 2) && (r = parent_kept(S, S->given, ndfd, nsp, S->v, S->real)) < 0) return r;
+    /* the kernel's order (do_renameat2, oracles 17.1 and 17.7): different mounts first, the exclave's against the
+     * host's, then, for two names the exclave owns, a last component that is "." or "..", then the write check; two
+     * names the host owns are the kernel's own, the special last component kept, since the host's mounts may differ
+     * among themselves, which the kernel sees before the name (oracle 17.7) */
     int oc = is_exclave_path(S->v2), nc = is_exclave_path(S->v);
     if (oc != nc) return -EXDEV;
-    if (osp) return -EBUSY;
-    if (nsp) return (fl & RENAME_NOREPLACE) ? -EEXIST : -EBUSY;
-    if (oc && nc) return -EROFS;
+    if (oc) {
+        if (osp) return -EBUSY;
+        if (nsp) return (fl & RENAME_NOREPLACE) ? -EEXIST : -EBUSY;
+        return -EROFS;
+    }
     /* neither name is followed: an identity symlink is the host's link on either side */
-    if (!identity_link_real(S, S->v2, S->real2, 1)) to_real_exec(S->v2, S->real2);
-    real_exec_nofollow(S, 1);
-    const char *old = old_given ? S->given2 : S->real2;
-    int od = old_given ? odfd : AT_FDCWD;
+    if (!osp && !identity_link_real(S, S->v2, S->real2, 1)) to_real_exec(S->v2, S->real2);
+    if (!nsp) real_exec_nofollow(S, 1);
+    const char *old = old_given ? S->given2 : S->real2, *new = new_given ? S->given : S->real;
+    int od = old_given ? odfd : AT_FDCWD, nd = new_given ? ndfd : AT_FDCWD;
     /* renameat2 is 3.15+ */
-    if (nr != NR_renameat2 && fl == 0) return RE5(NR_renameat, od, old, RE_DFD(S), RE_PATH(S), 0);
-    return RE5(NR_renameat2, od, old, RE_DFD(S), RE_PATH(S), fl);
+    if (nr != NR_renameat2 && fl == 0) return RE5(NR_renameat, od, old, nd, new, 0);
+    return RE5(NR_renameat2, od, old, nd, new, fl);
 }
 
 /* link and linkat, in do_linkat's order */

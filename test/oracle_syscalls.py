@@ -1919,23 +1919,7 @@ EXPECTED.extend(
 # measured on, 7.0 and later, a whole run in which an entry the host can show matches no case
 # fails, so that the fix removes the entry.
 DEFECTS_MEASURED = (7, 0)
-DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[], bool]]] = [
-    (
-        (
-            "a rename whose last name is . or .. with the two names on different host mounts, "
-            "the probe's /tmp among them: the kernel answers EXDEV for the mounts before EBUSY "
-            "for the name (do_renameat2); the handler sees the exclave's boundary alone and "
-            "answers EBUSY, or EEXIST under RENAME_NOREPLACE"
-        ),
-        lambda n, label, b, o, _c: (
-            n in ("rename", "renameat2")
-            and "tmp_new" in label
-            and errnos(b, o)[0] == errno.EXDEV
-            and errnos(b, o)[1] in (errno.EBUSY, errno.EEXIST)
-        ),
-        lambda: True,
-    )
-]
+DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[], bool]]] = []
 
 
 def expected(name: str, label: str, b: str, o: str, ctx: Ctx) -> str | None:
