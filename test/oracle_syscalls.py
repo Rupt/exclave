@@ -1649,6 +1649,22 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
         (
             call,
             lambda label, b, o, _c: (
+                KERNEL < (5, 8)
+                and label.endswith(("dot_slash/wr_creat_excl", "dotdot_slash/wr_creat_excl"))
+                and errnos(b, o) == (errno.EISDIR, errno.EEXIST)
+            ),
+            (
+                "O_CREAT|O_EXCL of dir/./ or dir/../: do_last took a last name of . or .. straight "
+                "to finish_open, where O_CREAT on a directory is EISDIR, until 5.8's do_open put "
+                "O_EXCL's EEXIST before it; the handler answers as the newer kernels do"
+            ),
+        )
+        for call in ("open", "openat")
+    ),
+    *(
+        (
+            call,
+            lambda label, b, o, _c: (
                 KERNEL < (6, 3) and label.endswith("/dir_creat") and errnos(b, o)[1] == errno.EINVAL
             ),
             (

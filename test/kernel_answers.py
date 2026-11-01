@@ -113,7 +113,8 @@ OPEN_FLAGS = (
 # the cases a kernel before 6.3 answers otherwise: open and openat opened or created with
 # O_DIRECTORY|O_CREAT until build_open_flags refused the pair (fs/open.c); the launcher answers as
 # the newer kernels do
-OPEN_FLAGS_SINCE_6_3 = "O_DIRECTORY|O_CREAT on "
+# every O_DIRECTORY|O_CREAT line but O_PATH's, which drops O_CREAT on every kernel
+OPEN_FLAGS_SINCE_6_3 = ("O_DIRECTORY|O_CREAT ", "openat O_DIRECTORY|O_CREAT ")
 
 
 def kernel() -> tuple[int, int]:
@@ -133,7 +134,7 @@ def open_flags_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     wrong = [
         f"got {g!r}, the kernel says {w!r}"
         for g, w in zip(got, OPEN_FLAGS, strict=False)
-        if g != w and not (old and OPEN_FLAGS_SINCE_6_3 in w)
+        if g != w and not (old and w.startswith(OPEN_FLAGS_SINCE_6_3))
     ]
     if len(got) != len(OPEN_FLAGS):
         wrong.append(f"{len(got)} lines, the kernel gives {len(OPEN_FLAGS)}")
@@ -480,13 +481,21 @@ SLASH_LINKS = (
 
 
 def slash_links_wrong(out: str) -> list[str]:
-    """The lines of slash_links's output that differ from the kernel's answers."""
+    """The lines of slash_links's output that differ from the kernel's answers.
+
+    A kernel without openat2 (before 5.6) answers its lines "skipped" in both worlds, since the
+    launcher re-issues the call as itself.
+    """
     got = out.splitlines()
     skipped = "exlink: skipped" in got
     got = [x for x in got if x != "exlink: skipped"]
     want = [x for x in SLASH_LINKS if not (skipped and x.startswith("exlink "))]
+    no_openat2 = kernel() < (5, 6)
     return [
-        f"got {g!r}, the kernel says {w!r}" for g, w in itertools.zip_longest(got, want) if g != w
+        f"got {g!r}, the kernel says {w!r}"
+        for g, w in itertools.zip_longest(got, want)
+        if g != w
+        and not (no_openat2 and w and " openat2 " in w and g == w.split(": ")[0] + ": skipped")
     ]
 
 
