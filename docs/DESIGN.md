@@ -179,7 +179,7 @@ How it is tested (17):
   and 2).
 - **The syscall probe**: every trapped path and descriptor syscall,
   with every flag and path form, run under `bwrap` and under the
-  launcher; 28 741 cases per exclave, each difference from the kernel
+  launcher; 30 541 cases per exclave, each difference from the kernel
   fixed, accepted under a named reason or listed as an open defect
   (17 item 7).
 - **Docker's default seccomp profile**: a workload in each exclave runs
@@ -4253,7 +4253,7 @@ listed apart by its two exact answers, printed by every run, and fails
 once the answers agree until its entry goes, on a host whose files can
 show it (an entry says which hosts can, such as one whose
 `/etc/resolv.conf` is a symlink). On the reference machine
-28 741 cases run on each of the gate's four exclaves and none differ
+30 541 cases run on each of the gate's four exclaves and none differ
 unexplained, and no launcher defect is open.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.

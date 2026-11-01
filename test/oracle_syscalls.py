@@ -144,6 +144,7 @@ KERNEL = tuple(int(x) for x in RELEASE.groups())
 O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_EXCL, O_TRUNC = 0, 1, 2, os.O_CREAT, os.O_EXCL, os.O_TRUNC
 # this machine's bits
 O_DIRECTORY, O_NOFOLLOW, O_PATH, O_TMPFILE = os.O_DIRECTORY, os.O_NOFOLLOW, os.O_PATH, os.O_TMPFILE
+O_NOATIME = os.O_NOATIME
 AT_FDCWD, AT_SYMLINK_NOFOLLOW, AT_REMOVEDIR, AT_SYMLINK_FOLLOW, AT_EMPTY_PATH, AT_EACCESS = (
     -100,
     0x100,
@@ -633,7 +634,20 @@ def generate(
         ("rd_nofollow", O_RDONLY | O_NOFOLLOW),
         ("rd_dir", O_RDONLY | O_DIRECTORY),
         ("wr_dir", O_WRONLY | O_DIRECTORY),
+        ("rd_dir_nofollow", O_RDONLY | O_DIRECTORY | O_NOFOLLOW),
         ("tmpfile", O_RDWR | O_TMPFILE),
+        # the flag word's own rules, before any lookup (build_open_flags): O_TMPFILE wants write
+        # access and O_DIRECTORY beside it, and refuses O_CREAT; open's O_PATH drops O_CREAT
+        ("tmpfile_rd", O_RDONLY | O_TMPFILE),
+        ("tmpfile_creat", O_RDWR | O_TMPFILE | O_CREAT),
+        ("tmpfile_bare", O_RDWR | (O_TMPFILE & ~O_DIRECTORY)),
+        ("path_dir_creat", O_PATH | O_DIRECTORY | O_CREAT),
+        # may_open's other answers: an access mode of 3 is checked as a read-write open and
+        # opened as neither, so it succeeds on a read-only mount; O_NOATIME is the owner's;
+        # O_EXCL without O_CREAT follows symlinks
+        ("acc3", 3),
+        ("rd_noatime", O_RDONLY | O_NOATIME),
+        ("rd_excl", O_RDONLY | O_EXCL),
     ]
     stat_flags = [
         ("follow", 0),
