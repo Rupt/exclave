@@ -1745,19 +1745,6 @@ DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[
     ),
     (
         (
-            "O_CREAT with a trailing slash is EISDIR before the last component is looked up "
-            "(open_last_lookups), so before RESOLVE_NO_SYMLINKS meets a link there; the handler "
-            "says ELOOP"
-        ),
-        lambda n, label, b, o, _c: (
-            n == "openat2"
-            and label.endswith("_slash/wr_creat/no_symlinks")
-            and (b, o) == ("ret=-1 errno=21", "ret=-1 errno=40")
-        ),
-        lambda: True,
-    ),
-    (
-        (
             "O_WRONLY|O_DIRECTORY on what is not a directory: the lookup wants a directory "
             "(LOOKUP_DIRECTORY, ENOTDIR) before may_open; the handler answers the read-only rules "
             "first (EROFS, EACCES, ETXTBSY)"

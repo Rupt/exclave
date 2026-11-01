@@ -862,9 +862,10 @@ def create_through_a_slashed_host_link(ctx: Ctx) -> None:
     A create, a delete, a rename, link's new name and open with O_CREAT walk the parent and look
     the last name up in it (filename_parentat), never following a symlink there, so mkdir of a
     dangling host link with a slash is EEXIST and creates nothing, rmdir and unlink of a link with
-    a slash ENOTDIR, a rename onto it ENOTDIR or EEXIST under RENAME_NOREPLACE; a plain open
-    follows the link, as lookup_last does. Measured under bwrap; the launcher once followed the
-    link, and mkdir made the dangling link's target.
+    a slash ENOTDIR, a rename onto it ENOTDIR or EEXIST under RENAME_NOREPLACE, and openat2 with
+    O_CREAT EISDIR before RESOLVE_NO_SYMLINKS meets the link; a plain open follows the link, as
+    lookup_last does. Measured under bwrap; the launcher once followed the link, mkdir made the
+    dangling link's target and openat2 said ELOOP.
     """
     d = os.path.join(ctx.work, "slashed_host")
     shutil.rmtree(d, ignore_errors=True)

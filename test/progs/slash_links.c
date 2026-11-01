@@ -23,11 +23,37 @@
 #define RENAME_NOREPLACE 1
 #define RENAME_EXCHANGE 2
 #endif
+#define RESOLVE_NO_SYMLINKS 0x04
+#ifndef SYS_openat2
+#define SYS_openat2 437
+#endif
+
+static int have_openat2;
 
 static void show(const char *form, const char *what, long r)
 {
     if (r < 0) printf("%s %s: ret=-1 errno=%d\n", form, what, errno);
     else printf("%s %s: ok\n", form, what); /* a descriptor's number is the world's own */
+}
+
+static long o2(const char *path, unsigned long flags, unsigned long resolve)
+{
+    struct {
+        unsigned long flags, mode, resolve;
+    } h = {flags, (flags & O_CREAT) ? 0644 : 0, resolve};
+    return syscall(SYS_openat2, AT_FDCWD, path, &h, sizeof h);
+}
+
+/* O_CREAT under RESOLVE_NO_SYMLINKS: the trailing slash is EISDIR before the walk reaches a link at the last name */
+static void try_openat2(const char *form, const char *what, const char *path, unsigned long flags)
+{
+    if (!have_openat2) {
+        printf("%s %s: skipped\n", form, what); /* a kernel without openat2 */
+        return;
+    }
+    long r = o2(path, flags, RESOLVE_NO_SYMLINKS);
+    show(form, what, r);
+    if (r >= 0) close((int)r);
 }
 
 static void try_open(const char *form, const char *what, const char *path, int flags)
@@ -71,6 +97,8 @@ static void cases(const char *form, const char *p, int dfd, const char *rel, con
     try_open(form, "open creat", p, O_WRONLY | O_CREAT);
     try_open(form, "open creat excl", p, O_WRONLY | O_CREAT | O_EXCL);
     try_open(form, "open rdonly", p, O_RDONLY);
+    try_openat2(form, "openat2 creat no_symlinks", p, O_WRONLY | O_CREAT);
+    try_openat2(form, "openat2 creat excl no_symlinks", p, O_WRONLY | O_CREAT | O_EXCL);
     snprintf(q, sizeof q, "%s/hfile2", host);
     show(form, "link to it", link(q, p));
     show(form, "renameat2 noreplace onto it", syscall(SYS_renameat2, AT_FDCWD, q, AT_FDCWD, p, RENAME_NOREPLACE));
@@ -97,6 +125,7 @@ int main(int argc, char **argv)
         perror(host);
         return 2;
     }
+    have_openat2 = o2("/", O_RDONLY, 0) >= 0 || errno != ENOSYS;
     /* a dangling link, a link to an exclave file, one to an exclave directory, a directory and a file */
     if (symlink("missing", "hdang") || symlink(exfile, "hlink") || symlink(exdir, "hlnkdir") || mkdir("hdir", 0755) ||
         (fd = open("hfile", O_WRONLY | O_CREAT, 0644)) < 0 || close(fd) ||

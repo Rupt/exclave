@@ -1084,7 +1084,9 @@ dropped from the re-issue:
   that is not followed is excepted, and the host's own mount boundaries
   are not seen (13 item 22).
 - `RESOLVE_NO_SYMLINKS` is `ELOOP` at any link the walk would follow,
-  the tree's own links and an identity file's host link included. A
+  the tree's own links and an identity file's host link included, after
+  `O_CREAT`'s `EISDIR` for a trailing slash, which comes before the last
+  name is looked up at all (`lookup_fast_for_open`). A
   magic link, one below `/proc/<pid>/`, is `ELOOP` under
   `RESOLVE_NO_MAGICLINKS` and `RESOLVE_NO_SYMLINKS`, and otherwise
   `EXDEV` under the scoped flags, in the kernel's order
@@ -4213,9 +4215,8 @@ once the answers agree until its entry goes, on a host whose files can
 show it (a host whose `/etc/resolv.conf` is no symlink shows no
 no-follow call on an identity symlink). On the reference machine
 26 521 cases run on each of the gate's four exclaves and none differ
-unexplained; 198 are open defects: `O_DIRECTORY` with `O_CREAT` or
-`O_WRONLY` in `open` and `openat`, `O_CREAT` with a trailing slash
-under `RESOLVE_NO_SYMLINKS`, and no-follow calls on an identity
+unexplained; 193 are open defects: `O_DIRECTORY` with `O_CREAT` or
+`O_WRONLY` in `open` and `openat`, and no-follow calls on an identity
 symlink.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.
