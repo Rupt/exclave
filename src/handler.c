@@ -366,17 +366,28 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     /* lookup_fast_for_open: O_CREAT with a trailing slash, before any lookup; a last name that is "." or ".." is the
      * directory itself (handle_dots), where do_open answers O_EXCL's EEXIST before EISDIR, as for any directory */
     if (creat && vl > 1 && S->v[vl - 1] == '/' && !last_special(S->given)) return -EISDIR;
-    /* the kernel protects a running program; the launcher protects the one it loaded (13 items 29 and 40) */
-    if (wr && (flags & O_TMPFILE) != O_TMPFILE && C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;
-    /* an identity file that is a host symlink (8.4) */
-    if ((flags & O_NOFOLLOW) && !(flags & O_PATH) && vis_readlink_identity(S->v, S->tmp) == 1) return -ELOOP;
-    if (is_exclave_path(S->v)) {
-        struct kstat st;
-        int ex = exists_exclave(S, S->v, &st);
-        /* the lookup's own error comes before the read-only answers */
-        long ae = ex ? 0 : absent_errno(S);
-        int dir = ex && (st.st_mode & S_IFMT) == S_IFDIR;
-        if ((flags & O_TMPFILE) == O_TMPFILE) return !ex ? ae : dir ? -EROFS : -ENOTDIR;
+    /* the kernel protects a running program; the launcher protects the one it loaded (13 items 29 and 40), a
+     * regular file, which a directory wanted of it (O_DIRECTORY, O_TMPFILE) refuses with the lookup's ENOTDIR first,
+     * from the rules below or from the re-issue */
+    if (wr && !(flags & O_DIRECTORY) && C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;
+    int in = is_exclave_path(S->v);
+    struct kstat st;
+    int ex = 0, dir = 0;
+    long ae = 0; /* the lookup's own error, which comes before the read-only answers */
+    if (in) {
+        ex = exists_exclave(S, S->v, &st);
+        ae = ex ? 0 : absent_errno(S);
+        dir = ex && (st.st_mode & S_IFMT) == S_IFDIR;
+    }
+    /* do_tmpfile: a directory looked up (path_lookupat, LOOKUP_DIRECTORY), then the mount wanted writable */
+    if (in && (flags & O_TMPFILE) == O_TMPFILE) return !ex ? ae : dir ? -EROFS : -ENOTDIR;
+    /* do_open, path_lookupat: O_DIRECTORY wants a directory, ENOTDIR, before may_open's answers, a symlink's ELOOP
+     * among them, and before the write access a read-only mount refuses */
+    if (in && (flags & O_DIRECTORY) && ex && !dir) return -ENOTDIR;
+    /* an identity file that is a host symlink (8.4), the host's own: the lookup's ENOTDIR, then may_open's ELOOP */
+    if ((flags & O_NOFOLLOW) && !(flags & O_PATH) && vis_readlink_identity(S->v, S->tmp) == 1)
+        return flags & O_DIRECTORY ? -ENOTDIR : -ELOOP;
+    if (in) {
         if (creat && (flags & O_EXCL)) return ex ? -EEXIST : ae != -ENOENT ? ae : -EROFS;
         if (creat && dir) return -EISDIR;
         if (wr) {

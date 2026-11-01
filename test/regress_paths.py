@@ -842,11 +842,14 @@ def unix_socket(ctx: Ctx) -> None:
 
 @test
 def open_flags_order(ctx: Ctx) -> None:
-    """7.4.3: the open flags the kernel judges before any lookup, in open and openat as in openat2.
+    """7.4.3: the open flags the kernel judges before the walk, and the directory it wants after it.
 
     build_open_flags refuses O_DIRECTORY with O_CREAT and O_TMPFILE without O_DIRECTORY or write
     access before getname, so before EFAULT and the read-only rules, and open's O_PATH drops every
-    companion but its own. Measured under bwrap; the launcher once answered these from its walk.
+    companion but its own; O_DIRECTORY on what is not a directory is ENOTDIR (do_open,
+    path_lookupat) before may_open's answers and the write access a read-only mount refuses, the
+    loaded program's ETXTBSY and an identity symlink's ELOOP included. Measured under bwrap; the
+    launcher once answered these from its walk and its read-only rules.
     """
     d = os.path.join(ctx.work, "open_flags")
     os.makedirs(d, exist_ok=True)

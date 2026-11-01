@@ -1059,7 +1059,11 @@ any lookup, as `openat2` does (`build_open_how`, `build_open_flags`):
 a flag the kernel does not know is dropped, `O_PATH` drops every
 companion but `O_DIRECTORY`, `O_NOFOLLOW` and `O_CLOEXEC`,
 `O_DIRECTORY` with `O_CREAT` is `EINVAL`, and so is `O_TMPFILE`
-without `O_DIRECTORY` or without write access.
+without `O_DIRECTORY` or without write access. After the walk, a
+directory wanted by `O_DIRECTORY` of what is not one is `ENOTDIR`
+(`do_open`, `path_lookupat`) before `may_open`'s answers, a symlink's
+`ELOOP` among them, and before the write access the read-only rule
+refuses, the loaded program's `ETXTBSY` included.
 
 A program on the loader path answers `ETXTBSY` when the process that
 loaded it write-opens or truncates its file, before any read-only
@@ -4250,8 +4254,7 @@ once the answers agree until its entry goes, on a host whose files can
 show it (an entry says which hosts can, such as one whose
 `/etc/resolv.conf` is a symlink). On the reference machine
 28 741 cases run on each of the gate's four exclaves and none differ
-unexplained; the open defects are `O_WRONLY|O_DIRECTORY` on what is
-not a directory in `open` and `openat`.
+unexplained, and no launcher defect is open.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.
 

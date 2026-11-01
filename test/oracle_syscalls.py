@@ -1764,22 +1764,7 @@ EXPECTED.extend(
 # measured on, 7.0 and later, a whole run in which an entry the host can show matches no case
 # fails, so that the fix removes the entry.
 DEFECTS_MEASURED = (7, 0)
-DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[], bool]]] = [
-    (
-        (
-            "O_WRONLY|O_DIRECTORY on what is not a directory: the lookup wants a directory "
-            "(LOOKUP_DIRECTORY, ENOTDIR) before may_open; the handler answers the read-only rules "
-            "first (EROFS, EACCES, ETXTBSY)"
-        ),
-        lambda n, label, b, o, _c: (
-            n in ("open", "openat")
-            and label.endswith("/wr_dir")
-            and errnos(b, o)[0] == errno.ENOTDIR
-            and errnos(b, o)[1] in (errno.EROFS, errno.EACCES, errno.ETXTBSY)
-        ),
-        lambda: True,
-    ),
-]
+DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[], bool]]] = []
 
 
 def expected(name: str, label: str, b: str, o: str, ctx: Ctx) -> str | None:
