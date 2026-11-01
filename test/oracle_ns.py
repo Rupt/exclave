@@ -405,9 +405,10 @@ def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
         wrong = kernel_answers.program_perm_wrong(out)
     elif name == "exe_link":
         wrong = kernel_answers.exe_link_wrong(out)
+    elif name == "creat_slash":
+        wrong = kernel_answers.creat_slash_wrong(out, by_the_kernel=True)
     else:
         wrong = {
-            "creat_slash": kernel_answers.creat_slash_wrong,
             "slash_links": kernel_answers.slash_links_wrong,
             "unix_socket": kernel_answers.unix_socket_wrong,
         }[name](out)

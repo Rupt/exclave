@@ -24,6 +24,8 @@ CREAT_SLASH = (
     "creat of a directory's dot with a slash: Is a directory",
     "creat with O_EXCL of a directory's dotdot with a slash: File exists",
 )
+# O_EXCL's EEXIST before a directory's EISDIR since 5.8's do_open (fs/namei.c); do_last said EISDIR
+CREAT_SLASH_SINCE_5_8 = "creat with O_EXCL of a directory's dot"
 
 # unix_socket HOSTDIR /usr/share EXFILE /usr/share/exclave-test.sock CWDDIR: the case and its answer
 UNIX_SOCKET = {
@@ -320,12 +322,20 @@ def program_perm_wrong(out: str) -> list[str]:
     return wrong
 
 
-def creat_slash_wrong(out: str) -> list[str]:
-    """The lines of creat_slash's output that differ from the kernel's answers."""
+def creat_slash_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
+    """The lines of creat_slash's output that differ from the kernel's answers.
+
+    by_the_kernel: the kernel itself answered, so a kernel before 5.8 may answer the cases of
+    CREAT_SLASH_SINCE_5_8 as it did then, EISDIR.
+    """
     got = out.splitlines()
-    return (
-        [] if got == list(CREAT_SLASH) else [f"got {got!r}, the kernel says {list(CREAT_SLASH)!r}"]
-    )
+    want = list(CREAT_SLASH)
+    if by_the_kernel and kernel() < (5, 8):
+        want = [
+            w.replace("File exists", "Is a directory") if w.startswith(CREAT_SLASH_SINCE_5_8) else w
+            for w in want
+        ]
+    return [] if got == want else [f"got {got!r}, the kernel says {want!r}"]
 
 
 # slash_links HOSTDIR EXFILE EXDIR EXLINK: the case and its answer, measured under bwrap on 7.0; the
