@@ -1,12 +1,18 @@
 /* openat2.c — the openat2 regression of DESIGN.md 17.4: the resolve flags in the exclave's world (7.4.3).
  * usage: openat2 HOSTDIR (HOSTDIR: a writable host directory). Prints FAIL lines; exit 1 on any; exit 3 when the kernel
- * has no openat2. Spellings come from the environment: EXCLAVE_TEST_SH (a symlink in the tree), EXCLAVE_TEST_TRUE. */
+ * has no openat2. Spellings come from the environment: EXCLAVE_TEST_SH (a symlink in the tree), EXCLAVE_TEST_TRUE.
+ *
+ * Mode "pathless HOSTDIR": a scoped openat2 (RESOLVE_BENEATH, RESOLVE_IN_ROOT) from a descriptor whose file has no
+ * path, a directory made in HOSTDIR and removed after it was opened, a memfd and an O_TMPFILE file in HOSTDIR, which
+ * the kernel walks from the descriptor itself. One line per case, the case and the errno text, or ok
+ * (test/kernel_answers.py has the kernel's answers); exit 3 when the kernel has no openat2. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -38,11 +44,91 @@ static long o2(int dfd, const char *path, unsigned long flags, unsigned long mod
         } else if (r_ >= 0) close((int)r_);                                                                            \
     } while (0)
 
+#ifndef SYS_memfd_create
+#define SYS_memfd_create 319
+#endif
+
+static void answer(const char *what, long r)
+{
+    printf("%s: %s\n", what, r >= 0 ? "ok" : strerror(errno));
+    if (r >= 0) close((int)r);
+}
+
+/* a scoped open from each descriptor whose file has no path; the kernel's order: the scope's directory itself, "."
+ * and "..", a name under it, an absolute path, and what is not a directory at all */
+static int pathless(const char *host)
+{
+    char gone[4096];
+    snprintf(gone, sizeof gone, "%s/gone", host);
+    mkdir(gone, 0755);
+    int gonefd = open(gone, O_PATH | O_DIRECTORY);
+    if (gonefd < 0 || rmdir(gone) != 0) {
+        printf("a removed directory: %s\n", strerror(errno));
+        return 2;
+    }
+    int memfd = (int)syscall(SYS_memfd_create, "probe", 0);
+    int tmpfilefd = open(host, O_TMPFILE | O_RDWR, 0644);
+    if (memfd < 0 || tmpfilefd < 0) {
+        printf("a memfd and an O_TMPFILE file: %s\n", strerror(errno));
+        return 2;
+    }
+    answer("removed directory, . beneath", o2(gonefd, ".", O_RDONLY, 0, RESOLVE_BENEATH));
+    answer("removed directory, . in root", o2(gonefd, ".", O_RDONLY, 0, RESOLVE_IN_ROOT));
+    answer("removed directory, . with O_DIRECTORY beneath",
+           o2(gonefd, ".", O_RDONLY | O_DIRECTORY, 0, RESOLVE_BENEATH));
+    answer("removed directory, . with O_PATH in root", o2(gonefd, ".", O_PATH, 0, RESOLVE_IN_ROOT));
+    answer("removed directory, .. beneath", o2(gonefd, "..", O_RDONLY, 0, RESOLVE_BENEATH));
+    answer("removed directory, .. in root", o2(gonefd, "..", O_RDONLY, 0, RESOLVE_IN_ROOT));
+    answer("removed directory, ../x beneath", o2(gonefd, "../x", O_RDONLY, 0, RESOLVE_BENEATH));
+    answer("removed directory, ../x in root", o2(gonefd, "../x", O_RDONLY, 0, RESOLVE_IN_ROOT));
+    answer("removed directory, x beneath", o2(gonefd, "x", O_RDONLY, 0, RESOLVE_BENEATH));
+    answer("removed directory, x in root", o2(gonefd, "x", O_RDONLY, 0, RESOLVE_IN_ROOT));
+    answer("removed directory, x created beneath", o2(gonefd, "x", O_WRONLY | O_CREAT, 0644, RESOLVE_BENEATH));
+    answer("removed directory, / beneath", o2(gonefd, "/", O_RDONLY, 0, RESOLVE_BENEATH));
+    answer("removed directory, / in root", o2(gonefd, "/", O_RDONLY, 0, RESOLVE_IN_ROOT));
+    answer("removed directory, /etc/passwd in root", o2(gonefd, "/etc/passwd", O_RDONLY, 0, RESOLVE_IN_ROOT));
+    answer("removed directory, empty path beneath", o2(gonefd, "", O_RDONLY, 0, RESOLVE_BENEATH));
+    answer("removed directory, . written beneath", o2(gonefd, ".", O_WRONLY, 0, RESOLVE_BENEATH));
+    answer("removed directory, .. written in root", o2(gonefd, "..", O_WRONLY, 0, RESOLVE_IN_ROOT));
+    answer("removed directory, . created in root", o2(gonefd, ".", O_WRONLY | O_CREAT, 0644, RESOLVE_IN_ROOT));
+    answer("memfd, . beneath", o2(memfd, ".", O_RDONLY, 0, RESOLVE_BENEATH));
+    answer("memfd, . in root", o2(memfd, ".", O_RDONLY, 0, RESOLVE_IN_ROOT));
+    answer("memfd, x beneath", o2(memfd, "x", O_RDONLY, 0, RESOLVE_BENEATH));
+    answer("memfd, x in root", o2(memfd, "x", O_RDONLY, 0, RESOLVE_IN_ROOT));
+    answer("memfd, x created beneath", o2(memfd, "x", O_WRONLY | O_CREAT, 0644, RESOLVE_BENEATH));
+    answer("memfd, empty path beneath", o2(memfd, "", O_RDONLY, 0, RESOLVE_BENEATH));
+    answer("memfd, / in root", o2(memfd, "/", O_RDONLY, 0, RESOLVE_IN_ROOT));
+    answer("O_TMPFILE file, . beneath", o2(tmpfilefd, ".", O_RDONLY, 0, RESOLVE_BENEATH));
+    answer("O_TMPFILE file, . in root", o2(tmpfilefd, ".", O_RDONLY, 0, RESOLVE_IN_ROOT));
+    answer("O_TMPFILE file, x beneath", o2(tmpfilefd, "x", O_RDONLY, 0, RESOLVE_BENEATH));
+    answer("O_TMPFILE file, x in root", o2(tmpfilefd, "x", O_RDONLY, 0, RESOLVE_IN_ROOT));
+    answer("O_TMPFILE file, . with O_PATH beneath", o2(tmpfilefd, ".", O_PATH, 0, RESOLVE_BENEATH));
+    int fds[2];
+    if (pipe(fds) == 0) {
+        answer("pipe, . beneath", o2(fds[0], ".", O_RDONLY, 0, RESOLVE_BENEATH));
+        answer("pipe, x in root", o2(fds[0], "x", O_RDONLY, 0, RESOLVE_IN_ROOT));
+    }
+    close(gonefd);
+    close(memfd);
+    close(tmpfilefd);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "usage: openat2 HOSTDIR\n");
+        fprintf(stderr, "usage: openat2 HOSTDIR | openat2 pathless HOSTDIR\n");
         return 2;
+    }
+    if (strcmp(argv[1], "pathless") == 0 && argc > 2) {
+        errno = 0;
+        long r0 = o2(AT_FDCWD, "/", O_RDONLY | O_DIRECTORY, 0, 0);
+        if (r0 < 0 && errno == ENOSYS) {
+            printf("no openat2 on this kernel\n");
+            return 3;
+        }
+        if (r0 >= 0) close((int)r0);
+        return pathless(argv[2]);
     }
     const char *host = argv[1];
     const char *sh = getenv("EXCLAVE_TEST_SH") ? getenv("EXCLAVE_TEST_SH") : "/usr/bin/sh";

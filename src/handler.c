@@ -458,6 +458,10 @@ static long do_openat2(struct scratch *S, long *a)
     if ((flags & O_PATH) && (flags & ~(unsigned long)O_PATH_FLAGS)) return -EINVAL;
     /* a create, a truncate or a temporary file under RESOLVE_CACHED: EAGAIN before any lookup (5.12) */
     if ((rf & RESOLVE_CACHED) && (flags & (O_TRUNC | O_CREAT | (O_TMPFILE & ~O_DIRECTORY)))) return -EAGAIN;
+    /* as given, for a host-only walk; canon decides */
+    S->how0[0] = flags;
+    S->how0[1] = mode;
+    S->how0[2] = rf;
     /* the scope: the descriptor's directory, a directory it must be */
     if (rf & (RESOLVE_IN_ROOT | RESOLVE_BENEATH)) {
         int dfd = (int)a[0];
@@ -470,13 +474,19 @@ static long do_openat2(struct scratch *S, long *a)
             if ((r = SC2(NR_fstat, dfd, st)) < 0) return r;
             if ((st->st_mode & S_IFMT) != S_IFDIR && (rf & RESOLVE_IN_ROOT)) return -ENOTDIR;
         }
-        if ((r = dfd_virtual(dfd, S->v2)) < 0) return r;
+        r = dfd_virtual(dfd, S->v2);
+        /* a scope whose file has no path, a removed directory, a memfd, an O_TMPFILE file, a pipe or a socket, is
+         * one the handler cannot name and the walk cannot leave: the kernel walks from the descriptor itself
+         * (path_init) and finds nothing the exclave owns there, since a removed directory is empty and the rest is
+         * no directory at all, so the call is the kernel's own as given, like the unscoped walk through the
+         * descriptor's magic link (7.4.3), with RESOLVE_CACHED dropped as for any host-only walk */
+        if (r == -ENOENT || (r == 0 && S->v2[0] != '/')) {
+            S->how0[2] &= ~(unsigned long)RESOLVE_CACHED;
+            return RE5(NR_openat2, dfd, S->given, S->how0, 24, 0);
+        }
+        if (r < 0) return r;
     }
     S->resolve = (unsigned)rf;
-    /* as given, for a host-only walk; canon decides */
-    S->how0[0] = flags;
-    S->how0[1] = mode;
-    S->how0[2] = rf;
     S->touched_exclave = 1;
     r = do_open(S, a, 1, 0, (long)flags, (long)mode, NR_openat2);
     S->resolve = 0;

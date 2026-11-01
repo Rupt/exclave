@@ -1922,26 +1922,6 @@ DEFECTS_MEASURED = (7, 0)
 DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[], bool]]] = [
     (
         (
-            "a scoped openat2 (RESOLVE_BENEATH, RESOLVE_IN_ROOT) from a descriptor whose file "
-            "has no path, a removed directory, a memfd or an O_TMPFILE file: the kernel walks "
-            "from the descriptor itself, so '.' opens the removed directory, '..' stays in root or "
-            "is EXDEV beneath, a write of it is EISDIR and a file is ENOTDIR; the handler cannot "
-            "name the scope and answers ENOENT"
-        ),
-        lambda n, label, b, o, _c: (
-            n == "openat2"
-            and label.startswith(("gonefd/", "memfd/", "tmpfilefd/"))
-            and label.endswith(("/beneath", "/in_root"))
-            and o == "ret=-1 errno=2"
-            and (
-                b.startswith("ret=0 ")
-                or errnos(b, o)[0] in (errno.EXDEV, errno.EISDIR, errno.ENOTDIR)
-            )
-        ),
-        lambda: True,
-    ),
-    (
-        (
             "a rename whose last name is . or .. with the two names on different host mounts, "
             "the probe's /tmp among them: the kernel answers EXDEV for the mounts before EBUSY "
             "for the name (do_renameat2); the handler sees the exclave's boundary alone and "
@@ -1954,7 +1934,7 @@ DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[
             and errnos(b, o)[1] in (errno.EBUSY, errno.EEXIST)
         ),
         lambda: True,
-    ),
+    )
 ]
 
 

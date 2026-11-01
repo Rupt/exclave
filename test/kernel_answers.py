@@ -140,6 +140,59 @@ def open_flags_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     return wrong
 
 
+# openat2 pathless HOSTDIR: one line per case, the case and the errno text; the kernel walks a
+# scoped openat2 from the descriptor itself (path_init), so a removed directory is its own "." and
+# ".." in root, EXDEV beyond it beneath, EISDIR for a write and ENOENT for a name in it, and what
+# is no directory at all is ENOTDIR
+OPENAT2_PATHLESS = (
+    "removed directory, . beneath: ok",
+    "removed directory, . in root: ok",
+    "removed directory, . with O_DIRECTORY beneath: ok",
+    "removed directory, . with O_PATH in root: ok",
+    "removed directory, .. beneath: Invalid cross-device link",
+    "removed directory, .. in root: ok",
+    "removed directory, ../x beneath: Invalid cross-device link",
+    "removed directory, ../x in root: No such file or directory",
+    "removed directory, x beneath: No such file or directory",
+    "removed directory, x in root: No such file or directory",
+    "removed directory, x created beneath: No such file or directory",
+    "removed directory, / beneath: Invalid cross-device link",
+    "removed directory, / in root: ok",
+    "removed directory, /etc/passwd in root: No such file or directory",
+    "removed directory, empty path beneath: No such file or directory",
+    "removed directory, . written beneath: Is a directory",
+    "removed directory, .. written in root: Is a directory",
+    "removed directory, . created in root: Is a directory",
+    "memfd, . beneath: Not a directory",
+    "memfd, . in root: Not a directory",
+    "memfd, x beneath: Not a directory",
+    "memfd, x in root: Not a directory",
+    "memfd, x created beneath: Not a directory",
+    "memfd, empty path beneath: No such file or directory",
+    "memfd, / in root: Not a directory",
+    "O_TMPFILE file, . beneath: Not a directory",
+    "O_TMPFILE file, . in root: Not a directory",
+    "O_TMPFILE file, x beneath: Not a directory",
+    "O_TMPFILE file, x in root: Not a directory",
+    "O_TMPFILE file, . with O_PATH beneath: Not a directory",
+    "pipe, . beneath: Not a directory",
+    "pipe, x in root: Not a directory",
+)
+
+
+def openat2_pathless_wrong(out: str) -> list[str]:
+    """The lines of openat2 pathless's output that differ from the kernel's answers.
+
+    Other lines in out, the plain mode's when the two ran together, are left alone.
+    """
+    got = dict(x.split(": ", 1) for x in out.splitlines() if ": " in x)
+    return [
+        f"{k}: got {got.get(k)!r}, the kernel says {v!r}"
+        for k, v in (x.split(": ", 1) for x in OPENAT2_PATHLESS)
+        if got.get(k) != v
+    ]
+
+
 def creat_slash_wrong(out: str) -> list[str]:
     """The lines of creat_slash's output that differ from the kernel's answers."""
     got = out.splitlines()

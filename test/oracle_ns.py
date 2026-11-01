@@ -381,8 +381,11 @@ def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
         bad = [x for x in out.splitlines() if x.startswith("FAIL") and "wrapper" not in x]
         return bad or ([] if "ro_matrix:" in out and rc == (1 if "FAIL" in out else 0) else [out])
     if name == "openat2":
-        # 3: the kernel has no openat2, which the suite skips on too
+        # 3: the kernel has no openat2, which the suite skips on too; the pathless mode's lines
+        # follow the plain mode's
         bad = [x for x in out.splitlines() if x.startswith("FAIL")]
+        if rc != 3:
+            bad += kernel_answers.openat2_pathless_wrong(out)
         return bad or ([] if rc in (0, 3) else [out])
     if name == "magic_links":
         wrong = kernel_answers.magic_links_wrong(
@@ -436,7 +439,10 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
     os.makedirs(deep, exist_ok=True)
     cmds = {
         "ro_matrix": f"{work}/ro_matrix {hostdir} /usr/bin/dash",
-        "openat2": f"EXCLAVE_TEST_TRUE={true} {work}/openat2 {hostdir}",
+        "openat2": (
+            f"EXCLAVE_TEST_TRUE={true} {work}/openat2 {hostdir} && "
+            f"{work}/openat2 pathless {hostdir}"
+        ),
         "creat_slash": f"{work}/creat_slash {hostdir}",
         "slash_links": (
             f"mkdir -p {hostdir}/slash_links && {work}/slash_links {hostdir}/slash_links {true} "

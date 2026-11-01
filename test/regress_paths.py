@@ -623,6 +623,25 @@ def openat2_resolve(ctx: Ctx) -> str | None:
 
 
 @test
+def openat2_scoped_from_pathless(ctx: Ctx) -> str | None:
+    """7.4.3: a scoped openat2 from a descriptor whose file has no path is the kernel's own.
+
+    With RESOLVE_BENEATH or RESOLVE_IN_ROOT the kernel walks from the descriptor itself: a removed
+    directory is its own "." and ".." in root, "" beyond it beneath, EISDIR for a write and ENOENT
+    for a name in it, and a memfd, an O_TMPFILE file or a pipe is ENOTDIR. The handler cannot name
+    such a scope, which the walk could never leave, and re-issues the call as given; it once
+    answered ENOENT. Measured under bwrap. Skips on a kernel without openat2.
+    """
+    d = os.path.join(ctx.work, "o2pathless")
+    os.makedirs(d, exist_ok=True)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "openat2"), ["pathless", d])
+    if rc == 3:
+        skip("no openat2 on this kernel (5.6 and later)")
+    expect(rc == 0 and not kernel_answers.openat2_pathless_wrong(out), out + err)
+    return None
+
+
+@test
 def openat2_xdev(ctx: Ctx) -> str | None:
     """13 item 22, 7.4.3: an openat2 whose walk never touches the exclave is re-issued as given.
 
