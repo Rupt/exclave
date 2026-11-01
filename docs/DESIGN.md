@@ -4200,10 +4200,12 @@ or a symlink to one, originals included. On the fixture one suite takes
 **The probe** (`test/progs/probe.c`, `test/oracle_syscalls.py`) puts the
 whole trapped-syscall surface in front of the kernel. It crosses the 61
 trapped path syscalls and six descriptor-addressed ones with every flag
-that changes resolution, 88 path forms over a fixed maze and the `*at`
-descriptors. The forms include 40 links in one walk and 41, in the
-tree, across the border at every link and through links walked as
-directories, since the kernel counts links over the whole walk. One
+that changes resolution, 93 path forms over a fixed maze and the `*at`
+descriptors. The forms include the identity files, with a trailing
+slash, as a directory on the way and one the host lacks, and 40 links
+in one walk and 41, in the tree, across the border at every link and
+through links walked as directories, since the kernel counts links
+over the whole walk. One
 program issues each case through `syscall(2)` under `bwrap`, with
 8.1's visibility rule spelt in `bwrap`'s terms, and under the
 launcher, and the answers are compared line by line. An answer says

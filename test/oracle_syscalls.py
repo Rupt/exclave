@@ -29,7 +29,8 @@ fsetxattr, fremovexattr, fstatfs, and ioctl with FS_IOC_SETFLAGS and FS_IOC_FSSE
 with every flag that changes resolution, with the invalid arguments the kernel checks before the
 lookup, and with the path forms of class Forms over the maze of make_maze, the same in every run:
   - inside the exclave: a file, a directory and a symlink of every kind (loop, chained, dangling,
-    absolute, relative), a wrapper, the shell's link, an identity file, a placeholder,
+    absolute, relative), a wrapper, the shell's link, an identity file, also with a trailing
+    slash and as a directory on the way, one the host lacks and the directory on the way to it,
     /proc/self/exe, and an exclave link to a host file and to a host directory, the latter also
     crossed in the middle of a path and followed by ..;
   - on the host: files, directories (an empty one among them, for an rmdir that succeeds) and
@@ -425,6 +426,15 @@ class Forms:
             ("sock", "/maze/sock"),
             ("passwd", "/etc/passwd"),
             ("resolv", "/etc/resolv.conf"),
+            # an identity file with a trailing slash, and a path through one: the kernel follows
+            # the link and wants a directory (ENOTDIR)
+            ("passwd_slash", "/etc/passwd/"),
+            ("resolv_slash", "/etc/resolv.conf/"),
+            ("resolv_dotdot", "/etc/resolv.conf/../hosts"),
+            # an identity file most hosts lack, the exclave's placeholder then (8.1 rule 5), and
+            # the directory on the way to it, which the host need not have
+            ("ca_bundle", "/etc/pki/tls/certs/ca-bundle.crt"),
+            ("ca_bundle_dir", "/etc/pki/tls/certs"),
             ("tmp", "/tmp"),
             ("dev_null", "/dev/null"),
             ("proc_exe", "/proc/self/exe"),
@@ -1410,6 +1420,10 @@ def exec_errnos(b: str, o: str) -> tuple[int, int]:
 BOUND = {
     "passwd": "/etc/passwd",
     "resolv": "/etc/resolv.conf",
+    "passwd_slash": "/etc/passwd",
+    "resolv_slash": "/etc/resolv.conf",
+    "resolv_dotdot": "/etc/resolv.conf",
+    "ca_bundle": "/etc/pki/tls/certs/ca-bundle.crt",
     "tmp": "/tmp",
     "home": "/home",
     "opt": "/opt",
