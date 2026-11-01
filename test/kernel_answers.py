@@ -259,6 +259,43 @@ def rename_dots_wrong(out: str, *, across: bool) -> list[str]:
     return wrong
 
 
+# program_perm: one line per case, the case and the errno text; the running program's own file on a
+# host path, writable and then made unwritable (chmod 0555): may_open's permission check comes
+# before do_dentry_open's and handle_truncate's ETXTBSY, with O_TRUNC asking for write access
+# under any access mode (build_open_flags), and vfs_truncate's before its own
+PROGRAM_PERM = (
+    "O_WRONLY on the writable program: Text file busy",
+    "O_WRONLY|O_TRUNC on the writable program: Text file busy",
+    "O_RDONLY|O_TRUNC on the writable program: Text file busy",
+    "O_RDWR on the writable program: Text file busy",
+    "truncate of the writable program: Text file busy",
+    "chmod 0555: ok",
+    "O_WRONLY on the unwritable program: Permission denied",
+    "O_WRONLY|O_TRUNC on the unwritable program: Permission denied",
+    "O_RDONLY|O_TRUNC on the unwritable program: Permission denied",
+    "O_RDWR on the unwritable program: Permission denied",
+    "O_RDONLY on the unwritable program: ok",
+    "truncate of the unwritable program: Permission denied",
+    "chmod 0755: ok",
+)
+
+
+def program_perm_wrong(out: str) -> list[str]:
+    """The lines of program_perm's output that differ from the kernel's answers.
+
+    Root overrides the mode (CAP_DAC_OVERRIDE), and then the unwritable program answers as the
+    writable one does.
+    """
+    want = list(PROGRAM_PERM)
+    if os.geteuid() == 0:
+        want = [w.replace("Permission denied", "Text file busy") for w in want]
+    got = out.splitlines()
+    wrong = [f"got {g!r}, the kernel says {w!r}" for g, w in zip(got, want, strict=False) if g != w]
+    if len(got) != len(want):
+        wrong.append(f"{len(got)} lines, the kernel gives {len(want)}")
+    return wrong
+
+
 def creat_slash_wrong(out: str) -> list[str]:
     """The lines of creat_slash's output that differ from the kernel's answers."""
     got = out.splitlines()

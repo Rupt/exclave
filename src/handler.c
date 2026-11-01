@@ -368,8 +368,15 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     if (creat && vl > 1 && S->v[vl - 1] == '/' && !last_special(S->given)) return -EISDIR;
     /* the kernel protects a running program; the launcher protects the one it loaded (13 items 29 and 40), a
      * regular file, which a directory wanted of it (O_DIRECTORY, O_TMPFILE) refuses with the lookup's ENOTDIR first,
-     * from the rules below or from the re-issue */
-    if (wr && !(flags & O_DIRECTORY) && C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;
+     * from the rules below or from the re-issue. may_open checks the permission first, EACCES, with O_TRUNC
+     * asking for write access under any access mode (build_open_flags); the ETXTBSY of do_dentry_open and
+     * handle_truncate comes after it */
+    if (wr && !(flags & O_DIRECTORY) && C.loader_mode && xstrcmp(S->v, C.program) == 0) {
+        int want = (acc == O_RDONLY ? R_OK : acc == O_WRONLY ? W_OK : R_OK | W_OK) | ((flags & O_TRUNC) ? W_OK : 0);
+        to_real(S->v, S->real, S->tmp);
+        long pe = sys_faccessat(AT_FDCWD, S->real, want);
+        return pe < 0 ? pe : -ETXTBSY;
+    }
     int in = is_exclave_path(S->v);
     struct kstat st;
     int ex = 0, dir = 0;
@@ -1240,7 +1247,12 @@ static long do_truncate(struct scratch *S, int nr, long *a)
     long r;
     if (a[1] < 0) return -EINVAL; /* do_sys_truncate: the length first */
     if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
-    if (C.loader_mode && xstrcmp(S->v, C.program) == 0) return -ETXTBSY;
+    /* the loaded program (13 item 29): vfs_truncate checks the permission, EACCES, before its ETXTBSY */
+    if (C.loader_mode && xstrcmp(S->v, C.program) == 0) {
+        to_real(S->v, S->real, S->tmp);
+        r = sys_faccessat(AT_FDCWD, S->real, W_OK);
+        return r < 0 ? r : -ETXTBSY;
+    }
     /* vfs_truncate: EISDIR and EINVAL for what cannot be truncated, then EROFS */
     if (is_exclave_path(S->v)) {
         struct kstat *st = &S->st;

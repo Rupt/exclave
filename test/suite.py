@@ -474,6 +474,7 @@ PROGS = (
     "readlink_fault",
     "identity_nofollow",
     "rename_dots",
+    "program_perm",
 )
 
 

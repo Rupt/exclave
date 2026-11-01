@@ -368,6 +368,7 @@ PROGRAMS = (
     "unix_socket",
     "magic_links",
     "rename_dots",
+    "program_perm",
 )
 
 
@@ -399,6 +400,8 @@ def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
     elif name == "rename_dots":
         # bwrap's /tmp is a tmpfs of its own, hostdir a bind of the host's
         wrong = kernel_answers.rename_dots_wrong(out, across=True)
+    elif name == "program_perm":
+        wrong = kernel_answers.program_perm_wrong(out)
     else:
         wrong = {
             "creat_slash": kernel_answers.creat_slash_wrong,
@@ -462,6 +465,7 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
             f"{work}/magic_links link-empty {hostdir}"
         ),
         "rename_dots": f"{work}/rename_dots {hostdir} /tmp",
+        "program_perm": f"{work}/program_perm",
     }
     fails = 0
     for name in PROGRAMS:

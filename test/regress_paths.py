@@ -930,6 +930,21 @@ def open_flags_order(ctx: Ctx) -> None:
 
 
 @test
+def program_perm_order(ctx: Ctx) -> None:
+    """7.4.3, 13 item 29: the permission before the loaded program's ETXTBSY.
+
+    The launcher protects the program it loaded from its own write-open or truncate, as the
+    kernel protects the programs it executes, and in the kernel's order: may_open's permission
+    check, EACCES on a file whose mode forbids writing, with O_TRUNC asking for write access under
+    any access mode, comes before the ETXTBSY of do_dentry_open and handle_truncate, and
+    vfs_truncate's before its own. The program makes its own file on a host path unwritable and
+    puts it back. Measured under bwrap; the launcher once answered ETXTBSY first.
+    """
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "program_perm"))
+    expect(rc == 0 and not kernel_answers.program_perm_wrong(out), out + err)
+
+
+@test
 def create_through_a_slashed_link(ctx: Ctx) -> None:
     """8.1: a slash ending the text of a final symlink is the path's trailing slash.
 

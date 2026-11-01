@@ -156,7 +156,7 @@ What is built and tested:
   exclave it runs is made on x86-64 (10.1).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The command as one file**: `build/exclave`, 1 014 KB, statically
+- **The command as one file**: `build/exclave`, 1 018 KB, statically
   linked, carrying its launcher, wraps, checks and prunes an exclave
   with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
@@ -170,7 +170,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 88 named tests, most of them programs that
+- **The regression suite**: 89 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1067,7 +1067,10 @@ refuses, the loaded program's `ETXTBSY` included.
 
 A program on the loader path answers `ETXTBSY` when the process that
 loaded it write-opens or truncates its file, before any read-only
-answer, as the kernel answers for the programs it executes. A write by
+answer, as the kernel answers for the programs it executes, and after
+the permission the kernel checks first: `EACCES` where the file's mode
+forbids the access (`may_open`, `vfs_truncate`), with `O_TRUNC` asking
+for write access under any access mode (`build_open_flags`). A write by
 another process is 13 item 29 on an exclave path (`EROFS`) and 13 item
 40 on a host path (it succeeds).
 
@@ -1780,10 +1783,11 @@ the references for the kernel's order.
 
 A running program's file is the one case where the answer depends on
 who writes. The process that loaded a program on the loader path gets
-`ETXTBSY` for a write-open or `truncate` of that program's file,
-before any read-only answer, as the kernel answers for the programs it
-executes (7.4.3). Another process's write-open without `O_TRUNC` of an
-exclave file that is running answers `EROFS` where the kernel answers
+`ETXTBSY` for a write-open or `truncate` of that program's file, after
+the permission and before any read-only answer, as the kernel answers
+for the programs it executes (7.4.3). Another process's write-open
+without `O_TRUNC` of an exclave file that is running answers `EROFS`
+where the kernel answers
 `ETXTBSY` (13 item 29); on a host path it succeeds (13 item 40).
 
 Two orders the handler does not follow are stated in 13: that one,
@@ -2394,7 +2398,7 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, 1 014 KB and 795 KB, with nothing beside it to run: no
+the cross compiler, 1 018 KB and 795 KB, with nothing beside it to run: no
 interpreter, no library, no file of the checkout. It carries its
 architecture's launcher and the text of every exclave's `README` as data
 (`tool/blobs.S`), so `wrap` and `relink` install the launcher it
@@ -2486,7 +2490,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 88 named regressions and every oracle its kernel can run; 17
+suite's 89 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -2747,10 +2751,11 @@ and stay fixed.
     (8.2) without opening the file, so it never learns that the file is
     running (17 items 1 and 7). With `O_TRUNC` the kernel answers
     `EROFS` as well. The loader-path program's own process gets
-    `ETXTBSY` (7.4.3), ahead of any read-only answer, so an `O_TRUNC`
-    open or a `truncate` of its own file on an exclave path, such as a
-    `.real/` original run directly, answers `ETXTBSY` where the kernel
-    would answer `EROFS`.
+    `ETXTBSY` (7.4.3), after the permission, `EACCES` where the file's
+    mode forbids the access, and ahead of any read-only answer, so an
+    `O_TRUNC` open or a `truncate` of its own file on an exclave path,
+    such as a `.real/` original run directly, answers `ETXTBSY` where
+    the kernel would answer `EROFS`.
 
 30. **Small alternate signal stacks overflow.** The handler runs on
     whatever stack the trap lands on, and needs the kernel's frame
@@ -3960,10 +3965,10 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus eight of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links` and `rename_dots` (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus nine of the suite's path programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots` and `program_perm` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 88 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 89 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
