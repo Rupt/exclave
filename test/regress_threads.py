@@ -84,6 +84,28 @@ def alternate_stacks(ctx: Ctx) -> str:
 
 
 @test
+def clones_trapping(ctx: Ctx) -> None:
+    """7.5.4, 7.5.5: threads and clones trapping.
+
+    A vfork child and clone(CLONE_VM) children trapping before they exit, on stacks of 64 KB down
+    to 2 KB above a guard page, where 4 KB and below cannot hold the kernel's frame and the
+    handler (13 item 30); a thread with a 16 KB stack and one with the least glibc allows; 64
+    threads trapping while the main thread sends each a SIGUSR1 whose handler traps;
+    pthread_cancel of a thread blocked in a trapped open and of one looping over traps with
+    asynchronous cancellation, which unwind through the launcher's frames; a sibling exiting
+    while a trap blocks; exit_group and pthread_exit from a handler that interrupted a blocking
+    trap. The kernel's answers (test/kernel_answers.py), confirmed under bwrap by the namespace
+    oracle.
+    """
+    d = os.path.join(ctx.work, f"hostdir-clones-{os.getpid()}")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "clones"), [d], timeout=60)
+    wrong = kernel_answers.clones_wrong(out)
+    expect(rc == 0 and not wrong, "\n".join(wrong) + err)
+
+
+@test
 def threads(ctx: Ctx) -> None:
     """7.5.5: threads, TLS and dlopen; 64 threads trapping at once, each answered for its path."""
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "threads"))

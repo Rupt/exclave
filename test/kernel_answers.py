@@ -535,7 +535,7 @@ def sigstack_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     by_the_kernel: the kernel itself answered. Otherwise the launcher did, and a handler that traps
     on an alternate stack smaller than 8 KB is its stated limitation (13 item 30), 8 KB too where
     the kernel's frame passes 3.5 KB; and a 5 KB handler without SA_ONSTACK landing during a trap
-    exits 9 from the SIGSEGV handler, since it runs on the 8 KB alternate stack (13 item 50).
+    exits 9 from the SIGSEGV handler, since it runs on the 8 KB alternate stack (13 item 51).
     """
     got = out.splitlines()
     wrong = []
@@ -554,6 +554,52 @@ def sigstack_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
         wrong.append(f"got {g!r}, the kernel says {w!r}")
     if len(got) != len(SIGSTACK):
         wrong.append(f"{len(got)} lines, the kernel gives {len(SIGSTACK)}")
+    return wrong
+
+
+# clones HOSTDIR: threads and clones trapping, one line per case
+CLONES = (
+    "vfork child's traps: stat ok, open ok, readlink ok, access ok, exit 0",
+    "clone(CLONE_VM) child on a 64 KB stack: stat ok, open ok, readlink ok, access ok, exit 0",
+    "clone(CLONE_VM) child trapping on a 8 KB stack: exit 0",
+    "clone(CLONE_VM) child trapping on a 4 KB stack: exit 0",
+    "clone(CLONE_VM) child trapping on a 2 KB stack: exit 0",
+    "clone(CLONE_VM|CLONE_VFORK) child's traps: stat ok, open ok, readlink ok, access ok, exit 0",
+    "thread with a 16 KB stack, 100 traps: ok",
+    "thread with the least stack, 100 traps: ok",
+    "64 threads trapping under tgkill: 0 wrong, handler traps 0 failed, signals landed",
+    "pthread_cancel in a blocking trapped open: cancelled",
+    "asynchronous pthread_cancel in a trap loop: cancelled",
+    "stat after the cancels: ok",
+    "sibling exit during a blocking trap: open completed",
+    "exit_group from a handler inside a blocking trap: exit 7",
+    "pthread_exit from a handler inside a blocking trap: joined",
+    "stat after it: ok",
+)
+
+
+def clones_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
+    """The lines of clones's output that differ from the kernel's answers.
+
+    by_the_kernel: the kernel itself answered. Otherwise the launcher did, and a clone(CLONE_VM)
+    child trapping on a 4 KB or 2 KB stack is its stated limitation (13 item 30), 8 KB too where
+    the kernel's frame passes 3.5 KB.
+    """
+    got = out.splitlines()
+    wrong = []
+    for g, w in zip(got, CLONES, strict=False):
+        if g == w:
+            continue
+        case = w.split(": ")[0]
+        if (
+            not by_the_kernel
+            and case.startswith("clone(CLONE_VM) child trapping on a ")
+            and ("4 KB" in case or "2 KB" in case or minsigstksz() > 3500)
+        ):
+            continue
+        wrong.append(f"got {g!r}, the kernel says {w!r}")
+    if len(got) != len(CLONES):
+        wrong.append(f"{len(got)} lines, the kernel gives {len(CLONES)}")
     return wrong
 
 

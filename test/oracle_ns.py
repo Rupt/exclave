@@ -377,6 +377,7 @@ PROGRAMS = (
     "sigcalls",
     "sigrain",
     "sigstack",
+    "clones",
 )
 
 
@@ -427,6 +428,8 @@ def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
         wrong = kernel_answers.sigrain_wrong(out)
     elif name == "sigstack":
         wrong = kernel_answers.sigstack_wrong(out, by_the_kernel=True)
+    elif name == "clones":
+        wrong = kernel_answers.clones_wrong(out, by_the_kernel=True)
     else:
         wrong = {
             "slash_links": kernel_answers.slash_links_wrong,
@@ -499,6 +502,7 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
         "sigcalls": f"{work}/sigcalls",
         "sigrain": f"mkdir -p {hostdir}/sigrain && {work}/sigrain {hostdir}/sigrain",
         "sigstack": f"{work}/sigstack",
+        "clones": f"mkdir -p {hostdir}/clones && {work}/clones {hostdir}/clones",
     }
     fails = 0
     for name in PROGRAMS:
