@@ -444,6 +444,54 @@ def sigcalls_wrong(out: str) -> list[str]:
     return wrong
 
 
+# sigrain HOSTDIR: signals in flight during trapped calls, one line per case
+SIGRAIN = (
+    "stat under SIGALRM rain, handler: ok, 0 EINTR, 0 other",
+    "stat under SIGALRM rain, SA_RESTART: ok, 0 EINTR, 0 other",
+    "stat under SIGALRM rain, handler that traps: ok, 0 EINTR, 0 other",
+    "open under SIGALRM rain, handler: ok, 0 EINTR, 0 other",
+    "open under SIGALRM rain, SA_RESTART: ok, 0 EINTR, 0 other",
+    "open under SIGALRM rain, handler that traps: ok, 0 EINTR, 0 other",
+    "readlink under SIGALRM rain, handler: ok, 0 EINTR, 0 other",
+    "readlink under SIGALRM rain, SA_RESTART: ok, 0 EINTR, 0 other",
+    "readlink under SIGALRM rain, handler that traps: ok, 0 EINTR, 0 other",
+    "execve of a missing file under SIGALRM rain, handler: ok, 0 EINTR, 0 other",
+    "execve of a missing file under SIGALRM rain, SA_RESTART: ok, 0 EINTR, 0 other",
+    "execve of a missing file under SIGALRM rain, handler that traps: ok, 0 EINTR, 0 other",
+    "the trapping handler's own traps: 0 failed",
+    "stat under SIGALRM rain, blocked: ok, 0 EINTR, 0 other",
+    "blocked throughout: 0 delivered, then 1 on unblocking",
+    "stat under SIGALRM rain, ignored: ok, 0 EINTR, 0 other",
+    "siglongjmp out of the handler: 20 of 20 rounds jumped, stat after ok",
+    "traps under kill from a child: ok, 0 wrong, handler traps 0 failed, signals landed",
+    "traps under tgkill from a thread: ok, 0 wrong, handler traps 0 failed, signals landed",
+    "pause under SA_RESTART: EINTR",
+    "sigsuspend under SA_RESTART: EINTR",
+    "ppoll under SA_RESTART: EINTR",
+    "pselect under SA_RESTART: EINTR",
+    "open of a FIFO under SA_RESTART: ok",
+    "open of a FIFO without SA_RESTART: Interrupted system call",
+    "mask inside the handler after its traps: USR1 yes, USR2 yes, HUP yes",
+    "mask after the handler: USR1 no, USR2 no, HUP no",
+    "stat with a path in a file mapping past its end: Bad address",
+    "stat with a path running off its mapping: Bad address",
+)
+
+
+def sigrain_wrong(out: str) -> list[str]:
+    """The lines of sigrain's output that differ from the kernel's answers."""
+    return lines_wrong(out, SIGRAIN)
+
+
+def lines_wrong(out: str, want: list[str] | tuple[str, ...]) -> list[str]:
+    """The lines of out that differ from want, line by line, and a count that differs."""
+    got = out.splitlines()
+    wrong = [f"got {g!r}, the kernel says {w!r}" for g, w in zip(got, want, strict=False) if g != w]
+    if len(got) != len(want):
+        wrong.append(f"{len(got)} lines, the kernel gives {len(want)}")
+    return wrong
+
+
 def exe_link_wrong(out: str) -> list[str]:
     """The lines of exe_link's output that differ from the kernel's answers."""
     got = out.splitlines()

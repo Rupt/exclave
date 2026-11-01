@@ -170,7 +170,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 95 named tests, most of them programs that
+- **The regression suite**: 96 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1432,7 +1432,16 @@ and an empty `sa_mask`. The program's own mask is in force during the
 re-issued syscall, so a blocking `open` on a FIFO inside an exclave is
 interrupted by Ctrl-C exactly as outside, and a program's own signal
 handler may run inside the launcher's. It then finds the registers as
-the launcher left them. A Go program without cgo keeps its goroutine in
+the launcher left them. A signal already pending when the trap is
+taken, a thread-directed one sent in the microsecond of the syscall's
+entry, is delivered on top of the launcher's frame, since the kernel
+dequeues `SIGSYS` first with the synchronous signals
+(`SYNCHRONOUS_MASK` in `kernel/signal.c`): the program's handler runs
+first, at the trapped instruction, and returns into the launcher's,
+which finds the trap's registers intact. `test/progs/sigrain.c` rains
+signals from a timer, a child process and a sibling thread on loops of
+trapped calls, with every disposition and the restart rules, and every
+answer is the kernel's. A Go program without cgo keeps its goroutine in
 `x28` on aarch64 and its signal handler reads the register as it finds
 it, so Go's preemption signal, landing in the launcher's handler, would
 read the launcher's value and fault; the aarch64 launcher is therefore
@@ -2526,7 +2535,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 95 named regressions and every oracle its kernel can run; 17
+suite's 96 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
@@ -3913,7 +3922,9 @@ meaning items 4 and 7.
    `test/regress_*.py`:
    - *signals and threads*: `SA_ONSTACK` handlers that trap, a FIFO
      `open` interrupted by `SIGINT` or left by `siglongjmp`, the
-     trapped signal syscalls answered in the kernel's order, Go's
+     trapped signal syscalls answered in the kernel's order, a timer,
+     a child process and a sibling thread raining signals on loops of
+     trapped calls with every disposition and the restart rules, Go's
      goroutines beside a collector, 64 threads trapping at once and threads trapping while
      another spawns, a descriptor-relative path looked up while its
      directory's parent is renamed, in both forms of the walk (16.6
@@ -4017,10 +4028,10 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus fifteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls` (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus sixteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls` and `sigrain` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 95 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 96 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

@@ -450,6 +450,7 @@ PROGS = (
     "ro_matrix",
     "signals",
     "sigcalls",
+    "sigrain",
     "threads",
     "spawn",
     "exec",

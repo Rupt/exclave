@@ -38,6 +38,28 @@ def signal_calls_in_order(ctx: Ctx) -> None:
 
 
 @test
+def signals_during_traps(ctx: Ctx) -> None:
+    """7.5.3: signals arriving during trapped syscalls.
+
+    A 1 ms timer raining on loops of stat, open, readlink and execve of a missing file, with and
+    without SA_RESTART, blocked, ignored, with a handler that traps and one that siglongjmps out;
+    kill from a child process and tgkill from a sibling thread in tight loops, the second a
+    thread-directed signal pending at the trap itself, which the kernel dequeues after the
+    synchronous SIGSYS; the restart rules of pause, sigsuspend, ppoll, pselect and a blocking
+    open; the mask inside a handler across its own traps; a path that faults in a file mapping
+    past its end or runs off its mapping, EFAULT with no signal. Every answer is the call's
+    result, as the kernel gives it (test/kernel_answers.py), confirmed under bwrap by the
+    namespace oracle.
+    """
+    d = os.path.join(ctx.work, f"hostdir-sigrain-{os.getpid()}")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "sigrain"), [d], timeout=60)
+    wrong = kernel_answers.sigrain_wrong(out)
+    expect(rc == 0 and not wrong, "\n".join(wrong) + err)
+
+
+@test
 def threads(ctx: Ctx) -> None:
     """7.5.5: threads, TLS and dlopen; 64 threads trapping at once, each answered for its path."""
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "threads"))
