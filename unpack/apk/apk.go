@@ -179,7 +179,7 @@ func ParseDeps(field string) ([][]reader.Dep, error) {
 	for _, tok := range strings.Fields(field) {
 		m := tokenRe.FindStringSubmatch(tok)
 		if m == nil {
-			return nil, reader.Errorf("cannot parse dependency %q", tok)
+			return nil, reader.Errorf("cannot parse dependency %s", reader.Pyrepr(tok))
 		}
 		if m[1] != "" {
 			continue

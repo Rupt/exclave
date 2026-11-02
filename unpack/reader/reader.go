@@ -12,6 +12,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
@@ -197,4 +198,34 @@ func AfterEnd(r io.Reader, end int64) error {
 			return err
 		}
 	}
+}
+
+// Pyrepr spells s as Python's repr does, for a message that names a path or a field that way.
+func Pyrepr(s string) string {
+	q := "'"
+	if strings.Contains(s, "'") && !strings.Contains(s, `"`) {
+		q = `"`
+	}
+	var b strings.Builder
+	b.WriteString(q)
+	for _, r := range s {
+		switch {
+		case r == '\\':
+			b.WriteString(`\\`)
+		case string(r) == q:
+			b.WriteString(`\` + q)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r < 32 || r == 127:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteString(q)
+	return b.String()
 }

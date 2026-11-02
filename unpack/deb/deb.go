@@ -295,7 +295,7 @@ func ParseDeps(field string) ([][]reader.Dep, error) {
 		for _, alt := range strings.Split(group, "|") {
 			m := depRe.FindStringSubmatch(alt)
 			if m == nil {
-				return nil, reader.Errorf("cannot parse dependency %q", alt)
+				return nil, reader.Errorf("cannot parse dependency %s", reader.Pyrepr(alt))
 			}
 			op := m[3]
 			switch op {

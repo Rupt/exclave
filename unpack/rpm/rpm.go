@@ -294,7 +294,7 @@ func (c *contents) Read(b []byte) (int, error) {
 	c.left -= int64(n)
 	if err == io.EOF || (err == nil && n == 0) {
 		if c.left > 0 {
-			return n, reader.Errorf("%s: cpio entry %q runs past the end of the payload", c.p.label, c.name)
+			return n, reader.Errorf("%s: cpio entry %s runs past the end of the payload", c.p.label, reader.Pyrepr(c.name))
 		}
 		return n, io.EOF
 	}
@@ -308,7 +308,7 @@ func openPayload(p string) (*payload, error) {
 	}
 	kind, ok := compressors[comp]
 	if !ok {
-		return nil, reader.Errorf("%s: unknown payload compressor %q", p, comp)
+		return nil, reader.Errorf("%s: unknown payload compressor %s", p, reader.Pyrepr(comp))
 	}
 	f, err := os.Open(p)
 	if err != nil {
@@ -378,9 +378,9 @@ func (p *payload) Next() (*reader.Member, error) {
 		name := p.cur.name
 		p.cur = nil
 		if p.r.Pos > p.end {
-			return nil, reader.Errorf("%s: cpio entry %q is shorter than its data", p.label, name)
+			return nil, reader.Errorf("%s: cpio entry %s is shorter than its data", p.label, reader.Pyrepr(name))
 		}
-		past := fmt.Sprintf("cpio entry %q runs past the end of the payload", name)
+		past := fmt.Sprintf("cpio entry %s runs past the end of the payload", reader.Pyrepr(name))
 		if err := p.skip(p.end-p.r.Pos, past); err != nil {
 			return nil, err
 		}
@@ -419,7 +419,7 @@ func (p *payload) Next() (*reader.Member, error) {
 			return nil, err
 		}
 		dataAt := p.r.Pos
-		past := fmt.Sprintf("cpio entry %q runs past the end of the payload", name)
+		past := fmt.Sprintf("cpio entry %s runs past the end of the payload", reader.Pyrepr(name))
 		if name == "TRAILER!!!" {
 			if err := p.skip(size, past); err != nil {
 				return nil, err
@@ -591,7 +591,7 @@ func ParseDeps(field string) ([][]reader.Dep, error) {
 	for _, tok := range strings.Fields(field) {
 		m := tokenRe.FindStringSubmatch(tok)
 		if m == nil {
-			return nil, reader.Errorf("cannot parse dependency %q", tok)
+			return nil, reader.Errorf("cannot parse dependency %s", reader.Pyrepr(tok))
 		}
 		out = append(out, []reader.Dep{{Name: m[1], Op: m[2], Version: m[3]}})
 	}
