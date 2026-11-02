@@ -1579,6 +1579,23 @@ def exec_errnos(b: str, o: str) -> tuple[int, int]:
     return one(b), one(o)
 
 
+MAXSYMLINKS_RETRY = (
+    "a walk of exactly MAXSYMLINKS links: filename_lookup retries a walk whose RCU attempt failed "
+    "(ECHILD) with the same nameidata, and total_link_count carries on from where that attempt "
+    "stopped, so the links it followed count twice and the retry may answer ELOOP, as the dentry "
+    "cache decides; the launcher's own walk counts each link once"
+)
+
+
+def at_maxsymlinks(label: str, errs: tuple[int, int]) -> bool:
+    """A walk of exactly MAXSYMLINKS links the kernel answered ELOOP and the launcher did not."""
+    return (
+        ("chain_40" in label or "dir_links_40" in label)
+        and errs[0] == errno.ELOOP
+        and errs[1] != errno.ELOOP
+    )
+
+
 # The bound host paths, the host's entries bound into bwrap's read-only root: there the host's own
 # answer is the expectation (8.1, 8.4)
 BOUND = {
@@ -1771,19 +1788,10 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
             "re-issues this kernel refuses, so it renames nothing"
         ),
     ),
-    (
-        None,
-        lambda label, b, o, _c: (
-            ("chain_40" in label or "dir_links_40" in label)
-            and errnos(b, o)[0] == errno.ELOOP
-            and errnos(b, o)[1] != errno.ELOOP
-        ),
-        (
-            "a walk of exactly MAXSYMLINKS links: filename_lookup retries a walk whose RCU attempt "
-            "failed (ECHILD) with the same nameidata, and total_link_count carries on from where "
-            "that attempt stopped, so the links it followed count twice and the retry may answer "
-            "ELOOP, as the dentry cache decides; the launcher's own walk counts each link once"
-        ),
+    (None, lambda label, b, o, _c: at_maxsymlinks(label, errnos(b, o)), MAXSYMLINKS_RETRY),
+    *(
+        (call, lambda label, b, o, _c: at_maxsymlinks(label, exec_errnos(b, o)), MAXSYMLINKS_RETRY)
+        for call in ("execve", "execveat")
     ),
     (
         None,
