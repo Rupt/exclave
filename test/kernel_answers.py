@@ -981,15 +981,28 @@ def lines_wrong(
 
 # exec_script run HOSTDIR (test/progs/exec_script.c), measured under bwrap on 7.0; an unreadable
 # script's status is its interpreter's, dash's 2 or bash's 126
+# the #! buffer of 128 bytes until 5.1, which cut the interpreter's argument sooner
+OLD_BUF = kernel() < (5, 1)
 EXEC_SCRIPT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("line127", "status=0 out=argv=[$E|interp a*full|$H/line127|x]"),
     ("line127-nonl", "status=0 out=argv=[$E|interp a*full|$H/line127-nonl|x]"),
-    ("line128", "status=0 out=argv=[$E|interp a*full|$H/line128|x]"),
-    ("line128-nonl", "status=0 out=argv=[$E|interp a*full|$H/line128-nonl|x]"),
-    ("line255", "status=0 out=argv=[$E|interp a*full|$H/line255|x]"),
-    ("line255-nonl", "status=0 out=argv=[$E|interp a*full|$H/line255-nonl|x]"),
-    ("line256", "status=0 out=argv=[$E|interp a*cut1|$H/line256|x]"),
-    ("line256-nonl", "status=0 out=argv=[$E|interp a*cut1|$H/line256-nonl|x]"),
+    # a kernel before 5.1 read a 128-byte #! line and cut the argument 128 bytes sooner (OLD_BUF);
+    # the launcher reads 256 bytes on every kernel
+    ("line128", f"status=0 out=argv=[$E|interp a*{'cut1' if OLD_BUF else 'full'}|$H/line128|x]"),
+    (
+        "line128-nonl",
+        f"status=0 out=argv=[$E|interp a*{'cut1' if OLD_BUF else 'full'}|$H/line128-nonl|x]",
+    ),
+    ("line255", f"status=0 out=argv=[$E|interp a*{'cut128' if OLD_BUF else 'full'}|$H/line255|x]"),
+    (
+        "line255-nonl",
+        f"status=0 out=argv=[$E|interp a*{'cut128' if OLD_BUF else 'full'}|$H/line255-nonl|x]",
+    ),
+    ("line256", f"status=0 out=argv=[$E|interp a*{'cut129' if OLD_BUF else 'cut1'}|$H/line256|x]"),
+    (
+        "line256-nonl",
+        f"status=0 out=argv=[$E|interp a*{'cut129' if OLD_BUF else 'cut1'}|$H/line256-nonl|x]",
+    ),
     ("trailing blanks", "status=0 out=argv=[$E|interp|$H/trailing blanks|x]"),
     (
         "argument with spaces",
@@ -1000,7 +1013,8 @@ EXEC_SCRIPT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("empty interpreter", "ENOEXEC"),
     ("blank interpreter", "ENOEXEC"),
     # a bare "#!" without a newline: ENOEXEC until binfmt_script's truncation rework in 5.5
-    # (allow interpreter argument truncation); EACCES since (measured: 5.4 and 5.10)
+    # (allow interpreter argument truncation); EACCES since (measured: 5.4 and 5.10); the
+    # launcher answers EACCES on every kernel
     ("only #! no newline", "ENOEXEC" if kernel() < (5, 5) else "EACCES"),
     ("only # no newline", "ENOEXEC"),
     ("empty file", "ENOEXEC"),
@@ -1055,6 +1069,20 @@ EXEC_SCRIPT_LAUNCHER: dict[str, str] = {
     "unreadable elf": "EACCES",
     "unreadable script": "EACCES",
     "unreadable script, elf interpreter": "EACCES",
+    # the launcher answers as the newer kernels do, whatever this kernel's buffer or rule
+    **({"only #! no newline": "EACCES"} if kernel() < (5, 5) else {}),
+    **(
+        {
+            "line128": "status=0 out=argv=[$E|interp a*full|$H/line128|x]",
+            "line128-nonl": "status=0 out=argv=[$E|interp a*full|$H/line128-nonl|x]",
+            "line255": "status=0 out=argv=[$E|interp a*full|$H/line255|x]",
+            "line255-nonl": "status=0 out=argv=[$E|interp a*full|$H/line255-nonl|x]",
+            "line256": "status=0 out=argv=[$E|interp a*cut1|$H/line256|x]",
+            "line256-nonl": "status=0 out=argv=[$E|interp a*cut1|$H/line256-nonl|x]",
+        }
+        if OLD_BUF
+        else {}
+    ),
 }
 # exec_elf HOSTDIR (test/progs/exec_elf.c), measured under bwrap on 7.0: the image's entry runs on
 # the stack on x86-64, so the two stack cases die there, and exits in place on aarch64 (STACK),
@@ -1065,7 +1093,10 @@ STACK = "signal=11" if platform.machine() == "x86_64" else "status=42"
 # (x86/elf: Disable automatic READ_IMPLIES_EXEC for 64-bit address spaces), so the kernel ran the
 # three images whose entry runs on the stack or on a page mapped twice; the launcher answers as the
 # newer kernels do
+# a distribution kernel before 5.8 may carry the change (RHEL 8's 4.18 does), so the kernel's
+# own answer is either
 OLD_RIE = kernel() < (5, 8)
+OLD_RIE_ANSWER: str | tuple[str, ...] = ("status=42", STACK) if OLD_RIE else STACK
 # a PT_INTERP naming an ET_EXEC image already at its own address: until 6.7 the interpreter's
 # mapping failed and the exec was killed; elf_load() took the interpreter's mapping in 6.7 and the
 # image runs (measured: 6.6 kills, 6.8 runs); the launcher answers by 7.3's own rule either way
@@ -1083,11 +1114,11 @@ def binfmt_misc_handlers() -> bool:
 FOREIGN: str | tuple[str, ...] = ("ENOEXEC", "signal=11") if binfmt_misc_handlers() else "ENOEXEC"
 EXEC_ELF: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("base", "status=42"),
-    ("no PT_GNU_STACK", "status=42" if OLD_RIE else STACK),
+    ("no PT_GNU_STACK", OLD_RIE_ANSWER),
     ("PT_GNU_STACK without PF_X", STACK),
     ("no PT_LOAD", "signal=11"),
-    ("two identical PT_LOADs", "status=42" if OLD_RIE else STACK),
-    ("PT_LOAD page overlapping the first", "status=42" if OLD_RIE else STACK),
+    ("two identical PT_LOADs", OLD_RIE_ANSWER),
+    ("PT_LOAD page overlapping the first", OLD_RIE_ANSWER),
     ("PT_LOADs out of address order", "status=42"),
     ("p_memsz below p_filesz", "signal=11"),
     ("a terabyte of bss", None),
@@ -1096,7 +1127,7 @@ EXEC_ELF: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("segment at 0x10000", "status=42"),
     ("segment past the end of the file", "status=42"),
     ("segment whose offset is past the file", "signal=7"),
-    ("code segment without PF_X", "signal=11"),
+    ("code segment without PF_X", ("status=42", "signal=11") if OLD_RIE else "signal=11"),
     ("segment without permissions", "signal=11"),
     ("p_align 3", "status=42"),
     ("entry outside every segment", "signal=11"),
@@ -1158,6 +1189,7 @@ EXEC_ELF_LAUNCHER: dict[str, str] = {
             "no PT_GNU_STACK": STACK,
             "two identical PT_LOADs": STACK,
             "PT_LOAD page overlapping the first": STACK,
+            "code segment without PF_X": "signal=11",
         }
         if OLD_RIE
         else {}
