@@ -102,8 +102,7 @@ func (c *cache) fetch(u string) ([]byte, error) {
 		if err == nil {
 			return data, nil
 		}
-		var he *httpError
-		if errors.As(err, &he) {
+		if he, ok := errors.AsType[*httpError](err); ok {
 			if attempt == tries-1 || !(he.code == 429 || he.code >= 500) {
 				return nil, err
 			}
@@ -195,8 +194,7 @@ func (c *cache) reject(u, msg string) error {
 // missing says whether err is a server's answer that the file is not there: 404, 403 as an
 // object-store mirror answers for a missing file, or a file:// repository without it.
 func missing(err error) bool {
-	var he *httpError
-	if errors.As(err, &he) {
+	if he, ok := errors.AsType[*httpError](err); ok {
 		return he.code == 403 || he.code == 404
 	}
 	return errors.Is(err, fs.ErrNotExist)

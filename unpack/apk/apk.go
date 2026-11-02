@@ -110,7 +110,7 @@ func (Format) Control(p string) (map[string]string, map[string]string, error) {
 			return nil, nil, err
 		}
 		if n == ".PKGINFO" {
-			for _, line := range strings.Split(string(data), "\n") {
+			for line := range strings.SplitSeq(string(data), "\n") {
 				if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, " = ") {
 					continue
 				}
@@ -165,7 +165,7 @@ var tokenRe = regexp.MustCompile(`^(!?)([^\s<>=~!][^\s<>=~]*?)(?:(<=|>=|><|<|>|=
 // item that is not a dependency is an error.
 func ParseDeps(field string) ([][]reader.Dep, error) {
 	var out [][]reader.Dep
-	for _, tok := range strings.Fields(field) {
+	for tok := range strings.FieldsSeq(field) {
 		m := tokenRe.FindStringSubmatch(tok)
 		if m == nil {
 			return nil, reader.Errorf("cannot parse dependency %s", reader.Pyrepr(tok))

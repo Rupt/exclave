@@ -162,7 +162,7 @@ func readHeader(r io.Reader) (Header, []byte, error) {
 				return nil, nil, fmt.Errorf("corrupt header: entry %d out of range", tag)
 			}
 			budget -= count * size
-			for k := 0; k < count; k++ {
+			for k := range count {
 				b := data[off+k*size:]
 				switch typ {
 				case 3:
@@ -182,7 +182,7 @@ func readHeader(r io.Reader) (Header, []byte, error) {
 			budget -= e + 1
 		case 8, 9: // string array, i18n string array
 			p := off
-			for k := 0; k < count; k++ {
+			for range count {
 				e := bytes.IndexByte(data[p:], 0)
 				if e < 0 || e+1 > budget {
 					return nil, nil, fmt.Errorf("corrupt header: entry %d has no end", tag)
@@ -306,7 +306,8 @@ func (c *contents) Read(b []byte) (int, error) {
 	c.left -= int64(n)
 	if err == io.EOF || (err == nil && n == 0) {
 		if c.left > 0 {
-			return n, reader.Errorf("%s: cpio entry %s runs past the end of the payload", c.p.label, reader.Pyrepr(c.name))
+			return n, reader.Errorf("%s: cpio entry %s runs past the end of the payload", c.p.label,
+				reader.Pyrepr(c.name))
 		}
 		return n, io.EOF
 	}
@@ -467,7 +468,7 @@ func (p *payload) Next() (*reader.Member, error) {
 				first.Kind = reader.File
 				p.pending = append(p.pending, first)
 				for _, m := range group[1:] {
-					p.pending = append(p.pending, &reader.Member{Name: m.Name, Mode: m.Mode, Mtime: m.Mtime, Kind: reader.Hardlink, Linkname: first.Name})
+					p.pending = append(p.pending, hardlink(m, first.Name))
 				}
 				delete(p.held, ino)
 			}
@@ -516,7 +517,7 @@ func (p *payload) Next() (*reader.Member, error) {
 			if nlink > 1 {
 				p.files[in] = m
 				for _, h := range p.held[in] {
-					p.pending = append(p.pending, &reader.Member{Name: h.Name, Mode: h.Mode, Mtime: h.Mtime, Kind: reader.Hardlink, Linkname: name})
+					p.pending = append(p.pending, hardlink(h, name))
 				}
 				delete(p.held, in)
 			}
@@ -533,6 +534,11 @@ func (p *payload) Next() (*reader.Member, error) {
 		}
 		return m, nil
 	}
+}
+
+// hardlink is the entry m as a hard link to the entry named target, as tar would have it.
+func hardlink(m *reader.Member, target string) *reader.Member {
+	return &reader.Member{Name: m.Name, Mode: m.Mode, Mtime: m.Mtime, Kind: reader.Hardlink, Linkname: target}
 }
 
 // OpenData returns the package's payload, the files it installs.
@@ -627,7 +633,7 @@ var tokenRe = regexp.MustCompile(`^([^\s<>=]+)(?:(<=|>=|<|>|=)([^\s<>=]+))?$`)
 // ship. An item that is not a dependency is an error.
 func ParseDeps(field string) ([][]reader.Dep, error) {
 	var out [][]reader.Dep
-	for _, tok := range strings.Fields(field) {
+	for tok := range strings.FieldsSeq(field) {
 		m := tokenRe.FindStringSubmatch(tok)
 		if m == nil {
 			return nil, reader.Errorf("cannot parse dependency %s", reader.Pyrepr(tok))

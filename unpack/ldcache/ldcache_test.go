@@ -59,7 +59,8 @@ func TestSharedObject(t *testing.T) {
 	if !ok || obj.Soname != "libx.so.1" || !obj.HasSoname || obj.Flags != flagElfLibc6|flagX8664Lib64 {
 		t.Errorf("got %+v %v", obj, ok)
 	}
-	if obj, ok := SharedObject(elf64(EMAarch64, "libm.so.6"), EMAarch64); !ok || obj.Flags != flagElfLibc6|flagAarch64Lib64 {
+	obj, ok = SharedObject(elf64(EMAarch64, "libm.so.6"), EMAarch64)
+	if !ok || obj.Flags != flagElfLibc6|flagAarch64Lib64 {
 		t.Errorf("aarch64: got %+v %v", obj, ok)
 	}
 	if _, ok := SharedObject(elf64(EMAarch64, "x"), EMX8664); ok {
@@ -81,7 +82,8 @@ func TestIncludesNest(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(d, "etc"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(d, "etc", "ld.so.conf"), []byte("include /etc/ld.so.conf\n/opt\n"), 0o644); err != nil {
+	conf := []byte("include /etc/ld.so.conf\n/opt\n")
+	if err := os.WriteFile(filepath.Join(d, "etc", "ld.so.conf"), conf, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	r, err := root.Open(d)

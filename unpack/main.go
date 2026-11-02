@@ -26,7 +26,7 @@ import (
 )
 
 // ldconfigCommand writes the cache of the tree at path as its ldconfig would (10.1).
-func ldconfigCommand(path string, log Log) error {
+func ldconfigCommand(path string, log logger) error {
 	r, err := root.Open(path)
 	if err != nil {
 		return err
@@ -59,7 +59,7 @@ func ldconfigCommand(path string, log Log) error {
 // volatile directories are stripped, each package file's hash is recorded, and unmet
 // dependencies are logged. On any failure, out is removed. It refuses when out exists, or the
 // packages mix formats, architectures or versions of one package.
-func unpack(out string, paths []string, log Log) error {
+func unpack(out string, paths []string, log logger) error {
 	if _, err := os.Lstat(out); err == nil {
 		return refuse("refusing: %s exists", out)
 	}
@@ -165,10 +165,14 @@ func pylist(items []string) string {
 	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
+// version is the build's, set by scripts/build.
+var version = "dev"
+
 func main() {
 	args := os.Args[1:]
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
 		fmt.Println("usage: unpack OUT PACKAGE [PACKAGE ...]\n       unpack ldconfig TREE\n\n" +
+			"unpack " + version + "\n\n" +
 			"Make the unwrapped exclave OUT from package files (.deb, .apk or .rpm); exclave wrap OUT then makes " +
 			"it an exclave. Or write TREE/etc/ld.so.cache as the tree's own ldconfig would, for a tree made by hand.")
 		return

@@ -24,25 +24,25 @@ func (p *Package) Version() string { return p.Fields["Version"] }
 // Arch is the package's architecture, as its control fields spell it.
 func (p *Package) Arch() string { return p.Fields["Architecture"] }
 
-// Log is where every step writes its lines.
-type Log func(line string)
+// logger is where every step writes its lines.
+type logger func(line string)
 
-// UnpackError is a refusal: package files unpack will not make a tree from, or a step that
+// refusal is a refusal: package files unpack will not make a tree from, or a step that
 // cannot be done.
-type UnpackError struct {
+type refusal struct {
 	Msg string
 }
 
-func (e *UnpackError) Error() string { return e.Msg }
+func (e *refusal) Error() string { return e.Msg }
 
 func refuse(format string, a ...any) error {
-	return &UnpackError{Msg: fmt.Sprintf(format, a...)}
+	return &refusal{Msg: fmt.Sprintf(format, a...)}
 }
 
 // safeRel returns a member's path relative to the tree, refusing `..` and the reserved `.real`.
 func safeRel(name string) (string, error) {
 	var parts []string
-	for _, p := range strings.Split(name, "/") {
+	for p := range strings.SplitSeq(name, "/") {
 		if p == "" || p == "." {
 			continue
 		}

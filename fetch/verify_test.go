@@ -109,14 +109,18 @@ func TestSignatures(t *testing.T) {
 	if err := k.detached(data, flipped); err == nil || !strings.Contains(err.Error(), "BAD") {
 		t.Errorf("a flipped version 3 signature: %v", err)
 	}
-	if err := k.detached(data, v3(t, right, data, 1, 0)); err == nil || !strings.Contains(err.Error(), "hash algorithm 1") {
-		t.Errorf("MD5 must be refused: %v", err)
-	}
-	if err := k.detached(data, v3(t, right, data, 8, 0x13)); err == nil || !strings.Contains(err.Error(), "not a signature over data") {
-		t.Errorf("a certification is not a signature over data: %v", err)
-	}
-	if err := k.detached(data, v3(t, wrong, data, 8, 0)); err == nil || !strings.Contains(err.Error(), "no good signature") {
-		t.Errorf("a version 3 signature by an unknown key: %v", err)
+	for _, c := range []struct {
+		name string
+		sig  []byte
+		why  string
+	}{
+		{"MD5", v3(t, right, data, 1, 0), "hash algorithm 1"},
+		{"a certification", v3(t, right, data, 8, 0x13), "not a signature over data"},
+		{"an unknown key's version 3 signature", v3(t, wrong, data, 8, 0), "no good signature"},
+	} {
+		if err := k.detached(data, c.sig); err == nil || !strings.Contains(err.Error(), c.why) {
+			t.Errorf("%s must be refused: %v", c.name, err)
+		}
 	}
 	// clearsigned, as an InRelease file is, and signed twice
 	var armoured bytes.Buffer
@@ -179,7 +183,8 @@ func TestSignaturesOnly(t *testing.T) {
 	if !signaturesOnly(sig) {
 		t.Error("a signature section")
 	}
-	for name, kind := range map[string]byte{"usr/bin/gcc": tar.TypeReg, ".SIGN.RSA.key/x": tar.TypeReg, ".SIGN.dir": tar.TypeDir} {
+	planted := map[string]byte{"usr/bin/gcc": tar.TypeReg, ".SIGN.RSA.key/x": tar.TypeReg, ".SIGN.dir": tar.TypeDir}
+	for name, kind := range planted {
 		if signaturesOnly(tarOf(t, name, kind)) {
 			t.Errorf("%s passed as a signature section", name)
 		}

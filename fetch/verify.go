@@ -11,6 +11,7 @@
 // does not consult them: the keyring is the whole statement of trust. Nothing here opens a
 // network connection: the keys come from the caller, pinned by hash in scripts/inputs or taken
 // from the machine's own keyrings.
+
 package main
 
 import (
@@ -60,7 +61,8 @@ func dearmor(data []byte) ([]byte, error) {
 			i++
 		}
 		var body []byte
-		for i < len(lines) && !bytes.HasPrefix(lines[i], []byte("=")) && !bytes.HasPrefix(lines[i], []byte("-----END")) {
+		for i < len(lines) && !bytes.HasPrefix(lines[i], []byte("=")) &&
+			!bytes.HasPrefix(lines[i], []byte("-----END")) {
 			body = append(body, bytes.TrimSpace(lines[i])...)
 			i++
 		}
@@ -216,7 +218,8 @@ func (k *keyring) verifyV3(signed, body []byte) (known bool, err error) {
 		return true, verifyErrorf("BAD signature by key %016X: hash algorithm %d is not supported", keyID, hashAlgo)
 	}
 	if pubAlgo != 1 && pubAlgo != 3 { // RSA, or RSA sign-only
-		return true, verifyErrorf("BAD signature by key %016X: a version 3 signature by algorithm %d is not supported", keyID, pubAlgo)
+		return true, verifyErrorf("BAD signature by key %016X: a version 3 signature by algorithm %d is not supported",
+			keyID, pubAlgo)
 	}
 	var w hash.Hash = h.New()
 	if sigType == 1 {
@@ -299,7 +302,8 @@ func (k *keyring) check(signed, signatures []byte) error {
 			continue
 		}
 		if sig.SigType != packet.SigTypeBinary && sig.SigType != packet.SigTypeText {
-			return verifyErrorf("BAD signature by key %016X: type %#x is not a signature over data", *sig.IssuerKeyId, sig.SigType)
+			return verifyErrorf("BAD signature by key %016X: type %#x is not a signature over data",
+				*sig.IssuerKeyId, sig.SigType)
 		}
 		verified := false
 		for _, key := range keys {

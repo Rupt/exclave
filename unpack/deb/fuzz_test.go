@@ -16,7 +16,8 @@ import (
 func arBytes(members ...[2][]byte) []byte {
 	out := []byte("!<arch>\n")
 	for _, m := range members {
-		out = append(out, []byte(fmt.Sprintf("%-16s%-12s%-6s%-6s%-8s%-10d`\n", m[0], "0", "0", "0", "100644", len(m[1])))...)
+		header := fmt.Sprintf("%-16s%-12s%-6s%-6s%-8s%-10d`\n", m[0], "0", "0", "0", "100644", len(m[1]))
+		out = append(out, header...)
 		out = append(out, m[1]...)
 		if len(m[1])%2 == 1 {
 			out = append(out, '\n')

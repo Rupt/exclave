@@ -55,7 +55,7 @@ const kept = 64
 
 func parts(path string) []string {
 	var out []string
-	for _, p := range strings.Split(path, "/") {
+	for p := range strings.SplitSeq(path, "/") {
 		if p != "" && p != "." {
 			out = append(out, p)
 		}
@@ -184,7 +184,8 @@ func (r *Root) walk(vpath string, follow, create bool) ([]string, string, error)
 				return nil, "", missing(vpath)
 			}
 			if err := unix.Mkdirat(dfd, name, 0o777); err != nil {
-				return nil, "", errorf("%s: cannot make /%s: %s", vpath, strings.Join(append(comps, name), "/"), errno(err))
+				made := strings.Join(append(comps, name), "/")
+				return nil, "", errorf("%s: cannot make /%s: %s", vpath, made, errno(err))
 			}
 			comps = append(comps, name)
 			continue

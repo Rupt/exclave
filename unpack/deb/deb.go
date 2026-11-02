@@ -206,9 +206,10 @@ func (f Format) Interests(p string) ([]string, error) {
 		return nil, err
 	}
 	var out []string
-	for _, line := range strings.Split(scripts["triggers"], "\n") {
+	for line := range strings.SplitSeq(scripts["triggers"], "\n") {
 		words := strings.Fields(line)
-		if len(words) == 2 && (words[0] == "interest" || words[0] == "interest-await" || words[0] == "interest-noawait") {
+		if len(words) == 2 &&
+			(words[0] == "interest" || words[0] == "interest-await" || words[0] == "interest-noawait") {
 			out = append(out, words[1])
 		}
 	}
@@ -223,7 +224,7 @@ func ParseStanzas(text string) []map[string]string {
 	var out []map[string]string
 	cur := map[string]string{}
 	key := ""
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		if strings.TrimSpace(line) == "" {
 			if len(cur) > 0 {
 				out = append(out, cur)
@@ -262,12 +263,12 @@ func ParseDeps(field string) ([][]reader.Dep, error) {
 	if field == "" {
 		return out, nil
 	}
-	for _, group := range strings.Split(strings.ReplaceAll(field, "\n", " "), ",") {
+	for group := range strings.SplitSeq(strings.ReplaceAll(field, "\n", " "), ",") {
 		if strings.TrimSpace(group) == "" {
 			continue
 		}
 		var alts []reader.Dep
-		for _, alt := range strings.Split(group, "|") {
+		for alt := range strings.SplitSeq(group, "|") {
 			m := depRe.FindStringSubmatch(alt)
 			if m == nil {
 				return nil, reader.Errorf("cannot parse dependency %s", reader.Pyrepr(alt))

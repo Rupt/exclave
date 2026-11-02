@@ -23,6 +23,7 @@
 // repomd.xml, and each package against the SHA-256 its index records. Package files are cached,
 // since their names carry their versions, and so is a primary index whose name carries its
 // checksum; repomd.xml is fetched on every run.
+
 package main
 
 import (
@@ -177,7 +178,8 @@ func (r *rpmRepo) repomd(u string) ([]byte, error) {
 		return data, nil
 	}
 	if err := r.keyring.detached(data, signature); err != nil {
-		return nil, r.cache.reject(u+"/repodata/repomd.xml", fmt.Sprintf("%s: repomd.xml's signature does not verify: %s", u, err))
+		return nil, r.cache.reject(u+"/repodata/repomd.xml",
+			fmt.Sprintf("%s: repomd.xml's signature does not verify: %s", u, err))
 	}
 	log(u + ": repomd.xml signature verified")
 	return data, nil
@@ -384,7 +386,9 @@ func (r *rpmRepo) pick(name, op, ver string, selected map[string]*rpmPackage, ch
 // lists only some of each package's files. The base set is added when base is true; choose
 // names the package to use for a capability. A requested package or a dependency that cannot be
 // met is an error.
-func (r *rpmRepo) resolve(wanted []string, base bool, choose map[string]string) (map[string]*rpmPackage, []string, error) {
+func (r *rpmRepo) resolve(wanted []string, base bool, choose map[string]string) (
+	map[string]*rpmPackage, []string, error,
+) {
 	selected := map[string]*rpmPackage{}
 	var notes []string
 	var queue []queued

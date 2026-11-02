@@ -18,6 +18,7 @@
 // the key to every file is checked and the mirror is trusted for nothing but availability.
 // Package files are cached, since their names carry their versions; APKINDEX is fetched on every
 // run.
+
 package main
 
 import (
@@ -122,7 +123,8 @@ func signaturesOnly(plain []byte) bool {
 		if err == io.EOF {
 			return true
 		}
-		if err != nil || !strings.HasPrefix(h.Name, ".SIGN.") || strings.Contains(h.Name, "/") || h.Typeflag != tar.TypeReg {
+		if err != nil || !strings.HasPrefix(h.Name, ".SIGN.") || strings.Contains(h.Name, "/") ||
+			h.Typeflag != tar.TypeReg {
 			return false
 		}
 	}
@@ -227,9 +229,9 @@ func (r *apkRepo) loadIndex() error {
 			return fmt.Errorf("%s/%s: APKINDEX in the index archive is not a file", r.branch, repo)
 		}
 		count := 0
-		for _, block := range strings.Split(string(text), "\n\n") {
+		for block := range strings.SplitSeq(string(text), "\n\n") {
 			st := stanza{}
-			for _, line := range strings.Split(block, "\n") {
+			for line := range strings.SplitSeq(block, "\n") {
 				if len(line) > 2 && line[1] == ':' {
 					st[line[:1]] = line[2:]
 				}
@@ -390,7 +392,8 @@ func (r *apkRepo) download(st stanza) (string, []byte, error) {
 		}
 	}
 	if len(control) != 1 || control[0] != len(members)-2 || len(members) > 3 {
-		return "", nil, r.cache.reject(u, name+": not an apk: no control section before the data, or more than three sections")
+		return "", nil, r.cache.reject(u, name+": not an apk: no control section before the data, "+
+			"or more than three sections")
 	}
 	for _, m := range members[:control[0]] {
 		if !m.whole || !signaturesOnly(m.plain) {

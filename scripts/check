@@ -1,8 +1,8 @@
 #!/bin/sh
-# The code checks: format, lint and type checks for the Python, the C, the
-# shell scripts and the TOML, every tool from uv.lock (pyproject.toml's dev
-# group) but gcc, the machine's, which builds the launcher and is asked for its
-# warnings. scripts/gate runs this as a step.
+# The code checks: format, lint and type checks for the Python, the Go, the C,
+# the shell scripts and the TOML, every tool from uv.lock (pyproject.toml's dev
+# group) or go.mod's tool directives but gcc, the machine's, which builds the
+# launcher and is asked for its warnings. scripts/gate runs this as a step.
 #
 #   scripts/check          report; exit non-zero on any finding
 #   scripts/check --fix    let ruff and the formatters write their corrections
@@ -130,22 +130,38 @@ if awk '/clang-format off/ { off = 1 } /clang-format on/ { off = 0 }
 # a definition in a shared header that nothing uses, which no compiler reports
 run "$UV" run --quiet python test/c_unused.py
 
-# The Go, the two commands' packages (go.mod; copies under build/ are left out): gofmt's layout, then go vet.
-godirs=$("$GO" list -f '{{.Dir}}' ./fetch/... ./unpack/...) || status=1
+# The Go, the two commands' packages (go.mod; copies under build/ are left out): gofmt's layout
+# simplified, go fix's modernisations, then go vet, staticcheck and deadcode, the last two the
+# versions go.mod's tool directives pin, run through the pinned toolchain. Each runs one after
+# the other. A line over 120 columns, a tab counted as four, is held to the C's rule.
+gopkgs="./fetch/... ./unpack/..."
+# shellcheck disable=SC2086  # the packages, one word each
+godirs=$("$GO" list -f '{{.Dir}}' $gopkgs) || status=1
 if $fix; then
     # shellcheck disable=SC2086  # the directories, one word each
-    run "$GOFMT" -l -w $godirs
+    run "$GOFMT" -l -s -w $godirs
+    # shellcheck disable=SC2086  # the packages, one word each
+    run quiet "$GO" fix $gopkgs
 else
     # shellcheck disable=SC2086  # the directories, one word each
-    if unformatted=$("$GOFMT" -l $godirs) && [ -n "$unformatted" ]; then
-        printf '%s: not as gofmt lays it out\n' $unformatted
+    if unformatted=$("$GOFMT" -l -s $godirs) && [ -n "$unformatted" ]; then
+        printf '%s: not as gofmt -s lays it out\n' $unformatted
         status=1
     fi
+    # shellcheck disable=SC2086  # the packages, one word each
+    run quiet "$GO" fix -diff $gopkgs
 fi
-run quiet "$GO" vet ./fetch/... ./unpack/...
+# shellcheck disable=SC2086  # the packages, one word each
+run quiet "$GO" vet $gopkgs
+# shellcheck disable=SC2086  # the packages, one word each
+run quiet "$GO" tool staticcheck $gopkgs
+# shellcheck disable=SC2086  # the packages, one word each
+run quiet "$GO" tool deadcode -test $gopkgs
+if awk '{ gsub(/\t/, "    ") } length > 120 { print FILENAME ":" FNR ": over 120 columns"; bad = 1 } END { exit bad }' \
+    fetch/*.go unpack/*.go unpack/*/*.go; then :; else status=1; fi
 
 # A suppression says why on its line: `# noqa: RULE -- reason`.
-if grep -rnE '# (noqa: [A-Z0-9, ]+|ty: ignore\[[a-z0-9, -]+\])$' --include='*.py' unpack fetch test src; then
+if grep -rnE '# (noqa: [A-Z0-9, ]+|ty: ignore\[[a-z0-9, -]+\])$' --include='*.py' test src; then
     echo "check: a suppression above gives no reason" >&2
     status=1
 fi

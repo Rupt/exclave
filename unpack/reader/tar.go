@@ -151,13 +151,8 @@ func fromHeader(h *tar.Header) *Member {
 	switch h.Typeflag {
 	case tar.TypeDir:
 		m.Kind = Dir
-	case tar.TypeReg, tar.TypeCont:
+	case tar.TypeReg, tar.TypeCont: // the old form that spelt a directory by a slash is a TypeDir by now
 		m.Kind = File
-	case tar.TypeRegA: // the old form, which spelt a directory by a trailing slash
-		m.Kind = File
-		if strings.HasSuffix(h.Name, "/") {
-			m.Kind = Dir
-		}
 	case tar.TypeSymlink:
 		m.Kind = Symlink
 	case tar.TypeLink:

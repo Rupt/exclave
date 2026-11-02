@@ -33,7 +33,8 @@ func header(entries map[uint32]string) []byte {
 
 // cpioEntry makes one newc entry, for the seeds.
 func cpioEntry(name string, mode, size int) []byte {
-	h := fmt.Sprintf("070701%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x", 1, mode, 0, 0, 1, 0, size, 0, 0, 0, 0, len(name)+1, 0)
+	h := fmt.Sprintf("070701%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x",
+		1, mode, 0, 0, 1, 0, size, 0, 0, 0, 0, len(name)+1, 0)
 	out := append([]byte(h), name...)
 	out = append(out, 0)
 	for len(out)%4 != 0 {
@@ -63,7 +64,8 @@ func rpmBytes(payload []byte) []byte {
 
 // FuzzRpm reads any bytes as an .rpm: every input is answered, by its contents or a refusal.
 func FuzzRpm(f *testing.F) {
-	payload := append(append(cpioEntry("usr", 0o040755, 0), cpioEntry("usr/x", 0o100644, 3)...), cpioEntry("TRAILER!!!", 0, 0)...)
+	payload := append(cpioEntry("usr", 0o040755, 0), cpioEntry("usr/x", 0o100644, 3)...)
+	payload = append(payload, cpioEntry("TRAILER!!!", 0, 0)...)
 	f.Add([]byte{})
 	f.Add(rpmBytes(payload))
 	f.Add(rpmBytes(payload[:len(payload)-20]))
@@ -96,7 +98,8 @@ func FuzzRpm(f *testing.F) {
 // FuzzCpio reads any bytes as a cpio payload: every input is answered, by entries or a refusal.
 func FuzzCpio(f *testing.F) {
 	f.Add([]byte{})
-	f.Add(append(append(cpioEntry("usr", 0o040755, 0), cpioEntry("usr/x", 0o100644, 3)...), cpioEntry("TRAILER!!!", 0, 0)...))
+	whole := append(cpioEntry("usr", 0o040755, 0), cpioEntry("usr/x", 0o100644, 3)...)
+	f.Add(append(whole, cpioEntry("TRAILER!!!", 0, 0)...))
 	f.Add(append(cpioEntry("l", 0o120777, 3), cpioEntry("TRAILER!!!", 0, 0)...))
 	f.Add([]byte("070701" + "00000001" + "000081a4" + "00000000" + "00000000" + "00000002" + "00000000" + "-0000001" +
 		"00000000" + "00000000" + "00000000" + "00000000" + "00000002" + "00000000" + "x\x00\x00\x00"))

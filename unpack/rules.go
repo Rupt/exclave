@@ -8,6 +8,7 @@
 // built, are read from the package (dpkg's `triggers` file, apk's `triggers` field) and named
 // against the interests table, and a postinst that calls `update-alternatives` in a form the
 // alternatives rule cannot read is noted too.
+
 package main
 
 import (
@@ -25,14 +26,14 @@ import (
 // rule is a synthesis rule: its name in the log, and the function that makes what it makes.
 type rule struct {
 	name  string
-	apply func(r *root.Root, packages []*Package, log Log) (bool, error)
+	apply func(r *root.Root, packages []*Package, log logger) (bool, error)
 }
 
 // link makes a symlink at a virtual path, unless something stands there. With replace, as
 // alternatives --install does, a file or link standing there gives way; a directory never does.
 // Fedora's binutils needs this: it ships gold at /usr/bin/ld and removes it in %post before
 // installing the alternative.
-func link(r *root.Root, at, target string, log Log, replace bool) (bool, error) {
+func link(r *root.Root, at, target string, log logger, replace bool) (bool, error) {
 	if r.Lexists(at) {
 		if !replace || (r.IsDir(at) && !r.IsLink(at)) {
 			return false, nil
@@ -84,7 +85,7 @@ func (a alternative) less(b alternative) bool {
 		return a.target < b.target
 	}
 	for i := 0; i < len(a.slaves) && i < len(b.slaves); i++ {
-		for k := 0; k < 3; k++ {
+		for k := range 3 {
 			if a.slaves[i][k] != b.slaves[i][k] {
 				return a.slaves[i][k] < b.slaves[i][k]
 			}
@@ -96,7 +97,7 @@ func (a alternative) less(b alternative) bool {
 // alternatives makes every `update-alternatives --install` line in a postinst, with its slaves.
 // The highest priority wins, unless a `--set` names a candidate; a line the rule cannot read, one
 // built from shell variables or in a loop, is noted, since its alternatives are not made.
-func alternatives(r *root.Root, packages []*Package, log Log) (bool, error) {
+func alternatives(r *root.Root, packages []*Package, log logger) (bool, error) {
 	groups := map[string][]alternative{}
 	var order []string
 	chosen := map[string]string{}
@@ -190,7 +191,7 @@ var (
 // for update-java-alternatives names the JDK's priority and, a line each, every tool and its
 // path. Each tool's /usr/bin link goes through /etc/alternatives to the highest priority's path,
 // where nothing stands there already.
-func javaJinfo(r *root.Root, _ []*Package, log Log) (bool, error) {
+func javaJinfo(r *root.Root, _ []*Package, log logger) (bool, error) {
 	type best struct{ prio, target string }
 	bests := map[string]best{}
 	if !r.IsDir("/usr/lib/jvm") {
@@ -242,7 +243,7 @@ func javaJinfo(r *root.Root, _ []*Package, log Log) (bool, error) {
 // as the dash rule makes /usr/bin/sh, so that a link run from outside the exclave reaches the
 // wrapper in the tree and not a host file of the same name; inside, a relative link resolves in
 // virtual space the same way. A path is a member's: `..` and .real are refused.
-func busyboxApplets(r *root.Root, _ []*Package, log Log) (bool, error) {
+func busyboxApplets(r *root.Root, _ []*Package, log logger) (bool, error) {
 	bbd := "/etc/busybox-paths.d"
 	if !(r.IsDir(bbd) && r.IsFile("/bin/busybox")) {
 		return false, nil
@@ -253,7 +254,7 @@ func busyboxApplets(r *root.Root, _ []*Package, log Log) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		for _, line := range strings.Split(text, "\n") {
+		for line := range strings.SplitSeq(text, "\n") {
 			rel, err := safeRel(strings.TrimSpace(line))
 			if err != nil {
 				return false, err
@@ -274,7 +275,7 @@ func busyboxApplets(r *root.Root, _ []*Package, log Log) (bool, error) {
 // sbinMerge does what Fedora 42's filesystem does in its %posttrans: it replaces /usr/sbin and
 // /usr/local/sbin by a link to bin when every entry there is a link ../bin/<name>; the script says
 // so in Lua, and this is its effect.
-func sbinMerge(r *root.Root, packages []*Package, log Log) (bool, error) {
+func sbinMerge(r *root.Root, packages []*Package, log logger) (bool, error) {
 	made := false
 	for _, pkg := range packages {
 		if pkg.Name != "filesystem" {
@@ -329,7 +330,7 @@ func names(packages []*Package) map[string]bool {
 }
 
 // dashSh makes dash's /bin/sh, which its postinst makes and the package does not ship.
-func dashSh(r *root.Root, packages []*Package, log Log) (bool, error) {
+func dashSh(r *root.Root, packages []*Package, log logger) (bool, error) {
 	if names(packages)["dash"] && r.Lexists("/usr/bin/dash") {
 		return link(r, "/usr/bin/sh", "dash", log, false)
 	}
@@ -338,7 +339,7 @@ func dashSh(r *root.Root, packages []*Package, log Log) (bool, error) {
 
 // caCertificates makes Debian's ca-certificates bundle, which update-ca-certificates makes from
 // the enabled ones.
-func caCertificates(r *root.Root, packages []*Package, log Log) (bool, error) {
+func caCertificates(r *root.Root, packages []*Package, log logger) (bool, error) {
 	conf := "/etc/ca-certificates.conf"
 	if !names(packages)["ca-certificates"] || !r.Exists(conf) {
 		return false, nil
@@ -348,7 +349,7 @@ func caCertificates(r *root.Root, packages []*Package, log Log) (bool, error) {
 		return false, err
 	}
 	var pems [][]byte
-	for _, raw := range strings.Split(text, "\n") {
+	for raw := range strings.SplitSeq(text, "\n") {
 		line := strings.TrimSpace(raw)
 		if line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "!") {
 			cert := "/usr/share/ca-certificates/" + line
@@ -381,7 +382,7 @@ var pemRe = regexp.MustCompile(`(?s)-----BEGIN CERTIFICATE-----.*?-----END CERTI
 // %post. The consumers' paths are links to /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem,
 // extracted from the p11-kit trust source; the CA anchors trusted there are concatenated the same
 // way. The bundle is an identity file (8.4): the host's where it has one.
-func caTrust(r *root.Root, _ []*Package, log Log) (bool, error) {
+func caTrust(r *root.Root, _ []*Package, log logger) (bool, error) {
 	extracted := "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
 	var sources []string
 	for _, dp := range [][2]string{
@@ -430,14 +431,15 @@ func caTrust(r *root.Root, _ []*Package, log Log) (bool, error) {
 	if err := r.WriteBytes(extracted, []byte(strings.Join(certs, "")), 0o666); err != nil {
 		return false, err
 	}
-	log(fmt.Sprintf("synthesised /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem from %d trusted certificates", len(certs)))
+	log(fmt.Sprintf("synthesised /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem from %d trusted certificates",
+		len(certs)))
 	return true, nil
 }
 
 // sslPaths makes OpenSSL's compiled-in trust paths, /usr/lib/ssl/cert.pem and /usr/lib/ssl/certs.
 // They are symlinks the openssl and ca-certificates packages ship and a library's closure lacks;
 // without them the host's bundle at the identity path (8.4) is never consulted.
-func sslPaths(r *root.Root, packages []*Package, log Log) (bool, error) {
+func sslPaths(r *root.Root, packages []*Package, log logger) (bool, error) {
 	libssl := false
 	for _, p := range packages {
 		if strings.HasPrefix(p.Name, "libssl") {
@@ -461,7 +463,7 @@ func sslPaths(r *root.Root, packages []*Package, log Log) (bool, error) {
 // basePasswd makes /etc/passwd and /etc/group, which come from update-passwd, not the package.
 // The host's are used unless an own record names them (8.4), but the files must exist for tools
 // that list /etc.
-func basePasswd(r *root.Root, packages []*Package, log Log) (bool, error) {
+func basePasswd(r *root.Root, packages []*Package, log logger) (bool, error) {
 	made := false
 	for _, nm := range [][2]string{{"passwd", "passwd.master"}, {"group", "group.master"}} {
 		src, dst := "/usr/share/base-passwd/"+nm[1], "/etc/"+nm[0]
@@ -485,7 +487,7 @@ func basePasswd(r *root.Root, packages []*Package, log Log) (bool, error) {
 // gets its cache here, before wrapping, so that the cache never indexes the launcher; Fedora 42
 // has merged sbin into bin. The aux-cache is removed, since it records inodes and mtimes: never
 // reproducible, never needed.
-func ldconfigRule(r *root.Root, packages []*Package, log Log) (bool, error) {
+func ldconfigRule(r *root.Root, packages []*Package, log logger) (bool, error) {
 	ld := ldcache.FindLdconfig(r)
 	if ld == "" {
 		if names(packages)["libc-bin"] {
@@ -527,7 +529,7 @@ var rules = []rule{
 // (10.1). The rules are the table above, run in order, each logging what it made; the names of
 // those that applied are logged last. Runs before wrapping, so that the tree's own ldconfig can
 // run unwrapped. Every path a rule reads or writes resolves with the tree as its root.
-func synthesise(rootPath string, packages []*Package, log Log) error {
+func synthesise(rootPath string, packages []*Package, log logger) error {
 	r, err := root.Open(rootPath)
 	if err != nil {
 		return err

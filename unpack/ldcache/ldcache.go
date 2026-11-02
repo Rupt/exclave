@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"math/bits"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -206,7 +207,8 @@ func IsDSO(name string) bool {
 func skippedName(name string) bool {
 	return (len(name) >= len(".#prelink#.XXXXXX") && name[len(name)-17:len(name)-6] == ".#prelink#.") ||
 		strings.Contains(name, ";") ||
-		strings.HasSuffix(name, ".#prelink#") || strings.HasSuffix(name, ".dpkg-new") || strings.HasSuffix(name, ".dpkg-tmp")
+		strings.HasSuffix(name, ".#prelink#") || strings.HasSuffix(name, ".dpkg-new") ||
+		strings.HasSuffix(name, ".dpkg-tmp")
 }
 
 // isaLevel is the ISA level a PT_GNU_PROPERTY segment needs, as x86's read_gnu_property reads it.
@@ -400,7 +402,7 @@ func sharedObject(data []byte, family int) (Object, bool) {
 func TrustedDirs(loader []byte) []string {
 	for _, data := range rodata(loader) {
 		var run []string
-		for _, chunk := range bytes.Split(data, []byte{0}) {
+		for chunk := range bytes.SplitSeq(data, []byte{0}) {
 			if len(chunk) >= 2 && chunk[0] == '/' && chunk[len(chunk)-1] == '/' {
 				run = append(run, string(chunk))
 			} else if len(run) >= 2 {
@@ -567,12 +569,7 @@ func (l *Ldconfig) findLoader() string {
 func key(st *unix.Stat_t) inode { return inode{uint64(st.Dev), uint64(st.Ino)} }
 
 func (l *Ldconfig) known(k inode) bool {
-	for _, have := range l.keys {
-		if have == k {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(l.keys, k)
 }
 
 // addDir adds a directory as ldconfig's add_dir_1 does: trailing blanks and slashes off, once.
@@ -642,7 +639,7 @@ func (l *Ldconfig) parseConf(filename string, depth int) error {
 	if err != nil {
 		return nil
 	}
-	for _, raw := range bytes.Split(text, []byte("\n")) {
+	for raw := range bytes.SplitSeq(text, []byte("\n")) {
 		line, _, _ := bytes.Cut(raw, []byte("#"))
 		s := strings.TrimLeft(string(line), " \t\n\v\f\r")
 		if s == "" {
@@ -679,7 +676,7 @@ func (l *Ldconfig) include(configFile, pattern string, depth int) error {
 // glob returns the tree's paths matching the pattern, in byte order, as glob64 finds them.
 func (l *Ldconfig) glob(pattern string) []string {
 	paths := []string{""} // the tree's root, which no virtual path names
-	for _, comp := range strings.Split(pattern, "/") {
+	for comp := range strings.SplitSeq(pattern, "/") {
 		if comp == "" {
 			continue
 		}
@@ -839,8 +836,8 @@ func (l *Ldconfig) searchDir(e dir) error {
 		dlibs[soname] = &dlib{name, obj.Flags, isLink, obj.ISALevel}
 		order = append(order, soname)
 	}
-	for i := len(order) - 1; i >= 0; i-- { // the list ldconfig builds at its head
-		soname := order[i]
+	for _, soname := range slices.Backward(order) { // the list ldconfig builds at its head
+
 		d := dlibs[soname]
 		filename := d.name
 		if e.hwcaps == "" {

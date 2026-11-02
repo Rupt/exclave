@@ -20,7 +20,8 @@ func TestVercmp(t *testing.T) {
 	if Vercmp("1.0", "0:1.0") != 0 || Vercmp("1.0-1", "1.0-1") != 0 {
 		t.Error("equal versions compare unequal")
 	}
-	if !Satisfies("1.0", "", "") || !Satisfies("1.0", ">=", "1.0") || Satisfies("1.0", ">>", "1.0") || !Satisfies("1.0", "<<", "1.1") {
+	if !Satisfies("1.0", "", "") || !Satisfies("1.0", ">=", "1.0") || Satisfies("1.0", ">>", "1.0") ||
+		!Satisfies("1.0", "<<", "1.1") {
 		t.Error("a constraint is misjudged")
 	}
 }

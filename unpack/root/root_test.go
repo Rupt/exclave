@@ -90,7 +90,7 @@ func TestLoopsAndDepth(t *testing.T) {
 		t.Errorf("a loop of links: %v", err)
 	}
 	// a chain of exactly 40 links resolves; 41 do not
-	for i := 0; i < 41; i++ {
+	for i := range 41 {
 		target := "end"
 		if i > 0 {
 			target = "l" + string(rune('0'+i-1)) + "x"
@@ -101,7 +101,7 @@ func TestLoopsAndDepth(t *testing.T) {
 		t.Fatal(err)
 	}
 	prev := "end"
-	for i := 0; i < 41; i++ {
+	for i := range 41 {
 		name := strings.Repeat("c", i+1)
 		if err := r.Symlink(prev, name); err != nil {
 			t.Fatal(err)
@@ -126,7 +126,8 @@ func TestLoopsAndDepth(t *testing.T) {
 		t.Error("the deep file and its link")
 	}
 	var pe *os.PathError
-	if err := r.Remove("missing/x"); !errors.As(err, &pe) || !errors.Is(err, ErrMissing) || !strings.Contains(err.Error(), "missing/x") {
+	err := r.Remove("missing/x")
+	if !errors.As(err, &pe) || !errors.Is(err, ErrMissing) || !strings.Contains(err.Error(), "missing/x") {
 		t.Errorf("a missing path names itself: %v", err)
 	}
 	hostUnchanged(t, host)

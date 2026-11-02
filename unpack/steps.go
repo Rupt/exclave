@@ -1,6 +1,7 @@
 // The steps that make a tree from package files (DESIGN.md 10.1): extraction, synthesis of what
 // maintainer scripts would have made, the volatile directories stripped, the dependency report,
 // and the hashes file's pkg records.
+
 package main
 
 import (
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unsafe"
@@ -33,9 +35,8 @@ var aliasRe = regexp.MustCompile(`^(bin|sbin|lib|lib32|lib64|libx32)(/|$)`)
 
 // refusing turns a tree that cannot hold what the packages ask into unpack's refusal.
 func refusing(err error) error {
-	var re *root.Error
-	if errors.As(err, &re) {
-		return &UnpackError{Msg: re.Msg}
+	if re, ok := errors.AsType[*root.Error](err); ok {
+		return &refusal{Msg: re.Msg}
 	}
 	return err
 }
@@ -48,7 +49,7 @@ func refusing(err error) error {
 // Replaces on the other; the /lib and /usr/lib spellings of a path count as one. Renaming
 // diversions are refused, and so is a file that would leave the output's filesystem short of
 // room. log gets one line per special file skipped.
-func extract(rootPath string, packages []*Package, log Log) error {
+func extract(rootPath string, packages []*Package, log logger) error {
 	if err := os.MkdirAll(rootPath, 0o777); err != nil {
 		return err
 	}
@@ -64,7 +65,7 @@ var divertRe = regexp.MustCompile(`--(remove|list|listpackage|truename)\b`)
 
 // extractInto extracts into the open tree; owner, the package that owns each extracted path by
 // its /usr-merged spelling, is how a file shipped twice is told from one replaced.
-func extractInto(r *root.Root, packages []*Package, log Log) error {
+func extractInto(r *root.Root, packages []*Package, log logger) error {
 	if err := r.Makedirs("usr"); err != nil {
 		return err
 	}
@@ -102,7 +103,8 @@ func extractInto(r *root.Root, packages []*Package, log Log) error {
 			if m.Kind == reader.File {
 				total += m.Size
 				if total-asked >= 64<<20 {
-					if err := r.Room(total, fmt.Sprintf("the files up to /%s in %s declare", rel, pkg.Name)); err != nil {
+					what := fmt.Sprintf("the files up to /%s in %s declare", rel, pkg.Name)
+					if err := r.Room(total, what); err != nil {
 						t.Close()
 						return err
 					}
@@ -178,11 +180,12 @@ func extractInto(r *root.Root, packages []*Package, log Log) error {
 		// and the merged-usr and zutils transitions every noble closure carries, leave a fresh
 		// tree unchanged.
 		for _, sname := range []string{"preinst", "postinst"} {
-			for _, line := range strings.Split(strings.ReplaceAll(scripts[sname], "\\\n", " "), "\n") {
+			for line := range strings.SplitSeq(strings.ReplaceAll(scripts[sname], "\\\n", " "), "\n") {
 				if strings.HasPrefix(strings.TrimSpace(line), "#") || !strings.Contains(line, "dpkg-divert") {
 					continue
 				}
-				if divertRe.MatchString(line) || strings.Contains(line, "--no-rename") || strings.Contains(line, ".usr-is-merged") {
+				if divertRe.MatchString(line) || strings.Contains(line, "--no-rename") ||
+					strings.Contains(line, ".usr-is-merged") {
 					continue
 				}
 				return refuse("%s adds a renaming diversion in its %s (%s); diversions are refused (10.1)",
@@ -227,7 +230,7 @@ func extractInto(r *root.Root, packages []*Package, log Log) error {
 type pending struct{ src, dst string }
 
 func extractPackage(r *root.Root, t reader.Archive, name string, replaces map[string]map[string]bool,
-	owner map[string]string, hardlinks *[]pending, log Log) error {
+	owner map[string]string, hardlinks *[]pending, log logger) error {
 	for {
 		m, err := t.Next()
 		if err == io.EOF {
@@ -338,12 +341,7 @@ func futimens(fd int, t unix.Timespec) error {
 }
 
 func hasPart(path, part string) bool {
-	for _, p := range strings.Split(path, "/") {
-		if p == part {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Split(path, "/"), part)
 }
 
 // cut returns the first n characters of s, as Python's s[:n] does.

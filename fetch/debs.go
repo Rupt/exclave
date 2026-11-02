@@ -18,6 +18,7 @@
 // trusted for nothing but availability. Package files and by-hash indexes are cached, since
 // their URLs name their content. The InRelease file, and an index the suite does not serve by
 // hash, are fetched on every run unless the mirror is a snapshot, which never changes.
+
 package main
 
 import (
@@ -36,10 +37,14 @@ import (
 )
 
 var (
-	debMirrors   = map[string]string{"ubuntu": "http://archive.ubuntu.com/ubuntu", "debian": "http://deb.debian.org/debian"}
-	snapshotBase = map[string]string{"ubuntu": "https://snapshot.ubuntu.com/ubuntu", "debian": "https://snapshot.debian.org/archive/debian"}
-	debSuites    = map[string][]string{"ubuntu": {"noble", "noble-updates", "noble-security"}, "debian": {"bookworm"}}
-	priorities   = map[string]int{"required": 0, "important": 1, "standard": 2, "optional": 3, "extra": 4}
+	debMirrors = map[string]string{
+		"ubuntu": "http://archive.ubuntu.com/ubuntu", "debian": "http://deb.debian.org/debian",
+	}
+	snapshotBase = map[string]string{
+		"ubuntu": "https://snapshot.ubuntu.com/ubuntu", "debian": "https://snapshot.debian.org/archive/debian",
+	}
+	debSuites  = map[string][]string{"ubuntu": {"noble", "noble-updates", "noble-security"}, "debian": {"bookworm"}}
+	priorities = map[string]int{"required": 0, "important": 1, "standard": 2, "optional": 3, "extra": 4}
 )
 
 // stanza is a Packages stanza, field name to value, with `_suite` added for the suite it came from.
@@ -114,14 +119,15 @@ func (r *debRepo) release(suite string) (map[string][2]string, bool, error) {
 	if until := fields["Valid-Until"]; until != "" && !r.cache.snapshot {
 		t, err := time.Parse(time.RFC1123, until)
 		if err != nil {
-			return nil, false, r.cache.reject(u, fmt.Sprintf("%s/InRelease: Valid-Until %q cannot be read", suite, until))
+			return nil, false, r.cache.reject(u,
+				fmt.Sprintf("%s/InRelease: Valid-Until %q cannot be read", suite, until))
 		}
 		if time.Now().After(t) {
 			return nil, false, r.cache.reject(u, fmt.Sprintf("%s/InRelease: expired on %s", suite, until))
 		}
 	}
 	digests := map[string][2]string{}
-	for _, line := range strings.Split(fields["SHA256"], "\n") {
+	for line := range strings.SplitSeq(fields["SHA256"], "\n") {
 		parts := strings.Fields(line)
 		if len(parts) == 3 {
 			digests[parts[2]] = [2]string{parts[0], parts[1]}
@@ -190,7 +196,9 @@ func (r *debRepo) loadIndex() error {
 		}
 	}
 	for _, versions := range r.index {
-		sort.SliceStable(versions, func(i, j int) bool { return deb.Vercmp(versions[i]["Version"], versions[j]["Version"]) > 0 })
+		sort.SliceStable(versions, func(i, j int) bool {
+			return deb.Vercmp(versions[i]["Version"], versions[j]["Version"]) > 0
+		})
 	}
 	return nil
 }
@@ -440,7 +448,8 @@ func fetchDebs(args []string) error {
 	if err != nil {
 		return err
 	}
-	repo, err := newDebRepo(*distro, suiteList, *arch, strings.Split(*components, ","), *cacheDir, keys, *mirror, *snapshot)
+	repo, err := newDebRepo(*distro, suiteList, *arch, strings.Split(*components, ","), *cacheDir, keys,
+		*mirror, *snapshot)
 	if err != nil {
 		return err
 	}
@@ -464,7 +473,8 @@ func fetchDebs(args []string) error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if err := repo.download(selected[name], filepath.Join(*out, path.Base(selected[name]["Filename"]))); err != nil {
+		dst := filepath.Join(*out, path.Base(selected[name]["Filename"]))
+		if err := repo.download(selected[name], dst); err != nil {
 			return err
 		}
 	}
