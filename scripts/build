@@ -65,7 +65,7 @@ for arch in $cross; do
     [ -z "$gobuilds" ] || [ -e "build/unpack-$arch" ] || fresh=false
 done
 gosources= # absent from a copy of the sources without the Go, as scripts/reproduce makes
-for p in go.mod go.sum fetch unpack; do
+for p in go.mod go.sum fetch unpack scripts/install-go .go/go/VERSION; do
     [ -e "$p" ] && gosources="$gosources $p"
 done
 # shellcheck disable=SC2086  # the Go sources, one word each
@@ -142,6 +142,11 @@ go_build() { # go_build ARCH OUT PKG: the Go command PKG for ARCH, static (lib.s
     arch=$1 out=$2 pkg=$3
     case $arch in x86_64) goarch=amd64 ;; aarch64) goarch=arm64 ;; *) goarch=$arch ;; esac
     GOOS=linux GOARCH=$goarch "$GO" build -ldflags="-s -w -X main.version=$version" -o "$out" "$pkg" || return 1
+    # a static file, as the command is: no interpreter, so nothing of the machine's is loaded
+    if readelf -l "$out" | grep -q 'interpreter'; then
+        echo "build: $out asks for an interpreter: not static" >&2
+        return 1
+    fi
     echo "built $out ($(stat -c %s "$out") bytes, $arch)"
 }
 

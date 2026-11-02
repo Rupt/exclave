@@ -551,7 +551,10 @@ GOARCH = {"x86_64": "amd64", "aarch64": "arm64"}
 
 
 def go_toolchain() -> str | None:
-    """Return the host's go, or None."""
+    """Return the pinned go in .go/ (scripts/install-go), else the host's, else None."""
+    pinned = os.path.join(REPO, ".go", "go", "bin", "go")
+    if os.path.exists(pinned):
+        return pinned
     return shutil.which("go") or next(
         (g for g in ("/usr/lib/go/bin/go", "/usr/local/go/bin/go") if os.path.exists(g)), None
     )

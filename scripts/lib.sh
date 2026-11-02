@@ -30,8 +30,13 @@ fi
 # The Go: the pinned toolchain scripts/install-go puts in .go/ builds the
 # unpack and fetch commands (DESIGN.md 10.1), never the go on PATH. Its module
 # and build caches stay inside the repository too; a build is static, with
-# every path in it relative, so the same sources give the same bytes anywhere.
-# scripts/build and scripts/check say when it is missing; nothing else needs it.
+# every path in it relative and no version-control stamp, so the same sources
+# give the same bytes anywhere, a checkout or a copy. The modules go.sum pins
+# are fetched by scripts/install-go alone, so no build, check or test touches
+# the network: to add or move one, run
+#   GOPROXY=https://proxy.golang.org,direct .go/go/bin/go get MODULE@VERSION
+# then scripts/install-go. scripts/build and scripts/check say when the
+# toolchain is missing; nothing else needs it.
 GO_HOME="$ROOT/.go"
 # shellcheck disable=SC2034  # run by scripts/build, scripts/check and scripts/install-go
 GO="$GO_HOME/go/bin/go"
@@ -41,7 +46,8 @@ export GOTOOLCHAIN=local
 export GOMODCACHE="$GO_HOME/mod"
 export GOCACHE="$GO_HOME/cache"
 export GOPATH="$GO_HOME/path"
-export GOFLAGS=-trimpath
+export GOFLAGS="-trimpath -buildvcs=false"
+export GOPROXY=off
 export CGO_ENABLED=0
 
 # The pinned Python, the project's environment brought up to date first:

@@ -436,7 +436,7 @@ scripts/install-go   the pinned Go into .go/, checked against a committed checks
 scripts/install-uv   the pinned uv into .uv/, checked the same way, which provides the Python the tests run on; scripts/lib.sh what every script sources
 scripts/exclave      the exclave command; scripts/unpack, fetch-debs, fetch-apks and fetch-rpms the steps before it
 scripts/example      the first run: from the build to a program built inside an exclave that runs on any glibc since 2.17, every command shown
-scripts/check        the code checks; scripts/gate the commit gate; scripts/extra the checks beyond it (scripts/steps.sh their step runner); scripts/inputs the development inputs; scripts/examples the example runs
+scripts/check        the code checks, gofmt, go vet, staticcheck and deadcode among them; scripts/gate the commit gate; scripts/extra the checks beyond it (scripts/steps.sh their step runner); scripts/inputs the development inputs; scripts/examples the example runs
 scripts/release      a signed release of exclaves with the command beside them; test/release_test.py, a step of scripts/extra, takes one as a consumer would
 scripts/reproduce    the launcher and the command built inside a gcc exclave, the same bytes wherever it runs
 scripts/test         the suite; scripts/matrix, exercise and sysroot the other test drivers

@@ -104,11 +104,16 @@ else
 fi
 has matrix && echo "gate: the change reaches the VMs: scripts/matrix is due, and runs when approved"
 
+# shellcheck disable=SC2329  # run through step, by name
+gostep() { # the Go commands' unit tests and fuzz seeds, and the modules in the cache as go.sum records them
+    "$GO" -C "$ROOT" test ./fetch/... ./unpack/... && "$GO" -C "$ROOT" mod verify
+}
+
 n=$(basename "$ex" .exclave)
 step check "$ROOT/scripts/check" # ruff, ty, shellcheck, shfmt and taplo, silent when clean
 has unit && step unit unit
 has stack && step stack stack
-has go && step go "$GO" test ./fetch/... ./unpack/...                    # the Go commands' unit tests and fuzz seeds
+has go && step go gostep                                                 # the Go commands' tests, go.sum verified
 has unpack && step unpack py "$here/unpack_test.py" --work "$out/unpack" # unpack's rules on hostile package files
 has fetch && step fetch py "$here/fetch_test.py" --work "$out/fetch"     # the fetchers' signature checks
 has suite && step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"

@@ -2169,8 +2169,9 @@ the tree's `ldconfig` would write, and `wrap EXCLAVE LAUNCHER` installs
 the launcher given, whose machine the static check reads the tree as:
 the loader's directories from the loader file, the objects of that
 machine checked and the others foreign (10.3). An arm64 exclave is made
-on x86-64 in about two seconds, with the tree hash of one made inside
-the arm64 virtual machine (measured October 2026): `scripts/inputs`
+on x86-64 in about three and a half seconds, with the tree hash of one
+made inside the arm64 virtual machine (measured November 2026):
+`scripts/inputs`
 makes the arm64 gcc exclave on the reference machine, and the kernel
 matrix only runs it (17).
 
@@ -2244,7 +2245,7 @@ format's spelling. Alpine keeps `/bin`, `/sbin` and `/lib` as
 directories of their own, so no merged-`/usr` links are made, and adds
 one rule, busybox's applet links (13 item 37). rpm adds a handful, among
 them cpio hard links, `rpmvercmp` ordering, Fedora 42's merge of `sbin`
-into `bin` and Fedora's p11-kit CA bundle. The module docstrings of
+into `bin` and Fedora's p11-kit CA bundle. The package comments of
 `unpack/apk` and `unpack/rpm` list each format's differences.
 
 **The step before the tool** belongs to whoever makes the exclave.
@@ -4176,12 +4177,13 @@ So the command reaches every step whose driver runs it, unpack's tests
 among them; `unpack/` and `fetch/` reach their tests and the Go step;
 a program reaches the suite, or the one oracle that compiles
 it; a helper reaches whatever imports it. A launcher source,
-`scripts/build`, `scripts/lib.sh`, `LICENSE`, `.python-version`, the
-gate and the derivation itself run every step, and the first five say
-the matrix is due, as do the command and the matrix's own code, since
-the VMs run them; documents, scripts and settings run the code checks
-alone; and a path nothing names runs everything. `--full` runs every
-step whatever changed.
+`scripts/build`, `scripts/lib.sh`, `scripts/install-go`, `go.mod`,
+`go.sum`, `LICENSE`, `.python-version`, the gate and the derivation
+itself run every step, and all but the last two say the matrix is due,
+as do the command, `unpack/` and the matrix's own code, since the VMs
+run them; documents, scripts and settings run the code checks alone;
+and a path nothing names runs everything. `--full` runs every step
+whatever changed.
 The steps run two at a time, or `--jobs N`, so that the machine stays
 usable, each with its own log under `build/gate/`, one line each with
 its time, ok, SKIP or FAIL:
@@ -4217,11 +4219,14 @@ its time, ok, SKIP or FAIL:
   when they differ;
 - the stack budget of both launchers (the aarch64 one when it is
   built);
-- the Go step (`go test`): the Go commands' unit tests, the version
-  orders, the dependency parsers and the header fields, and the seeds
-  of their fuzz targets, each reader on a package made in the test and
-  on cut and corrupt ones, the OpenPGP packet reader, and the laws of
-  each order;
+- the Go step (`go test`, then `go mod verify`): the Go commands' unit
+  tests, the version orders, the dependency parsers and the header
+  fields, the root walk's escapes and loops, the ld.so.cache writer on
+  a shared object made in the test, the signature checks on keys made
+  in the test, and the seeds of their fuzz targets, each reader on a
+  package made in the test and on cut and corrupt ones, the OpenPGP
+  packet reader, and the laws of each order; and the modules in the
+  cache as `go.sum` records them;
 - unpack's tests (`test/unpack_test.py`), which need no exclave: each
   reader's own, and hostile package files in each format, built by
   `test/packages.py` (`..` and `.real` refused; symlinks that climb
@@ -4781,14 +4786,25 @@ specified.
   library is enough, since unlike the launcher it never runs inside
   another program; `wrap` takes the other architecture's launcher, since
   the checks read the tree as the launcher's machine (10.5).
-- **One pinned Python, never the machine's**, for `unpack`, the
-  fetchers and the tests: uv, pinned with a checksum per architecture
-  in `scripts/install-uv`, installs the version `.python-version` names
-  into the checkout, and every script and the matrix VMs run that one
-  (10, 17).
+- **One pinned Python, never the machine's**, for the tests: uv, pinned
+  with a checksum per architecture in `scripts/install-uv`, installs the
+  version `.python-version` names into the checkout, and every script
+  and the matrix VMs run that one (10, 17).
+- **One pinned Go, never the machine's**, for `unpack` and the
+  fetchers: `scripts/install-go` installs the toolchain `go.mod` names
+  into the checkout, checked the same way, with the modules `go.sum`
+  pins, the one time anything fetches them; every build is static, its
+  paths trimmed and its version-control stamp off, so the same sources
+  give the same bytes in a checkout or a copy (10, 17).
 - **The Python is ruff- and ty-clean**: `scripts/check` runs ruff, ty,
   shellcheck, shfmt and taplo from `uv.lock`, and an ignored rule or a
   suppression carries its reason (17).
+- **The Go is gofmt-, go vet-, staticcheck- and deadcode-clean**, with
+  `go fix`'s modernisations applied and no line over 120 columns, as
+  `scripts/check` checks through the pinned toolchain, the two tools
+  the versions `go.mod`'s tool directives pin; `go test` is a gate step
+  with `go mod verify`, and every parser of its own has a fuzz target
+  `scripts/extra` runs (17).
 - **The C is clang-formatted and clean under gcc's strict warnings and
   clang-tidy**, the launcher and the command for both architectures;
   clang-format and clang-tidy come from `uv.lock`, gcc is the one that

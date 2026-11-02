@@ -1,8 +1,9 @@
 #!/bin/sh
 # Install the pinned Go toolchain into .go/, verified against a checksum
-# committed here. It builds the unpack and fetch commands (scripts/build),
-# which are Go, as uv provides the Python the tests run on: nothing the
-# machine has installed decides how they are built.
+# committed here, and the modules go.sum pins into its cache. It builds the
+# unpack and fetch commands (scripts/build), which are Go, as uv provides the
+# Python the tests run on: nothing the machine has installed decides how they
+# are built, and nothing after this script fetches a module.
 #
 # Portable across Linux: the official builds are statically linked, one per
 # architecture. Needs only curl or wget, tar, and sha256sum or shasum.
@@ -33,10 +34,21 @@ aarch64 | arm64) arch=arm64 sum=$GO_SHA256_AARCH64 ;;
     ;;
 esac
 
+# modules: the ones go.sum pins, into the module cache under .go/, the one time anything
+# fetches them (lib.sh turns the proxy off for every other run)
+modules() {
+    GOPROXY=https://proxy.golang.org,direct "$GO" -C "$ROOT" mod download || {
+        echo "the modules go.sum pins could not be fetched" >&2
+        exit 1
+    }
+    echo "modules present in $GOMODCACHE"
+}
+
 if [ "${1-}" != --force ] && [ -x "$GO" ]; then
     installed=$("$GO" version 2>/dev/null | cut -d' ' -f3 | sed 's/^go//' || echo none)
     if [ "$installed" = "$GO_VERSION" ]; then
         echo "go $GO_VERSION already installed at $GO"
+        modules
         exit 0
     fi
     echo "replacing go $installed with $GO_VERSION"
@@ -79,3 +91,4 @@ mv "$work/go" "$GO_HOME/.go.new"
 rm -rf "$GO_HOME/go"
 mv "$GO_HOME/.go.new" "$GO_HOME/go"
 echo "installed $("$GO" version) at $GO"
+modules

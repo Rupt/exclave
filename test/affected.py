@@ -5,7 +5,7 @@
 Prints one step name per line: those of STEPS a changed path reaches, `every` and every step
 when a path reaches everything, and `matrix` when the change reaches the VMs. A step reaches a
 path when the path is one the step runs or builds from, or one its Python drivers import or name:
-a sibling module in test/ is followed, `unpack` is the package, and a path under the repository
+a sibling module in test/ is followed, and a path under the repository
 named through `os.path.join(REPO, ...)` is what the driver runs there (`build/exclave` is the
 command, so `tool/`; `build/launcher` the launcher, so `src/`; `build/unpack` and `build/fetch`
 the Go commands, so `unpack/` and `fetch/`). Nothing here is kept by hand but
@@ -60,12 +60,18 @@ EVERY = (
     "scripts/gate",
     "test/affected.py",
 )
-# What the VMs run: the launcher, the command, the Python, and the matrix's own code.
+# What the VMs run: the launcher, the command, unpack (the suite's ld.so.cache regression runs
+# it there), the Python, the licence the launcher carries, and the matrix's own code.
 MATRIX = (
     "src/*",
     "tool/*",
+    "unpack/*",
+    "go.mod",
+    "go.sum",
+    "scripts/install-go",
     "scripts/build",
     "scripts/lib.sh",
+    "LICENSE",
     ".python-version",
     "test/matrix.py",
     "test/vm_run.py",
@@ -123,7 +129,7 @@ def joined_paths(tree: ast.AST) -> set[str]:
 
 
 def dependencies(path: str, seen: dict[str, set[str]]) -> set[str]:
-    """The patterns a driver depends on: itself, its sibling imports, unpack, the paths it names."""
+    """The patterns a driver depends on: itself, its sibling imports, and the paths it names."""
     if path in seen:
         return seen[path]
     deps: set[str] = {path}
@@ -138,9 +144,7 @@ def dependencies(path: str, seen: dict[str, set[str]]) -> set[str]:
             names = [node.module]
         for name in names:
             top = name.split(".")[0]
-            if top == "unpack":
-                deps.add("unpack/*")
-            elif os.path.isfile(os.path.join(REPO, "test", top + ".py")):
+            if os.path.isfile(os.path.join(REPO, "test", top + ".py")):
                 deps |= dependencies("test/" + top + ".py", seen)
     for named in joined_paths(tree):
         for built, source in BUILT.items():

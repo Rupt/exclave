@@ -54,9 +54,10 @@ fuzz() { # fuzz EXCLAVE
 # (unpack/*/fuzz_test.go, fetch/fuzz_test.go); an input that panics is written under the package's testdata/fuzz,
 # which the gate's go step then runs as a case
 gofuzz() {
-    for pkg in $("$GO" list ./fetch/... ./unpack/...); do
-        for t in $("$GO" test -list 'Fuzz.*' "$pkg" | grep '^Fuzz'); do
-            "$GO" test -run '^$' -fuzz "^$t\$" -fuzztime 10s "$pkg" || return 1
+    for pkg in $("$GO" -C "$ROOT" list ./fetch/... ./unpack/...); do
+        for t in $("$GO" -C "$ROOT" test -list 'Fuzz.*' "$pkg" | grep '^Fuzz'); do
+            # four workers, not one per CPU: the laptop is in use beside it
+            "$GO" -C "$ROOT" test -run '^$' -fuzz "^$t\$" -fuzztime 10s -parallel 4 "$pkg" || return 1
         done
     done
 }
