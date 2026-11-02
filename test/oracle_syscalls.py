@@ -1720,6 +1720,20 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
     ),
     (
         None,
+        lambda label, b, o, _c: (
+            ("chain_40" in label or "dir_links_40" in label)
+            and errnos(b, o)[0] == errno.ELOOP
+            and errnos(b, o)[1] != errno.ELOOP
+        ),
+        (
+            "a walk of exactly MAXSYMLINKS links: filename_lookup retries a walk whose RCU attempt "
+            "failed (ECHILD) with the same nameidata, and total_link_count carries on from where "
+            "that attempt stopped, so the links it followed count twice and the retry may answer "
+            "ELOOP, as the dentry cache decides; the launcher's own walk counts each link once"
+        ),
+    ),
+    (
+        None,
         lambda label, b, o, c: (
             "dot_last" in label
             and "tmp_new" in label
