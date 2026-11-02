@@ -1021,6 +1021,10 @@ def lines_wrong(
 # script's status is its interpreter's, dash's 2 or bash's 126
 # the #! buffer of 128 bytes until 5.1, which cut the interpreter's argument sooner
 OLD_BUF = kernel() < (5, 1)
+# before 5.9 exec opened the file before checking that it was regular, and a socket's open answers
+# ENXIO; a distribution kernel may carry the change (Ubuntu's 4.15 does), so either answer is the
+# kernel's, and the launcher answers as the newer kernels do
+OLD_EXEC_OPEN = kernel() < (5, 9)
 EXEC_SCRIPT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("line127", "status=0 out=argv=[$E|interp a*full|$H/line127|x]"),
     ("line127-nonl", "status=0 out=argv=[$E|interp a*full|$H/line127-nonl|x]"),
@@ -1095,7 +1099,7 @@ EXEC_SCRIPT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("elf by O_RDONLY fd", "status=0 out=argv=[renamed|interp]"),
     ("directory", "EACCES"),
     ("fifo", "EACCES"),
-    ("socket", "EACCES"),
+    ("socket", ("EACCES", "ENXIO") if OLD_EXEC_OPEN else "EACCES"),
     ("/dev/null", "EACCES"),
     ("absent", "ENOENT"),
     ("under a file", "ENOTDIR"),
@@ -1109,6 +1113,7 @@ EXEC_SCRIPT_LAUNCHER: dict[str, str] = {
     "unreadable script, elf interpreter": "EACCES",
     # the launcher answers as the newer kernels do, whatever this kernel's buffer or rule
     **({"only #! no newline": "EACCES"} if kernel() < (5, 5) else {}),
+    **({"socket": "EACCES"} if OLD_EXEC_OPEN else {}),
     **(
         {
             "line128": "status=0 out=argv=[$E|interp a*full|$H/line128|x]",

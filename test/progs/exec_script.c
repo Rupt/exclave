@@ -225,6 +225,9 @@ int main(int argc, char **argv)
     script("directory interpreter", text);
     snprintf(p, sizeof p, "%s/interp-fifo", hd);
     if (mkfifo(p, 0755)) perror(p);
+    /* a writer held open: a kernel before 5.9 opened the file before checking that it was regular, and a FIFO's open
+     * waits for a writer; with one it reaches the check and answers EACCES, as the newer kernels do at once */
+    int fifo_writer = open(p, O_RDWR | O_CLOEXEC);
     snprintf(text, sizeof text, "#!%s interp", p);
     script("fifo interpreter", text);
     snprintf(text, sizeof text, "#!%s/absent interp", hd);
@@ -307,7 +310,10 @@ int main(int argc, char **argv)
     ex("directory", AT_FDCWD, hd, av, 0);
     snprintf(p, sizeof p, "%s/fifo", hd);
     if (mkfifo(p, 0755)) perror(p);
+    int fifo_writer2 = open(p, O_RDWR | O_CLOEXEC);
     ex("fifo", AT_FDCWD, p, av, 0);
+    close(fifo_writer2);
+    close(fifo_writer);
     snprintf(p, sizeof p, "%s/sock", hd);
     {
         int sk = socket(AF_UNIX, SOCK_STREAM, 0);
