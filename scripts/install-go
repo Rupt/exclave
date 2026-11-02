@@ -1,0 +1,81 @@
+#!/bin/sh
+# Install the pinned Go toolchain into .go/, verified against a checksum
+# committed here. It builds the unpack and fetch commands (scripts/build),
+# which are Go, as uv provides the Python the tests run on: nothing the
+# machine has installed decides how they are built.
+#
+# Portable across Linux: the official builds are statically linked, one per
+# architecture. Needs only curl or wget, tar, and sha256sum or shasum.
+#
+# Idempotent: does nothing when the pinned version is in place. --force
+# reinstalls.
+set -eu
+
+# The pinned release. To upgrade, change the version and both checksums, which
+# are the ones reviewed (https://go.dev/dl/), not ones taken from the download.
+GO_VERSION=1.27.3
+GO_SHA256_X86_64=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+GO_SHA256_AARCH64=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
+
+UV_BOOTSTRAP=1 # lib.sh's check for the pinned uv: this script runs no Python
+. "$(dirname -- "$0")/lib.sh"
+
+[ "$(uname -s)" = Linux ] || {
+    echo "Go is pinned for Linux only; this is $(uname -s)" >&2
+    exit 1
+}
+case "$(uname -m)" in
+x86_64 | amd64) arch=amd64 sum=$GO_SHA256_X86_64 ;;
+aarch64 | arm64) arch=arm64 sum=$GO_SHA256_AARCH64 ;;
+*)
+    echo "no Go is pinned for $(uname -m); add its checksum to $0" >&2
+    exit 1
+    ;;
+esac
+
+if [ "${1-}" != --force ] && [ -x "$GO" ]; then
+    installed=$("$GO" version 2>/dev/null | cut -d' ' -f3 | sed 's/^go//' || echo none)
+    if [ "$installed" = "$GO_VERSION" ]; then
+        echo "go $GO_VERSION already installed at $GO"
+        exit 0
+    fi
+    echo "replacing go $installed with $GO_VERSION"
+fi
+
+name=go$GO_VERSION.linux-$arch.tar.gz
+url=https://go.dev/dl/$name
+work=$(mktemp -d)
+# shellcheck disable=SC2064  # expand $work now, not when the trap fires
+trap "rm -rf '$work'" EXIT INT TERM
+
+echo "fetching $url"
+# a connection that fails or stalls is tried again, five times over about a minute
+if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --connect-timeout 30 --retry 5 --retry-delay 5 --retry-all-errors --retry-connrefused \
+        -o "$work/go.tar.gz" "$url"
+elif command -v wget >/dev/null 2>&1; then
+    wget -q --timeout=30 --tries=5 --waitretry=5 -O "$work/go.tar.gz" "$url"
+else
+    echo "neither curl nor wget is installed" >&2
+    exit 1
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+    got=$(sha256sum "$work/go.tar.gz" | cut -d' ' -f1)
+else
+    got=$(shasum -a 256 "$work/go.tar.gz" | cut -d' ' -f1)
+fi
+[ "$got" = "$sum" ] || {
+    echo "checksum mismatch for $name: $got; refusing to install" >&2
+    exit 1
+}
+
+# The archive holds go/; into place through a temporary name, so a running go
+# is never half replaced. The caches beside it (lib.sh) are kept.
+tar -xzf "$work/go.tar.gz" -C "$work"
+mkdir -p "$GO_HOME"
+rm -rf "$GO_HOME/.go.new"
+mv "$work/go" "$GO_HOME/.go.new"
+rm -rf "$GO_HOME/go"
+mv "$GO_HOME/.go.new" "$GO_HOME/go"
+echo "installed $("$GO" version) at $GO"

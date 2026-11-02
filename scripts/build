@@ -26,6 +26,12 @@
 #                   unit step runs on hostile input; left out of a copy of
 #                   the sources without the tests, as scripts/reproduce makes
 #
+#   unpack          the unpack command, from unpack/ (10.1), and
+#   fetch           the fetch command, from fetch/: Go, built by the pinned
+#                   toolchain in .go/ (scripts/install-go), static and
+#                   stripped; where there is no toolchain, as inside an exclave
+#                   under scripts/reproduce, a line says so and the C is built
+#
 # and, on x86-64 with the cross compiler, launcher-aarch64,
 # launcher-old-aarch64 and exclave-aarch64. Nothing is built when every output
 # is there and no source, LICENSE, this script or lib.sh is newer than the last
@@ -48,13 +54,20 @@ cross=$(c_arches | grep -vx "$native")
 fresh=${fresh:-true}
 sanitized=test/sanitize.c
 [ -f "$sanitized" ] || sanitized=
-for f in "$stamp" build/launcher build/launcher-old build/launcher-debug build/exclave ${sanitized:+build/exclave-asan}; do
+gobuilds=
+[ -x "$GO" ] && gobuilds="build/unpack build/fetch"
+for f in "$stamp" build/launcher build/launcher-old build/launcher-debug build/exclave ${sanitized:+build/exclave-asan} $gobuilds; do
     [ -e "$f" ] || fresh=false
 done
 for arch in $cross; do
     [ -e "build/launcher-$arch" ] && [ -e "build/launcher-old-$arch" ] && [ -e "build/exclave-$arch" ] || fresh=false
 done
-if $fresh && [ -z "$(find src tool $sanitized LICENSE scripts/build scripts/lib.sh -newer "$stamp" | head -n 1)" ]; then
+gosources= # absent from a copy of the sources without the Go, as scripts/reproduce makes
+for p in go.mod go.sum fetch unpack; do
+    [ -e "$p" ] && gosources="$gosources $p"
+done
+# shellcheck disable=SC2086  # the Go sources, one word each
+if $fresh && [ -z "$(find src tool $sanitized $gosources LICENSE scripts/build scripts/lib.sh -newer "$stamp" | head -n 1)" ]; then
     exit 0
 fi
 
@@ -123,6 +136,12 @@ tool() { # tool ARCH OUT ARGS...: the exclave command for ARCH
     echo "built $out ($(stat -c %s "$out") bytes, $arch)"
 }
 
+go_build() { # go_build OUT PKG: the Go command PKG, static (lib.sh: cgo off, paths trimmed) and stripped
+    out=$1 pkg=$2
+    "$GO" build -ldflags='-s -w' -o "$out" "$pkg" || return 1
+    echo "built $out ($(stat -c %s "$out") bytes, $native)"
+}
+
 rm -f "$stamp" build/launcher*.debug-*.ci
 # the machine's own launcher first, so that a compile error is told once
 launcher "$native" build/launcher -fcallgraph-info=su -dumpdir build/launcher.debug- || exit 1
@@ -132,6 +151,12 @@ launcher "$native" build/launcher-debug -fsanitize=undefined -fsanitize-trap=und
 tool "$native" build/exclave -static -s || status=1
 if [ -n "$sanitized" ]; then
     tool "$native" build/exclave-asan -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer "$sanitized" || status=1
+fi
+if [ -n "$gobuilds" ]; then
+    go_build build/unpack ./unpack || status=1
+    go_build build/fetch ./fetch || status=1
+else
+    echo "build: no Go at $GO (scripts/install-go): build/unpack and build/fetch not built"
 fi
 for arch in $cross; do
     # the command carries the launcher, so is built after it

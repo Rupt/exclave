@@ -21,6 +21,11 @@ fix=false
 "$UV" sync --quiet || exit 2
 export UV_NO_SYNC=1
 
+[ -x "$GO" ] || {
+    echo "check: no Go at $GO; run scripts/install-go" >&2
+    exit 2
+}
+
 # The shell scripts, in the positional parameters: every file under scripts/
 # that starts as a POSIX shell script, and lib.sh and steps.sh, which are sourced.
 set -- scripts/lib.sh scripts/steps.sh
@@ -124,6 +129,20 @@ if awk '/clang-format off/ { off = 1 } /clang-format on/ { off = 0 }
     src/*.[ch] tool/*.[ch] test/*.c test/progs/*.c; then :; else status=1; fi
 # a definition in a shared header that nothing uses, which no compiler reports
 run "$UV" run --quiet python test/c_unused.py
+
+# The Go, the two commands' packages (go.mod; copies under build/ are left out): gofmt's layout, then go vet.
+godirs=$("$GO" list -f '{{.Dir}}' ./fetch/... ./unpack/...) || status=1
+if $fix; then
+    # shellcheck disable=SC2086  # the directories, one word each
+    run "$GOFMT" -l -w $godirs
+else
+    # shellcheck disable=SC2086  # the directories, one word each
+    if unformatted=$("$GOFMT" -l $godirs) && [ -n "$unformatted" ]; then
+        printf '%s: not as gofmt lays it out\n' $unformatted
+        status=1
+    fi
+fi
+run quiet "$GO" vet ./fetch/... ./unpack/...
 
 # A suppression says why on its line: `# noqa: RULE -- reason`.
 if grep -rnE '# (noqa: [A-Z0-9, ]+|ty: ignore\[[a-z0-9, -]+\])$' --include='*.py' unpack fetch test src; then

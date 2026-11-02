@@ -1,7 +1,8 @@
 # The commit gate and the kernel matrix on GitHub's hosted runners (docs/DESIGN.md 17), run by
 # hand (workflow_dispatch: the Actions tab, or gh workflow run ci.yml -f matrix=true, false for
 # the gate alone; gh run watch ID --exit-status waits) and never at a push. The workflow only calls the
-# repository's scripts: scripts/install-uv for the pinned Python, scripts/inputs for the
+# repository's scripts: scripts/install-uv for the pinned Python, scripts/install-go for the
+# pinned Go, scripts/inputs for the
 # development inputs through cached package files, scripts/gate --full and scripts/matrix. What
 # it adds is what the runner lacks and the reference machine has: packages, the KVM device
 # opened to the runner, and the AppArmor sysctl that denies user namespaces on Ubuntu 24.04.
@@ -51,6 +52,13 @@ jobs:
         run: |
           scripts/install-uv
           ROOT=$PWD; . scripts/lib.sh; "$UV" sync --quiet --project "$ROOT"
+      - name: the pinned Go, its modules and its build cache, from the last run with the same pins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .go
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-go', 'go.mod', 'go.sum') }}
+      - name: the pinned Go
+        run: scripts/install-go
       - name: package files and sources the inputs are made from
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -109,6 +117,13 @@ jobs:
         run: |
           scripts/install-uv
           ROOT=$PWD; . scripts/lib.sh; "$UV" sync --quiet --project "$ROOT"
+      - name: the pinned Go, its modules and its build cache, from the last run with the same pins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .go
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-go', 'go.mod', 'go.sum') }}
+      - name: the pinned Go
+        run: scripts/install-go
       - name: package files and sources the inputs are made from
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
