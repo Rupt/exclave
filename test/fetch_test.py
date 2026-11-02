@@ -294,7 +294,9 @@ def apk_mirror(d: str, key: RsaKey, signer: str, *, kind: str = "RSA", tamper: s
     """An Alpine repository of one package, its index signed by key under the name signer.
 
     tamper: "signed" alters the index after signing; "control" gives the index the checksum of
-    another package's control section, and "data" gives .PKGINFO the datahash of other data.
+    another package's control section, "data" gives .PKGINFO the datahash of other data, and
+    "planted" puts a file beside the signature in the package's signature section, which no
+    digest covers, with the index's size and checksum true of the package as planted.
     """
     rel = os.path.join("v3.21", "main", MACHINE)
     pkg = os.path.join(d, rel, "x-1.0-r0.apk")
@@ -305,6 +307,12 @@ def apk_mirror(d: str, key: RsaKey, signer: str, *, kind: str = "RSA", tamper: s
     make_apk(pkg, "x", members, f"datahash = {hashlib.sha256(hashed).hexdigest()}\n", data=data)
     with open(pkg, "rb") as f:
         apk = f.read()
+    if tamper == "planted":
+        section = [(".SIGN.RSA.x", "file", b"", 0o644), ("usr/planted", "file", b"p\n", 0o644)]
+        planted = gzip.compress(tar_bytes(section, trailer=False), mtime=0)
+        write(pkg, planted + apk)
+        with open(pkg, "rb") as f:
+            apk = f.read()
     if tamper == "control":
         make_apk(pkg + ".other", "x", members, "pkgdesc = another\n", data=data)
         with open(pkg + ".other", "rb") as f:
@@ -312,7 +320,10 @@ def apk_mirror(d: str, key: RsaKey, signer: str, *, kind: str = "RSA", tamper: s
         os.remove(pkg + ".other")
     else:
         listed = apk
-    control_sha1 = hashlib.sha1(first_gzip_member(listed)).digest()  # noqa: S324 -- apk's checksum
+    control = first_gzip_member(listed)
+    if tamper == "planted":  # the control section is the second member, after the planted one
+        control = first_gzip_member(listed[len(first_gzip_member(listed)) :])
+    control_sha1 = hashlib.sha1(control).digest()  # noqa: S324 -- apk's checksum
     index = (
         f"C:Q1{base64.b64encode(control_sha1).decode()}\nP:x\nV:1.0-r0\nA:{MACHINE}\n"
         f"S:{len(apk)}\nI:4096\nT:x\nU:x\nL:MIT\nD:\n\n"
@@ -479,8 +490,9 @@ def apks_check_index(work: str) -> None:
 
     Signed by the key given, SHA-1 as Alpine signs or SHA-256: fetched. Signed under a name no
     --key has, by another key under the same name, or altered after signing: refused. Below the
-    signature, a package whose control section the index's checksum does not name, or whose data
-    its .PKGINFO's datahash does not: refused.
+    signature, a package whose control section the index's checksum does not name, whose data
+    its .PKGINFO's datahash does not, or whose signature section holds a file beside the
+    signature, which no digest covers: refused.
     """
     right, wrong = RsaKey(work, "right.rsa.pub"), RsaKey(work, "wrong.rsa.pub")
     apk = "x-1.0-r0.apk"
@@ -497,6 +509,7 @@ def apks_check_index(work: str) -> None:
     for tamper, why in (
         ("control", f"{apk}: checksum does not match the index"),
         ("data", f"{apk}: the data section does not match the datahash of .PKGINFO"),
+        ("planted", f"{apk}: not an apk: the signature section holds more than signatures"),
     ):
         mirror = apk_mirror(os.path.join(work, tamper), right, "right.rsa.pub", tamper=tamper)
         refused(f"{tamper} altered", fetch_apks(work, mirror, right.public, tamper), why)

@@ -29,9 +29,11 @@ import (
 	"bytes"
 	"crypto/md5"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"flag"
 	"fmt"
 	"hash"
@@ -188,15 +190,16 @@ func newHash(kind string) hash.Hash {
 	case "sha1":
 		return sha1.New()
 	case "sha256":
-		return sha256New()
+		return sha256.New()
 	case "sha512":
 		return sha512.New()
 	}
 	return nil
 }
 
-// primary fetches a repository's primary index, checks it against repomd.xml and decompresses it.
-func (r *rpmRepo) primary(u string) ([]byte, error) {
+// primary fetches a repository's primary index, checks it against repomd.xml and returns it
+// decompressing, read as a stream.
+func (r *rpmRepo) primary(u string) (io.ReadCloser, error) {
 	data, err := r.repomd(u)
 	if err != nil {
 		return nil, err
@@ -210,10 +213,10 @@ func (r *rpmRepo) primary(u string) ([]byte, error) {
 			continue
 		}
 		if d.Location == nil {
-			return nil, fmt.Errorf("repository metadata: no location in %s", "data")
+			return nil, errors.New("repository metadata: no location in data")
 		}
 		if d.Checksum == nil {
-			return nil, fmt.Errorf("repository metadata: no checksum in %s", "data")
+			return nil, errors.New("repository metadata: no checksum in data")
 		}
 		kind := d.Checksum.Type
 		if kind == "sha" { // yum's old name for it
@@ -237,18 +240,13 @@ func (r *rpmRepo) primary(u string) ([]byte, error) {
 		}
 		comp, ok := reader.Suffixes[path.Ext(href)]
 		if !ok {
-			return raw, nil
+			return io.NopCloser(bytes.NewReader(raw)), nil
 		}
 		s, err := reader.Decompress(comp, bytes.NewReader(raw))
 		if err != nil {
 			return nil, fmt.Errorf("%s: %s", href, err)
 		}
-		defer s.Close()
-		plain, err := io.ReadAll(s)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %s", href, err)
-		}
-		return plain, nil
+		return s, nil
 	}
 	return nil, fmt.Errorf("%s: no primary index in repomd.xml", u)
 }
@@ -256,12 +254,13 @@ func (r *rpmRepo) primary(u string) ([]byte, error) {
 // loadIndex reads the primary index of every repository.
 func (r *rpmRepo) loadIndex() error {
 	for _, u := range r.urls {
-		plain, err := r.primary(u)
+		stream, err := r.primary(u)
 		if err != nil {
 			return err
 		}
+		defer stream.Close()
 		count := 0
-		dec := xml.NewDecoder(bytes.NewReader(plain))
+		dec := xml.NewDecoder(stream)
 		for {
 			tok, err := dec.Token()
 			if err == io.EOF {
@@ -390,11 +389,11 @@ func (r *rpmRepo) resolve(wanted []string, base bool, choose map[string]string) 
 	var notes []string
 	var queue []queued
 	for _, n := range wanted {
-		queue = append(queue, queued{n, "requested"})
+		queue = append(queue, queued{name: n, why: "requested"})
 	}
 	if base {
 		for _, n := range rpmBase {
-			queue = append(queue, queued{n, "base"})
+			queue = append(queue, queued{name: n, why: "base"})
 		}
 	}
 	for len(queue) > 0 {
@@ -435,7 +434,7 @@ func (r *rpmRepo) resolve(wanted []string, base bool, choose map[string]string) 
 				return nil, nil, fmt.Errorf("cannot satisfy %s of %s%s", want, pkg.name, have)
 			}
 			if _, ok := selected[chosen.name]; !ok {
-				queue = append(queue, queued{chosen.name, pkg.name})
+				queue = append(queue, queued{name: chosen.name, why: pkg.name})
 			}
 		}
 	}
@@ -460,7 +459,7 @@ func (r *rpmRepo) download(pkg *rpmPackage) (string, []byte, error) {
 	if int64(len(data)) != pkg.size {
 		return "", nil, r.cache.reject(u, name+": size does not match the index")
 	}
-	if err := r.verifyPackage(r.cache.path(u), data); err != nil {
+	if err := r.verifyPackage(name, data); err != nil {
 		return "", nil, r.cache.reject(u, fmt.Sprintf("%s: %s", name, err))
 	}
 	return name, data, nil
@@ -471,10 +470,13 @@ func (r *rpmRepo) download(pkg *rpmPackage) (string, []byte, error) {
 // over header and payload together (RPMSIGTAG_PGP or _GPG), which rpm made before 4.14 recorded
 // a digest, covers both. Every signature the package carries must verify, and one of the two
 // must cover the payload.
-func (r *rpmRepo) verifyPackage(p string, data []byte) error {
-	parts, err := rpm.ReadSections(p)
+func (r *rpmRepo) verifyPackage(name string, data []byte) error {
+	parts, err := rpm.ReadSectionsFrom(bytes.NewReader(data), name)
 	if err != nil {
 		return err
+	}
+	if parts.Payload > int64(len(data)) {
+		return verifyErrorf("the header runs past the end of the file")
 	}
 	payload := data[parts.Payload:]
 	headerSig := sigValue(parts.Signature, 268, 267)
@@ -541,7 +543,11 @@ func fetchRpms(args []string) error {
 	if err := repo.loadIndex(); err != nil {
 		return err
 	}
-	selected, notes, err := repo.resolve(packages, !*noBase, splitChoices(choose))
+	chosen, err := splitChoices(choose)
+	if err != nil {
+		return err
+	}
+	selected, notes, err := repo.resolve(packages, !*noBase, chosen)
 	if err != nil {
 		return err
 	}

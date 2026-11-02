@@ -17,14 +17,13 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/rsa"
-	"crypto/sha1"
-	"crypto/sha256"
-	"crypto/sha512"
+	_ "crypto/sha1" // the digests apk's signature kinds name, made available by their import
+	_ "crypto/sha256"
+	_ "crypto/sha512"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -32,6 +31,7 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
+	pgperrors "github.com/ProtonMail/go-crypto/openpgp/errors"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
 
@@ -177,9 +177,21 @@ func splitPackets(data []byte) ([]pgpPacket, error) {
 	return out, nil
 }
 
-// OpenPGP's hash algorithms by number (RFC 4880 9.4).
+// OpenPGP's hash algorithms by number (RFC 4880 9.4), without MD5, which gpgv refuses too.
 var pgpHashes = map[byte]crypto.Hash{
-	1: crypto.MD5, 2: crypto.SHA1, 8: crypto.SHA256, 9: crypto.SHA384, 10: crypto.SHA512, 11: crypto.SHA224,
+	2: crypto.SHA1, 8: crypto.SHA256, 9: crypto.SHA384, 10: crypto.SHA512, 11: crypto.SHA224,
+}
+
+// signingKeys returns the keys of the keyring with the ID that may sign: a key whose self
+// signature says so, or one too old to say.
+func (k *keyring) signingKeys(id uint64) []openpgp.Key {
+	var out []openpgp.Key
+	for _, key := range k.keys.KeysById(id) {
+		if key.SelfSignature == nil || !key.SelfSignature.FlagsValid || key.SelfSignature.FlagSign {
+			out = append(out, key)
+		}
+	}
+	return out
 }
 
 // verifyV3 checks a version 3 signature packet (RFC 4880 5.2.2), which go-crypto does not read
@@ -192,9 +204,12 @@ func (k *keyring) verifyV3(signed, body []byte) (known bool, err error) {
 	}
 	sigType, creation, keyID := body[2], body[3:7], binary.BigEndian.Uint64(body[7:15])
 	pubAlgo, hashAlgo := body[15], body[16]
-	keys := k.keys.KeysById(keyID)
+	keys := k.signingKeys(keyID)
 	if len(keys) == 0 {
 		return false, nil
+	}
+	if sigType > 1 { // a signature over data is binary (0) or text (1); a certification is not
+		return true, verifyErrorf("BAD signature by key %016X: type %#x is not a signature over data", keyID, sigType)
 	}
 	h, ok := pgpHashes[hashAlgo]
 	if !ok || !h.Available() {
@@ -253,7 +268,7 @@ func (k *keyring) check(signed, signatures []byte) error {
 			return verifyErrorf("no good signature by a key in the keyring: not a signature packet")
 		}
 		seen++
-		if len(pkt.body) > 0 && pkt.body[0] == 3 {
+		if len(pkt.body) > 0 && (pkt.body[0] == 3 || pkt.body[0] == 2) { // gpg reads 2 as 3
 			known, err := k.verifyV3(signed, pkt.body)
 			if err != nil {
 				return err
@@ -265,6 +280,11 @@ func (k *keyring) check(signed, signatures []byte) error {
 		}
 		p, err := packet.Read(bytes.NewReader(pkt.raw))
 		if err != nil {
+			// a signature of a kind go-crypto cannot read, beside one it can, is passed over as
+			// gpgv passes over what it cannot check
+			if _, unsupported := err.(pgperrors.UnsupportedError); unsupported {
+				continue
+			}
 			return verifyErrorf("no good signature by a key in the keyring: cannot read the signature: %s", err)
 		}
 		sig, ok := p.(*packet.Signature)
@@ -274,21 +294,25 @@ func (k *keyring) check(signed, signatures []byte) error {
 		if sig.IssuerKeyId == nil {
 			continue
 		}
-		keys := k.keys.KeysById(*sig.IssuerKeyId)
+		keys := k.signingKeys(*sig.IssuerKeyId)
 		if len(keys) == 0 {
 			continue
 		}
-		h, err := sig.PrepareVerify()
-		if err != nil {
-			return verifyErrorf("no good signature by a key in the keyring: %s", err)
+		if sig.SigType != packet.SigTypeBinary && sig.SigType != packet.SigTypeText {
+			return verifyErrorf("BAD signature by key %016X: type %#x is not a signature over data", *sig.IssuerKeyId, sig.SigType)
 		}
-		var w hash.Hash = h
-		if sig.SigType == packet.SigTypeText {
-			w = openpgp.NewCanonicalTextHash(h)
-		}
-		w.Write(signed)
 		verified := false
 		for _, key := range keys {
+			// a hash of its own per key: a failed check leaves the hash it was given spoiled
+			h, err := sig.PrepareVerify()
+			if err != nil {
+				return verifyErrorf("no good signature by a key in the keyring: %s", err)
+			}
+			var w hash.Hash = h
+			if sig.SigType == packet.SigTypeText {
+				w = openpgp.NewCanonicalTextHash(h)
+			}
+			w.Write(signed)
 			if key.PublicKey.VerifySignature(h, sig) == nil {
 				verified = true
 				break
@@ -367,25 +391,13 @@ func checkRSA(data, signature []byte, keyFile string, digest crypto.Hash) error 
 	if !ok {
 		return verifyErrorf("the RSA signature does not verify against %s: not an RSA key", keyFile)
 	}
-	var sum []byte
-	switch digest {
-	case crypto.SHA1:
-		s := sha1.Sum(data) // apk's index signatures are SHA-1, which the design records
-		sum = s[:]
-	case crypto.SHA256:
-		s := sha256.Sum256(data)
-		sum = s[:]
-	default:
-		s := sha512.Sum512(data)
-		sum = s[:]
+	if !digest.Available() {
+		return verifyErrorf("the RSA signature does not verify against %s: its digest is not available", keyFile)
 	}
-	if err := rsa.VerifyPKCS1v15(pub, digest, sum, signature); err != nil {
+	h := digest.New() // SHA-1 for the signatures Alpine makes, which the design records
+	h.Write(data)
+	if err := rsa.VerifyPKCS1v15(pub, digest, h.Sum(nil), signature); err != nil {
 		return verifyErrorf("the RSA signature does not verify against %s", keyFile)
 	}
 	return nil
-}
-
-func isVerifyError(err error) bool {
-	var ve *verifyError
-	return errors.As(err, &ve)
 }

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -50,11 +53,23 @@ func newCache(dir string, timeout time.Duration, trim int) (*cache, error) {
 	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return nil, err
 	}
+	dialer := &net.Dialer{Timeout: timeout}
 	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: timeout}).DialContext,
+		Proxy: http.ProxyFromEnvironment,
+		// every read of the body has timeout to deliver a byte, as urllib's socket timeout had,
+		// so a mirror that stalls is tried again rather than waited on
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return &idleConn{Conn: c, idle: timeout}, nil
+		},
 		TLSHandshakeTimeout:   timeout,
 		ResponseHeaderTimeout: timeout,
+		// the bytes as the server stores them: a .gz an object store labels gzip-encoded would
+		// otherwise arrive decompressed and fail its digest
+		DisableCompression: true,
 	}
 	return &cache{dir: dir, timeout: timeout, trim: trim, client: &http.Client{Transport: transport}}, nil
 }
@@ -119,6 +134,24 @@ func (c *cache) once(u string) ([]byte, error) {
 		return nil, &httpError{resp.StatusCode, strings.TrimPrefix(resp.Status, fmt.Sprintf("%d ", resp.StatusCode)), u}
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// idleConn is a connection whose every read must deliver within idle.
+type idleConn struct {
+	net.Conn
+	idle time.Duration
+}
+
+func (c *idleConn) Read(b []byte) (int, error) {
+	if err := c.Conn.SetReadDeadline(time.Now().Add(c.idle)); err != nil {
+		return 0, err
+	}
+	return c.Conn.Read(b)
+}
+
+func sha256hex(data []byte) string {
+	s := sha256.Sum256(data)
+	return hex.EncodeToString(s[:])
 }
 
 // get returns the file at u, read from the cache when it can be kept there. A file whose URL

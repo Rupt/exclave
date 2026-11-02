@@ -34,12 +34,15 @@ func (m *multi) String() string     { return strings.Join(*m, ",") }
 func (m *multi) Set(s string) error { *m = append(*m, s); return nil }
 
 // parseArgs parses the flags of fs from args, in any order with the positional arguments,
-// which it returns.
+// which it returns; an argument the flags cannot take is a usage error.
 func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 	var positional []string
 	for {
 		if err := fs.Parse(args); err != nil {
-			return nil, err
+			if err == flag.ErrHelp {
+				return nil, err
+			}
+			return nil, &usageError{err.Error()}
 		}
 		args = fs.Args()
 		if len(args) == 0 {
@@ -51,13 +54,16 @@ func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 }
 
 // splitChoices reads --choose VIRTUAL=PKG arguments.
-func splitChoices(choose []string) map[string]string {
+func splitChoices(choose []string) (map[string]string, error) {
 	out := map[string]string{}
 	for _, c := range choose {
-		k, v, _ := strings.Cut(c, "=")
+		k, v, found := strings.Cut(c, "=")
+		if !found || k == "" || v == "" {
+			return nil, &usageError{"--choose takes VIRTUAL=PKG, not " + c}
+		}
 		out[k] = v
 	}
-	return out
+	return out, nil
 }
 
 func main() {

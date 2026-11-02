@@ -21,11 +21,8 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"flag"
 	"fmt"
-	"hash"
 	"os"
 	"path"
 	"path/filepath"
@@ -108,6 +105,21 @@ func (r *debRepo) release(suite string) (map[string][2]string, bool, error) {
 	if len(stanzas) > 0 {
 		fields = stanzas[0]
 	}
+	// the file must be the suite's, and current: a mirror could otherwise serve another suite's
+	// signed file, or a past one, at the suite's URL
+	if fields["Suite"] != suite && fields["Codename"] != suite {
+		return nil, false, r.cache.reject(u, fmt.Sprintf("%s/InRelease: it is %s's, not %s's",
+			suite, strings.TrimSpace(fields["Suite"]+" "+fields["Codename"]), suite))
+	}
+	if until := fields["Valid-Until"]; until != "" && !r.cache.snapshot {
+		t, err := time.Parse(time.RFC1123, until)
+		if err != nil {
+			return nil, false, r.cache.reject(u, fmt.Sprintf("%s/InRelease: Valid-Until %q cannot be read", suite, until))
+		}
+		if time.Now().After(t) {
+			return nil, false, r.cache.reject(u, fmt.Sprintf("%s/InRelease: expired on %s", suite, until))
+		}
+	}
 	digests := map[string][2]string{}
 	for _, line := range strings.Split(fields["SHA256"], "\n") {
 		parts := strings.Fields(line)
@@ -183,13 +195,6 @@ func (r *debRepo) loadIndex() error {
 	return nil
 }
 
-func sha256New() hash.Hash { return sha256.New() }
-
-func sha256hex(data []byte) string {
-	s := sha256.Sum256(data)
-	return hex.EncodeToString(s[:])
-}
-
 // best returns the highest version of the package name that meets the constraint, or nil.
 func (r *debRepo) best(name, op, ver string) stanza {
 	for _, st := range r.index[name] {
@@ -212,7 +217,12 @@ func (r *debRepo) essential() []string {
 	return out
 }
 
-type queued struct{ name, why string }
+// queued is a package to select: the stanza already chosen for it, where a dependency chose
+// one at a version that meets it, else the name to pick for.
+type queued struct {
+	name, why string
+	st        stanza
+}
 
 // resolve returns the closure of Depends and Pre-Depends over wanted, by package name, with the
 // Essential set added when essential is true; choose names the package to use for a virtual
@@ -221,11 +231,11 @@ func (r *debRepo) resolve(wanted []string, essential bool, choose map[string]str
 	selected := map[string]stanza{}
 	var queue []queued
 	for _, n := range wanted {
-		queue = append(queue, queued{n, "requested"})
+		queue = append(queue, queued{name: n, why: "requested"})
 	}
 	if essential {
 		for _, n := range r.essential() {
-			queue = append(queue, queued{n, "essential"})
+			queue = append(queue, queued{name: n, why: "essential"})
 		}
 	}
 	for len(queue) > 0 {
@@ -234,7 +244,10 @@ func (r *debRepo) resolve(wanted []string, essential bool, choose map[string]str
 		if _, ok := selected[q.name]; ok {
 			continue
 		}
-		st := r.pick(q.name, "", "", selected, choose)
+		st := q.st
+		if st == nil {
+			st = r.pick(q.name, "", "", selected, choose)
+		}
 		if st == nil {
 			return nil, fmt.Errorf("no package provides %s (needed by %s)", q.name, q.why)
 		}
@@ -253,7 +266,8 @@ func (r *debRepo) resolve(wanted []string, essential bool, choose map[string]str
 					return nil, fmt.Errorf("cannot satisfy %s of %s: %s", field, st["Package"], r.unmet(alts, selected))
 				}
 				if _, ok := selected[chosen["Package"]]; !ok {
-					queue = append(queue, queued{chosen["Package"], st["Package"]})
+					// the stanza that met the constraint, not the name's highest version
+					queue = append(queue, queued{chosen["Package"], st["Package"], chosen})
 				}
 			}
 		}
@@ -311,8 +325,9 @@ func (r *debRepo) unmet(alts []reader.Dep, selected map[string]stanza) string {
 
 // pick returns the package that meets one dependency, or nil. The package --choose names for it
 // wins, then the highest version of the package of that name that meets the constraint.
-// Otherwise a provider is used: one already selected, else the one of highest Priority. A
-// versioned dependency is met only by a provider that provides a version.
+// Otherwise a provider is used: one already selected, else the one of highest Priority, at its
+// highest version that provides the name. A versioned dependency is met only by a provider that
+// provides a version.
 func (r *debRepo) pick(name, op, ver string, selected map[string]stanza, choose map[string]string) stanza {
 	if c, ok := choose[name]; ok {
 		return r.best(c, "", "")
@@ -345,7 +360,10 @@ func (r *debRepo) pick(name, op, ver string, selected map[string]stanza, choose 
 		if pi != pj {
 			return pi < pj
 		}
-		return providers[i].st["Package"] < providers[j].st["Package"]
+		if a, b := providers[i].st["Package"], providers[j].st["Package"]; a != b {
+			return a < b
+		}
+		return deb.Vercmp(providers[i].st["Version"], providers[j].st["Version"]) > 0
 	})
 	if len(providers) == 0 {
 		return nil
@@ -353,24 +371,36 @@ func (r *debRepo) pick(name, op, ver string, selected map[string]stanza, choose 
 	return providers[0].st
 }
 
-// download fetches one package, checks it against the index, and returns its path in the cache.
-func (r *debRepo) download(st stanza) (string, error) {
+// download fetches one package, checks it against the index, and puts it at dst as a hard link
+// to the cache's copy where the filesystem allows one. The file at dst is checked again once it
+// is there: another run sharing the cache could have replaced the cache's file between the
+// check and the link, and a rename never changes a file in place, so the link's bytes are what
+// was checked or another file whole.
+func (r *debRepo) download(st stanza, dst string) error {
 	filename := st["Filename"]
 	if st["SHA256"] == "" {
-		return "", fmt.Errorf("%s: the index carries no SHA256 for it; refusing an unverifiable download", filename)
+		return fmt.Errorf("%s: the index carries no SHA256 for it; refusing an unverifiable download", filename)
 	}
 	u := r.mirror + "/" + filename
 	data, err := r.cache.get(u, false)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if sha256hex(data) != st["SHA256"] {
-		return "", r.cache.reject(u, filename+": SHA256 does not match the index")
+		return r.cache.reject(u, filename+": SHA256 does not match the index")
 	}
 	if size, ok := st["Size"]; ok && strconv.Itoa(len(data)) != size {
-		return "", r.cache.reject(u, filename+": size does not match the index")
+		return r.cache.reject(u, filename+": size does not match the index")
 	}
-	return r.cache.path(u), nil
+	if err := linkOrCopy(r.cache.path(u), dst); err != nil {
+		return err
+	}
+	linked, err := os.ReadFile(dst)
+	if err != nil || sha256hex(linked) != st["SHA256"] {
+		os.Remove(dst)
+		return r.cache.reject(u, filename+": the cache's file changed under the link")
+	}
+	return nil
 }
 
 func fetchDebs(args []string) error {
@@ -417,7 +447,11 @@ func fetchDebs(args []string) error {
 	if err := repo.loadIndex(); err != nil {
 		return err
 	}
-	selected, err := repo.resolve(packages, !*noEssential, splitChoices(choose))
+	chosen, err := splitChoices(choose)
+	if err != nil {
+		return err
+	}
+	selected, err := repo.resolve(packages, !*noEssential, chosen)
 	if err != nil {
 		return err
 	}
@@ -430,11 +464,7 @@ func fetchDebs(args []string) error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		src, err := repo.download(selected[name])
-		if err != nil {
-			return err
-		}
-		if err := linkOrCopy(src, filepath.Join(*out, path.Base(selected[name]["Filename"]))); err != nil {
+		if err := repo.download(selected[name], filepath.Join(*out, path.Base(selected[name]["Filename"]))); err != nil {
 			return err
 		}
 	}

@@ -220,11 +220,17 @@ func ReadSections(p string) (*Sections, error) {
 		return nil, err
 	}
 	defer f.Close()
+	return ReadSectionsFrom(bufio.NewReader(f), p)
+}
+
+// ReadSectionsFrom reads the signature header and header of the rpm file in f, named p in a
+// refusal.
+func ReadSectionsFrom(f io.Reader, p string) (*Sections, error) {
 	var l [lead]byte
 	if _, err := io.ReadFull(f, l[:]); err != nil || !bytes.Equal(l[:4], []byte{0xed, 0xab, 0xee, 0xdb}) {
 		return nil, reader.Errorf("%s: not an rpm", p)
 	}
-	r := &reader.Counting{R: bufio.NewReader(f), Pos: lead}
+	r := &reader.Counting{R: f, Pos: lead}
 	sig, _, err := readHeader(r)
 	if err != nil {
 		return nil, reader.Errorf("%s: corrupt header: %s", p, err)
