@@ -4455,13 +4455,18 @@ Actions tab or as `gh workflow run ci.yml -f matrix=true` (`false`
 for the gate alone) on the pushed `main`, never at a push; `gh run
 list --workflow ci.yml` names the run, `gh run watch ID
 --exit-status` waits for it and `gh run view ID --log-failed` shows
-what failed. It calls `scripts/install-uv`,
-`scripts/inputs` for the gate's inputs alone, from the package
-archives and GitHub (cached between runs, keyed on the inputs script
-and the fetchers), `scripts/gate --full` and
-`scripts/matrix`, adding only what a runner lacks and the reference
-machine has: packages, the KVM device opened to the runner, and the
-AppArmor sysctl. The gate runs on an x86-64 runner on the gcc exclave
+what failed. It calls `scripts/install-uv`, with `.uv/` restored
+from the last run with the same pins so that uv, its Python and its
+packages are downloaded once, `scripts/inputs` for the gate's inputs
+alone, from the package archives and GitHub (cached between runs,
+keyed on the inputs script and the fetchers), `scripts/gate --full`
+and `scripts/matrix`, adding only what a runner lacks and the
+reference machine has: packages, the KVM device opened to the runner,
+and the AppArmor sysctl. Every download, uv's, a package file's, a
+source's or an image's, tries a failed or stalled connection again
+over about a minute (`fetch/retry.py`), since a runner has been refused
+by GitHub for two minutes at a time; a server's own answer, a 404, is
+final. The gate runs on an x86-64 runner on the gcc exclave
 and, natively, on an aarch64 runner on the arm64 gcc exclave
 made there, whose kernel is Ubuntu 24.04's 6.8, the one the emulated
 `noble-arm64` row boots: so that row has no job there, and the

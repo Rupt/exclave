@@ -52,10 +52,13 @@ work=$(mktemp -d)
 trap "rm -rf '$work'" EXIT INT TERM
 
 echo "fetching $url"
+# a connection that fails or stalls is tried again, five times over about a minute: GitHub has
+# refused a runner's connection for two minutes at a time
 if command -v curl >/dev/null 2>&1; then
-    curl -fsSL -o "$work/uv.tar.gz" "$url"
+    curl -fsSL --connect-timeout 30 --retry 5 --retry-delay 5 --retry-all-errors --retry-connrefused \
+        -o "$work/uv.tar.gz" "$url"
 elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$work/uv.tar.gz" "$url"
+    wget -q --timeout=30 --tries=5 --waitretry=5 -O "$work/uv.tar.gz" "$url"
 else
     echo "neither curl nor wget is installed" >&2
     exit 1

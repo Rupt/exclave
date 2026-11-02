@@ -42,6 +42,11 @@ jobs:
           [ "$(uname -m)" != x86_64 ] || sudo apt-get install -y -q --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
       - name: unprivileged user namespaces, for bwrap
         run: sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: the pinned uv, its Python and its package cache, from the last run with the same pins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .uv
+          key: uv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-uv', '.python-version', 'uv.lock') }}
       - name: the pinned uv, its Python and the locked tools
         run: |
           scripts/install-uv
@@ -95,6 +100,11 @@ jobs:
         run: |
           sudo mkdir -p /mnt/matrix && sudo chown "$(id -u):$(id -g)" /mnt/matrix
           df -h / /mnt
+      - name: the pinned uv, its Python and its package cache, from the last run with the same pins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .uv
+          key: uv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-uv', '.python-version', 'uv.lock') }}
       - name: the pinned uv, its Python and the locked tools
         run: |
           scripts/install-uv

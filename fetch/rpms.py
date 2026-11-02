@@ -43,6 +43,7 @@ import xml.etree.ElementTree as ET
 from compression import zstd
 from typing import NoReturn, TypedDict
 
+import retry
 import verify
 
 from unpack import rpm
@@ -155,8 +156,7 @@ class Repo:
                 return f.read()
         log(f"fetch {url}")
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(request, timeout=300) as response:
-            data = response.read()
+        data = retry.fetch(request, 300, log)
         if not mutable:
             tmp = f"{path}.tmp{os.getpid()}"  # several runs may share the cache
             with open(tmp, "wb") as f:

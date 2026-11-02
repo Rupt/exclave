@@ -36,6 +36,7 @@ import urllib.request
 import zlib
 from typing import NoReturn
 
+import retry
 import verify
 
 from unpack import apk
@@ -91,8 +92,7 @@ class Repo:
                 return f.read()
         log(f"fetch {url}")
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(request, timeout=120) as response:
-            data = response.read()
+        data = retry.fetch(request, 120, log)
         if not mutable:
             tmp = f"{path}.tmp{os.getpid()}"  # several runs may share the cache
             with open(tmp, "wb") as f:
