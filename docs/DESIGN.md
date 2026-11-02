@@ -2545,29 +2545,31 @@ suite's 99 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher and
 the command inside its copy of the exclave (`scripts/reproduce`,
 10.5) and compares their bytes with the reference machine's build;
-a row whose notes say "reproduced" built the same bytes. Measured
-October 2026:
+a row whose notes say "reproduced" built the same bytes. The suite's
+counts are from GitHub's hosted runners in November 2026, the rest
+from the reference machine in October 2026; the runner fetches
+Fedora's newest image, release 44 with kernel 6.19:
 
 | Distribution | Kernel | Suite | Oracles | Notes |
 |---|---|---|---|---|
-| CentOS 7 | 3.10 | 84 of 84 | none: no user namespaces | `seccomp(2)` absent, so the `prctl` form is used; `renameat`, not `renameat2` |
-| Ubuntu 18.04 | 4.15 | 84 of 84 | namespace, probe and Docker profile pass; no `openat2` | bwrap 0.2 |
-| Rocky Linux 8 | 4.18 | 84 of 84 | all pass | |
-| Ubuntu 20.04 | 5.4 | 84 of 84 | namespace, probe and Docker profile pass; no `openat2` | |
-| Debian 11 | 5.10 | 84 of 84 | all pass | the security suite lists a `bubblewrap` it does not serve; the matrix installs the release's |
-| Ubuntu 22.04 | 5.15 | 84 of 84 | all pass | |
-| Debian 12 | 6.1 | 84 of 84 | all pass | |
-| Alpine 3.20 | 6.6 | 84 of 84 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
-| Fedora 42 | 6.14 | 84 of 84 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
-| Ubuntu 26.10 | 7.3 | 84 of 84 | all pass | glibc 2.44 |
-| Ubuntu 24.04 arm64 | 6.8 | 84 of 84 | all pass | aarch64: natively on GitHub's aarch64 runner, where the gate runs this kernel (17), and under TCG on the reference machine, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed, where the suite takes 17 minutes and the row 36; the exclave is made on the reference machine and only run here (10.1) |
-| Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | 84 of 84 | all pass | aarch64 under TCG: the VM installs the 64 KB kernel and reboots into it; the row takes about two hours on a 2-core aarch64 machine (17), and runs when asked, from the reference machine; reproduced |
-| reference machine | 7.0 | 84 of 84 | all pass | Ubuntu 24.04, AppArmor |
+| CentOS 7 | 3.10 | 99 of 99 | none: no user namespaces | `seccomp(2)` absent, so the `prctl` form is used; `renameat`, not `renameat2` |
+| Ubuntu 18.04 | 4.15 | 99 of 99 | namespace, probe and Docker profile pass; no `openat2` | bwrap 0.2 |
+| Rocky Linux 8 | 4.18 | 99 of 99 | all pass | |
+| Ubuntu 20.04 | 5.4 | 99 of 99 | namespace, probe and Docker profile pass; no `openat2` | |
+| Debian 11 | 5.10 | 99 of 99 | all pass | the security suite lists a `bubblewrap` it does not serve; the matrix installs the release's |
+| Ubuntu 22.04 | 5.15 | 99 of 99 | all pass | |
+| Debian 12 | 6.1 | 99 of 99 | all pass | |
+| Alpine 3.20 | 6.6 | 99 of 99 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
+| Fedora 42 | 6.14 | 99 of 99 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
+| Ubuntu 26.10 | 7.3 | 99 of 99 | all pass | glibc 2.44 |
+| Ubuntu 24.04 arm64 | 6.8 | 99 of 99 | all pass | aarch64: natively on GitHub's aarch64 runner, where the gate runs this kernel (17), and under TCG on the reference machine, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed, where the suite takes 17 minutes and the row 36; the exclave is made on the reference machine and only run here (10.1) |
+| Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | 84 of 84, October 2026 | all pass | aarch64 under TCG: the VM installs the 64 KB kernel and reboots into it; the row takes about two hours on a 2-core aarch64 machine (17), and runs when asked, from the reference machine; reproduced |
+| reference machine | 7.0 | 99 of 99 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
 run passes; the ten x86-64 rows pass the same way on GitHub's hosted
-x86-64 runner, where the matrix job takes about 25 minutes (17,
-measured October 2026). Two checks outside the suite run natively on
+x86-64 runner, where the matrix job takes about 14 minutes (17,
+measured November 2026). Two checks outside the suite run natively on
 each row:
 
 - **`noexec`.** A program built by the exclave's gcc, placed on a
