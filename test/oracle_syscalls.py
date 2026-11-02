@@ -400,7 +400,18 @@ def make_maze(root: str, host: str) -> None:
         ("/maze/llong", padded("/maze/", "f2", PATH_MAX - 1)),
     ]
     for link, target in links:
-        os.symlink(target, os.path.join(root, link.lstrip("/")))
+        try:
+            os.symlink(target, os.path.join(root, link.lstrip("/")))
+        except OSError as e:
+            # a text as long as a text can be is more than some filesystems keep (XFS 1024
+            # bytes, ext4 a block less one): the link is left out, and its cases answer alike in
+            # both worlds
+            if e.errno != errno.ENAMETOOLONG or link != "/maze/llong":
+                raise
+            print(
+                f"{link} is not made: this filesystem refuses {len(target)} bytes of link text "
+                f"({os.strerror(e.errno)}), and the cases naming it see no link"
+            )
     for link, target in chain_links(host):
         if link.startswith("/maze/"):
             os.makedirs(os.path.dirname(os.path.join(root, link.lstrip("/"))), exist_ok=True)
