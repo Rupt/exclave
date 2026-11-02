@@ -12,6 +12,7 @@ Go regression's programs, which the matrix builds on the host for VMs that have 
 
 import fcntl
 import filecmp
+import functools
 import hashlib
 import os
 import re
@@ -162,6 +163,35 @@ def mount_of(path: str) -> str:
             if (real == mp or real.startswith(mp.rstrip("/") + "/")) and len(mp) > len(best):
                 best = mp
     return best
+
+
+@functools.cache
+def memfd_exec_under_bwrap() -> int | None:
+    """The errno of running an empty executable memfd under bwrap, or None where bwrap cannot.
+
+    ENOEXEC where the kernel reads it, as it does natively on every kernel of the matrix; EACCES
+    where an AppArmor profile confines bwrap's child, as Ubuntu 26.10's bwrap-userns-restrict
+    does (unpriv_bwrap), whose exec rule names paths under / and so refuses a file with none. The
+    oracles accept EACCES for every exec of a memfd under bwrap on such a host, where the launcher
+    answers as the host does natively.
+    """
+    script = (
+        "import os\n"
+        # MFD_EXEC (6.3; EINVAL before, where nothing seals a plain memfd against exec)
+        "try:\n    fd = os.memfd_create('probe', 0x10)\n"
+        "except OSError:\n    fd = os.memfd_create('probe', 0)\n"
+        "try:\n    os.execve(f'/proc/self/fd/{fd}', ['x'], {})\n"
+        "except OSError as e:\n    print(e.errno)\n"
+    )
+    bwrap = ["bwrap", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev"]
+    try:
+        p = subprocess.run(
+            [*bwrap, sys.executable, "-I", "-c", script], capture_output=True, check=False
+        )
+    except FileNotFoundError:
+        return None
+    out = p.stdout.decode().strip()
+    return int(out) if p.returncode == 0 and out.isdigit() else None
 
 
 def interp(path: str) -> str | None:

@@ -13,6 +13,7 @@ against the launcher. Needs user namespaces and bwrap; says so and exits 0 when 
 import argparse
 import concurrent.futures
 import dataclasses
+import errno
 import os
 import platform
 import re
@@ -415,7 +416,11 @@ def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
     elif name == "exe_link":
         wrong = kernel_answers.exe_link_wrong(out)
     elif name == "memfd_exec":
-        wrong = kernel_answers.memfd_exec_wrong(out)
+        # a confined bwrap child is refused every exec of a memfd (tree.memfd_exec_under_bwrap)
+        denied = tree.memfd_exec_under_bwrap() == errno.EACCES
+        wrong = kernel_answers.memfd_exec_wrong(out, exec_denied=denied)
+        if wrong:
+            wrong += [x for x in out.splitlines() if x.startswith("facts:")]
     elif name == "creat_slash":
         wrong = kernel_answers.creat_slash_wrong(out, by_the_kernel=True)
     elif name.startswith("exec_"):

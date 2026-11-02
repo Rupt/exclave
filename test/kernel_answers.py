@@ -10,6 +10,7 @@ import errno
 import itertools
 import os
 import platform
+import re
 lazy import ctypes
 
 # creat_slash HOSTDIR: one line per case, the case and the errno text
@@ -633,23 +634,41 @@ def clones_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     return wrong
 
 
-# memfd_exec: exec of a memfd, the kernel's exec permission before its reading of the header; a
-# memfd made with no flag is executable on 7.0 (vm.memfd_noexec 0) and refused on Ubuntu 26.10's
-# 7.3 (EACCES: the probe's open defect), so either; the last line is the host's facts
-MEMFD_EXEC: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
-    ("executable memfd with the program", "ran"),
-    ("executable memfd, empty", "ENOEXEC"),
-    ("sealed memfd with the program", "EACCES"),
-    ("sealed memfd, empty", "EACCES"),
-    ("plain memfd with the program", ("ran", "EACCES")),
-    ("plain memfd, empty", ("ENOEXEC", "EACCES")),
-    ("facts", None),
-)
+# memfd_exec: exec of a memfd, the kernel's exec permission before its reading of the header. The
+# flags MFD_EXEC and MFD_NOEXEC_SEAL are 6.3's, EINVAL before; a memfd made with no flag is sealed
+# against exec where vm.memfd_noexec is 1, which the program's last line, the host's facts, shows
+# in its seals (F_SEAL_EXEC); and under a bwrap whose child an AppArmor profile confines, every
+# exec of a memfd is EACCES (tree.memfd_exec_under_bwrap)
+OLD_MEMFD = kernel() < (6, 3)
+F_SEAL_EXEC = 0x20
 
 
-def memfd_exec_wrong(out: str) -> list[str]:
-    """The lines of memfd_exec's output that differ from the kernel's answers."""
-    return lines_wrong(out, MEMFD_EXEC, {}, by_the_kernel=True)
+def memfd_exec_table(
+    out: str, *, exec_denied: bool
+) -> tuple[tuple[str, str | tuple[str, ...] | None], ...]:
+    """The answers memfd_exec's cases take on this kernel, read with the host's facts in out."""
+    m = re.search(r"seals=(0x[0-9a-f]+|0)", out)
+    sealed = bool(int(m.group(1), 16) & F_SEAL_EXEC) if m else False
+    flagged = "memfd_create EINVAL" if OLD_MEMFD else None
+    ran = "EACCES" if exec_denied else "ran"
+    empty = "EACCES" if exec_denied else "ENOEXEC"
+    return (
+        ("executable memfd with the program", flagged or ran),
+        ("executable memfd, empty", flagged or empty),
+        ("sealed memfd with the program", flagged or "EACCES"),
+        ("sealed memfd, empty", flagged or "EACCES"),
+        ("plain memfd with the program", "EACCES" if sealed else ran),
+        ("plain memfd, empty", "EACCES" if sealed else empty),
+        ("facts", None),
+    )
+
+
+def memfd_exec_wrong(out: str, *, exec_denied: bool = False) -> list[str]:
+    """The lines of memfd_exec's output that differ from the kernel's answers.
+
+    exec_denied: the run was under a bwrap whose child is refused the exec of a memfd.
+    """
+    return lines_wrong(out, memfd_exec_table(out, exec_denied=exec_denied), {}, by_the_kernel=True)
 
 
 def exe_link_wrong(out: str) -> list[str]:

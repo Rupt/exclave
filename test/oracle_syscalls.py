@@ -1925,6 +1925,20 @@ EXPECTED.extend(
         (
             "execveat",
             lambda label, b, o, _c: (
+                label.startswith("memfd/")
+                and exec_errnos(b, o) == (errno.EACCES, errno.ENOEXEC)
+                and tree.memfd_exec_under_bwrap() == errno.EACCES
+            ),
+            (
+                "exec of a memfd under bwrap on a host whose AppArmor confines bwrap's child "
+                "(Ubuntu 26.10's bwrap-userns-restrict: unpriv_bwrap, whose exec rule names paths "
+                "under / and so refuses a file with none, EACCES); natively the kernel reads the "
+                "empty memfd (ENOEXEC), as the launcher does"
+            ),
+        ),
+        (
+            "execveat",
+            lambda label, b, o, _c: (
                 KERNEL < (6, 14)
                 and label.endswith("/check")
                 and exec_errnos(b, o)[0] == errno.EINVAL
@@ -1976,22 +1990,7 @@ EXPECTED.extend(
 # measured on, 7.0 and later, a whole run in which an entry the host can show matches no case
 # fails, so that the fix removes the entry.
 DEFECTS_MEASURED = (7, 0)
-DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[], bool]]] = [
-    (
-        (
-            "execveat of an empty memfd made with no flag through AT_EMPTY_PATH: Ubuntu 26.10's "
-            "7.3 answers EACCES where 7.0 and the launcher, whose X_OK check on /proc/self/fd/N "
-            "passes there, read the header and answer ENOEXEC; the rule that kernel applies, "
-            "vm.memfd_noexec or a noexec mount of its own, is not yet read, and "
-            "test/progs/memfd_exec.c prints that host's facts on the namespace oracle's line"
-        ),
-        lambda n, label, b, o, _c: (
-            (n, label, b, o)
-            == ("execveat", "memfd//empty_path", "ret=28928 errno=0", "ret=27648 errno=0")
-        ),
-        lambda: KERNEL >= (7, 1),
-    )
-]
+DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[], bool]]] = []
 
 
 def expected(name: str, label: str, b: str, o: str, ctx: Ctx) -> str | None:
