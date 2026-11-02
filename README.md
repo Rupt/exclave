@@ -57,14 +57,17 @@ kernel 7.0, glibc 2.39.
 
 You need an x86-64 or aarch64 Linux host with `gcc` and its static C
 library (Ubuntu's `libc6-dev`), `curl` or `wget`, and the network.
-`scripts/install-uv` fetches a pinned, checksummed
+`scripts/install-go` fetches a pinned, checksummed
+[Go](https://go.dev/dl/) into `.go/`, which builds `unpack` and the
+fetchers, and `scripts/install-uv` a pinned, checksummed
 [uv](https://docs.astral.sh/uv/) into `.uv/`, which provides the pinned
-Python and every Python tool the project uses. The example then
+Python the tests and checks run on. The example then
 downloads Ubuntu's gcc packages and CentOS 7's glibc, 121 MB in all. No
 root, no container runtime, no user namespaces: nothing needs a
 privilege, and nothing is installed outside the checkout.
 
 ```bash
+scripts/install-go
 scripts/install-uv
 scripts/build
 scripts/example ~/exclave-example
@@ -78,12 +81,12 @@ hand:
 
 1. `scripts/build` builds `build/launcher`, the freestanding binary every
    executable in an exclave is a hard link to.
-2. `fetch/debs.py` downloads Ubuntu 24.04's `gcc-13` closure, 94
+2. `scripts/fetch-debs` downloads Ubuntu 24.04's `gcc-13` closure, 94
    packages, and `unpack` makes an unwrapped exclave from the files: the
    tree under `gcc.exclave/tree/`, the maintainer scripts' effects
    synthesised, every input recorded by hash in
    `gcc.exclave/.exclave/hashes`.
-3. `fetch/rpms.py` downloads CentOS 7's glibc, headers and `libgcc`.
+3. `scripts/fetch-rpms` downloads CentOS 7's glibc, headers and `libgcc`.
    Unpacked into a tree of their own, they are copied into the gcc
    exclave at `/opt/sysroot-el7`, and a two-line manifest says `data
    "/opt/sysroot-el7"`: nothing there is wrapped, checked or executed.
@@ -234,7 +237,8 @@ Whatever made the tree is the step before it. For package files that is
 
 - it reads each package's own control archive and reports the
   dependencies the set does not satisfy;
-- it extracts in Python and synthesises what the maintainer scripts
+- it extracts, every path resolved inside the tree, and synthesises
+  what the maintainer scripts
   would have done: alternatives, `ld.so.cache` as the exclave's own
   `ldconfig` would write it, the CA bundle, `/etc/passwd`;
 - it records every input by hash in the hashes file.
@@ -381,6 +385,8 @@ a release of the gcc exclave.
 ## Development
 
 Every command is a POSIX shell script in `scripts/`, run from anywhere.
+`unpack` and the fetchers are Go, built by the pinned toolchain in
+`.go/` (`scripts/install-go`), their modules pinned by `go.sum`.
 Python runs only through the pinned uv in `.uv/` (`scripts/install-uv`):
 it installs the Python `.python-version` names and the tools `uv.lock`
 pins, ruff and ty among them, inside the checkout, so a run depends on
@@ -393,8 +399,8 @@ Beyond the first run's requirements:
   as from a plain terminal on Ubuntu 23.10 and later, the gate marks
   those steps SKIP rather than ok.
 - `strace`, `gdb`, Go and `rustc`, for the suite's regressions.
-- `gpgv` and `openssl`, for the fetchers' signature checks, and `gpg`
-  for their tests.
+- `gpg` and `openssl`, for the fetchers' tests, which make keys and
+  signatures with them.
 - Optionally `aarch64-linux-gnu-gcc`, for the aarch64 launcher, and
   QEMU with KVM and `cloud-image-utils`, for the kernel matrix
   (`qemu-system-arm` and `qemu-efi-aarch64` for its arm64 row).
@@ -414,7 +420,7 @@ each test establishes, 19 the decisions a change is expected to respect.
 scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, clang-format, clang-tidy and gcc's strict warnings; --fix lets them correct
 scripts/inputs ~/.cache/exclave-inputs   # the test inputs: the four exclaves, the arm64 gcc exclave and Docker's seccomp profile, from the package archives and GitHub; skips what is present
 scripts/inputs ~/.cache/exclave-inputs examples   # the examples' inputs too, some from their authors' sites
-D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave   # the commit gate: of the code checks, unit tests, stack budget, unpack's and the fetchers' tests, the suite, the oracles, the syscall probe and the Docker profile run, the steps the change can affect, two at a time (--jobs N); --full runs all of them
+D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave   # the commit gate: of the code checks, unit tests, stack budget, the Go commands' tests, unpack's and the fetchers' tests, the suite, the oracles, the syscall probe and the Docker profile run, the steps the change can affect, two at a time (--jobs N); --full runs all of them
 D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # beyond the gate, when asked: the suite, the debug launcher, the oracles and the probe on every exclave given; the plain-label suite, the fuzz budget and the release test on the first
 scripts/test --exclave gcc.exclave       # the suite alone; -k NAME runs one test
 scripts/matrix --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix: cloud images under QEMU/KVM, one at a time (--jobs N); due when the gate says a change reaches the VMs
@@ -426,7 +432,8 @@ scripts/examples ~/.cache/exclave-inputs/realsoft.exclave   # the example runs, 
 The repository's layout:
 
 ```
-scripts/install-uv   the pinned uv into .uv/, checked against a committed checksum per architecture; scripts/lib.sh what every script sources
+scripts/install-go   the pinned Go into .go/, checked against a committed checksum per architecture, which builds unpack and fetch
+scripts/install-uv   the pinned uv into .uv/, checked the same way, which provides the Python the tests run on; scripts/lib.sh what every script sources
 scripts/exclave      the exclave command; scripts/unpack, fetch-debs, fetch-apks and fetch-rpms the steps before it
 scripts/example      the first run: from the build to a program built inside an exclave that runs on any glibc since 2.17, every command shown
 scripts/check        the code checks; scripts/gate the commit gate; scripts/extra the checks beyond it (scripts/steps.sh their step runner); scripts/inputs the development inputs; scripts/examples the example runs
@@ -434,8 +441,8 @@ scripts/release      a signed release of exclaves with the command beside them; 
 scripts/reproduce    the launcher and the command built inside a gcc exclave, the same bytes wherever it runs
 scripts/test         the suite; scripts/matrix, exercise and sysroot the other test drivers
 .github/workflows/ci.yml  the gate on GitHub's x86-64 and aarch64 runners and the x86-64 rows under KVM, when dispatched by hand
-pyproject.toml       the Python project, unpack: no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python
-scripts/build        the launchers: build/launcher, build/launcher-old for the nesting regression, build/launcher-debug with UBSan's checks; the command, build/exclave, and build/exclave-asan for the gate; the aarch64 ones with a cross compiler; nothing when they are up to date
+pyproject.toml       the Python project, the tests: no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python; go.mod the Go module, go.sum its pins
+scripts/build        the launchers: build/launcher, build/launcher-old for the nesting regression, build/launcher-debug with UBSan's checks; the command, build/exclave, and build/exclave-asan for the gate; the Go commands, build/unpack and build/fetch; the aarch64 ones with a cross compiler, unpack-aarch64 for the matrix; nothing when they are up to date
 src/sys.h            syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
 src/elf.h            the ELF structures the loader needs
 src/common.h         constants, the run-time state (struct exclave), every module's interface
@@ -466,19 +473,20 @@ tool/check.c         the static and dynamic checks of 10.3, the wrappers and loc
 tool/prune.c         prune (10.4)
 tool/blake2b.c       BLAKE2b, from RFC 7693; the licence of the RFC's reference code is noted in the file
 tool/blobs.S         the launcher and tool/README.txt, the README every exclave gets, carried as data
-unpack/cli.py        the step before the tool: package files -> an unwrapped exclave (10.1)
-unpack/steps.py      extraction rules, synthesis, the volatile directories, dependency report, the pkg records
-unpack/rules.py      the synthesis rules as a table, named in the log as they apply, and the notes on what no rule makes; unpack/package.py a package file and its reader
-unpack/ldcache.py    ld.so.cache as the tree's own ldconfig would write it, byte for byte, running nothing (10.1)
-unpack/reader.py     the interface every package reader provides, and the streams they read as they decompress
-unpack/root.py       the tree as a root: every path resolved inside it, every write through a directory descriptor
-unpack/deb.py        the Debian reader: ar, tar, compression, control stanzas, dependency fields, version order
-unpack/apk.py        the Alpine reader: gzip streams, .PKGINFO, apk's dependency and version syntax
-unpack/rpm.py        the rpm reader: lead and headers, the cpio payload, rpm's flags and version order
-fetch/debs.py        resolve a closure from a Debian archive and download it: InRelease against the keyring, every file against the index
-fetch/apks.py        the same for an Alpine repository: the index against the key its signature names, each package's checksums as apk checks them
-fetch/rpms.py        the same for a yum or dnf repository: every rpm's own signatures as rpm checks them, repomd.xml's where the repository signs it
-fetch/verify.py      the signature checks the fetchers share: gpgv for OpenPGP, openssl for Alpine's RSA, armoured keys decoded
+unpack/main.go       the step before the tool: package files -> an unwrapped exclave, and `unpack ldconfig TREE` for a tree made by hand (10.1)
+unpack/steps.go      extraction, the volatile directories, the dependency report, the pkg records; unpack/package.go a package file and its reader
+unpack/rules.go      the synthesis rules as a table, named in the log as they apply, and the notes on what no rule makes
+unpack/ldcache/      ld.so.cache as the tree's own ldconfig would write it, byte for byte, running nothing (10.1)
+unpack/reader/       the interface every package reader provides, the streams they read as they decompress, and the tar reader
+unpack/root/         the tree as a root: every path resolved inside it, every write through a directory descriptor
+unpack/deb/          the Debian reader: ar, tar, compression, control stanzas, dependency fields, version order
+unpack/apk/          the Alpine reader: gzip streams, .PKGINFO, apk's dependency and version syntax
+unpack/rpm/          the rpm reader: lead and headers, the cpio payload, rpm's flags and version order
+fetch/main.go        the fetch command, debs, apks or rpms; fetch/net.go the cache and the retried fetch they share
+fetch/debs.go        resolve a closure from a Debian archive and download it: InRelease against the keyring, every file against the index
+fetch/apks.go        the same for an Alpine repository: the index against the key its signature names, each package's checksums as apk checks them
+fetch/rpms.go        the same for a yum or dnf repository: every rpm's own signatures as rpm checks them, repomd.xml's where the repository signs it
+fetch/verify.go      the signature checks the fetchers share: OpenPGP through go-crypto, its version 3 signatures and Alpine's RSA through Go's crypto, armoured keys decoded
 test/run.py          the regression suite: test/regress_*.py its tests in eight groups, test/suite.py its fixtures,
                      test/harness.py the runner it shares with the unpack tests; test/progs/ its C, Rust and Go programs
 test/unpack_test.py  unpack's rules on hostile .deb, .apk and .rpm files; test/packages.py builds them

@@ -44,7 +44,7 @@ The loop that has served well, in the order it pays:
    EXCLAVE` on the gcc exclave at zero failures, then the commit. It is
    the one gate, and it is fast: every step is a test, which fails on a
    case with the answer expected, in seconds (the code checks, the
-   unit tests, the stack budget, unpack's and the fetchers' tests, the
+   unit tests, the stack budget, the Go commands' tests, unpack's and the fetchers' tests, the
    suite once, the oracles, the syscall probe and the Docker profile
    run); it runs the steps the change can affect, in seconds for a
    document or a script, `--full` all of them, and says when the
@@ -134,11 +134,20 @@ The loop that has served well, in the order it pays:
   launcher, since it never runs inside another program; paths are bytes
   and every list it prints or hashes is in the order of their bytes.
   The tests judge it only through its commands. The steps before it are
-  Python: `unpack/` (`scripts/unpack`), which makes a tree from package
-  files, and before that `fetch/debs.py`, `fetch/apks.py` and
-  `fetch/rpms.py`. `curl` has not been needed. A package reader
-  (`deb.py`, `apk.py`, `rpm.py`) has one interface,
-  `unpack/reader.py`'s `Reader`, and is chosen by the file. `src/gdb.py`
+  Go, each one static file `scripts/build` builds with the pinned
+  toolchain in `.go/` (`scripts/install-go`, checked against a committed
+  checksum, as uv is): `unpack/` (`build/unpack`, `scripts/unpack`),
+  which makes a tree from package files, and `fetch/` (`build/fetch`,
+  with `debs`, `apks` and `rpms` commands, `scripts/fetch-*`). Their
+  delicate parsers are Go's standard library's where it has them, with
+  xz, zstd and OpenPGP from the pure-Go modules `go.mod` pins and no
+  cgo; `fetch/verify.go` checks signatures in-process under apt's rule,
+  neither expiry nor revocation consulted. A package reader
+  (`unpack/deb`, `apk`, `rpm`) has one interface, `unpack/reader`'s
+  `Reader`, and is chosen by the file. `scripts/check` runs gofmt and
+  go vet; the gate's go step runs `go test`, whose fuzz targets
+  `scripts/extra` fuzzes for ten seconds each. `curl` has not been
+  needed. `src/gdb.py`
   is data the launcher carries for gdb, not code it runs, and it runs
   on gdb's own Python (ruff targets 3.7 there).
 - **Python runs only through the pinned uv**, never the machine's
@@ -146,12 +155,10 @@ The loop that has served well, in the order it pays:
   per architecture, checked against a committed checksum), uv installs
   the Python `.python-version` names (3.15) and the dev tools `uv.lock`
   pins, and every command is a POSIX `sh` wrapper in `scripts/` that
-  sources `scripts/lib.sh`. `unpack` is a package, which `uv sync`
-  installs into `.venv` in editable form; everything imports it as a
-  package (`from unpack import steps`), never by editing `sys.path`,
-  and a test driver imports its helpers as a script's siblings. Python
-  files are programs the wrappers run, without shebangs or executable
-  bits. The matrix carries the same Python into its VMs.
+  sources `scripts/lib.sh`. A test driver imports its helpers as a
+  script's siblings, never by editing `sys.path`. Python files are
+  programs the wrappers run, without shebangs or executable bits. The
+  matrix carries the same Python into its VMs.
   Running Python by hand: `.uv/bin/uv run python FILE` with the
   environment `scripts/lib.sh` sets.
 - **The Python is ruff- and ty-clean**, as `scripts/check` checks
@@ -193,8 +200,8 @@ The loop that has served well, in the order it pays:
   better left out than quoted.
 - **The gate.** `scripts/gate EXCLAVE` (`EXCLAVE_TEST_INPUTS=DIR`,
   the directory `scripts/inputs` filled, adds the Docker profile) runs,
-  of the code checks, the unit tests, the stack budget, unpack's and
-  the fetchers' tests, the suite, the oracles and the syscall probe on
+  of the code checks, the unit tests, the stack budget, the Go commands'
+  tests, unpack's and the fetchers' tests, the suite, the oracles and the syscall probe on
   the one exclave, the ones the changed paths can affect (`--full`: all
   of them), two steps at a time (`--jobs N`; this laptop is in use
   meanwhile) on copies with its time printed, and a 30 s budget per

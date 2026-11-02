@@ -31,6 +31,13 @@ mkdir -p "$dir/log" "$dir/src" || exit 2
 fails=0
 
 exclave() { "$repo/build/exclave" "$@"; }
+download() { # download URL FILE: through curl or wget, with their retries
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -A exclave-inputs --connect-timeout 30 --retry 5 --retry-delay 5 --retry-all-errors --retry-connrefused -o "$2" "$1"
+    else
+        wget -q -U exclave-inputs --timeout=30 --tries=5 --waitretry=5 -O "$2" "$1"
+    fi
+}
 unpack() { "$repo/build/unpack" "$@"; }
 
 fetch() { # fetch NAME KIND ARGS...: package files into DIR/NAME through the fetcher's cache; KIND is debs, apks or rpms
@@ -79,15 +86,8 @@ file() { # file URL NAME HASH: one file into DIR/src, verified by its BLAKE2b-25
         return 0
     fi
     rm -f "$dir/src/$name"
-    # fetched through the fetchers' retry (fetch/retry.py): a failed or stalled connection is tried again
-    if py -c '
-import sys, urllib.request
-sys.path.insert(0, sys.argv[3])
-import retry
-request = urllib.request.Request(sys.argv[1], headers={"User-Agent": "exclave-inputs"})
-with open(sys.argv[2], "wb") as f:
-    f.write(retry.fetch(request, 300, print))
-' "$url" "$dir/src/$name" "$ROOT/fetch" >"$dir/log/$name.log" 2>&1 &&
+    # a failed or stalled connection is tried again, five times over about a minute, as scripts/install-uv does
+    if download "$url" "$dir/src/$name" >"$dir/log/$name.log" 2>&1 &&
         [ "$(b2sum -l 256 "$dir/src/$name" | cut -d' ' -f1)" = "$hash" ]; then
         echo "src/$name: fetched"
     else

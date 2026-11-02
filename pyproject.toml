@@ -5,29 +5,20 @@ description = "Relocatable, privilege-free Linux software: a directory that runs
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-# The exclave command is C (tool/, built by scripts/build). The Python here is
-# the step before it, unpack/, the fetchers and the tests, on the pinned Python
-# .python-version names, which uv installs and every script runs through
-# (scripts/lib.sh). They use the standard library only, so there is nothing to
-# depend on.
+# The exclave command is C (tool/) and the steps before it, unpack/ and fetch/,
+# are Go, all built by scripts/build. The Python here is the tests, on the
+# pinned Python .python-version names, which uv installs and every script runs
+# through (scripts/lib.sh). They use the standard library only, so there is
+# nothing to depend on, and nothing to build: the project is its tests.
 requires-python = ">=3.15"
 dependencies = []
-
-[build-system]
-requires = ["uv_build>=0.13.5,<0.14"]
-build-backend = "uv_build"
-
-[tool.uv.build-backend]
-# The package is unpack/, at the top of the checkout beside src/ and tool/, the
-# C. uv sync installs it into .venv in editable mode; the matrix's VMs get it as
-# a .pth naming the checkout.
-module-name = "unpack"
-module-root = ""
 
 [tool.uv]
 # Never borrow a Python from the machine, as the uv in .uv/ is never borrowed
 # from PATH: what runs here should not depend on what is installed.
 python-preference = "only-managed"
+# No package: the tests are scripts, each importing its helpers as siblings.
+package = false
 
 [dependency-groups]
 dev = [
@@ -144,13 +135,13 @@ convention = "google"
 
 [tool.ty.environment]
 python-version = "3.15"
-# The import roots: the checkout, for the unpack package, and test/, whose
-# drivers import their helpers (tree, syscalls, oracle_ns, ...) as a script's
-# siblings, from the directory Python puts first on a script's path.
-root = [".", "test"]
+# The import root: test/, whose drivers import their helpers (tree, syscalls,
+# oracle_ns, ...) as a script's siblings, from the directory Python puts first
+# on a script's path.
+root = ["test"]
 
 [tool.ty.src]
-include = ["unpack", "test", "fetch"]
+include = ["test"]
 
 [tool.ty.analysis]
 # A `type: ignore` suppresses nothing: only `ty: ignore[<rule>]` does, so every

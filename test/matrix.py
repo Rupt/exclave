@@ -38,7 +38,6 @@ import tree
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 UV = os.path.join(REPO, ".uv", "bin", "uv")
-PYDIR = f"python{sys.version_info[0]}.{sys.version_info[1]}"
 MACHINE = platform.machine()
 # ELF e_machine to the name uname gives it, for the launcher an exclave carries
 MACHINES = {62: "x86_64", 183: "aarch64"}
@@ -689,7 +688,7 @@ def main() -> int:
         log("packing the test tree for", arch)
         with tarfile.open(payload, "w:gz", compresslevel=1) as t:
             # src and tool: the sources the suite's fixture is stamped with
-            for d in ("test", "unpack", "src", "tool"):
+            for d in ("test", "src", "tool"):
                 t.add(os.path.join(REPO, d), arcname="repo/" + d)
             # the text the launcher carries, which exclave_readme compares
             t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")
@@ -700,12 +699,6 @@ def main() -> int:
             info.size = len(commit) + 1
             t.addfile(info, io.BytesIO(commit.encode() + b"\n"))
             t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
-            # the unpack package installed into that Python as uv sync installs it here, in
-            # editable form: a .pth naming the checkout, relative to site-packages
-            pth = b"../../../../repo\n"
-            info = tarfile.TarInfo(f"python/lib/{PYDIR}/site-packages/_exclave.pth")
-            info.size = len(pth)
-            t.addfile(info, io.BytesIO(pth))
             if args.docker_profile:
                 t.add(args.docker_profile, arcname="docker-seccomp.json")
             # the Go regression's programs, built here for the VM's machine: the VMs have no go

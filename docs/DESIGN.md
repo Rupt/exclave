@@ -1952,7 +1952,7 @@ before a user does.
   the four test exclaves (17).
 - **An Alpine exclave**: `gcc musl-dev binutils make linux-headers`
   and the base, 20 packages from Alpine 3.21 fetched with
-  `fetch/apks.py`, unpacked and wrapped: 87 ELF files, no error
+  `scripts/fetch-apks`, unpacked and wrapped: 87 ELF files, no error
   from the static check, and a tree hash that reproduces from the same
   files. Its gcc 14.2 compiles and runs C inside, dynamically linked
   on musl 1.2.5 and statically linked. The static output runs on a
@@ -1960,7 +1960,7 @@ before a user does.
   loader. A compile touches no host path, and it is one of the four
   test exclaves (17).
 - **A Fedora exclave**: `gcc glibc-devel binutils make` and the base,
-  87 packages from Fedora 42 fetched with `fetch/rpms.py`, with
+  87 packages from Fedora 42 fetched with `scripts/fetch-rpms`, with
   `glibc-minimal-langpack` chosen for the langpack, unpacked and
   wrapped: 351 ELF files, no error from the static check, and a tree
   hash that reproduces from the same files. Its gcc 15 compiles and
@@ -1995,11 +1995,14 @@ prunes and relinks it. It is C, in `tool/`, built by `scripts/build` as
 one static file per architecture that carries its launcher (10.5), and
 run from a checkout as `build/exclave` or `scripts/exclave`. The tests
 judge it only through its commands. `unpack` (10.1), the step before
-it, is the Python package `unpack`, run like every Python program here
-by the pinned Python: the uv that `scripts/install-uv` puts in `.uv/`
-installs the version `.python-version` names (3.15) into the checkout,
-and every script runs through it (`scripts/lib.sh`), so nothing the
-machine has installed decides which Python runs.
+it, and the fetchers are Go, in `unpack/` and `fetch/`, built by
+`scripts/build` into `build/unpack` and `build/fetch`, each one static
+file, with the pinned toolchain `scripts/install-go` puts in `.go/`. The
+tests are Python, run by the pinned Python: the uv that
+`scripts/install-uv` puts in `.uv/` installs the version
+`.python-version` names (3.15) into the checkout, and every script runs
+through it (`scripts/lib.sh`), so nothing the machine has installed
+decides which Go or Python runs.
 
 The tool's input is an unwrapped exclave, a directory holding `tree/`.
 What made the tree is the step before the tool: `unpack` from package
@@ -2036,8 +2039,8 @@ ln -s tree/usr/bin/gcc-13 gcc-13.exclave/gcc
 ```
 
 **Unpack** is the step before the tool, as fetching is the step before
-it: the Python package `unpack` beside the tool, run as `scripts/unpack
-OUT PKG...`, which shares with the tool only the layout of 6.1 and the
+it: the Go program `unpack` beside the tool, `build/unpack`, run as
+`scripts/unpack OUT PKG...`, which shares with the tool only the layout of 6.1 and the
 hashes file of 6.4. It reads `.deb`, `.apk`
 and `.rpm` files, each through a reader chosen by the file's suffix;
 the three share one interface, and a set that mixes formats is
@@ -2052,7 +2055,7 @@ refused. From `.deb` files, in five steps:
    report, not a refusal, because the set is its maker's choice; the
    static check (10.3) is the gate on correctness, and a missing data
    file shows up as a failed open in `EXCLAVE_LOG`. The Essential set, which every package assumes and none
-   declares, is the fetcher's concern; `fetch/debs.py` adds it
+   declares, is the fetcher's concern; `fetch debs` adds it
    unless given `--no-essential`.
 2. **Extract** each `data.tar.*` into `tree/`, after creating the
    distribution's merged-`/usr` symlinks (`bin`, `sbin`, `lib`, `lib32`,
@@ -2070,7 +2073,7 @@ refused. From `.deb` files, in five steps:
    resolves it in the root it installs into: an absolute symlink starts
    at the tree's root and `..` stops there, so a link that points out of
    the tree leads back into it, and nothing outside the tree is read,
-   written or removed (`unpack/root.py` walks each path one directory
+   written or removed (`unpack/root` walks each path one directory
    descriptor at a time, no component followed but by reading it, at
    most 40 links). A hard link to a file the tree does not hold is
    refused, and so are `..` in a member's name and a member under the
@@ -2085,14 +2088,14 @@ refused. From `.deb` files, in five steps:
    is refused, since another reader could extract members hidden
    there; a cpio payload without its trailer, or with an entry running
    past its end, was cut short and is refused too.
-   `ar` and `tar` are read in Python, xz, gzip and bzip2 through the
-   standard library, and zstd through its `compression.zstd`. Modes
+   `ar` and `cpio` are read here; `tar`, gzip and bzip2 by Go's standard
+   library, and xz and zstd by the pure-Go decoders `go.mod` pins. Modes
    and modification times come from the archive, with setuid and setgid
    bits dropped (they mean nothing under `no_new_privs`, 12) and every
    file made readable by its owner; special files are skipped with a
    note.
 3. **Synthesise** the effects of maintainer scripts; the scripts are
-   never run. The rules are a table, `unpack/rules.py`, each named,
+   never run. The rules are a table, `unpack/rules.go`, each named,
    applied in order when the packages ask for it, and named in the log
    when it applied; they approximate dpkg's configure step for the case
    without privilege, and a tree whose scripts must really run comes
@@ -2114,7 +2117,7 @@ refused. From `.deb` files, in five steps:
    consulted; `base-passwd`, `/etc/passwd` and `/etc/group` from its
    masters; and `ldconfig`, `ld.so.cache` written as the exclave's own
    static `ldconfig` would write it, from the tree's files alone
-   (`unpack/ldcache.py`, from glibc's `ldconfig` source): the directories
+   (`unpack/ldcache`, from glibc's `ldconfig` source): the directories
    `ld.so.conf` names and then the loader's trusted directories, read
    from the loader's own table (10.3), the soname links made and the
    dangling `.so.` links removed in them as `ldconfig` makes and removes
@@ -2242,28 +2245,30 @@ directories of their own, so no merged-`/usr` links are made, and adds
 one rule, busybox's applet links (13 item 37). rpm adds a handful, among
 them cpio hard links, `rpmvercmp` ordering, Fedora 42's merge of `sbin`
 into `bin` and Fedora's p11-kit CA bundle. The module docstrings of
-`exclave/apk.py` and `exclave/rpm.py` list each format's differences.
+`unpack/apk` and `unpack/rpm` list each format's differences.
 
 **The step before the tool** belongs to whoever makes the exclave.
-Three fetchers in `fetch/`, one for each format, are worked examples;
-they are not part of the tool's exclave. Each resolves a closure from a
+Three fetchers, one for each format, the commands of one Go program
+in `fetch/` (`build/fetch`, run as `scripts/fetch-debs`, `fetch-apks`
+and `fetch-rpms`), are worked examples; they are not part of the
+tool's exclave. Each resolves a closure from a
 repository's index, chooses providers of virtual names by priority,
 verifies every download against the index's checksum, and fills a
 directory. They know about mirrors and snapshot services because those
 are locators; the tool does not, because a hash is not a locator.
 
-- `fetch/debs.py` resolves `Depends` and `Pre-Depends` from an
+- `fetch debs` resolves `Depends` and `Pre-Depends` from an
   archive's `Packages` index, adds the Essential set, checks the
   suite's `InRelease` signature against the keyrings it is given
   (`--keyring`, the archive's signing keys), and the index against the
   digests that signed file lists.
-- `fetch/apks.py` resolves `D:` dependencies through the index's
+- `fetch apks` resolves `D:` dependencies through the index's
   `p:` provides, checks the `APKINDEX` signature against the public key
   its signature names (`--key`, a file named as apk names it in
   `/etc/apk/keys`), and checks each package's checksums as apk does: the
   index's checksum against the control section, and `.PKGINFO`'s
   `datahash` against the data section.
-- `fetch/rpms.py` reads a yum or dnf repository's `repomd.xml` and
+- `fetch rpms` reads a yum or dnf repository's `repomd.xml` and
   `primary.xml`, resolves `Requires` through `Provides` and the files
   the index lists, checks `repomd.xml`'s signature where the repository
   serves one (`repomd.xml.asc`; CentOS does, Fedora does not, and the
@@ -2272,14 +2277,17 @@ are locators; the tool does not, because a hash is not a locator.
   the header signature over the header, whose payload digest covers the
   payload, or a signature over header and payload together.
 
-The signatures are checked by `gpgv` and, for Alpine's RSA, `openssl`
-(`fetch/verify.py`), by apt's rule for a file signed by several keys,
-as the archives' `InRelease` files are: one good signature by a key of
-the keyring, and no bad one. The keys are the caller's, the machine's
-own keyrings or the key files `scripts/inputs` pins by hash, and the
-fetchers never fetch one; `gpgv` takes every key in a keyring as valid,
-checking neither expiry nor revocation, so the keyring is the whole
-statement of trust. What remains trusted is the keys' provenance, an
+The signatures are checked in the program (`fetch/verify.go`), nothing
+of the machine's: OpenPGP's packets, hashes and public-key arithmetic
+are go-crypto's, but for the version 3 signatures CentOS 7 made, which
+it does not read, whose hash is computed there and checked with Go's
+RSA; Alpine's RSA is Go's. The rule is apt's for a file signed by
+several keys, as the archives' `InRelease` files are: one good
+signature by a key of the keyring, and no bad one. The keys are the
+caller's, the machine's own keyrings or the key files `scripts/inputs`
+pins by hash, and the fetchers never fetch one; every key in a keyring
+is taken as valid, as `gpgv` takes it, neither expiry nor revocation
+consulted, so the keyring is the whole statement of trust. What remains trusted is the keys' provenance, an
 unsigned `repomd.xml` for which versions a repository offers, and SHA-1
 in the signatures Alpine makes (13 item 32).
 
@@ -2500,8 +2508,8 @@ is what was released. The README gives the commands, and
 release of the gcc exclave, with a tampered archive and a tampered
 sums file refused (17).
 
-The step before it, `unpack` (10.1), is a Python package run by the
-pinned Python, like the fetchers and the tests; nothing of it is in the
+The step before it, `unpack` (10.1), is a Go program of its own,
+`build/unpack`, as the fetchers are; nothing of either is in the
 command.
 
 ## 11. Layers
@@ -2850,14 +2858,15 @@ and stay fixed.
 
 32. **The tool trusts its input files, and the fetchers trust their
     keys.** The tool records its inputs' hashes and checks nothing
-    about their origin, which it cannot know. `fetch/debs.py`,
-    `fetch/apks.py` and `fetch/rpms.py` verify every download against
+    about their origin, which it cannot know. `fetch debs`,
+    `fetch apks` and `fetch rpms` verify every download against
     its index's digest and the index against the archive's signature
     (10): the `InRelease` file's, the `APKINDEX`'s, and every rpm's own,
     with `repomd.xml`'s where the repository signs it. The keys are
     given, never fetched, so a wrong key file is trusted as a right one
-    would be, and `gpgv` checks neither a key's expiry nor its
-    revocation; `scripts/inputs` pins each by its hash. A repository that
+    would be, and the fetchers consult neither a key's expiry nor its
+    revocation, as `gpgv` does not; `scripts/inputs` pins each by its
+    hash. A repository that
     does not sign `repomd.xml`, as Fedora's do not, leaves which
     versions it offers to the mirror, every package still verified.
     Alpine signs its indexes with RSA over SHA-1, so an Alpine index is
@@ -3241,7 +3250,7 @@ every file at its base, originals included.
 |---|---|
 | A generated index beside the manifest | Every record the launcher uses is readable from the tree in microseconds, and a tree edited without re-indexing would be silently wrong (6.3). |
 | Layers at run time | A second root in the translator, a libc rule, a record naming another exclave's location and an unanswered listing question, to save disk. Composition is a copy at build time (11). |
-| The tool fetching from archives | Acquisition has its own trust argument and failure surface; it is the step before the tool, `fetch/debs.py` and its siblings (10). |
+| The tool fetching from archives | Acquisition has its own trust argument and failure surface; it is the step before the tool, `fetch` (10). |
 | `from-source` with build recipes | The beginning of a distribution. A build script builds inside an exclave, and an exclave is made of the staging directory plus the runtime packages (10.2). |
 | `env` and `entry` records | Both duplicate a file: a symlink in `/usr/local/bin`, a wrapper script, a symlink at the top of the exclave (6.2). |
 | Several roots per CPU level, `chroot` re-rooting, maintainer scripts run in a scratch exclave | Two exclaves are two exclaves; a writable root would be a second world; a tree that needs its scripts run comes from outside (7.7, 7.8, 10.1). |
@@ -4099,11 +4108,12 @@ it. It walks gcc's call graph from `on_sigsys` in both launchers' builds
 and enforces the handler's stack budget of 7.5.4.
 
 **Requirements.** The build needs gcc, and the static C library for the
-command (Ubuntu's `libc6-dev`), and `scripts/install-uv` needs curl or
-wget. Every Python program, `unpack`, the fetchers and every driver,
-runs on the pinned Python uv installs into the checkout, and the code
-checks' ruff, ty, shellcheck, shfmt and taplo come from `uv.lock` the
-same way; none is taken from the machine. The namespace oracle, the syscall probe, the
+command (Ubuntu's `libc6-dev`), and `scripts/install-go` and
+`scripts/install-uv` need curl or wget. `unpack` and the fetchers are
+built by the pinned Go in `.go/`, their modules pinned by `go.sum`;
+every driver runs on the pinned Python uv installs into the checkout,
+and the code checks' ruff, ty, shellcheck, shfmt and taplo come from
+`uv.lock` the same way; none is taken from the machine. The namespace oracle, the syscall probe, the
 Docker profile run and the exerciser need `bwrap` (bubblewrap) and
 unprivileged user namespaces; the resolution oracle needs `openat2`
 (Linux 5.6). The suite uses `strace`, `gdb`, Go and `rustc`; a test
@@ -4158,12 +4168,13 @@ uncommitted paths or, in a clean tree, the last commit's, and with
 once before it is pushed.
 `test/affected.py` derives them from what each step runs: its drivers
 and the sources it builds, each Python driver followed through the
-sibling modules it imports, the `unpack` package, and the repository
-paths it names (`build/exclave` is the command, so `tool/`;
-`build/launcher` the launcher, so `src/`; `test/progs/probe.c` the
-probe's program). So the command reaches every step whose driver runs
-it, unpack's tests among them; `unpack/` reaches its tests and the
-fetchers'; a program reaches the suite, or the one oracle that compiles
+sibling modules it imports and the repository paths it names
+(`build/exclave` is the command, so `tool/`; `build/launcher` the
+launcher, so `src/`; `build/unpack` and `build/fetch` the Go commands,
+so `unpack/` and `fetch/`; `test/progs/probe.c` the probe's program).
+So the command reaches every step whose driver runs it, unpack's tests
+among them; `unpack/` and `fetch/` reach their tests and the Go step;
+a program reaches the suite, or the one oracle that compiles
 it; a helper reaches whatever imports it. A launcher source,
 `scripts/build`, `scripts/lib.sh`, `LICENSE`, `.python-version`, the
 gate and the derivation itself run every step, and the first five say
@@ -4176,7 +4187,8 @@ usable, each with its own log under `build/gate/`, one line each with
 its time, ok, SKIP or FAIL:
 
 - the code checks, `scripts/check`: ruff, ty, shellcheck, shfmt and
-  taplo over the Python, the shell scripts and the TOML; over the C,
+  taplo over the Python, the shell scripts and the TOML; gofmt and go
+  vet over the Go; over the C,
   clang-format (`.clang-format`), gcc's strict warnings as errors (the
   flags `scripts/lib.sh` gives every C build: the launcher for each
   architecture and as `build/launcher-old`, the command for each
@@ -4205,6 +4217,11 @@ its time, ok, SKIP or FAIL:
   when they differ;
 - the stack budget of both launchers (the aarch64 one when it is
   built);
+- the Go step (`go test`): the Go commands' unit tests, the version
+  orders, the dependency parsers and the header fields, and the seeds
+  of their fuzz targets, each reader on a package made in the test and
+  on cut and corrupt ones, the OpenPGP packet reader, and the laws of
+  each order;
 - unpack's tests (`test/unpack_test.py`), which need no exclave: each
   reader's own, and hostile package files in each format, built by
   `test/packages.py` (`..` and `.real` refused; symlinks that climb
@@ -4216,8 +4233,9 @@ its time, ok, SKIP or FAIL:
   and data after an archive's end). A refusal must be one line with nothing left behind,
   and no case may change a directory beside the output that the
   packages aim at;
-- the fetchers' tests (`test/fetch_test.py`), which need gpg, gpgv and
-  openssl and say so without them: each fetcher run through a `file://`
+- the fetchers' tests (`test/fetch_test.py`), which need gpg and
+  openssl, to make the keys and signatures, and say so without them:
+  each fetcher run through a `file://`
   URL on a repository of one package made and signed there, with keys
   made there; the signed repository yields its package, and one signed
   by another key, altered after signing, with its package altered, or
@@ -4275,7 +4293,11 @@ steps:
   its size, so that a read past it is the sanitiser's to report. A
   parser answers every input: a refusal is an answer, and a
   sanitiser's finding, a signal or an exit is not, and then the input
-  is kept with the number that remakes it;
+  is kept with the number that remakes it; and the Go commands' parsers
+  under Go's own fuzzer, ten seconds a target from the seeds their tests
+  hold (`unpack/*/fuzz_test.go`, `fetch/fuzz_test.go`), an input that
+  panics kept under the package's `testdata/fuzz`, which the gate's Go
+  step then runs as a case;
 - the release test (`test/release_test.py`): a release of the exclave
   made by `scripts/release`, the command and the launcher built inside
   it by `scripts/reproduce`, signed with a key made there, and taken
@@ -4418,10 +4440,9 @@ pushed, rather than before each commit. Each VM
 boots its distribution's cloud image under QEMU with KVM behind a
 copy-on-write overlay; cloud-init installs strace and, where the
 distribution has it, bubblewrap. The exclave, the test tree, the
-checkout's launcher and command and the pinned Python are copied in,
-`unpack` installed into that Python in editable form as `uv sync`
-installs it here (a `.pth` naming the checkout), and the exclave is
-relinked there by the command, which runs as it is on every kernel of
+checkout's launcher, command and `unpack`, built for the VM's machine,
+and the pinned Python are copied in, and the exclave is relinked there
+by the command, which runs as it is on every kernel of
 the matrix, CentOS 7's 3.10 included. The
 Python is built for the VM's machine and libc and
 installed by the repository's uv: the glibc builds need only glibc 2.17,
@@ -4468,9 +4489,10 @@ alone, from the package archives and GitHub (cached between runs,
 keyed on the inputs script and the fetchers), `scripts/gate --full`
 and `scripts/matrix`, adding only what a runner lacks and the
 reference machine has: packages, the KVM device opened to the runner,
-and the AppArmor sysctl. Every download, uv's, a package file's, a
-source's or an image's, tries a failed or stalled connection again
-over about a minute (`fetch/retry.py`), since a runner has been refused
+and the AppArmor sysctl. Every download, uv's and Go's, a package
+file's, a source's or an image's, tries a failed or stalled connection
+again over about a minute (`fetch/net.go`; curl's own retries in the
+scripts), since a runner has been refused
 by GitHub for two minutes at a time; a server's own answer, a 404, is
 final. The gate runs on an x86-64 runner on the gcc exclave
 and, natively, on an aarch64 runner on the arm64 gcc exclave
@@ -4735,13 +4757,17 @@ specified.
   trust argument; `fetch/` holds examples of that step (10).
 - **The tool's input is a directory holding `tree/`, and `unpack` is
   the step before it**: what made the tree, package files, `tar` or a
-  build, is not the tool's concern, so `unpack` is a Python package of
-  its own, apart from the C tool (10, 10.1).
-- **`unpack` stays Python**: it parses package files that come from
-  outside, and Python's parsers are memory-safe, while the command's
-  input is the user's own tree; the command's single static file is
-  worth most where an exclave is wrapped and checked, not where it is
-  made (10, 10.1, 10.5).
+  build, is not the tool's concern, so `unpack` is a program of its
+  own, apart from the C tool (10, 10.1).
+- **`unpack` and the fetchers are Go, each one static file**: they
+  parse package files and indexes that come from outside, so their
+  parsers are a memory-safe language's, and the delicate ones, tar,
+  gzip, bzip2, XML, HTTP, TLS and RSA, are Go's own standard library's,
+  with xz, zstd and OpenPGP from the pure-Go modules `go.mod` pins and
+  no C compiled in; a static file runs wherever the command does, with
+  nothing to install beside it, which is what portability asks of the
+  step that makes an exclave as much as of the one that wraps it (10,
+  10.1, 10.5).
 - **Building software is the build system's job**: an exclave of built
   software is a staging directory plus runtime packages, with no
   recipes (10.2).

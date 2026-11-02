@@ -49,7 +49,7 @@ wheels = [
 [[package]]
 name = "exclave"
 version = "0.1.0"
-source = { editable = "." }
+source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
