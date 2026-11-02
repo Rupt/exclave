@@ -513,4 +513,7 @@ which the MIT licence asks to go with every copy; `readelf -p
 writes says so. The software in an exclave's tree keeps its packages'
 own licences, and an exclave passed on passes their terms on with it:
 `exclave prune` keeps their texts, and an Alpine exclave has them only
-if the packages' `-doc` packages went in.
+if the packages' `-doc` packages went in. One file of the tool,
+`tool/blake2b.c`, follows the structure of the reference code in RFC
+7693, which the IETF Trust licenses under the Simplified BSD licence;
+the file carries that notice.

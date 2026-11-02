@@ -1,4 +1,18 @@
-/* blake2b.c — BLAKE2b, written from RFC 7693 (sections 2 and 3, the constants of appendix C). */
+/* blake2b.c — BLAKE2b, written from RFC 7693 (sections 2 and 3, the constants of appendix C), and following the
+ * structure of the reference code in its appendix C: Copyright (c) 2015 IETF Trust and the persons identified as
+ * authors of the code (Markku-Juhani O. Saarinen and Jean-Philippe Aumasson). All rights reserved. Redistribution
+ * and use in source and binary forms, with or without modification, are permitted pursuant to, and subject to the
+ * license terms contained in, the Simplified BSD License set forth in Section 4.c of the IETF Trust's Legal
+ * Provisions Relating to IETF Documents (https://trustee.ietf.org/license-info): redistributions of source code
+ * must retain the above copyright notice, this list of conditions and the following disclaimer; redistributions in
+ * binary form must reproduce them in the documentation and/or other materials provided with the distribution. THIS
+ * SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+ * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 #include <string.h>
 #include "tool.h"
 
