@@ -378,6 +378,7 @@ PROGRAMS = (
     "sigrain",
     "sigstack",
     "clones",
+    "memfd_exec",
 )
 
 
@@ -413,6 +414,8 @@ def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
         wrong = kernel_answers.program_perm_wrong(out)
     elif name == "exe_link":
         wrong = kernel_answers.exe_link_wrong(out)
+    elif name == "memfd_exec":
+        wrong = kernel_answers.memfd_exec_wrong(out)
     elif name == "creat_slash":
         wrong = kernel_answers.creat_slash_wrong(out, by_the_kernel=True)
     elif name.startswith("exec_"):
@@ -494,6 +497,7 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
         "rename_dots": f"{work}/rename_dots {hostdir} /tmp",
         "program_perm": f"{work}/program_perm",
         "exe_link": f"{work}/exe_link",
+        "memfd_exec": f"{work}/memfd_exec",
         # each in a host directory of its own: their files share names
         "exec_script": f"mkdir -p {hostdir}/s && {work}/exec_script run {hostdir}/s",
         "exec_elf": f"mkdir -p {hostdir}/e && {work}/exec_elf {hostdir}/e",

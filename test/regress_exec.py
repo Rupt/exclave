@@ -406,6 +406,20 @@ def exec_vectors(ctx: Ctx) -> None:
 
 
 @test
+def memfd_exec_permission(ctx: Ctx) -> None:
+    """7.4.5, 13 item 25: exec of a memfd, the kernel's exec permission before the header.
+
+    A memfd sealed against execution (MFD_NOEXEC_SEAL) is EACCES whatever it holds, an executable
+    one runs the ELF copied into it and refuses an empty one with ENOEXEC; a memfd made with no
+    flag is the host's vm.memfd_noexec to decide, and the last line prints the host's facts.
+    Measured under bwrap on 7.0, where the launcher agrees; Ubuntu 26.10's 7.3 refuses the plain
+    memfd where the launcher does not (the probe's open defect).
+    """
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "memfd_exec"))
+    expect(rc == 0 and not kernel_answers.memfd_exec_wrong(out), out + err)
+
+
+@test
 def another_process_exe_link(ctx: Ctx) -> None:
     """7.6, 13 item 10: another exclave process's /proc/<pid>/exe names the program it runs.
 

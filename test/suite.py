@@ -466,6 +466,7 @@ PROGS = (
     "fexec",
     "exec_identity",
     "exe_link",
+    "memfd_exec",
     "path_length",
     "spawn_threads",
     "adversarial",

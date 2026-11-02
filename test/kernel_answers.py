@@ -633,6 +633,25 @@ def clones_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     return wrong
 
 
+# memfd_exec: exec of a memfd, the kernel's exec permission before its reading of the header; a
+# memfd made with no flag is executable on 7.0 (vm.memfd_noexec 0) and refused on Ubuntu 26.10's
+# 7.3 (EACCES: the probe's open defect), so either; the last line is the host's facts
+MEMFD_EXEC: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
+    ("executable memfd with the program", "ran"),
+    ("executable memfd, empty", "ENOEXEC"),
+    ("sealed memfd with the program", "EACCES"),
+    ("sealed memfd, empty", "EACCES"),
+    ("plain memfd with the program", ("ran", "EACCES")),
+    ("plain memfd, empty", ("ENOEXEC", "EACCES")),
+    ("facts", None),
+)
+
+
+def memfd_exec_wrong(out: str) -> list[str]:
+    """The lines of memfd_exec's output that differ from the kernel's answers."""
+    return lines_wrong(out, MEMFD_EXEC, {}, by_the_kernel=True)
+
+
 def exe_link_wrong(out: str) -> list[str]:
     """The lines of exe_link's output that differ from the kernel's answers."""
     got = out.splitlines()
