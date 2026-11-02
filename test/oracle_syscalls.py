@@ -1914,15 +1914,16 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
     *(
         (
             call,
-            lambda _label, b, o, c: (
+            lambda label, b, o, c: (
                 KERNEL < (5, 9)
-                and "/maze/sock" in c.paths
+                and ("/maze/sock" in c.paths or label.startswith("sockfd/"))
                 and b.startswith("ret=27136")
                 and o.startswith("ret=28928")
             ),
             (
-                "an exec of a socket: ENXIO from its open before 5.9, EACCES from may_open since "
-                "(fs/namei.c); the handler answers as the newer kernels do"
+                "an exec of a socket, by path or descriptor: ENXIO from its open before 5.9, "
+                "EACCES from may_open since (fs/namei.c); the handler answers as the newer "
+                "kernels do"
             ),
         )
         for call in ("execve", "execveat")
