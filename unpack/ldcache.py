@@ -28,7 +28,7 @@ Every path is a virtual path resolved by the Root, so nothing outside the tree i
 """
 
 import fnmatch
-import functools
+import itertools
 import os
 import re
 import stat
@@ -96,32 +96,19 @@ class _TruncatedError(Exception):
     """A read past the file's end: ldconfig's check_ptr, which skips the file."""
 
 
-def libcmp(p1: bytes, p2: bytes) -> int:
-    """Order two names as glibc's _dl_cache_libcmp does: bytes, digit runs as numbers."""
-    i = j = 0
-    while i < len(p1):
-        c1 = p1[i]
-        c2 = p2[j] if j < len(p2) else 0
-        if 48 <= c1 <= 57:
-            if 48 <= c2 <= 57:
-                v1 = v2 = 0
-                while i < len(p1) and 48 <= p1[i] <= 57:
-                    v1 = v1 * 10 + p1[i] - 48
-                    i += 1
-                while j < len(p2) and 48 <= p2[j] <= 57:
-                    v2 = v2 * 10 + p2[j] - 48
-                    j += 1
-                if v1 != v2:
-                    return v1 - v2
-                continue
-            return 1
-        if 48 <= c2 <= 57:
-            return -1
-        if c1 != c2:
-            return c1 - c2
-        i += 1
-        j += 1
-    return 0 - (p2[j] if j < len(p2) else 0)
+def version_key(name: bytes) -> list[tuple[int, int]]:
+    """A name's order as ldconfig's version comparison has it, as a sort key.
+
+    Byte by byte, except that a run of digits counts as one number, and a digit outranks every
+    other byte; a name that ends first comes first. (glibc's _dl_cache_libcmp.)
+    """
+    key: list[tuple[int, int]] = []
+    for digits, run in itertools.groupby(name, lambda c: 48 <= c <= 57):
+        if digits:
+            key.append((1, int(bytes(run))))
+        else:
+            key.extend((0, c) for c in run)
+    return key
 
 
 def is_dso(name: str) -> bool:
@@ -510,7 +497,8 @@ class Ldconfig:
             have = dlibs.get(soname)
             if have is not None:
                 if (not is_link and have[2]) or (
-                    is_link == have[2] and libcmp(have[0].encode(), name.encode()) < 0
+                    is_link == have[2]
+                    and version_key(have[0].encode()) < version_key(name.encode())
                 ):
                     have[0], have[2], have[3] = name, is_link, level
                 continue
@@ -566,7 +554,13 @@ class Ldconfig:
         return self.cache()
 
     def cache(self) -> bytes:
-        entries = sorted(self.entries, key=functools.cmp_to_key(_compare))
+        # the entries in cache.c's order: by soname, the later version first, then the higher
+        # flags first, then the glibc-hwcaps entries before the plain one, in their names' order;
+        # stable sorts, the last key first
+        enc = "utf-8", "surrogateescape"
+        entries = sorted(self.entries, key=lambda e: (e.hwcaps is None, e.hwcaps or ""))
+        entries.sort(key=lambda e: e.flags, reverse=True)
+        entries.sort(key=lambda e: version_key(e.lib.encode(*enc)), reverse=True)
         hwcaps = sorted({e.hwcaps for e in entries if e.hwcaps is not None})
         index = {name: i for i, name in enumerate(hwcaps)}
         strings = _StringTable({e.lib for e in entries} | {e.path for e in entries} | set(hwcaps))
@@ -607,44 +601,16 @@ class Ldconfig:
         return out + bytes(ext_offset - len(out)) + ext + gen
 
 
-def _compare(e1: _Entry, e2: _Entry) -> int:
-    """Order two entries as cache.c's compare does.
-
-    Sonames in descending libcmp order, higher flags first, hwcaps entries before plain ones and
-    in their names' order.
-    """
-    enc = "utf-8", "surrogateescape"
-    res = libcmp(e2.lib.encode(*enc), e1.lib.encode(*enc))
-    if res:
-        return res
-    if e1.flags != e2.flags:
-        return 1 if e1.flags < e2.flags else -1
-    if e1.hwcaps is not None and e2.hwcaps is None:
-        return -1
-    if e1.hwcaps is None and e2.hwcaps is not None:
-        return 1
-    if e1.hwcaps is not None and e2.hwcaps is not None:
-        a, b = e1.hwcaps.encode(), e2.hwcaps.encode()
-        return (a > b) - (a < b)
-    return 0
-
-
-def _finalize_compare(left: bytes, right: bytes) -> int:
-    """Order two strings as stringtable.c's finalize_compare does: by the tail, a longer first."""
-    for i in range(1, min(len(left), len(right)) + 1):
-        if left[-i] != right[-i]:
-            return right[-i] - left[-i]
-    if len(left) == len(right):
-        return 0
-    return 1 if len(left) < len(right) else -1
-
-
 class _StringTable:
-    """The cache's string table: every string once, tail-merged in finalize_compare's order."""
+    """The cache's string table: every string once, tail-merged in stringtable.c's order.
+
+    The strings sorted by their tails, the greater byte first and, of a string and its own tail,
+    the longer first, so that each tail follows the string that holds it.
+    """
 
     def __init__(self, strings: set[str]) -> None:
         encoded = {s: s.encode("utf-8", "surrogateescape") for s in strings}
-        order = sorted(set(encoded.values()), key=functools.cmp_to_key(_finalize_compare))
+        order = sorted(set(encoded.values()), key=lambda b: b[::-1], reverse=True)
         offsets: dict[bytes, int] = {}
         data = bytearray()
         previous: bytes | None = None
