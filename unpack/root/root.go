@@ -375,8 +375,15 @@ func Decode(data []byte) string {
 }
 
 // Listdir returns the names in the directory at vpath, sorted; none when it is no directory.
+// The empty path, which no virtual path names, is the tree's root.
 func (r *Root) Listdir(vpath string) []string {
-	fd, err := r.open(vpath, unix.O_RDONLY|unix.O_DIRECTORY)
+	var fd int
+	var err error
+	if len(parts(vpath)) == 0 {
+		fd, err = unix.Openat(r.fd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	} else {
+		fd, err = r.open(vpath, unix.O_RDONLY|unix.O_DIRECTORY)
+	}
 	if err != nil {
 		return nil
 	}

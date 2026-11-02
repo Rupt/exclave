@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"exclave/unpack/apk"
+	"exclave/unpack/ldcache"
 	"exclave/unpack/root"
 )
 
@@ -480,9 +481,32 @@ func basePasswd(r *root.Root, packages []*Package, log Log) (bool, error) {
 }
 
 // ldconfigRule writes ld.so.cache as the exclave's own static ldconfig would write it, without
-// running it: the writer of unpack/ldcache.py, which the port has yet to carry over.
+// running it. Package ldcache reads the tree as ldconfig reads it, so a tree of any architecture
+// gets its cache here, before wrapping, so that the cache never indexes the launcher; Fedora 42
+// has merged sbin into bin. The aux-cache is removed, since it records inodes and mtimes: never
+// reproducible, never needed.
 func ldconfigRule(r *root.Root, packages []*Package, log Log) (bool, error) {
-	return false, nil
+	ld := ldcache.FindLdconfig(r)
+	if ld == "" {
+		if names(packages)["libc-bin"] {
+			log("libc-bin present but no static ldconfig found; no ld.so.cache")
+		}
+		return false, nil
+	}
+	made, err := ldcache.Write(r, ld, ldcache.Log(log))
+	if err != nil {
+		return false, err
+	}
+	if made {
+		log("synthesised /etc/ld.so.cache as the exclave's ldconfig writes it")
+	}
+	aux := "/var/cache/ldconfig"
+	if r.IsDir(aux) && !r.IsLink(aux) {
+		if err := r.Rmtree(aux); err != nil {
+			return false, err
+		}
+	}
+	return made, nil
 }
 
 var rules = []rule{
