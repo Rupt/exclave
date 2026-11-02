@@ -35,6 +35,7 @@ STEPS: dict[str, tuple[str, ...]] = {
         "tool/blake2b.c",
     ),
     "stack": ("test/stackcheck.py", "src/*"),
+    "go": ("fetch/*", "unpack/*"),
     "unpack": ("test/unpack_test.py",),
     "fetch": ("test/fetch_test.py",),
     "suite": ("test/run.py",),

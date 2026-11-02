@@ -10,9 +10,9 @@
 # settings run the code checks alone; a path nothing names runs everything. --full runs every step, whatever
 # changed.
 #
-# The steps: the code checks (scripts/check), the unit tests under ASan and UBSan, the stack budget, unpack's
-# tests on hostile package files (test/unpack_test.py), the fetchers' signature checks (test/fetch_test.py), and
-# on the exclave given the suite, the resolution oracle, the namespace oracle, the syscall probe and, when
+# The steps: the code checks (scripts/check), the unit tests under ASan and UBSan, the stack budget, the Go
+# commands' unit tests and fuzz seeds (go test), unpack's tests on hostile package files (test/unpack_test.py), the
+# fetchers' signature checks (test/fetch_test.py), and on the exclave given the suite, the resolution oracle, the namespace oracle, the syscall probe and, when
 # EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled, the Docker profile run on its
 # src/docker-seccomp.json. No step touches the network. Everything slower or broader is scripts/extra's and
 # scripts/matrix's, run when the user asks. The steps run two at a time, or N with --jobs, so that the machine
@@ -95,7 +95,7 @@ has() {
     return 1
 } # has STEP: whether the change reaches it
 if $full || has every; then
-    steps="unit stack unpack fetch suite oracles $steps"
+    steps="unit stack go unpack fetch suite oracles $steps"
     # the resolution oracle's mazes from a seed of the moment rather than the commit's, printed on a failure
     $full && seed=$(($(date +%s) % 100000))
     echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
@@ -108,6 +108,7 @@ n=$(basename "$ex" .exclave)
 step check "$ROOT/scripts/check" # ruff, ty, shellcheck, shfmt and taplo, silent when clean
 has unit && step unit unit
 has stack && step stack stack
+has go && step go "$GO" test ./fetch/... ./unpack/...                    # the Go commands' unit tests and fuzz seeds
 has unpack && step unpack py "$here/unpack_test.py" --work "$out/unpack" # unpack's rules on hostile package files
 has fetch && step fetch py "$here/fetch_test.py" --work "$out/fetch"     # the fetchers' signature checks
 has suite && step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"

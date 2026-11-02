@@ -50,7 +50,19 @@ fuzz() { # fuzz EXCLAVE
         py "$here/fuzz.py" --exclave "$ex" --work "$out/fuzz" --tool "$out/tool_fuzz" --launcher "$out/launcher_fuzz"
 }
 
+# the Go commands' parsers under Go's own fuzzer, ten seconds a target, from the seeds their tests hold
+# (unpack/*/fuzz_test.go, fetch/fuzz_test.go); an input that panics is written under the package's testdata/fuzz,
+# which the gate's go step then runs as a case
+gofuzz() {
+    for pkg in $("$GO" list ./fetch/... ./unpack/...); do
+        for t in $("$GO" test -list 'Fuzz.*' "$pkg" | grep '^Fuzz'); do
+            "$GO" test -run '^$' -fuzz "^$t\$" -fuzztime 10s "$pkg" || return 1
+        done
+    done
+}
+
 step fuzz fuzz "$1"
+step gofuzz gofuzz
 step release py "$here/release_test.py" --exclave "$1" --work "$out/release"
 if command -v aa-exec >/dev/null 2>&1 && aa-exec -p unconfined true 2>/dev/null; then # the plain terminal's label (12)
     n=$(basename "$1" .exclave)
