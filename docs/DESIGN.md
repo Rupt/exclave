@@ -2821,7 +2821,11 @@ and stay fixed.
     held to the same, since a thread has no alternate stack until it
     arms one: a child trapping on 8 KB passes and on 4 KB is killed,
     where the kernel needs no user stack for a syscall
-    (`test/progs/clones.c`).
+    (`test/progs/clones.c`). Before 5.16 that death takes the whole
+    program: the kernel's core dump of a process killed every process
+    sharing its memory (`fs/coredump.c`, `zap_threads`), each ending
+    with the child's signal, so on the matrix's 5.15 and older rows a
+    `clone(CLONE_VM)` child's overflow ends the program that made it.
 
 31. **Some paths inside structures are not translated.** A datagram
     destination in `sendto`, `sendmsg` or `sendmmsg` reaches the kernel

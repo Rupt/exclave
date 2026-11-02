@@ -89,8 +89,10 @@ def clones_trapping(ctx: Ctx) -> None:
 
     A vfork child and clone(CLONE_VM) children trapping before they exit, on stacks of 64 KB down
     to 2 KB above a guard page, where 4 KB and below cannot hold the kernel's frame and the
-    handler (13 item 30); a thread with a 16 KB stack and one with the least glibc allows; 64
-    threads trapping while the main thread sends each a SIGUSR1 whose handler traps;
+    handler (13 item 30), the small ones each from a forked process, since before 5.16 a child's
+    core-dumping death takes every process sharing its memory; a thread with a 16 KB stack and
+    one with the least glibc allows; 64 threads trapping while the main thread sends each a
+    SIGUSR1 whose handler traps;
     pthread_cancel of a thread blocked in a trapped open and of one looping over traps with
     asynchronous cancellation, which unwind through the launcher's frames; a sibling exiting
     while a trap blocks; exit_group and pthread_exit from a handler that interrupted a blocking

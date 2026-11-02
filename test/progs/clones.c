@@ -158,14 +158,30 @@ int main(int argc, char **argv)
     int st = 0;
     waitpid(c, &st, 0);
     printf("vfork child's traps: %s, %s\n", three(), status(st));
-    /* 2. clone(CLONE_VM) children on stacks of 64 KB, 8 KB, 4 KB and 2 KB above a guard page */
+    /* 2. clone(CLONE_VM) children on stacks of 64 KB, 8 KB, 4 KB and 2 KB above a guard page. The 4 KB and
+     * 2 KB children can die in a handler, and before 5.16 a core-dumping death takes every process sharing
+     * the memory (fs/coredump.c, zap_threads), this one included: each runs from a forked process of its own,
+     * which ends as its child did */
     static const size_t sizes[] = {65536, 8192, 4096, 2048};
     for (unsigned i = 0; i < sizeof sizes / sizeof *sizes; i++) {
         memset(answers, 0, sizeof answers);
         void *top = stack_top(sizes[i]);
-        c = clone(i ? clone_one_trap : clone_child, top, CLONE_VM | SIGCHLD, 0);
-        st = 0;
-        waitpid(c, &st, 0);
+        pid_t f = i >= 2 ? fork() : 0;
+        if (f == 0) {
+            c = clone(i ? clone_one_trap : clone_child, top, CLONE_VM | SIGCHLD, 0);
+            st = 0;
+            waitpid(c, &st, 0);
+            if (i >= 2) {
+                if (WIFSIGNALED(st)) {
+                    signal(WTERMSIG(st), SIG_DFL);
+                    raise(WTERMSIG(st));
+                }
+                _exit(WIFEXITED(st) ? WEXITSTATUS(st) : 9);
+            }
+        } else {
+            st = 0;
+            waitpid(f, &st, 0);
+        }
         if (i == 0) printf("clone(CLONE_VM) child on a 64 KB stack: %s, %s\n", three(), status(st));
         else printf("clone(CLONE_VM) child trapping on a %zu KB stack: %s\n", sizes[i] / 1024, status(st));
     }
