@@ -32,6 +32,7 @@ package ldcache
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"math/bits"
 	"regexp"
 	"sort"
@@ -127,6 +128,14 @@ func catch(ok *bool) {
 		}
 		*ok = false
 	}
+}
+
+// u16 reads a little-endian 16-bit integer at at, or false past the end.
+func u16(data []byte, at int) (int, bool) {
+	if at < 0 || at+2 > len(data) {
+		return 0, false
+	}
+	return int(data[at]) | int(data[at+1])<<8, true
 }
 
 // VersionCmp orders two names as ldconfig's version comparison has it: byte by byte, except that
@@ -323,7 +332,7 @@ func sharedObject(data []byte, family int) (Object, bool) {
 		case ptDynamic:
 			dynOff, dynSize = off, filesz
 		case ptGnuProperty:
-			if family == EMX8664 && align == addr {
+			if family == EMX8664 && align == addr && off+filesz >= off {
 				o.ISALevel = isaLevel(data, off, filesz, addr)
 			}
 		}
@@ -414,11 +423,10 @@ func rodata(elf []byte) (out [][]byte) {
 	if len(elf) < 5 || string(elf[:4]) != "\x7fELF" || (elf[4] != 1 && elf[4] != 2) {
 		return whole
 	}
+	ok := true
 	defer func() {
-		if e := recover(); e != nil {
-			if _, is := e.(truncated); !is {
-				panic(e)
-			}
+		catch(&ok)
+		if !ok {
 			out = whole
 		}
 	}()
@@ -467,8 +475,7 @@ func Generator(ldconfig []byte) string {
 
 type dir struct {
 	path   string
-	hwcaps string // the glibc-hwcaps subdirectory's name, or ""
-	isHw   bool
+	hwcaps string // the glibc-hwcaps subdirectory's name, or "" for a plain directory
 }
 
 type entry struct {
@@ -476,8 +483,7 @@ type entry struct {
 	path     string
 	flags    int
 	isaLevel int
-	hwcaps   string
-	isHw     bool
+	hwcaps   string // as dir's
 }
 
 type inode struct{ dev, ino uint64 }
@@ -504,9 +510,7 @@ func New(r *root.Root, ldconfig string, log Log) (*Ldconfig, error) {
 		return nil, err
 	}
 	l := &Ldconfig{r: r, log: log, generator: Generator(binary)}
-	if len(binary) >= 20 {
-		l.family = int(u(binary, 18, 2))
-	}
+	l.family, _ = u16(binary, 18)
 	l.Loader = l.findLoader()
 	if l.Loader != "" {
 		if data, err := r.ReadBytes(l.Loader); err == nil {
@@ -551,7 +555,8 @@ func (l *Ldconfig) findLoader() string {
 			if err != nil {
 				continue
 			}
-			if len(data) > 64 && string(data[:4]) == "\x7fELF" && int(u(data, 18, 2)) == l.family && len(TrustedDirs(data)) > 0 {
+			machine, _ := u16(data, 18)
+			if len(data) > 64 && string(data[:4]) == "\x7fELF" && machine == l.family && len(TrustedDirs(data)) > 0 {
 				return d + "/" + name
 			}
 		}
@@ -602,7 +607,7 @@ func (l *Ldconfig) addDir(line string) {
 			continue
 		}
 		l.keys = append(l.keys, key(st))
-		l.dirs = append(l.dirs, dir{path: sub, hwcaps: name, isHw: true})
+		l.dirs = append(l.dirs, dir{path: sub, hwcaps: name})
 	}
 }
 
@@ -625,10 +630,17 @@ func (l *Ldconfig) addSystemDir(d string) {
 	}
 }
 
-func (l *Ldconfig) parseConf(filename string) {
+// maxIncludes bounds how deep ld.so.conf's includes may nest: a file that includes itself, or a
+// cycle, would otherwise recurse without end, where ldconfig itself runs out of stack.
+const maxIncludes = 32
+
+func (l *Ldconfig) parseConf(filename string, depth int) error {
+	if depth > maxIncludes {
+		return fmt.Errorf("%s: ld.so.conf includes nest deeper than %d", filename, maxIncludes)
+	}
 	text, err := l.r.ReadBytes(filename)
 	if err != nil {
-		return
+		return nil
 	}
 	for _, raw := range bytes.Split(text, []byte("\n")) {
 		line, _, _ := bytes.Cut(raw, []byte("#"))
@@ -639,7 +651,9 @@ func (l *Ldconfig) parseConf(filename string) {
 		switch {
 		case strings.HasPrefix(s, "include") && len(s) > 7 && (s[7] == ' ' || s[7] == '\t'):
 			for _, pattern := range strings.FieldsFunc(s[8:], func(r rune) bool { return r == ' ' || r == '\t' }) {
-				l.include(filename, pattern)
+				if err := l.include(filename, pattern, depth); err != nil {
+					return err
+				}
 			}
 		case len(s) > 5 && strings.ToLower(s[:5]) == "hwcap" && (s[5] == ' ' || s[5] == '\t'):
 			continue
@@ -647,15 +661,19 @@ func (l *Ldconfig) parseConf(filename string) {
 			l.addDir(s)
 		}
 	}
+	return nil
 }
 
-func (l *Ldconfig) include(configFile, pattern string) {
+func (l *Ldconfig) include(configFile, pattern string, depth int) error {
 	if !strings.HasPrefix(pattern, "/") && strings.Contains(configFile, "/") {
 		pattern = configFile[:strings.LastIndex(configFile, "/")] + "/" + pattern
 	}
 	for _, path := range l.glob(pattern) {
-		l.parseConf(path)
+		if err := l.parseConf(path, depth+1); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // glob returns the tree's paths matching the pattern, in byte order, as glob64 finds them.
@@ -720,9 +738,10 @@ func Fnmatch(pattern, name string) bool {
 			} else if strings.HasPrefix(class, "^") {
 				class = `\` + class
 			}
-			re.WriteString("[" + strings.ReplaceAll(class, `\`, `\\`) + "]")
+			class = strings.ReplaceAll(strings.ReplaceAll(class, `\`, `\\`), "[", `\[`)
+			re.WriteString("[" + class + "]")
 		default:
-			re.WriteString(regexp.QuoteMeta(string(c)))
+			re.WriteString(regexp.QuoteMeta(pattern[i : i+1]))
 		}
 	}
 	re.WriteString("$")
@@ -770,7 +789,7 @@ func (l *Ldconfig) searchDir(e dir) error {
 		if kind != unix.S_IFLNK && kind != unix.S_IFREG && kind != unix.S_IFDIR {
 			continue
 		}
-		if !IsDSO(name) && (kind == unix.S_IFREG || !e.isHw) {
+		if !IsDSO(name) && (kind == unix.S_IFREG || e.hwcaps == "") {
 			continue
 		}
 		if skippedName(name) {
@@ -824,7 +843,7 @@ func (l *Ldconfig) searchDir(e dir) error {
 		soname := order[i]
 		d := dlibs[soname]
 		filename := d.name
-		if !e.isHw {
+		if e.hwcaps == "" {
 			if !d.isLink {
 				if err := l.createLinks(e.path, d.name, soname); err != nil {
 					return err
@@ -832,7 +851,7 @@ func (l *Ldconfig) searchDir(e dir) error {
 			}
 			filename = soname
 		}
-		l.entries = append(l.entries, entry{soname, e.path + "/" + filename, d.flag, d.level, e.hwcaps, e.isHw})
+		l.entries = append(l.entries, entry{soname, e.path + "/" + filename, d.flag, d.level, e.hwcaps})
 	}
 	return nil
 }
@@ -878,7 +897,9 @@ func (l *Ldconfig) createLinks(path, libname, soname string) error {
 // Run reads the directories and the files and returns the cache, as `ldconfig` with no option
 // makes them.
 func (l *Ldconfig) Run() ([]byte, error) {
-	l.parseConf("/etc/ld.so.conf")
+	if err := l.parseConf("/etc/ld.so.conf", 0); err != nil {
+		return nil, err
+	}
 	l.builtinDirs()
 	for _, e := range l.dirs {
 		if err := l.searchDir(e); err != nil {
@@ -895,8 +916,8 @@ func (l *Ldconfig) cache() []byte {
 	entries := append([]entry(nil), l.entries...)
 	sort.SliceStable(entries, func(i, j int) bool {
 		a, b := entries[i], entries[j]
-		if a.isHw != b.isHw {
-			return a.isHw // hwcaps entries (false < true in Python's key) first
+		if (a.hwcaps == "") != (b.hwcaps == "") {
+			return a.hwcaps != "" // the glibc-hwcaps entries before the plain one
 		}
 		return a.hwcaps < b.hwcaps
 	})
@@ -904,7 +925,7 @@ func (l *Ldconfig) cache() []byte {
 	sort.SliceStable(entries, func(i, j int) bool { return VersionCmp(entries[i].lib, entries[j].lib) > 0 })
 	hwset := map[string]bool{}
 	for _, e := range entries {
-		if e.isHw {
+		if e.hwcaps != "" {
 			hwset[e.hwcaps] = true
 		}
 	}
@@ -930,7 +951,7 @@ func (l *Ldconfig) cache() []byte {
 	le := binary.LittleEndian
 	for _, e := range entries {
 		var hwcap uint64
-		if e.isHw {
+		if e.hwcaps != "" {
 			hwcap = hwcapExtension | uint64(e.isaLevel)<<32 | uint64(index[e.hwcaps])
 		}
 		body = le.AppendUint32(body, uint32(e.flags))

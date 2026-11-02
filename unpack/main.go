@@ -100,12 +100,20 @@ func unpack(out string, paths []string, log Log) error {
 	if len(arches) > 1 {
 		return refuse("the packages mix architectures %s", pylist(keys(arches)))
 	}
+	// a failed unpack leaves no output behind, whatever failed it: an error, or a panic that
+	// unwinds through here
+	done := false
+	defer func() {
+		if !done {
+			os.RemoveAll(out)
+		}
+	}()
 	if err := os.MkdirAll(filepath.Join(out, ".exclave"), 0o777); err != nil {
 		return err
 	}
 	rootPath := filepath.Join(out, "tree")
 	err := func() error {
-		if _, err := extract(rootPath, packages, log); err != nil {
+		if err := extract(rootPath, packages, log); err != nil {
 			return err
 		}
 		if err := synthesise(rootPath, packages, log); err != nil {
@@ -132,9 +140,9 @@ func unpack(out string, paths []string, log Log) error {
 		return writeRecords(out, packages)
 	}()
 	if err != nil {
-		os.RemoveAll(out)
 		return err
 	}
+	done = true
 	log(fmt.Sprintf("unpacked %d packages into %s; exclave wrap %s makes it an exclave", len(packages), out, out))
 	return nil
 }

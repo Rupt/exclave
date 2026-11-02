@@ -41,32 +41,32 @@ func refusing(err error) error {
 }
 
 // extract extracts every package's payload into the tree at rootPath, after making the
-// merged-/usr links (10.1), and returns the package that owns each extracted path, keyed by its
-// /usr-merged spelling.
+// merged-/usr links (10.1).
 //
 // Paths resolve with the tree as their root (package root), so a symlink a package ships leads
 // nowhere outside it. A regular file shipped by two packages is an error unless one declares
 // Replaces on the other; the /lib and /usr/lib spellings of a path count as one. Renaming
 // diversions are refused, and so is a file that would leave the output's filesystem short of
 // room. log gets one line per special file skipped.
-func extract(rootPath string, packages []*Package, log Log) (map[string]string, error) {
+func extract(rootPath string, packages []*Package, log Log) error {
 	if err := os.MkdirAll(rootPath, 0o777); err != nil {
-		return nil, err
+		return err
 	}
 	r, err := root.Open(rootPath)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer r.Close()
-	owner, err := extractInto(r, packages, log)
-	return owner, refusing(err)
+	return refusing(extractInto(r, packages, log))
 }
 
 var divertRe = regexp.MustCompile(`--(remove|list|listpackage|truename)\b`)
 
-func extractInto(r *root.Root, packages []*Package, log Log) (map[string]string, error) {
+// extractInto extracts into the open tree; owner, the package that owns each extracted path by
+// its /usr-merged spelling, is how a file shipped twice is told from one replaced.
+func extractInto(r *root.Root, packages []*Package, log Log) error {
 	if err := r.Makedirs("usr"); err != nil {
-		return nil, err
+		return err
 	}
 	// A symlink one package ships at a path other packages ship files under, Fedora 42's
 	// usr/sbin -> bin, is made before anything is extracted, as the merged-usr links are, so that
@@ -80,7 +80,7 @@ func extractInto(r *root.Root, packages []*Package, log Log) (map[string]string,
 	for _, pkg := range packages {
 		t, err := readerFor(pkg.Path).OpenData(pkg.Path)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		for {
 			m, err := t.Next()
@@ -89,12 +89,12 @@ func extractInto(r *root.Root, packages []*Package, log Log) (map[string]string,
 			}
 			if err != nil {
 				t.Close()
-				return nil, err
+				return err
 			}
 			rel, err := safeRel(m.Name)
 			if err != nil {
 				t.Close()
-				return nil, err
+				return err
 			}
 			if rel == "" {
 				continue
@@ -104,7 +104,7 @@ func extractInto(r *root.Root, packages []*Package, log Log) (map[string]string,
 				if total-asked >= 64<<20 {
 					if err := r.Room(total, fmt.Sprintf("the files up to /%s in %s declare", rel, pkg.Name)); err != nil {
 						t.Close()
-						return nil, err
+						return err
 					}
 					asked = total
 				}
@@ -120,7 +120,7 @@ func extractInto(r *root.Root, packages []*Package, log Log) (map[string]string,
 		}
 		t.Close()
 		if err := r.Room(total, fmt.Sprintf("the files of the packages up to %s declare", pkg.Name)); err != nil {
-			return nil, err
+			return err
 		}
 		asked = total
 	}
@@ -140,12 +140,12 @@ func extractInto(r *root.Root, packages []*Package, log Log) (map[string]string,
 			// unless a package ships usr/<d> itself as a link (Fedora 42's usr/sbin -> bin)
 			if _, ok := links["usr/"+d]; !ok {
 				if err := r.Makedirs("usr/" + d); err != nil {
-					return nil, err
+					return err
 				}
 			}
 			if !r.Lexists(d) {
 				if err := r.Symlink("usr/"+d, d); err != nil {
-					return nil, err
+					return err
 				}
 			}
 		}
@@ -160,7 +160,7 @@ func extractInto(r *root.Root, packages []*Package, log Log) (map[string]string,
 		if (parents[rel] || merged[rel]) && !strings.HasPrefix(target, "/") &&
 			!hasPart(target, "..") && !r.Lexists(rel) {
 			if err := r.Symlink(target, rel); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
@@ -171,7 +171,7 @@ func extractInto(r *root.Root, packages []*Package, log Log) (map[string]string,
 		name, rd := pkg.Name, readerFor(pkg.Path)
 		_, scripts, err := rd.Control(pkg.Path)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		// 10.1 step 2: a diversion that renames a file changes where the tree must hold it, and
 		// dpkg's database is not reproduced here; those are refused. Diversions with --no-rename,
@@ -185,13 +185,13 @@ func extractInto(r *root.Root, packages []*Package, log Log) (map[string]string,
 				if divertRe.MatchString(line) || strings.Contains(line, "--no-rename") || strings.Contains(line, ".usr-is-merged") {
 					continue
 				}
-				return nil, refuse("%s adds a renaming diversion in its %s (%s); diversions are refused (10.1)",
+				return refuse("%s adds a renaming diversion in its %s (%s); diversions are refused (10.1)",
 					name, sname, cut(strings.TrimSpace(line), 100))
 			}
 		}
 		groups, err := rd.ParseDeps(pkg.Fields["Replaces"])
 		if err != nil {
-			return nil, err
+			return err
 		}
 		replaces[name] = map[string]bool{}
 		for _, alts := range groups {
@@ -201,26 +201,26 @@ func extractInto(r *root.Root, packages []*Package, log Log) (map[string]string,
 		}
 		t, err := rd.OpenData(pkg.Path)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if err := extractPackage(r, t, name, replaces, owner, &hardlinks, log); err != nil {
 			t.Close()
-			return nil, err
+			return err
 		}
 		t.Close()
 	}
 	for _, h := range hardlinks {
 		if r.Lexists(h.dst) {
 			if err := r.Remove(h.dst); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		// the member the archive names, never what a shipped symlink there points at
 		if err := r.Link(h.src, h.dst); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return owner, nil
+	return nil
 }
 
 // pending is a hard link to make once every member is extracted: the entry it names, and its path.

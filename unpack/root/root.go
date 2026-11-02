@@ -22,8 +22,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// MaxLinks is the kernel's limit on symlinks followed in one resolution (ELOOP).
-const MaxLinks = 40
+// maxLinks is the kernel's limit on symlinks followed in one resolution (ELOOP).
+const maxLinks = 40
 
 // Margin is what a write leaves free on the tree's filesystem, at the least: a payload that
 // decompresses without end is refused rather than filling the disk.
@@ -40,8 +40,13 @@ func errorf(format string, a ...any) error {
 	return &Error{Msg: fmt.Sprintf(format, a...)}
 }
 
-// ErrMissing is a path, or a directory on the way to one, that does not exist.
+// ErrMissing is a path, or a directory on the way to one, that does not exist; an error that
+// carries it names the path.
 var ErrMissing = errors.New("no such path in the tree")
+
+func missing(vpath string) error {
+	return &os.PathError{Op: "resolve", Path: vpath, Err: ErrMissing}
+}
 
 const dirFlags = unix.O_PATH | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC
 
@@ -113,10 +118,11 @@ func (r *Root) openDir(comps []string) (int, error) {
 	}
 	fd, err := unix.Openat(parent, comps[len(comps)-1], dirFlags, 0)
 	if err != nil {
+		// ENOTDIR also when the component became a symlink since it was walked, which O_NOFOLLOW
+		// with O_DIRECTORY refuses as not a directory
 		if err == unix.ENOENT || err == unix.ENOTDIR {
-			return 0, ErrMissing
+			return 0, missing("/" + key)
 		}
-		// ELOOP: the component became a symlink since it was walked
 		return 0, errorf("/%s: %s", key, errno(err))
 	}
 	r.dirs[key] = fd
@@ -175,7 +181,7 @@ func (r *Root) walk(vpath string, follow, create bool) ([]string, string, error)
 				return comps, name, nil
 			}
 			if !create {
-				return nil, "", ErrMissing
+				return nil, "", missing(vpath)
 			}
 			if err := unix.Mkdirat(dfd, name, 0o777); err != nil {
 				return nil, "", errorf("%s: cannot make /%s: %s", vpath, strings.Join(append(comps, name), "/"), errno(err))
@@ -185,8 +191,8 @@ func (r *Root) walk(vpath string, follow, create bool) ([]string, string, error)
 		}
 		if st.Mode&unix.S_IFMT == unix.S_IFLNK {
 			links++
-			if links > MaxLinks {
-				return nil, "", errorf("%s: more than %d symlinks on the way (ELOOP)", vpath, MaxLinks)
+			if links > maxLinks {
+				return nil, "", errorf("%s: more than %d symlinks on the way (ELOOP)", vpath, maxLinks)
 			}
 			target, err := readlinkat(dfd, name)
 			if err != nil {
@@ -235,18 +241,6 @@ func (r *Root) at(vpath string, follow, create bool) (int, string, error) {
 	}
 	dfd, err := r.openDir(comps)
 	return dfd, name, err
-}
-
-// Real returns the host's path of what vpath names, every symlink on the way resolved inside.
-//
-// For a program to run from the tree, whose path the host resolves again: unpack is the only
-// writer of the tree, so the path stays as resolved.
-func (r *Root) Real(vpath string) (string, error) {
-	comps, name, err := r.walk(vpath, true, false)
-	if err != nil {
-		return "", err
-	}
-	return strings.Join(append([]string{r.Path}, append(comps, name)...), "/"), nil
 }
 
 func (r *Root) lstat(vpath string, follow bool) (*unix.Stat_t, bool) {
@@ -318,7 +312,7 @@ func (r *Root) open(vpath string, flags int) (int, error) {
 	fd, err := unix.Openat(dfd, name, flags|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		if err == unix.ENOENT || err == unix.ENOTDIR {
-			return 0, ErrMissing
+			return 0, missing(vpath)
 		}
 		return 0, &os.PathError{Op: "open", Path: vpath, Err: err}
 	}
@@ -351,13 +345,14 @@ func (r *Root) ReadText(vpath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	text := Decode(data)
+	text := decode(data)
 	return strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n"), nil
 }
 
-// Decode decodes UTF-8 as Python's "replace" does: each byte that is no part of a character
-// becomes U+FFFD.
-func Decode(data []byte) string {
+// decode decodes UTF-8 as Python's "replace" does: each maximal subpart of an ill-formed
+// sequence, a lead byte with the continuation bytes that could have followed it, becomes one
+// U+FFFD.
+func decode(data []byte) string {
 	if utf8.Valid(data) {
 		return string(data)
 	}
@@ -365,6 +360,7 @@ func Decode(data []byte) string {
 	for len(data) > 0 {
 		c, size := utf8.DecodeRune(data)
 		if c == utf8.RuneError && size == 1 {
+			size = subpart(data)
 			b.WriteRune(utf8.RuneError)
 		} else {
 			b.Write(data[:size])
@@ -372,6 +368,41 @@ func Decode(data []byte) string {
 		data = data[size:]
 	}
 	return b.String()
+}
+
+// subpart returns the length of the maximal subpart of the ill-formed sequence at the start of
+// data: its lead byte, and each continuation byte in the range the lead and the bytes before it
+// allow (Unicode 3.9, table 3-7).
+func subpart(data []byte) int {
+	lead := data[0]
+	var need int
+	lo, hi := byte(0x80), byte(0xBF)
+	switch {
+	case lead >= 0xC2 && lead <= 0xDF:
+		need = 1
+	case lead == 0xE0:
+		need, lo = 2, 0xA0
+	case lead == 0xED:
+		need, hi = 2, 0x9F
+	case lead >= 0xE1 && lead <= 0xEF:
+		need = 2
+	case lead == 0xF0:
+		need, lo = 3, 0x90
+	case lead == 0xF4:
+		need, hi = 3, 0x8F
+	case lead >= 0xF1 && lead <= 0xF3:
+		need = 3
+	default:
+		return 1
+	}
+	n := 1
+	for ; n <= need && n < len(data); n++ {
+		if data[n] < lo || data[n] > hi {
+			break
+		}
+		lo, hi = 0x80, 0xBF
+	}
+	return n
 }
 
 // Listdir returns the names in the directory at vpath, sorted; none when it is no directory.
@@ -436,11 +467,11 @@ func (r *Root) Symlink(target, vpath string) error {
 
 // Link makes a hard link at dst to the entry src names, which is not followed.
 func (r *Root) Link(src, dst string) error {
-	missing := errorf("the hard link /%s names %s, which the tree does not hold", strings.TrimLeft(dst, "/"), src)
+	notHeld := errorf("the hard link /%s names %s, which the tree does not hold", strings.TrimLeft(dst, "/"), src)
 	cached, sname, err := r.at(src, false, false)
 	if err != nil {
-		if err == ErrMissing {
-			return missing
+		if errors.Is(err, ErrMissing) {
+			return notHeld
 		}
 		return err
 	}
@@ -455,7 +486,7 @@ func (r *Root) Link(src, dst string) error {
 	}
 	if err := unix.Linkat(sfd, sname, dfd, dname, 0); err != nil {
 		if err == unix.ENOENT {
-			return missing
+			return notHeld
 		}
 		return &os.PathError{Op: "link", Path: dst, Err: err}
 	}
