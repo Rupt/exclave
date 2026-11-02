@@ -1,5 +1,9 @@
 #!/bin/sh
-# scripts/fetch-apks: an Alpine package closure, downloaded (docs/DESIGN.md 10.1), run by the pinned Python (scripts/lib.sh).
+# scripts/fetch-apks: an Alpine package closure, downloaded (docs/DESIGN.md 10.1): the fetch command as scripts/build built it.
 set -eu
-. "$(dirname -- "$0")/lib.sh"
-exec "$UV" run --quiet --project "$ROOT" python "$ROOT/fetch/apks.py" "$@"
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+[ -x "$root/build/fetch" ] || {
+    echo "no $root/build/fetch: run scripts/build" >&2
+    exit 1
+}
+exec "$root/build/fetch" apks "$@"

@@ -33,16 +33,16 @@ fails=0
 exclave() { "$repo/build/exclave" "$@"; }
 unpack() { "$repo/build/unpack" "$@"; }
 
-fetch() { # fetch NAME FETCHER ARGS...: package files into DIR/NAME through the fetcher's cache
+fetch() { # fetch NAME KIND ARGS...: package files into DIR/NAME through the fetcher's cache; KIND is debs, apks or rpms
     name=$1
-    tool=$2
+    kind=$2
     shift 2
     if [ -n "$(ls "$dir/$name" 2>/dev/null)" ]; then
         echo "$name: present"
         return 0
     fi
     rm -rf "${dir:?}/$name"
-    if py "$repo/fetch/$tool" --out "$dir/$name" "$@" >"$dir/log/$name.log" 2>&1; then
+    if "$repo/build/fetch" "$kind" --out "$dir/$name" "$@" >"$dir/log/$name.log" 2>&1; then
         echo "$name: $(find "$dir/$name" -type f | wc -l) files"
     else
         echo "$name: FAIL, see $dir/log/$name.log"
@@ -111,16 +111,16 @@ ubuntu=$dir/src/ubuntu-archive-keyring.gpg
 mirror=http://gb.archive.ubuntu.com/ubuntu
 alpine=$dir/src/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub
 # the gate's: its four exclaves, the arm64 gcc exclave, and Docker's default seccomp profile
-fetch debs-gcc13 debs.py --keyring "$ubuntu" gcc-13 libc6-dev && make_exclave gcc13 debs-gcc13
-fetch apks apks.py --key "$alpine" gcc musl-dev binutils make linux-headers && make_exclave alpine apks
-fetch rpms-f42 rpms.py --keyring "$dir/src/RPM-GPG-KEY-fedora-42-primary" --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make && make_exclave f42 rpms-f42
-fetch debs-clang debs.py --keyring "$ubuntu" clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils && make_exclave clang debs-clang
+fetch debs-gcc13 debs --keyring "$ubuntu" gcc-13 libc6-dev && make_exclave gcc13 debs-gcc13
+fetch apks apks --key "$alpine" gcc musl-dev binutils make linux-headers && make_exclave alpine apks
+fetch rpms-f42 rpms --keyring "$dir/src/RPM-GPG-KEY-fedora-42-primary" --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make && make_exclave f42 rpms-f42
+fetch debs-clang debs --keyring "$ubuntu" clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils && make_exclave clang debs-clang
 # the aarch64 launcher this machine builds: its own on aarch64, the cross-built one on x86-64 with the cross compiler
 case $(uname -m) in
 aarch64) aarch64_launcher=$repo/build/launcher ;;
 *) aarch64_launcher=$repo/build/launcher-aarch64 ;;
 esac
-fetch debs-arm64 debs.py --keyring "$ubuntu" --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev &&
+fetch debs-arm64 debs --keyring "$ubuntu" --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev &&
     if [ -x "$aarch64_launcher" ]; then
         make_exclave gcc13-arm64 debs-arm64 "$aarch64_launcher"
     else
@@ -135,15 +135,15 @@ file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868e
 # the examples': test/realsoft.py's packages and sources, the sysroot's CentOS 7 glibc, test/workloads.py's exclaves
 # and files, and test/bench.py's SQLite, some from their authors' own sites
 file https://vault.centos.org/7.9.2009/os/x86_64/RPM-GPG-KEY-CentOS-7 RPM-GPG-KEY-CentOS-7 4a088ee35b0355b8a9cc8b611b72ca76280cb34c4b90346ff08abb30fe0b82a0
-fetch debs-realsoft debs.py --keyring "$ubuntu" gcc g++ make libc6-dev python3 && make_exclave realsoft debs-realsoft
-fetch el7 rpms.py --keyring "$dir/src/RPM-GPG-KEY-CentOS-7" --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
-fetch debs-valgrind-gcc debs.py --keyring "$ubuntu" --mirror $mirror valgrind gcc libc6-dev && make_exclave valgrind debs-valgrind-gcc
-fetch debs-poppler debs.py --keyring "$ubuntu" --mirror $mirror poppler-utils poppler-data fonts-urw-base35 && make_exclave poppler debs-poppler
-fetch debs-rust debs.py --keyring "$ubuntu" --mirror $mirror cargo rustc gcc libc6-dev && make_exclave rust debs-rust
-fetch debs-cmake debs.py --keyring "$ubuntu" --mirror $mirror cmake ninja-build gcc g++ libc6-dev && make_exclave cmake debs-cmake
-fetch debs-java debs.py --keyring "$ubuntu" --mirror $mirror openjdk-17-jdk-headless libfreetype6 libharfbuzz0b libasound2t64 && make_exclave java debs-java
+fetch debs-realsoft debs --keyring "$ubuntu" gcc g++ make libc6-dev python3 && make_exclave realsoft debs-realsoft
+fetch el7 rpms --keyring "$dir/src/RPM-GPG-KEY-CentOS-7" --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
+fetch debs-valgrind-gcc debs --keyring "$ubuntu" --mirror $mirror valgrind gcc libc6-dev && make_exclave valgrind debs-valgrind-gcc
+fetch debs-poppler debs --keyring "$ubuntu" --mirror $mirror poppler-utils poppler-data fonts-urw-base35 && make_exclave poppler debs-poppler
+fetch debs-rust debs --keyring "$ubuntu" --mirror $mirror cargo rustc gcc libc6-dev && make_exclave rust debs-rust
+fetch debs-cmake debs --keyring "$ubuntu" --mirror $mirror cmake ninja-build gcc g++ libc6-dev && make_exclave cmake debs-cmake
+fetch debs-java debs --keyring "$ubuntu" --mirror $mirror openjdk-17-jdk-headless libfreetype6 libharfbuzz0b libasound2t64 && make_exclave java debs-java
 # the packages cmix-neif 1.0's install.sh installs, at the snapshot it pins (test/workloads.py buildimage)
-fetch debs-buildimage debs.py --keyring "$ubuntu" --snapshot 20260927T160000Z clang-18 lld-18 llvm-18 libclang-rt-18-dev build-essential gawk python3 && make_exclave buildimage debs-buildimage
+fetch debs-buildimage debs --keyring "$ubuntu" --snapshot 20260927T160000Z clang-18 lld-18 llvm-18 libclang-rt-18-dev build-essential gawk python3 && make_exclave buildimage debs-buildimage
 file https://marwoelk.de/cmix-neif-1.0/cmix-neif-1.0.tar.gz cmix-neif-1.0.tar.gz f5e09238c88fb7290c8e36cc262bd25d625c9bb32c506237227839fc0aef4bb3
 file https://arxiv.org/pdf/1706.03762v7 attention.pdf 3d56f08914b524d39582df88d31489b197b246bb879406421664896210cb6e70
 file https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz ac034b9c7bbd9f8cc38953efaac07145ce0c8993107a1594d5cedd08fdf2a2bc

@@ -39,7 +39,7 @@ jobs:
       - name: packages the gate needs
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends bubblewrap strace gdb gpgv
+          sudo apt-get install -y -q --no-install-recommends bubblewrap strace gdb
           [ "$(uname -m)" != x86_64 ] || sudo apt-get install -y -q --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
       - name: unprivileged user namespaces, for bwrap
         run: sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0

@@ -141,7 +141,7 @@ tool() { # tool ARCH OUT ARGS...: the exclave command for ARCH
 go_build() { # go_build ARCH OUT PKG: the Go command PKG for ARCH, static (lib.sh: cgo off, paths trimmed) and stripped
     arch=$1 out=$2 pkg=$3
     case $arch in x86_64) goarch=amd64 ;; aarch64) goarch=arm64 ;; *) goarch=$arch ;; esac
-    GOOS=linux GOARCH=$goarch "$GO" build -ldflags='-s -w' -o "$out" "$pkg" || return 1
+    GOOS=linux GOARCH=$goarch "$GO" build -ldflags="-s -w -X main.version=$version" -o "$out" "$pkg" || return 1
     echo "built $out ($(stat -c %s "$out") bytes, $arch)"
 }
 

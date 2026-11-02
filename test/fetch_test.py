@@ -3,14 +3,14 @@
     test/fetch_test.py [--work DIR] [-k NAME|SUBSTRING]
 
 Each test makes a repository of one package under its work directory, signed with keys made here
-(an OpenPGP key from gpg, an RSA key from openssl), and runs a fetcher on it through a file:// URL,
-as scripts/fetch-debs, fetch-rpms and fetch-apks run it. The signed repository must yield its
+(an OpenPGP key from gpg, an RSA key from openssl), and runs build/fetch on it through a file://
+URL, as scripts/fetch-debs, fetch-rpms and fetch-apks run it. The signed repository must yield its
 package; the same repository signed by another key, with its signed text altered, with the
 package altered, or without its signature, must be refused in one line with nothing fetched, and
 so must one whose signed text is intact but a digest below it, of an index or of a package, does
 not match.
-Needs gpg, gpgv and openssl, and says so and exits 0 without them. Prints one line per test; the
-exit status is the number of failures, at most 255.
+Needs gpg and openssl to make the keys and signatures, and says so and exits 0 without them. Prints
+one line per test; the exit status is the number of failures, at most 255.
 """
 
 import argparse
@@ -30,7 +30,7 @@ from packages import DEB_ARCH, MACHINE, make_apk, make_deb, make_rpm, tar_bytes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-FETCH = os.path.join(REPO, "fetch")
+FETCH = (os.path.join(REPO, "build", "fetch"),)  # Go, built by scripts/build
 
 
 class Test(Protocol):
@@ -166,8 +166,8 @@ def fetch_debs(work: str, mirror: str, keyring: str, name: str) -> tuple[int, st
     out = os.path.join(work, f"out-{name}")
     p = subprocess.run(
         [
-            sys.executable,
-            os.path.join(FETCH, "debs.py"),
+            *FETCH,
+            "debs",
             "--out",
             out,
             "--keyring",
@@ -260,8 +260,8 @@ def fetch_rpms(work: str, repo: str, keyring: str, name: str) -> tuple[int, str,
     out = os.path.join(work, f"out-{name}")
     p = subprocess.run(
         [
-            sys.executable,
-            os.path.join(FETCH, "rpms.py"),
+            *FETCH,
+            "rpms",
             "--out",
             out,
             "--keyring",
@@ -338,8 +338,8 @@ def fetch_apks(work: str, mirror: str, key: str, name: str) -> tuple[int, str, l
     out = os.path.join(work, f"out-{name}")
     p = subprocess.run(
         [
-            sys.executable,
-            os.path.join(FETCH, "apks.py"),
+            *FETCH,
+            "apks",
             "--out",
             out,
             "--key",
@@ -510,7 +510,7 @@ def main() -> int:
     ap.add_argument("--work", default=os.path.join(REPO, "build", "fetch-test"))
     ap.add_argument("-k", dest="select", default="")
     args = ap.parse_args()
-    missing = [t for t in ("gpg", "gpgv", "openssl") if not shutil.which(t)]
+    missing = [t for t in ("gpg", "openssl") if not shutil.which(t)]
     if missing:
         print(f"SKIP: {', '.join(missing)} not installed; the fetchers' checks cannot be tested")
         return 0
