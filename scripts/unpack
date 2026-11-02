@@ -1,5 +1,9 @@
 #!/bin/sh
-# scripts/unpack: package files -> an unwrapped exclave (docs/DESIGN.md 10.1), run by the pinned Python (scripts/lib.sh).
+# scripts/unpack: package files -> an unwrapped exclave (docs/DESIGN.md 10.1), the unpack command as scripts/build built it.
 set -eu
-. "$(dirname -- "$0")/lib.sh"
-exec "$UV" run --quiet --project "$ROOT" python -m unpack "$@"
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+[ -x "$root/build/unpack" ] || {
+    echo "no $root/build/unpack: run scripts/build" >&2
+    exit 1
+}
+exec "$root/build/unpack" "$@"

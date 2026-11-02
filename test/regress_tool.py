@@ -8,7 +8,6 @@ import os
 import platform
 import re
 import shutil
-import sys
 from typing import TYPE_CHECKING
 
 import tree
@@ -19,10 +18,7 @@ if TYPE_CHECKING:
 from harness import expect, read_bytes, read_text, run, skip, test
 from suite import REPO, TOOL, Ctx, check, copy_exclave, inside
 
-from unpack import ldcache
-from unpack.root import Root
-
-UNPACK = (sys.executable, "-m", "unpack")
+UNPACK = tree.UNPACK
 
 
 # the synthetic packages of the tool tests carry this machine's architecture
@@ -649,21 +645,20 @@ def ld_so_cache_as_ldconfig_writes_it(ctx: Ctx) -> str | None:
         tree.unwrap_tree(ex)
         copies.append(os.path.join(ex, "tree"))
     a, b = copies
-    with Root(a) as r:
-        ldconfig = ldcache.find_ldconfig(r)
-    # a glibc tree carries one; the pruned fixture keeps it, since this run opens it
-    expect(ldconfig is not None, "no static ldconfig in the tree")
-    assert ldconfig is not None
-    family = ldcache.EM_X86_64 if ctx.machine == "x86_64" else ldcache.EM_AARCH64
     libdir = os.path.dirname(ctx.vreal(ctx.libc))
     sample = None  # a library beside libc with a soname, which the alterations copy
     for name in sorted(os.listdir(os.path.join(a, libdir.lstrip("/")))):
         p = os.path.join(a, libdir.lstrip("/"), name)
-        if name.startswith("lib") and ".so" in name and name != "libc.so.6" and os.path.isfile(p):
-            info = None if os.path.islink(p) else ldcache.shared_object(read_bytes(p), family)
-            if info and info[2]:
-                sample = name
-                break
+        if (
+            name.startswith("lib")
+            and ".so" in name
+            and name != "libc.so.6"
+            and os.path.isfile(p)
+            and not os.path.islink(p)
+            and tree.soname(p)
+        ):
+            sample = name
+            break
     if not sample:
         skip("no library with a soname beside libc")
     hwcaps = os.path.join(libdir.lstrip("/"), "glibc-hwcaps", "x86-64-v3")
@@ -686,6 +681,18 @@ def ld_so_cache_as_ldconfig_writes_it(ctx: Ctx) -> str | None:
         os.makedirs(os.path.join(root, "etc", "ld.so.conf.d"), exist_ok=True)
         with open(os.path.join(root, "etc", "ld.so.conf.d", "zz-test.conf"), "w") as f:
             f.write("# a test\n/opt/testlib  \n/missing/dir\n")
+    # unpack's writer on the second copy: the links it made and removed, then the ldconfig it
+    # read, which a glibc tree carries (the pruned fixture keeps it, since this run opens it), the
+    # loader and the loader's directories
+    rc, out, err = run([*UNPACK, "ldconfig", b])
+    expect(rc == 0, f"the writer wrote no cache: {out}{err}")
+    said = dict(
+        line.split(": ", 1)
+        for line in out.splitlines()
+        if line.startswith(("ldconfig: ", "loader: ", "loader directories: "))
+    )
+    ldconfig, table = said["ldconfig"], said["loader directories"].split()
+    logs = [line for line in out.splitlines() if line.startswith(("synthesised ", "removed "))]
     # the tree's ldconfig on the first copy; a relative include, Red Hat's, is spelt from /etc,
     # since -r refuses it
     conf, cf = os.path.join(a, "etc", "ld.so.conf"), "/etc/ld.so.conf"
@@ -700,9 +707,6 @@ def ld_so_cache_as_ldconfig_writes_it(ctx: Ctx) -> str | None:
     expect(rc == 0, f"the tree's ldconfig on a copy: {out}{err}")
     if cf != "/etc/ld.so.conf":
         os.remove(os.path.join(a, "etc", "ld.so.conf.exclave"))
-    logs: list[str] = []
-    with Root(b) as r:
-        expect(ldcache.write(r, ldconfig, logs.append), f"the writer wrote no cache: {logs}")
     ca = read_bytes(os.path.join(a, "etc", "ld.so.cache"))
     cb = read_bytes(os.path.join(b, "etc", "ld.so.cache"))
     expect(
@@ -724,7 +728,6 @@ def ld_so_cache_as_ldconfig_writes_it(ctx: Ctx) -> str | None:
     expect(la == lb, f"the links differ: {sorted(set(la) ^ set(lb))[:6]!r}")
     rc, out, err = inside(ctx, ctx.interp, ["--list-diagnostics"])
     printed = re.findall(r'^path\.system_dirs\[0x[0-9a-f]+\]="([^"]*)"', out, flags=re.MULTILINE)
-    table = ldcache.trusted_dirs(read_bytes(ctx.payload(ctx.interp)))
     if printed:  # glibc 2.33 and later print them
         expect(table == printed, f"the loader's table {table!r} is not what it prints {printed!r}")
     # the tool reads the same table: a hand-made tree with libc in the table's first directory
@@ -763,8 +766,8 @@ def ld_so_cache_as_ldconfig_writes_it(ctx: Ctx) -> str | None:
     os.makedirs(os.path.join(root, "etc"))
     with open(os.path.join(root, "etc", "ld.so.conf"), "w") as f:
         f.write("/opt/testlib\n")
-    with Root(root) as r:
-        expect(ldcache.write(r, ldconfig, logs.append), f"no cache for the hand tree: {logs}")
+    rc, out, err = run([*UNPACK, "ldconfig", root])
+    expect(rc == 0, f"no cache for the hand tree: {out}{err}")
     rc, out, err = run([*TOOL, "wrap", hand])
     unfound = "/usr/bin/true needs libc.so.6, which"  # no search finds, or does not resolve
     expect(rc == 0 and unfound not in out, f"libc through the cache: {out[-500:]}{err}")

@@ -491,8 +491,8 @@ type Ldconfig struct {
 	dirs      []dir
 	keys      []inode
 	entries   []entry
-	Loader    string // the tree's glibc loader, or "" without one
-	table     []string
+	Loader    string   // the tree's glibc loader, or "" without one
+	Table     []string // the loader's trusted directories, from its own table
 	debian    bool
 }
 
@@ -510,13 +510,13 @@ func New(r *root.Root, ldconfig string, log Log) (*Ldconfig, error) {
 	l.Loader = l.findLoader()
 	if l.Loader != "" {
 		if data, err := r.ReadBytes(l.Loader); err == nil {
-			l.table = TrustedDirs(data)
+			l.Table = TrustedDirs(data)
 		}
 	}
 	// Debian's ldconfig carries a copy of the loader's table beside its static C library's and
 	// adds its entries as spelt; glibc's takes slibdir and libdir and expands a lib64
-	run := []byte(strings.Join(l.table, "\x00") + "\x00")
-	l.debian = len(l.table) > 0 && bytes.Count(binary, run) >= 2
+	run := []byte(strings.Join(l.Table, "\x00") + "\x00")
+	l.debian = len(l.Table) > 0 && bytes.Count(binary, run) >= 2
 	return l, nil
 }
 
@@ -732,11 +732,11 @@ func Fnmatch(pattern, name string) bool {
 
 func (l *Ldconfig) builtinDirs() {
 	if l.debian {
-		for _, d := range l.table {
+		for _, d := range l.Table {
 			l.addDir(d)
 		}
 	} else {
-		for i, d := range l.table {
+		for i, d := range l.Table {
 			if i >= 2 {
 				break
 			}
@@ -1021,33 +1021,34 @@ func FindLdconfig(r *root.Root) string {
 	return ""
 }
 
-// Write writes /etc/ld.so.cache as the tree's ldconfig would, mode 0644; false when it could not.
-func Write(r *root.Root, ldconfig string, log Log) (bool, error) {
+// Write writes /etc/ld.so.cache as the tree's ldconfig would, mode 0644, and returns the run
+// that wrote it; nil when it could not.
+func Write(r *root.Root, ldconfig string, log Log) (*Ldconfig, error) {
 	if !r.IsDir("/etc") {
 		log("no /etc: ldconfig would write no cache")
-		return false, nil
+		return nil, nil
 	}
 	run, err := New(r, ldconfig, log)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if run.Loader == "" {
 		log("no glibc loader in the tree: no built-in directories for ld.so.cache")
 	}
 	data, err := run.Run()
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if r.Lexists("/etc/ld.so.cache") {
 		if err := r.Remove("/etc/ld.so.cache"); err != nil {
-			return false, err
+			return nil, err
 		}
 	}
 	if err := r.WriteBytes("/etc/ld.so.cache", data, 0o644); err != nil {
-		return false, err
+		return nil, err
 	}
 	if err := r.Chmod("/etc/ld.so.cache", 0o644); err != nil {
-		return false, err
+		return nil, err
 	}
-	return true, nil
+	return run, nil
 }

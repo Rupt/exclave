@@ -22,7 +22,7 @@ mkdir -p "$1" && cd "$1"
 dir=$(pwd)
 rm -rf gcc.exclave sysroot.exclave hello.exclave hello.c hello hello-plain hello-pruned log && mkdir log # a rerun keeps only the fetched files
 exclave() { "$here/build/exclave" "$@"; }
-unpack() { py -m unpack "$@"; }
+unpack() { "$here/build/unpack" "$@"; }
 run() {
     echo "+ $*" >&2
     "$@"

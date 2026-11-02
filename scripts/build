@@ -33,7 +33,8 @@
 #                   under scripts/reproduce, a line says so and the C is built
 #
 # and, on x86-64 with the cross compiler, launcher-aarch64,
-# launcher-old-aarch64 and exclave-aarch64. Nothing is built when every output
+# launcher-old-aarch64, exclave-aarch64 and unpack-aarch64, which the matrix
+# carries into its arm64 VM. Nothing is built when every output
 # is there and no source, LICENSE, this script or lib.sh is newer than the last
 # build; a line for each one built. The builds run one after the other, as
 # every build here does, so that building never loads the machine with more
@@ -61,6 +62,7 @@ for f in "$stamp" build/launcher build/launcher-old build/launcher-debug build/e
 done
 for arch in $cross; do
     [ -e "build/launcher-$arch" ] && [ -e "build/launcher-old-$arch" ] && [ -e "build/exclave-$arch" ] || fresh=false
+    [ -z "$gobuilds" ] || [ -e "build/unpack-$arch" ] || fresh=false
 done
 gosources= # absent from a copy of the sources without the Go, as scripts/reproduce makes
 for p in go.mod go.sum fetch unpack; do
@@ -136,10 +138,11 @@ tool() { # tool ARCH OUT ARGS...: the exclave command for ARCH
     echo "built $out ($(stat -c %s "$out") bytes, $arch)"
 }
 
-go_build() { # go_build OUT PKG: the Go command PKG, static (lib.sh: cgo off, paths trimmed) and stripped
-    out=$1 pkg=$2
-    "$GO" build -ldflags='-s -w' -o "$out" "$pkg" || return 1
-    echo "built $out ($(stat -c %s "$out") bytes, $native)"
+go_build() { # go_build ARCH OUT PKG: the Go command PKG for ARCH, static (lib.sh: cgo off, paths trimmed) and stripped
+    arch=$1 out=$2 pkg=$3
+    case $arch in x86_64) goarch=amd64 ;; aarch64) goarch=arm64 ;; *) goarch=$arch ;; esac
+    GOOS=linux GOARCH=$goarch "$GO" build -ldflags='-s -w' -o "$out" "$pkg" || return 1
+    echo "built $out ($(stat -c %s "$out") bytes, $arch)"
 }
 
 rm -f "$stamp" build/launcher*.debug-*.ci
@@ -153,8 +156,11 @@ if [ -n "$sanitized" ]; then
     tool "$native" build/exclave-asan -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer "$sanitized" || status=1
 fi
 if [ -n "$gobuilds" ]; then
-    go_build build/unpack ./unpack || status=1
-    go_build build/fetch ./fetch || status=1
+    go_build "$native" build/unpack ./unpack || status=1
+    go_build "$native" build/fetch ./fetch || status=1
+    for arch in $cross; do
+        go_build "$arch" "build/unpack-$arch" ./unpack || status=1
+    done
 else
     echo "build: no Go at $GO (scripts/install-go): build/unpack and build/fetch not built"
 fi

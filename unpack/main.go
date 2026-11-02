@@ -1,9 +1,12 @@
 // The unpack command line (DESIGN.md 10.1):
 //
-//	unpack OUT PKG...    Make the unwrapped exclave OUT from package files: extract, synthesise
-//	                     what maintainer scripts would have done, strip the volatile directories,
-//	                     record every input in OUT/.exclave/hashes, report dependencies the set
-//	                     does not satisfy.
+//	unpack OUT PKG...      Make the unwrapped exclave OUT from package files: extract, synthesise
+//	                       what maintainer scripts would have done, strip the volatile
+//	                       directories, record every input in OUT/.exclave/hashes, report
+//	                       dependencies the set does not satisfy.
+//	unpack ldconfig TREE   Write TREE/etc/ld.so.cache as the tree's own ldconfig would, for a
+//	                       tree made by hand: the links it makes and removes, then the ldconfig
+//	                       and the loader it read and the loader's directories.
 //
 // `exclave wrap OUT` then makes it an exclave. Between the two OUT is a directory, and anything
 // may be done to it. Unpack never opens a network connection: the files it is given are its
@@ -17,8 +20,38 @@ import (
 	"sort"
 	"strings"
 
+	"exclave/unpack/ldcache"
 	"exclave/unpack/reader"
+	"exclave/unpack/root"
 )
+
+// ldconfigCommand writes the cache of the tree at path as its ldconfig would (10.1).
+func ldconfigCommand(path string, log Log) error {
+	r, err := root.Open(path)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	ld := ldcache.FindLdconfig(r)
+	if ld == "" {
+		return refuse("%s holds no static ldconfig under the names the distributions give it", path)
+	}
+	run, err := ldcache.Write(r, ld, ldcache.Log(log))
+	if err != nil {
+		return refusing(err)
+	}
+	if run == nil {
+		return refuse("%s: no cache written", path)
+	}
+	log("ldconfig: " + ld)
+	if run.Loader == "" {
+		log("loader: none")
+	} else {
+		log("loader: " + run.Loader)
+	}
+	log("loader directories: " + strings.Join(run.Table, " "))
+	return nil
+}
 
 // unpack makes the unwrapped exclave out from package files (10.1).
 //
@@ -127,15 +160,26 @@ func pylist(items []string) string {
 func main() {
 	args := os.Args[1:]
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
-		fmt.Println("usage: unpack OUT PACKAGE [PACKAGE ...]\n\nMake the unwrapped exclave OUT from package files; " +
-			"exclave wrap OUT then makes it an exclave. PACKAGE: .deb, .apk or .rpm files")
+		fmt.Println("usage: unpack OUT PACKAGE [PACKAGE ...]\n       unpack ldconfig TREE\n\n" +
+			"Make the unwrapped exclave OUT from package files (.deb, .apk or .rpm); exclave wrap OUT then makes " +
+			"it an exclave. Or write TREE/etc/ld.so.cache as the tree's own ldconfig would, for a tree made by hand.")
 		return
 	}
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: unpack OUT PACKAGE [PACKAGE ...]\nunpack: error: OUT and at least one PACKAGE are required")
+		fmt.Fprintln(os.Stderr, "usage: unpack OUT PACKAGE [PACKAGE ...]\n       unpack ldconfig TREE\n"+
+			"unpack: error: OUT and at least one PACKAGE are required")
 		os.Exit(2)
 	}
-	if err := unpack(args[0], args[1:], func(line string) { fmt.Println(line) }); err != nil {
+	log := func(line string) { fmt.Println(line) }
+	// the ldconfig form names a directory that exists, which no OUT may and no PACKAGE is
+	if st, err := os.Stat(args[1]); args[0] == "ldconfig" && len(args) == 2 && err == nil && st.IsDir() {
+		if err := ldconfigCommand(args[1], log); err != nil {
+			fmt.Fprintf(os.Stderr, "unpack: %s\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err := unpack(args[0], args[1:], log); err != nil {
 		fmt.Fprintf(os.Stderr, "unpack: %s\n", err)
 		os.Exit(1)
 	}

@@ -716,6 +716,7 @@ def main() -> int:
             t.add(exclaves[arch], arcname="ex")
             t.add(built("launcher", arch), arcname="repo/build/launcher")
             t.add(built("exclave", arch), arcname="repo/build/exclave")
+            t.add(built("unpack", arch), arcname="repo/build/unpack")
             if os.path.exists(built("launcher-old", arch)):
                 t.add(built("launcher-old", arch), arcname="repo/build/launcher-old")
             # test/sysroot.py's output: runs natively on every glibc of its machine

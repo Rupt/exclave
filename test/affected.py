@@ -7,7 +7,8 @@ when a path reaches everything, and `matrix` when the change reaches the VMs. A 
 path when the path is one the step runs or builds from, or one its Python drivers import or name:
 a sibling module in test/ is followed, `unpack` is the package, and a path under the repository
 named through `os.path.join(REPO, ...)` is what the driver runs there (`build/exclave` is the
-command, so `tool/`; `build/launcher` the launcher, so `src/`). Nothing here is kept by hand but
+command, so `tool/`; `build/launcher` the launcher, so `src/`; `build/unpack` and `build/fetch`
+the Go commands, so `unpack/` and `fetch/`). Nothing here is kept by hand but
 the list of what each step runs, which is the gate's own definition of its steps. --explain names
 the reason for each step.
 """
@@ -81,7 +82,12 @@ CHECK_ONLY = (
     ".github/*",
 )
 # A path under build/ a driver names stands for the sources it is built from.
-BUILT = {"build/exclave": "tool/*", "build/launcher": "src/*"}
+BUILT = {
+    "build/exclave": "tool/*",
+    "build/launcher": "src/*",
+    "build/unpack": "unpack/*",
+    "build/fetch": "fetch/*",
+}
 
 
 ROOTS = {

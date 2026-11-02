@@ -59,6 +59,11 @@ func (t *Tar) Next() (*Member, error) {
 		t.held.on = true
 		hdr, err := t.tr.Next()
 		t.held.on = false
+		if err != nil && err != io.EOF && start == 0 {
+			// no archive at all: tar's own word for its first header
+			t.done = true
+			return nil, t.wrap(err)
+		}
 		if err == io.EOF || errors.Is(err, tar.ErrHeader) || err == io.ErrUnexpectedEOF {
 			t.done = true
 			// the archive ended at start: what the header read took and the rest must be padding

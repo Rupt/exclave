@@ -31,7 +31,7 @@ mkdir -p "$dir/log" "$dir/src" || exit 2
 fails=0
 
 exclave() { "$repo/build/exclave" "$@"; }
-unpack() { py -m unpack "$@"; }
+unpack() { "$repo/build/unpack" "$@"; }
 
 fetch() { # fetch NAME FETCHER ARGS...: package files into DIR/NAME through the fetcher's cache
     name=$1

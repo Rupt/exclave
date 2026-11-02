@@ -8,6 +8,7 @@
 package reader
 
 import (
+	"bufio"
 	"compress/bzip2"
 	"compress/gzip"
 	"fmt"
@@ -141,7 +142,15 @@ func Decompress(compression string, r io.Reader) (io.ReadCloser, error) {
 	case Bzip2:
 		return io.NopCloser(bzip2.NewReader(r)), nil
 	case Zstd:
-		z, err := zstd.NewReader(r, zstd.WithDecoderConcurrency(1))
+		// a stream without a frame is no stream: zstd's decoder would read it as nothing
+		b := bufio.NewReader(r)
+		if _, err := b.Peek(1); err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, err
+		}
+		z, err := zstd.NewReader(b, zstd.WithDecoderConcurrency(1))
 		if err != nil {
 			return nil, err
 		}

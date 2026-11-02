@@ -439,6 +439,9 @@ func (p *payload) Next() (*reader.Member, error) {
 				delete(p.held, ino)
 			}
 			if why := reader.AfterEnd(p.r, p.r.Pos); why != nil {
+				if e, ok := why.(*reader.Error); ok {
+					return nil, e
+				}
 				return nil, reader.Errorf("%s: %s", p.label, why)
 			}
 			if len(p.pending) > 0 {

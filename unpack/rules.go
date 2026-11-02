@@ -493,10 +493,11 @@ func ldconfigRule(r *root.Root, packages []*Package, log Log) (bool, error) {
 		}
 		return false, nil
 	}
-	made, err := ldcache.Write(r, ld, ldcache.Log(log))
+	run, err := ldcache.Write(r, ld, ldcache.Log(log))
 	if err != nil {
 		return false, err
 	}
+	made := run != nil
 	if made {
 		log("synthesised /etc/ld.so.cache as the exclave's ldconfig writes it")
 	}

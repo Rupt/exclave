@@ -2,8 +2,8 @@
 
     test/unpack_test.py [--work DIR] [-k NAME|SUBSTRING]
 
-Each test makes the .deb, .apk and .rpm files it needs (test/packages.py) and runs unpack on them
-as scripts/unpack does. A set unpack refuses must be refused in one line, `unpack: ` and the
+Each test makes the .deb, .apk and .rpm files it needs (test/packages.py) and runs build/unpack on
+them as scripts/unpack does. A set unpack refuses must be refused in one line, `unpack: ` and the
 reason, with no traceback and nothing left at the output; and whatever it does, nothing outside
 the output may change: each test's work directory holds host/, with a file the packages aim at
 through `..`, symlinks and hard links. The tests take no exclave; the readers' own tests, which
@@ -27,16 +27,17 @@ import tree
 from harness import TESTS, expect, read_text, run, run_tests, select, test
 from packages import MACHINE, MTIME, Member, compress, cpio, make_apk, make_deb, make_rpm, tar_bytes
 
-from unpack import steps
-
 if TYPE_CHECKING:
     from harness import Test
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-UNPACK = (sys.executable, "-m", "unpack")
+UNPACK = tree.UNPACK
 TOOL = tree.TOOL
 FORMATS = ("deb", "apk", "rpm")
+# the host's volatile directories (8.1), as unpack strips them; test/tables_test.py holds the
+# copies to one
+VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -129,7 +130,7 @@ def landing(root: str, host_path: str) -> str | None:
 
     The volatile step (8.1) leaves nothing there to read, as when the work directory is under /tmp.
     """
-    if any(host_path == v or host_path.startswith(v + "/") for v in steps.VOLATILE):
+    if any(host_path == v or host_path.startswith(v + "/") for v in VOLATILE):
         return None
     return os.path.join(root, host_path.lstrip("/"))
 
@@ -363,21 +364,13 @@ def merged_usr_spellings_conflict(ctx: Ctx) -> None:
         "b",
         [("./lib", "dir", None, 0o755), ("./lib/libfoo.so.1", "file", b"B", 0o644)],
     )
-    root = os.path.join(ctx.work, "root-alias")
-    try:
-        steps.extract(
-            root,
-            [
-                steps.Package("a", os.path.join(d, "a.deb"), {}),
-                steps.Package("b", os.path.join(d, "b.deb"), {}),
-            ],
-            log=lambda *_: None,
-        )
-    except steps.UnpackError as e:
-        expect("both ship" in str(e), str(e))
-    else:
-        msg = "the merged-usr spellings of one file were not seen as a conflict"
-        raise AssertionError(msg)
+    rc, _o, e, _out = unpack(
+        ctx, "root-alias", [os.path.join(d, "a.deb"), os.path.join(d, "b.deb")]
+    )
+    expect(
+        rc != 0 and "both ship" in e,
+        "the merged-usr spellings of one file were not seen as a conflict: " + e,
+    )
 
 
 @test
@@ -768,23 +761,19 @@ def damaged_payloads(ctx: Ctx) -> None:
         ("usr/share/f", "file", bytes(range(256)) * 64, 0o644),
     ]
     os.makedirs(os.path.join(ctx.work, "pkgs"))
-    ended = "Compressed file ended before the end-of-stream marker was reached"
     why = {  # by the compression and the case, as each decompressor says it
-        ("gz", "cut"): ended,
-        ("gz", "flipped"): "CRC check failed",
-        ("gz", "plain"): "Not a gzipped file",
-        ("gz", "empty"): "empty file",
-        ("xz", "cut"): ended,
-        ("xz", "flipped"): "Corrupt input data",
-        ("xz", "plain"): "Input format not supported by decoder",
-        ("xz", "empty"): ended,
-        ("zst", "cut"): ended,
-        (
-            "zst",
-            "flipped",
-        ): "Unable to decompress Zstandard data: Restored data doesn't match checksum",
-        ("zst", "plain"): "Unable to decompress Zstandard data: Unknown frame descriptor",
-        ("zst", "empty"): ended,
+        ("gz", "cut"): "unexpected EOF",
+        ("gz", "flipped"): "gzip: invalid checksum",
+        ("gz", "plain"): "gzip: invalid header",
+        ("gz", "empty"): "EOF",
+        ("xz", "cut"): "unexpected EOF",
+        ("xz", "flipped"): "writeMatch: distance out of range",
+        ("xz", "plain"): "xz: invalid header magic bytes",
+        ("xz", "empty"): "unexpected EOF",
+        ("zst", "cut"): "unexpected EOF",
+        ("zst", "flipped"): "CRC check failed",
+        ("zst", "plain"): "invalid input: magic number mismatch",
+        ("zst", "empty"): "unexpected EOF",
     }
     for fmt, suffix, good in payload_forms(members):
         flipped = bytearray(good)
@@ -802,8 +791,6 @@ def damaged_payloads(ctx: Ctx) -> None:
                 pkg = package(ctx, fmt, name, members, data=data)
             prefix = {"deb": f"corrupt data.tar{suffix}: ", "apk": "not an apk: "}
             reason = why[suffix.lstrip(".") or "gz", case]
-            if fmt == "rpm" and case == "empty":  # gzip of nothing: a cpio payload without its end
-                reason = "the cpio payload has no trailer"
             refused(ctx, name, [pkg], prefix.get(fmt, "corrupt gzip payload: ") + reason)
     for fmt, reason in (
         ("deb", "not an ar archive"),
@@ -822,7 +809,9 @@ def tar_structure(ctx: Ctx) -> None:
 
     GNU long names, PAX paths and link paths and base-256 times are read as tar defines them. A
     member whose data runs past the end is refused, and so is any byte but NUL after the archive's
-    last member: a corrupt header or a part of one, behind which more members could hide.
+    last member: a corrupt header or a part of one, behind which more members could hide, and a
+    header cut short after a GNU long-link header, which ends the archive where the last whole
+    member did.
     """
     long = "usr/share/" + "/".join(["d" * 40] * 4) + "/file"
     target = "/" + "t" * 150
@@ -846,12 +835,10 @@ def tar_structure(ctx: Ctx) -> None:
             expect(os.readlink(os.path.join(root, "usr", "l")) == target, f"{fmt} {case}: the link")
         root, _ = accepted(ctx, f"{fmt}-base256", [pkg("base256", base256)])
         expect(os.lstat(os.path.join(root, "usr", "early")).st_mtime == -1, f"{fmt}: base-256 time")
-        refused(
-            ctx, f"{fmt}-cut-head", [pkg("cut-head", head[: len(head) - 300])], "truncated header"
-        )
+        refused(ctx, f"{fmt}-cut-head", [pkg("cut-head", head[: len(head) - 300])], "after")
         big = tar_bytes([("usr/big", "file", b"b" * 5000, 0o644)], trailer=False)
         cut = big[: len(big) - 3000]  # the cut inside the member's data
-        refused(ctx, f"{fmt}-cut-data", [pkg("cut-data", cut)], "unexpected end of data")
+        refused(ctx, f"{fmt}-cut-data", [pkg("cut-data", cut)], "unexpected EOF")
         after = tar_bytes([("usr/hidden", "file", b"h", 0o644)])
         refused(ctx, f"{fmt}-bad-header", [pkg("bad-header", head + b"x" * 512 + after)], "after")
         refused(

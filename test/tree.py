@@ -28,6 +28,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_LAUNCHER = os.path.join(REPO, "build", "launcher")
 # the exclave command, as scripts/build built it
 TOOL = (os.path.join(REPO, "build", "exclave"),)
+# the step before it (10.1), Go, built by scripts/build too
+UNPACK = (os.path.join(REPO, "build", "unpack"),)
 # The host identity files (8.4), which an exclave ships empty and the host answers for.
 IDENTITY_FILES = (
     "/etc/passwd",
@@ -213,6 +215,42 @@ def interp(path: str) -> str | None:
                 f.seek(off)
                 return f.read(size).rstrip(b"\0").decode()
     return None
+
+
+def soname(path: str) -> str | None:
+    """Return the DT_SONAME an ELF64 shared object carries, or None when it has none."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if len(data) < 64 or data[:5] != b"\x7fELF\x02":
+        return None
+    phoff, phnum = struct.unpack_from("<Q", data, 32)[0], struct.unpack_from("<H", data, 56)[0]
+    loads: list[tuple[int, int, int]] = []
+    dyn = None
+    for i in range(phnum):
+        kind, _flags, off, vaddr, _paddr, size = struct.unpack_from("<IIQQQQ", data, phoff + 56 * i)
+        if kind == 1:  # PT_LOAD
+            loads.append((off, vaddr, size))
+        elif kind == 2:  # PT_DYNAMIC
+            dyn = (off, size)
+    if dyn is None:
+        return None
+    tags: dict[int, int] = {}
+    for d in range(dyn[0], dyn[0] + dyn[1], 16):
+        tag, val = struct.unpack_from("<qQ", data, d)
+        if tag == 0:
+            break
+        if tag not in tags:
+            tags[tag] = val
+    if 5 not in tags or 14 not in tags:  # DT_STRTAB, DT_SONAME
+        return None
+    strtab = tags[5]
+    for off, vaddr, size in loads:
+        if vaddr <= strtab < vaddr + size:
+            strtab = strtab - vaddr + off
+            break
+    at = strtab + tags[14]
+    end = data.find(b"\0", at)
+    return data[at:end].decode(errors="replace") if 0 <= at < len(data) and end >= 0 else None
 
 
 # ---------------------------------------------------------------- an exclave's files (6.1, 6.4)

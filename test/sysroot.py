@@ -30,7 +30,7 @@ import tree
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 TOOL = tree.TOOL
-UNPACK = (sys.executable, "-m", "unpack")
+UNPACK = tree.UNPACK
 
 
 HELLO = (
