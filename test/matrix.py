@@ -838,7 +838,7 @@ def main() -> int:
             if "bwrap-ok" in out:
                 steps = [
                     oracle_step("oracle_resolve.py", "--work $PWD/rw", 30),
-                    oracle_step("oracle_ns.py", "--work $PWD/nw", 40),
+                    oracle_step("oracle_ns.py", "--work $PWD/nw", 400),
                     oracle_step("oracle_syscalls.py", "--work $PWD/sw --show 5000", 20000),
                 ]
                 if args.docker_profile:
