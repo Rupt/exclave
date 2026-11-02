@@ -31,7 +31,7 @@ func TestParseDeps(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := func(name, op, version string) reader.Dep { return reader.Dep{Name: name, Op: op, Version: version} }
-	want := [][]reader.Dep{{d("a", ">=", "1"), d("b", "", "")}, {d("c", "", "")}, {d("d", "<<", "2")}}
+	want := [][]reader.Dep{{d("a", ">=", "1"), d("b", "", "")}, {d("c", "", "")}, {d("d", "<=", "2")}}
 	if len(got) != len(want) {
 		t.Fatalf("got %v", got)
 	}

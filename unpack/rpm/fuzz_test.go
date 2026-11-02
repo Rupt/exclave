@@ -93,6 +93,28 @@ func FuzzRpm(f *testing.F) {
 	})
 }
 
+// FuzzCpio reads any bytes as a cpio payload: every input is answered, by entries or a refusal.
+func FuzzCpio(f *testing.F) {
+	f.Add([]byte{})
+	f.Add(append(append(cpioEntry("usr", 0o040755, 0), cpioEntry("usr/x", 0o100644, 3)...), cpioEntry("TRAILER!!!", 0, 0)...))
+	f.Add(append(cpioEntry("l", 0o120777, 3), cpioEntry("TRAILER!!!", 0, 0)...))
+	f.Add([]byte("070701" + "00000001" + "000081a4" + "00000000" + "00000000" + "00000002" + "00000000" + "-0000001" +
+		"00000000" + "00000000" + "00000000" + "00000000" + "00000002" + "00000000" + "x\x00\x00\x00"))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		a := newPayload(io.NopCloser(bytes.NewReader(raw)), "fuzz")
+		defer a.Close()
+		for {
+			m, err := a.Next()
+			if err != nil {
+				return
+			}
+			if m.Kind == reader.File {
+				io.Copy(io.Discard, a.Open())
+			}
+		}
+	})
+}
+
 // FuzzParseDeps parses any field: an answer or an error, never a panic.
 func FuzzParseDeps(f *testing.F) {
 	f.Add("glibc>=2.17 libc.so.6(GLIBC_2.2.5)(64bit) /bin/sh")

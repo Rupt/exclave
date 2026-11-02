@@ -29,7 +29,7 @@ func FuzzTar(f *testing.F) {
 		&tar.Header{Name: "usr/l", Typeflag: tar.TypeSymlink, Linkname: "x"}))
 	f.Add(append(tarBytes(&tar.Header{Name: "a", Typeflag: tar.TypeReg, Size: 1}), []byte("junk")...))
 	f.Fuzz(func(t *testing.T, data []byte) {
-		tr := NewTar(io.NopCloser(bytes.NewReader(data)), "fuzz", nil)
+		tr := NewTar(io.NopCloser(bytes.NewReader(data)), nil, "fuzz", nil)
 		defer tr.Close()
 		for {
 			m, err := tr.Next()

@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"compress/bzip2"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -101,6 +102,9 @@ const (
 	Zstd  = "zstd"
 )
 
+// dictCap is the largest LZMA dictionary a stream may ask for: xz -9 uses 64 MiB.
+const dictCap = 128 << 20
+
 // Suffixes maps a file name's suffix onto its compression.
 var Suffixes = map[string]string{
 	".xz": Xz, ".lzma": Lzma, ".gz": Gzip, ".bz2": Bzip2, ".zst": Zstd, ".tar": None,
@@ -128,13 +132,14 @@ func Decompress(compression string, r io.Reader) (io.ReadCloser, error) {
 		}
 		return g, nil
 	case Xz:
-		x, err := xz.NewReader(r)
+		// the dictionary a stream's header asks for is capped, since a few bytes could ask for 4 GiB
+		x, err := xz.ReaderConfig{DictCap: dictCap}.NewReader(r)
 		if err != nil {
 			return nil, err
 		}
 		return io.NopCloser(x), nil
 	case Lzma:
-		l, err := lzma.NewReader(r)
+		l, err := lzma.ReaderConfig{DictCap: dictCap}.NewReader(r)
 		if err != nil {
 			return nil, err
 		}
@@ -159,6 +164,21 @@ func Decompress(compression string, r io.Reader) (io.ReadCloser, error) {
 	return nil, fmt.Errorf("unknown compression %q", compression)
 }
 
+// SmallLimit bounds a control file or script read whole: no package's is near it.
+const SmallLimit = 16 << 20
+
+// ReadSmall reads r whole, refusing more than SmallLimit bytes, naming what in the refusal.
+func ReadSmall(r io.Reader, what string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, SmallLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > SmallLimit {
+		return nil, Errorf("%s: larger than %d MiB", what, SmallLimit>>20)
+	}
+	return data, nil
+}
+
 // Labelled wraps a stream so that every error but io.EOF comes back as an Error naming label,
 // for a decompressor's error on data it cannot decode or that ends early.
 type Labelled struct {
@@ -168,10 +188,8 @@ type Labelled struct {
 
 func (l *Labelled) Read(p []byte) (int, error) {
 	n, err := l.R.Read(p)
-	if err != nil && err != io.EOF {
-		if _, ok := err.(*Error); !ok {
-			err = &Error{Msg: l.Label + ": " + err.Error()}
-		}
+	if err != nil && err != io.EOF && !IsError(err) {
+		err = &Error{Msg: l.Label + ": " + err.Error()}
 	}
 	return n, err
 }
@@ -207,6 +225,24 @@ func AfterEnd(r io.Reader, end int64) error {
 			return err
 		}
 	}
+}
+
+// CmpNum compares two strings of decimal digits by value, whatever their length.
+func CmpNum(a, b string) int {
+	a, b = strings.TrimLeft(a, "0"), strings.TrimLeft(b, "0")
+	if len(a) != len(b) {
+		if len(a) < len(b) {
+			return -1
+		}
+		return 1
+	}
+	return strings.Compare(a, b)
+}
+
+// IsError says whether err is a package file that cannot be read, however wrapped.
+func IsError(err error) bool {
+	var e *Error
+	return errors.As(err, &e)
 }
 
 // Pyrepr spells s as Python's repr does, for a message that names a path or a field that way.

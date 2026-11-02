@@ -17,15 +17,14 @@ import (
 	"sort"
 	"strings"
 
-	"exclave/unpack/apk"
 	"exclave/unpack/ldcache"
+	"exclave/unpack/reader"
 	"exclave/unpack/root"
 )
 
-// rule is a synthesis rule: its name in the log, what it makes, and the function that makes it.
+// rule is a synthesis rule: its name in the log, and the function that makes what it makes.
 type rule struct {
 	name  string
-	what  string
 	apply func(r *root.Root, packages []*Package, log Log) (bool, error)
 }
 
@@ -75,7 +74,7 @@ type alternative struct {
 
 // less orders alternatives as Python orders the tuples (priority, link, target, slaves).
 func (a alternative) less(b alternative) bool {
-	if c := apk.CmpNum(a.priority, b.priority); c != 0 {
+	if c := reader.CmpNum(a.priority, b.priority); c != 0 {
 		return c < 0
 	}
 	if a.link != b.link {
@@ -211,7 +210,7 @@ func javaJinfo(r *root.Root, _ []*Package, log Log) (bool, error) {
 		}
 		for _, t := range jinfoToolRe.FindAllStringSubmatch(text, -1) {
 			tool, target := t[1], t[2]
-			if b, ok := bests[tool]; r.Lexists(target) && (!ok || apk.CmpNum(prio, b.prio) > 0) {
+			if b, ok := bests[tool]; r.Lexists(target) && (!ok || reader.CmpNum(prio, b.prio) > 0) {
 				bests[tool] = best{prio, target}
 			}
 		}
@@ -389,7 +388,7 @@ func caTrust(r *root.Root, _ []*Package, log Log) (bool, error) {
 		{"/usr/share/pki/ca-trust-source", "*.p11-kit"}, {"/etc/pki/ca-trust/source/anchors", "*"},
 	} {
 		for _, n := range r.Listdir(dp[0]) {
-			if !strings.HasPrefix(n, ".") && fnmatch(dp[1], n) {
+			if !strings.HasPrefix(n, ".") && ldcache.Fnmatch(dp[1], n) {
 				sources = append(sources, dp[0]+"/"+n)
 			}
 		}
@@ -408,6 +407,7 @@ func caTrust(r *root.Root, _ []*Package, log Log) (bool, error) {
 		if !strings.Contains(text, "[p11-kit-object-v1]") {
 			if strings.Contains(text, "-----BEGIN CERTIFICATE-----") {
 				certs = append(certs, strings.TrimSpace(text)+"\n")
+				have[strings.TrimSpace(text)+"\n"] = true
 			}
 			continue
 		}
@@ -438,13 +438,13 @@ func caTrust(r *root.Root, _ []*Package, log Log) (bool, error) {
 // They are symlinks the openssl and ca-certificates packages ship and a library's closure lacks;
 // without them the host's bundle at the identity path (8.4) is never consulted.
 func sslPaths(r *root.Root, packages []*Package, log Log) (bool, error) {
-	any := false
+	libssl := false
 	for _, p := range packages {
 		if strings.HasPrefix(p.Name, "libssl") {
-			any = true
+			libssl = true
 		}
 	}
-	if !any {
+	if !libssl {
 		return false, nil
 	}
 	a, err := link(r, "/usr/lib/ssl/certs", "/etc/ssl/certs", log, false)
@@ -511,16 +511,16 @@ func ldconfigRule(r *root.Root, packages []*Package, log Log) (bool, error) {
 }
 
 var rules = []rule{
-	{"alternatives", "the links of every update-alternatives --install line, --set honoured", alternatives},
-	{"java-jinfo", "a JDK's tool links from its /usr/lib/jvm/.*.jinfo file", javaJinfo},
-	{"busybox-applets", "busybox's applet links from /etc/busybox-paths.d", busyboxApplets},
-	{"sbin-merge", "Fedora's /usr/sbin and /usr/local/sbin as links to bin", sbinMerge},
-	{"dash-sh", "dash's /bin/sh", dashSh},
-	{"ca-certificates", "Debian's ca-certificates.crt from the enabled certificates", caCertificates},
-	{"ca-trust", "Fedora's tls-ca-bundle.pem from the p11-kit trust source", caTrust},
-	{"ssl-paths", "OpenSSL's compiled-in trust paths as links to /etc/ssl", sslPaths},
-	{"base-passwd", "/etc/passwd and /etc/group from base-passwd's masters", basePasswd},
-	{"ldconfig", "ld.so.cache as the exclave's own ldconfig writes it", ldconfigRule},
+	{"alternatives", alternatives},
+	{"java-jinfo", javaJinfo},
+	{"busybox-applets", busyboxApplets},
+	{"sbin-merge", sbinMerge},
+	{"dash-sh", dashSh},
+	{"ca-certificates", caCertificates},
+	{"ca-trust", caTrust},
+	{"ssl-paths", sslPaths},
+	{"base-passwd", basePasswd},
+	{"ldconfig", ldconfigRule},
 }
 
 // synthesise makes what the packages' maintainer scripts would have made, without running them
@@ -581,25 +581,6 @@ var interests = [][2]string{
 	{"/usr/lib/*/pkgconfig", ""},
 }
 
-// fnmatch matches name against a shell pattern as Python's fnmatchcase does: `*` and `?` match
-// any character, `/` included.
-func fnmatch(pattern, name string) bool {
-	var re strings.Builder
-	re.WriteString("^")
-	for _, c := range pattern {
-		switch c {
-		case '*':
-			re.WriteString(".*")
-		case '?':
-			re.WriteString(".")
-		default:
-			re.WriteString(regexp.QuoteMeta(string(c)))
-		}
-	}
-	re.WriteString("$")
-	return regexp.MustCompile("(?s)" + re.String()).MatchString(name)
-}
-
 // notes is what the packages' trigger interests say the tree lacks, one line each.
 func notes(packages []*Package) ([]string, error) {
 	var out []string
@@ -612,7 +593,7 @@ func notes(packages []*Package) ([]string, error) {
 			what := "a cache or index its trigger would have built; the tree lacks it"
 			best := -1
 			for _, pt := range interests {
-				if len(pt[0]) > best && (path == pt[0] || fnmatch(pt[0], path)) {
+				if len(pt[0]) > best && (path == pt[0] || ldcache.Fnmatch(pt[0], path)) {
 					best, what = len(pt[0]), pt[1]
 				}
 			}

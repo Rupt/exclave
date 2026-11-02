@@ -69,18 +69,7 @@ func open(p string, data bool) (*reader.Tar, error) {
 	if data {
 		keep = func(m *reader.Member) bool { return !strings.HasPrefix(norm(m.Name), ".") }
 	}
-	return reader.NewTar(&closeBoth{stream, f}, label, keep), nil
-}
-
-type closeBoth struct {
-	io.ReadCloser
-	f *os.File
-}
-
-func (c *closeBoth) Close() error {
-	err := c.ReadCloser.Close()
-	c.f.Close()
-	return err
+	return reader.NewTar(stream, f, label, keep), nil
 }
 
 // OpenData returns the package's payload, the files it installs: the archive without its dot-files.
@@ -113,10 +102,10 @@ func (Format) Control(p string) (map[string]string, map[string]string, error) {
 		if !strings.HasPrefix(n, ".") {
 			break
 		}
-		if m.Kind != reader.File {
+		if m.Kind != reader.File || (n != ".PKGINFO" && !scripts[n]) {
 			continue
 		}
-		data, err := io.ReadAll(t.Open())
+		data, err := reader.ReadSmall(t.Open(), p+": "+n)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -194,109 +183,221 @@ func (Format) ParseDeps(field string) ([][]reader.Dep, error) { return ParseDeps
 
 // ------------------------------------------------------------ versions, as apk-tools orders them
 
-var suffixOrder = map[string]int{
-	"alpha": -4, "beta": -3, "pre": -2, "rc": -1, "cvs": 1, "svn": 2, "git": 3, "hg": 4, "p": 5,
+// A version is digit{.digit}...{letter}{_suffix{number}}...{~hash}{-r number}, read into tokens
+// as apk-tools' version.c reads it (its 3.0), and two versions compare token by token.
+type tokenKind int
+
+const (
+	tokInitialDigit tokenKind = iota
+	tokDigit
+	tokLetter
+	tokSuffix
+	tokSuffixNo
+	tokCommitHash
+	tokRevisionNo
+	tokEnd
+	tokInvalid
+)
+
+// the suffixes in apk-tools' order; those before "" are pre-releases
+var suffixes = []string{"", "alpha", "beta", "pre", "rc", "", "cvs", "svn", "git", "hg", "p"}
+
+const (
+	suffixInvalid = 0
+	suffixNone    = 5
+)
+
+type token struct {
+	kind   tokenKind
+	value  string // the digits, the letter, the suffix's word or the hash
+	suffix int    // a suffix's place in suffixes
 }
 
-var verRe = regexp.MustCompile(
-	`^(\d+(?:\.\d+)*)([a-z])?((?:_(?:alpha|beta|pre|rc|cvs|svn|git|hg|p)\d*)*)(?:-r(\d+))?$`)
-
-type suffix struct {
-	order int
-	num   string
+// tokens reads a version into its tokens, ending with tokEnd, or tokInvalid where apk-tools
+// would stop.
+type tokens struct {
+	rest string
+	cur  token
 }
 
-// key is a version split into the parts apk-tools compares: numbers, letter, suffixes, revision.
-type key struct {
-	nums   []string
-	letter string
-	sufs   []suffix
-	rev    string
-}
-
-func parse(v string) key {
-	m := verRe.FindStringSubmatch(v)
-	if m == nil {
-		return key{nums: []string{"0"}, rev: "0"} // a version apk would not accept: compared as 0
+func (t *tokens) digits() {
+	i := 0
+	for i < len(t.rest) && t.rest[i] >= '0' && t.rest[i] <= '9' {
+		i++
 	}
-	k := key{nums: strings.Split(m[1], "."), letter: m[2], rev: m[4]}
-	if k.rev == "" {
-		k.rev = "0"
+	if i == 0 {
+		t.cur.kind = tokInvalid
+		return
 	}
-	for _, s := range strings.Split(m[3], "_") {
-		if s == "" {
-			continue
+	t.cur.value, t.rest = t.rest[:i], t.rest[i:]
+}
+
+func (t *tokens) first() {
+	t.cur = token{kind: tokInitialDigit}
+	t.digits()
+}
+
+func (t *tokens) next() {
+	prev := t.cur.kind
+	if t.rest == "" {
+		t.cur = token{kind: tokEnd}
+		return
+	}
+	c := t.rest[0]
+	switch {
+	case c >= 'a' && c <= 'z':
+		if prev > tokDigit {
+			break
 		}
-		word := strings.TrimRight(s, "0123456789")
-		k.sufs = append(k.sufs, suffix{suffixOrder[word], s[len(word):]})
+		t.cur = token{kind: tokLetter, value: t.rest[:1]}
+		t.rest = t.rest[1:]
+		return
+	case c == '.' || (c >= '0' && c <= '9'):
+		if c == '.' {
+			if prev > tokDigit {
+				break
+			}
+			t.rest = t.rest[1:]
+		}
+		switch prev {
+		case tokInitialDigit, tokDigit:
+			t.cur = token{kind: tokDigit}
+		case tokSuffix:
+			if c == '.' {
+				t.cur = token{kind: tokInvalid}
+				return
+			}
+			t.cur = token{kind: tokSuffixNo}
+		default:
+			t.cur = token{kind: tokInvalid}
+			return
+		}
+		t.digits()
+		return
+	case c == '_':
+		if prev > tokSuffixNo {
+			break
+		}
+		i := 1
+		for i < len(t.rest) && t.rest[i] >= 'a' && t.rest[i] <= 'z' {
+			i++
+		}
+		word := t.rest[1:i]
+		t.rest = t.rest[i:]
+		s := suffixInvalid
+		for k, w := range suffixes {
+			if k != suffixInvalid && w != "" && w == word {
+				s = k
+			}
+		}
+		if s == suffixInvalid {
+			t.cur = token{kind: tokInvalid}
+			return
+		}
+		t.cur = token{kind: tokSuffix, value: word, suffix: s}
+		return
+	case c == '~':
+		if prev >= tokCommitHash {
+			break
+		}
+		i := 1
+		for i < len(t.rest) && ((t.rest[i] >= '0' && t.rest[i] <= '9') || (t.rest[i] >= 'a' && t.rest[i] <= 'f')) {
+			i++
+		}
+		if i == 1 {
+			t.cur = token{kind: tokInvalid}
+			return
+		}
+		t.cur = token{kind: tokCommitHash, value: t.rest[1:i]}
+		t.rest = t.rest[i:]
+		return
+	case c == '-':
+		if prev >= tokRevisionNo || !strings.HasPrefix(t.rest, "-r") {
+			break
+		}
+		t.rest = t.rest[2:]
+		t.cur = token{kind: tokRevisionNo}
+		t.digits()
+		return
 	}
-	return k
+	t.cur = token{kind: tokInvalid}
 }
 
-// CmpNum compares two strings of decimal digits by value, whatever their length.
-func CmpNum(a, b string) int {
-	a, b = strings.TrimLeft(a, "0"), strings.TrimLeft(b, "0")
-	if len(a) != len(b) {
-		if len(a) < len(b) {
-			return -1
+// cmp compares two tokens of one kind as apk-tools' token_cmp does.
+func (a token) cmp(b token) int {
+	switch a.kind {
+	case tokDigit:
+		// a component with a leading zero compares as a string, as Gentoo's rule has it
+		if a.value[0] == '0' || b.value[0] == '0' {
+			return strings.Compare(a.value, b.value)
 		}
-		return 1
-	}
-	return strings.Compare(a, b)
-}
-
-// Vercmp returns -1, 0 or 1 as a sorts before, with or after b, in apk-tools' order.
-func Vercmp(a, b string) int {
-	ka, kb := parse(a), parse(b)
-	for i := 0; i < len(ka.nums) && i < len(kb.nums); i++ {
-		if c := CmpNum(ka.nums[i], kb.nums[i]); c != 0 {
-			return c
-		}
-	}
-	if len(ka.nums) != len(kb.nums) {
-		if len(ka.nums) < len(kb.nums) {
-			return -1
-		}
-		return 1
-	}
-	if ka.letter != kb.letter {
-		return strings.Compare(ka.letter, kb.letter)
-	}
-	sa, sb := ka.sufs, kb.sufs
-	if len(sa) == 0 {
-		sa = []suffix{{0, "0"}}
-	}
-	if len(sb) == 0 {
-		sb = []suffix{{0, "0"}}
-	}
-	for i := 0; i < len(sa) && i < len(sb); i++ {
-		if sa[i].order != sb[i].order {
-			if sa[i].order < sb[i].order {
+		return reader.CmpNum(a.value, b.value)
+	case tokInitialDigit, tokSuffixNo, tokRevisionNo:
+		return reader.CmpNum(a.value, b.value)
+	case tokLetter:
+		return strings.Compare(a.value, b.value)
+	case tokSuffix:
+		if a.suffix != b.suffix {
+			if a.suffix < b.suffix {
 				return -1
 			}
 			return 1
 		}
-		if c := CmpNum(sa[i].num, sb[i].num); c != 0 {
-			return c
-		}
+		return 0
 	}
-	if len(sa) != len(sb) {
-		if len(sa) < len(sb) {
-			return -1
+	return strings.Compare(a.value, b.value)
+}
+
+// compare returns -1, 0 or 1 as a sorts before, with or after b, in apk-tools' order; with fuzzy,
+// b that is a prefix of a, token for token, counts as equal.
+func compare(a, b string, fuzzy bool) int {
+	var ta, tb tokens
+	ta.rest, tb.rest = a, b
+	ta.first()
+	tb.first()
+	for ta.cur.kind == tb.cur.kind && ta.cur.kind < tokEnd {
+		if r := ta.cur.cmp(tb.cur); r != 0 {
+			return r
 		}
+		ta.next()
+		tb.next()
+	}
+	if ta.cur.kind == tb.cur.kind {
+		return 0
+	}
+	if tb.cur.kind == tokEnd && fuzzy {
+		return 0
+	}
+	// the leading components agree: the longer version is the later unless its suffix says
+	// pre-release
+	if ta.cur.kind == tokSuffix && ta.cur.suffix < suffixNone {
+		return -1
+	}
+	if tb.cur.kind == tokSuffix && tb.cur.suffix < suffixNone {
 		return 1
 	}
-	return CmpNum(ka.rev, kb.rev)
+	if ta.cur.kind > tb.cur.kind {
+		return -1
+	}
+	if tb.cur.kind > ta.cur.kind {
+		return 1
+	}
+	return 0
+}
+
+// Vercmp returns -1, 0 or 1 as a sorts before, with or after b, in apk-tools' order.
+func Vercmp(a, b string) int {
+	return compare(a, b, false)
 }
 
 // Satisfies says whether version meets the constraint `op want`; no operator is always met.
-// `~` is a fuzzy match: the version is want, or starts with want and a separator.
+// `~` is apk's fuzzy match: want is a prefix of version, token for token.
 func Satisfies(version, op, want string) bool {
 	if op == "" {
 		return true
 	}
 	if op == "~" {
-		return version == want || strings.HasPrefix(version, want+".") || strings.HasPrefix(version, want+"-")
+		return compare(version, want, true) == 0
 	}
 	c := Vercmp(version, want)
 	switch op {

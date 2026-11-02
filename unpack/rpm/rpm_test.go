@@ -1,6 +1,10 @@
 package rpm
 
-import "testing"
+import (
+	"bytes"
+	"encoding/binary"
+	"testing"
+)
 
 func TestVercmp(t *testing.T) {
 	// rpmvercmp's order: each pair sorts a before b
@@ -33,6 +37,33 @@ func TestParseDeps(t *testing.T) {
 	}
 	if _, err := ParseDeps("a>=<b"); err == nil {
 		t.Error("`a>=<b` is not a dependency")
+	}
+}
+
+func TestHeaderBudget(t *testing.T) {
+	// entries that together decode to more than the data holds are refused
+	var index, data []byte
+	data = make([]byte, 64)
+	for tag := uint32(1000); tag < 1000+64; tag++ {
+		e := make([]byte, 16)
+		binary.BigEndian.PutUint32(e[0:], tag)
+		binary.BigEndian.PutUint32(e[4:], 4)
+		binary.BigEndian.PutUint32(e[12:], 16)
+		index = append(index, e...)
+	}
+	raw := append([]byte{0x8e, 0xad, 0xe8, 0x01, 0, 0, 0, 0}, make([]byte, 8)...)
+	binary.BigEndian.PutUint32(raw[8:], 64)
+	binary.BigEndian.PutUint32(raw[12:], uint32(len(data)))
+	raw = append(append(raw, index...), data...)
+	if _, _, err := readHeader(bytes.NewReader(raw)); err == nil {
+		t.Error("64 entries of 64 bytes over 64 bytes of data were accepted")
+	}
+	one := append([]byte{0x8e, 0xad, 0xe8, 0x01, 0, 0, 0, 0}, make([]byte, 8)...)
+	binary.BigEndian.PutUint32(one[8:], 1)
+	binary.BigEndian.PutUint32(one[12:], uint32(len(data)))
+	one = append(append(one, index[:16]...), data...)
+	if _, _, err := readHeader(bytes.NewReader(one)); err != nil {
+		t.Errorf("one entry within the data was refused: %s", err)
 	}
 }
 

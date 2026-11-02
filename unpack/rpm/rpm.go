@@ -16,9 +16,8 @@
 //   - Dependencies come as rpm spells them: package names, the provides a library's package
 //     declares (`libc.so.6(GLIBC_2.2.5)(64bit)`, `rtld(GNU_HASH)`), and file names. `rpmlib(...)`
 //     features and rich dependencies (`(a or b)`) are rpm's own and are skipped.
-//   - `alternatives --install` lines in %post are read in either spelling, the tree's own ldconfig
-//     runs where it is static, and the identity files are the placeholders wrap adds. `setup`
-//     ships /etc/passwd, so nothing is made for it.
+//   - `alternatives --install` lines in %post are read in either spelling, and the identity files
+//     are the placeholders wrap adds. `setup` ships /etc/passwd, so nothing is made for it.
 //   - An `alternatives --install` line replaces a file or link already standing at the link path,
 //     as both implementations do. Fedora's binutils needs this: it ships gold at /usr/bin/ld and
 //     removes it in %post before installing ld.bfd as the alternative.
@@ -29,9 +28,8 @@
 //   - Fedora 42's `filesystem` package merges sbin into bin in its %posttrans, written in Lua:
 //     when every entry of /usr/sbin is a link `../bin/<name>`, the directory becomes a link to
 //     bin. Unpack does the same when that script is present.
-//   - Red Hat's ld.so.conf says `include ld.so.conf.d/*.conf`, relative to /etc, which ldconfig
-//     refuses under -r. Unpack runs ldconfig on a temporary copy in the tree with the pattern
-//     spelt from /etc, and removes the copy afterwards.
+//   - Red Hat's ld.so.conf says `include ld.so.conf.d/*.conf`, relative to /etc, which the cache
+//     writer reads as ldconfig does without -r (package ldcache).
 //   - Files shipped unreadable, such as Fedora's /etc/gshadow at mode 0, are made readable by
 //     their owner, since a tree its owner cannot read can be neither hashed nor copied. A tree
 //     that comes from outside with such a file is refused by `wrap`, naming the file (10.3).
@@ -135,7 +133,8 @@ func readHeader(r io.Reader) (Header, []byte, error) {
 		return nil, nil, fmt.Errorf("bad header magic")
 	}
 	nindex, hsize := binary.BigEndian.Uint32(head[8:12]), binary.BigEndian.Uint32(head[12:16])
-	if nindex > 1<<20 || hsize > 1<<28 {
+	// rpm's own limits (lib/header.c): 0xffff entries, 256 MiB of data
+	if nindex > 0xffff || hsize > 1<<28 {
 		return nil, nil, fmt.Errorf("corrupt header: %d entries, %d bytes", nindex, hsize)
 	}
 	raw := make([]byte, 16+16*int(nindex)+int(hsize))
@@ -145,6 +144,9 @@ func readHeader(r io.Reader) (Header, []byte, error) {
 	}
 	index, data := raw[16:16+16*int(nindex)], raw[16+16*int(nindex):]
 	out := Header{}
+	// the entries' values together cannot exceed the data they are read from, so entries that
+	// overlap it many times over, which decode to far more than the file holds, are refused
+	budget := len(data)
 	for i := 0; i < int(nindex); i++ {
 		e := index[16*i : 16*i+16]
 		tag, typ := binary.BigEndian.Uint32(e[0:4]), binary.BigEndian.Uint32(e[4:8])
@@ -156,9 +158,10 @@ func readHeader(r io.Reader) (Header, []byte, error) {
 		switch typ {
 		case 3, 4, 5: // int16, int32, int64
 			size := map[uint32]int{3: 2, 4: 4, 5: 8}[typ]
-			if count > (len(data)-off)/size {
+			if count > (len(data)-off)/size || count*size > budget {
 				return nil, nil, fmt.Errorf("corrupt header: entry %d out of range", tag)
 			}
+			budget -= count * size
 			for k := 0; k < count; k++ {
 				b := data[off+k*size:]
 				switch typ {
@@ -172,25 +175,28 @@ func readHeader(r io.Reader) (Header, []byte, error) {
 			}
 		case 6: // one string
 			e := bytes.IndexByte(data[off:], 0)
-			if e < 0 {
+			if e < 0 || e+1 > budget {
 				return nil, nil, fmt.Errorf("corrupt header: entry %d has no end", tag)
 			}
 			v.Strs = []string{string(data[off : off+e])}
+			budget -= e + 1
 		case 8, 9: // string array, i18n string array
 			p := off
 			for k := 0; k < count; k++ {
 				e := bytes.IndexByte(data[p:], 0)
-				if e < 0 {
+				if e < 0 || e+1 > budget {
 					return nil, nil, fmt.Errorf("corrupt header: entry %d has no end", tag)
 				}
 				v.Strs = append(v.Strs, string(data[p:p+e]))
 				p += e + 1
+				budget -= e + 1
 			}
 		case 7, 1: // binary, char
-			if count > len(data)-off {
+			if count > len(data)-off || count > budget {
 				return nil, nil, fmt.Errorf("corrupt header: entry %d out of range", tag)
 			}
 			v.Bin = data[off : off+count]
+			budget -= count
 		default:
 			continue
 		}
@@ -324,41 +330,58 @@ func openPayload(p string) (*payload, error) {
 		f.Close()
 		return nil, reader.Errorf("%s: %s", label, err)
 	}
+	pl := newPayload(stream, label)
+	pl.f = f
+	return pl, nil
+}
+
+// newPayload reads the cpio archive from stream, decompressed; an error names label.
+func newPayload(stream io.ReadCloser, label string) *payload {
 	return &payload{
 		label:  label,
 		stream: stream,
-		f:      f,
 		r:      &reader.Counting{R: &reader.Labelled{R: stream, Label: label}},
 		held:   map[inode][]*reader.Member{},
 		files:  map[inode]*reader.Member{},
-	}, nil
+	}
 }
 
 func (p *payload) Close() error {
 	err := p.stream.Close()
-	p.f.Close()
+	if p.f != nil {
+		p.f.Close()
+	}
 	return err
 }
 
-// exact reads n bytes, or fails with what their absence means.
+// exact reads n bytes, a bounded few, or fails with what their absence means.
 func (p *payload) exact(n int64, what string) ([]byte, error) {
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(p.r, buf); err != nil {
-		if e, ok := err.(*reader.Error); ok {
-			return nil, e
+		if reader.IsError(err) {
+			return nil, err
 		}
 		return nil, reader.Errorf("%s: %s", p.label, what)
 	}
 	return buf, nil
 }
 
+// skip passes over n bytes without holding them, or fails with what their absence means.
 func (p *payload) skip(n int64, what string) error {
 	if n <= 0 {
 		return nil
 	}
-	_, err := p.exact(n, what)
-	return err
+	if _, err := io.CopyN(io.Discard, p.r, n); err != nil {
+		if reader.IsError(err) {
+			return err
+		}
+		return reader.Errorf("%s: %s", p.label, what)
+	}
+	return nil
 }
+
+// pathMax bounds a cpio entry's name and a symlink's target, as the kernel bounds a path.
+const pathMax = 4096
 
 func (p *payload) Open() io.Reader {
 	return p.cur
@@ -399,20 +422,24 @@ func (p *payload) Next() (*reader.Member, error) {
 		}
 		var fields [13]int64
 		for k := range fields {
-			v, err := strconv.ParseInt(string(header[6+8*k:14+8*k]), 16, 64)
+			// eight hex digits, unsigned: a sign would read as a size below zero
+			v, err := strconv.ParseUint(string(header[6+8*k:14+8*k]), 16, 32)
 			if err != nil {
 				return nil, reader.Errorf("%s: bad cpio header at %d", p.label, start)
 			}
-			fields[k] = v
+			fields[k] = int64(v)
 		}
 		ino, mode, nlink, mtime, size := fields[0], fields[1], fields[4], fields[5], fields[6]
 		devmaj, devmin, nsize := fields[7], fields[8], fields[11]
-		if nsize < 1 {
+		if nsize < 1 || nsize > pathMax {
 			return nil, reader.Errorf("%s: bad cpio header at %d", p.label, start)
 		}
 		raw, err := p.exact(nsize, "the cpio payload ends inside a name")
 		if err != nil {
 			return nil, err
+		}
+		if raw[nsize-1] != 0 || bytes.IndexByte(raw[:nsize-1], 0) >= 0 {
+			return nil, reader.Errorf("%s: bad cpio header at %d", p.label, start)
 		}
 		name := string(raw[:nsize-1])
 		if err := p.skip((4-p.r.Pos%4)%4, "the cpio payload ends inside a name"); err != nil {
@@ -439,8 +466,8 @@ func (p *payload) Next() (*reader.Member, error) {
 				delete(p.held, ino)
 			}
 			if why := reader.AfterEnd(p.r, p.r.Pos); why != nil {
-				if e, ok := why.(*reader.Error); ok {
-					return nil, e
+				if reader.IsError(why) {
+					return nil, why
 				}
 				return nil, reader.Errorf("%s: %s", p.label, why)
 			}
@@ -458,6 +485,9 @@ func (p *payload) Next() (*reader.Member, error) {
 		case format == 0o040000:
 			m.Kind = reader.Dir
 		case format == 0o120000:
+			if size > pathMax {
+				return nil, reader.Errorf("%s: bad cpio header at %d", p.label, start)
+			}
 			link, err := p.exact(size, past)
 			if err != nil {
 				return nil, err
@@ -610,18 +640,6 @@ var segmentRe = regexp.MustCompile(`[0-9]+|[a-zA-Z]+|~|\^`)
 
 func isDigits(s string) bool { return s != "" && s[0] >= '0' && s[0] <= '9' }
 
-// cmpNum compares two strings of decimal digits by value, whatever their length.
-func cmpNum(a, b string) int {
-	a, b = strings.TrimLeft(a, "0"), strings.TrimLeft(b, "0")
-	if len(a) != len(b) {
-		if len(a) < len(b) {
-			return -1
-		}
-		return 1
-	}
-	return strings.Compare(a, b)
-}
-
 // rpmvercmp compares two version or release strings as rpmvercmp does: segment by segment,
 // alphabetic and numeric segments alternating. A numeric segment sorts after an alphabetic one,
 // and `~` before anything.
@@ -653,7 +671,7 @@ func rpmvercmp(a, b string) int {
 		var c int
 		switch {
 		case isDigits(x) && isDigits(y):
-			c = cmpNum(x, y)
+			c = reader.CmpNum(x, y)
 		case isDigits(x) || isDigits(y):
 			if isDigits(x) {
 				return 1

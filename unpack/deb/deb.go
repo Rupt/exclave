@@ -36,13 +36,18 @@ type ArMember struct {
 	Size   int64
 }
 
-// ArMembers lists the members of the ar archive at path.
+// ArMembers lists the members of the ar archive at path: a member that runs past the file's
+// end, or a header cut short, is refused.
 func ArMembers(p string) ([]ArMember, error) {
 	f, err := os.Open(p)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
 	var magic [8]byte
 	if _, err := io.ReadFull(f, magic[:]); err != nil || string(magic[:]) != "!<arch>\n" {
 		return nil, reader.Errorf("%s: not an ar archive", p)
@@ -52,8 +57,11 @@ func ArMembers(p string) ([]ArMember, error) {
 	for {
 		var h [60]byte
 		n, err := io.ReadFull(f, h[:])
-		if err != nil && n < 60 {
+		if err != nil && n == 0 {
 			break
+		}
+		if err != nil {
+			return nil, reader.Errorf("%s: ar header cut short", p)
 		}
 		pos += 60
 		name := strings.TrimRight(strings.TrimSpace(string(bytes.Map(ascii, h[:16]))), "/")
@@ -64,6 +72,9 @@ func ArMembers(p string) ([]ArMember, error) {
 		size, perr := strconv.ParseInt(sizeField, 10, 64)
 		if string(h[58:60]) != "`\n" || perr != nil || size < 0 {
 			return nil, reader.Errorf("%s: bad ar header", p)
+		}
+		if size > st.Size()-pos {
+			return nil, reader.Errorf("%s: member %s runs past the end of the file", p, name)
 		}
 		out = append(out, ArMember{Name: name, Offset: pos, Size: size})
 		pos += size + size&1
@@ -95,24 +106,6 @@ func findMember(p, member string) (ArMember, error) {
 	return ArMember{}, reader.Errorf("%s: no member %s", p, member)
 }
 
-// ArRead returns the full name and the contents of the member named member or member.<suffix>.
-func ArRead(p, member string) (string, []byte, error) {
-	m, err := findMember(p, member)
-	if err != nil {
-		return "", nil, err
-	}
-	f, err := os.Open(p)
-	if err != nil {
-		return "", nil, err
-	}
-	defer f.Close()
-	data := make([]byte, m.Size)
-	if _, err := f.ReadAt(data, m.Offset); err != nil {
-		return "", nil, reader.Errorf("%s: %s is cut short", p, m.Name)
-	}
-	return m.Name, data, nil
-}
-
 // Decompress decompresses data by the compression its file name's suffix names: an unknown suffix
 // or corrupt data is an error.
 func Decompress(name string, data []byte) ([]byte, error) {
@@ -136,14 +129,6 @@ func Decompress(name string, data []byte) ([]byte, error) {
 	return out, nil
 }
 
-// memberStream is the bytes of one ar member, read from the package file, closed with the file.
-type memberStream struct {
-	*io.SectionReader
-	f *os.File
-}
-
-func (m *memberStream) Close() error { return m.f.Close() }
-
 // openTar opens the .deb's control.tar.* or data.tar.* member as a tar archive read as it
 // decompresses.
 func openTar(p, member string, keep func(*reader.Member) bool) (*reader.Tar, error) {
@@ -160,23 +145,12 @@ func openTar(p, member string, keep func(*reader.Member) bool) (*reader.Tar, err
 		return nil, err
 	}
 	label := fmt.Sprintf("%s: corrupt %s", p, m.Name)
-	stream, err := reader.Decompress(comp, &memberStream{io.NewSectionReader(f, m.Offset, m.Size), f})
+	stream, err := reader.Decompress(comp, io.NewSectionReader(f, m.Offset, m.Size))
 	if err != nil {
 		f.Close()
 		return nil, reader.Errorf("%s: %s", label, err)
 	}
-	return reader.NewTar(&closeBoth{stream, f}, label, keep), nil
-}
-
-type closeBoth struct {
-	io.ReadCloser
-	f *os.File
-}
-
-func (c *closeBoth) Close() error {
-	err := c.ReadCloser.Close()
-	c.f.Close()
-	return err
+	return reader.NewTar(stream, f, label, keep), nil
 }
 
 // OpenData returns the package's payload, data.tar.*.
@@ -206,10 +180,10 @@ func (Format) Control(p string) (map[string]string, map[string]string, error) {
 			return nil, nil, err
 		}
 		n := strings.TrimPrefix(m.Name, "./")
-		if m.Kind != reader.File {
+		if m.Kind != reader.File || (n != "control" && !scriptNames[n]) {
 			continue
 		}
-		data, err := io.ReadAll(t.Open())
+		data, err := reader.ReadSmall(t.Open(), p+": "+n)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -217,7 +191,7 @@ func (Format) Control(p string) (map[string]string, map[string]string, error) {
 			if stanzas := ParseStanzas(string(data)); len(stanzas) > 0 {
 				fields = stanzas[0]
 			}
-		} else if scriptNames[n] {
+		} else {
 			scripts[n] = string(data)
 		}
 	}
@@ -281,7 +255,8 @@ var depRe = regexp.MustCompile(
 
 // ParseDeps parses a Depends-style field into groups of alternatives. For example,
 // `a (>= 1) | b, c:any` gives [[{a >= 1} {b}] [{c}]]. The architecture qualifier, architecture
-// lists and build profiles are dropped; an item that is not a dependency is an error.
+// lists and build profiles are dropped; a bare `<` or `>`, the obsolete spelling, means `<=` or
+// `>=` as dpkg reads it; an item that is not a dependency is an error.
 func ParseDeps(field string) ([][]reader.Dep, error) {
 	var out [][]reader.Dep
 	if field == "" {
@@ -298,11 +273,11 @@ func ParseDeps(field string) ([][]reader.Dep, error) {
 				return nil, reader.Errorf("cannot parse dependency %s", reader.Pyrepr(alt))
 			}
 			op := m[3]
-			switch op {
+			switch op { // the obsolete bare forms, which dpkg reads as inclusive
 			case "<":
-				op = "<<"
+				op = "<="
 			case ">":
-				op = ">>"
+				op = ">="
 			}
 			alts = append(alts, reader.Dep{Name: m[1], Op: op, Version: m[4]})
 		}

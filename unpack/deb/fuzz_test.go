@@ -75,6 +75,7 @@ func FuzzDeb(f *testing.F) {
 		}
 		ArMembers(p)
 		readAll(Reader, p)
+		ParseDeps(string(raw))
 	})
 }
 
