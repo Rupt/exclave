@@ -145,9 +145,9 @@ nothing, which is true and harmless; an error would have stopped `wrap`.
 Afterwards the directory holds `gcc.exclave`, a compiler that touches
 nothing on the host, 264 MB with the sysroot; `hello`; `hello.exclave`,
 the pruned copy, 50 MB; the fetched packages, which a second run reuses;
-and `log/`, one file per step. A second run takes nine seconds on the
-reference machine. The first also fetches 121 MB: the 94 packages, 23
-rpms and the indexes that resolve them.
+and `log/`, one file per step. A second run reuses the packages; the
+first also fetches 121 MB: the 94 packages, 23 rpms and the indexes
+that resolve them.
 
 ## What bites first
 
@@ -414,10 +414,10 @@ each test establishes, 19 the decisions a change is expected to respect.
 scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, clang-format, clang-tidy and gcc's strict warnings; --fix lets them correct
 scripts/inputs ~/.cache/exclave-inputs   # the test inputs: the four exclaves, the arm64 gcc exclave and Docker's seccomp profile, from the package archives and GitHub; skips what is present
 scripts/inputs ~/.cache/exclave-inputs examples   # the examples' inputs too, some from their authors' sites
-D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave   # the commit gate: of the code checks, unit tests, stack budget, unpack's and the fetchers' tests, the suite, the oracles, the syscall probe and the Docker profile run, the steps the change can affect, two at a time (--jobs N); --full runs all of them, about two and a half minutes, the code checks most of it
-D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # beyond the gate, when asked: the suite, the debug launcher, the oracles and the probe on every exclave given; the plain-label suite, the fuzz budget and the release test on the first; about 96 s
+D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave   # the commit gate: of the code checks, unit tests, stack budget, unpack's and the fetchers' tests, the suite, the oracles, the syscall probe and the Docker profile run, the steps the change can affect, two at a time (--jobs N); --full runs all of them
+D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # beyond the gate, when asked: the suite, the debug launcher, the oracles and the probe on every exclave given; the plain-label suite, the fuzz budget and the release test on the first
 scripts/test --exclave gcc.exclave       # the suite alone; -k NAME runs one test
-scripts/matrix --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix: cloud images under QEMU/KVM, one at a time (--jobs N), about sixteen minutes; due when the gate says a change reaches the VMs
+scripts/matrix --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix: cloud images under QEMU/KVM, one at a time (--jobs N); due when the gate says a change reaches the VMs
 gh workflow run ci.yml -f matrix=true    # the gate on GitHub's x86-64 and aarch64 runners, then the x86-64 rows under KVM, for the pushed main; -f matrix=false the gate alone. gh run list --workflow ci.yml, gh run watch ID --exit-status, gh run view ID --log-failed
 scripts/exercise --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the launcher, side by side
 scripts/examples ~/.cache/exclave-inputs/realsoft.exclave   # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_ARM64 (the emulated aarch64 row), EXCLAVE_TEST_DOCKER (its Docker profile run)
