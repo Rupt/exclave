@@ -102,6 +102,8 @@ def clones_trapping(ctx: Ctx) -> None:
     os.makedirs(d)
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "clones"), [d], timeout=60)
     wrong = kernel_answers.clones_wrong(out)
+    if wrong:
+        wrong.append(f"rc {rc}, output {out!r}, stderr {err!r}")
     expect(rc == 0 and not wrong, "\n".join(wrong) + err)
 
 

@@ -243,7 +243,9 @@ int main(int argc, char **argv)
     sigset_t none;
     sigemptyset(&none);
     sigprocmask(SIG_SETMASK, &none, 0);
-    for (int sig = 1; sig < 32; sig++)
+    /* every disposition the environment may have left ignored, the real-time signals too (an init ignores one on
+     * Alpine); glibc refuses its own two, which were never ignored */
+    for (int sig = 1; sig <= 64; sig++)
         if (sig != SIGKILL && sig != SIGSTOP) signal(sig, SIG_DFL);
     ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
     if (n < 0) {

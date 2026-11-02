@@ -193,7 +193,11 @@ int main(void)
     /* 3. queries and changes from inside a handler on the alternate stack, with and without SS_AUTODISARM */
     void *sp = guarded(65536);
     for (int autodisarm = 0; autodisarm < 2; autodisarm++) {
-        if (arm(sp, 65536, autodisarm ? (int)SS_AUTODISARM : 0)) printf("sigaltstack of 64 KB: %s\n", strerror(errno));
+        int e = arm(sp, 65536, autodisarm ? (int)SS_AUTODISARM : 0);
+        if (e) { /* a kernel without SS_AUTODISARM (4.7) refuses the flag: EINVAL */
+            printf("%s: sigaltstack %s\n", autodisarm ? "SS_AUTODISARM" : "plain alternate stack", strerror(e));
+            continue;
+        }
         handler_with(SIGUSR1, h_query, SA_ONSTACK);
         raise(SIGUSR1);
         stack_t o;

@@ -428,17 +428,18 @@ def sigcalls_wrong(out: str) -> list[str]:
     k = kernel()
     if k < (5, 11):
         want = [w.replace("flag bit reported: dropped", "flag bit reported: kept") for w in want]
-        want = [
-            w.split(": ")[0] + ": Function not implemented" if w.startswith("epoll_pwait2 ") else w
-            for w in want
-        ]
-    if k < (4, 18):
-        want = [
-            w.split(": ")[0] + ": Function not implemented" if w.startswith("io_pgetevents ") else w
-            for w in want
-        ]
+    # a syscall this kernel lacks: ENOSYS from the kernel, where the launcher's own checks of the
+    # arguments before the re-issue answer as the newer kernels do
+    lacking = ("epoll_pwait2 ",) * (k < (5, 11)) + ("io_pgetevents ",) * (k < (4, 18))
+    also = {
+        w: w.split(": ")[0] + ": Function not implemented" for w in want if w.startswith(lacking)
+    }
     got = out.splitlines()
-    wrong = [f"got {g!r}, the kernel says {w!r}" for g, w in zip(got, want, strict=False) if g != w]
+    wrong = [
+        f"got {g!r}, the kernel says {w!r}"
+        for g, w in zip(got, want, strict=False)
+        if g != w and g != also.get(w)
+    ]
     if len(got) != len(want):
         wrong.append(f"{len(got)} lines, the kernel gives {len(want)}")
     return wrong
@@ -555,6 +556,12 @@ def sigstack_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     for g, w in zip(got, SIGSTACK, strict=False):
         if g == w or (w.startswith("MINSIGSTKSZ: ") and g.startswith("MINSIGSTKSZ: ")):
             continue
+        if (
+            w.startswith("SS_AUTODISARM: ")
+            and kernel() < (4, 7)
+            and g == "SS_AUTODISARM: sigaltstack Invalid argument"
+        ):
+            continue  # the flag is 4.7's
         if g == w.replace("exit 1", "exit 3") and any(
             f"of {name}," in w and size < least for name, size in SIGSTACK_SIZES.items()
         ):
@@ -992,7 +999,9 @@ EXEC_SCRIPT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("nul in line", "status=0 out=argv=[$E|$H/nul|x]"),
     ("empty interpreter", "ENOEXEC"),
     ("blank interpreter", "ENOEXEC"),
-    ("only #! no newline", "EACCES"),
+    # a bare "#!" without a newline: ENOEXEC until binfmt_script's truncation rework in 5.5
+    # (allow interpreter argument truncation); EACCES since (measured: 5.4 and 5.10)
+    ("only #! no newline", "ENOEXEC" if kernel() < (5, 5) else "EACCES"),
     ("only # no newline", "ENOEXEC"),
     ("empty file", "ENOEXEC"),
     ("one newline", "ENOEXEC"),
@@ -1052,13 +1061,33 @@ EXEC_SCRIPT_LAUNCHER: dict[str, str] = {
 # as do the two images whose second PT_LOAD covers the first, measured alike in both worlds on
 # each machine; the terabyte of bss depends on the host's overcommit rule
 STACK = "signal=11" if platform.machine() == "x86_64" else "status=42"
+# until 5.8 a 64-bit image without PT_GNU_STACK got READ_IMPLIES_EXEC, every mapping executable
+# (x86/elf: Disable automatic READ_IMPLIES_EXEC for 64-bit address spaces), so the kernel ran the
+# three images whose entry runs on the stack or on a page mapped twice; the launcher answers as the
+# newer kernels do
+OLD_RIE = kernel() < (5, 8)
+# a PT_INTERP naming an ET_EXEC image already at its own address: until 6.7 the interpreter's
+# mapping failed and the exec was killed; elf_load() took the interpreter's mapping in 6.7 and the
+# image runs (measured: 6.6 kills, 6.8 runs); the launcher answers by 7.3's own rule either way
+OLD_INTERP = "signal=11" if kernel() < (6, 7) else "status=42"
+
+
+# a host that registered a binfmt_misc handler for other machines, as Fedora's cloud image does,
+# runs a foreign image through it: ENOEXEC or the handler's death
+def binfmt_misc_handlers() -> bool:
+    """Whether this host registered a binfmt_misc handler, for any machine."""
+    d = "/proc/sys/fs/binfmt_misc"
+    return os.path.isdir(d) and any(e not in ("register", "status") for e in os.listdir(d))
+
+
+FOREIGN: str | tuple[str, ...] = ("ENOEXEC", "signal=11") if binfmt_misc_handlers() else "ENOEXEC"
 EXEC_ELF: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("base", "status=42"),
-    ("no PT_GNU_STACK", STACK),
+    ("no PT_GNU_STACK", "status=42" if OLD_RIE else STACK),
     ("PT_GNU_STACK without PF_X", STACK),
     ("no PT_LOAD", "signal=11"),
-    ("two identical PT_LOADs", STACK),
-    ("PT_LOAD page overlapping the first", STACK),
+    ("two identical PT_LOADs", "status=42" if OLD_RIE else STACK),
+    ("PT_LOAD page overlapping the first", "status=42" if OLD_RIE else STACK),
     ("PT_LOADs out of address order", "status=42"),
     ("p_memsz below p_filesz", "signal=11"),
     ("a terabyte of bss", None),
@@ -1074,8 +1103,8 @@ EXEC_ELF: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("entry zero", "signal=11"),
     ("PT_INTERP a text file", "EIO"),
     ("PT_INTERP a script", "EIO"),
-    ("PT_INTERP the base image", "status=42"),
-    ("PT_INTERP itself", "status=42"),
+    ("PT_INTERP the base image", OLD_INTERP),
+    ("PT_INTERP itself", OLD_INTERP),
     ("PT_INTERP absent", "ENOENT"),
     ("PT_INTERP a directory", "EACCES"),
     ("PT_INTERP a text file of 100 bytes", "ELIBBAD"),
@@ -1089,7 +1118,7 @@ EXEC_ELF: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("EI_VERSION 0", "status=42"),
     ("e_version 0", "status=42"),
     ("EI_OSABI FreeBSD", "status=42"),
-    ("another machine", "ENOEXEC"),
+    ("another machine", FOREIGN),
     ("ET_REL", "ENOEXEC"),
     ("ET_CORE", "ENOEXEC"),
     ("e_phnum 0", "ENOEXEC"),
@@ -1106,7 +1135,7 @@ EXEC_ELF: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("ET_DYN at 0x400000", "status=42"),
     ("ET_DYN at zero", "status=42"),
     ("ET_DYN p_vaddr off p_offset", "signal=11"),
-    ("ET_DYN with PT_INTERP the base image", "status=42"),
+    ("ET_DYN with PT_INTERP the base image", OLD_INTERP),
     ("ET_DYN without PT_LOAD", "signal=11"),
     ("static", ("status=42", "compile failed")),
     ("static-pie", ("status=42", "compile failed")),
@@ -1124,6 +1153,15 @@ EXEC_ELF_LAUNCHER: dict[str, str] = {
     # the loader refuses a segment at an address already in use on every machine (7.3), as
     # x86-64's kernel does; aarch64's maps the identical segment over the first and runs it
     **({"two identical PT_LOADs": "signal=11"} if platform.machine() == "aarch64" else {}),
+    **(
+        {
+            "no PT_GNU_STACK": STACK,
+            "two identical PT_LOADs": STACK,
+            "PT_LOAD page overlapping the first": STACK,
+        }
+        if OLD_RIE
+        else {}
+    ),
 }
 # exec_auxv HOSTDIR (test/progs/exec_auxv.c), measured under bwrap on 7.0; a value the kernel copies
 # as its own, the vector's entries, the page size, the hardware capabilities and the loader's name,
