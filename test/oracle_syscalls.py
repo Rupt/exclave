@@ -1528,6 +1528,47 @@ def errnos(b: str, o: str) -> tuple[int, int]:
     )
 
 
+def watch_numbers(
+    mine: list[tuple[str, str, list[str], str]], bl: list[str], ol: list[str]
+) -> tuple[list[str], list[str]]:
+    """The inotify_add_watch answers with their watch descriptors numbered by first appearance.
+
+    The probe keeps one inotify instance, so that a watch descriptor names an inode (probe.c), but
+    the instance numbers its watches in order: one case the worlds answer differently under a
+    rule (the kernel's ELOOP at exactly MAXSYMLINKS links, which its retried walk may give) adds
+    a watch in one world and shifts every later number there. Each world's numbers are replaced
+    by the order of their first appearance among the cases both worlds answered with a
+    descriptor, which keeps what a descriptor says, two cases that reach one inode answer the
+    same, and drops the count.
+    """
+    numbers: tuple[dict[str, int], dict[str, int]] = ({}, {})
+
+    def wd(answer: str) -> str | None:
+        ret, _, rest = answer.partition(" ")
+        return ret if rest.startswith("errno=0") and not ret.startswith("ret=-") else None
+
+    for (_label, n, _toks, _group), b, o in zip(mine, bl, ol, strict=True):
+        if n != "inotify_add_watch":
+            continue
+        pair = wd(b.split(" ", 1)[1]), wd(o.split(" ", 1)[1])
+        if None in pair:
+            continue
+        for seen, w in zip(numbers, pair, strict=True):
+            if w is not None and w not in seen:
+                seen[w] = len(seen)
+    out = []
+    for lines, seen in zip((bl, ol), numbers, strict=True):
+        new = []
+        for (_label, n, _toks, _group), line in zip(mine, lines, strict=True):
+            i, _, answer = line.partition(" ")
+            w = wd(answer) if n == "inotify_add_watch" else None
+            if w is not None and w in seen:
+                answer = f"ret=w{seen[w]}" + answer[len(w) :]
+            new.append(f"{i} {answer}")
+        out.append(new)
+    return out[0], out[1]
+
+
 def exec_errnos(b: str, o: str) -> tuple[int, int]:
     """An exec's errnos: the probe runs it in a child whose wait status is 100 + errno (probe.c)."""
 
@@ -2188,6 +2229,7 @@ def main() -> int:
             )
             differ += 1
             continue
+        bl, ol = watch_numbers(mine, bl, ol)
         d = 0
         kernel = {c[0]: bline.split(" ", 1)[1] for c, bline in zip(mine, bl, strict=True)}
         for (label, n, toks, _), bline, oline in zip(mine, bl, ol, strict=True):
