@@ -1019,8 +1019,20 @@ def lines_wrong(
 
 # exec_script run HOSTDIR (test/progs/exec_script.c), measured under bwrap on 7.0; an unreadable
 # script's status is its interpreter's, dash's 2 or bash's 126
-# the #! buffer of 128 bytes until 5.1, which cut the interpreter's argument sooner
+# the #! buffer of 128 bytes until 5.1, which cut the interpreter's argument sooner; a distribution
+# kernel may carry the change (RHEL 8's 4.18 does), so before 5.1 either answer is the kernel's
 OLD_BUF = kernel() < (5, 1)
+
+
+def shebang_line(case: str, new: str, old: str) -> tuple[str, str | tuple[str, ...]]:
+    """A #! line case's answer: its argument cut as since 5.1 (new), or either way before (old)."""
+
+    def answer(cut: str) -> str:
+        return f"status=0 out=argv=[$E|interp a*{cut}|$H/{case}|x]"
+
+    return case, (answer(old), answer(new)) if OLD_BUF else answer(new)
+
+
 # before 5.9 exec opened the file before checking that it was regular, and a socket's open answers
 # ENXIO; a distribution kernel may carry the change (Ubuntu's 4.15 does), so either answer is the
 # kernel's, and the launcher answers as the newer kernels do
@@ -1030,20 +1042,14 @@ EXEC_SCRIPT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("line127-nonl", "status=0 out=argv=[$E|interp a*full|$H/line127-nonl|x]"),
     # a kernel before 5.1 read a 128-byte #! line and cut the argument 128 bytes sooner (OLD_BUF);
     # the launcher reads 256 bytes on every kernel
-    ("line128", f"status=0 out=argv=[$E|interp a*{'cut1' if OLD_BUF else 'full'}|$H/line128|x]"),
-    (
-        "line128-nonl",
-        f"status=0 out=argv=[$E|interp a*{'cut1' if OLD_BUF else 'full'}|$H/line128-nonl|x]",
-    ),
-    ("line255", f"status=0 out=argv=[$E|interp a*{'cut128' if OLD_BUF else 'full'}|$H/line255|x]"),
-    (
-        "line255-nonl",
-        f"status=0 out=argv=[$E|interp a*{'cut128' if OLD_BUF else 'full'}|$H/line255-nonl|x]",
-    ),
-    ("line256", f"status=0 out=argv=[$E|interp a*{'cut129' if OLD_BUF else 'cut1'}|$H/line256|x]"),
-    (
-        "line256-nonl",
-        f"status=0 out=argv=[$E|interp a*{'cut129' if OLD_BUF else 'cut1'}|$H/line256-nonl|x]",
+    *(
+        shebang_line(case + nonl, new, old)
+        for case, new, old in (
+            ("line128", "full", "cut1"),
+            ("line255", "full", "cut128"),
+            ("line256", "cut1", "cut129"),
+        )
+        for nonl in ("", "-nonl")
     ),
     ("trailing blanks", "status=0 out=argv=[$E|interp|$H/trailing blanks|x]"),
     (
