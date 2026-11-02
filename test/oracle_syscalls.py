@@ -97,7 +97,7 @@ covers:
     AT_EMPTY_PATH refused with ENOENT before 6.10; RENAME_WHITEOUT's capability check in the initial
     user namespace; O_DIRECTORY|O_CREAT opening or creating before 6.3; RHEL 8's 4.18 openat2
     answering EXDEV for a create through a symlink under RESOLVE_NO_XDEV and RESOLVE_CACHED unknown
-    before 5.12, where the launcher must answer what the kernel answers without the flag;
+    before 5.12, where the launcher answers what it answers without the flag;
     utimensat refusing AT_EMPTY_PATH and checking the nanoseconds first before 5.9; an
     exec of a socket answered ENXIO before 5.9; truncate checking the mount before the permission on
     6.1 and earlier (6.14 checks the permission first).
@@ -1606,6 +1606,7 @@ class Ctx(NamedTuple):
     paths: tuple[str, ...]  # the same, made absolute and normal lexically (lexical)
     kernel: dict[str, str]  # the kernel's answers in its group, by label
     native: dict[str, str]  # the native run's answers in its group, by label (run_native)
+    launcher: dict[str, str]  # the launcher's answers in its group, by label
 
 
 def named_paths(name: str, toks: list[str], host: str) -> tuple[str, ...]:
@@ -1747,7 +1748,7 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
             and label.endswith("/cached")
             and errnos(b, o)[0] == errno.EINVAL
             and o.removesuffix(" cached_retry")
-            == c.kernel.get(label.removesuffix("cached") + "plain")
+            == c.launcher.get(label.removesuffix("cached") + "plain")
         ),
         (
             "RESOLVE_CACHED is 5.12+: EINVAL before; the handler answers as 5.12 does, EAGAIN for "
@@ -2233,13 +2234,14 @@ def main() -> int:
         bl, ol = watch_numbers(mine, bl, ol)
         d = 0
         kernel = {c[0]: bline.split(" ", 1)[1] for c, bline in zip(mine, bl, strict=True)}
+        launcher = {c[0]: oline.split(" ", 1)[1] for c, oline in zip(mine, ol, strict=True)}
         for (label, n, toks, _), bline, oline in zip(mine, bl, ol, strict=True):
             total += 1
             b, o = bline.split(" ", 1)[1], oline.split(" ", 1)[1]
             if b == o:
                 continue
             raw = named_paths(n, toks, host)
-            ctx = Ctx(raw, tuple(lexical(r) for r in raw), kernel, native)
+            ctx = Ctx(raw, tuple(lexical(r) for r in raw), kernel, native, launcher)
             which = [i for i, (_why, pred, _s) in enumerate(DEFECTS) if pred(n, label, b, o, ctx)]
             if which:
                 known[which[0]] += 1
