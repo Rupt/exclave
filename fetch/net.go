@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -280,6 +282,32 @@ func (c *cache) getVerified(u, path string, verify func(string) error) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// downloads is how many packages a fetcher fetches, or checks in its cache, at once: enough to
+// overlap a mirror's latency and the hashing, few enough to load neither a mirror nor the machine.
+const downloads = 4
+
+// eachAtOnce runs job(i) for every i below n, downloads at a time, and returns each one's error
+// by its i, so that the caller reports the first failure in its own order, as one job after
+// another would.
+func eachAtOnce(n int, job func(int) error) []error {
+	errs := make([]error, n)
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for range min(downloads, n) {
+		wg.Go(func() {
+			for {
+				i := int(next.Add(1) - 1)
+				if i >= n {
+					return
+				}
+				errs[i] = job(i)
+			}
+		})
+	}
+	wg.Wait()
+	return errs
 }
 
 // place puts the cache's file src at dst, a hard link where the filesystem allows it; a copy is

@@ -396,39 +396,37 @@ func (r *debRepo) pick(name, op, ver string, selected map[string]stanza, choose 
 	return providers[0].st
 }
 
-// download fetches one package, checks it against the index, and puts it at dst as a hard link
-// to the cache's copy where the filesystem allows one. The file at dst is checked again once it
-// is there: another run sharing the cache could have replaced the cache's file between the
-// check and the link, and a rename never changes a file in place, so the link's bytes are what
-// was checked or another file whole.
-func (r *debRepo) download(st stanza, dst string) error {
+// download fetches one package into the cache, checks it against the index, and returns the
+// cache's file and the check, which place makes again of a copy.
+func (r *debRepo) download(st stanza) (string, func(string) error, error) {
 	filename := st["Filename"]
 	if st["SHA256"] == "" {
-		return fmt.Errorf("%s: the index carries no SHA256 for it; refusing an unverifiable download", filename)
+		return "", nil, fmt.Errorf("%s: the index carries no SHA256 for it; refusing an unverifiable download",
+			filename)
 	}
 	size := int64(-1)
 	if s, ok := st["Size"]; ok {
 		n, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
-			return fmt.Errorf("%s: the index gives its size as %q", filename, s)
+			return "", nil, fmt.Errorf("%s: the index gives its size as %q", filename, s)
 		}
 		size = n
 	}
 	p, err := r.cache.keyed("sha256", st["SHA256"])
 	if err != nil {
-		return fmt.Errorf("%s: %w", filename, err)
+		return "", nil, fmt.Errorf("%s: %w", filename, err)
 	}
 	verify := func(f string) error { return checkFile(f, sha256.New, st["SHA256"], size) }
 	switch err := r.cache.getVerified(r.mirror+"/"+filename, p, verify); err {
 	case nil:
+		return p, verify, nil
 	case errDigest:
-		return errors.New(filename + ": SHA256 does not match the index")
+		return "", nil, errors.New(filename + ": SHA256 does not match the index")
 	case errSize:
-		return errors.New(filename + ": size does not match the index")
+		return "", nil, errors.New(filename + ": size does not match the index")
 	default:
-		return err
+		return "", nil, err
 	}
-	return place(p, dst, verify)
 }
 
 func fetchDebs(args []string) error {
@@ -492,9 +490,18 @@ func fetchDebs(args []string) error {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	for _, name := range names {
+	cached := make([]string, len(names))
+	verify := make([]func(string) error, len(names))
+	errs := eachAtOnce(len(names), func(i int) (err error) {
+		cached[i], verify[i], err = repo.download(selected[names[i]])
+		return err
+	})
+	for i, name := range names {
+		if errs[i] != nil {
+			return errs[i]
+		}
 		dst := filepath.Join(*out, path.Base(selected[name]["Filename"]))
-		if err := repo.download(selected[name], dst); err != nil {
+		if err := place(cached[i], dst, verify[i]); err != nil {
 			return err
 		}
 	}

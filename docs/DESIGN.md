@@ -2293,7 +2293,8 @@ names by its digest as `KIND/DIGEST`, whatever mirror, snapshot or URL
 served it: the packages and the indexes, an apk by the SHA-1 of its
 control section. A download is streamed to a file of its own and
 hashed, renamed into place only once it is the file named, and checked
-again every time it is used, a damaged one fetched again; what changes
+again every time it is used, a damaged one fetched again, four packages
+at a time, the first failure reported in the order of their names; what changes
 at its URL, `InRelease`, `APKINDEX` and `repomd.xml`, is fetched on
 every run but from a snapshot, which never changes. `fetch debs` reads
 the gzip `Packages` index where the Release file lists one, the same

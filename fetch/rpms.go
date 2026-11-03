@@ -583,12 +583,16 @@ func fetchRpms(args []string) error {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	for _, name := range names {
-		filename, cached, err := repo.download(selected[name])
-		if err != nil {
-			return err
+	filenames, cached := make([]string, len(names)), make([]string, len(names))
+	errs := eachAtOnce(len(names), func(i int) (err error) {
+		filenames[i], cached[i], err = repo.download(selected[names[i]])
+		return err
+	})
+	for i, name := range names {
+		if errs[i] != nil {
+			return errs[i]
 		}
-		pkg := selected[name]
+		filename, cached, pkg := filenames[i], cached[i], selected[name]
 		if err := place(cached, filepath.Join(*out, filename), func(f string) error {
 			return checkFile(f, sha256.New, pkg.sha256, pkg.size)
 		}); err != nil {
