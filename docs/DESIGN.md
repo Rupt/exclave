@@ -2593,7 +2593,10 @@ and compares it with the reference machine's (12.1).
 **A release.** `scripts/release KEY DIR TOOLCHAIN EXCLAVE...` builds
 the launcher inside `TOOLCHAIN`, a gcc exclave, and the command from
 it, by `scripts/reproduce`, and puts under `DIR` each exclave as
-`NAME.exclave.tar.xz`, an archive that keeps the hard links, sorted
+`NAME.exclave.tar.zst`, zstd's level 19, the same bytes on any number
+of threads (on the Alpine exclave, 6% larger than xz's and unpacked in
+a tenth of its time, 0.19 s against 1.98 s, November 2026), an archive
+that keeps the hard links, sorted
 and without owners, made only after the exclave passes `check` and
 only if it is wrapped with that launcher; the command itself as
 `exclave`, with the licence texts of the Go modules it links as

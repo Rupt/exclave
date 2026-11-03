@@ -121,7 +121,7 @@ def main() -> int:
         bad = [n for h, n in listed if run([tool, "hash", n], consumer)[1].strip() != "b3:" + h]
         rc, out = (1 if bad or not listed else 0), f"differ: {bad}"
     step("the BLAKE3 sums check", rc == 0, out)
-    rc, out = run(["tar", "-xJf", name + ".tar.xz"], consumer)
+    rc, out = run(["tar", "--zstd", "-xf", name + ".tar.zst"], consumer)
     step("the archive unpacks", rc == 0, out)
     rc, out = run([tool, "check", name], consumer)
     step("the release's exclave checks the exclave", rc == 0, out[-500:])
@@ -150,7 +150,7 @@ def main() -> int:
     )
 
     # tampering: a byte of the archive, and a sum in the sums file
-    with open(os.path.join(consumer, name + ".tar.xz"), "r+b") as f:
+    with open(os.path.join(consumer, name + ".tar.zst"), "r+b") as f:
         f.seek(64)
         b = f.read(1)
         f.seek(64)

@@ -368,7 +368,7 @@ launcher, which the command built there carries:
 ```bash
 scripts/reproduce gcc.exclave build/reproduce               # build/reproduce/build/{launcher,exclave}, and their BLAKE3
 build/reproduce/build/exclave relink app.exclave           # app.exclave wrapped with the reproducible launcher
-scripts/release ~/.ssh/id_ed25519 release gcc.exclave app.exclave    # release/: app.exclave.tar.xz, exclave, NOTICES, SHA256SUMS, B3SUMS, SHA256SUMS.sig
+scripts/release ~/.ssh/id_ed25519 release gcc.exclave app.exclave    # release/: app.exclave.tar.zst, exclave, NOTICES, SHA256SUMS, B3SUMS, SHA256SUMS.sig
 ```
 
 Taking one, with the release's files in a directory and the releaser's
@@ -378,7 +378,7 @@ public key from a channel you trust (not the release itself):
 echo "exclave-release $(cat releaser.pub)" > allowed_signers
 ssh-keygen -Y verify -f allowed_signers -I exclave-release -n exclave -s SHA256SUMS.sig < SHA256SUMS
 sha256sum -c SHA256SUMS                                   # or b3sum -c B3SUMS
-tar -xJf gcc.exclave.tar.xz
+tar --zstd -xf gcc.exclave.tar.zst
 chmod +x exclave && ./exclave check gcc.exclave           # the tree against the hashes file, the wrappers, the static check
 ./exclave version                                         # which build made it; the launcher inside says the same
 ```

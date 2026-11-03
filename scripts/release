@@ -1,6 +1,6 @@
 #!/bin/sh
 # scripts/release KEY DIR TOOLCHAIN EXCLAVE... — a release of the exclaves named (docs/DESIGN.md 10.5): under DIR, each
-# as NAME.exclave.tar.xz, the command itself as `exclave` with the licence texts of the Go modules it links as
+# as NAME.exclave.tar.zst, zstd's level 19, the command itself as `exclave` with the licence texts of the Go modules it links as
 # NOTICES, SHA256SUMS and B3SUMS over every file there, the second as b3sum writes it, by the command, and
 # SHA256SUMS.sig, the sums signed with the ssh private key KEY (ssh-keygen -Y, in the namespace "exclave"). The launcher
 # is built inside TOOLCHAIN, a gcc exclave, and the command here from it, by scripts/reproduce, so that anyone can
@@ -11,6 +11,10 @@ set -eu
 . "$(dirname -- "$0")/lib.sh"
 [ $# -ge 4 ] || {
     echo "usage: scripts/release KEY DIR TOOLCHAIN EXCLAVE..." >&2
+    exit 2
+}
+command -v zstd >/dev/null 2>&1 || {
+    echo "release: no zstd here: the archives are zstd's" >&2
     exit 2
 }
 key=$1 dir=$2 toolchain=$3
@@ -53,8 +57,8 @@ for ex; do
     # hard links kept, so the wrappers stay links to the launcher; names sorted and no owner, so the archive
     # does not depend on the machine that made it
     tar -C "$(dirname -- "$ex")" --sort=name --owner=0 --group=0 --numeric-owner -cf - "$name" |
-        xz -T0 >"$dir/$name.tar.xz"
-    echo "release: $name ($(stat -c %s "$dir/$name.tar.xz") bytes)"
+        zstd -q -19 -T0 >"$dir/$name.tar.zst" # the same bytes on any number of threads
+    echo "release: $name ($(stat -c %s "$dir/$name.tar.zst") bytes)"
 done
 cp "$command" "$dir/exclave"
 cp "$built/build/NOTICES" "$dir/NOTICES"
