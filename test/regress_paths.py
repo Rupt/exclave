@@ -5,6 +5,7 @@ Run by test/run.py, on the fixtures test/suite.py makes.
 
 import errno
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -621,6 +622,59 @@ def readlink_bad_buffer(ctx: Ctx) -> None:
         [lib, "/proc/self/exe", ctx.vbin("sh"), "/nonexistent"],
     )
     expect(rc == 0 and out == "-1 14\n-1 14\n-1 14\n-1 2\n", f"bad buffer: rc={rc} {out!r} {err!r}")
+
+
+@test
+def listings_hide_real(ctx: Ctx) -> None:
+    """8.3: a listing of a wrapped directory is upstream's, as the kernel would give it.
+
+    .real is in none, at any buffer size, through getdents64 and getdents: a buffer of the longest
+    record, which holds .real alone when the names are short, too; the count is the unsigned int the
+    kernel reads; a buffer the kernel can write only part of holds the records that fit, and one it
+    can write none of is EFAULT, or the directory's end once .real alone is left; a record's d_off
+    resumes the listing after it. The directory is the tree's wrapped one with the fewest bytes of
+    records, where .real most often stands alone.
+    """
+
+    def record(name: str) -> int:  # getdents64's record: the header, the name and its NUL, in 8s
+        return (19 + len(os.fsencode(name)) + 1 + 7) & ~7
+
+    best: tuple[int, str, list[str]] | None = None
+    for d, dirs, _files in os.walk(ctx.root):
+        if ".real" in dirs:
+            names = [*(n for n in os.listdir(d) if n != ".real"), ".", ".."]
+            total = sum(record(n) for n in names)
+            if best is None or total < best[0]:
+                best = (total, d, names)
+        dirs[:] = [x for x in dirs if x != ".real"]
+    if best is None:
+        skip("no wrapped directory in the tree")
+    total, d, names = best
+    vdir = "/" + os.path.relpath(d, ctx.root)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "listing"), [vdir])
+    lines = out.splitlines()
+    want = sorted(names, key=os.fsencode)
+    expect(rc == 0 and lines[: len(want)] == want, f"{vdir}: rc={rc} {lines[:40]!r} {err!r}")
+    calls = ["getdents64", *(["getdents"] if platform.machine() == "x86_64" else [])]
+    cases = [
+        f"{c} {at}: the same names, no .real"
+        for c in calls
+        for at in ("the longest record", "4096", "32768")
+    ]
+    cases += [
+        "count with upper bits: read as 32",
+        "into a buffer that meets a read-only page: some records 0",
+    ]
+    # the second read into an unwritable buffer: the end once every record fit in the first 100
+    # bytes, EFAULT while one is left, and either near the edge, where padding decides
+    second = "into a read-only buffer, after those:"
+    after = "0 0" if total <= 93 else "-1 14" if total > 100 else None
+    cases += [f"{second} {after}"] if after else []
+    cases.append("into a read-only buffer, first: -1 14")
+    if len(names) > 4:
+        cases.append("resumed from a d_off: the names after it")
+    got = [g for g in lines[len(want) :] if after or not g.startswith(second)]
+    expect(got == cases, f"{vdir}: {got!r}, wanted {cases!r}")
 
 
 @test

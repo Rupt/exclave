@@ -1611,41 +1611,72 @@ static long do_fd_change(struct scratch *S, int nr, long *a)
     return -EROFS;
 }
 
+/* Whether the directory's next record is the tree's .real, read alone into the scratch and so passed; another record
+ * read is put back, the directory where it was. A listing's EINVAL, a buffer too small for the next record, and its
+ * EFAULT, a buffer the kernel cannot write the next record to, may be .real's alone, which upstream's tree does not
+ * have. ours is the cache of whether the directory is the tree's. */
+static int next_is_real(struct scratch *S, int nr, int fd, int *ours, unsigned long name_at)
+{
+    /* .real's record: the name, its NUL and getdents' trailing d_type, in 8-byte units */
+    unsigned long size = (name_at + 6 + (nr != NR_getdents64) + 7) & ~7UL;
+    long pos = SC3(NR_lseek, fd, 0, SEEK_CUR);
+    if (pos < 0) return 0;
+    long n = SC3(nr, fd, S->extra, size);
+    if (n <= 0) return 0;
+    if (xstrcmp(S->extra + name_at, ".real") == 0) {
+        if (*ours < 0) *ours = fd_real_path(fd, S->tmp) >= 0 && starts_dir(S->tmp, C.root);
+        if (*ours) return 1;
+    }
+    SC3(NR_lseek, fd, pos, SEEK_SET);
+    return 0;
+}
+
 /* getdents64 and getdents: the directory's entries as the kernel lists them, but for a .real/ in a directory of the
- * tree, which upstream's tree does not have (8.3, 6.1). The batch is read into the scratch, at most its size, which
- * a listing may return fewer than asked for, and copied out without the .real entry; whether the directory is the
- * tree's is asked only of a batch that holds one. A batch of nothing but .real is followed by the next, so that only
- * the directory's end is an empty answer; a buffer the copy cannot write is EFAULT with the directory where it was,
- * as when the kernel's own write fails. Both records hold d_reclen at 16; the name is at 19, or at 18 in getdents'
- * older record. */
+ * tree, which upstream's tree does not have (8.3, 6.1). The kernel writes its batch into the program's buffer, so
+ * every error and every short or faulting write is its own, but for one .real alone causes (next_is_real); the count
+ * is an unsigned int, as it reads it, and at most the scratch's size, which a listing may return fewer than asked
+ * for. The batch is read back and, only when it holds the tree's .real, written again without it, to the bytes the
+ * kernel writes; whether the directory is the tree's is asked only of a batch that holds one. A batch of nothing but
+ * .real is followed by the next, so that only the directory's end is an empty answer, and the room .real took in a
+ * batch is filled. Both records hold d_reclen at 16; the name is at 19, or at 18 in getdents' older record, which
+ * ends in d_type, where getdents64's ends in the padding after the name's NUL. A copy that fails on memory the
+ * kernel has just written, which only another thread's unmapping or a pipe the fallback cannot make can cause,
+ * answers the kernel's count. */
 static long do_getdents(struct scratch *S, int nr, long *a)
 {
-    unsigned long count = (unsigned long)a[2];
+    unsigned int count = (unsigned int)a[2];
     if (count > sizeof S->extra) count = sizeof S->extra;
     int fd = (int)a[0], ours = -1;
     unsigned long name_at = nr == NR_getdents64 ? 19 : 18;
-    long pos = SC3(NR_lseek, fd, 0, SEEK_CUR);
     for (;;) {
-        long n = SC3(nr, fd, S->extra, count), kept = 0;
+        long n = SC3(nr, fd, a[1], count), kept = 0, end = 0, real_seen = 0;
+        if ((n == -EINVAL || n == -EFAULT) && next_is_real(S, nr, fd, &ours, name_at)) continue;
         if (n <= 0) return n;
+        if (copy_in(S->pid, S->extra, (const void *)a[1], (size_t)n) != n) return n;
         for (long o = 0; o + 18 <= n;) {
             unsigned short len = *(unsigned short *)(S->extra + o + 16);
-            if (len < name_at + 1 || o + len > n) break; /* the kernel's records, so never: kept as they are */
+            if (len < name_at + 1 || o + len > n) return n; /* the kernel's records, so never: left as they are */
             const char *name = S->extra + o + name_at;
             int real = xstrcmp(name, ".real") == 0;
             if (real && ours < 0) ours = fd_real_path(fd, S->tmp) >= 0 && starts_dir(S->tmp, C.root);
-            if (!(real && ours)) {
+            if (real && ours) {
+                real_seen = 1;
+            } else {
+                /* the bytes the kernel wrote of the record, measured before it moves */
+                long written = nr == NR_getdents64 ? (long)(name_at + xstrlen(name) + 1) : len;
                 if (kept != o) xmemcpy(S->extra + kept, S->extra + o, len); /* forward over a gap: safe */
+                end = kept + written;
                 kept += len;
             }
             o += len;
         }
+        if (!real_seen) return n;
         if (kept == 0) continue; /* nothing but .real: the next batch */
-        if (copy_out(S->pid, (void *)a[1], S->extra, (size_t)kept)) {
-            if (pos >= 0) SC3(NR_lseek, fd, pos, SEEK_SET);
-            return -EFAULT;
-        }
-        return kept;
+        if (copy_out(S->pid, (void *)a[1], S->extra, (size_t)end)) return n;
+        /* the room .real took, filled as the kernel fills a batch; a directory holds one .real, and an error after a
+         * record is the records' count */
+        long more = SC3(nr, fd, a[1] + kept, count - (unsigned long)kept);
+        return more > 0 ? kept + more : kept;
     }
 }
 

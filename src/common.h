@@ -256,7 +256,7 @@ struct scratch {
     struct kstat st; /* the stat the kernel's order asks for, in the scratch rather than the frame (7.5.4) */
     unsigned long how[3]; /* the open_how an openat2 is re-issued with */
     char comm[NAME_MAX + 1]; /* the comm the kernel would set for an exec'd program (7.6) */
-    char extra[8192]; /* argv and envp vectors, ELF headers, a #! line, an extended open_how, a sockaddr */
+    char extra[8192]; /* argv and envp vectors, ELF headers, a #! line, an extended open_how, a sockaddr, a listing */
     pid_t pid, tid; /* the owner, looked up once per trap */
     unsigned resolve; /* openat2's resolve flags for the walk (7.4.3); 0 for every other syscall */
     /* set by canon: the walk started at, passed through or ended in the exclave's domain, or rewrote a magic link */

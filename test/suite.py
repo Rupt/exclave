@@ -481,6 +481,7 @@ PROGS = (
     "open_flags",
     "xattrat",
     "readlink_fault",
+    "listing",
     "identity_nofollow",
     "rename_dots",
     "program_perm",
