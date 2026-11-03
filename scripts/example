@@ -41,12 +41,25 @@ sysroot=--sysroot=/opt/sysroot-el7 sysroot_b=-B/opt/sysroot-el7/usr/lib64/ # hea
 echo "== 1. the launcher"
 run "$here/scripts/build"
 
+# the archives' signing keys, which every index and package is checked against (10.1): Ubuntu's from the
+# machine's own keyring package, CentOS 7's fetched once and checked against the hash scripts/inputs pins
+ubuntu=/usr/share/keyrings/ubuntu-archive-keyring.gpg
+centos=$dir/RPM-GPG-KEY-CentOS-7
+[ -e "$centos" ] || {
+    url=https://vault.centos.org/7.9.2009/os/x86_64/RPM-GPG-KEY-CentOS-7
+    if command -v curl >/dev/null 2>&1; then curl -fsSL -o "$centos" "$url"; else wget -q -O "$centos" "$url"; fi
+    echo "4a088ee35b0355b8a9cc8b611b72ca76280cb34c4b90346ff08abb30fe0b82a0  $centos" | b2sum -l 256 -c --quiet || {
+        echo "the CentOS 7 key fetched does not match its hash" >&2
+        exit 1
+    }
+}
+
 echo "== 2. a gcc exclave from Ubuntu 24.04 packages"
-[ -n "$(ls debs 2>/dev/null)" ] || logged fetch-debs "$here/build/exclave" fetch debs --out debs gcc-13 libc6-dev
+[ -n "$(ls debs 2>/dev/null)" ] || logged fetch-debs "$here/build/exclave" fetch debs --keyring "$ubuntu" --out debs gcc-13 libc6-dev
 logged unpack unpack gcc.exclave debs/*.deb
 
 echo "== 3. CentOS 7's glibc as a sysroot inside it"
-[ -n "$(ls el7 2>/dev/null)" ] || logged fetch-rpms "$here/build/exclave" fetch rpms --repo https://vault.centos.org/7.9.2009/os/x86_64 --no-base --out el7 glibc glibc-devel glibc-headers kernel-headers libgcc
+[ -n "$(ls el7 2>/dev/null)" ] || logged fetch-rpms "$here/build/exclave" fetch rpms --keyring "$centos" --repo https://vault.centos.org/7.9.2009/os/x86_64 --no-base --out el7 glibc glibc-devel glibc-headers kernel-headers libgcc
 logged unpack-el7 unpack sysroot.exclave el7/*.rpm
 run mkdir -p gcc.exclave/tree/opt # the placeholders are wrap's, which comes after
 run cp -a sysroot.exclave/tree gcc.exclave/tree/opt/sysroot-el7
