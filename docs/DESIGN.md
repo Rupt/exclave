@@ -4268,7 +4268,11 @@ has is skipped, and whatever is missing is fetched again. The items
 run three at a time once the signing keys are fetched, each a fetch,
 an unpack and a wrap of a few hundred megabytes on mostly one core; on
 the reference machine, with the fetchers' caches warm, the gate's
-inputs are made in 10 s, 25 s one item after another (November 2026).
+inputs are made in 10 s, 25 s one item after another (November 2026),
+when the mirrors answer at once. Every run fetches each suite's signed
+index again, a 256 KB `InRelease` for each of a deb fetch's three
+suites, which archive.ubuntu.com served in 2.5 to 3 s each on a slower
+afternoon, when the same run took 17 to 30 s.
 The repository holds no third-party input.
 
 **The gate** (`scripts/gate [--full] [--since REV] [--jobs N] EXCLAVE`)
