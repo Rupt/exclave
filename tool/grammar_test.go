@@ -75,12 +75,12 @@ func TestCanonical(t *testing.T) {
 		}
 	}
 	// the hashes file's order: keys in the schema's order, then the fields' bytes, a blank line between keys
-	text := "hashes 1\n\ntool \"v\"\n\npkg \"b\" \"1\" \"amd64\" \"b2:x\"\npkg \"a\" \"2\" \"amd64\" \"b2:y\"\n"
+	text := "hashes 1\n\ntool \"v\"\n\npkg \"b\" \"1\" \"amd64\" \"b3:x\"\npkg \"a\" \"2\" \"amd64\" \"b3:y\"\n"
 	rs, err := grammarParse([]byte(text), kindHashes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "hashes 1\n\ntool \"v\"\n\npkg \"a\" \"2\" \"amd64\" \"b2:y\"\npkg \"b\" \"1\" \"amd64\" \"b2:x\"\n"
+	want := "hashes 1\n\ntool \"v\"\n\npkg \"a\" \"2\" \"amd64\" \"b3:y\"\npkg \"b\" \"1\" \"amd64\" \"b3:x\"\n"
 	if out := grammarDump(rs, kindHashes); string(out) != want {
 		t.Errorf("sorted as %q", out)
 	}
@@ -93,8 +93,8 @@ func TestCanonical(t *testing.T) {
 // parses again to the same bytes.
 func FuzzGrammar(f *testing.F) {
 	f.Add([]byte("exclave 1\n\ncpu \"x86-64-v3\"\n\ndata \"/opt/d\"\n\nhost \"/etc/x\"\n\n# why\nown \"/usr\"\n"))
-	f.Add([]byte("hashes 1\n\ntool \"0.1.0\"\n\nlauncher \"b2:00\"\n\npkg \"a\" \"1\" \"all\" \"b2:01\"\n\n" +
-		"manifest \"b2:02\"\n\ntree \"b2:03\"\n"))
+	f.Add([]byte("hashes 1\n\ntool \"0.1.0\"\n\nlauncher \"b3:00\"\n\npkg \"a\" \"1\" \"all\" \"b3:01\"\n\n" +
+		"manifest \"b3:02\"\n\ntree \"b3:03\"\n"))
 	f.Add([]byte("exclave 1\n\nown \"/\\x00\\n\\t\\\"\\\\é\"\n"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		for _, k := range []kind{kindManifest, kindHashes} {

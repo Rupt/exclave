@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"syscall"
 
-	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
+	"lukechampine.com/blake3"
 )
 
 // requireExclave refuses ex before anything is read or written unless it holds tree/, and
@@ -88,7 +88,7 @@ func unreadable(p string, err error) {
 	failErrno(p, err)
 }
 
-// hashFile hashes a job's file with buf, the worker's own: the BLAKE2b-256 of its contents as
+// hashFile hashes a job's file with buf, the worker's own: the BLAKE3-256 of its contents as
 // lowercase hex, whether its first four bytes are the ELF magic, or the error of a failed read.
 func hashFile(j *hashJob, buf []byte) {
 	fd, err := retryEINTR(func() (int, error) { return unix.Open(j.path, unix.O_RDONLY|unix.O_CLOEXEC, 0) })
@@ -97,7 +97,7 @@ func hashFile(j *hashJob, buf []byte) {
 		return
 	}
 	defer unix.Close(fd)
-	h, _ := blake2b.New256(nil)
+	h := blake3.New(32, nil) // each write of buf hashed on several goroutines, in pieces of 16 KB
 	var head [4]byte
 	k := 0
 	for {
@@ -112,7 +112,7 @@ func hashFile(j *hashJob, buf []byte) {
 		k += copy(head[k:], buf[:n])
 		h.Write(buf[:n])
 	}
-	var d [blake2b.Size256]byte
+	var d [32]byte
 	j.hex, j.elf = hex.EncodeToString(h.Sum(d[:0])), k == 4 && string(head[:]) == "\x7fELF"
 }
 
@@ -126,8 +126,9 @@ func retryEINTR(call func() (int, error)) (int, error) {
 	}
 }
 
-// threads is how many goroutines a walk or the hashing uses: the machine's threads, at most
-// eight, since the machine may be in use beside the command.
+// threads is how many goroutines a walk or the hashing uses, and how many threads run Go at once
+// (main): the machine's threads, at most eight, since the machine may be in use beside the
+// command.
 func threads() int { return min(max(runtime.NumCPU(), 1), 8) }
 
 // hashAll hashes the files' contents on several goroutines after the walk has listed them in
@@ -239,7 +240,7 @@ func (h *hashing) walk(real, rel string) {
 	}
 }
 
-// treeHash is 6.4's hash of the tree at root, "b2:" and hex.
+// treeHash is 6.4's hash of the tree at root, "b3:" and hex.
 func treeHash(root string) string { return listTree(root).treeHash(root) }
 
 // treeHash is 6.4's hash of the tree at root from the listing; it notes for the static check
@@ -259,11 +260,11 @@ func (l *listing) treeHash(root string) string {
 		lines[i] = []byte(text + "\x00")
 	}
 	sort.Slice(lines, func(i, j int) bool { return bytes.Compare(lines[i], lines[j]) < 0 })
-	d, _ := blake2b.New256(nil)
+	d := blake3.New(32, nil)
 	for _, l := range lines {
 		d.Write(l)
 	}
-	return "b2:" + hex.EncodeToString(d.Sum(nil))
+	return "b3:" + hex.EncodeToString(d.Sum(nil))
 }
 
 // ---------------------------------------------------------------- the listing

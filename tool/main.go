@@ -30,11 +30,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"syscall"
 
-	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
+	"lukechampine.com/blake3"
 
 	"exclave/fetch"
 	"exclave/unpack"
@@ -146,11 +147,11 @@ func isDir(path string) bool {
 	return err == nil && st.IsDir()
 }
 
-// hashText is "b2:" and the lowercase hex of the BLAKE2b-256 of data, as the hashes file writes
+// hashText is "b3:" and the lowercase hex of the BLAKE3-256 of data, as the hashes file writes
 // it (6.4).
 func hashText(data []byte) string {
-	d := blake2b.Sum256(data)
-	return "b2:" + fmt.Sprintf("%x", d[:])
+	d := blake3.Sum256(data)
+	return "b3:" + fmt.Sprintf("%x", d[:])
 }
 
 // ---------------------------------------------------------------- the commands
@@ -229,6 +230,9 @@ func cmdFormat(args []string) int {
 }
 
 func main() {
+	// Go runs on eight threads at most, BLAKE3's own goroutines too, since the machine may be in
+	// use beside the command (10.5)
+	runtime.GOMAXPROCS(threads())
 	commands := map[string]func([]string) int{
 		"check": cmdCheck, "format": cmdFormat, "hash": cmdHash, "prune": cmdPrune,
 		"relink": cmdRelink, "unwrap": cmdUnwrap, "version": cmdVersion, "wrap": cmdWrap,

@@ -66,7 +66,7 @@ file. An exclave does not run from a filesystem mounted noexec.
 
 Checking it
 
-The hashes are BLAKE2b-256, so "b2sum -l 256 .exclave/launcher" prints
+The hashes are BLAKE3-256, so "b3sum .exclave/launcher" prints
 the recorded launcher hash, and a package file fetched again its pkg
 hash. The exclave tool, which builds these directories, is not part
 of this one:

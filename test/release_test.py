@@ -120,7 +120,7 @@ def main() -> int:
     step("the release's exclave checks the exclave", rc == 0, out[-500:])
     rc, out = run([tool, "hash", name], consumer)
     with open(os.path.join(consumer, name, ".exclave", "hashes"), encoding="utf-8") as f:
-        m = re.search(r'^tree "(b2:[0-9a-f]+)"$', f.read(), re.MULTILINE)
+        m = re.search(r'^tree "(b3:[0-9a-f]+)"$', f.read(), re.MULTILINE)
     step(
         "the tree hash is the one the hashes file records",
         rc == 0 and m and out.strip() == m.group(1),

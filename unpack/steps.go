@@ -17,8 +17,8 @@ import (
 	"strings"
 	"unsafe"
 
-	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
+	"lukechampine.com/blake3"
 
 	"exclave/unpack/reader"
 	"exclave/unpack/root"
@@ -460,7 +460,7 @@ func dependencyReport(packages []*Package, rd reader.Reader, rootPath string) ([
 
 // writeRecords writes OUT/.exclave/hashes with one pkg record per package file, in canonical
 // form (6.4): the name, version and architecture from the file's control data and the file's
-// BLAKE2b-256. `exclave wrap` keeps the records and adds its own. A field that is not printable
+// BLAKE3-256. `exclave wrap` keeps the records and adds its own. A field that is not printable
 // ASCII, which no package format allows, is refused.
 func writeRecords(out string, packages []*Package) error {
 	var rows [][4]string
@@ -469,13 +469,13 @@ func writeRecords(out string, packages []*Package) error {
 		if err != nil {
 			return err
 		}
-		h, _ := blake2b.New256(nil)
+		h := blake3.New(32, nil)
 		_, err = io.Copy(h, f)
 		f.Close()
 		if err != nil {
 			return err
 		}
-		row := [4]string{p.Name, p.Version(), p.Arch(), "b2:" + hex.EncodeToString(h.Sum(nil))}
+		row := [4]string{p.Name, p.Version(), p.Arch(), "b3:" + hex.EncodeToString(h.Sum(nil))}
 		for _, v := range row {
 			for _, c := range v {
 				if c < ' ' || c > '~' {

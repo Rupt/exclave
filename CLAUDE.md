@@ -192,7 +192,9 @@ The loop that has served well, in the order it pays:
   carries its reason on the line. The gate's unit step runs the unit
   tests under ASan and UBSan, and the gate runs the suite once on
   `build/launcher-debug`, whose UBSan checks trap.
-- **Hashes are BLAKE2b-256.** Manifest and hashes file use the strict
+- **Hashes are BLAKE3-256**, `lukechampine.com/blake3`'s in the command and
+  `test/b3.py`'s, from the specification, in the tests, since the standard
+  library has none. Manifest and hashes file use the strict
   grammar of `docs/DESIGN.md` 6.2, and `format` output is the accepted spelling.
   There is no index: the launcher reads the manifest and the tree, and
   anything the tree can say is best not written down anywhere else.

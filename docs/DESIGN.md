@@ -413,7 +413,7 @@ by hand; it is a convention, recorded nowhere.
     locale and time zone;
   - that setuid programs and `noexec` mounts do not work;
   - how to move, copy and remove the exclave;
-  - how `b2sum -l 256` checks the hashes file's hashes without the
+  - how `b3sum` checks the hashes file's hashes without the
     tool, and what the tool's `check`, `unwrap`, `wrap` and `relink`
     do;
   - where the packages' licence texts are, and how to print the
@@ -653,14 +653,14 @@ hashes 1
 
 tool "0.1.0+1a2b3c4"
 
-launcher "b2:<blake2b-256 of .exclave/launcher>"
+launcher "b3:<blake3-256 of .exclave/launcher>"
 
-pkg "gcc-13" "13.3.0-6ubuntu2~24.04.1" "amd64" "b2:<blake2b-256 hex of the .deb>"
-pkg "libc6" "2.39-0ubuntu8.8" "amd64" "b2:..."
+pkg "gcc-13" "13.3.0-6ubuntu2~24.04.1" "amd64" "b3:<blake3-256 hex of the .deb>"
+pkg "libc6" "2.39-0ubuntu8.8" "amd64" "b3:..."
 
-manifest "b2:<blake2b-256 of the manifest bytes>"
+manifest "b3:<blake3-256 of the manifest bytes>"
 
-tree "b2:<blake2b-256 of the serialised listing>"
+tree "b3:<blake3-256 of the serialised listing>"
 ```
 
 The hashes file uses the grammar of 6.2; its keys, in canonical order,
@@ -690,9 +690,10 @@ exclave. An exclave wrapped from a tree made otherwise has no `pkg`
 records and has a tree hash. A hashes file with no `tree` record marks
 an unwrapped exclave.
 
-All hashes are BLAKE2b-256, written as `b2:` followed by lowercase hex,
-so `b2sum -l 256` checks any of them without the tool. The `tree` hash
-is the BLAKE2b-256 of a byte string built from every entry under
+All hashes are BLAKE3-256, written as `b3:` followed by lowercase hex,
+so `b3sum` checks any of them without the tool. BLAKE3 hashes one file
+on many cores, so a large file is not a tree hash's floor (10.5). The
+`tree` hash is the BLAKE3-256 of a byte string built from every entry under
 `tree/` except `.real/` directories, with originals in place of
 wrappers and a `.real/` file with no wrapper beside it under its own
 path (6.1), sorted by the bytes of the relative path. For each entry
@@ -700,7 +701,7 @@ the string holds:
 
 ```
 relative path, NUL, one of f x d l, NUL,
-    f, x: the lowercase hex BLAKE2b-256 of the content
+    f, x: the lowercase hex BLAKE3-256 of the content
     l:    the link target bytes
     d:    nothing
 NUL
@@ -2483,7 +2484,10 @@ runs `check` on hand-made trees whose ELF files, `ld.so.cache` and logs
 lie about themselves (`test/readers_test.py`) and the grammar's
 properties (`test/grammar_test.py`), and the package's own tests and
 fuzz targets (`tool/*_test.go`) hold each reader to its answers (17).
-Its BLAKE2b is `golang.org/x/crypto`'s. The tree hash (6.4) lists the
+Its BLAKE3 is `lukechampine.com/blake3`'s, which hashes each write of a
+large file on several goroutines, 16 KB apiece, so one file is hashed on
+many cores; Go runs on eight threads at most, these goroutines too, since
+the machine may be in use beside the command. The tree hash (6.4) lists the
 tree's directories on up to eight goroutines, takes the entries from
 that listing in the walk's order, and then hashes the files' contents
 on as many, the largest first, so that no large file starts last; each
@@ -3921,13 +3925,13 @@ resolved without a manifest record being added.
 
 **The command.** On the gate's gcc exclave (159 MB, 709 ELF files), best
 of five, November 2026, on this machine's 16 threads: `wrap` of the
-unwrapped tree 0.26 s, `check` 0.20 s and `hash` 0.10 s, the listing
-and the hashing on eight goroutines (10.5); BLAKE2b is most of the
-hash. On a tree of 105 204 files and links, the gcc exclave with
-100 000 small files added in 100 directories, `hash` takes 0.36 s,
-`check` 0.49 s, and `prune` to a log naming half of the added files
-1.8 s, the kernel's unlinks and stats most of it; on that tree the
-kernel's opens, reads and stats are most of the hash too.
+unwrapped tree 0.18 s, `check` 0.11 s and `hash` 0.05 s, the listing
+and the hashing on eight threads (10.5). On a tree of 105 204 files and
+links, the gcc exclave with 100 000 small files added in 100
+directories, `hash` takes 0.30 s, `check` 0.40 s, and `prune` to a log
+naming half of the added files 1.8 s, the kernel's unlinks and stats
+most of it; on that tree the kernel's opens, reads and stats are most
+of the hash too.
 
 ### 16.9 Reproducing
 
@@ -4665,16 +4669,13 @@ questions.
    gVisor-based CI, WSL1 and SELinux `execmem` policies are listed as
    untested in the portability envelope (12); each is a matrix row to
    add, or a limitation to state.
-6. **The command's hashing.** The tree is listed once and hashed
-   largest file first (10.5), so what is left of the tree hash is
-   BLAKE2b on a tree of large files and the kernel's calls on a tree of
-   many small ones (16.8). One file is hashed on one core, so the
-   largest file is the hash's floor. A faster BLAKE2b keeps every
-   recorded hash; BLAKE3, which hashes one file on many cores, would
-   lower that floor, and is a change of the format (6.4, 19.1) and of
-   the tool that checks a hash without the command, `b3sum` for
-   `b2sum`. It pays for exclaves holding single files of hundreds of
-   megabytes.
+6. **The command's hashing.** The tree is listed once and hashed with
+   BLAKE3, the largest file first and each large file on many cores
+   (10.5), so what is left of the tree hash on a tree of many small
+   files is the kernel's opens, reads and stats (16.8).
+   `lukechampine.com/blake3` has assembly for x86-64 alone, so an
+   aarch64 machine hashes in Go, on as many cores, and slower per
+   core; how much slower is unmeasured.
 
 ## 19. Design decisions
 
@@ -4706,8 +4707,10 @@ specified.
   symlink or a wrapper script does both jobs (6.1).
 - **A strict manifest grammar with one canonical spelling**, the output
   of `exclave format`: both parsers refuse anything else (6.2).
-- **Hashes are BLAKE2b-256, and the hashes file records and never
-  locates**: locating belongs to the step before the tool (6.4).
+- **Hashes are BLAKE3-256, and the hashes file records and never
+  locates**: BLAKE3 hashes one file on many cores, and `b3sum` checks
+  a hash without the tool; locating belongs to the step before the tool
+  (6.4).
 - **No layers, no single-file form, no several roots per CPU level**:
   composition is a copy at build time, `tar` makes one file, and an
   exclave per CPU level is two exclaves (11, 6.6).

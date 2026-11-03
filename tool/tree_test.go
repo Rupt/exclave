@@ -8,8 +8,8 @@ import (
 	"sort"
 	"testing"
 
-	"golang.org/x/crypto/blake2b"
 	"golang.org/x/sys/unix"
+	"lukechampine.com/blake3"
 )
 
 // TestTreeHash states 6.4 and holds treeHash to it: one entry per file, directory and link,
@@ -27,7 +27,7 @@ func TestTreeHash(t *testing.T) {
 	if err := os.Symlink("\xfe/x", filepath.Join(root, "l")); err != nil {
 		t.Fatal(err)
 	}
-	hex := func(s string) string { d := blake2b.Sum256([]byte(s)); return fmt.Sprintf("%x", d[:]) }
+	hex := func(s string) string { d := blake3.Sum256([]byte(s)); return fmt.Sprintf("%x", d[:]) }
 	lines := []string{
 		"a\x00f\x00" + hex("A") + "\x00",
 		"d\x00d\x00\x00",
@@ -39,11 +39,11 @@ func TestTreeHash(t *testing.T) {
 		"l\x00l\x00\xfe/x\x00",
 	}
 	sort.Slice(lines, func(i, j int) bool { return bytes.Compare([]byte(lines[i]), []byte(lines[j])) < 0 })
-	h, _ := blake2b.New256(nil)
+	h := blake3.New(32, nil)
 	for _, l := range lines {
 		h.Write([]byte(l))
 	}
-	want := "b2:" + fmt.Sprintf("%x", h.Sum(nil))
+	want := "b3:" + fmt.Sprintf("%x", h.Sum(nil))
 	if got := treeHash(root); got != want {
 		t.Errorf("treeHash: %s, stated %s", got, want)
 	}
@@ -167,5 +167,27 @@ func TestListing(t *testing.T) {
 	}
 	if _, ok := (*listing)(nil).isELF("/usr/bin/w"); ok {
 		t.Errorf("a nil listing knows a file's magic")
+	}
+}
+
+// TestHashFile holds a file hashed through the worker's buffer, a write at a time and each write
+// on several goroutines, to the BLAKE3-256 of its contents at once: sizes about a chunk, a buffer
+// and the 16 KB pieces a write is split into, and one of several buffers with a ragged end.
+func TestHashFile(t *testing.T) {
+	dir := t.TempDir()
+	buf := make([]byte, 1<<20)
+	for _, n := range []int{0, 1, 1023, 1024, 1025, 16 << 10, 16<<10 + 1, 1 << 20, 3<<20 + 12345} {
+		data := make([]byte, n)
+		for i := range data {
+			data[i] = byte(i*7 + i>>11)
+		}
+		p := filepath.Join(dir, fmt.Sprint(n))
+		write(t, p, data)
+		j := hashJob{path: p}
+		hashFile(&j, buf)
+		want := blake3.Sum256(data)
+		if j.err != nil || j.hex != fmt.Sprintf("%x", want[:]) {
+			t.Errorf("%d bytes: %s %v, the hash of the contents %x", n, j.hex, j.err, want[:])
+		}
 	}
 }

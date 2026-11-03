@@ -24,6 +24,8 @@ import subprocess
 import sys
 lazy from collections.abc import Iterator
 
+from b3 import blake3
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_LAUNCHER = os.path.join(REPO, "build", "launcher")
 # the exclave command, as scripts/build built it
@@ -354,12 +356,17 @@ def owned(ex: str) -> list[str]:
     return own
 
 
-def b2(data: bytes) -> str:
-    return "b2:" + hashlib.blake2b(data, digest_size=32).hexdigest()
+def b3(data: bytes) -> str:
+    """The hash the hashes file writes (6.4): "b3:" and the BLAKE3-256 of data, in Python."""
+    return "b3:" + blake3(data)
 
 
 def tree_hash(root: str) -> str:
-    """Return the tree hash of 6.4, computed here as the design states it."""
+    """Return the tree hash of 6.4, computed here as the design states it.
+
+    Its BLAKE3 is Python's (test/b3.py), slow but independent of the command's: for the small
+    trees a test makes.
+    """
     entries = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != ".real"]
@@ -383,10 +390,10 @@ def tree_hash(root: str) -> str:
                 d, n = os.path.split(real)
                 orig = os.path.join(d, ".real", n)
                 with open(orig if os.path.exists(orig) else real, "rb") as f:
-                    h = hashlib.file_digest(f, lambda: hashlib.blake2b(digest_size=32)).hexdigest()
+                    h = blake3(f.read())
                 kind = b"x" if st.st_mode & 0o111 else b"f"
                 entries.append(rel + b"\0" + kind + b"\0" + h.encode() + b"\0")
-    return b2(b"".join(sorted(entries)))
+    return b3(b"".join(sorted(entries)))
 
 
 def unwrap_tree(ex: str) -> None:
@@ -408,7 +415,9 @@ def wrap_unchecked(ex: str, manifest: bytes) -> None:
 
     The suite's own wrap of the tree it is given, which need not pass the static check: each
     original moves to .real/ beside a hard link to .exclave/launcher, and the hashes file records
-    the launcher, the manifest and the tree, and no tool, since no tool wrote it.
+    the launcher, the manifest and the tree, and no tool, since no tool wrote it. The tree's hash is
+    the command's (`exclave hash`), since a whole tree is too large for the Python BLAKE3;
+    test/regress_tool.py holds the command's to tree_hash.
     """
     ld = os.path.join(ex, ".exclave", "launcher")
     root = os.path.join(ex, "tree")
@@ -424,10 +433,13 @@ def wrap_unchecked(ex: str, manifest: bytes) -> None:
         f.write(manifest)
     with open(ld, "rb") as f:
         launcher = f.read()
+    p = subprocess.run([*TOOL, "hash", ex], capture_output=True, text=True, check=False)
+    if p.returncode or not p.stdout.startswith("b3:"):
+        sys.exit(f"exclave hash {ex}: {p.stdout}{p.stderr}")
     with open(os.path.join(ex, ".exclave", "hashes"), "w") as f:
         f.write(
-            f'hashes 1\n\nlauncher "{b2(launcher)}"\n\n'
-            f'manifest "{b2(manifest)}"\n\ntree "{tree_hash(root)}"\n'
+            f'hashes 1\n\nlauncher "{b3(launcher)}"\n\n'
+            f'manifest "{b3(manifest)}"\n\ntree "{p.stdout.strip()}"\n'
         )
 
 

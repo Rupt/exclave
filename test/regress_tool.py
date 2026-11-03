@@ -169,7 +169,7 @@ def unpack_and_wrap(ctx: Ctx) -> str | None:
     Unpack takes package files and nothing else, records every input by hash, reports what the set's
     own control files say it lacks, strips the volatile directories, refuses two versions of one
     package, and adds no launcher, manifest or placeholder; wrap adds them, wraps the tree and
-    records the manifest, launcher and tree hashes, each the BLAKE2b-256 of what it names, and
+    records the manifest, launcher and tree hashes, each the BLAKE3-256 of what it names, and
     relink records its launcher's; unwrap, check and a second wrap keep the hashes file; a
     tree assembled by hand becomes an exclave by wrap alone; the tree hash is 6.4's on odd names,
     modes and link texts, and refuses a directory it cannot read, as it does a file.
@@ -221,7 +221,7 @@ def unpack_and_wrap(ctx: Ctx) -> str | None:
         f"pkg records: {pkgs!r}",
     )
     expect(
-        pkgs[1][3] == tree.b2(read_bytes(os.path.join(d, "tool.deb"))),
+        pkgs[1][3] == tree.b3(read_bytes(os.path.join(d, "tool.deb"))),
         "the input hash is the file's",
     )
     expect(not lock.get("tree", []), "an unwrapped exclave has no tree hash yet")
@@ -265,7 +265,7 @@ def unpack_and_wrap(ctx: Ctx) -> str | None:
         o.strip() == lock["tree"][0][0] == tree.tree_hash(os.path.join(out, "tree")),
         "hash agrees with the hashes file and with the tree hash as 6.4 states it",
     )
-    # 6.4: the manifest and launcher records are the BLAKE2b-256 of the files' bytes, as wrap wrote
+    # 6.4: the manifest and launcher records are the BLAKE3-256 of the files' bytes, as wrap wrote
     # them and as relink recomputes the launcher's, for a launcher of other bytes and back again
     launcher = os.path.join(out, ".exclave", "launcher")
     first = read_bytes(launcher)
@@ -280,8 +280,8 @@ def unpack_and_wrap(ctx: Ctx) -> str | None:
         lock = tree.records(os.path.join(out, ".exclave", "hashes"))
         manifest = read_bytes(os.path.join(out, ".exclave", "manifest"))
         expect(
-            lock.get("manifest") == [[tree.b2(manifest)]]
-            and lock.get("launcher") == [[tree.b2(read_bytes(launcher))]]
+            lock.get("manifest") == [[tree.b3(manifest)]]
+            and lock.get("launcher") == [[tree.b3(read_bytes(launcher))]]
             and lock.get("tree") == [[tree.tree_hash(os.path.join(out, "tree"))]],
             f"the hashes file against the files' own hashes, relinked to {given}: {lock!r}",
         )
@@ -819,7 +819,7 @@ def wrap_takes_a_launcher(ctx: Ctx) -> str | None:
     )
     lock = tree.records(os.path.join(ex, ".exclave", "hashes"))
     expect(
-        [[tree.b2(read_bytes(other))]] == lock.get("launcher"),
+        [[tree.b3(read_bytes(other))]] == lock.get("launcher"),
         f"the launcher given is not the one recorded: {lock.get('launcher')!r}",
     )
     rc, o, e = run([*TOOL, "wrap", ex, other])
