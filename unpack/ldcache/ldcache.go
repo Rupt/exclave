@@ -427,11 +427,11 @@ func rodata(elf []byte) (out [][]byte) {
 	}
 	ok := true
 	defer func() {
-		catch(&ok)
 		if !ok {
 			out = whole
 		}
 	}()
+	defer catch(&ok) // deferred directly, so that its recover sees the panic; the function above then reads ok
 	cls := elf[4]
 	var shoff, shentsize, shnum uint64
 	if cls == 1 {
