@@ -694,7 +694,7 @@ def main() -> int:
             # the text the launcher carries, which exclave_readme compares
             t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")
             # what scripts/reproduce copies and runs, and the commit it names, without a checkout
-            for f in ("scripts/build", "scripts/lib.sh", "scripts/reproduce", "pyproject.toml"):
+            for f in ("scripts/build", "scripts/lib.sh", "scripts/reproduce", "VERSION"):
                 t.add(os.path.join(REPO, f), arcname="repo/" + f)
             info = tarfile.TarInfo("repo/COMMIT")
             info.size = len(commit) + 1

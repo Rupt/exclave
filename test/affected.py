@@ -49,6 +49,7 @@ STEPS: dict[str, tuple[str, ...]] = {
 # driver runs on, the Go the commands are built by, the gate and this derivation.
 EVERY = (
     "src/*",
+    "VERSION",
     "scripts/build",
     "scripts/lib.sh",
     "scripts/install-go",

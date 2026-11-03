@@ -1,15 +1,14 @@
 [project]
-name = "exclave"
-version = "0.1.0"
-description = "Relocatable, privilege-free Linux software: a directory that runs by path."
-readme = "README.md"
-license = "MIT"
-license-files = ["LICENSE"]
-# The exclave command is C (tool/) and the steps before it, unpack/ and fetch/,
-# are Go, all built by scripts/build. The Python here is the tests, on the
-# pinned Python .python-version names, which uv installs and every script runs
-# through (scripts/lib.sh). They use the standard library only, so there is
-# nothing to depend on, and nothing to build: the project is its tests.
+name = "exclave-tests"
+version = "0"
+description = "The tests and checks of exclave, run on the pinned Python."
+# This file is the tests', not exclave's: the launcher is C (src/) and the
+# exclave command Go (tool/, unpack/, fetch/), both built by scripts/build,
+# and exclave's version is the file VERSION's. The Python here is the tests,
+# on the pinned Python .python-version names, which uv installs and every
+# script runs through (scripts/lib.sh). They use the standard library only, so
+# there is nothing to depend on and nothing to build; the dev tools below are
+# the checks'.
 requires-python = ">=3.15"
 dependencies = []
 

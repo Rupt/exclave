@@ -441,7 +441,8 @@ scripts/release      a signed release of exclaves with the command beside them; 
 scripts/reproduce    the launcher built inside a gcc exclave and the command from it, the same bytes wherever it runs
 scripts/test         the suite; scripts/matrix, exercise and sysroot the other test drivers
 .github/workflows/ci.yml  the gate on GitHub's x86-64 and aarch64 runners and the x86-64 rows under KVM, when dispatched by hand
-pyproject.toml       the Python project, the tests: no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python; go.mod the Go module, go.sum its pins
+VERSION              the project's version, which every build names with its commit
+pyproject.toml       the Python project, the tests': no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python; go.mod the Go module, go.sum its pins
 scripts/build        the launchers: build/launcher, build/launcher-old for the nesting regression, build/launcher-debug with UBSan's checks; the command, build/exclave, carrying the launcher; the aarch64 ones with a cross compiler, for the matrix; nothing when they are up to date
 src/sys.h            syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
 src/elf.h            the ELF structures the loader needs

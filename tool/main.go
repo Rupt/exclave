@@ -41,7 +41,7 @@ import (
 	"exclave/unpack"
 )
 
-// toolVersion is the project's version, pyproject.toml's, which scripts/check holds it to.
+// toolVersion is the project's version, the file VERSION's, which scripts/check holds it to.
 const toolVersion = "0.1.0"
 
 // version is the build's (7, 10): the project's version and the commit, which scripts/build

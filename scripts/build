@@ -46,7 +46,7 @@ native=$(uname -m)
 # the build's version (7, 10): the project's version and the commit, -dirty for uncommitted changes; a copy of the
 # sources without the checkout, as scripts/reproduce makes, names its commit in the file COMMIT
 commit=$(git describe --always --dirty --exclude='*' 2>/dev/null) || commit=$(cat COMMIT 2>/dev/null) || commit=unknown
-version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)+$commit
+version=$(cat VERSION)+$commit
 [ "$(cat build/.version 2>/dev/null)" = "$version" ] || fresh=false
 cross=$(c_arches | grep -vx "$native")
 

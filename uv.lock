@@ -47,8 +47,8 @@ wheels = [
 ]
 
 [[package]]
-name = "exclave"
-version = "0.1.0"
+name = "exclave-tests"
+version = "0"
 source = { virtual = "." }
 
 [package.dev-dependencies]
