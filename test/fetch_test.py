@@ -15,14 +15,17 @@ one line per test; the exit status is the number of failures, at most 255.
 
 import argparse
 import base64
+import functools
 import gzip
 import hashlib
+import http.server
 import os
 import shutil
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import zlib
 from typing import Protocol
@@ -539,6 +542,73 @@ def debs_interrupted(work: str) -> None:
             time.sleep(0.01)
         p.send_signal(signal.SIGTERM)
         _, err = p.communicate(timeout=10)
+    expect(p.returncode == -signal.SIGTERM, f"ended by {p.returncode}: {err[-300:]!r}")
+    left = os.listdir(out) if os.path.isdir(out) else []
+    expect(not os.path.exists(out), f"the interrupted fetch left its --out, holding {left}")
+
+
+@test
+def debs_interrupted_downloading(work: str) -> None:
+    """10.1: the same, with the signal arriving while a package downloads after the index verified.
+
+    The mirror serves its signed index and stalls on the package, so the download workers are
+    running when SIGTERM arrives: they stop, the fetch cleans up, and the signal ends it.
+    """
+    right = PgpKey(work, "right")
+    keyring = right.export(work, "right.gpg")
+    mirror = deb_mirror(os.path.join(work, "mirror"), right.clearsign)
+    release = threading.Event()
+
+    class Stalling(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if "/pool/" in self.path:
+                release.wait(30)
+                return
+            super().do_GET()
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002 the base class names it
+            pass
+
+    server = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), functools.partial(Stalling, directory=mirror)
+    )
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    out = os.path.join(work, "out-downloading")
+    try:
+        p = subprocess.Popen(
+            [
+                *FETCH,
+                "debs",
+                "--out",
+                out,
+                "--keyring",
+                keyring,
+                "--mirror",
+                f"http://127.0.0.1:{server.server_address[1]}",
+                "--arch",
+                DEB_ARCH,
+                "--suite",
+                "noble",
+                "--components",
+                "main",
+                "--no-essential",
+                "x",
+            ],
+            stderr=subprocess.PIPE,
+        )
+        deadline = time.monotonic() + 10
+        # the package's download has begun once its file of its own is there
+        while time.monotonic() < deadline and not any(
+            ".tmp" in f for _d, _s, files in os.walk(out) for f in files
+        ):
+            time.sleep(0.01)
+        p.send_signal(signal.SIGTERM)
+        _, err = p.communicate(timeout=10)
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
     expect(p.returncode == -signal.SIGTERM, f"ended by {p.returncode}: {err[-300:]!r}")
     left = os.listdir(out) if os.path.isdir(out) else []
     expect(not os.path.exists(out), f"the interrupted fetch left its --out, holding {left}")

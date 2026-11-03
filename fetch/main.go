@@ -81,12 +81,10 @@ func Main(v string, args []string) int {
 	kind, args := args[0], args[1:]
 	var err error
 	switch kind {
-	case "debs":
-		err = fetchDebs(args)
-	case "apks":
-		err = fetchApks(args)
-	case "rpms":
-		err = fetchRpms(args)
+	case "debs", "apks", "rpms":
+		end := watchSignals()
+		err = map[string]func([]string) error{"debs": fetchDebs, "apks": fetchApks, "rpms": fetchRpms}[kind](args)
+		end()
 	case "version":
 		if len(args) != 0 {
 			fmt.Fprintln(os.Stderr, usage)

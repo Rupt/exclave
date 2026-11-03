@@ -121,6 +121,9 @@ func (c *cache) fetchInto(u string, w io.Writer, reset func() error) error {
 		if err == nil {
 			return nil
 		}
+		if run.Err() != nil { // a signal is ending the fetch: no retry
+			return run.Err()
+		}
 		if he, ok := errors.AsType[*httpError](err); ok {
 			if attempt == tries-1 || !(he.code == 429 || he.code >= 500) {
 				return err
@@ -132,13 +135,17 @@ func (c *cache) fetchInto(u string, w io.Writer, reset func() error) error {
 			}
 			log(fmt.Sprintf("retry after %s in %.0f s", err, wait.Seconds()))
 		}
-		time.Sleep(wait)
+		select {
+		case <-time.After(wait):
+		case <-run.Done():
+			return run.Err()
+		}
 		wait *= 2
 	}
 }
 
 func (c *cache) once(u string, w io.Writer) error {
-	req, err := http.NewRequest("GET", u, nil)
+	req, err := http.NewRequestWithContext(run, "GET", u, nil)
 	if err != nil {
 		return err
 	}
@@ -304,7 +311,9 @@ func eachAtOnce(n int, job func(int) error) []error {
 				if i >= n {
 					return
 				}
-				errs[i] = job(i)
+				if errs[i] = run.Err(); errs[i] == nil { // a signal is ending the fetch: no job started
+					errs[i] = job(i)
+				}
 			}
 		})
 	}
@@ -373,9 +382,9 @@ func linkOrCopy(src, dst string) error {
 }
 
 // cacheIn is the directory a fetcher keeps files in: dir when one is given, else a directory of its
-// own inside out, removed by done or by an ending signal the fetch was not started ignoring, so that
-// a fetch without --cache keeps nothing outside out and its packages are still hard-linked into
-// place. An out the fetch made and left empty, as a refusal leaves it, is removed too.
+// own inside out, removed by done, so that a fetch without --cache keeps nothing outside out and its
+// packages are still hard-linked into place. An out the fetch made and left empty, as a refusal
+// leaves it, is removed too. A signal ends the fetch through run, so done runs then as well.
 func cacheIn(dir, out string) (string, func(), error) {
 	if dir != "" {
 		return dir, func() {}, nil
@@ -384,40 +393,15 @@ func cacheIn(dir, out string) (string, func(), error) {
 	if err := os.MkdirAll(out, 0o777); err != nil {
 		return "", nil, err
 	}
-	var ending []os.Signal
-	for _, s := range []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
-		if !signal.Ignored(s) {
-			ending = append(ending, s)
-		}
-	}
-	signals := make(chan os.Signal, 1) // before the directory exists, so that no signal finds it unwatched
-	if len(ending) > 0 {
-		signal.Notify(signals, ending...)
-	}
 	tmp, err := os.MkdirTemp(out, ".exclave-fetch-")
 	if err != nil {
-		signal.Stop(signals)
 		return "", nil, err
 	}
-	clean := func() {
+	return tmp, func() {
 		os.RemoveAll(tmp)
 		if made {
 			os.Remove(out) // only when empty
 		}
-	}
-	go func() {
-		s, ok := <-signals
-		if !ok {
-			return
-		}
-		clean()
-		signal.Reset(s) // the signal again, to its default action, so that the exit says what ended it
-		syscall.Kill(os.Getpid(), s.(syscall.Signal))
-	}()
-	return tmp, func() {
-		signal.Stop(signals)
-		close(signals)
-		clean()
 	}, nil
 }
 
@@ -425,4 +409,48 @@ func cacheIn(dir, out string) (string, func(), error) {
 func lexists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil
+}
+
+// ---------------------------------------------------------------- ending by a signal
+
+// run is the fetch's context, cancelled by a signal that ends it: downloads in flight stop, no
+// retry waits and no job starts, and the fetch returns through its own cleanup before the signal
+// ends the process (watchSignals).
+var run = context.Background()
+
+// watchSignals cancels run on SIGINT, SIGTERM or SIGHUP, but for those the process was started
+// ignoring, which stay ignored. Its result, called once the fetch has returned, ends the process by
+// the signal that came, if one did, with the signal's default action, so that the exit says what
+// ended it.
+func watchSignals() func() {
+	ctx, cancel := context.WithCancel(context.Background())
+	run = ctx
+	var ending []os.Signal
+	for _, s := range []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+		if !signal.Ignored(s) {
+			ending = append(ending, s)
+		}
+	}
+	signals := make(chan os.Signal, 1)
+	if len(ending) > 0 {
+		signal.Notify(signals, ending...)
+	}
+	var came atomic.Value
+	go func() {
+		if s, ok := <-signals; ok {
+			came.Store(s)
+			cancel()
+		}
+	}()
+	return func() {
+		signal.Stop(signals)
+		close(signals)
+		if s, ok := came.Load().(os.Signal); ok {
+			signal.Reset(s)
+			syscall.Kill(os.Getpid(), s.(syscall.Signal))
+			time.Sleep(time.Second) // the default action ends the process first
+			os.Exit(128 + int(s.(syscall.Signal)))
+		}
+		cancel()
+	}
 }

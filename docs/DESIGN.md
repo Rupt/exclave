@@ -2389,7 +2389,8 @@ file a signed one names by its digest as `KIND/DIGEST`, whatever
 mirror, snapshot or URL served it: the packages and the indexes, an apk
 by the SHA-1 of its control section. Without one it keeps nothing
 outside `--out`: the run works in a directory of its own inside it,
-removed when the run ends, however it ends but by `SIGKILL`, with an
+removed when the run ends, however it ends but by `SIGKILL` (a signal
+stops the downloads first, and ends the run once they have), with an
 `--out` the run made and left empty, and the next run fetches
 everything again. A download is streamed to a file of its own and
 hashed, renamed into place only once it is the file named, and checked
