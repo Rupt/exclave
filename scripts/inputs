@@ -18,6 +18,7 @@
 # (moby/profiles, Apache-2.0), the version DESIGN.md 15.7 checked, for test/docker_profile.py; and the archives'
 # signing keys the fetchers check every index and package against (10), pinned here by hash. The tests themselves
 # touch no network.
+# shellcheck disable=SC2329  # the items' functions run through item, which shellcheck does not follow
 set -u
 . "$(dirname -- "$0")/lib.sh"
 repo=$ROOT
@@ -29,6 +30,26 @@ repo=$ROOT
 dir=$(mkdir -p "$1" && cd "$1" && pwd) || exit 2
 mkdir -p "$dir/log" "$dir/src" || exit 2
 fails=0
+# The items, a fetch and the exclave made from it or a file, run three at a time, each in the background with its
+# lines printed as it ends: a fetch, an unpack and a wrap are each mostly one core and a few hundred MB, so three at
+# once stay light beside the machine's other work. A failure leaves a file under DIR/log, counted when all are done,
+# since a background item's variables end with it. The signing keys come first, since the fetches read them.
+rm -f "$dir"/log/.failed.*
+slots=$dir/log/.slots.$$
+{ mkfifo "$slots" && exec 3<>"$slots" && rm -f "$slots"; } || exit 2
+for slot in 1 2 3; do echo "$slot" >&3; done
+item() { # item COMMAND...: COMMAND in the background once a slot is free
+    read -r slot <&3
+    {
+        "$@"
+        echo "$slot" >&3
+    } &
+}
+failed() { : >"$dir/log/.failed.$1"; } # failed NAME: an item that failed
+counted() {                            # counted: every item done, the failures counted
+    wait
+    fails=$(find "$dir/log" -name '.failed.*' | wc -l)
+}
 
 exclave() { "$repo/build/exclave" "$@"; }
 download() { # download URL FILE: through curl or wget, with their retries
@@ -54,7 +75,7 @@ fetch() { # fetch NAME KIND ARGS...: package files into DIR/NAME through the fet
     else
         echo "$name: FAIL, see $dir/log/$name.log"
         rm -rf "${dir:?}/$name"
-        fails=$((fails + 1))
+        failed "$name"
         return 1
     fi
 }
@@ -73,9 +94,14 @@ make_exclave() { # make_exclave NAME PKGDIR [LAUNCHER]: unpack the package files
     else
         echo "$name.exclave: FAIL, see $dir/log/$name.exclave.log"
         rm -rf "$dir/$name.exclave"
-        fails=$((fails + 1))
+        failed "$name.exclave"
         return 1
     fi
+}
+both() { # both NAME PKGDIR KIND ARGS...: the package files into DIR/PKGDIR, then DIR/NAME.exclave made of them
+    exname=$1 pkgdir=$2
+    shift 2
+    fetch "$pkgdir" "$@" && make_exclave "$exname" "$pkgdir"
 }
 b3() { # b3 FILE: its BLAKE3-256 as lowercase hex, by the command built here (exclave hash FILE)
     "$repo/build/exclave" hash "$1" 2>/dev/null | sed 's/^b3://'
@@ -96,7 +122,7 @@ file() { # file URL NAME HASH: one file into DIR/src, verified by its BLAKE3-256
     else
         echo "src/$name: FAIL (download or hash), see $dir/log/$name.log"
         rm -f "$dir/src/$name"
-        fails=$((fails + 1))
+        failed "$name"
         return 1
     fi
 }
@@ -114,54 +140,62 @@ ubuntu=$dir/src/ubuntu-archive-keyring.gpg
 mirror=http://gb.archive.ubuntu.com/ubuntu
 alpine=$dir/src/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub
 # the gate's: its four exclaves, the arm64 gcc exclave, and Docker's default seccomp profile
-fetch debs-gcc13 debs --keyring "$ubuntu" gcc-13 libc6-dev && make_exclave gcc13 debs-gcc13
-fetch apks apks --key "$alpine" gcc musl-dev binutils make linux-headers && make_exclave alpine apks
-fetch rpms-f42 rpms --keyring "$dir/src/RPM-GPG-KEY-fedora-42-primary" --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make && make_exclave f42 rpms-f42
-fetch debs-clang debs --keyring "$ubuntu" clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils && make_exclave clang debs-clang
+item both gcc13 debs-gcc13 debs --keyring "$ubuntu" gcc-13 libc6-dev
+item both alpine apks apks --key "$alpine" gcc musl-dev binutils make linux-headers
+item both f42 rpms-f42 rpms --keyring "$dir/src/RPM-GPG-KEY-fedora-42-primary" --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make
+item both clang debs-clang debs --keyring "$ubuntu" clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils
 # the aarch64 launcher this machine builds: its own on aarch64, the cross-built one on x86-64 with the cross compiler
 case $(uname -m) in
 aarch64) aarch64_launcher=$repo/build/launcher ;;
 *) aarch64_launcher=$repo/build/launcher-aarch64 ;;
 esac
-fetch debs-arm64 debs --keyring "$ubuntu" --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev &&
-    if [ -x "$aarch64_launcher" ]; then
-        make_exclave gcc13-arm64 debs-arm64 "$aarch64_launcher"
-    else
-        echo "gcc13-arm64.exclave: no aarch64 launcher built here (aarch64-linux-gnu-gcc missing); skipped"
-    fi
-file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json b5b6b32d9b6c410d6e8c00639ead764745bd4eaf9cb662d2ec25b656e3f17f75
+arm64() {
+    fetch debs-arm64 debs --keyring "$ubuntu" --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev &&
+        if [ -x "$aarch64_launcher" ]; then
+            make_exclave gcc13-arm64 debs-arm64 "$aarch64_launcher"
+        else
+            echo "gcc13-arm64.exclave: no aarch64 launcher built here (aarch64-linux-gnu-gcc missing); skipped"
+        fi
+}
+item arm64
+item file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json b5b6b32d9b6c410d6e8c00639ead764745bd4eaf9cb662d2ec25b656e3f17f75
+counted
 [ "${2-}" = examples ] || {
     echo "inputs: $fails failed (the gate's; scripts/inputs DIR examples fetches the examples' too)"
-    exit $fails
+    exit "$fails"
 }
 
 # the examples': test/realsoft.py's packages and sources, the sysroot's CentOS 7 glibc, test/workloads.py's exclaves
 # and files, and test/bench.py's SQLite, some from their authors' own sites
 file https://vault.centos.org/7.9.2009/os/x86_64/RPM-GPG-KEY-CentOS-7 RPM-GPG-KEY-CentOS-7 0f486068ef5f812ec4780aa667408c34cc2a66e7ac15e66d29cc9c534dfe79ca
-fetch debs-realsoft debs --keyring "$ubuntu" gcc g++ make libc6-dev python3 && make_exclave realsoft debs-realsoft
-fetch el7 rpms --keyring "$dir/src/RPM-GPG-KEY-CentOS-7" --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
-fetch debs-valgrind-gcc debs --keyring "$ubuntu" --mirror $mirror valgrind gcc libc6-dev && make_exclave valgrind debs-valgrind-gcc
-fetch debs-poppler debs --keyring "$ubuntu" --mirror $mirror poppler-utils poppler-data fonts-urw-base35 && make_exclave poppler debs-poppler
-fetch debs-rust debs --keyring "$ubuntu" --mirror $mirror cargo rustc gcc libc6-dev && make_exclave rust debs-rust
-fetch debs-cmake debs --keyring "$ubuntu" --mirror $mirror cmake ninja-build gcc g++ libc6-dev && make_exclave cmake debs-cmake
-fetch debs-java debs --keyring "$ubuntu" --mirror $mirror openjdk-17-jdk-headless libfreetype6 libharfbuzz0b libasound2t64 && make_exclave java debs-java
+item both realsoft debs-realsoft debs --keyring "$ubuntu" gcc g++ make libc6-dev python3
+item fetch el7 rpms --keyring "$dir/src/RPM-GPG-KEY-CentOS-7" --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
+item both valgrind debs-valgrind-gcc debs --keyring "$ubuntu" --mirror $mirror valgrind gcc libc6-dev
+item both poppler debs-poppler debs --keyring "$ubuntu" --mirror $mirror poppler-utils poppler-data fonts-urw-base35
+item both rust debs-rust debs --keyring "$ubuntu" --mirror $mirror cargo rustc gcc libc6-dev
+item both cmake debs-cmake debs --keyring "$ubuntu" --mirror $mirror cmake ninja-build gcc g++ libc6-dev
+item both java debs-java debs --keyring "$ubuntu" --mirror $mirror openjdk-17-jdk-headless libfreetype6 libharfbuzz0b libasound2t64
 # the packages cmix-neif 1.0's install.sh installs, at the snapshot it pins (test/workloads.py buildimage)
-fetch debs-buildimage debs --keyring "$ubuntu" --snapshot 20260927T160000Z clang-18 lld-18 llvm-18 libclang-rt-18-dev build-essential gawk python3 && make_exclave buildimage debs-buildimage
-file https://marwoelk.de/cmix-neif-1.0/cmix-neif-1.0.tar.gz cmix-neif-1.0.tar.gz 656180fdcf33b407502de2abba2098a29ef58aac947c49b8a88e89805a1d40b5
-file https://arxiv.org/pdf/1706.03762v7 attention.pdf 8110b31b13b21ea79c3cf668f3c5dc2aa20a20927d9956343f2442f0536d6600
-file https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz 207c3b0862cb4e3686f8405f76a98c38dbad9c94bcf4be4b9efca0716aba51ec
-file https://www.lua.org/ftp/lua-5.4.7.tar.gz lua-5.4.7.tar.gz e51c2f347e3185479d5ff95cae8ac77511db486853269443c56bedaa0a6ae629
-file https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz sqlite-autoconf-3460100.tar.gz 023516a598e6109db5002f3a8f452d9cc5e496e200c40881d3bc70d8d7415448
-file https://github.com/skvadrik/re2c/releases/download/3.1/re2c-3.1.tar.xz re2c-3.1.tar.xz 15358a2b6d139d566269a6be1c7c0a179be03b4df59d78e12e02647b8da0b594
-file https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip sqlite-amalgamation-3500400.zip 29f027da01fcbecf04e6633b8b878e0e52d4a6b0ed514dd6fc3d92aa240b7a8a &&
-    if [ ! -f "$dir/src/sqlite3.c" ]; then
-        if py -c 'import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); [open(sys.argv[2], "wb").write(z.read(n)) for n in z.namelist() if n.endswith("/sqlite3.c")]' \
-            "$dir/src/sqlite-amalgamation-3500400.zip" "$dir/src/sqlite3.c"; then
-            echo "src/sqlite3.c: extracted"
-        else
-            echo "src/sqlite3.c: FAIL"
-            fails=$((fails + 1))
+item both buildimage debs-buildimage debs --keyring "$ubuntu" --snapshot 20260927T160000Z clang-18 lld-18 llvm-18 libclang-rt-18-dev build-essential gawk python3
+item file https://marwoelk.de/cmix-neif-1.0/cmix-neif-1.0.tar.gz cmix-neif-1.0.tar.gz 656180fdcf33b407502de2abba2098a29ef58aac947c49b8a88e89805a1d40b5
+item file https://arxiv.org/pdf/1706.03762v7 attention.pdf 8110b31b13b21ea79c3cf668f3c5dc2aa20a20927d9956343f2442f0536d6600
+item file https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz 207c3b0862cb4e3686f8405f76a98c38dbad9c94bcf4be4b9efca0716aba51ec
+item file https://www.lua.org/ftp/lua-5.4.7.tar.gz lua-5.4.7.tar.gz e51c2f347e3185479d5ff95cae8ac77511db486853269443c56bedaa0a6ae629
+item file https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz sqlite-autoconf-3460100.tar.gz 023516a598e6109db5002f3a8f452d9cc5e496e200c40881d3bc70d8d7415448
+item file https://github.com/skvadrik/re2c/releases/download/3.1/re2c-3.1.tar.xz re2c-3.1.tar.xz 15358a2b6d139d566269a6be1c7c0a179be03b4df59d78e12e02647b8da0b594
+sqlite() {
+    file https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip sqlite-amalgamation-3500400.zip 29f027da01fcbecf04e6633b8b878e0e52d4a6b0ed514dd6fc3d92aa240b7a8a &&
+        if [ ! -f "$dir/src/sqlite3.c" ]; then
+            if py -c 'import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); [open(sys.argv[2], "wb").write(z.read(n)) for n in z.namelist() if n.endswith("/sqlite3.c")]' \
+                "$dir/src/sqlite-amalgamation-3500400.zip" "$dir/src/sqlite3.c"; then
+                echo "src/sqlite3.c: extracted"
+            else
+                echo "src/sqlite3.c: FAIL"
+                failed sqlite3.c
+            fi
         fi
-    fi
+}
+item sqlite
+counted
 echo "inputs: $fails failed"
-exit $fails
+exit "$fails"

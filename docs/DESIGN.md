@@ -4192,8 +4192,12 @@ their authors' own sites. Packages come through the
 fetchers of `fetch/`, which verify each download against the repository
 index's checksum and cache it under `~/.cache`. Every other third-party
 file is pinned by its BLAKE3-256 in the script, checked by `exclave hash`. An item `DIR` already
-has is skipped, and whatever is missing is fetched again. The
-repository holds no third-party input.
+has is skipped, and whatever is missing is fetched again. The items
+run three at a time once the signing keys are fetched, each a fetch,
+an unpack and a wrap of a few hundred megabytes on mostly one core; on
+the reference machine, with the fetchers' caches warm, the gate's
+inputs are made in 15 s, 41 s one item after another (November 2026).
+The repository holds no third-party input.
 
 **The gate** (`scripts/gate [--full] [--since REV] [--jobs N] EXCLAVE`)
 is the one check run before a commit, and it is fast: every step is a
