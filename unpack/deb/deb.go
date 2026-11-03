@@ -6,6 +6,7 @@
 package deb
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -145,7 +146,8 @@ func openTar(p, member string, keep func(*reader.Member) bool) (*reader.Tar, err
 		return nil, err
 	}
 	label := fmt.Sprintf("%s: corrupt %s", p, m.Name)
-	stream, err := reader.Decompress(comp, io.NewSectionReader(f, m.Offset, m.Size))
+	// buffered: xz's decoder reads its input a byte at a time, each byte a pread of the file
+	stream, err := reader.Decompress(comp, bufio.NewReaderSize(io.NewSectionReader(f, m.Offset, m.Size), 64<<10))
 	if err != nil {
 		f.Close()
 		return nil, reader.Errorf("%s: %s", label, err)
