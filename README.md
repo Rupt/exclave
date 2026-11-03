@@ -18,10 +18,14 @@ the exclave's own `ld.so`. The **`exclave` command** builds exclaves from
 package files or from any filesystem tree.
 
 > **Experimental.** exclave works and is tested widely (below), but has
-> no release yet. The format is versioned (`exclave 1`, `hashes 1`), and
-> a build is named by the project's version and commit (`exclave
+> no release yet. Everything one build reads that another wrote is
+> versioned, the format (`exclave 1`, `hashes 1`), the log and the
+> launchers' nesting, and from the first release a later build reads
+> what earlier builds of the same versions wrote (docs/DESIGN.md 6.7).
+> A build is named by the project's version and commit (`exclave
 > version`; the launcher and the hashes file carry the same name).
-> Nothing else promises compatibility between commits.
+> Before the first release nothing promises compatibility between
+> commits.
 
 ## What works
 

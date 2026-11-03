@@ -22,7 +22,7 @@ measure it.
 | 3. Goals and non-goals | what exclave is for, and what it will not do |
 | 4. Problem analysis | why a program is bound to its host |
 | 5. Concepts and names | the words the rest uses |
-| 6. The exclave format | the directory, the manifest, the hashes file |
+| 6. The exclave format | the directory, the manifest, the hashes file, their versions |
 | 7. The launcher | the filter, the handler, the loader, exec |
 | 8. Visibility rule | which paths are the exclave's and which the host's |
 | 9. Compilers specifically | toolchains, sysroots and their outputs |
@@ -131,11 +131,12 @@ contributor wants 17, how a change is tested, and 19, what is settled.
 ## 2. Status
 
 exclave is experimental software. It works and is tested as described
-below, but it has not been released: there is no release and no
-version number, the commit gate and the kernel matrix run on the
-reference machine or on GitHub's hosted runners when a maintainer
-dispatches the workflow (17), and nothing yet promises compatibility
-between one commit and the next.
+below, but it has not been released: there is no release, the commit
+gate and the kernel matrix run on the reference machine or on GitHub's
+hosted runners when a maintainer dispatches the workflow (17), and
+nothing yet promises compatibility between one commit and the next.
+From the first release on, what one build reads that another wrote is
+versioned and kept as 6.7 says.
 
 What is built and tested:
 
@@ -738,6 +739,48 @@ There is none. An exclave is a directory, and `tar` makes it one file.
 A launcher with an appended archive that extracts itself on first run
 would need a cache directory, which the format has none of (6.1), and
 a `noexec` temporary directory would make its failure ugly.
+
+### 6.7 Versions and compatibility
+
+What one build of exclave reads that another build wrote carries a
+version of its own, and from the first release on each version keeps
+the promise below; builds before it promise nothing (2).
+
+| What | Its version | Written by | Read by |
+|---|---|---|---|
+| The layout: `.exclave/` holding `launcher`, `manifest` and `hashes`, `tree/`, an original in `.real/` beside its wrapper (6.1) | the manifest's | `wrap`, `unwrap`, `relink`, `prune` | the launcher, every command |
+| The manifest (6.2) | `exclave 1` | people, `wrap` | the launcher the exclave carries, every command |
+| The hashes file and the tree hash (6.4) | `hashes 1` | `unpack`, `wrap`, `unwrap`, `relink`, `prune` | `check`, `hash`, anyone with `b3sum` |
+| `EXCLAVE_LOG` (6.2) | the number in each `launcher` line, 1 | every launcher of a run | `check`, `prune` |
+| One launcher running another's programs (7.4.2) | the filter version, 6, and the page generation, 2 | each launcher | each launcher |
+| The `exclave` command's own commands and their arguments (10) | the project's, `VERSION`'s | | people and scripts |
+
+The rules every version keeps:
+
+- **A reader refuses by name a version it does not know**, rather
+  than reading it as one it does: both parsers refuse a manifest or
+  hashes file of another version, `check` and `prune` a log whose
+  launcher lines carry another number, and of two launchers of
+  different page generations the later refuses the earlier, nested
+  either way (13 item 45).
+- **A later build reads what every earlier build of the same version
+  wrote**: a later command checks, hashes, prunes, relinks, unwraps
+  and wraps an earlier one's exclave, reads its launchers' logs, and a
+  later launcher nests with an earlier one either way, the newer
+  filter reused and the older stacked under it (7.4.2).
+- **Within a version, only what an earlier reader passes over is
+  added**: a log line of a new kind, a syscall the filter newly traps,
+  which an older handler under a newer filter answers `ENOSYS` (7.4.2).
+  Anything an earlier reader would refuse or read otherwise moves the
+  version: a new manifest key is `exclave 2`, since the strict
+  grammar refuses an unknown key, and a new hashes key, hash function
+  or serialisation of the tree is `hashes 2`.
+- **The launcher reads only its own exclave's manifest**, wrapped with
+  it, so a newer key reaches an older launcher only through `relink`
+  with that launcher, which refuses the manifest by its version.
+- **The command's version names a build, not a format**: `exclave
+  version` and the hashes file's `tool` record give it with the commit
+  (6.4), and the versions above say what the build reads.
 
 ## 7. The launcher
 
@@ -4656,8 +4699,8 @@ questions.
    aarch64 machine, as its exclaves are (10.1). The commit gate (17)
    and the kernel matrix (12.1) run on the reference machine, and on
    GitHub's hosted runners when a maintainer dispatches the workflow;
-   nothing runs at a push, and nothing promises compatibility between
-   commits (2).
+   nothing runs at a push. Before it nothing promises compatibility
+   between commits (2); from it on, the versions of 6.7 do.
 3. **aarch64 kernels with 16 KB or 64 KB pages.** The loader rounds to
    the kernel's page size and the launcher's own segments are 64 KB
    aligned (13 item 43). The matrix's `noble-arm64-64k` row, on
@@ -4714,6 +4757,11 @@ specified.
   symlink or a wrapper script does both jobs (6.1).
 - **A strict manifest grammar with one canonical spelling**, the output
   of `exclave format`: both parsers refuse anything else (6.2).
+- **What one build reads that another wrote is versioned, each part by
+  its own number; a reader refuses a version it does not know, a later
+  build reads every earlier one of the same version, and anything an
+  earlier reader would refuse or misread moves the version**: an
+  exclave outlives the build that made it (6.7).
 - **Hashes are BLAKE3-256, and the hashes file records and never
   locates**: BLAKE3 hashes one file on many cores, and `b3sum` checks
   a hash without the tool; locating belongs to the step before the tool
