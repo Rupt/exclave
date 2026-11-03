@@ -234,6 +234,17 @@ The loop that has served well, in the order it pays:
   NAME` runs any single test. Several suites run at once in
   `scripts/extra`, so a name in a shared namespace, an abstract socket
   or a file in `/tmp`, carries the pid.
+- **Local, as an exclave is.** exclave makes software local and portable,
+  and its tooling keeps to the same design: what it makes stays inside
+  the repository's tree, the pinned uv and Go and their caches in `.uv/`
+  and `.go/`, builds, images, inputs, temporary files (`TMPDIR` is
+  `build/tmp`) and locks under `build/`, or in a `DIR` the user gives.
+  Nothing goes in the home directory or `/tmp` unless the user asks, and
+  a tool whose default is elsewhere gets its path in `scripts/lib.sh`.
+  The exceptions are the network of `scripts/inputs`, the install
+  scripts and the matrix's images; the machine's own tools, which are
+  run, not written to; and the tests of the host's `/tmp`, which is the
+  host's by rule (8.1).
 - **Shell commands with absolute paths.** The shell's working directory
   persists between commands and has drifted into scratch directories
   before; `pkill -f` with an anchored pattern avoids killing the shell

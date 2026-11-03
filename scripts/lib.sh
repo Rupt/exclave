@@ -21,6 +21,12 @@ export UV_CACHE_DIR="$UV_HOME/cache"
 export UV_PYTHON_INSTALL_DIR="$UV_HOME/python"
 export UV_MANAGED_PYTHON=1
 
+# Temporary files stay inside the repository too: what mktemp, Python's
+# tempfile, Go's tests and the compilers make goes under build/tmp, not
+# /tmp. A test that means the host's /tmp (DESIGN.md 8.1) names it.
+export TMPDIR="$ROOT/build/tmp"
+mkdir -p "$TMPDIR"
+
 # install-uv sets this, because it is the one script that runs before uv exists.
 if [ -z "${UV_BOOTSTRAP-}" ] && [ ! -x "$UV" ]; then
     echo "no uv at $UV; run scripts/install-uv" >&2
