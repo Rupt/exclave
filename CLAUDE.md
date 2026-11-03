@@ -84,14 +84,16 @@ The loop that has served well, in the order it pays:
   in git history rather than archive files, review notes or change
   lists. Comments in code are held to the same: no review IDs or
   revision numbers.
-- **No options.** The launcher has one environment knob, `EXCLAVE_LOG`,
-  and the tool's own commands take paths, `format --check` the one
-  flag (the fetchers, worked examples, take the arguments they document). A
-  flag, a mode or a manifest key is rarely the answer; the rule that
-  makes the option unnecessary, or a stated limitation, usually is. An
-  exclave is a directory at every stage, so what a user can do to it
-  with `cp`, `ln` and an editor between `unpack` and `wrap` need not be
-  a feature of the tool. Test scripts may take arguments.
+- **Few options.** The launcher has one environment knob, `EXCLAVE_LOG`,
+  the commands that make an exclave take paths, `format --check` their
+  one flag today, and the fetchers take the arguments a download needs.
+  This is a preference for the least complexity, not a law against
+  flags: weigh a flag, a mode or a manifest key against the rule that
+  would make it unnecessary and against a stated limitation, and add it
+  where it is the simpler answer. An exclave is a directory at every
+  stage, so what a user can do to it with `cp`, `ln` and an editor
+  between `unpack` and `wrap` need not be a feature of the tool. Test
+  scripts may take arguments.
 - **The launcher is freestanding C**: no libc, raw syscalls from
   `src/sys.h`, every syscall issued through the syscall page (a bare
   `syscall` or `svc` instruction belongs only in the bootstrap, the

@@ -4772,10 +4772,16 @@ specified.
 
 ### 19.3 Tool
 
-- **The tool's own commands take files and never fetch**: acquisition
-  has its own trust argument; `exclave fetch` holds examples of that
-  step, worked examples bundled in the one file and apart from `wrap`
-  (10).
+- **The commands that make, check and ship an exclave never fetch**:
+  `wrap`, `check`, `prune`, `hash`, `format`, `relink` and `unwrap`
+  read the directory they are given and open no network connection, so
+  what they say of an exclave rests on its files alone, and `unpack`
+  reads only the package files it is given. Getting those files is the
+  step before them, with a trust argument of its own, the archive's keys
+  and sums; `exclave fetch` is that step, three worked examples carried
+  in the same binary so that one file does everything, sharing nothing
+  with the other commands but the file, and the one command that opens
+  a connection (10, 10.1).
 - **The tool's input is a directory holding `tree/`, and `unpack` is
   the step before it**: what made the tree, package files, `tar` or a
   build, is not the tool's concern, so `unpack` is a subcommand apart
@@ -4841,10 +4847,12 @@ specified.
   traced run touched is the evidence (10.3, 10.4).
 - **`prune` keeps the packages' licence texts**: a pruned exclave passed
   on carries the packages' terms (10.4, 13 item 47).
-- **No options**: the tool's own commands take paths and `format
-  --check` is the one flag, the fetchers' arguments being the worked
-  examples' own; a rule or a stated limitation is preferred to a flag, a
-  mode or a manifest key (10).
+- **Few options, as a preference for the least complexity rather than
+  a law**: the commands that make an exclave take paths, and `format
+  --check` is their one flag today; the fetchers take the arguments a
+  download needs. A flag, a mode or a manifest key is weighed against
+  the rule that would make it unnecessary and against a stated
+  limitation, and added where it is the simpler answer (10).
 
 ### 19.4 Tests
 
