@@ -782,6 +782,10 @@ The rules every version keeps:
   version` and the hashes file's `tool` record give it with the commit
   (6.4), and the versions above say what the build reads.
 
+`test/compat_test.py` holds a build to these rules against an earlier
+build's files (17); against a build from before the log carried its
+version it fails as it should, on the log.
+
 ## 7. The launcher
 
 The launcher is one static, freestanding, `ET_DYN` binary of 88 744
@@ -4384,6 +4388,12 @@ steps:
   as a consumer takes it, the README's recipe step by step, with a
   tampered archive and a tampered sums file refused and `NOTICES`
   naming the modules the command links (10.5).
+- the compatibility test (`test/compat_test.py`), given an earlier
+  build's command and launcher (`EXCLAVE_TEST_OLD`), the first
+  release's once there is one: this command checks, hashes, unwraps,
+  wraps and reads the logs of an exclave the earlier build made, the
+  earlier command checks and hashes one this build made, and the two
+  launchers nest either way (6.7).
 
 On the reference machine, on the four exclaves, four steps at a time,
 it takes 96 s (measured October 2026).
