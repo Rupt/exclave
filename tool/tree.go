@@ -5,12 +5,12 @@ package main
 
 import (
 	"bytes"
-	"fmt"
-	"io"
+	"encoding/hex"
 	"os"
 	"path"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -59,11 +59,14 @@ func stat(p string) (unix.Stat_t, error) {
 
 // ---------------------------------------------------------------- the tree hash (6.4)
 
-// a file's contents to hash, for the entry at index e
+// a file's contents to hash, for the entry at index e: its size orders the work, and whether it
+// begins with the ELF magic spares the static check an open of every file that does not
 type hashJob struct {
 	path string
 	e    int
+	size int64
 	hex  string
+	elf  bool
 	err  error
 }
 
@@ -73,6 +76,7 @@ type hashEntry struct {
 }
 
 type hashing struct {
+	l       *listing
 	entries []hashEntry
 	jobs    []hashJob
 }
@@ -84,37 +88,71 @@ func unreadable(p string, err error) {
 	failErrno(p, err)
 }
 
-// hashFile is the BLAKE2b-256 of a file's contents as lowercase hex, or the error of a failed read.
-func hashFile(p string) (string, error) {
-	f, err := os.Open(p)
+// hashFile hashes a job's file with buf, the worker's own: the BLAKE2b-256 of its contents as
+// lowercase hex, whether its first four bytes are the ELF magic, or the error of a failed read.
+func hashFile(j *hashJob, buf []byte) {
+	fd, err := retryEINTR(func() (int, error) { return unix.Open(j.path, unix.O_RDONLY|unix.O_CLOEXEC, 0) })
 	if err != nil {
-		return "", err
+		j.err = err
+		return
 	}
-	defer f.Close()
+	defer unix.Close(fd)
 	h, _ := blake2b.New256(nil)
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
+	var head [4]byte
+	k := 0
+	for {
+		n, err := retryEINTR(func() (int, error) { return unix.Read(fd, buf) })
+		if err != nil {
+			j.err = err
+			return
+		}
+		if n == 0 {
+			break
+		}
+		k += copy(head[k:], buf[:n])
+		h.Write(buf[:n])
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	var d [blake2b.Size256]byte
+	j.hex, j.elf = hex.EncodeToString(h.Sum(d[:0])), k == 4 && string(head[:]) == "\x7fELF"
 }
 
-// hashAll hashes the files' contents on several goroutines, each taking the next job, after the
-// walk has listed them in order; each writes only its own job, so the listing, and the hash of it,
-// are the walk's alone. The first file the walk listed that could not be read is named, as a
-// serial hash would name it; the walk is in the order of the names' bytes, so the file named is
-// the same on every filesystem.
+// retryEINTR is a system call made again when a signal interrupted it, as the os package does.
+func retryEINTR(call func() (int, error)) (int, error) {
+	for {
+		n, err := call()
+		if err != syscall.EINTR {
+			return n, err
+		}
+	}
+}
+
+// threads is how many goroutines a walk or the hashing uses: the machine's threads, at most
+// eight, since the machine may be in use beside the command.
+func threads() int { return min(max(runtime.NumCPU(), 1), 8) }
+
+// hashAll hashes the files' contents on several goroutines after the walk has listed them in
+// order, the largest first so that no large file starts last and holds up the end; each job is
+// written only by the goroutine that took it, so the listing, and the hash of it, are the walk's
+// alone. The first file the walk listed that could not be read is named, as a serial hash would
+// name it; the walk is in the order of the names' bytes, so the file named is the same on every
+// filesystem.
 func (h *hashing) hashAll() {
-	n := min(max(runtime.NumCPU(), 1), 8, max(len(h.jobs), 1))
+	order := make([]int, len(h.jobs))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return h.jobs[order[a]].size > h.jobs[order[b]].size })
 	var next atomic.Int64
 	var wg sync.WaitGroup
-	for range n {
+	for range min(threads(), max(len(h.jobs), 1)) {
 		wg.Go(func() {
+			buf := make([]byte, 1<<20)
 			for {
 				i := int(next.Add(1) - 1)
-				if i >= len(h.jobs) {
+				if i >= len(order) {
 					return
 				}
-				h.jobs[i].hex, h.jobs[i].err = hashFile(h.jobs[i].path)
+				hashFile(&h.jobs[order[i]], buf)
 			}
 		})
 	}
@@ -144,51 +182,56 @@ func (h *hashing) addEntry(rel, real string, st *unix.Stat_t) {
 		if st.Mode&0o111 != 0 {
 			k = "x\x00"
 		}
-		h.jobs = append(h.jobs, hashJob{path: payloadPath(real), e: len(h.entries)})
+		p, size := h.l.payload(real), st.Size
+		if p != real {
+			if pst, err := lstat(p); err == nil {
+				size = pst.Size // the original's, which is what is read
+			}
+		}
+		h.jobs = append(h.jobs, hashJob{path: p, e: len(h.entries), size: size})
 		h.entries = append(h.entries, hashEntry{rel, k, len(h.jobs) - 1})
 	}
 }
 
-// walk lists every entry under real, a directory; .real/ directories are not listed, but a .real/
-// file without a wrapper beside it is, under its own path, so that no file goes unhashed.
+// walk lists every entry under real, a directory, from the listing; .real/ directories are not
+// listed, but a .real/ file without a wrapper beside it is, under its own path, so that no file
+// goes unhashed. The first entry that cannot be read, in this order, is named.
 func (h *hashing) walk(real, rel string) {
-	names, err := dirNames(real)
+	e, err := h.l.list(real)
 	if err != nil {
 		unreadable(real, err)
 	}
 	var subdirs []string
 	hasReal := false
-	for _, name := range names {
-		p, r := pathJoin(real, name), relJoin(rel, name)
-		st, err := lstat(p)
-		if err != nil {
-			failErrno(p, err)
+	for i := range e {
+		p, r := pathJoin(real, e[i].name), relJoin(rel, e[i].name)
+		if e[i].err != nil {
+			failErrno(p, e[i].err)
 		}
-		if name == ".real" && isDir(p) {
+		if e[i].name == ".real" && e[i].isDir {
 			hasReal = true
 			continue
 		}
-		h.addEntry(r, p, &st)
-		if isDirM(&st) {
-			subdirs = append(subdirs, name)
+		h.addEntry(r, p, &e[i].st)
+		if isDirM(&e[i].st) {
+			subdirs = append(subdirs, e[i].name)
 		}
 	}
 	if hasReal {
 		dotReal := pathJoin(real, ".real")
-		names, err := dirNames(dotReal)
+		re, err := h.l.list(dotReal)
 		if err != nil {
 			unreadable(dotReal, err)
 		}
-		for _, name := range names {
-			if _, err := lstat(pathJoin(real, name)); err == nil || !isErrno(err, syscall.ENOENT) {
+		for i := range re {
+			if hasName(e, re[i].name) { // a wrapper's original, or anything else by its name
 				continue
 			}
-			p := pathJoin(dotReal, name)
-			st, err := lstat(p)
-			if err != nil {
-				failErrno(p, err)
+			p := pathJoin(dotReal, re[i].name)
+			if re[i].err != nil {
+				failErrno(p, re[i].err)
 			}
-			h.addEntry(relJoin(relJoin(rel, ".real"), name), p, &st)
+			h.addEntry(relJoin(relJoin(rel, ".real"), re[i].name), p, &re[i].st)
 		}
 	}
 	for _, name := range subdirs {
@@ -197,15 +240,21 @@ func (h *hashing) walk(real, rel string) {
 }
 
 // treeHash is 6.4's hash of the tree at root, "b2:" and hex.
-func treeHash(root string) string {
-	var h hashing
+func treeHash(root string) string { return listTree(root).treeHash(root) }
+
+// treeHash is 6.4's hash of the tree at root from the listing; it notes for the static check
+// which files begin with the ELF magic.
+func (l *listing) treeHash(root string) string {
+	h := hashing{l: l}
 	h.walk(root, "")
 	h.hashAll()
 	lines := make([][]byte, len(h.entries))
+	l.elf = make(map[string]bool, len(h.jobs))
 	for i, e := range h.entries {
 		text := e.rel + "\x00" + e.kind
 		if e.job >= 0 {
 			text += h.jobs[e.job].hex
+			l.elf["/"+e.rel] = h.jobs[e.job].elf
 		}
 		lines[i] = []byte(text + "\x00")
 	}
@@ -214,7 +263,95 @@ func treeHash(root string) string {
 	for _, l := range lines {
 		d.Write(l)
 	}
-	return "b2:" + fmt.Sprintf("%x", d.Sum(nil))
+	return "b2:" + hex.EncodeToString(d.Sum(nil))
+}
+
+// ---------------------------------------------------------------- the listing
+
+// A listing is every directory of a tree listed once, on several goroutines, for the commands
+// that read the tree several times over without changing it: check, and wrap before it wraps.
+// Each pass then walks it in the order a walk of the disk would take, and gives the same answers;
+// a directory the listing does not hold is listed from the disk. A nil listing is the disk's.
+type listing struct {
+	dirs map[string]listed
+	elf  map[string]bool // by virtual path, the files the tree hash read: whether each is ELF
+}
+
+type listed struct {
+	e   []entryInfo
+	err error
+}
+
+// listTree lists root and every directory below it that is one, not a link to one, .real/ ones
+// included.
+func listTree(root string) *listing {
+	l := &listing{dirs: map[string]listed{}}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, threads()-1)
+	var visit func(dir string)
+	visit = func(dir string) {
+		e, err := listDir(dir)
+		mu.Lock()
+		l.dirs[dir] = listed{e, err}
+		mu.Unlock()
+		for i := range e {
+			if !e[i].isDir || isLnk(&e[i].st) {
+				continue
+			}
+			sub := pathJoin(dir, e[i].name)
+			select {
+			case slots <- struct{}{}:
+				wg.Go(func() {
+					visit(sub)
+					<-slots
+				})
+			default:
+				visit(sub)
+			}
+		}
+	}
+	visit(root)
+	wg.Wait()
+	return l
+}
+
+// list is a directory's entries as listDir gives them.
+func (l *listing) list(dir string) ([]entryInfo, error) {
+	if l != nil {
+		if d, ok := l.dirs[dir]; ok {
+			return d.e, d.err
+		}
+	}
+	return listDir(dir)
+}
+
+// payload is payloadPath's answer: where the directory holds no .real, there is no original to
+// look for.
+func (l *listing) payload(real string) string {
+	if l != nil {
+		slash := strings.LastIndexByte(real, '/')
+		if d, ok := l.dirs[real[:max(slash, 0)]]; ok && d.err == nil && !hasName(d.e, ".real") {
+			return real
+		}
+	}
+	return payloadPath(real)
+}
+
+// isELF reports, for a file the tree hash read, whether it begins with the ELF magic; ok is false
+// for any other.
+func (l *listing) isELF(vpath string) (elf, ok bool) {
+	if l == nil {
+		return false, false
+	}
+	elf, ok = l.elf[vpath]
+	return elf, ok
+}
+
+// hasName reports whether a directory's sorted entries hold name.
+func hasName(e []entryInfo, name string) bool {
+	i := sort.Search(len(e), func(i int) bool { return e[i].name >= name })
+	return i < len(e) && e[i].name == name
 }
 
 // ---------------------------------------------------------------- walks
@@ -236,11 +373,12 @@ func dirNames(p string) ([]string, error) {
 	return names, nil
 }
 
-// An entryInfo is a directory's entry: its name, its lstat (zero when it cannot be read), and
-// whether it is a directory as a walk counts one, a link to a directory included.
+// An entryInfo is a directory's entry: its name, its lstat (zero when it cannot be read, err
+// saying why), and whether it is a directory as a walk counts one, a link to a directory included.
 type entryInfo struct {
 	name  string
 	st    unix.Stat_t
+	err   error
 	isDir bool
 }
 
@@ -256,6 +394,8 @@ func listDir(p string) ([]entryInfo, error) {
 		full := pathJoin(p, name)
 		if st, err := lstat(full); err == nil {
 			e.st = st
+		} else {
+			e.err = err
 		}
 		if isDirM(&e.st) {
 			e.isDir = true
@@ -278,8 +418,8 @@ func relJoin(rel, name string) string {
 
 type walkFn func(dir, rel string, e []entryInfo)
 
-func walkDirsAt(dir, rel string, bottomUp bool, fn walkFn) {
-	e, err := listDir(dir)
+func (l *listing) walkDirsAt(dir, rel string, bottomUp bool, fn walkFn) {
+	e, err := l.list(dir)
 	if err != nil { // unreadable: skipped with what is beneath it
 		return
 	}
@@ -288,7 +428,7 @@ func walkDirsAt(dir, rel string, bottomUp bool, fn walkFn) {
 	}
 	for i := range e {
 		if e[i].isDir && !isLnk(&e[i].st) {
-			walkDirsAt(pathJoin(dir, e[i].name), relJoin(rel, e[i].name), bottomUp, fn)
+			l.walkDirsAt(pathJoin(dir, e[i].name), relJoin(rel, e[i].name), bottomUp, fn)
 		}
 	}
 	if bottomUp {
@@ -304,14 +444,20 @@ func walkDirsAt(dir, rel string, bottomUp bool, fn walkFn) {
 // bottom-up: a link to a directory is listed and not descended, and a directory that cannot be
 // read is passed over with everything beneath it. rel is the directory's path from root, "" for
 // root itself.
-func walkDirs(root string, bottomUp bool, fn walkFn) { walkDirsAt(root, "", bottomUp, fn) }
+func walkDirs(root string, bottomUp bool, fn walkFn) {
+	(*listing)(nil).walkDirsAt(root, "", bottomUp, fn)
+}
 
 func isRealDir(dir string) bool { return path.Base(dir) == ".real" }
 
 // strays lists every file in a .real/ directory with no wrapper beside it, as /PATH from root (6.1).
-func strays(root string) []string {
+func strays(root string) []string { return (*listing)(nil).strays(root) }
+
+// strays is strays from the listing; a bottom-up walk lists the disk again, so only a top-down
+// one reads a listing.
+func (l *listing) strays(root string) []string {
 	var out []string
-	walkDirs(root, false, func(dir, rel string, e []entryInfo) {
+	l.walkDirsAt(root, "", false, func(dir, rel string, e []entryInfo) {
 		if !isRealDir(dir) {
 			return
 		}
@@ -330,8 +476,8 @@ func strays(root string) []string {
 
 type fileFn func(real, v string, st *unix.Stat_t)
 
-func walkFilesAt(dir, rel string, fn fileFn) {
-	e, err := listDir(dir)
+func (l *listing) walkFilesAt(dir, rel string, fn fileFn) {
+	e, err := l.list(dir)
 	if err != nil { // unreadable: passed over with what is beneath it
 		return
 	}
@@ -346,11 +492,14 @@ func walkFilesAt(dir, rel string, fn fileFn) {
 		if !e[i].isDir || isLnk(&e[i].st) || e[i].name == ".real" {
 			continue
 		}
-		walkFilesAt(pathJoin(dir, e[i].name), relJoin(rel, e[i].name), fn)
+		l.walkFilesAt(pathJoin(dir, e[i].name), relJoin(rel, e[i].name), fn)
 	}
 }
 
 // walkFiles calls fn for every entry under root but a directory, a link to one included, as
 // (real path, virtual path, lstat): each directory's entries in the order of their bytes, before
 // the directories below it, .real/ directories aside.
-func walkFiles(root string, fn fileFn) { walkFilesAt(root, "", fn) }
+func walkFiles(root string, fn fileFn) { (*listing)(nil).walkFiles(root, fn) }
+
+// walkFiles is walkFiles from the listing.
+func (l *listing) walkFiles(root string, fn fileFn) { l.walkFilesAt(root, "", fn) }

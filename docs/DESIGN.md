@@ -157,7 +157,7 @@ What is built and tested:
   exclave it runs is made on x86-64 (10.1).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The command as one file**: `build/exclave`, 8 819 KB, static Go
+- **The command as one file**: `build/exclave`, 8 831 KB, static Go
   carrying its launcher, fetches and unpacks packages and wraps,
   checks and prunes an exclave with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
@@ -2465,7 +2465,7 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, 8 819 KB and 7 996 KB, with nothing beside it to run: no
+the cross compiler, 8 831 KB and 7 996 KB, with nothing beside it to run: no
 interpreter, no library, no file of the checkout. It carries its
 architecture's launcher and the text of every exclave's `README` as data
 (`tool/blob_*.go`, the launcher copied beside them by `scripts/build`),
@@ -2484,11 +2484,18 @@ runs `check` on hand-made trees whose ELF files, `ld.so.cache` and logs
 lie about themselves (`test/readers_test.py`) and the grammar's
 properties (`test/grammar_test.py`), and the package's own tests and
 fuzz targets (`tool/*_test.go`) hold each reader to its answers (17).
-Its BLAKE2b is `golang.org/x/crypto`'s. The tree hash (6.4) walks the
-tree in order and then hashes the files' contents on up to eight
-goroutines, each writing only its own entry of the listing, so the hash
-is the walk's whatever they do; a file it cannot read is named as the
-walk listed it. `unpack` (10.1) and the fetchers are its subcommands,
+Its BLAKE2b is `golang.org/x/crypto`'s. The tree hash (6.4) lists the
+tree's directories on up to eight goroutines, takes the entries from
+that listing in the walk's order, and then hashes the files' contents
+on as many, the largest first, so that no large file starts last; each
+goroutine writes only its own entry, so the hash is the walk's whatever
+they do, and a file or directory it cannot read is named as the walk
+meets it. `check`, and `wrap` before it wraps, read the tree five and
+three times over without changing it, so they list it once and run
+every pass on that listing, which answers as the disk would; the tree
+hash notes which files begin with the ELF magic, so the static check
+opens only those, and a directory with no `.real/` needs no look for
+an original. `unpack` (10.1) and the fetchers are its subcommands,
 the packages `unpack/` and `fetch/`: one file carries every step from
 the repository to a wrapped exclave.
 
@@ -3914,12 +3921,14 @@ build touched, `/tmp`, the source directory and the working directory,
 resolved without a manifest record being added.
 
 **The command.** On the gate's gcc exclave (159 MB, 709 ELF files), best
-of three, November 2026, on this machine's 16 threads: `wrap` of the
-unwrapped tree 0.36 s, `check` 0.30 s and `hash` 0.15 s, the tree
-hash on eight goroutines (10.5). On a tree of 105 204 files and links,
-the gcc exclave with 100 000 small files added, `hash` takes 0.79 s,
-and `prune` to a log naming half of the added files 1.5 s, the
-kernel's unlinks and stats most of it.
+of five, November 2026, on this machine's 16 threads: `wrap` of the
+unwrapped tree 0.26 s, `check` 0.20 s and `hash` 0.10 s, the listing
+and the hashing on eight goroutines (10.5); BLAKE2b is most of the
+hash. On a tree of 105 204 files and links, the gcc exclave with
+100 000 small files added in 100 directories, `hash` takes 0.36 s,
+`check` 0.49 s, and `prune` to a log naming half of the added files
+1.8 s, the kernel's unlinks and stats most of it; on that tree the
+kernel's opens, reads and stats are most of the hash too.
 
 ### 16.9 Reproducing
 
@@ -4657,12 +4666,16 @@ questions.
    gVisor-based CI, WSL1 and SELinux `execmem` policies are listed as
    untested in the portability envelope (12); each is a matrix row to
    add, or a limitation to state.
-6. **The command's hashing.** `wrap`, `check` and `hash` spend most of
-   their time on the tree hash, which runs on up to eight threads
-   (10.5), and the command's BLAKE2b, written plainly from RFC 7693, is
-   slower per byte than a vectorised one such as Python's `hashlib`. A
-   faster implementation keeps every recorded hash; another hash
-   function would be a change of the format (6.4, 19.1).
+6. **The command's hashing.** The tree is listed once and hashed
+   largest file first (10.5), so what is left of the tree hash is
+   BLAKE2b on a tree of large files and the kernel's calls on a tree of
+   many small ones (16.8). One file is hashed on one core, so the
+   largest file is the hash's floor. A faster BLAKE2b keeps every
+   recorded hash; BLAKE3, which hashes one file on many cores, would
+   lower that floor, and is a change of the format (6.4, 19.1) and of
+   the tool that checks a hash without the command, `b3sum` for
+   `b2sum`. It pays for exclaves holding single files of hundreds of
+   megabytes.
 
 ## 19. Design decisions
 

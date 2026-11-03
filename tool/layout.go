@@ -366,11 +366,12 @@ func cmdWrap(args []string) int {
 		fail("tree/ has %d top-level entries; the launcher holds 256", len(top))
 	}
 	data := dataPrefixes(ex)
-	problems := append(wrapperProblems(ex, data), locatedLinks(ex)...)
+	ls := listTree(root) // read three times over before anything is wrapped: listed once
+	problems := append(wrapperProblems(ex, data, ls), locatedLinks(ex, ls)...)
 	for _, p := range problems {
 		fmt.Fprintf(out, "error: %s\n", p)
 	}
-	errors := staticReport(ex)
+	errors := staticReport(ex, ls)
 	if len(problems) > 0 || errors > 0 {
 		fmt.Fprintln(out, "refused: nothing was wrapped")
 		return 1

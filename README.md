@@ -461,7 +461,7 @@ src/str.c            string helpers, arena, the shebang parser
 src/log.c            EXCLAVE_LOG and fatal messages
 tool/main.go         the exclave command (10), Go, one static file: the command line, hash, format, refusals and files; unpack and fetch are its subcommands
 tool/grammar.go      the strict grammar of the manifest and the hashes file (6.2), and its canonical form
-tool/tree.go         the walks of a tree in the order of its names' bytes, and the tree hash (6.4), its files hashed on goroutines
+tool/tree.go         the walks of a tree in the order of its names' bytes, the tree listed once on goroutines, and the tree hash (6.4), its files hashed on goroutines, the largest first
 tool/layout.go       the launcher, the README and the hashes file; wrap, unwrap and relink
 tool/paths.go        virtual paths resolved in the tree and spelt as posixpath does, the manifest's ownership (8.1)
 tool/elf.go          the ELF headers, PT_INTERP, the dynamic section and ld.so.cache the checks read

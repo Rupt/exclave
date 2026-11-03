@@ -297,7 +297,7 @@ func cmdPrune(args []string) int {
 	if hasTreeRecord(ex) {
 		writeHashes(ex, "", false, true)
 	}
-	if staticReport(ex) > 0 {
+	if staticReport(ex, nil) > 0 {
 		return 1
 	}
 	return 0

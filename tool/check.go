@@ -59,6 +59,7 @@ type scan struct {
 	root                         string
 	data                         []string
 	own                          *ownership
+	l                            *listing // the tree listed once, and which files are ELF
 	rep                          *report
 	executables, libraries       []object
 	interpR, interpText, interpV []string // each loader resolved, as named, and by whom, first come
@@ -76,20 +77,24 @@ func (s *scan) file(vpath string, st *unix.Stat_t, real string) {
 	if !isReg(st) {
 		return
 	}
-	pay := treePayload(s.root, vpath)
-	f, err := os.Open(pay)
-	if err != nil {
-		if !isErrno(err, syscall.EACCES) && !isErrno(err, syscall.EPERM) {
-			failErrno(pay, err)
+	pay := s.l.payload(treeReal(s.root, vpath))
+	elf, known := s.l.isELF(vpath) // a file the tree hash read is not opened again to tell
+	if !known {
+		f, err := os.Open(pay)
+		if err != nil {
+			if !isErrno(err, syscall.EACCES) && !isErrno(err, syscall.EPERM) {
+				failErrno(pay, err)
+			}
+			rep.errorf("unreadable file %s: chmod u+r it; no copy of the exclave can carry it and the tree hash "+
+				"needs it (10.3)", vpath)
+			return
 		}
-		rep.errorf("unreadable file %s: chmod u+r it; no copy of the exclave can carry it and the tree hash needs "+
-			"it (10.3)", vpath)
-		return
+		head := make([]byte, 4)
+		k, _ := f.Read(head)
+		f.Close()
+		elf = k == 4 && string(head) == "\x7fELF"
 	}
-	head := make([]byte, 4)
-	k, _ := f.Read(head)
-	f.Close()
-	if k != 4 || string(head) != "\x7fELF" {
+	if !elf {
 		return
 	}
 	e, rc, why, err := elfRead(pay)
@@ -140,7 +145,7 @@ func (s *scan) dir(dir, rel string) {
 	if underAny(rel, s.data) {
 		return
 	}
-	e, err := listDir(dir)
+	e, err := s.l.list(dir)
 	if err != nil {
 		return
 	}
@@ -244,7 +249,7 @@ func (w *walkCtx) object(vpath string, e *elfFile, rpaths, chain []string) {
 	}
 }
 
-func staticCheck(ex string, own *ownership, data []string) *report {
+func staticCheck(ex string, own *ownership, data []string, l *listing) *report {
 	rep := &report{}
 	// the tree is read as its launcher's machine's loader reads it (10.1): nothing of it runs
 	root := pathJoin(ex, "tree")
@@ -284,7 +289,7 @@ func staticCheck(ex string, own *ownership, data []string) *report {
 			}
 		}
 	}
-	s := scan{root: root, data: data, own: own, rep: rep}
+	s := scan{root: root, data: data, own: own, rep: rep, l: l}
 	s.dir(root, "")
 	// one loader, and so one libc, per exclave (7.3): read from the ELF files, not declared anywhere
 	if len(s.interpR) > 1 {
@@ -537,15 +542,15 @@ func isWrapper(real string, st *unix.Stat_t, l *launcherID) bool {
 // stale wrapper (one of another launcher), a wrapper without an original, an executable its user
 // cannot run, and an original without a wrapper, a stray under the reserved name. Executables not
 // yet wrapped are not problems here.
-func wrapperProblems(ex string, data []string) []string {
+func wrapperProblems(ex string, data []string, ls *listing) []string {
 	l := launcherOf(ex)
 	root := pathJoin(ex, "tree")
 	var out []string
-	walkFiles(root, func(real, v string, st *unix.Stat_t) {
+	ls.walkFiles(root, func(real, v string, st *unix.Stat_t) {
 		if !isReg(st) || underAny(v, data) {
 			return
 		}
-		w, hasOrig := isWrapper(real, st, &l), payloadPath(real) != real
+		w, hasOrig := isWrapper(real, st, &l), ls.payload(real) != real
 		switch {
 		case !w && hasOrig:
 			out = append(out, fmt.Sprintf("stale wrapper (not this exclave's launcher): %s; run exclave relink", v))
@@ -557,7 +562,7 @@ func wrapperProblems(ex string, data []string) []string {
 			out = append(out, "wrapper without original: "+v)
 		}
 	})
-	for _, s := range strays(root) {
+	for _, s := range ls.strays(root) {
 		out = append(out, "original without wrapper: "+s+" (.real is reserved for originals, 6.1)")
 	}
 	return out
@@ -566,7 +571,7 @@ func wrapperProblems(ex string, data []string) []string {
 // locatedLinks lists the tree's symlinks whose text names the exclave's own location (6.1).
 // Packages never make one; one added by hand would break when the exclave is moved or copied,
 // so wrap and check refuse it, naming the fix.
-func locatedLinks(ex string) []string {
+func locatedLinks(ex string, l *listing) []string {
 	cwd, err := unix.Getwd() // the physical directory, as getcwd gives it, never $PWD's spelling
 	if err != nil {
 		failErrno(".", err)
@@ -582,7 +587,7 @@ func locatedLinks(ex string) []string {
 		places = append(places, real)
 	}
 	var out []string
-	walkFiles(pathJoin(ex, "tree"), func(real, v string, st *unix.Stat_t) {
+	l.walkFiles(pathJoin(ex, "tree"), func(real, v string, st *unix.Stat_t) {
 		if !isLnk(st) {
 			return
 		}
@@ -616,10 +621,14 @@ func printReport(rep *report) {
 	}
 }
 
-// staticReport runs the static check and prints its report; returns the number of errors.
-func staticReport(ex string) int {
+// staticReport runs the static check and prints its report; returns the number of errors. l is
+// the tree's listing, or nil for one made here.
+func staticReport(ex string, l *listing) int {
 	data := dataPrefixes(ex)
-	rep := staticCheck(ex, ownershipOf(ex), data)
+	if l == nil {
+		l = listTree(pathJoin(ex, "tree"))
+	}
+	rep := staticCheck(ex, ownershipOf(ex), data, l)
 	printReport(rep)
 	fmt.Fprintf(out, "static check: %d ELF files, %d static executables, %d warnings, %d errors\n", rep.seen,
 		len(rep.statics), len(rep.warnings), len(rep.errors))
@@ -638,12 +647,13 @@ func cmdCheck(args []string) int {
 	data := dataPrefixes(ex)
 	l := launcherOf(ex)
 	root, hashes := pathJoin(ex, "tree"), pathJoin(ex, ".exclave/hashes")
-	problems := append(wrapperProblems(ex, data), locatedLinks(ex)...)
-	walkFiles(root, func(real, v string, st *unix.Stat_t) {
+	ls := listTree(root) // the tree is read five times over and not changed: listed once
+	problems := append(wrapperProblems(ex, data, ls), locatedLinks(ex, ls)...)
+	ls.walkFiles(root, func(real, v string, st *unix.Stat_t) {
 		if !isReg(st) || st.Mode&0o111 == 0 || underAny(v, data) || isWrapper(real, st, &l) {
 			return
 		}
-		if payloadPath(real) == real {
+		if ls.payload(real) == real {
 			problems = append(problems, "executable not wrapped: "+v)
 		}
 	})
@@ -653,7 +663,7 @@ func cmdCheck(args []string) int {
 			failGrammar(err)
 		}
 		if recorded := find(rs, "tree"); recorded != nil {
-			if actual := treeHash(root); recorded.f[0].v != actual {
+			if actual := ls.treeHash(root); recorded.f[0].v != actual {
 				problems = append(problems, fmt.Sprintf("the tree differs from the hashes file: recorded %s, now %s",
 					recorded.f[0].v, actual))
 			}
@@ -662,7 +672,7 @@ func cmdCheck(args []string) int {
 		}
 	} else {
 		wrapped := false // the third state: wrapped, never finished
-		walkFiles(root, func(real, _ string, st *unix.Stat_t) {
+		ls.walkFiles(root, func(real, _ string, st *unix.Stat_t) {
 			if isWrapper(real, st, &l) {
 				wrapped = true
 			}
@@ -675,7 +685,7 @@ func cmdCheck(args []string) int {
 		fmt.Fprintln(out, p)
 	}
 	fmt.Fprintf(out, "%d wrapper problems\n", len(problems))
-	errors := staticReport(ex)
+	errors := staticReport(ex, ls)
 	rc := 0
 	if len(problems) > 0 || errors > 0 {
 		rc = 1
