@@ -1655,15 +1655,20 @@ static long do_getdents(struct scratch *S, int nr, long *a)
         if (copy_in(S->pid, S->extra, (const void *)a[1], (size_t)n) != n) return n;
         for (long o = 0; o + 18 <= n;) {
             unsigned short len = *(unsigned short *)(S->extra + o + 16);
-            if (len < name_at + 1 || o + len > n) return n; /* the kernel's records, so never: left as they are */
+            if (len < name_at + 1 || o + len > n) return n; /* not the kernel's records any more: left as they are */
             const char *name = S->extra + o + name_at;
-            int real = xstrcmp(name, ".real") == 0;
+            /* the name, read within its record: the program's memory, which another thread may have changed since the
+             * kernel wrote it, so a record without its NUL is left as the kernel's answer */
+            long nlen = 0;
+            while (nlen < (long)(len - name_at) && name[nlen]) nlen++;
+            if (nlen == (long)(len - name_at)) return n;
+            int real = nlen == 5 && xmemcmp(name, ".real", 5) == 0;
             if (real && ours < 0) ours = fd_real_path(fd, S->tmp) >= 0 && starts_dir(S->tmp, C.root);
             if (real && ours) {
                 real_seen = 1;
             } else {
                 /* the bytes the kernel wrote of the record, measured before it moves */
-                long written = nr == NR_getdents64 ? (long)(name_at + xstrlen(name) + 1) : len;
+                long written = nr == NR_getdents64 ? (long)name_at + nlen + 1 : len;
                 if (kept != o) xmemcpy(S->extra + kept, S->extra + o, len); /* forward over a gap: safe */
                 end = kept + written;
                 kept += len;
