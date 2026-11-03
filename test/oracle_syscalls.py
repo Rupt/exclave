@@ -366,15 +366,26 @@ def set_probe_xattrs(top: str, values: tuple[tuple[str, str], ...]) -> None:
             pass
 
 
-def make_maze(root: str, host: str) -> None:
+def make_maze(root: str, host: str, launcher: str | None = None) -> None:
     """Make the probe's maze under root's /maze, every form's target named explicitly.
 
     The forms are fixed, so that no run can lose one; the resolution oracle's maze is the random
-    one (17 item 2).
+    one (17 item 2). /maze/xd holds an executable, wrapped in the exclave's world, whose launcher
+    is given, so that its listing there holds .real/, which the kernel's never does (8.3); the
+    host area's hreal holds a .real/ of the host's own, which every listing shows.
     """
     maze = os.path.join(root, "maze")
     rmtree(maze)
     os.makedirs(os.path.join(root, MAZE_DIR.lstrip("/")))
+    xd = os.path.join(maze, "xd")
+    os.makedirs(os.path.join(xd, ".real") if launcher else xd)
+    prog = os.path.join(xd, ".real", "prog") if launcher else os.path.join(xd, "prog")
+    with open(prog, "w") as fh:
+        fh.write("#!/bin/sh\n")
+    os.chmod(prog, 0o755)
+    if launcher:
+        os.link(launcher, os.path.join(xd, "prog"))
+    os.makedirs(os.path.join(host, "hreal", ".real"), exist_ok=True)
     # every file a size of its own, as the host area's (host_reset), so that a stat tells which
     # file a path reached
     for f, size in ((MAZE_FILE, 7), ("/maze/d0/f1", 8), ("/maze/f2", 9)):
@@ -1224,6 +1235,13 @@ def generate(
             add("ioctl", n + "/fssetxattr", f, I(FS_IOC_FSSETXATTR), B("raw", 28))
             add("ioctl", n + "/setflags_null", f, I(FS_IOC_SETFLAGS), "n:")
             add("ioctl", n + "/fssetxattr_null", f, I(FS_IOC_FSSETXATTR), "n:")
+    # listings: a directory of the tree with a wrapper, whose .real/ the kernel's tree has not, and
+    # the host's own .real/, which stays (8.3); getdents is x86-64's alone
+    listed = [*forms.fds, ("wrapped_dir", F(O_RDONLY | O_DIRECTORY, "/maze/xd"))]
+    listed.append(("host_real", F(O_RDONLY | O_DIRECTORY, forms.host + "/hreal")))
+    for n, f in listed:
+        add("getdents64", n, f, B("dents64", 4096), I(4096))
+        add("getdents", n, f, B("dents", 4096), I(4096))
     # relative paths from a working directory the exclave owns
     rel = [
         "",
@@ -1371,11 +1389,12 @@ def run_bwrap(root: str, host: str, _bindir: str, probe: str, cases: str) -> tup
         return run([*args, probe], env={}, stdin=f, timeout=TIMEOUT)
 
 
-def snapshot(top: str) -> dict[str, str]:
+def snapshot(top: str, *, wrapped: bool = False) -> dict[str, str]:
     """What a tree holds, by path relative to top.
 
     Each entry's type and permissions, a file's size and link count, a link's text, its user.probe
-    attribute and its mtime, "now" for any time past 10 000 s, which no case sets.
+    attribute and its mtime, "now" for any time past 10 000 s, which no case sets. A wrapped tree is
+    read as its programs see it: each wrapper as its original, and no .real/ (6.1, 8.3).
     """
     getxattr = getattr(os, "getxattr", None)
     out: dict[str, str] = {}
@@ -1385,6 +1404,14 @@ def snapshot(top: str) -> dict[str, str]:
     while todo:
         rel = todo.pop()
         full = os.path.join(top, rel) if rel else top
+        if (
+            wrapped
+            and rel
+            and os.path.lexists(
+                os.path.join(os.path.dirname(full), ".real", os.path.basename(full))
+            )
+        ):
+            full = os.path.join(os.path.dirname(full), ".real", os.path.basename(full))
         try:
             st = os.lstat(full)
         except PermissionError:  # under a directory a chmod case took the search bit from
@@ -1404,7 +1431,9 @@ def snapshot(top: str) -> dict[str, str]:
         out[rel or "."] = " ".join(desc)
         if stat.S_ISDIR(st.st_mode):
             try:
-                todo += [os.path.join(rel, n) for n in os.listdir(full)]
+                todo += [
+                    os.path.join(rel, n) for n in os.listdir(full) if not (wrapped and n == ".real")
+                ]
             except PermissionError:
                 out[rel or "."] += " unreadable"
     return out
@@ -2097,8 +2126,11 @@ def main() -> int:
     ex, root = tree.kept_worlds(given, "syscalls")
     # ".." from the host area is a directory the reset owns
     host = os.path.join(work, "area", "host")
-    for r in (root, os.path.join(ex, "tree")):
-        make_maze(r, host)
+    for r, launcher in (
+        (root, None),
+        (os.path.join(ex, "tree"), os.path.join(ex, ".exclave", "launcher")),
+    ):
+        make_maze(r, host, launcher)
     for f in IDENTITY:  # as oracle_ns: the host's link text in the copy, its target bound
         p_ = os.path.join(root, f.lstrip("/"))
         if os.path.islink(f) and os.path.lexists(p_):
@@ -2195,7 +2227,7 @@ def main() -> int:
             host_reset(host, forms, probe)
             op = run_launcher(ex, host, probe, path)
             op_effects = effects(host) | prefixed(
-                "maze", snapshot(os.path.join(ex, "tree", "maze"))
+                "maze", snapshot(os.path.join(ex, "tree", "maze"), wrapped=True)
             )
             if here:
                 world = "the native run"

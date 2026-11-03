@@ -1611,6 +1611,44 @@ static long do_fd_change(struct scratch *S, int nr, long *a)
     return -EROFS;
 }
 
+/* getdents64 and getdents: the directory's entries as the kernel lists them, but for a .real/ in a directory of the
+ * tree, which upstream's tree does not have (8.3, 6.1). The batch is read into the scratch, at most its size, which
+ * a listing may return fewer than asked for, and copied out without the .real entry; whether the directory is the
+ * tree's is asked only of a batch that holds one. A batch of nothing but .real is followed by the next, so that only
+ * the directory's end is an empty answer; a buffer the copy cannot write is EFAULT with the directory where it was,
+ * as when the kernel's own write fails. Both records hold d_reclen at 16; the name is at 19, or at 18 in getdents'
+ * older record. */
+static long do_getdents(struct scratch *S, int nr, long *a)
+{
+    unsigned long count = (unsigned long)a[2];
+    if (count > sizeof S->extra) count = sizeof S->extra;
+    int fd = (int)a[0], ours = -1;
+    unsigned long name_at = nr == NR_getdents64 ? 19 : 18;
+    long pos = SC3(NR_lseek, fd, 0, SEEK_CUR);
+    for (;;) {
+        long n = SC3(nr, fd, S->extra, count), kept = 0;
+        if (n <= 0) return n;
+        for (long o = 0; o + 18 <= n;) {
+            unsigned short len = *(unsigned short *)(S->extra + o + 16);
+            if (len < name_at + 1 || o + len > n) break; /* the kernel's records, so never: kept as they are */
+            const char *name = S->extra + o + name_at;
+            int real = xstrcmp(name, ".real") == 0;
+            if (real && ours < 0) ours = fd_real_path(fd, S->tmp) >= 0 && starts_dir(S->tmp, C.root);
+            if (!(real && ours)) {
+                if (kept != o) xmemcpy(S->extra + kept, S->extra + o, len); /* forward over a gap: safe */
+                kept += len;
+            }
+            o += len;
+        }
+        if (kept == 0) continue; /* nothing but .real: the next batch */
+        if (copy_out(S->pid, (void *)a[1], S->extra, (size_t)kept)) {
+            if (pos >= 0) SC3(NR_lseek, fd, pos, SEEK_SET);
+            return -EFAULT;
+        }
+        return kept;
+    }
+}
+
 static long dispatch(struct scratch *S, int nr, long *a, void *uc)
 {
     long r;
@@ -1708,6 +1746,8 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
     case NR_fstatfs:
         r = RE5(NR_fstatfs, a[0], a[1], 0, 0, 0);
         return r == 0 && fd_exclave(S, (int)a[0]) ? ro_flag(S, (char *)a[1] + STATFS_FLAGS_OFF) : r;
+    case NR_getdents64:
+    case NR_getdents: return do_getdents(S, nr, a);
     case NR_inotify_add_watch:
     case NR_fanotify_mark: return do_watch(S, nr, a);
     case NR_fchmod:
@@ -1800,6 +1840,8 @@ static const char *sysname(int nr)
     case NR_lremovexattr: return "xattr";
     case NR_statfs:
     case NR_fstatfs: return "statfs";
+    case NR_getdents64:
+    case NR_getdents: return "listing";
     case NR_rt_sigaction:
     case NR_rt_sigprocmask:
     case NR_rt_sigsuspend:

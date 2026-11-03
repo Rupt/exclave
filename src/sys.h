@@ -69,7 +69,7 @@ enum {
     NR_getpid = 39, NR_execve = 59,
     NR_kill = 62, NR_chdir = 80, NR_getcwd = 79, NR_madvise = 28,
     NR_statfs = 137, NR_pivot_root = 155,
-    NR_prctl = 157, NR_mount = 165, NR_umount2 = 166, NR_getdents64 = 217,
+    NR_prctl = 157, NR_mount = 165, NR_umount2 = 166, NR_getdents64 = 217, NR_getdents = 78, NR_lseek = 8,
     NR_exit_group = 231, NR_openat = 257, NR_mkdirat = 258, NR_newfstatat = 262,
     NR_unlinkat = 263, NR_symlinkat = 266, NR_readlinkat = 267,
     NR_faccessat = 269,
@@ -143,7 +143,7 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
     NR_getpid = 172, NR_execve = 221,
     NR_kill = 129, NR_chdir = 49, NR_getcwd = 17, NR_madvise = 233,
     NR_statfs = 43, NR_pivot_root = 41,
-    NR_prctl = 167, NR_mount = 40, NR_umount2 = 39, NR_getdents64 = 61,
+    NR_prctl = 167, NR_mount = 40, NR_umount2 = 39, NR_getdents64 = 61, NR_getdents = ABSENT(24), NR_lseek = 62,
     NR_exit_group = 94, NR_openat = 56, NR_mkdirat = 34, NR_newfstatat = 79,
     NR_unlinkat = 35, NR_symlinkat = 36, NR_readlinkat = 78,
     NR_faccessat = 48,
@@ -257,6 +257,8 @@ long __sc6_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define F_DUPFD 0
 #define F_GETFD 1
 #define F_GETFL 3
+#define SEEK_SET 0
+#define SEEK_CUR 1
 #define F_DUPFD_CLOEXEC 1030
 #define FD_CLOEXEC 1
 

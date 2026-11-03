@@ -389,8 +389,10 @@ by hand; it is a convention, recorded nowhere.
   kernel follows a shortcut by the host's resolution, so a shortcut to
   a link in the tree with an absolute target, `/etc/alternatives/cc`,
   would run the host's program, and nothing hashes the shortcuts.
-- `.real/` is a hidden sibling by convention only: `find`, `du`, `tar`
-  and directory scanners see it. Hard links cost nothing; a copy that
+- `.real/` is a hidden sibling: from the host, `find`, `du`, `tar` and
+  directory scanners see it, and inside the exclave no listing of the
+  tree shows it, so a program sees upstream's tree (8.3), though it
+  opens by name. Hard links cost nothing; a copy that
   breaks them, `cp -r`, `git` or `zip -y`, makes each wrapper a copy of
   the launcher, larger by the launcher's size per wrapper. Whether a
   file is a wrapper is read from the file (7.4.4), so both forms run.
@@ -758,7 +760,7 @@ the promise below; builds before it promise nothing (2).
 | The manifest (6.2) | `exclave 1` | people, `wrap` | the launcher the exclave carries, every command |
 | The hashes file and the tree hash (6.4) | `hashes 1` | `unpack`, `wrap`, `unwrap`, `relink`, `prune` | `check`, `hash`, anyone with `b3sum` |
 | `EXCLAVE_LOG` (6.2) | the number in each `launcher` line, 1 | every launcher of a run | `check`, `prune` |
-| One launcher running another's programs (7.4.2) | the filter version, 6, and the page generation, 2 | each launcher | each launcher |
+| One launcher running another's programs (7.4.2) | the filter version, 7, and the page generation, 2 | each launcher | each launcher |
 | The `exclave` command's own commands and their arguments (10) | the project's, `VERSION`'s | | people and scripts |
 
 The rules every version keeps:
@@ -775,8 +777,13 @@ The rules every version keeps:
   later launcher nests with an earlier one either way, the newer
   filter reused and the older stacked under it (7.4.2).
 - **Within a version, only what an earlier reader passes over is
-  added**: a log line of a new kind, a syscall the filter newly traps,
-  which an older handler under a newer filter answers `ENOSYS` (7.4.2).
+  added**: a log line of a new kind; a syscall the filter newly traps,
+  which an older handler under a newer filter answers `ENOSYS`, so only
+  one whose `ENOSYS` a library falls back from (7.4.2). A trap without
+  that fallback moves the page generation instead, so that the two
+  launchers refuse each other's nesting by name rather than an older
+  one failing the call: the listings version 7 traps have none, and
+  came before any release.
   Anything an earlier reader would refuse or read otherwise moves the
   version: a new manifest key is `exclave 2`, since the strict
   grammar refuses an unknown key, and a new hashes key, hash function
@@ -1068,7 +1075,8 @@ kernel has added has a libc fallback and a re-issue would be an
 untranslated host access.
 
 The version moves whenever the trap set grows or the syscall page
-moves, and is 6; `test/syscalls.py` records a digest of the set and the
+moves, and is 7, whose addition is the listings, `getdents64` and
+`getdents`, for `.real/` (8.3); `test/syscalls.py` records a digest of the set and the
 page each version shipped with and fails when either changes under the
 same version. Filters before 6 allow a page at another address, so
 neither launcher can run under the other's filter: a launcher under a
@@ -1089,6 +1097,7 @@ inside the current launcher.
 | Path, on the parent | `unlinkat`, `mkdirat`, `mknodat`, `symlinkat` (the link's path; its target is stored verbatim), `renameat2`, `linkat`'s new name, `bind`, `open` with `O_CREAT` | translate all but the final component, which the kernel looks up by name in its parent and never follows (`filename_parentat`), a trailing slash included: the slash is the call's to judge, `EISDIR` for `O_CREAT` before any lookup, `EEXIST` for a create of what exists, a symlink included, `ENOENT` for a non-directory create of what does not, `ENOTDIR` for `rmdir` and `unlink` of what is not a directory, and `rename`'s own rules; `O_CREAT` without `O_EXCL` or `O_NOFOLLOW` then follows what the lookup found |
 | Descriptor-addressed | any of the above with an empty path and `AT_EMPTY_PATH`; a NULL path where the kernel accepts one (`fstatat` and `statx` since 6.11, the `*xattrat` family, `file_getattr` and `file_setattr` under `AT_EMPTY_PATH`, `utimensat(fd, NULL, ...)` behind `futimens`) and `EFAULT` elsewhere (the empty-path forms are behind Rust's `File::metadata` and `fexecve`); and `fchmod`, `fchown`, `fsetxattr`, `fremovexattr`, `fstatfs` and the `chattr` ioctls (`ftruncate` needs a writable descriptor, which an exclave file never has) | resolve the descriptor through `/proc/self/fd`, no component walk, no trailing-slash rule, and re-issue the call through the descriptor as given, so that the kernel's rule for `AT_EMPTY_PATH` is its own (`linkat` wants `CAP_DAC_READ_SEARCH` before 6.10); `AT_FDCWD` is the working directory; apply the read-only rules; an `O_PATH` descriptor is `EBADF` for the five attribute calls, as natively; for `execveat` a descriptor on a symlink itself is `ELOOP`, and one on anything but a regular file, a pipe or a socket included, is `EACCES`; an original's descriptor given to `execveat` is mapped back to its wrapper; a descriptor whose file has no path (a pipe, a socket, a memfd, an unlinked file or directory) names nothing the exclave owns, so `linkat` with `AT_EMPTY_PATH` on one is the kernel's own through the descriptor, a link of the file, `EXDEV` or `EPERM`, after the read-only rule for the new name |
 | A path inside a structure | `bind` and `connect` with an `AF_UNIX` address whose path is not abstract | below |
+| A listing of the tree | `getdents64` and `getdents` on a directory of the tree | the kernel's listing without `.real/`, read into the scratch and copied out (8.3) |
 | Reverse-translate results | `getcwd`; `readlinkat` of `/proc/self/{exe,cwd,fd/*}` and of the process's own pid; `readlinkat` of an identity file; `statfs` and `fstatfs` on exclave paths | strip the tree's prefix, and the `.real/` of an original, which then names its wrapper; answer the program's virtual path for `exe` on the loader path (7.6); answer the host's link text for an identity file (8.4); report `ST_RDONLY`. Any other link's text is returned as stored, as the kernel returns it |
 | Self-defence | `rt_sigaction` with a new action; the mask-carrying calls above | scrub `SIGSYS` from the mask (7.5.1), with no canonicalisation |
 | Denied | `clone3`, `io_uring_setup`, `seccomp` except the availability query, `prctl(PR_SET_SECCOMP)`, `uselib`, the mount API (`open_tree`, `open_tree_attr`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr`) | `ENOSYS` |
@@ -1921,8 +1930,14 @@ exclave lists the tree's top-level entries, which with the placeholders
 of rule 1 are the conventional names. `cd` into a placeholder works
 whether or not the host has a directory of that name. A host-owned file
 inside an exclave-owned directory appears when opened but not in a
-listing, and `.real/` appears in every listing of a directory that
-holds an executable (13 item 6).
+listing (13 item 6). `.real/` appears in no listing of a directory of
+the tree, so that a program inside sees upstream's tree: `getdents64`
+and `getdents` trap, and the handler reads the kernel's batch into its
+scratch and copies it out without the entry, reading on past a batch
+that held nothing else. A `.real/` the host has is listed as the host
+has it, and the directory still opens by name. On the gcc exclave,
+best of five, November 2026, `find /usr` takes 13 ms and `ls -lR /usr`
+65 ms with the listings trapped, against 13 ms and 64 ms without.
 
 ### 8.4 Host identity files
 
@@ -2749,8 +2764,8 @@ and stay fixed.
    report the same as the kernel's (17).
 
 6. **Listings differ from the host's.** A directory listing omits
-   host-owned files inside exclave-owned directories, and shows
-   `.real/` (8.3).
+   host-owned files inside exclave-owned directories (8.3); a `.real/`
+   of the tree is listed nowhere inside, though it opens by name.
 
 7. **Host tools are not found by name inside an exclave.** `PATH` is
    the exclave's, and a host program whose libraries are not in the
@@ -4804,6 +4819,9 @@ specified.
 - **A wrapper for every executable file, and the loader path for
   programs without one**: process identity is the kernel's, and
   originals stay byte-identical (7.4.5, 7.6).
+- **A program inside sees upstream's tree: no listing of the tree shows
+  `.real/`**, at the cost of a trap per listing call, which measures as
+  nothing beside a listing's `stat`s (8.3).
 - **One world inside an exclave**: a host world for programs on host
   paths would break `make check` whenever the two libcs differ (7.4.5).
 - **Read-only by refusal, in the kernel's order of checks, not by

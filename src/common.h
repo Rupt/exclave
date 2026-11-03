@@ -10,7 +10,7 @@
 #ifndef FILTER_VERSION
 /* 7.4.2: versioned reuse; the version moves whenever the trap set grows or the syscall page moves. build/launcher-old
  * is these sources at version 3, without bind and connect, which version 4 added (EXCLAVE_TEST_OLD). */
-#define FILTER_VERSION 6
+#define FILTER_VERSION 7
 #endif
 /* an inherited filter older than this allows another page's syscalls and traps this launcher's */
 #define FILTER_PAGE_SINCE 6

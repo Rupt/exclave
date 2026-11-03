@@ -285,6 +285,31 @@ static void show(struct arg *a, long ret)
         /* no uid: a user namespace shows root's files as nobody's */
         printf(" data=mode=%o", (unsigned)st->st_mode);
         if (S_ISREG(st->st_mode) || S_ISLNK(st->st_mode)) printf(",size=%lld", (long long)st->st_size);
+    } else if ((!strcmp(a->bkind, "dents64") || !strcmp(a->bkind, "dents")) && ret > 0) {
+        /* a listing: its names and types, sorted, since two directories' orders are their own */
+        int is64 = a->bkind[5] == '6', k = 0;
+        const char *names[256];
+        unsigned types[256];
+        for (long o = 0; o + 18 <= ret && k < 256;) {
+            unsigned short len;
+            memcpy(&len, (char *)a->buf + o + 16, 2);
+            if (!len || o + len > ret) break;
+            names[k] = (char *)a->buf + o + (is64 ? 19 : 18);
+            types[k++] = (unsigned char)((char *)a->buf)[is64 ? o + 18 : o + len - 1];
+            o += len;
+        }
+        for (int i = 1; i < k; i++)
+            for (int j = i; j > 0 && strcmp(names[j - 1], names[j]) > 0; j--) {
+                const char *n = names[j];
+                unsigned t = types[j];
+                names[j] = names[j - 1], types[j] = types[j - 1];
+                names[j - 1] = n, types[j - 1] = t;
+            }
+        printf(" data=");
+        for (int i = 0; i < k; i++) {
+            hex(names[i], (long)strlen(names[i]));
+            printf(":%u,", types[i]);
+        }
     } else if (!strcmp(a->bkind, "statx") && ret == 0) {
         unsigned char *x = (unsigned char *)a->buf;
         unsigned mode = x[28] | (x[29] << 8);
