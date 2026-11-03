@@ -19,6 +19,8 @@ import gzip
 import hashlib
 import os
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import time
@@ -499,6 +501,47 @@ def debs_without_cache(work: str) -> None:
     expect(not os.listdir(home), f"the fetch wrote into its home directory: {os.listdir(home)}")
     damaged = deb_mirror(os.path.join(work, "damaged"), right.clearsign, tamper="deb")
     refused("refused", fetch_debs(work, damaged, keyring, "refused", cache=False), "SHA256")
+    expect(not os.path.exists(os.path.join(work, "out-refused")), "a refused fetch left its --out")
+
+
+@test
+def debs_interrupted(work: str) -> None:
+    """10.1: a fetch without --cache that a signal ends leaves nothing behind, and ends by it.
+
+    The mirror accepts the connection and never answers, so the fetch is waiting on InRelease when
+    SIGTERM arrives.
+    """
+    right = PgpKey(work, "right")
+    keyring = right.export(work, "right.gpg")
+    with socket.create_server(("127.0.0.1", 0)) as server:
+        out = os.path.join(work, "out-interrupted")
+        p = subprocess.Popen(
+            [
+                *FETCH,
+                "debs",
+                "--out",
+                out,
+                "--keyring",
+                keyring,
+                "--mirror",
+                f"http://127.0.0.1:{server.getsockname()[1]}",
+                "--suite",
+                "noble",
+                "--no-essential",
+                "x",
+            ],
+            stderr=subprocess.PIPE,
+        )
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not (
+            os.path.isdir(out) and any(n.startswith(".exclave-fetch-") for n in os.listdir(out))
+        ):
+            time.sleep(0.01)
+        p.send_signal(signal.SIGTERM)
+        _, err = p.communicate(timeout=10)
+    expect(p.returncode == -signal.SIGTERM, f"ended by {p.returncode}: {err[-300:]!r}")
+    left = os.listdir(out) if os.path.isdir(out) else []
+    expect(not os.path.exists(out), f"the interrupted fetch left its --out, holding {left}")
 
 
 @test

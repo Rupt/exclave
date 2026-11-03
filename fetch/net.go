@@ -14,11 +14,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -371,18 +373,56 @@ func linkOrCopy(src, dst string) error {
 }
 
 // cacheIn is the directory a fetcher keeps files in: dir when one is given, else a directory of its
-// own inside out, removed by done, so that a fetch without --cache keeps nothing outside out and
-// its packages are still hard-linked into place.
+// own inside out, removed by done or by an ending signal the fetch was not started ignoring, so that
+// a fetch without --cache keeps nothing outside out and its packages are still hard-linked into
+// place. An out the fetch made and left empty, as a refusal leaves it, is removed too.
 func cacheIn(dir, out string) (string, func(), error) {
 	if dir != "" {
 		return dir, func() {}, nil
 	}
+	made := !lexists(out)
 	if err := os.MkdirAll(out, 0o777); err != nil {
 		return "", nil, err
 	}
+	var ending []os.Signal
+	for _, s := range []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+		if !signal.Ignored(s) {
+			ending = append(ending, s)
+		}
+	}
+	signals := make(chan os.Signal, 1) // before the directory exists, so that no signal finds it unwatched
+	if len(ending) > 0 {
+		signal.Notify(signals, ending...)
+	}
 	tmp, err := os.MkdirTemp(out, ".exclave-fetch-")
 	if err != nil {
+		signal.Stop(signals)
 		return "", nil, err
 	}
-	return tmp, func() { os.RemoveAll(tmp) }, nil
+	clean := func() {
+		os.RemoveAll(tmp)
+		if made {
+			os.Remove(out) // only when empty
+		}
+	}
+	go func() {
+		s, ok := <-signals
+		if !ok {
+			return
+		}
+		clean()
+		signal.Reset(s) // the signal again, to its default action, so that the exit says what ended it
+		syscall.Kill(os.Getpid(), s.(syscall.Signal))
+	}()
+	return tmp, func() {
+		signal.Stop(signals)
+		close(signals)
+		clean()
+	}, nil
+}
+
+// lexists reports whether anything is at path, a dangling link included.
+func lexists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
 }
