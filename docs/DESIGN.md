@@ -599,7 +599,8 @@ the path names the tree or `.exclave/` or a symlink leads there, and
 makes a new log only where no symlink stands, so the log leaves the
 exclave as it was. A log that cannot be opened is not kept, and the
 run goes on. The launcher appends its decisions, as lines beginning
-`launcher 0`, and every translated syscall as `<syscall> <result>
+`launcher 1`, where the 1 is the log format's version, and every
+translated syscall as `<syscall> <result>
 <virtual path>`: one line, in one write unless the path needs more
 than two escapes. A syscall whose path could not be resolved is logged
 with the path as the program gave it. An exec is logged as `exec 0`
@@ -608,7 +609,10 @@ returns; one that fails adds a second line with its error. A newline
 in a path is written as `\n` and a backslash as `\\`, the only two
 escapes, which the tool undoes when it reads a log (10.3, 10.4; 13
 item 34). The launcher at the border also logs the working directory
-it started in. The log changes nothing else.
+it started in. The log changes nothing else. Every launcher of a run
+writes a line when it starts, so a log several launchers share says
+each one's version; `check` and `prune` refuse by name a log with a
+launcher line of another version rather than misread it.
 
 ### 6.3 What the launcher reads
 

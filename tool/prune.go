@@ -160,7 +160,7 @@ func cmdPrune(args []string) int {
 	var keep, whole uniq
 	programs := 0
 	for _, l := range args[1:] {
-		for _, x := range readLog(l) {
+		for _, x := range readLogs(l) {
 			if x.what == "launcher" || !strings.HasPrefix(x.path, "/") || x.result < 0 || hostOwned(x.path, own) {
 				continue
 			}

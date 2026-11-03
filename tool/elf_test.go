@@ -252,11 +252,11 @@ func TestReadCache(t *testing.T) {
 
 func TestReadLog(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "log")
-	write(t, p, []byte("launcher 0 cwd /\nopen 3 /srv/liba.so\x00junk\nopen 3 /srv/libb\\\\c.so\n"+
+	write(t, p, []byte("launcher 1 cwd /\nopen 3 /srv/liba.so\x00junk\nopen 3 /srv/libb\\\\c.so\n"+
 		"open 99999999999999999999 /srv/libbig.so\nopen -2 /srv/libgone.so\nbad line\nopen x /y\n"+
 		"open 3 /srv/libz.so\\"))
 	lines := readLog(p)
-	want := []logLine{{"launcher", "cwd /", 0}, {"open", "/srv/liba.so", 3}, {"open", "/srv/libb\\c.so", 3},
+	want := []logLine{{"launcher", "cwd /", 1}, {"open", "/srv/liba.so", 3}, {"open", "/srv/libb\\c.so", 3},
 		{"open", "/srv/libbig.so", 1<<63 - 1}, {"open", "/srv/libgone.so", -2}, {"open", "/srv/libz.so\\", 3}}
 	if len(lines) != len(want) {
 		t.Fatalf("%+v", lines)
@@ -330,7 +330,7 @@ func FuzzCache(f *testing.F) {
 }
 
 func FuzzLog(f *testing.F) {
-	f.Add([]byte("open 3 /srv/liba.so\nlauncher 0 cwd given to the host /x\n"))
+	f.Add([]byte("open 3 /srv/liba.so\nlauncher 1 cwd given to the host /x\n"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		p := filepath.Join(t.TempDir(), "log")
 		if err := os.WriteFile(p, data, 0o644); err != nil {

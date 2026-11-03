@@ -113,7 +113,8 @@ void log_line(const char *what, long result, const char *path)
 void log_msg(const char *a, const char *b)
 {
     if (!log_ok()) return;
-    struct iovec io[5] = {iov("launcher 0 ", 11), iov(a, xstrlen(a)), iov(" ", b ? 1 : 0),
+    /* the number where other lines carry a result is the log format's version (6.2) */
+    struct iovec io[5] = {iov("launcher " LOG_VERSION " ", 11), iov(a, xstrlen(a)), iov(" ", b ? 1 : 0),
                           iov(b ? b : "", b ? xstrlen(b) : 0), iov("\n", 1)};
     /* one write, no buffer: this runs on the handler's stack too */
     SC3(NR_writev, C.logfd, io, 5);

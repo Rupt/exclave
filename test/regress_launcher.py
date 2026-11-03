@@ -390,9 +390,9 @@ def nested_older_launcher(ctx: Ctx) -> str | None:
     )
     text = read_text(log)
     expect(
-        f"launcher 0 inside {prog}" in text
+        f"launcher 1 inside {prog}" in text
         and "trap -38 -" in text
-        and "border" not in text.split("launcher 0 inside", 1)[1],
+        and "border" not in text.split("launcher 1 inside", 1)[1],
         f"the inner launcher reused the newer filter and answered the trap itself: {text[-400:]!r}",
     )
     # the page's move: this launcher under launcher-old's version-3 filter refuses before its first

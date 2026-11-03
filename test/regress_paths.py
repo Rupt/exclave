@@ -395,7 +395,7 @@ def cwd_rules(ctx: Ctx) -> str | None:
     log = os.path.join(ctx.work, f"cwd-given-{os.getpid()}.log")
     rc, out, err = run([wrapper(ctx, "true")], cwd=ctx.work, env=dict(ctx.env, EXCLAVE_LOG=log))
     expect(
-        rc == 0 and f"launcher 0 cwd given to the host {ctx.work}\n" in read_text(log),
+        rc == 0 and f"launcher 1 cwd given to the host {ctx.work}\n" in read_text(log),
         f"the rule-4 log line: {read_text(log)[:400]!r}",
     )
     with open(log, "a") as f:

@@ -16,6 +16,8 @@
 #define FILTER_PAGE_SINCE 6
 /* the word of the launcher's notes (launcher.c); 1 marks a launcher whose page is at 0x3f0000 */
 #define PAGE_GENERATION 2
+/* the EXCLAVE_LOG format's version, the number in every launcher line (6.2): one digit, as log_msg writes it */
+#define LOG_VERSION "1"
 #define PATH_MAX 4096
 #define BINPRM_BUF_SIZE 256 /* the bytes of a file the kernel reads for its #! line (fs/binfmt_script.c) */
 #define NAME_MAX 255

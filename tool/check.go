@@ -396,6 +396,23 @@ type logLine struct {
 	result     int64
 }
 
+// logVersion is the log format's version, which every launcher line carries where other lines carry
+// a result (6.2): a log another format wrote is refused by name rather than misread.
+const logVersion = 1
+
+// readLogs reads the log at p, refusing it when a launcher line names another format's version.
+func readLogs(p string) []logLine {
+	lines := readLog(p)
+	for _, x := range lines {
+		if x.what == "launcher" && x.result != logVersion {
+			fail("%s: a launcher of log format %d wrote it; this command reads format %d (docs/DESIGN.md 6.2)", p,
+				x.result, logVersion)
+		}
+	}
+	return lines
+}
+
+// readLog parses an EXCLAVE_LOG file's lines, passing over any it cannot read.
 func readLog(p string) []logLine {
 	var out []logLine
 	for line := range strings.SplitSeq(string(readFile(p)), "\n") {
@@ -427,7 +444,7 @@ func dynamicCheck(ex string, logs []string, own *ownership) *report {
 	rep := &report{}
 	var libs, cwds []string
 	for _, l := range logs {
-		lines := readLog(l)
+		lines := readLogs(l)
 		rep.lines += len(lines)
 		for _, x := range lines {
 			const given = "cwd given to the host "

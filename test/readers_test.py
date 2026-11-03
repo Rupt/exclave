@@ -250,7 +250,7 @@ def log_reader(ctx: Ctx) -> None:
     log = os.path.join(ctx.work, "log")
     with open(log, "wb") as f:
         f.write(
-            b"launcher 0 cwd /\n"
+            b"launcher 1 cwd /\n"
             b"open 3 /srv/liba.so\0junk\n"
             b"open 3 /srv/libb\\\\c.so\n"
             b"open 99999999999999999999 /srv/libbig.so\n"
@@ -261,6 +261,26 @@ def log_reader(ctx: Ctx) -> None:
     opened = sorted(e.removeprefix("library opened on the host: ") for e in errors)
     want = ["/srv/liba.so", "/srv/libb\\c.so", "/srv/libbig.so"]
     expect(rc == 1 and opened == want, f"the log's libraries: {errors!r}")
+
+
+@test
+def log_version(ctx: Ctx) -> None:
+    """6.2: a log whose launcher lines name another format's version is refused by name.
+
+    check reads it for the dynamic check and prune for what to keep; both refuse it rather than
+    misread lines a later launcher may spell otherwise.
+    """
+    ex, root = exclave(ctx, "versioned")
+    put(root, "/usr/bin/x", elf(interp=b"/lib/ld.so"))
+    log = os.path.join(ctx.work, "log2")
+    with open(log, "wb") as f:
+        f.write(b"launcher 1 border /usr/bin/x\nlauncher 2 inside /usr/bin/x\nexec 0 /usr/bin/x\n")
+    for cmd in ("check", "prune"):
+        rc, out, err = run([ctx.tool, cmd, ex, log])
+        expect(
+            rc == 1 and "a launcher of log format 2 wrote it; this command reads format 1" in err,
+            f"{cmd} of a format 2 log: rc={rc} {out[-200:]!r} {err[-300:]!r}",
+        )
 
 
 def main() -> int:

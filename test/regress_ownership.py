@@ -324,12 +324,12 @@ def log_path_rules(ctx: Ctx) -> None:
     rc, _, err = with_log(log)
     text = read_text(log) if os.path.exists(log) else ""
     expect(
-        rc == 0 and "launcher 0 border" in text and "launcher 0 inside" in text,
+        rc == 0 and "launcher 1 border" in text and "launcher 1 inside" in text,
         f"one log for every launcher: rc={rc} {err!r} {text[-300:]!r}",
     )
     rc, _, err = with_log("/dev/stderr")
     expect(
-        rc == 0 and "launcher 0 border" in err, f"/dev/stderr as the log: rc={rc} {err[-300:]!r}"
+        rc == 0 and "launcher 1 border" in err, f"/dev/stderr as the log: rc={rc} {err[-300:]!r}"
     )
 
 
@@ -554,7 +554,7 @@ def nested_and_log(ctx: Ctx) -> None:
     expect(rc == 0 and out.strip(), out + err)
     text = read_text(log)
     expect(
-        "launcher 0 border " + ctx.sh_exe in text
-        and "launcher 0 inside " + ctx.vreal(ctx.vbin(ctx.gcc)) in text,
+        "launcher 1 border " + ctx.sh_exe in text
+        and "launcher 1 inside " + ctx.vreal(ctx.vbin(ctx.gcc)) in text,
         "log: " + text[:400],
     )
