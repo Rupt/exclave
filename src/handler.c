@@ -1614,7 +1614,9 @@ static long do_fd_change(struct scratch *S, int nr, long *a)
 /* Whether the directory's next record is the tree's .real, read alone into the scratch and so passed; another record
  * read is put back, the directory where it was. A listing's EINVAL, a buffer too small for the next record, and its
  * EFAULT, a buffer the kernel cannot write the next record to, may be .real's alone, which upstream's tree does not
- * have. ours is the cache of whether the directory is the tree's. */
+ * have. ours is the cache of whether the directory is the tree's. The kernel takes one call at a time on a descriptor
+ * and this is three: another thread listing the same descriptor between the read and the lseek back sees that record
+ * again, on these refusals alone (8.3). */
 static int next_is_real(struct scratch *S, int nr, int fd, int *ours, unsigned long name_at)
 {
     /* .real's record: the name, its NUL and getdents' trailing d_type, in 8-byte units */

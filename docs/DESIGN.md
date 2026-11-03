@@ -1945,7 +1945,10 @@ as the kernel fills a batch and a batch of nothing else followed by the
 next. A refusal only `.real`'s record causes, a buffer too small for it
 (`EINVAL`) or one the kernel cannot write it to (`EFAULT`), answers as
 for the entry after it, so a listing of the tree names what upstream's
-tree names at every buffer size (`listings_hide_real`); a batch holds
+tree names at every buffer size (`listings_hide_real`), but for two
+threads listing one descriptor at once, where the one entry after a
+refusal so caused may come twice, since the kernel serialises one call
+and that answer takes three; a batch holds
 at most the scratch's 8 KB, as a listing may return fewer entries than
 fit. A `.real/` the host has is listed as the host has it, and the
 directory still opens by name. On the gcc exclave,
