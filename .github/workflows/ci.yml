@@ -67,8 +67,9 @@ jobs:
             ~/.cache/exclave-apks
             ~/.cache/exclave-rpms
             ~/inputs/src
-          key: packages-${{ hashFiles('scripts/inputs', 'fetch/**') }}
-          restore-keys: packages-
+          # the fetchers keep files by digest; a cache of the earlier layout, by URL, is not restored
+          key: packages-by-digest-${{ hashFiles('scripts/inputs', 'fetch/**') }}
+          restore-keys: packages-by-digest-
       - name: the development inputs
         run: scripts/inputs "$INPUTS"
       - name: the gate
@@ -132,8 +133,9 @@ jobs:
             ~/.cache/exclave-apks
             ~/.cache/exclave-rpms
             ~/inputs/src
-          key: packages-${{ hashFiles('scripts/inputs', 'fetch/**') }}
-          restore-keys: packages-
+          # the fetchers keep files by digest; a cache of the earlier layout, by URL, is not restored
+          key: packages-by-digest-${{ hashFiles('scripts/inputs', 'fetch/**') }}
+          restore-keys: packages-by-digest-
       - name: the development inputs
         run: scripts/inputs "$INPUTS"
       - name: the matrix

@@ -20,9 +20,9 @@
 // signs its metadata, repomd.xml.asc beside repomd.xml, as CentOS does and Fedora does not, has
 // that signature checked too, which holds the index itself to the key; without it the index is
 // the mirror's, and the fetcher says so. The primary index is checked against the checksum in
-// repomd.xml, and each package against the SHA-256 its index records. Package files are cached,
-// since their names carry their versions, and so is a primary index whose name carries its
-// checksum; repomd.xml is fetched on every run.
+// repomd.xml, and each package against the SHA-256 its index records. Package files and the
+// primary index are cached under those digests, whatever mirror served them; repomd.xml is
+// fetched on every run.
 
 package fetch
 
@@ -32,9 +32,10 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
-	"encoding/hex"
 	"encoding/xml"
 	"errors"
+	"exclave/unpack/reader"
+	"exclave/unpack/rpm"
 	"flag"
 	"fmt"
 	"hash"
@@ -46,9 +47,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"exclave/unpack/reader"
-	"exclave/unpack/rpm"
 )
 
 var (
@@ -165,11 +163,11 @@ func newRpmRepo(urls []string, arch, cacheDir string, keys *keyring) (*rpmRepo, 
 
 // repomd fetches a repository's repomd.xml, checked against its signature where there is one.
 func (r *rpmRepo) repomd(u string) ([]byte, error) {
-	data, err := r.cache.get(u+"/repodata/repomd.xml", true)
+	data, err := r.cache.get(u + "/repodata/repomd.xml")
 	if err != nil {
 		return nil, err
 	}
-	signature, err := r.cache.get(u+"/repodata/repomd.xml.asc", true)
+	signature, err := r.cache.get(u + "/repodata/repomd.xml.asc")
 	if err != nil {
 		if !missing(err) {
 			return nil, err
@@ -225,20 +223,26 @@ func (r *rpmRepo) primary(u string) (io.ReadCloser, error) {
 			kind = "sha1"
 		}
 		want := strings.TrimSpace(d.Checksum.Value)
-		h := newHash(kind)
-		if h == nil {
+		if newHash(kind) == nil {
 			return nil, fmt.Errorf("%s: repomd.xml uses an unknown checksum, %s", u, kind)
 		}
 		href := d.Location.Href
-		primaryURL := u + "/" + href
-		// createrepo names the file by its checksum unless told not to.
-		raw, err := r.cache.get(primaryURL, !strings.Contains(href, want))
+		// kept by the checksum the signed repomd.xml gives, whatever its name or mirror
+		p, err := r.cache.keyed(kind, want)
 		if err != nil {
+			return nil, fmt.Errorf("%s: %w", href, err)
+		}
+		err = r.cache.getVerified(u+"/"+href, p, func(f string) error {
+			return checkFile(f, func() hash.Hash { return newHash(kind) }, want, -1)
+		})
+		if _, ok := errors.AsType[mismatch](err); ok {
+			return nil, errors.New(href + ": the index does not match repomd.xml")
+		} else if err != nil {
 			return nil, err
 		}
-		h.Write(raw)
-		if hex.EncodeToString(h.Sum(nil)) != want {
-			return nil, r.cache.reject(primaryURL, href+": the index does not match repomd.xml")
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			return nil, err
 		}
 		comp, ok := reader.Suffixes[path.Ext(href)]
 		if !ok {
@@ -445,28 +449,41 @@ func (r *rpmRepo) resolve(wanted []string, base bool, choose map[string]string) 
 	return selected, notes, nil
 }
 
-// download fetches one package, checks it against the index, and returns its file name and
-// contents.
-func (r *rpmRepo) download(pkg *rpmPackage) (string, []byte, error) {
+// download fetches one package into the cache, checks it against the index and its signatures,
+// and returns its file name and the cache's file.
+func (r *rpmRepo) download(pkg *rpmPackage) (string, string, error) {
 	name := path.Base(pkg.href)
 	if pkg.sha256 == "" {
-		return "", nil, fmt.Errorf("%s: the index carries no SHA-256 for it; refusing an unverifiable download", name)
+		return "", "", fmt.Errorf("%s: the index carries no SHA-256 for it; refusing an unverifiable download", name)
 	}
-	u := pkg.repo + "/" + pkg.href
-	data, err := r.cache.get(u, false)
+	p, err := r.cache.keyed("sha256", pkg.sha256)
 	if err != nil {
-		return "", nil, err
+		return "", "", fmt.Errorf("%s: %w", name, err)
 	}
-	if sha256hex(data) != pkg.sha256 {
-		return "", nil, r.cache.reject(u, name+": SHA-256 does not match the index")
+	// the digest and size the signed index gives, then the package's own signatures
+	verify := func(f string) error {
+		if err := checkFile(f, sha256.New, pkg.sha256, pkg.size); err != nil {
+			return err
+		}
+		data, err := os.ReadFile(f)
+		if err != nil {
+			return err
+		}
+		if err := r.verifyPackage(name, data); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		return nil
 	}
-	if int64(len(data)) != pkg.size {
-		return "", nil, r.cache.reject(u, name+": size does not match the index")
+	switch err := r.cache.getVerified(pkg.repo+"/"+pkg.href, p, verify); err {
+	case nil:
+		return name, p, nil
+	case errDigest:
+		return "", "", errors.New(name + ": SHA-256 does not match the index")
+	case errSize:
+		return "", "", errors.New(name + ": size does not match the index")
+	default:
+		return "", "", err
 	}
-	if err := r.verifyPackage(name, data); err != nil {
-		return "", nil, r.cache.reject(u, fmt.Sprintf("%s: %s", name, err))
-	}
-	return name, data, nil
 }
 
 // verifyPackage checks a package's signatures as rpm does. A header signature (RPMSIGTAG_RSA or
@@ -567,11 +584,14 @@ func fetchRpms(args []string) error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		filename, data, err := repo.download(selected[name])
+		filename, cached, err := repo.download(selected[name])
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(*out, filename), data, 0o666); err != nil {
+		pkg := selected[name]
+		if err := place(cached, filepath.Join(*out, filename), func(f string) error {
+			return checkFile(f, sha256.New, pkg.sha256, pkg.size)
+		}); err != nil {
 			return err
 		}
 	}

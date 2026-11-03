@@ -1,11 +1,13 @@
 package fetch
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"net"
@@ -85,31 +87,44 @@ func (c *cache) path(u string) string {
 
 // fetch returns the body at u, read whole, with the retries the module describes.
 func (c *cache) fetch(u string) ([]byte, error) {
+	var buf bytes.Buffer
+	err := c.fetchInto(u, &buf, func() error { buf.Reset(); return nil })
+	return buf.Bytes(), err
+}
+
+// fetchInto writes the body at u to w as it arrives, with the retries the module describes;
+// reset empties w before each try.
+func (c *cache) fetchInto(u string, w io.Writer, reset func() error) error {
 	parsed, err := url.Parse(u)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if parsed.Scheme == "file" {
-		data, err := os.ReadFile(parsed.Path)
+		f, err := os.Open(parsed.Path)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		return data, nil
+		defer f.Close()
+		_, err = io.Copy(w, f)
+		return err
 	}
 	wait := firstWait
 	for attempt := 0; ; attempt++ {
-		data, err := c.once(u)
+		if err := reset(); err != nil {
+			return err
+		}
+		err := c.once(u, w)
 		if err == nil {
-			return data, nil
+			return nil
 		}
 		if he, ok := errors.AsType[*httpError](err); ok {
 			if attempt == tries-1 || !(he.code == 429 || he.code >= 500) {
-				return nil, err
+				return err
 			}
 			log(fmt.Sprintf("retry after %d %s in %.0f s", he.code, he.reason, wait.Seconds()))
 		} else {
 			if attempt == tries-1 {
-				return nil, err
+				return err
 			}
 			log(fmt.Sprintf("retry after %s in %.0f s", err, wait.Seconds()))
 		}
@@ -118,21 +133,22 @@ func (c *cache) fetch(u string) ([]byte, error) {
 	}
 }
 
-func (c *cache) once(u string) ([]byte, error) {
+func (c *cache) once(u string, w io.Writer) error {
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	req.Header.Set("User-Agent", userAgent())
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, &httpError{resp.StatusCode, strings.TrimPrefix(resp.Status, fmt.Sprintf("%d ", resp.StatusCode)), u}
+		return &httpError{resp.StatusCode, strings.TrimPrefix(resp.Status, fmt.Sprintf("%d ", resp.StatusCode)), u}
 	}
-	return io.ReadAll(resp.Body)
+	_, err = io.Copy(w, resp.Body)
+	return err
 }
 
 // idleConn is a connection whose every read must deliver within idle.
@@ -153,12 +169,12 @@ func sha256hex(data []byte) string {
 	return hex.EncodeToString(s[:])
 }
 
-// get returns the file at u, read from the cache when it can be kept there. A file whose URL
-// names its content is cached. A mutable file, whose content can change at the same URL, is
-// fetched every time unless the mirror is a snapshot.
-func (c *cache) get(u string, mutable bool) ([]byte, error) {
+// get returns a mutable file, one whose content can change at the same URL, such as a signed
+// index: fetched every time unless the mirror is a snapshot, which never changes, and then kept
+// by its URL. A file a signed index names by its digest is getVerified's.
+func (c *cache) get(u string) ([]byte, error) {
 	path := c.path(u)
-	keep := c.snapshot || !mutable
+	keep := c.snapshot
 	if keep {
 		if data, err := os.ReadFile(path); err == nil {
 			return data, nil
@@ -181,6 +197,109 @@ func (c *cache) get(u string, mutable bool) ([]byte, error) {
 	return data, nil
 }
 
+// ---------------------------------------------------------------- files kept by their digest
+
+// A file a signed index names by its digest is kept under the cache as KIND/DIGEST, whatever
+// mirror, snapshot or URL served it, so that another mirror of the same file is a hit. It is
+// streamed to a file as it arrives and hashed, kept only once it is the file the index names, and
+// checked again every time it is used, so a file damaged in the cache is fetched again.
+
+var digestRe = regexp.MustCompile(`^[0-9a-f]{32,128}$`)
+
+// keyed is the cache file for the content whose digest under kind is digest, or an error when
+// the digest is not one, which a signed index would not hold.
+func (c *cache) keyed(kind, digest string) (string, error) {
+	if !digestRe.MatchString(digest) {
+		return "", fmt.Errorf("the index names a %s digest %q, which is not lowercase hex", kind, digest)
+	}
+	return filepath.Join(c.dir, kind, digest), nil
+}
+
+// mismatch is a file that is not the one its index names: by its digest, or by its size.
+type mismatch string
+
+func (m mismatch) Error() string { return string(m) }
+
+const (
+	errDigest mismatch = "digest"
+	errSize   mismatch = "size"
+)
+
+// checkFile reports whether the file at p has the digest want under newHash and, unless size is
+// negative, that many bytes; the digest is checked first.
+func checkFile(p string, newHash func() hash.Hash, want string, size int64) error {
+	f, err := os.Open(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	h := newHash()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return err
+	}
+	if hex.EncodeToString(h.Sum(nil)) != want {
+		return errDigest
+	}
+	if size >= 0 && n != size {
+		return errSize
+	}
+	return nil
+}
+
+// getVerified makes path the file at u, unless the file there already passes verify, and
+// returns verify's refusal of what u served. The download goes to a file of its own beside path,
+// renamed over it only once it passes, so that runs sharing the cache never see half a file.
+func (c *cache) getVerified(u, path string, verify func(string) error) error {
+	if verify(path) == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o777); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // gone once renamed
+	log("fetch " + u)
+	err = c.fetchInto(u, tmp, func() error {
+		if err := tmp.Truncate(0); err != nil {
+			return err
+		}
+		_, err := tmp.Seek(0, io.SeekStart)
+		return err
+	})
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if err := verify(tmp.Name()); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// place puts the cache's file src at dst, a hard link where the filesystem allows it; a copy is
+// checked again by verify, since it is not the file verified.
+func place(src, dst string, verify func(string) error) error {
+	if err := linkOrCopy(src, dst); err != nil {
+		return err
+	}
+	if a, err := os.Stat(src); err == nil {
+		if b, err := os.Stat(dst); err == nil && os.SameFile(a, b) {
+			return nil
+		}
+	}
+	if err := verify(dst); err != nil {
+		os.Remove(dst)
+		return fmt.Errorf("%s: the cache's file changed while it was copied: %w", dst, err)
+	}
+	return nil
+}
+
 // reject removes u's file from the cache, so that the next run fetches it again, and returns
 // the refusal.
 func (c *cache) reject(u, msg string) error {
@@ -200,15 +319,25 @@ func missing(err error) bool {
 	return errors.Is(err, fs.ErrNotExist)
 }
 
-// linkOrCopy puts src at dst, as a hard link where the filesystem allows it.
+// linkOrCopy puts src at dst, as a hard link where the filesystem allows it, else a copy the
+// kernel makes (copy_file_range), which a filesystem with block cloning clones.
 func linkOrCopy(src, dst string) error {
 	os.Remove(dst)
 	if err := os.Link(src, dst); err == nil {
 		return nil
 	}
-	data, err := os.ReadFile(src)
+	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0o666)
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }

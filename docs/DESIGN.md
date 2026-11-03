@@ -2287,6 +2287,19 @@ are locators; the tool does not, because a hash is not a locator.
   the header signature over the header, whose payload digest covers the
   payload, or a signature over header and payload together.
 
+Each fetcher keeps, under its cache directory (`--cache`,
+`~/.cache/exclave-debs`, `-apks` and `-rpms`), every file a signed one
+names by its digest as `KIND/DIGEST`, whatever mirror, snapshot or URL
+served it: the packages and the indexes, an apk by the SHA-1 of its
+control section. A download is streamed to a file of its own and
+hashed, renamed into place only once it is the file named, and checked
+again every time it is used, a damaged one fetched again; what changes
+at its URL, `InRelease`, `APKINDEX` and `repomd.xml`, is fetched on
+every run but from a snapshot, which never changes. `fetch debs` reads
+the gzip `Packages` index where the Release file lists one, the same
+index as the xz one and quicker to decompress, which was most of a
+warm fetch.
+
 The signatures are checked in the program (`fetch/verify.go`), nothing
 of the machine's: OpenPGP's packets, hashes and public-key arithmetic
 are go-crypto's, but for the version 3 signatures CentOS 7 made, which

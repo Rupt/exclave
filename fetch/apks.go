@@ -16,8 +16,8 @@
 // design records). Each package is then checked against the checksum its index records (the
 // SHA-1 apk-tools uses), and its data against the datahash in its .PKGINFO, so the chain from
 // the key to every file is checked and the mirror is trusted for nothing but availability.
-// Package files are cached, since their names carry their versions; APKINDEX is fetched on every
-// run.
+// Package files are cached under the SHA-1 of their control sections, whatever mirror served
+// them; APKINDEX is fetched on every run.
 
 package fetch
 
@@ -27,6 +27,9 @@ import (
 	"compress/gzip"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"exclave/unpack/apk"
 	"flag"
 	"fmt"
 	"io"
@@ -37,8 +40,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"exclave/unpack/apk"
 )
 
 const apkMirror = "https://dl-cdn.alpinelinux.org/alpine"
@@ -134,7 +135,7 @@ func signaturesOnly(plain []byte) bool {
 // archive's first gzip member holds the signature, .SIGN.RSA*.KEYNAME, over every byte that
 // follows it; the key is the one of that name among those given.
 func (r *apkRepo) signedIndex(u string) ([]byte, error) {
-	data, err := r.cache.get(u, true)
+	data, err := r.cache.get(u)
 	if err != nil {
 		return nil, err
 	}
@@ -357,29 +358,45 @@ func (r *apkRepo) resolve(wanted []string, base bool) (map[string]stanza, error)
 
 var datahashRe = regexp.MustCompile(`(?m)^datahash = ([0-9a-f]{64})$`)
 
-// download fetches one package, checks it the way apk does, and returns its file name and
-// contents. The index's checksum is the SHA-1 of the control section, the gzip member that
-// holds .PKGINFO. The datahash in .PKGINFO is the SHA-256 of the compressed data member, as
-// abuild computes it. The sections before the control section may hold nothing but signatures,
-// since unpack reads every section as one archive: a member planted there would be extracted
-// with no digest over it.
-func (r *apkRepo) download(st stanza) (string, []byte, error) {
+// download fetches one package into the cache, checks it the way apk does, and returns its file
+// name and the cache's file. The index's checksum is the SHA-1 of the control section, the gzip
+// member that holds .PKGINFO, and names the package: it is the cache's key. The datahash in
+// .PKGINFO is the SHA-256 of the compressed data member, as abuild computes it. The sections
+// before the control section may hold nothing but signatures, since unpack reads every section as
+// one archive: a member planted there would be extracted with no digest over it.
+func (r *apkRepo) download(st stanza) (string, string, error) {
 	name := fmt.Sprintf("%s-%s.apk", st["P"], st["V"])
 	want := st["C"]
 	if !strings.HasPrefix(want, "Q1") {
-		return "", nil, fmt.Errorf("%s: the index carries no checksum for it; refusing an unverifiable download", name)
+		return "", "", fmt.Errorf("%s: the index carries no checksum for it; refusing an unverifiable download", name)
+	}
+	sum, err := base64.StdEncoding.DecodeString(want[2:])
+	if err != nil || len(sum) != sha1.Size {
+		return "", "", fmt.Errorf("%s: the index's checksum %s is not a SHA-1", name, want)
+	}
+	p, err := r.cache.keyed("sha1-control", hex.EncodeToString(sum))
+	if err != nil {
+		return "", "", err
 	}
 	u := fmt.Sprintf("%s/%s/%s/%s/%s", r.mirror, r.branch, st["_repo"], r.arch, name)
-	data, err := r.cache.get(u, false)
+	if err := r.cache.getVerified(u, p, func(f string) error { return r.check(name, st, f) }); err != nil {
+		return "", "", err
+	}
+	return name, p, nil
+}
+
+// check reports whether the file at p is the package the index names, as download describes.
+func (r *apkRepo) check(name string, st stanza, p string) error {
+	data, err := os.ReadFile(p)
 	if err != nil {
-		return "", nil, err
+		return err
 	}
 	if size, ok := st["S"]; ok && strconv.Itoa(len(data)) != size {
-		return "", nil, r.cache.reject(u, name+": size does not match the index")
+		return errors.New(name + ": size does not match the index")
 	}
 	members, err := gzipMembers(data)
 	if err != nil {
-		return "", nil, r.cache.reject(u, fmt.Sprintf("%s: not an apk: %s", name, err))
+		return fmt.Errorf("%s: not an apk: %s", name, err)
 	}
 	var control []int
 	for i, m := range members {
@@ -392,27 +409,26 @@ func (r *apkRepo) download(st stanza) (string, []byte, error) {
 		}
 	}
 	if len(control) != 1 || control[0] != len(members)-2 || len(members) > 3 {
-		return "", nil, r.cache.reject(u, name+": not an apk: no control section before the data, "+
-			"or more than three sections")
+		return errors.New(name + ": not an apk: no control section before the data, or more than three sections")
 	}
 	for _, m := range members[:control[0]] {
 		if !m.whole || !signaturesOnly(m.plain) {
-			return "", nil, r.cache.reject(u, name+": not an apk: the signature section holds more than signatures")
+			return errors.New(name + ": not an apk: the signature section holds more than signatures")
 		}
 	}
 	raw, plain := members[control[0]].raw, members[control[0]].plain
 	if !members[control[0]].whole {
-		return "", nil, r.cache.reject(u, name+": not an apk: the control section is too large")
+		return errors.New(name + ": not an apk: the control section is too large")
 	}
 	sum := sha1.Sum(raw) // apk's index records SHA-1
-	if base64.StdEncoding.EncodeToString(sum[:]) != want[2:] {
-		return "", nil, r.cache.reject(u, name+": checksum does not match the index")
+	if base64.StdEncoding.EncodeToString(sum[:]) != st["C"][2:] {
+		return errors.New(name + ": checksum does not match the index")
 	}
 	m := datahashRe.FindSubmatch(plain)
 	if m == nil || sha256hex(members[len(members)-1].raw) != string(m[1]) {
-		return "", nil, r.cache.reject(u, name+": the data section does not match the datahash of .PKGINFO")
+		return errors.New(name + ": the data section does not match the datahash of .PKGINFO")
 	}
-	return name, data, nil
+	return nil
 }
 
 func fetchApks(args []string) error {
@@ -453,11 +469,14 @@ func fetchApks(args []string) error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		filename, data, err := repo.download(selected[name])
+		filename, cached, err := repo.download(selected[name])
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(*out, filename), data, 0o666); err != nil {
+		st := selected[name]
+		if err := place(cached, filepath.Join(*out, filename), func(f string) error {
+			return repo.check(filename, st, f)
+		}); err != nil {
 			return err
 		}
 	}

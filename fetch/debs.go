@@ -15,13 +15,18 @@
 // such as /usr/share/keyrings/ubuntu-archive-keyring.gpg, or a key file in ASCII armour), each
 // Packages index against the Release file it carries, and each package against the SHA256 its
 // index records, so the chain from the keyring to every file is checked and the mirror is
-// trusted for nothing but availability. Package files and by-hash indexes are cached, since
-// their URLs name their content. The InRelease file, and an index the suite does not serve by
-// hash, are fetched on every run unless the mirror is a snapshot, which never changes.
+// trusted for nothing but availability. Package files and indexes are cached under the SHA256
+// the signed files give them, whatever mirror served them, and fetched again only when that
+// changes; the InRelease file is fetched on every run unless the mirror is a snapshot, which never
+// changes.
 
 package fetch
 
 import (
+	"crypto/sha256"
+	"errors"
+	"exclave/unpack/deb"
+	"exclave/unpack/reader"
 	"flag"
 	"fmt"
 	"os"
@@ -31,9 +36,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"exclave/unpack/deb"
-	"exclave/unpack/reader"
 )
 
 var (
@@ -96,7 +98,7 @@ func newDebRepo(distro string, suites []string, arch string, components []string
 // serves its indexes by hash.
 func (r *debRepo) release(suite string) (map[string][2]string, bool, error) {
 	u := fmt.Sprintf("%s/dists/%s/InRelease", r.mirror, suite)
-	signed, err := r.cache.get(u, true)
+	signed, err := r.cache.get(u)
 	if err != nil {
 		return nil, false, err
 	}
@@ -161,12 +163,25 @@ func (r *debRepo) loadIndex() error {
 			if byHash {
 				u = fmt.Sprintf("%s/%s/by-hash/SHA256/%s", dists, base, want[0])
 			}
-			data, err := r.cache.get(u, !byHash)
+			// kept by the digest the signed Release file gives, so an index that has not changed
+			// is not fetched again whatever its URL
+			size, err := strconv.ParseInt(want[1], 10, 64)
 			if err != nil {
+				return fmt.Errorf("%s/%s: the Release file gives its size as %q", suite, rel, want[1])
+			}
+			p, err := r.cache.keyed("sha256", want[0])
+			if err != nil {
+				return fmt.Errorf("%s/%s: %w", suite, rel, err)
+			}
+			err = r.cache.getVerified(u, p, func(f string) error { return checkFile(f, sha256.New, want[0], size) })
+			if _, ok := errors.AsType[mismatch](err); ok {
+				return fmt.Errorf("%s/%s: the index does not match the Release file", suite, rel)
+			} else if err != nil {
 				return err
 			}
-			if strconv.Itoa(len(data)) != want[1] || sha256hex(data) != want[0] {
-				return r.cache.reject(u, fmt.Sprintf("%s/%s: the index does not match the Release file", suite, rel))
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
 			}
 			plain, err := deb.Decompress(rel, data)
 			if err != nil {
@@ -391,26 +406,29 @@ func (r *debRepo) download(st stanza, dst string) error {
 	if st["SHA256"] == "" {
 		return fmt.Errorf("%s: the index carries no SHA256 for it; refusing an unverifiable download", filename)
 	}
-	u := r.mirror + "/" + filename
-	data, err := r.cache.get(u, false)
+	size := int64(-1)
+	if s, ok := st["Size"]; ok {
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return fmt.Errorf("%s: the index gives its size as %q", filename, s)
+		}
+		size = n
+	}
+	p, err := r.cache.keyed("sha256", st["SHA256"])
 	if err != nil {
+		return fmt.Errorf("%s: %w", filename, err)
+	}
+	verify := func(f string) error { return checkFile(f, sha256.New, st["SHA256"], size) }
+	switch err := r.cache.getVerified(r.mirror+"/"+filename, p, verify); err {
+	case nil:
+	case errDigest:
+		return errors.New(filename + ": SHA256 does not match the index")
+	case errSize:
+		return errors.New(filename + ": size does not match the index")
+	default:
 		return err
 	}
-	if sha256hex(data) != st["SHA256"] {
-		return r.cache.reject(u, filename+": SHA256 does not match the index")
-	}
-	if size, ok := st["Size"]; ok && strconv.Itoa(len(data)) != size {
-		return r.cache.reject(u, filename+": size does not match the index")
-	}
-	if err := linkOrCopy(r.cache.path(u), dst); err != nil {
-		return err
-	}
-	linked, err := os.ReadFile(dst)
-	if err != nil || sha256hex(linked) != st["SHA256"] {
-		os.Remove(dst)
-		return r.cache.reject(u, filename+": the cache's file changed under the link")
-	}
-	return nil
+	return place(p, dst, verify)
 }
 
 func fetchDebs(args []string) error {

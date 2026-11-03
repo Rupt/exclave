@@ -438,6 +438,45 @@ def debs_check_inrelease(work: str) -> None:
 
 
 @test
+def debs_cache_by_digest(work: str) -> None:
+    """10: the cache keeps a file the signed index names under its digest, whatever its URL.
+
+    The same archive at another URL is a hit for the index and the package, and the InRelease
+    file alone is fetched; a package damaged in the cache is fetched again, not refused.
+    """
+    right = PgpKey(work, "right")
+    keyring = right.export(work, "right.gpg")
+    deb = f"x_1_{DEB_ARCH}.deb"
+    first = deb_mirror(os.path.join(work, "first"), right.clearsign)
+    second = os.path.join(work, "second")
+    shutil.copytree(first, second)
+
+    def fetched(err: str) -> list[str]:
+        lines = err.splitlines()
+        return [line.removeprefix("fetch ") for line in lines if line.startswith("fetch ")]
+
+    accepted("first mirror", fetch_debs(work, first, keyring, "cache"), deb, "verified")
+    result = fetch_debs(work, second, keyring, "cache")
+    accepted("second mirror", result, deb, "verified")
+    urls = fetched(result[1])
+    expect(
+        len(urls) == 1 and urls[0].endswith("/InRelease"),
+        f"the same files at another URL are fetched again: {urls}",
+    )
+    with open(os.path.join(first, "pool", deb), "rb") as f:
+        cached = os.path.join(work, "cache-cache", "sha256", hashlib.sha256(f.read()).hexdigest())
+    expect(os.path.isfile(cached), f"no package under its digest in the cache: {cached}")
+    os.remove(cached)  # a damaged file in the cache, not one shared with the output by its link
+    write(cached, b"damaged")
+    result = fetch_debs(work, second, keyring, "cache")
+    accepted("damaged in the cache", result, deb, "verified")
+    expect(
+        any(u.endswith("/" + deb) for u in fetched(result[1])),
+        f"a damaged package is not fetched again: {result[1][-300:]!r}",
+    )
+
+
+@test
 def rpms_check_packages_and_repomd(work: str) -> None:
     """10: fetch-rpms takes a package only when its own signature verifies, and repomd.xml's too.
 
