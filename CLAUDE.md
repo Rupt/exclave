@@ -238,7 +238,8 @@ The loop that has served well, in the order it pays:
   and its tooling keeps to the same design: what it makes stays inside
   the repository's tree, the pinned uv and Go and their caches in `.uv/`
   and `.go/`, builds, images, inputs, temporary files (`TMPDIR` is
-  `build/tmp`) and locks under `build/`, or in a `DIR` the user gives.
+  `build/tmp`, which `scripts/clean-tmp` empties) and locks under
+  `build/`, or in a `DIR` the user gives.
   Nothing goes in the home directory or `/tmp` unless the user asks, and
   a tool whose default is elsewhere gets its path in `scripts/lib.sh`.
   The exceptions are the network of `scripts/inputs`, the install

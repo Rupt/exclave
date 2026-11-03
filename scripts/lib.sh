@@ -24,6 +24,7 @@ export UV_MANAGED_PYTHON=1
 # Temporary files stay inside the repository too: what mktemp, Python's
 # tempfile, Go's tests and the compilers make goes under build/tmp, not
 # /tmp. A test that means the host's /tmp (DESIGN.md 8.1) names it.
+# build/tmp outlives a reboot; scripts/clean-tmp empties it.
 export TMPDIR="$ROOT/build/tmp"
 mkdir -p "$TMPDIR"
 

@@ -1,0 +1,10 @@
+#!/bin/sh
+# scripts/clean-tmp: empty build/tmp, the TMPDIR every script sets (scripts/lib.sh). Unlike /tmp it outlives a
+# reboot, so what a killed run left there stays until this removes it. A run in progress keeps its files there too:
+# run it when none is.
+set -eu
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+tmp=$root/build/tmp
+[ -d "$tmp" ] || exit 0
+echo "removing $(du -sh "$tmp" | cut -f1) from $tmp"
+find "$tmp" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
