@@ -1,8 +1,8 @@
 #!/bin/sh
 # Install the pinned Go toolchain into .go/, verified against a checksum
 # committed here, and the modules go.sum pins into its cache. It builds the
-# unpack and fetch commands (scripts/build), which are Go, as uv provides the
-# Python the tests run on: nothing the machine has installed decides how they
+# exclave command (scripts/build), which is Go, as uv provides the Python the
+# tests run on: nothing the machine has installed decides how they
 # are built, and nothing after this script fetches a module.
 #
 # Portable across Linux: the official builds are statically linked, one per

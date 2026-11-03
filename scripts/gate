@@ -2,7 +2,7 @@
 # scripts/gate [--full] [--since REV] [--jobs N] EXCLAVE — the commit gate (DESIGN.md 17), run on the change at hand.
 #
 # It is the one gate, and it is fast: every step is a test that fails on a case with the answer expected, in
-# seconds. It builds the launchers first (scripts/build), which takes no time when they are up to date. Then by
+# seconds. It builds the launchers and the command first (scripts/build), which takes no time when they are up to date. Then by
 # default it runs the steps the changed paths can affect: the uncommitted changes, or, in a clean tree, the last
 # commit; --since REV takes the commits after REV too, so that a series is gated once. test/affected.py derives
 # the steps from what each step runs, through the drivers' imports and the paths they name: a launcher source or
@@ -10,8 +10,8 @@
 # settings run the code checks alone; a path nothing names runs everything. --full runs every step, whatever
 # changed.
 #
-# The steps: the code checks (scripts/check), the unit tests under ASan and UBSan, the stack budget, the Go
-# commands' unit tests and fuzz seeds (go test), unpack's tests on hostile package files (test/unpack_test.py), the
+# The steps: the code checks (scripts/check), the unit tests under ASan and UBSan, the stack budget, the
+# command's Go unit tests and fuzz seeds (go test), unpack's tests on hostile package files (test/unpack_test.py), the
 # fetchers' signature checks (test/fetch_test.py), and on the exclave given the suite, the resolution oracle, the namespace oracle, the syscall probe and, when
 # EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled, the Docker profile run on its
 # src/docker-seccomp.json. No step touches the network. Everything slower or broader is scripts/extra's and
@@ -48,7 +48,7 @@ case $jobs in '' | *[!0-9]* | 0) jobs=0 ;; esac
     exit 2
 }
 ex=$1
-"$ROOT/scripts/build" || exit 2 # the launchers, unless they are up to date
+"$ROOT/scripts/build" || exit 2 # the launchers and the command, unless they are up to date
 rm -rf "$out" && mkdir -p "$out" || exit 2
 . "$ROOT/scripts/steps.sh"
 start=$(date +%s)

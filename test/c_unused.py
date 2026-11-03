@@ -3,7 +3,7 @@
 The compiler reports an unused static function or macro of a .c file, but not one of a header: a
 header's definitions are there to be used by someone. This lists each macro, enum constant and
 function that src/sys.h and src/common.h define or declare, and fails on one that
-appears in no other place in src/, tool/ or the unit tests, counting a use in the headers
+appears in no other place in src/ or the unit tests, counting a use in the headers
 themselves. A function's
 definition in a .c file, a line that starts with its type, is not a use.
 """

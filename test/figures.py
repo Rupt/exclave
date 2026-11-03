@@ -68,7 +68,7 @@ QUOTED = (
     ("named tests", r"(\d[\d ]*) named (?:tests|regressions)"),
     ("resolve paths", r"(\d[\d ]*) paths over (?:a random maze|\w+ random mazes)"),
     ("command KB", r"`build/exclave`, (\d[\d ]*) KB"),
-    ("command KB", r"the cross compiler, (\d[\d ]*) KB and \d+ KB"),
+    ("command KB", r"the cross compiler, (\d[\d ]*) KB and \d[\d ]* KB"),
     ("command KB aarch64", r"the cross compiler, \d[\d ]* KB and (\d[\d ]*) KB"),
 )
 

@@ -57,6 +57,7 @@ EVERY = (
     "LICENSE",
     ".python-version",
     "scripts/gate",
+    "scripts/steps.sh",
     "test/affected.py",
 )
 # What the VMs run: the launcher, the command with its unpack (the suite's ld.so.cache regression
@@ -71,6 +72,7 @@ MATRIX = (
     "scripts/install-go",
     "scripts/build",
     "scripts/lib.sh",
+    "scripts/reproduce",
     "LICENSE",
     ".python-version",
     "test/matrix.py",

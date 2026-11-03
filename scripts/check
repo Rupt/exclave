@@ -126,35 +126,36 @@ run "$UV" run --quiet python test/c_unused.py
 # versions go.mod's tool directives pin, run through the pinned toolchain. Each runs one after
 # the other. A line over 120 columns, a tab counted as four, is held to the C's rule. The
 # command embeds the launcher scripts/build copies to tool/, so the Go is checked after a build.
-[ -e "tool/launcher-$(uname -m)" ] || {
-    echo "check: no tool/launcher-$(uname -m) for the command to embed; run scripts/build" >&2
-    exit 2
-}
 gopkgs="./tool/... ./fetch/... ./unpack/..."
-# shellcheck disable=SC2086  # the packages, one word each
-godirs=$("$GO" list -f '{{.Dir}}' $gopkgs) || status=1
-if $fix; then
-    # shellcheck disable=SC2086  # the directories, one word each
-    run "$GOFMT" -l -s -w $godirs
+if [ -e "tool/launcher-$(uname -m)" ]; then
     # shellcheck disable=SC2086  # the packages, one word each
-    run quiet "$GO" fix $gopkgs
-else
-    # shellcheck disable=SC2086  # the directories, one word each
-    if unformatted=$("$GOFMT" -l -s $godirs) && [ -n "$unformatted" ]; then
-        printf '%s: not as gofmt -s lays it out\n' $unformatted
-        status=1
+    godirs=$("$GO" list -f '{{.Dir}}' $gopkgs) || status=1
+    if $fix; then
+        # shellcheck disable=SC2086  # the directories, one word each
+        run "$GOFMT" -l -s -w $godirs
+        # shellcheck disable=SC2086  # the packages, one word each
+        run quiet "$GO" fix $gopkgs
+    else
+        # shellcheck disable=SC2086  # the directories, one word each
+        if unformatted=$("$GOFMT" -l -s $godirs) && [ -n "$unformatted" ]; then
+            printf '%s: not as gofmt -s lays it out\n' $unformatted
+            status=1
+        fi
+        # shellcheck disable=SC2086  # the packages, one word each
+        run quiet "$GO" fix -diff $gopkgs
     fi
     # shellcheck disable=SC2086  # the packages, one word each
-    run quiet "$GO" fix -diff $gopkgs
+    run quiet "$GO" vet $gopkgs
+    # shellcheck disable=SC2086  # the packages, one word each
+    run quiet "$GO" tool staticcheck $gopkgs
+    # shellcheck disable=SC2086  # the packages, one word each
+    run quiet "$GO" tool deadcode -test $gopkgs
+    if awk '{ gsub(/\t/, "    ") } length > 120 { print FILENAME ":" FNR ": over 120 columns"; bad = 1 } END { exit bad }' \
+        tool/*.go fetch/*.go unpack/*.go unpack/*/*.go; then :; else status=1; fi
+else
+    echo "check: no tool/launcher-$(uname -m) for the command to embed; run scripts/build: the Go is unchecked" >&2
+    status=1
 fi
-# shellcheck disable=SC2086  # the packages, one word each
-run quiet "$GO" vet $gopkgs
-# shellcheck disable=SC2086  # the packages, one word each
-run quiet "$GO" tool staticcheck $gopkgs
-# shellcheck disable=SC2086  # the packages, one word each
-run quiet "$GO" tool deadcode -test $gopkgs
-if awk '{ gsub(/\t/, "    ") } length > 120 { print FILENAME ":" FNR ": over 120 columns"; bad = 1 } END { exit bad }' \
-    tool/*.go fetch/*.go unpack/*.go unpack/*/*.go; then :; else status=1; fi
 
 # A suppression says why on its line: `# noqa: RULE -- reason`.
 if grep -rnE '# (noqa: [A-Z0-9, ]+|ty: ignore\[[a-z0-9, -]+\])$' --include='*.py' test src; then

@@ -25,9 +25,13 @@ done
 commit=$(git -C "$ROOT" describe --always --dirty --exclude='*' 2>/dev/null) || commit=$(cat "$ROOT/COMMIT")
 rm -rf "$dir"
 mkdir -p "$dir/scripts"
-cp -R "$ROOT/src" "$ROOT/tool" "$ROOT/unpack" "$ROOT/fetch" "$ROOT/go.mod" "$ROOT/go.sum" "$ROOT/LICENSE" \
-    "$ROOT/pyproject.toml" "$dir/"
+cp -R "$ROOT/src" "$ROOT/tool" "$ROOT/LICENSE" "$ROOT/pyproject.toml" "$dir/"
 rm -f "$dir"/tool/launcher-* # the checkout's copies of its launchers: the command here carries the one built inside
+# the command's other packages and its module, for the build here; a copy of the sources without them, as the
+# matrix carries into its VMs, builds the launcher alone
+for p in unpack fetch go.mod go.sum; do
+    [ -e "$ROOT/$p" ] && cp -R "$ROOT/$p" "$dir/"
+done
 cp "$ROOT/scripts/build" "$ROOT/scripts/lib.sh" "$dir/scripts/"
 printf '%s\n' "$commit" >"$dir/COMMIT"
 # the exclave's own programs alone on PATH, so that no tool of the machine's takes part
@@ -38,7 +42,7 @@ env -i HOME="$dir" PATH="$ex/tree/usr/bin:$ex/tree/bin" CC="$cc" UV_BOOTSTRAP=1 
     exit 1
 }
 built="launcher"
-if [ -x "$GO" ]; then
+if [ -x "$GO" ] && [ -e "$dir/go.mod" ]; then
     version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$dir/pyproject.toml")+$commit
     cp "$dir/build/launcher" "$dir/tool/launcher-$(uname -m)"
     (cd "$dir" && go_build "$(uname -m)" build/exclave ./tool "$version") >>"$dir/build.log" 2>&1 || {

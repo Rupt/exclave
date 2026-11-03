@@ -4,8 +4,9 @@
 # undefined-behaviour checks), the resolution oracle, the namespace oracle, the syscall probe and, when
 # EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled, the Docker profile run; and on the first exclave, the
 # suite under the plain terminal's AppArmor label (aa-exec -p unconfined, where there is one), the parsers fuzzed from
-# its files under the sanitisers for ten seconds a harness (test/fuzz.py), and a release of it made and taken as a
-# consumer takes it (test/release_test.py). These are broader than the gate or slower, or are budgets and
+# its files under the sanitisers for ten seconds (test/fuzz.py, the launcher's parsers) and the command's parsers
+# under Go's fuzzer for ten seconds a target (gofuzz), and a release of it made and taken as a consumer takes it
+# (test/release_test.py). These are broader than the gate or slower, or are budgets and
 # integration runs rather than tests: a bug one of them finds gets a fast reproduction as a test in the gate; the
 # run that found it stays here. The resolution oracle takes a seed of the moment, printed with a difference. The
 # steps run two at a time, or N with --jobs; one line per step with its time; logs under build/extra/. Exit status:
@@ -45,7 +46,7 @@ fuzz() { # fuzz EXCLAVE
 }
 
 # the command's parsers under Go's own fuzzer, ten seconds a target, from the seeds their tests hold
-# (tool/fuzz_test.go, unpack/*/fuzz_test.go, fetch/fuzz_test.go); an input that panics is written under the
+# (tool/*_test.go, unpack/*/fuzz_test.go, fetch/fuzz_test.go); an input that panics is written under the
 # package's testdata/fuzz, which the gate's go step then runs as a case
 gofuzz() {
     for pkg in $("$GO" -C "$ROOT" list ./tool/... ./fetch/... ./unpack/...); do

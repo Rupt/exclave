@@ -21,6 +21,10 @@ shift 3
 built=$ROOT/build/reproduce
 "$ROOT/scripts/reproduce" "$toolchain" "$built"
 command=$built/build/exclave
+[ -x "$command" ] || {
+    echo "release: scripts/reproduce built no command: it needs the pinned Go (scripts/install-go)" >&2
+    exit 2
+}
 mkdir -p "$dir"
 for ex; do
     ex=${ex%/}

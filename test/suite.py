@@ -200,11 +200,14 @@ def fixture_keys(ex: str) -> tuple[str, str] | None:
         for f in os.listdir(os.path.join(REPO, "src"))
         if f[-2:] in (".c", ".h")
     )
-    files += sorted(
-        os.path.join(REPO, "tool", f)
-        for f in os.listdir(os.path.join(REPO, "tool"))
-        if not f.startswith(".")
-    )
+    # the command's sources: its packages' Go and the README it carries, not the launcher copies
+    # scripts/build puts beside them nor a fuzzer's testdata
+    for pkg in ("tool", "unpack", "fetch"):
+        for dirpath, dirs, names in os.walk(os.path.join(REPO, pkg)):
+            dirs[:] = sorted(d for d in dirs if d != "testdata")
+            files += sorted(
+                os.path.join(dirpath, f) for f in names if f.endswith(".go") or f == "README.txt"
+            )
     sources = hashlib.blake2b(digest_size=6)
     for f in files:
         sources.update(os.path.basename(f).encode() + b"\0" + read_bytes(f) + b"\0")

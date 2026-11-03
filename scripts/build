@@ -51,12 +51,12 @@ cross=$(c_arches | grep -vx "$native")
 fresh=${fresh:-true}
 gobuilds=
 [ -x "$GO" ] && gobuilds=build/exclave
-for f in "$stamp" build/launcher build/launcher-old build/launcher-debug $gobuilds; do
+for f in "$stamp" build/launcher build/launcher-old build/launcher-debug $gobuilds ${gobuilds:+tool/launcher-$native}; do
     [ -e "$f" ] || fresh=false
 done
 for arch in $cross; do
     [ -e "build/launcher-$arch" ] && [ -e "build/launcher-old-$arch" ] || fresh=false
-    [ -z "$gobuilds" ] || [ -e "build/exclave-$arch" ] || fresh=false
+    [ -z "$gobuilds" ] || { [ -e "build/exclave-$arch" ] && [ -e "tool/launcher-$arch" ]; } || fresh=false
 done
 gosources= # absent from a copy of the sources without the Go, as scripts/reproduce makes
 for p in go.mod go.sum fetch unpack tool scripts/install-go .go/go/VERSION; do
