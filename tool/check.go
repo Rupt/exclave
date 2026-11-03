@@ -633,10 +633,14 @@ func locatedLinks(ex string, l *listing) []string {
 // host's resolution, a link inside the tree with an absolute target included, and nothing hashes the shortcuts, so
 // each symlink at the top of the exclave must name a path of its tree relatively, and resolve on the host to a file
 // of that tree.
+// The exclave is made absolute first, so that the verdict is the same however its path is spelled.
 func shortcutProblems(ex string) []string {
 	names, err := dirNames(ex)
 	if err != nil {
 		failErrno(ex, err)
+	}
+	if abs, err := filepath.Abs(ex); err == nil {
+		ex = abs
 	}
 	treeAt, err := filepath.EvalSymlinks(pathJoin(ex, "tree"))
 	if err != nil {
@@ -657,6 +661,9 @@ func shortcutProblems(ex string) []string {
 		case strings.HasPrefix(text, "/"):
 			out = append(out, fmt.Sprintf("shortcut by an absolute path: %s -> %s; a shortcut names its file in tree/ "+
 				"relatively, so that the exclave can move", name, text))
+		case !strings.HasPrefix(filepath.Clean(text), "tree/"):
+			out = append(out, fmt.Sprintf("shortcut by a path outside tree/: %s -> %s; a shortcut names its file as "+
+				"tree/..., so that the exclave can be renamed", name, text))
 		case rerr != nil:
 			out = append(out, fmt.Sprintf("shortcut that does not resolve: %s -> %s", name, text))
 		case !under(real, treeAt) || real == treeAt:

@@ -621,13 +621,19 @@ def wrap_refusals(ctx: Ctx) -> None:
     for name, target, why in (
         ("located", located, "by an absolute path"),
         ("dangling", "tree/usr/bin/none", "that does not resolve"),
-        ("out", "../st.exclave/tree/usr/bin/hi", "leaving the tree"),
+        ("out", "../st.exclave/tree/usr/bin/hi", "by a path outside tree/"),
+        ("self", "../shortcuts.exclave/tree/usr/bin/hi", "by a path outside tree/"),
         ("escape", "tree/usr/bin/abs", "leaving the tree: escape -> tree/usr/bin/abs, which the"),
     ):
         os.symlink(target, os.path.join(sc, name))
         rc, o, e = run([*TOOL, "check", sc])
         expect(rc == 1 and f"shortcut {why}" in o + e, f"shortcut {name}: {rc} {(o + e)[-300:]}")
+        # the same verdict however the exclave's path is spelled
+        rc, o, e = run([*TOOL, "check", "."], cwd=sc)
+        expect(rc == 1 and f"shortcut {why}" in o + e, f"{name}, from .: {rc} {(o + e)[-300:]}")
         os.remove(os.path.join(sc, name))
+    rc, o, e = run([*TOOL, "check", "."], cwd=sc)
+    expect(rc == 0, f"a shortcut into the tree, from .: {rc} {(o + e)[-300:]}")
 
 
 @test

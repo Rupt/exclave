@@ -386,9 +386,11 @@ by hand; it is a convention, recorded nowhere.
 - A symlink in the tree whose text names the exclave's own location is
   refused by `wrap` and `check`, with the `ln` that fixes it: moving
   the exclave would break it (3, goal 2). Packages never make one.
-- A shortcut must name its file in `tree/` by a relative path and
-  resolve, as the host resolves it, to a file of the tree: `wrap` and
-  `check` refuse one that is absolute, dangling or leaves the tree. The
+- A shortcut must name its file by a relative path that begins
+  `tree/` and resolve, as the host resolves it, to a file of the tree:
+  `wrap` and `check` refuse one that is absolute, goes another way
+  (`../x.exclave/tree/...` breaks when the exclave is renamed),
+  dangling or leaves the tree, whatever the exclave's path is spelled. The
   kernel follows a shortcut by the host's resolution, so a shortcut to
   a link in the tree with an absolute target, `/etc/alternatives/cc`,
   would run the host's program, and nothing hashes the shortcuts.
