@@ -4648,7 +4648,7 @@ those measured on the reference machine.
 runs a script beside the files it is given, for exclaves made to ship,
 where the suite does not apply. The two VM drivers are the one
 exception to the rule that only `scripts/inputs` downloads: they fetch
-each cloud image once into `~/.cache/exclave-images`, and the VMs
+each cloud image once into `build/images`, and the VMs
 install their packages through cloud-init.
 
 **The example runs** (`scripts/examples EXCLAVE`) need inputs and time

@@ -276,5 +276,5 @@ hunting. The scratchpad suits traces and one-off trees; a driver worth running t
 `scripts/inputs` makes the arm64 gcc exclave here too (`gcc13-arm64.exclave`,
 wrapped with the cross-built launcher), and the matrix's VM only runs it; the suite, the oracles and `test/exercise.py` make
 their own copies under `build/` (ignored by git). Cloud images for the
-matrix live in `~/.cache/exclave-images`; QEMU with KVM and
+matrix live in `build/images`; QEMU with KVM and
 `cloud-image-utils` are installed, and this user can open `/dev/kvm`.

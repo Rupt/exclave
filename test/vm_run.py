@@ -26,9 +26,7 @@ def main() -> int:
     ap.add_argument("--script", required=True)
     ap.add_argument("--only")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "vm-run-work"))
-    ap.add_argument(
-        "--images", default=os.path.join(os.path.expanduser("~"), ".cache", "exclave-images")
-    )
+    ap.add_argument("--images", default=os.path.join(REPO, "build", "images"))
     ap.add_argument("--memory", type=int, default=2048)
     ap.add_argument("files", nargs="*")
     args = ap.parse_args()
