@@ -105,8 +105,9 @@ side; anything the tree can say about itself the launcher reads from
 the tree, so the manifest holds little else (6.2, 6.3).
 
 The **`exclave` command** (10) is one static executable per
-architecture that carries its launcher (10.5), takes a directory and
-never fetches anything. Its input is an unwrapped exclave, a plain
+architecture that carries its launcher (10.5); its own commands take
+a directory and never fetch, and the fetchers, the step before them,
+are its `fetch` subcommand (10.1). Its input is an unwrapped exclave, a plain
 directory holding `tree/` that ordinary tools can edit; `unpack`, the
 step before it, makes one from `.deb`, `.apk` or `.rpm` packages, and
 `tar` or `debootstrap` make others (10.1). `wrap` turns any such tree
@@ -156,7 +157,7 @@ What is built and tested:
   exclave it runs is made on x86-64 (10.1).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The command as one file**: `build/exclave`, 8 827 KB, static Go
+- **The command as one file**: `build/exclave`, 8 819 KB, static Go
   carrying its launcher, fetches and unpacks packages and wraps,
   checks and prunes an exclave with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
@@ -228,8 +229,9 @@ Goals:
 7. **Uniform behaviour.** One mechanism, one world, one libc, one shape
    of exclave, one code path. The same exclave behaves the same on
    every host and every medium. The launcher has one run-time knob,
-   `EXCLAVE_LOG`, which only logs; the tool's commands take paths, and
-   `format --check` is its one flag.
+   `EXCLAVE_LOG`, which only logs; the tool's own commands take paths,
+   and `format --check` is their one flag (the fetchers, worked
+   examples of the step before it, take the arguments they document).
 8. **Verifiability.** Isolation and libc homogeneity are checkable by
    the tool, statically and by trace.
 
@@ -2007,10 +2009,11 @@ decides which Go or Python runs.
 The tool's input is an unwrapped exclave, a directory holding `tree/`.
 What made the tree is the step before the tool: `unpack` from package
 files (10.1), a build's staging directory (10.2), `debootstrap`, a
-container export or `tar`. Neither the tool nor `unpack` opens a
-network connection: the files they are given are their inputs, whoever
-fetched them, and any record of where they came from is the fetcher's
-to keep. Every command of the tool's own takes paths, and `format
+container export or `tar`. Neither the tool's own commands nor
+`unpack` opens a network connection: the files they are given are
+their inputs, whoever fetched them, and any record of where they came
+from is the fetcher's to keep; `exclave fetch` is that fetcher, a
+worked example that shares nothing with them but the binary. Every command of the tool's own takes paths, and `format
 --check` is the only flag; the fetchers, worked examples of the step
 before it, take the arguments their documentation lists:
 
@@ -2028,14 +2031,14 @@ exclave fetch debs|apks|rpms ...    a package closure from a repository, verifie
 ```
 
 `wrap` and `relink` also write the exclave's `README` (6.1) where it
-has none. Every command except `format` refuses,
+has none. Every command of the tool's own except `format` refuses,
 before reading or writing anything, a directory without `tree/`, and
-every command except `wrap` refuses one without `.exclave/`.
+every one except `wrap` refuses one without `.exclave/`.
 
 ### 10.1 From packages
 
 ```
-scripts/fetch-debs --out debs gcc-13 libc6-dev       # or apt, a mirror, a hand-made directory
+scripts/fetch-debs --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --out debs gcc-13 libc6-dev   # or apt, a mirror, a hand-made directory
 scripts/unpack gcc-13.exclave debs/*.deb
 exclave wrap gcc-13.exclave
 ln -s tree/usr/bin/gcc-13 gcc-13.exclave/gcc
@@ -2254,8 +2257,9 @@ into `bin` and Fedora's p11-kit CA bundle. The package comments of
 **The step before the tool** belongs to whoever makes the exclave.
 Three fetchers, one for each format, the commands of `exclave fetch`
 (the package `fetch/`, run as `scripts/fetch-debs`, `fetch-apks` and
-`fetch-rpms`), are worked examples; they are not part of the tool's
-exclave. Each resolves a closure from a
+`fetch-rpms`), are worked examples, the one part of the command that
+opens a network connection, and nothing the tool's own commands do
+depends on them. Each resolves a closure from a
 repository's index, chooses providers of virtual names by priority,
 verifies every download against the index's checksum, and fills a
 directory. They know about mirrors and snapshot services because those
@@ -2461,7 +2465,7 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, 8 827 KB and 7 996 KB, with nothing beside it to run: no
+the cross compiler, 8 819 KB and 7 996 KB, with nothing beside it to run: no
 interpreter, no library, no file of the checkout. It carries its
 architecture's launcher and the text of every exclave's `README` as data
 (`tool/blob_*.go`, the launcher copied beside them by `scripts/build`),
@@ -3906,12 +3910,12 @@ build touched, `/tmp`, the source directory and the working directory,
 resolved without a manifest record being added.
 
 **The command.** On the gate's gcc exclave (159 MB, 709 ELF files), best
-of three, October 2026, on this machine's 16 threads: `wrap` of the
-unwrapped tree 0.39 s, `check` 0.29 s and `hash` 0.17 s, the tree
-hash on eight threads (10.5). On a tree of 109 020 files, the gcc
-exclave with 100 000 small files added, `hash` takes 0.52 s, and
-`prune` to a log naming half of the added files 5.3 s, of which 0.3 s
-is the command's own and the rest the kernel's unlinks and stats.
+of three, November 2026, on this machine's 16 threads: `wrap` of the
+unwrapped tree 0.36 s, `check` 0.30 s and `hash` 0.15 s, the tree
+hash on eight goroutines (10.5). On a tree of 105 204 files and links,
+the gcc exclave with 100 000 small files added, `hash` takes 0.79 s,
+and `prune` to a log naming half of the added files 1.5 s, the
+kernel's unlinks and stats most of it.
 
 ### 16.9 Reproducing
 
@@ -4763,8 +4767,10 @@ specified.
 
 ### 19.3 Tool
 
-- **The tool takes files and never fetches**: acquisition has its own
-  trust argument; `fetch/` holds examples of that step (10).
+- **The tool's own commands take files and never fetch**: acquisition
+  has its own trust argument; `exclave fetch` holds examples of that
+  step, worked examples bundled in the one file and apart from `wrap`
+  (10).
 - **The tool's input is a directory holding `tree/`, and `unpack` is
   the step before it**: what made the tree, package files, `tar` or a
   build, is not the tool's concern, so `unpack` is a subcommand apart
@@ -4830,8 +4836,9 @@ specified.
   traced run touched is the evidence (10.3, 10.4).
 - **`prune` keeps the packages' licence texts**: a pruned exclave passed
   on carries the packages' terms (10.4, 13 item 47).
-- **No options**: the commands take paths and `format --check` is the
-  one flag; a rule or a stated limitation is preferred to a flag, a
+- **No options**: the tool's own commands take paths and `format
+  --check` is the one flag, the fetchers' arguments being the worked
+  examples' own; a rule or a stated limitation is preferred to a flag, a
   mode or a manifest key (10).
 
 ### 19.4 Tests

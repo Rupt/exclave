@@ -27,9 +27,9 @@ package files or from any filesystem tree.
 
 - **Packages in, a directory out.** The `exclave` command builds
   exclaves from Debian and Ubuntu `.deb`, Alpine `.apk`, and Fedora,
-  Rocky or CentOS `.rpm` files, or from any filesystem tree. It takes
-  files and never fetches; three small fetchers in `fetch/` are the step
-  before it.
+  Rocky or CentOS `.rpm` files, or from any filesystem tree. Its own
+  commands take files and never fetch; three small fetchers, its `fetch`
+  subcommand, are the step before it.
 - **Compilers first.** A gcc exclave builds zlib, Lua, SQLite and re2c
   from source with their configure scripts: the builds within a fifth of
   native time, the configure scripts about a third slower. A clang

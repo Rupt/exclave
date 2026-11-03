@@ -85,7 +85,8 @@ The loop that has served well, in the order it pays:
   lists. Comments in code are held to the same: no review IDs or
   revision numbers.
 - **No options.** The launcher has one environment knob, `EXCLAVE_LOG`,
-  and the tool's commands take paths, `format --check` the one flag. A
+  and the tool's own commands take paths, `format --check` the one
+  flag (the fetchers, worked examples, take the arguments they document). A
   flag, a mode or a manifest key is rarely the answer; the rule that
   makes the option unnecessary, or a stated limitation, usually is. An
   exclave is a directory at every stage, so what a user can do to it
@@ -132,8 +133,8 @@ The loop that has served well, in the order it pays:
   in `.go/` (`scripts/install-go`, checked against a committed checksum,
   as uv is); it carries its launcher (copied to `tool/launcher-ARCH` for
   `go:embed`, so the Go is checked after a build) and the exclave
-  README, takes a directory holding `tree/` and does not open a network
-  connection; paths are bytes and every list it prints or hashes is in
+  README, takes a directory holding `tree/` and, but for `exclave
+  fetch`, does not open a network connection; paths are bytes and every list it prints or hashes is in
   the order of their bytes. The tests judge it only through its
   commands. The steps before it are its subcommands: `unpack/`
   (`exclave unpack`, `scripts/unpack`), which makes a tree from package
