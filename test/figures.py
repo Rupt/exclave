@@ -7,7 +7,7 @@ A figure in a document is measured, never guessed (CLAUDE.md), and the ones here
 without running anything: the suite's count of named tests, the resolution oracle's default number
 of paths and the matrix's rows; sizes, which move with every change, are not quoted. The probe's
 case count needs an exclave and a run: the gate's syscalls step prints it on its last line, and the
-documents quote the reference machine's. scripts/check runs --check.
+documents round it, so that a case added does not make them wrong. scripts/check runs --check.
 """
 
 import argparse

@@ -184,7 +184,7 @@ How it is tested (17):
   and 2).
 - **The syscall probe**: every trapped path and descriptor syscall,
   with every flag and path form, run under `bwrap` and under the
-  launcher; 39 716 cases per exclave, each difference from the kernel
+  launcher; about 40 000 cases per exclave, each difference from the kernel
   fixed, accepted under a named reason or listed as an open defect
   (17 item 7).
 - **Docker's default seccomp profile**: a workload in each exclave runs
@@ -807,9 +807,9 @@ version it fails as it should, on the log.
 
 ## 7. The launcher
 
-The launcher is one static, freestanding, `ET_DYN` binary of 88 744
-bytes stripped on x86-64 and 90 744 on aarch64 (measured October
-2026), with no libc and no `PT_INTERP`; it relocates itself. Every
+The launcher is one static, freestanding, `ET_DYN` binary, about
+100 KB stripped on either architecture, with no libc and no
+`PT_INTERP`; it relocates itself. Every
 executable in an exclave's tree is a hard link to it, a *wrapper*, and
 the program a wrapper stands for, its *original*, sits beside it in
 `.real/` (6.1). Besides its code it carries:
@@ -3356,7 +3356,7 @@ every file at its base, originals included.
 | Resolving host symlinks in the host's domain | A host link into `/usr` would reach the host's `/usr`. Links resolve in the exclave's view; the identity files are handled at startup (8.4). |
 | Honouring `clone3` by copying the signal frame onto the child's stack | The FPU save area must be copied with the frame and the frame's pointer to it moved, or every new thread starts with a corrupt `MXCSR`. That can be done, but it ties the handler to the kernel's signal-frame layout on both architectures, a layout that grows with each new register set, where `ENOSYS` costs a few traps per `posix_spawn` (7.5.5). |
 | Reclaiming scratch by comparing stack pointers across threads | Meaningless across alternate stacks and coroutines; scratch is reclaimed by liveness sweeps (7.5.4). |
-| Synthesising host entries into `getdents64` | Invents results and traps every directory read. Empty placeholders in the tree give `ls /` the same answer for free (8.3). |
+| Synthesising host entries into `getdents64` | Invents results: a listing would name what no directory holds, merged in an order no choice gets right for every program. Empty placeholders in the tree give `ls /` the same answer for free (8.3). |
 | A canonicalisation cache shared across processes | Would save a few hundred `lstat`s per compile, but an inherited descriptor is visible to the program (descriptor counts, `close_range`, leak checks), and a file outside the exclave is state an edited tree makes wrong (14.5). |
 | Caching host paths | A host directory can be replaced at any time. The one-step host check (7.4.4) gets most of the benefit without remembering anything. |
 | Skipping the empty top-level directories at startup | The placeholders are how `ls /` lists the host's directories (8.3), and only reading a directory says it is empty: twelve reads per start in the gcc exclave. |
@@ -4551,13 +4551,13 @@ listed apart by its two exact answers, printed by every run, and fails
 once the answers agree until its entry goes, on a host whose files can
 show it (an entry says which hosts can, such as one whose
 `/etc/resolv.conf` is a symlink). On the reference machine
-39 716 cases run on each of the gate's four exclaves and none differ
+about 40 000 cases run on each of the gate's four exclaves and none differ
 unexplained, and no defect is open.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.
 
 The probe does not cover signals, threads, `vfork`, nesting, the
-border, `getdents` (which is not trapped), or the host's own mount
+border, or the host's own mount
 boundaries, which `bwrap` rebuilds. Those stay with the named
 regressions.
 
