@@ -367,7 +367,7 @@ func cmdWrap(args []string) int {
 	}
 	data := dataPrefixes(ex)
 	ls := listTree(root) // read three times over before anything is wrapped: listed once
-	problems := append(wrapperProblems(ex, data, ls), locatedLinks(ex, ls)...)
+	problems := append(append(wrapperProblems(ex, data, ls), locatedLinks(ex, ls)...), shortcutProblems(ex)...)
 	for _, p := range problems {
 		fmt.Fprintf(out, "error: %s\n", p)
 	}

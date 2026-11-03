@@ -383,6 +383,12 @@ by hand; it is a convention, recorded nowhere.
 - A symlink in the tree whose text names the exclave's own location is
   refused by `wrap` and `check`, with the `ln` that fixes it: moving
   the exclave would break it (3, goal 2). Packages never make one.
+- A shortcut must name its file in `tree/` by a relative path and
+  resolve, as the host resolves it, to a file of the tree: `wrap` and
+  `check` refuse one that is absolute, dangling or leaves the tree. The
+  kernel follows a shortcut by the host's resolution, so a shortcut to
+  a link in the tree with an absolute target, `/etc/alternatives/cc`,
+  would run the host's program, and nothing hashes the shortcuts.
 - `.real/` is a hidden sibling by convention only: `find`, `du`, `tar`
   and directory scanners see it. Hard links cost nothing; a copy that
   breaks them, `cp -r`, `git` or `zip -y`, makes each wrapper a copy of

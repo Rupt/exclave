@@ -629,6 +629,44 @@ func locatedLinks(ex string, l *listing) []string {
 	return out
 }
 
+// shortcutProblems lists the exclave's shortcuts that do not stay in it (6.1). The kernel follows a shortcut by the
+// host's resolution, a link inside the tree with an absolute target included, and nothing hashes the shortcuts, so
+// each symlink at the top of the exclave must name a path of its tree relatively, and resolve on the host to a file
+// of that tree.
+func shortcutProblems(ex string) []string {
+	names, err := dirNames(ex)
+	if err != nil {
+		failErrno(ex, err)
+	}
+	treeAt, err := filepath.EvalSymlinks(pathJoin(ex, "tree"))
+	if err != nil {
+		failErrno(pathJoin(ex, "tree"), err)
+	}
+	var out []string
+	for _, name := range names {
+		p := pathJoin(ex, name)
+		if st, err := lstat(p); err != nil || !isLnk(&st) {
+			continue
+		}
+		text, err := os.Readlink(p)
+		if err != nil {
+			failErrno(p, err)
+		}
+		real, rerr := filepath.EvalSymlinks(p)
+		switch {
+		case strings.HasPrefix(text, "/"):
+			out = append(out, fmt.Sprintf("shortcut by an absolute path: %s -> %s; a shortcut names its file in tree/ "+
+				"relatively, so that the exclave can move", name, text))
+		case rerr != nil:
+			out = append(out, fmt.Sprintf("shortcut that does not resolve: %s -> %s", name, text))
+		case !under(real, treeAt) || real == treeAt:
+			out = append(out, fmt.Sprintf("shortcut leaving the tree: %s -> %s, which the host resolves to %s; point "+
+				"it at the tree's own file", name, text, real))
+		}
+	}
+	return out
+}
+
 func printReport(rep *report) {
 	for _, w := range rep.warnings {
 		fmt.Fprintf(out, "warning: %s\n", w)
@@ -665,7 +703,7 @@ func cmdCheck(args []string) int {
 	l := launcherOf(ex)
 	root, hashes := pathJoin(ex, "tree"), pathJoin(ex, ".exclave/hashes")
 	ls := listTree(root) // the tree is read five times over and not changed: listed once
-	problems := append(wrapperProblems(ex, data, ls), locatedLinks(ex, ls)...)
+	problems := append(append(wrapperProblems(ex, data, ls), locatedLinks(ex, ls)...), shortcutProblems(ex)...)
 	ls.walkFiles(root, func(real, v string, st *unix.Stat_t) {
 		if !isReg(st) || st.Mode&0o111 == 0 || underAny(v, data) || isWrapper(real, st, &l) {
 			return

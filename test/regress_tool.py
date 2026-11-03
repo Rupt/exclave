@@ -422,7 +422,9 @@ def wrap_refusals(ctx: Ctx) -> None:
     It refuses a stale wrapper of another launcher, a file its user cannot execute, an original
     without a wrapper, an ELF whose loader the tree lacks, a manifest or a tree beyond the
     launcher's tables, which the launcher refuses too, and a link naming the exclave's own location,
-    with the link that fixes it; executables in a data directory are left alone.
+    with the link that fixes it; executables in a data directory are left alone. A shortcut must
+    name a file of the tree relatively: check refuses one that is absolute, dangling, outside the
+    exclave or reaching the host through a link of the tree.
     """
 
     def hand(
@@ -605,6 +607,23 @@ def wrap_refusals(ctx: Ctx) -> None:
         and not os.path.exists(os.path.join(lk, "tree", "usr", "bin", ".real")),
         f"a link naming the exclave's location must be refused: {rc} {(o + e)[-400:]}",
     )
+    # shortcuts: into the tree by a relative path, or refused, since the host resolves them
+    sc = hand("shortcuts.exclave", [("/usr/bin/hi", script, 0o755)])
+    os.symlink("/usr/bin/true", os.path.join(sc, "tree", "usr", "bin", "abs"))
+    os.symlink("tree/usr/bin/hi", os.path.join(sc, "hi"))
+    rc, o, e = run([*TOOL, "wrap", sc])
+    expect(rc == 0, f"a shortcut into the tree: {rc} {(o + e)[-300:]}")
+    located = os.path.join(os.path.realpath(sc), "tree", "usr", "bin", "hi")
+    for name, target, why in (
+        ("located", located, "by an absolute path"),
+        ("dangling", "tree/usr/bin/none", "that does not resolve"),
+        ("out", "../st.exclave/tree/usr/bin/hi", "leaving the tree"),
+        ("escape", "tree/usr/bin/abs", "leaving the tree: escape -> tree/usr/bin/abs, which the"),
+    ):
+        os.symlink(target, os.path.join(sc, name))
+        rc, o, e = run([*TOOL, "check", sc])
+        expect(rc == 1 and f"shortcut {why}" in o + e, f"shortcut {name}: {rc} {(o + e)[-300:]}")
+        os.remove(os.path.join(sc, name))
 
 
 @test
