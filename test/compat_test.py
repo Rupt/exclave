@@ -7,7 +7,8 @@ launcher; the first release's, once there is one, which scripts/inputs then pins
 exclave. One copy of it is relinked by the earlier command to the earlier launcher, another by this
 command to this launcher, and each build reads the other's: this command checks, hashes, unwraps and
 wraps the earlier exclave and reads its launcher's log in check and prune; the earlier command
-checks and hashes this one's; and each launcher runs the other's programs, nested either way.
+checks and hashes this one's; and each launcher runs the other's programs, a listing among them,
+nested either way.
 Prints one line per step; the exit status is the number of failures.
 """
 
@@ -104,12 +105,14 @@ def main() -> int:
     rc, out = run([old_cmd, "hash", later])
     step("and hashes it as this command recorded", out.strip() == recorded_tree(later), out)
 
-    # the two launchers, each running the other's programs
+    # the two launchers, each running the other's programs, a listing among them: the call a later
+    # filter version traps that an earlier handler may not answer (6.7)
     for outer, inner, name in (
         (earlier, later, "earlier outside, this inside"),
         (later, earlier, "this outside, earlier inside"),
     ):
-        rc, out = run([shell(outer), "-c", f"{shell(inner)} -c 'echo nested'"])
+        inner_cmd = "ls / /usr >/dev/null && echo nested"
+        rc, out = run([shell(outer), "-c", f"{shell(inner)} -c '{inner_cmd}'"])
         step(f"nested, {name}", rc == 0 and out.strip() == "nested", out[-300:])
 
     print(f"compat: {'every step passed' if not fails else f'{len(fails)} steps failed'}")
