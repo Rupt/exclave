@@ -369,3 +369,20 @@ func linkOrCopy(src, dst string) error {
 	}
 	return out.Close()
 }
+
+// cacheIn is the directory a fetcher keeps files in: dir when one is given, else a directory of its
+// own inside out, removed by done, so that a fetch without --cache keeps nothing outside out and
+// its packages are still hard-linked into place.
+func cacheIn(dir, out string) (string, func(), error) {
+	if dir != "" {
+		return dir, func() {}, nil
+	}
+	if err := os.MkdirAll(out, 0o777); err != nil {
+		return "", nil, err
+	}
+	tmp, err := os.MkdirTemp(out, ".exclave-fetch-")
+	if err != nil {
+		return "", nil, err
+	}
+	return tmp, func() { os.RemoveAll(tmp) }, nil
+}

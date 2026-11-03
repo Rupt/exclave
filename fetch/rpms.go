@@ -543,7 +543,7 @@ func fetchRpms(args []string) error {
 	fs.Var(&keyrings, "keyring", "a keyring the packages must be signed by: an RPM-GPG-KEY file, or a binary keyring")
 	fs.Var(&repos, "repo", "a repository root holding repodata/")
 	arch := fs.String("arch", "x86_64", "architecture to take besides noarch")
-	cacheDir := fs.String("cache", filepath.Join(homeDir(), ".cache", "exclave-rpms"), "the cache directory")
+	cacheDir := fs.String("cache", "", "a directory to keep files in between runs, or none")
 	fs.Var(&choose, "choose", "VIRTUAL=PKG, the package to use for a capability")
 	noBase := fs.Bool("no-base", false, "leave the base set out")
 	packages, err := parseArgs(fs, args)
@@ -557,7 +557,12 @@ func fetchRpms(args []string) error {
 	if err != nil {
 		return err
 	}
-	repo, err := newRpmRepo(repos, *arch, *cacheDir, keys)
+	cdir, done, err := cacheIn(*cacheDir, *out)
+	if err != nil {
+		return err
+	}
+	defer done()
+	repo, err := newRpmRepo(repos, *arch, cdir, keys)
 	if err != nil {
 		return err
 	}

@@ -2372,11 +2372,12 @@ are locators; the tool does not, because a hash is not a locator.
   the header signature over the header, whose payload digest covers the
   payload, or a signature over header and payload together.
 
-Each fetcher keeps, under its cache directory (`--cache`,
-`~/.cache/exclave-debs`, `-apks` and `-rpms`), every file a signed one
-names by its digest as `KIND/DIGEST`, whatever mirror, snapshot or URL
-served it: the packages and the indexes, an apk by the SHA-1 of its
-control section. A download is streamed to a file of its own and
+Given a cache directory (`--cache DIR`), each fetcher keeps there every
+file a signed one names by its digest as `KIND/DIGEST`, whatever
+mirror, snapshot or URL served it: the packages and the indexes, an apk
+by the SHA-1 of its control section. Without one it keeps nothing
+outside `--out`: the run works in a directory of its own inside it,
+removed when the run ends, and the next run fetches everything again. A download is streamed to a file of its own and
 hashed, renamed into place only once it is the file named, and checked
 again every time it is used, a damaged one fetched again, four packages
 at a time, the first failure reported in the order of their names; what changes
@@ -4262,7 +4263,8 @@ the sysroot of 9, the workloads' exclaves, and the source tarballs of
 `test/realsoft.py`, `test/bench.py` and `test/workloads.py`, some from
 their authors' own sites. Packages come through the
 fetchers of `fetch/`, which verify each download against the repository
-index's checksum and cache it under `~/.cache`. Every other third-party
+index's checksum and keep it in `DIR/packages`, their cache: nothing is
+kept outside `DIR`. Every other third-party
 file is pinned by its BLAKE3-256 in the script, checked by `exclave hash`. An item `DIR` already
 has is skipped, and whatever is missing is fetched again. The items
 run three at a time once the signing keys are fetched, each a fetch,

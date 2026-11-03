@@ -410,10 +410,11 @@ Beyond the first run's requirements:
   QEMU with KVM and `cloud-image-utils`, for the kernel matrix
   (`qemu-system-arm` and `qemu-efi-aarch64` for its arm64 row).
 
-`scripts/inputs` downloads every development input, pinned or verified,
-through caches under `~/.cache`. The tests take their inputs as paths;
-nothing else touches the network except the kernel matrix, which
-downloads cloud images and whose VMs install packages.
+`scripts/inputs DIR` downloads every development input, pinned or
+verified, and keeps everything in `DIR`, the fetchers' cache included.
+The tests take their inputs as paths; nothing else touches the network
+except the kernel matrix, which downloads cloud images and whose VMs
+install packages.
 
 `docs/DESIGN.md` is the design and specification, self-contained: 6 is
 the format, 7 the launcher, 8 the visibility rule, 10 the `exclave`

@@ -440,7 +440,7 @@ func fetchApks(args []string) error {
 	repos := fs.String("repos", "main,community", "repositories, separated by commas")
 	arch := fs.String("arch", "x86_64", "architecture")
 	mirror := fs.String("mirror", apkMirror, "the mirror's URL")
-	cacheDir := fs.String("cache", filepath.Join(homeDir(), ".cache", "exclave-apks"), "the cache directory")
+	cacheDir := fs.String("cache", "", "a directory to keep files in between runs, or none")
 	noBase := fs.Bool("no-base", false, "leave the base set out")
 	packages, err := parseArgs(fs, args)
 	if err != nil {
@@ -449,7 +449,12 @@ func fetchApks(args []string) error {
 	if len(packages) == 0 || *out == "" || len(keys) == 0 {
 		return &usageError{"--out, --key and at least one PACKAGE are required"}
 	}
-	repo, err := newApkRepo(*mirror, *branch, strings.Split(*repos, ","), *arch, *cacheDir, keys)
+	cdir, done, err := cacheIn(*cacheDir, *out)
+	if err != nil {
+		return err
+	}
+	defer done()
+	repo, err := newApkRepo(*mirror, *branch, strings.Split(*repos, ","), *arch, cdir, keys)
 	if err != nil {
 		return err
 	}

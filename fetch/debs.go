@@ -440,7 +440,7 @@ func fetchDebs(args []string) error {
 	components := fs.String("components", "main,universe", "components, separated by commas")
 	mirror := fs.String("mirror", "", "the archive's URL")
 	snapshot := fs.String("snapshot", "", "a snapshot service date instead of a mirror")
-	cacheDir := fs.String("cache", filepath.Join(homeDir(), ".cache", "exclave-debs"), "the cache directory")
+	cacheDir := fs.String("cache", "", "a directory to keep files in between runs, or none")
 	noEssential := fs.Bool("no-essential", false, "leave the Essential set out")
 	fs.Var(&choose, "choose", "VIRTUAL=PKG, the package to use for a virtual package or an alternative")
 	packages, err := parseArgs(fs, args)
@@ -466,7 +466,12 @@ func fetchDebs(args []string) error {
 	if err != nil {
 		return err
 	}
-	repo, err := newDebRepo(*distro, suiteList, *arch, strings.Split(*components, ","), *cacheDir, keys,
+	cdir, done, err := cacheIn(*cacheDir, *out)
+	if err != nil {
+		return err
+	}
+	defer done()
+	repo, err := newDebRepo(*distro, suiteList, *arch, strings.Split(*components, ","), cdir, keys,
 		*mirror, *snapshot)
 	if err != nil {
 		return err
@@ -507,11 +512,4 @@ func fetchDebs(args []string) error {
 	}
 	log(fmt.Sprintf("%d packages in %s", len(selected), *out))
 	return nil
-}
-
-func homeDir() string {
-	if h, err := os.UserHomeDir(); err == nil {
-		return h
-	}
-	return "."
 }

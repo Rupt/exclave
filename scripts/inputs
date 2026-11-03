@@ -2,8 +2,8 @@
 # scripts/inputs DIR [examples] — the development inputs, remade from the network (DESIGN.md 17): the exclaves
 # the gate runs on and Docker's seccomp profile, from the distributions' package archives and GitHub alone, and
 # with the word examples the files the examples take too, some from their authors' own sites, which a
-# continuous-integration run has no business fetching. Nothing is kept anywhere but DIR and the fetchers'
-# caches under ~/.cache, and both may be empty at any time: whatever is missing is fetched again, and an item
+# continuous-integration run has no business fetching. Nothing is kept anywhere but DIR, the fetchers'
+# caches included (DIR/packages), and DIR may be empty at any time: whatever is missing is fetched again, and an item
 # DIR already has is skipped, so a rerun costs nothing. Afterwards:
 #   EXCLAVE_TEST_INPUTS=DIR scripts/gate DIR/gcc13.exclave
 #   EXCLAVE_TEST_INPUTS=DIR scripts/extra DIR/gcc13.exclave DIR/alpine.exclave DIR/f42.exclave DIR/clang.exclave
@@ -61,7 +61,7 @@ download() { # download URL FILE: through curl or wget, with their retries
 }
 unpack() { "$repo/build/exclave" unpack "$@"; }
 
-fetch() { # fetch NAME KIND ARGS...: package files into DIR/NAME through the fetcher's cache; KIND is debs, apks or rpms
+fetch() { # fetch NAME KIND ARGS...: package files into DIR/NAME through the cache DIR/packages/KIND; KIND is debs, apks or rpms
     name=$1
     kind=$2
     shift 2
@@ -70,7 +70,7 @@ fetch() { # fetch NAME KIND ARGS...: package files into DIR/NAME through the fet
         return 0
     fi
     rm -rf "${dir:?}/$name"
-    if "$repo/build/exclave-fetch" "$kind" --out "$dir/$name" "$@" >"$dir/log/$name.log" 2>&1; then
+    if "$repo/build/exclave-fetch" "$kind" --cache "$dir/packages/$kind" --out "$dir/$name" "$@" >"$dir/log/$name.log" 2>&1; then
         echo "$name: $(find "$dir/$name" -type f | wc -l) files"
     else
         echo "$name: FAIL, see $dir/log/$name.log"

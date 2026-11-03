@@ -161,9 +161,16 @@ def deb_mirror(d: str, sign: Callable[[bytes], bytes] | None, *, tamper: str = "
     return d
 
 
-def fetch_debs(work: str, mirror: str, keyring: str, name: str) -> tuple[int, str, list[str]]:
-    """Run the deb fetcher on the mirror; return its status, stderr and what it fetched."""
+def fetch_debs(
+    work: str, mirror: str, keyring: str, name: str, *, cache: bool = True
+) -> tuple[int, str, list[str]]:
+    """Run the deb fetcher on the mirror; return its status, stderr and what it fetched.
+
+    It has a home directory of its own, and a cache of its own unless cache is false.
+    """
     out = os.path.join(work, f"out-{name}")
+    home = os.path.join(work, f"home-{name}")
+    os.makedirs(home, exist_ok=True)
     p = subprocess.run(
         [
             *FETCH,
@@ -181,13 +188,13 @@ def fetch_debs(work: str, mirror: str, keyring: str, name: str) -> tuple[int, st
             "--components",
             "main",
             "--no-essential",
-            "--cache",
-            os.path.join(work, f"cache-{name}"),
+            *(["--cache", os.path.join(work, f"cache-{name}")] if cache else []),
             "x",
         ],
         capture_output=True,
         check=False,
         timeout=120,
+        env={**os.environ, "HOME": home, "XDG_CACHE_HOME": os.path.join(home, ".cache")},
     )
     got = sorted(os.listdir(out)) if os.path.isdir(out) else []
     return p.returncode, p.stderr.decode("utf-8", "replace"), got
@@ -474,6 +481,24 @@ def debs_cache_by_digest(work: str) -> None:
         any(u.endswith("/" + deb) for u in fetched(result[1])),
         f"a damaged package is not fetched again: {result[1][-300:]!r}",
     )
+
+
+@test
+def debs_without_cache(work: str) -> None:
+    """10.1: without --cache a fetch keeps nothing outside --out, and nothing in the home directory.
+
+    The output holds the package alone, and a refused fetch leaves no file in it.
+    """
+    right = PgpKey(work, "right")
+    keyring = right.export(work, "right.gpg")
+    deb = f"x_1_{DEB_ARCH}.deb"
+    mirror = deb_mirror(os.path.join(work, "mirror"), right.clearsign)
+    accepted("fetched", fetch_debs(work, mirror, keyring, "nocache", cache=False), deb, "verified")
+    expect(not os.path.exists(os.path.join(work, "cache-nocache")), "a cache was kept")
+    home = os.path.join(work, "home-nocache")
+    expect(not os.listdir(home), f"the fetch wrote into its home directory: {os.listdir(home)}")
+    damaged = deb_mirror(os.path.join(work, "damaged"), right.clearsign, tamper="deb")
+    refused("refused", fetch_debs(work, damaged, keyring, "refused", cache=False), "SHA256")
 
 
 @test

@@ -63,9 +63,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/.cache/exclave-debs
-            ~/.cache/exclave-apks
-            ~/.cache/exclave-rpms
+            ~/inputs/packages
             ~/inputs/src
           # the fetchers keep files by digest; a cache of the earlier layout, by URL, is not restored
           key: packages-by-digest-${{ hashFiles('scripts/inputs', 'fetch/**') }}
@@ -129,9 +127,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/.cache/exclave-debs
-            ~/.cache/exclave-apks
-            ~/.cache/exclave-rpms
+            ~/inputs/packages
             ~/inputs/src
           # the fetchers keep files by digest; a cache of the earlier layout, by URL, is not restored
           key: packages-by-digest-${{ hashFiles('scripts/inputs', 'fetch/**') }}

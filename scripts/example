@@ -1,7 +1,7 @@
 #!/bin/sh
 # scripts/example DIR — from a clean checkout to a program that runs on any glibc since 2.17, in one script
-# (README; DESIGN.md 9, 10). Everything it makes goes under DIR; the fetchers keep their caches under
-# ~/.cache, so a second run fetches nothing. The steps, each a command you can run by hand:
+# (README; DESIGN.md 9, 10). Everything it makes goes under DIR, and nothing anywhere else; a second run
+# keeps the fetched files and fetches nothing. The steps, each a command you can run by hand:
 #   1. scripts/build builds the launcher.
 #   2. scripts/fetch-debs downloads Ubuntu 24.04's gcc-13 closure; scripts/unpack makes an unwrapped exclave from the files.
 #   3. scripts/fetch-rpms downloads CentOS 7's glibc; unpacked into an exclave of its own, its tree is copied into the
