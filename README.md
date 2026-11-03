@@ -412,6 +412,9 @@ Beyond the first run's requirements:
 
 `scripts/inputs DIR` downloads every development input, pinned or
 verified, and keeps everything in `DIR`, the fetchers' cache included.
+Nothing the scripts make goes in the home directory: the pinned uv and
+Go keep themselves and their caches in `.uv/` and `.go/`, and the rest
+is under `build/` or the `DIR` given.
 The tests take their inputs as paths; nothing else touches the network
 except the kernel matrix, which downloads cloud images and whose VMs
 install packages.
@@ -424,15 +427,15 @@ each test establishes, 19 the decisions a change is expected to respect.
 
 ```
 scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, clang-format, clang-tidy and gcc's strict warnings; --fix lets them correct
-scripts/inputs ~/.cache/exclave-inputs   # the test inputs: the four exclaves, the arm64 gcc exclave and Docker's seccomp profile, from the package archives and GitHub; skips what is present
-scripts/inputs ~/.cache/exclave-inputs examples   # the examples' inputs too, some from their authors' sites
-D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave   # the commit gate: of the code checks, unit tests, stack budget, the command's Go tests, unpack's and the fetchers' tests, the suite, the oracles, the syscall probe and the Docker profile run, the steps the change can affect, two at a time (--jobs N); --full runs all of them
-D=~/.cache/exclave-inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # beyond the gate, when asked: the suite, the debug launcher, the oracles and the probe on every exclave given; the plain-label suite, the fuzz budget, the release test and, with EXCLAVE_TEST_OLD=DIR, the compatibility test on the first
+scripts/inputs build/inputs   # the test inputs: the four exclaves, the arm64 gcc exclave and Docker's seccomp profile, from the package archives and GitHub; skips what is present
+scripts/inputs build/inputs examples   # the examples' inputs too, some from their authors' sites
+D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave   # the commit gate: of the code checks, unit tests, stack budget, the command's Go tests, unpack's and the fetchers' tests, the suite, the oracles, the syscall probe and the Docker profile run, the steps the change can affect, two at a time (--jobs N); --full runs all of them
+D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # beyond the gate, when asked: the suite, the debug launcher, the oracles and the probe on every exclave given; the plain-label suite, the fuzz budget, the release test and, with EXCLAVE_TEST_OLD=DIR, the compatibility test on the first
 scripts/test --exclave gcc.exclave       # the suite alone; -k NAME runs one test
-scripts/matrix --exclave gcc.exclave --docker-profile ~/.cache/exclave-inputs/src/docker-seccomp.json   # the kernel matrix: cloud images under QEMU/KVM, one at a time (--jobs N); due when the gate says a change reaches the VMs
+scripts/matrix --exclave gcc.exclave --docker-profile build/inputs/src/docker-seccomp.json   # the kernel matrix: cloud images under QEMU/KVM, one at a time (--jobs N); due when the gate says a change reaches the VMs
 gh workflow run ci.yml -f matrix=true    # the gate on GitHub's x86-64 and aarch64 runners, then the x86-64 rows under KVM, for the pushed main; -f matrix=false the gate alone. gh run list --workflow ci.yml, gh run watch ID --exit-status, gh run view ID --log-failed
 scripts/exercise --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the launcher, side by side
-scripts/examples ~/.cache/exclave-inputs/realsoft.exclave   # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_ARM64 (the emulated aarch64 row), EXCLAVE_TEST_DOCKER (its Docker profile run)
+scripts/examples build/inputs/realsoft.exclave   # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_ARM64 (the emulated aarch64 row), EXCLAVE_TEST_DOCKER (its Docker profile run)
 ```
 
 The repository's layout:

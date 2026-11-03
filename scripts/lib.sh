@@ -46,6 +46,10 @@ export GOTOOLCHAIN=local
 export GOMODCACHE="$GO_HOME/mod"
 export GOCACHE="$GO_HOME/cache"
 export GOPATH="$GO_HOME/path"
+# staticcheck's cache and the go command's telemetry counters, which would otherwise go under the
+# home directory: nothing the scripts run writes there
+export STATICCHECK_CACHE="$GO_HOME/staticcheck"
+export XDG_CONFIG_HOME="$GO_HOME/config"
 export GOFLAGS="-trimpath -buildvcs=false"
 export GOPROXY=off
 export CGO_ENABLED=0

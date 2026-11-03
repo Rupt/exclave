@@ -4246,8 +4246,8 @@ gate:
 ```sh
 scripts/install-uv
 scripts/build
-scripts/inputs ~/.cache/exclave-inputs
-D=~/.cache/exclave-inputs
+scripts/inputs build/inputs
+D=build/inputs
 EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave
 ```
 

@@ -267,9 +267,9 @@ some from their authors' sites, which CI must not fetch. It is the one
 script that downloads: a test takes its inputs as paths and touches no
 network, and the repository holds no file of someone else's, so a
 third-party input is fetched there, pinned by its hash.
-`~/.cache/exclave-inputs` is a good `DIR`; the fetchers cache in
-`DIR/packages`, and nothing else is kept outside `DIR`. Nothing
-under `~/.cache` or the session scratchpad is assumed to persist: the
+`build/inputs` is a good `DIR`; the fetchers cache in `DIR/packages`,
+and nothing goes in the home directory unless the user asks. Nothing
+under `build/` or the session scratchpad is assumed to persist: the
 scratchpad lost every exclave once, so an input is best not kept only
 there, nor put where a script will remove it, and refetching beats
 hunting. The scratchpad suits traces and one-off trees; a driver worth running twice belongs in `test/`.
