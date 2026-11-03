@@ -10,9 +10,10 @@ step() { # step NAME CMD...: in the background once fewer than $jobs run, its st
     while [ $((started - $(find "$out" -maxdepth 1 -name '*.rc' | wc -l))) -ge "$jobs" ]; do sleep 1; done
     started=$((started + 1))
     (
-        t=$(date +%s)
+        # a name no step's function uses for its own, since a function shares the shell's variables
+        step_started=$(date +%s)
         "$@" >"$out/$name.log" 2>&1
-        echo "$? $(($(date +%s) - t))" >"$out/$name.rc"
+        echo "$? $(($(date +%s) - step_started))" >"$out/$name.rc"
     ) &
 }
 

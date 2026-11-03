@@ -38,26 +38,20 @@ start=$(date +%s)
 seed=$(($(date +%s) % 100000))
 
 # shellcheck disable=SC2329  # run through step, by name
-# the parsers of the command (every module but its entry, with the files it carries) and of the launcher, each built
-# with test/fuzz.c under the sanitisers, under mutation of EXCLAVE's own files
+# the launcher's parsers, built with test/fuzz.c under the sanitisers, under mutation of EXCLAVE's own files
 fuzz() { # fuzz EXCLAVE
-    ex=$1
-    set --
-    for f in "$repo"/tool/*.c; do [ "$f" = "$repo/tool/main.c" ] || set -- "$@" "$f"; done
-    (cd "$repo" && sanitized "$out/tool_fuzz" -D_GNU_SOURCE "-DLAUNCHER=\"$repo/build/launcher\"" "$here/fuzz.c" \
-        "$here/tool_fuzz.c" "$@" "$repo/tool/blobs.S") &&
-        sanitized "$out/launcher_fuzz" -DHOST_TEST "$here/fuzz.c" "$here/launcher_fuzz.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
-        py "$here/fuzz.py" --exclave "$ex" --work "$out/fuzz" --tool "$out/tool_fuzz" --launcher "$out/launcher_fuzz"
+    sanitized "$out/launcher_fuzz" -DHOST_TEST "$here/fuzz.c" "$here/launcher_fuzz.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
+        py "$here/fuzz.py" --exclave "$1" --work "$out/fuzz" --launcher "$out/launcher_fuzz"
 }
 
-# the Go commands' parsers under Go's own fuzzer, ten seconds a target, from the seeds their tests hold
-# (unpack/*/fuzz_test.go, fetch/fuzz_test.go); an input that panics is written under the package's testdata/fuzz,
-# which the gate's go step then runs as a case
+# the command's parsers under Go's own fuzzer, ten seconds a target, from the seeds their tests hold
+# (tool/fuzz_test.go, unpack/*/fuzz_test.go, fetch/fuzz_test.go); an input that panics is written under the
+# package's testdata/fuzz, which the gate's go step then runs as a case
 gofuzz() {
-    for pkg in $("$GO" -C "$ROOT" list ./fetch/... ./unpack/...); do
-        for t in $("$GO" -C "$ROOT" test -list 'Fuzz.*' "$pkg" | grep '^Fuzz'); do
+    for pkg in $("$GO" -C "$ROOT" list ./tool/... ./fetch/... ./unpack/...); do
+        for target in $("$GO" -C "$ROOT" test -list 'Fuzz.*' "$pkg" | grep '^Fuzz'); do
             # four workers, not one per CPU: the laptop is in use beside it
-            "$GO" -C "$ROOT" test -run '^$' -fuzz "^$t\$" -fuzztime 10s -parallel 4 "$pkg" || return 1
+            "$GO" -C "$ROOT" test -run '^$' -fuzz "^$target\$" -fuzztime 10s -parallel 4 "$pkg" || return 1
         done
     done
 }
