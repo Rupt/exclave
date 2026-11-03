@@ -202,7 +202,7 @@ def fixture_keys(ex: str) -> tuple[str, str] | None:
     )
     # the command's sources: its packages' Go and the README it carries, not the launcher copies
     # scripts/build puts beside them nor a fuzzer's testdata
-    for pkg in ("tool", "unpack", "fetch"):
+    for pkg in ("tool", "unpack"):
         for dirpath, dirs, names in os.walk(os.path.join(REPO, pkg)):
             dirs[:] = sorted(d for d in dirs if d != "testdata")
             files += sorted(

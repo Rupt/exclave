@@ -31,9 +31,10 @@ package files or from any filesystem tree.
 
 - **Packages in, a directory out.** The `exclave` command builds
   exclaves from Debian and Ubuntu `.deb`, Alpine `.apk`, and Fedora,
-  Rocky or CentOS `.rpm` files, or from any filesystem tree. Its own
-  commands take files and never fetch; three small fetchers, its `fetch`
-  subcommand, are the step before it.
+  Rocky or CentOS `.rpm` files, or from any filesystem tree. Its
+  commands take files, and it holds no network code; `exclave-fetch`,
+  a program of its own beside it, downloads a package closure with every
+  file checked against the repository's signatures.
 - **Compilers first.** A gcc exclave builds zlib, Lua, SQLite and re2c
   from source with their configure scripts: the builds within a fifth of
   native time, the configure scripts about a third slower. A clang
@@ -236,8 +237,8 @@ from the checkout. Its `wrap` takes a directory holding `tree/` and
 never fetches.
 
 Whatever made the tree is the step before it. For package files that is
-`exclave unpack` (`scripts/unpack`), beside the three fetchers, `exclave
-fetch debs`, `apks` and `rpms` (`scripts/fetch-*`):
+`exclave unpack` (`scripts/unpack`), beside the three fetchers of
+`exclave-fetch`, `debs`, `apks` and `rpms` (`scripts/fetch-*`):
 
 - it reads each package's own control archive and reports the
   dependencies the set does not satisfy;
@@ -464,7 +465,7 @@ src/scratch.c        handler memory: mmap'd chunks with liveness reclamation (7.
 src/isa.c            the CPU check (7.7): x86-64 psABI levels by cpuid and XCR0, aarch64 levels by AT_HWCAP
 src/str.c            string helpers, arena, the shebang parser
 src/log.c            EXCLAVE_LOG and fatal messages
-tool/main.go         the exclave command (10), Go, one static file: the command line, hash, format, refusals and files; unpack and fetch are its subcommands
+tool/main.go         the exclave command (10), Go, one static file: the command line, hash, format, refusals and files; unpack is its subcommand
 tool/grammar.go      the strict grammar of the manifest and the hashes file (6.2), and its canonical form
 tool/tree.go         the walks of a tree in the order of its names' bytes, the tree listed once on goroutines, and the tree hash (6.4), its files hashed on goroutines, the largest first
 tool/layout.go       the launcher, the README and the hashes file; wrap, unwrap and relink
@@ -483,7 +484,7 @@ unpack/root/         the tree as a root: every path resolved inside it, every wr
 unpack/deb/          the Debian reader: ar, tar, compression, control stanzas, dependency fields, version order
 unpack/apk/          the Alpine reader: gzip streams, .PKGINFO, apk's dependency and version syntax
 unpack/rpm/          the rpm reader: lead and headers, the cpio payload, rpm's flags and version order
-fetch/main.go        exclave fetch, debs, apks or rpms; fetch/net.go the cache and the retried fetch they share
+fetch/main.go        exclave-fetch, debs, apks or rpms, its own program (fetch/exclave-fetch); fetch/net.go the cache by digest and the retried fetch they share
 fetch/debs.go        resolve a closure from a Debian archive and download it: InRelease against the keyring, every file against the index
 fetch/apks.go        the same for an Alpine repository: the index against the key its signature names, each package's checksums as apk checks them
 fetch/rpms.go        the same for a yum or dnf repository: every rpm's own signatures as rpm checks them, repomd.xml's where the repository signs it

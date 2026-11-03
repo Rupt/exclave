@@ -105,9 +105,9 @@ side; anything the tree can say about itself the launcher reads from
 the tree, so the manifest holds little else (6.2, 6.3).
 
 The **`exclave` command** (10) is one static executable per
-architecture that carries its launcher (10.5); its own commands take
-a directory and never fetch, and the fetchers, the step before them,
-are its `fetch` subcommand (10.1). Its input is an unwrapped exclave, a plain
+architecture that carries its launcher (10.5); its commands take
+a directory, and it holds no network code. The fetchers, the step
+before it, are a program of their own, **`exclave-fetch`** (10.1). Its input is an unwrapped exclave, a plain
 directory holding `tree/` that ordinary tools can edit; `unpack`, the
 step before it, makes one from `.deb`, `.apk` or `.rpm` packages, and
 `tar` or `debootstrap` make others (10.1). `wrap` turns any such tree
@@ -143,8 +143,10 @@ What is built and tested:
 - **The launcher** for x86-64 and aarch64, from one freestanding C
   source (7).
 - **The `exclave` command**, reading Debian and Ubuntu `.deb`, Alpine
-  `.apk` and `.rpm` packages through one reader interface (10.1); the
-  fetchers in `fetch/` are examples of the step before it.
+  `.apk` and `.rpm` packages through one reader interface (10.1), and
+  `exclave-fetch`, which downloads a package closure from a Debian,
+  Ubuntu, Alpine or rpm repository, every file checked against the
+  repository's signatures (10.1).
 - **Four exclave kinds**, made from distribution packages: a gcc
   exclave from Ubuntu 24.04, which builds zlib, Lua, SQLite and re2c
   from source with their own configure scripts; an Alpine exclave on
@@ -159,8 +161,9 @@ What is built and tested:
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
 - **The command as one file**: `build/exclave`, static Go carrying its
-  launcher, fetches and unpacks packages and wraps,
-  checks and prunes an exclave with nothing beside it (10.5).
+  launcher, unpacks packages and wraps, checks and prunes an exclave
+  with nothing beside it, and `build/exclave-fetch` beside it fetches
+  the packages (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
   CentOS 7 sysroot keeps 226 of the gcc exclave's 9 564 files and
   symlinks, counted as `exclave prune` reports them, the
@@ -230,9 +233,9 @@ Goals:
 7. **Uniform behaviour.** One mechanism, one world, one libc, one shape
    of exclave, one code path. The same exclave behaves the same on
    every host and every medium. The launcher has one run-time knob,
-   `EXCLAVE_LOG`, which only logs; the tool's own commands take paths,
-   and `format --check` is their one flag (the fetchers, worked
-   examples of the step before it, take the arguments they document).
+   `EXCLAVE_LOG`, which only logs; the tool's commands take paths,
+   and `format --check` is their one flag (`exclave-fetch`, the step
+   before it, takes the arguments a download needs).
 8. **Verifiability.** Isolation and libc homogeneity are checkable by
    the tool, statically and by trace.
 
@@ -761,7 +764,8 @@ the promise below; builds before it promise nothing (2).
 | The hashes file and the tree hash (6.4) | `hashes 1` | `unpack`, `wrap`, `unwrap`, `relink`, `prune` | `check`, `hash`, anyone with `b3sum` |
 | `EXCLAVE_LOG` (6.2) | the number in each `launcher` line, 1 | every launcher of a run | `check`, `prune` |
 | One launcher running another's programs (7.4.2) | the filter version, 7, and the page generation, 2 | each launcher | each launcher |
-| The `exclave` command's own commands and their arguments (10) | the project's, `VERSION`'s | | people and scripts |
+| The `exclave` command's commands and their arguments (10) | the project's, `VERSION`'s | | people and scripts |
+| `exclave-fetch`'s commands, their arguments as `--help` lists them, its checks, and its cache's layout, `KIND/DIGEST` (10.1) | the project's, `VERSION`'s | `exclave-fetch` | people, scripts, a later `exclave-fetch` sharing the cache |
 
 The rules every version keeps:
 
@@ -2070,9 +2074,11 @@ prunes and relinks it. It is Go, in `tool/`, built by `scripts/build`
 with the pinned toolchain `scripts/install-go` puts in `.go/` as one
 static file per architecture that carries its launcher (10.5), and run
 from a checkout as `build/exclave` or `scripts/exclave`. The tests judge
-it only through its commands. `unpack` (10.1), the step before it, and
-the fetchers are its subcommands, `exclave unpack` and `exclave fetch`,
-the packages `unpack/` and `fetch/`. The tests are Python, run by the
+it only through its commands. `unpack` (10.1), the step before it, is
+its subcommand, `exclave unpack`, the package `unpack/`; the fetchers,
+the step before that, are `exclave-fetch`, a program of their own built
+the same way from `fetch/`, so that the command holds no network code.
+The tests are Python, run by the
 pinned Python: the uv that
 `scripts/install-uv` puts in `.uv/` installs the version
 `.python-version` names (3.15) into the checkout, and every script runs
@@ -2082,13 +2088,13 @@ decides which Go or Python runs.
 The tool's input is an unwrapped exclave, a directory holding `tree/`.
 What made the tree is the step before the tool: `unpack` from package
 files (10.1), a build's staging directory (10.2), `debootstrap`, a
-container export or `tar`. Neither the tool's own commands nor
-`unpack` opens a network connection: the files they are given are
-their inputs, whoever fetched them, and any record of where they came
-from is the fetcher's to keep; `exclave fetch` is that fetcher, a
-worked example that shares nothing with them but the binary. Every command of the tool's own takes paths, and `format
---check` is the only flag; the fetchers, worked examples of the step
-before it, take the arguments their documentation lists:
+container export or `tar`. No command of the tool opens a network
+connection, and the command holds no code that could: the files they
+are given are their inputs, whoever fetched them, and any record of
+where they came from is the fetcher's to keep; `exclave-fetch` is that
+fetcher, a program of its own. Every command of the tool takes paths,
+and `format --check` is the only flag; `exclave-fetch` takes the
+arguments a download needs, which its `--help` lists:
 
 ```
 exclave wrap EXCLAVE                wrap an exclave (idempotent; a bare directory holding tree/ becomes an exclave)
@@ -2100,7 +2106,8 @@ exclave hash EXCLAVE|FILE           the tree hash of 6.4, or a file's hash as th
 exclave relink EXCLAVE [LAUNCHER]   replace the launcher and relink every wrapper
 exclave version                     the build this command is from: the project's version and the commit
 exclave unpack OUT PKG...           an unwrapped exclave from package files (10.1); exclave unpack ldconfig TREE writes ld.so.cache for a tree made by hand
-exclave fetch debs|apks|rpms ...    a package closure from a repository, verified and downloaded (10.1)
+exclave-fetch debs|apks|rpms ...    a package closure from a repository, verified and downloaded (10.1)
+exclave-fetch version               the build it is from, as exclave version
 ```
 
 `wrap` and `relink` also write the exclave's `README` (6.1) where it
@@ -2331,12 +2338,15 @@ them cpio hard links, `rpmvercmp` ordering, Fedora 42's merge of `sbin`
 into `bin` and Fedora's p11-kit CA bundle. The package comments of
 `unpack/apk` and `unpack/rpm` list each format's differences.
 
-**The step before the tool** belongs to whoever makes the exclave.
-Three fetchers, one for each format, the commands of `exclave fetch`
-(the package `fetch/`, run as `scripts/fetch-debs`, `fetch-apks` and
-`fetch-rpms`), are worked examples, the one part of the command that
-opens a network connection, and nothing the tool's own commands do
-depends on them. Each resolves a closure from a
+**The step before the tool** belongs to whoever makes the exclave, and
+`exclave-fetch` is exclave's own: three fetchers, one for each format,
+`exclave-fetch debs`, `apks` and `rpms` (the package `fetch/`, run from
+a checkout as `scripts/fetch-debs`, `fetch-apks` and `fetch-rpms`). It
+is a program of its own, shipped beside the command in a release, the
+one program of exclave that opens a network connection, and nothing
+the tool's commands do depends on it; its arguments, as each fetcher's
+`--help` lists them, its cache's layout and its checks are part of
+what a release keeps (6.7). Each resolves a closure from a
 repository's index, chooses providers of virtual names by priority,
 verifies every download against the index's checksum, and fills a
 directory. They know about mirrors and snapshot services because those
@@ -2556,7 +2566,10 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, with nothing beside it to run: no interpreter, no library, no file of the checkout. It carries its
+the cross compiler, with nothing beside it to run: no interpreter, no
+library, no file of the checkout, and no network code. Beside it,
+`build/exclave-fetch` and `build/exclave-fetch-aarch64` are the
+fetchers (10.1), built the same way. The command carries its
 architecture's launcher and the text of every exclave's `README` as data
 (`tool/blob_*.go`, the launcher copied beside them by `scripts/build`),
 so `wrap` and `relink` install the launcher it carries unless given
@@ -2588,9 +2601,9 @@ three times over without changing it, so they list it once and run
 every pass on that listing, which answers as the disk would; the tree
 hash notes which files begin with the ELF magic, so the static check
 opens only those, and a directory with no `.real/` needs no look for
-an original. `unpack` (10.1) and the fetchers are its subcommands,
-the packages `unpack/` and `fetch/`: one file carries every step from
-the repository to a wrapped exclave.
+an original. `unpack` (10.1) is its subcommand, the package `unpack/`:
+the command and `exclave-fetch` carry every step from the repository
+to a wrapped exclave, and only the second opens a connection.
 
 **A reproducible build.** `scripts/reproduce EXCLAVE DIR` builds the
 launcher inside a gcc exclave, from a copy of the sources under `DIR`,
@@ -4885,26 +4898,27 @@ specified.
   what they say of an exclave rests on its files alone, and `unpack`
   reads only the package files it is given. Getting those files is the
   step before them, with a trust argument of its own, the archive's keys
-  and sums; `exclave fetch` is that step, three worked examples carried
-  in the same binary so that one file does everything, sharing nothing
-  with the other commands but the file, and the one command that opens
-  a connection (10, 10.1).
+  and sums; `exclave-fetch` is that step, a program of its own beside
+  the command, so that the command holds no network code at all, and a
+  defined part of a release, its arguments and checks kept as 6.7 keeps
+  the formats (10, 10.1).
 - **The tool's input is a directory holding `tree/`, and `unpack` is
   the step before it**: what made the tree, package files, `tar` or a
   build, is not the tool's concern, so `unpack` is a subcommand apart
   from `wrap`, sharing with it only the layout and the hashes file (10,
   10.1).
 - **The command is Go, one static file per architecture carrying its
-  launcher, with `unpack` and the fetchers as its subcommands**: it
-  runs with nothing beside it, and it is the one program that reads
-  what comes from outside, package files, indexes and the trees they
-  make, so its parsers are a memory-safe language's, and the delicate
-  ones, tar, gzip, bzip2, XML, HTTP, TLS and RSA, are Go's own standard
-  library's, with xz, zstd and OpenPGP from the pure-Go modules `go.mod`
-  pins and no C compiled in; one file is what portability asks of every
-  step from the repository to a wrapped exclave; `wrap` takes the other
-  architecture's launcher, since the checks read the tree as the
-  launcher's machine (10, 10.1, 10.5).
+  launcher, with `unpack` as its subcommand, and `exclave-fetch` a
+  second such file**: each runs with nothing beside it, and they are the
+  programs that read what comes from outside, package files, indexes
+  and the trees they make, so their parsers are a memory-safe
+  language's, and the delicate ones, tar, gzip, bzip2, XML, HTTP, TLS
+  and RSA, are Go's own standard library's, with xz, zstd and OpenPGP
+  from the pure-Go modules `go.mod` pins and no C compiled in; a static
+  file is what portability asks of every step from the repository to a
+  wrapped exclave; `wrap` takes the other architecture's launcher,
+  since the checks read the tree as the launcher's machine (10, 10.1,
+  10.5).
 - **Building software is the build system's job**: an exclave of built
   software is a staging directory plus runtime packages, with no
   recipes (10.2).

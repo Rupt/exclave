@@ -1,14 +1,15 @@
-// The fetch command: a package closure resolved from a distribution's repository, every file
-// checked against the repository's signatures, and downloaded (DESIGN.md 10.1):
+// exclave-fetch, the program: a package closure resolved from a distribution's repository, every
+// file checked against the repository's signatures, and downloaded (DESIGN.md 10.1):
 //
-//	exclave fetch debs ...    a Debian or Ubuntu closure, from an archive's Packages indexes
-//	exclave fetch apks ...    an Alpine closure, from a branch's APKINDEX files
-//	exclave fetch rpms ...    an rpm closure, from yum or dnf repositories' primary indexes
+//	exclave-fetch debs ...    a Debian or Ubuntu closure, from an archive's Packages indexes
+//	exclave-fetch apks ...    an Alpine closure, from a branch's APKINDEX files
+//	exclave-fetch rpms ...    an rpm closure, from yum or dnf repositories' primary indexes
+//	exclave-fetch version     the build, as exclave version prints the command's
 //
-// Each is a worked example of the step before the tool, and takes the arguments its own
-// documentation lists. Nothing else of the command fetches: `exclave unpack OUT DIR/*` takes
-// whatever directory of package files this subcommand, a package manager, a mirror or a person
-// has made. A refusal is one line, "fetch-KIND: " and the reason.
+// Each takes the arguments its --help lists, which are part of what a release keeps (6.7). It is
+// the one program of exclave that opens a network connection: `exclave unpack OUT DIR/*` takes
+// whatever directory of package files this program, a package manager, a mirror or a person has
+// made. A refusal is one line, "fetch-KIND: " and the reason.
 package fetch
 
 import (
@@ -21,7 +22,7 @@ import (
 // version is the build's, which Main is given; it names the command to the servers it asks.
 var version = "dev"
 
-func userAgent() string { return "exclave/" + version }
+func userAgent() string { return "exclave-fetch/" + version }
 
 // log writes one line to stderr, the parts joined by spaces as print does.
 func log(parts ...any) {
@@ -67,11 +68,12 @@ func splitChoices(choose []string) (map[string]string, error) {
 	return out, nil
 }
 
-// Main runs the fetch command, `exclave fetch`, with the build's version and the arguments after
-// the command's name; returns its exit status.
+// Main runs exclave-fetch with the build's version and the arguments after its name; returns its
+// exit status.
 func Main(v string, args []string) int {
 	version = v
-	usage := "usage: exclave fetch debs|apks|rpms [ARGS...]; exclave fetch debs --help and the others say which"
+	usage := "usage: exclave-fetch debs|apks|rpms [ARGS...] | version; " +
+		"exclave-fetch debs --help and the others say which"
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, usage)
 		return 2
@@ -85,6 +87,13 @@ func Main(v string, args []string) int {
 		err = fetchApks(args)
 	case "rpms":
 		err = fetchRpms(args)
+	case "version":
+		if len(args) != 0 {
+			fmt.Fprintln(os.Stderr, usage)
+			return 2
+		}
+		fmt.Println("exclave-fetch " + version)
+		return 0
 	case "-h", "--help":
 		fmt.Println(usage)
 		return 0

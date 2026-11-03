@@ -2,8 +2,9 @@
 # scripts/reproduce EXCLAVE DIR — the launcher built inside EXCLAVE, a gcc exclave, from a copy of the sources under
 # DIR (docs/DESIGN.md 10.5): its compiler, its binutils and its shell, and nothing of the machine's, so that
 # DIR/build/launcher is the same bytes on any machine the exclave runs on; then, where this checkout has the pinned
-# Go (scripts/install-go), the command built here from that launcher, DIR/build/exclave, which the toolchain builds
-# the same bytes anywhere from the same sources (lib.sh), and DIR/build/NOTICES, its modules' licence texts. Prints the
+# Go (scripts/install-go), the command built here from that launcher, DIR/build/exclave, and DIR/build/exclave-fetch,
+# which the toolchain builds the same bytes anywhere from the same sources (lib.sh), and DIR/build/NOTICES, their
+# modules' licence texts. Prints the
 # BLAKE3-256 of each as b3sum does, by the command (exclave hash FILE): the one built here, or the checkout's where
 # there is no Go, as in the matrix's VMs, where the launcher's is printed alone. The commit is the checkout's, or the file COMMIT's in
 # a copy of the sources without one, as the matrix carries into its VMs. It runs no Python.
@@ -51,12 +52,17 @@ if [ -x "$GO" ] && [ -e "$dir/go.mod" ]; then
         echo "reproduce: the command's build from $dir failed; $dir/build.log has its output" >&2
         exit 1
     }
-    (cd "$dir" && go_notices build/NOTICES ./tool) >>"$dir/build.log" 2>&1 || {
+    (cd "$dir" && go_build "$(uname -m)" build/exclave-fetch ./fetch/exclave-fetch "$version") >>"$dir/build.log" 2>&1 || {
         tail -n 20 "$dir/build.log" >&2
-        echo "reproduce: the notices of the command's modules could not be written" >&2
+        echo "reproduce: exclave-fetch's build from $dir failed; $dir/build.log has its output" >&2
         exit 1
     }
-    built="$built exclave"
+    (cd "$dir" && go_notices build/NOTICES ./tool ./fetch/exclave-fetch) >>"$dir/build.log" 2>&1 || {
+        tail -n 20 "$dir/build.log" >&2
+        echo "reproduce: the notices of the commands' modules could not be written" >&2
+        exit 1
+    }
+    built="$built exclave exclave-fetch"
 fi
 hasher=$dir/build/exclave
 [ -x "$hasher" ] || hasher=$ROOT/build/exclave

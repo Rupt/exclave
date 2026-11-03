@@ -3,7 +3,7 @@
     test/fetch_test.py [--work DIR] [-k NAME|SUBSTRING]
 
 Each test makes a repository of one package under its work directory, signed with keys made here
-(an OpenPGP key from gpg, an RSA key from openssl), and runs build/exclave fetch on it through a file://
+(an OpenPGP key from gpg, an RSA key from openssl), and runs build/exclave-fetch on it through a file://
 URL, as scripts/fetch-debs, fetch-rpms and fetch-apks run it. The signed repository must yield its
 package; the same repository signed by another key, with its signed text altered, with the
 package altered, or without its signature, must be refused in one line with nothing fetched, and
@@ -30,7 +30,7 @@ from packages import DEB_ARCH, MACHINE, make_apk, make_deb, make_rpm, tar_bytes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-FETCH = (os.path.join(REPO, "build", "exclave"), "fetch")  # the command's fetch subcommand
+FETCH = (os.path.join(REPO, "build", "exclave-fetch"),)  # exclave-fetch, as scripts/build built it
 
 
 class Test(Protocol):

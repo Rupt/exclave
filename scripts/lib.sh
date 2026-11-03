@@ -65,20 +65,21 @@ go_build() {
     echo "built $out ($(stat -c %s "$out") bytes, $arch)"
 }
 
-# go_notices OUT PKG: the licence texts of every module linked into PKG, for a release to ship beside the command
+# go_notices OUT PKG...: the licence texts of every module linked into the PKGs, for a release to ship beside them
 # (DESIGN.md 10.5), since the modules' BSD licences ask a binary distribution to carry their notices. The modules in
 # the order of their paths, each with the licence files at its root from the pinned cache, so the file is the same
 # from the same go.sum anywhere; a module without one fails the build, loudly.
 go_notices() {
-    out=$1 pkg=$2
+    out=$1
+    shift
     mods=$("$GO" list -deps -f '{{if and .Module (not .Module.Main)}}{{.Module.Path}} {{.Module.Version}} {{.Module.Dir}}{{end}}' \
-        "$pkg") || return 1
+        "$@") || return 1
     [ -n "$mods" ] || {
-        echo "build: $pkg links no module: no notices to write" >&2
+        echo "build: $* link no module: no notices to write" >&2
         return 1
     }
     {
-        echo "The exclave command links these Go modules, the versions go.mod pins, each under"
+        echo "The exclave command and exclave-fetch link these Go modules, the versions go.mod pins, each under"
         echo "the licence that follows its name. exclave itself is under the MIT licence (LICENSE)."
         printf '%s\n' "$mods" | LC_ALL=C sort -u | while read -r path ver dir; do
             found=false

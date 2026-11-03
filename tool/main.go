@@ -1,6 +1,7 @@
 // The exclave command (DESIGN.md 10): one static file per architecture that carries its launcher
-// and the README every exclave gets, and makes, checks, prunes and relinks exclaves; the steps
-// before it, unpack and the fetchers, are its subcommands.
+// and the README every exclave gets, and makes, checks, prunes and relinks exclaves; the step before
+// it, unpack, is its subcommand. It opens no network connection and holds no code that could:
+// fetching package files is exclave-fetch's (fetch/exclave-fetch).
 //
 //	exclave check EXCLAVE [LOG...]      Wrappers, originals, the tree against its recorded hash and the static
 //	                                    check; with EXCLAVE_LOG files, the dynamic check of what a workload opened.
@@ -16,11 +17,10 @@
 //	                                    launcher, manifest and tree hashes to .exclave/hashes.
 //	exclave version                     The build this command is from.
 //	exclave unpack OUT PKG...           The unwrapped exclave OUT from package files (10.1, unpack/).
-//	exclave fetch debs|apks|rpms ...    A package closure from a repository, verified (10.1, fetch/).
 //
 // Paths are bytes, as the kernel has them, and every list the command prints or hashes is sorted
-// by its bytes. A refusal prints one line, "exclave: " and the reason (unpack's and the fetchers'
-// their own prefixes, "unpack: " and "fetch-KIND: "), and exits 1; a usage error exits 2.
+// by its bytes. A refusal prints one line, "exclave: " and the reason (unpack's its own prefix,
+// "unpack: "), and exits 1; a usage error exits 2.
 package main
 
 import (
@@ -37,7 +37,6 @@ import (
 	"golang.org/x/sys/unix"
 	"lukechampine.com/blake3"
 
-	"exclave/fetch"
 	"exclave/unpack"
 )
 
@@ -248,7 +247,6 @@ func main() {
 		"check": cmdCheck, "format": cmdFormat, "hash": cmdHash, "prune": cmdPrune,
 		"relink": cmdRelink, "unwrap": cmdUnwrap, "version": cmdVersion, "wrap": cmdWrap,
 		"unpack": func(args []string) int { return unpack.Main(version, args) },
-		"fetch":  func(args []string) int { return fetch.Main(version, args) },
 	}
 	if len(os.Args) < 2 {
 		usage("COMMAND ARGS...")

@@ -70,7 +70,7 @@ fetch() { # fetch NAME KIND ARGS...: package files into DIR/NAME through the fet
         return 0
     fi
     rm -rf "${dir:?}/$name"
-    if "$repo/build/exclave" fetch "$kind" --out "$dir/$name" "$@" >"$dir/log/$name.log" 2>&1; then
+    if "$repo/build/exclave-fetch" "$kind" --out "$dir/$name" "$@" >"$dir/log/$name.log" 2>&1; then
         echo "$name: $(find "$dir/$name" -type f | wc -l) files"
     else
         echo "$name: FAIL, see $dir/log/$name.log"

@@ -8,9 +8,9 @@ exclave under WORK, wrapped again by that command, since a release is of what th
 signed with a key made here. A copy wrapped with another launcher is refused.
 Then, in a directory that holds nothing but the release's files, the README's recipe runs: the
 signature is verified against the key, the sums are checked, the archive is unpacked, the release's
-own `exclave` checks the exclave, its tree hash is the one the hashes file records, a program in
-it runs, and NOTICES names every module go.mod requires with its licence. A tampered archive and a
-tampered sums file are refused. Prints one line per step; the
+own `exclave` checks the exclave and its `exclave-fetch` runs, its tree hash is the one the hashes
+file records, a program in it runs, and NOTICES names every module go.mod requires with its
+licence. A tampered archive and a tampered sums file are refused. Prints one line per step; the
 exit status is the number of failures.
 """
 
@@ -125,6 +125,10 @@ def main() -> int:
     step("the archive unpacks", rc == 0, out)
     rc, out = run([tool, "check", name], consumer)
     step("the release's exclave checks the exclave", rc == 0, out[-500:])
+    fetcher = os.path.join(consumer, "exclave-fetch")
+    os.chmod(fetcher, 0o755)
+    rc, out = run([fetcher, "version"], consumer)
+    step("the release's exclave-fetch runs", rc == 0 and out.startswith("exclave-fetch "), out)
     rc, out = run([tool, "hash", name], consumer)
     with open(os.path.join(consumer, name, ".exclave", "hashes"), encoding="utf-8") as f:
         m = re.search(r'^tree "(b3:[0-9a-f]+)"$', f.read(), re.MULTILINE)

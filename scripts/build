@@ -52,13 +52,13 @@ cross=$(c_arches | grep -vx "$native")
 
 fresh=${fresh:-true}
 gobuilds=
-[ -x "$GO" ] && gobuilds="build/exclave build/NOTICES"
+[ -x "$GO" ] && gobuilds="build/exclave build/exclave-fetch build/NOTICES"
 for f in "$stamp" build/launcher build/launcher-old build/launcher-debug $gobuilds ${gobuilds:+tool/launcher-$native}; do
     [ -e "$f" ] || fresh=false
 done
 for arch in $cross; do
     [ -e "build/launcher-$arch" ] && [ -e "build/launcher-old-$arch" ] || fresh=false
-    [ -z "$gobuilds" ] || { [ -e "build/exclave-$arch" ] && [ -e "tool/launcher-$arch" ]; } || fresh=false
+    [ -z "$gobuilds" ] || { [ -e "build/exclave-$arch" ] && [ -e "build/exclave-fetch-$arch" ] && [ -e "tool/launcher-$arch" ]; } || fresh=false
 done
 gosources= # absent from a copy of the sources without the Go, as scripts/reproduce makes
 for p in go.mod go.sum fetch unpack tool scripts/install-go .go/go/VERSION; do
@@ -141,9 +141,11 @@ for arch in $cross; do
 done
 if [ -n "$gobuilds" ]; then
     go_command "$native" build/exclave || status=1
-    go_notices build/NOTICES ./tool || status=1
+    go_build "$native" build/exclave-fetch ./fetch/exclave-fetch "$version" || status=1
+    go_notices build/NOTICES ./tool ./fetch/exclave-fetch || status=1
     for arch in $cross; do
         [ -e "build/launcher-$arch" ] && { go_command "$arch" "build/exclave-$arch" || status=1; }
+        go_build "$arch" "build/exclave-fetch-$arch" ./fetch/exclave-fetch "$version" || status=1
     done
 else
     echo "build: no Go at $GO (scripts/install-go): build/exclave not built"

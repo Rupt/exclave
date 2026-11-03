@@ -1,9 +1,9 @@
 #!/bin/sh
-# scripts/fetch-apks: an Alpine package closure, downloaded (docs/DESIGN.md 10.1): the exclave command's fetch apks, as scripts/build built it.
+# scripts/fetch-apks: an Alpine package closure, downloaded (docs/DESIGN.md 10.1): exclave-fetch apks, as scripts/build built it.
 set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-[ -x "$root/build/exclave" ] || {
-    echo "no $root/build/exclave: run scripts/build" >&2
+[ -x "$root/build/exclave-fetch" ] || {
+    echo "no $root/build/exclave-fetch: run scripts/build" >&2
     exit 1
 }
-exec "$root/build/exclave" fetch apks "$@"
+exec "$root/build/exclave-fetch" apks "$@"
