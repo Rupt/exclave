@@ -20,6 +20,20 @@
 #define RENAME_WHITEOUT 4
 #define AT_NO_AUTOMOUNT 0x800
 #define STATX__RESERVED 0x80000000U
+/* statx's mask bits and the offsets of the fields a directory's correction reads and writes (struct statx) */
+#define STATX_TYPE 0x1U
+#define STATX_NLINK 0x4U
+#define STATX_SIZE 0x200U
+#define STX_NLINK_OFF 16
+#define STX_MODE_OFF 28
+#define STX_SIZE_OFF 40
+#define STX_DEV_MAJOR_OFF 136
+#define STX_DEV_MINOR_OFF 140
+#define STATX_SIZE_BYTES 256
+/* statfs's f_type for the filesystems whose directory size counts entries */
+#define ZFS_SUPER_MAGIC 0x2fc12fc1L
+#define BTRFS_SUPER_MAGIC 0x9123683eL
+#define TMPFS_MAGIC 0x01021994L
 #define XATTR_CREATE 1
 #define XATTR_REPLACE 2
 #define XATTR_NAME_MAX 255
@@ -1189,6 +1203,73 @@ static long do_sockaddr(struct scratch *S, long *a, int nr)
 }
 #endif
 
+/* Whether the directory the stat named holds .real/: for a path, the exclave's virtual S->v, by the cache under
+ * S->v/.real, which is the exclave's and so never changes (7.4.4), the kernel asked on a miss and the answer kept;
+ * for a descriptor, the kernel asked, and then whether the descriptor is the exclave's. A path the cache knows is no
+ * directory is no such directory. */
+static int holds_real(struct scratch *S, int dfd, const char *path)
+{
+    if (!path)
+        return sys_fstatat(dfd, ".real", &S->st, AT_SYMLINK_NOFOLLOW) == 0 && (S->st.st_mode & S_IFMT) == S_IFDIR &&
+               fd_exclave(S, dfd);
+    int k = cache_get(S->v, S->rest);
+    if (k && k != CK_DIR) return 0;
+    if (xstrlen(S->v) + sizeof "/.real" > PATH_MAX || xstrlen(path) + sizeof "/.real" > PATH_MAX) return 0;
+    scpy(S->tmp, S->v, PATH_MAX);
+    scat(S->tmp, "/.real", PATH_MAX);
+    if ((k = cache_get(S->tmp, S->rest))) return k == CK_DIR;
+    scpy(S->real2, path, PATH_MAX);
+    scat(S->real2, "/.real", PATH_MAX);
+    long r = sys_fstatat(dfd, S->real2, &S->st, AT_SYMLINK_NOFOLLOW);
+    if (r == 0 || r == -ENOENT || r == -ENOTDIR) {
+        k = r == 0 && (S->st.st_mode & S_IFMT) == S_IFDIR ? CK_DIR : CK_NONE;
+        cache_put(S->tmp, k, 0);
+    }
+    return k == CK_DIR;
+}
+
+/* A directory of the tree that holds .real/, as upstream's tree would stat it (8.3): a link fewer where links count
+ * subdirectories, so not on a filesystem that gives every directory one, and on a filesystem whose directory size
+ * counts entries, ZFS one an entry, btrfs twice its name and tmpfs 20 bytes, a size without .real's, where the
+ * directory is on the tree's own filesystem. A stat has just written the program's buffer at at, statx's or struct
+ * stat's, which is read back and written again only for such a directory; a field statx was not asked for is left
+ * alone. The directory is path from dfd as the stat named it, its virtual path S->v, ours whether that is the
+ * exclave's; or with path 0 the descriptor dfd itself. Anything that fails leaves the kernel's answer as it is. */
+static void dir_upstream(struct scratch *S, int statx, long at, int dfd, const char *path, int ours)
+{
+    if (!ours || !holds_real(S, dfd, path)) return;
+    void *buf = (void *)at;
+    char *s = S->extra;
+    size_t n = statx ? STATX_SIZE_BYTES : sizeof(struct kstat);
+    if (copy_exact(S->pid, s, buf, n)) return;
+    unsigned mask = statx ? *(unsigned *)s : STATX_TYPE | STATX_NLINK | STATX_SIZE;
+    unsigned mode = statx ? *(unsigned short *)(s + STX_MODE_OFF) : ((struct kstat *)s)->st_mode;
+    if (!(mask & STATX_TYPE) || (mode & S_IFMT) != S_IFDIR) return;
+    /* the tree's filesystem's size of an entry, asked once */
+    if (!C.dirent_known) {
+        struct kstatfs fs;
+        long t = SC2(NR_statfs, C.root, &fs) == 0 ? fs.f_type : 0;
+        C.dirent_size = t == ZFS_SUPER_MAGIC ? 1 : t == BTRFS_SUPER_MAGIC ? 2 * 5 : t == TMPFS_MAGIC ? 20 : 0;
+        C.dirent_known = 1;
+    }
+    unsigned long sd = C.root_dev, ma = ((sd >> 8) & 0xfff) | ((sd >> 32) & ~0xfffUL),
+                  mi = (sd & 0xff) | ((sd >> 12) & ~0xffUL);
+    int same_fs = statx ? *(unsigned *)(s + STX_DEV_MAJOR_OFF) == ma && *(unsigned *)(s + STX_DEV_MINOR_OFF) == mi
+                        : ((struct kstat *)s)->st_dev == sd;
+    long entry = same_fs ? C.dirent_size : 0;
+    if (statx) {
+        unsigned *nlink = (unsigned *)(s + STX_NLINK_OFF);
+        unsigned long *size = (unsigned long *)(s + STX_SIZE_OFF);
+        if ((mask & STATX_NLINK) && *nlink >= 3) --*nlink;
+        if ((mask & STATX_SIZE) && entry && *size >= (unsigned long)entry) *size -= (unsigned long)entry;
+    } else {
+        struct kstat *st = (struct kstat *)s;
+        if (st->st_nlink >= 3) st->st_nlink--;
+        if (entry && st->st_size >= entry) st->st_size -= entry;
+    }
+    copy_out(S->pid, buf, s, n);
+}
+
 /* stat, lstat, newfstatat and statx: the flags the kernel checks first, then the re-issue of the resolved path */
 static long do_stat(struct scratch *S, int nr, long *a)
 {
@@ -1198,15 +1279,23 @@ static long do_stat(struct scratch *S, int nr, long *a)
     case NR_lstat:
         if ((r = resolve(S, a, 0, -1, nr == NR_stat, 0)) < 0) return r;
         real_nofollow(S, nr == NR_lstat);
-        return RE5(NR_newfstatat, AT_FDCWD, S->real, a[1], nr == NR_stat ? 0 : nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
+        r = RE5(NR_newfstatat, AT_FDCWD, S->real, a[1], nr == NR_stat ? 0 : nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
+        if (r == 0) dir_upstream(S, 0, a[1], AT_FDCWD, S->real, is_exclave_path(S->v));
+        return r;
     case NR_newfstatat:
         /* vfs_fstatat: the flags before the name */
         if ((unsigned)a[3] & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_EMPTY_PATH | AT_STATX_SYNC_TYPE))
             return -EINVAL;
         if ((r = resolve(S, a, 1, 0, !(a[3] & AT_SYMLINK_NOFOLLOW), (a[3] & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
-        if (r == 1) return RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], 0);
+        if (r == 1) {
+            r = RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], 0);
+            if (r == 0) dir_upstream(S, 0, a[2], (int)a[0], 0, -1);
+            return r;
+        }
         real_nofollow(S, (a[3] & AT_SYMLINK_NOFOLLOW) != 0);
-        return RE5(nr, RE_DFD(S), RE_PATH(S), a[2], a[3] | re_flag(S, AT_SYMLINK_NOFOLLOW), 0);
+        r = RE5(nr, RE_DFD(S), RE_PATH(S), a[2], a[3] | re_flag(S, AT_SYMLINK_NOFOLLOW), 0);
+        if (r == 0) dir_upstream(S, 0, a[2], RE_DFD(S), RE_PATH(S), is_exclave_path(S->v));
+        return r;
     case NR_statx: {
         /* statx: the mask, the two sync flags at once and any other flag, before the name */
         unsigned fl = (unsigned)a[2];
@@ -1214,9 +1303,15 @@ static long do_stat(struct scratch *S, int nr, long *a)
             (fl & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_EMPTY_PATH | AT_STATX_SYNC_TYPE)))
             return -EINVAL;
         if ((r = resolve(S, a, 1, 0, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) ? 2 : 0)) < 0) return r;
-        if (r == 1) return RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4]);
+        if (r == 1) {
+            r = RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4]);
+            if (r == 0) dir_upstream(S, 1, a[4], (int)a[0], 0, -1);
+            return r;
+        }
         real_nofollow(S, (a[2] & AT_SYMLINK_NOFOLLOW) != 0);
-        return RE5(nr, RE_DFD(S), RE_PATH(S), a[2] | re_flag(S, AT_SYMLINK_NOFOLLOW), a[3], a[4]);
+        r = RE5(nr, RE_DFD(S), RE_PATH(S), a[2] | re_flag(S, AT_SYMLINK_NOFOLLOW), a[3], a[4]);
+        if (r == 0) dir_upstream(S, 1, a[4], RE_DFD(S), RE_PATH(S), is_exclave_path(S->v));
+        return r;
     }
     default: __builtin_trap(); /* dispatch sends only the syscalls above */
     }
@@ -1799,6 +1894,10 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
         return r == 0 && fd_exclave(S, (int)a[0]) ? ro_flag(S, (char *)a[1] + STATFS_FLAGS_OFF) : r;
     case NR_getdents64:
     case NR_getdents: return do_getdents(S, nr, a);
+    case NR_fstat:
+        /* the kernel's answer, as for a stat of the descriptor's own file */
+        if ((r = RE5(NR_fstat, a[0], a[1], 0, 0, 0)) == 0) dir_upstream(S, 0, a[1], (int)a[0], 0, -1);
+        return r;
     case NR_inotify_add_watch:
     case NR_fanotify_mark: return do_watch(S, nr, a);
     case NR_fchmod:
@@ -1833,6 +1932,7 @@ static const char *sysname(int nr)
     case NR_stat:
     case NR_lstat:
     case NR_newfstatat:
+    case NR_fstat:
     case NR_statx: return "stat";
     case NR_fchmod:
     case NR_fchown:

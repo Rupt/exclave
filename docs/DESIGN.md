@@ -175,7 +175,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 99 named tests, most of them programs that
+- **The regression suite**: 100 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -765,7 +765,7 @@ the promise below; builds before it promise nothing (2).
 | The manifest (6.2) | `exclave 1` | people, `wrap` | the launcher the exclave carries, every command |
 | The hashes file and the tree hash (6.4) | `hashes 1` | `unpack`, `wrap`, `unwrap`, `relink`, `prune` | `check`, `hash`, anyone with `b3sum` |
 | `EXCLAVE_LOG` (6.2) | the number in each `launcher` line, 1 | every launcher of a run | `check`, `prune` |
-| One launcher running another's programs (7.4.2) | the filter version, 7, and the page generation, 2 | each launcher | each launcher |
+| One launcher running another's programs (7.4.2) | the filter version, 8, and the page generation, 2 | each launcher | each launcher |
 | The `exclave` command's commands and their arguments (10) | the project's, `VERSION`'s | | people and scripts |
 | `exclave-fetch`'s commands, their arguments as `--help` lists them, its checks, and its cache's layout, `KIND/DIGEST` (10.1) | the project's, `VERSION`'s | `exclave-fetch` | people, scripts, a later `exclave-fetch` sharing the cache |
 
@@ -788,8 +788,8 @@ The rules every version keeps:
   one whose `ENOSYS` a library falls back from (7.4.2). A trap without
   that fallback moves the page generation instead, so that the two
   launchers refuse each other's nesting by name rather than an older
-  one failing the call: the listings version 7 traps have none, and
-  came before any release.
+  one failing the call: the listings version 7 traps and the `fstat`
+  version 8 traps have none, and came before any release.
   Anything an earlier reader would refuse or read otherwise moves the
   version: a new manifest key is `exclave 2`, since the strict
   grammar refuses an unknown key, and a new hashes key, hash function
@@ -1081,9 +1081,9 @@ kernel has added has a libc fallback and a re-issue would be an
 untranslated host access.
 
 The version moves whenever the trap set grows or the syscall page
-moves, and is 7, whose addition is the listings, `getdents64` and
-`getdents`, for `.real/` (8.3); `test/syscalls.py` records a digest of the set and the
-page each version shipped with and fails when either changes under the
+moves, and is 8: 7 added the listings, `getdents64` and `getdents`,
+and 8 `fstat`, for a directory's `.real/` (8.3); `test/syscalls.py`
+records a digest of the set and the page each version shipped with and fails when either changes under the
 same version. Filters before 6 allow a page at another address, so
 neither launcher can run under the other's filter: a launcher under a
 filter older than 6 refuses by name at startup, and a handler sends a
@@ -1104,6 +1104,7 @@ inside the current launcher.
 | Descriptor-addressed | any of the above with an empty path and `AT_EMPTY_PATH`; a NULL path where the kernel accepts one (`fstatat` and `statx` since 6.11, the `*xattrat` family, `file_getattr` and `file_setattr` under `AT_EMPTY_PATH`, `utimensat(fd, NULL, ...)` behind `futimens`) and `EFAULT` elsewhere (the empty-path forms are behind Rust's `File::metadata` and `fexecve`); and `fchmod`, `fchown`, `fsetxattr`, `fremovexattr`, `fstatfs` and the `chattr` ioctls (`ftruncate` needs a writable descriptor, which an exclave file never has) | resolve the descriptor through `/proc/self/fd`, no component walk, no trailing-slash rule, and re-issue the call through the descriptor as given, so that the kernel's rule for `AT_EMPTY_PATH` is its own (`linkat` wants `CAP_DAC_READ_SEARCH` before 6.10); `AT_FDCWD` is the working directory; apply the read-only rules; an `O_PATH` descriptor is `EBADF` for the five attribute calls, as natively; for `execveat` a descriptor on a symlink itself is `ELOOP`, and one on anything but a regular file, a pipe or a socket included, is `EACCES`; an original's descriptor given to `execveat` is mapped back to its wrapper; a descriptor whose file has no path (a pipe, a socket, a memfd, an unlinked file or directory) names nothing the exclave owns, so `linkat` with `AT_EMPTY_PATH` on one is the kernel's own through the descriptor, a link of the file, `EXDEV` or `EPERM`, after the read-only rule for the new name |
 | A path inside a structure | `bind` and `connect` with an `AF_UNIX` address whose path is not abstract | below |
 | A listing of the tree | `getdents64` and `getdents` on a directory of the tree | the kernel's listing, written into the program's buffer and rewritten without `.real/` (8.3) |
+| A directory's stat | `fstat`, and every stat above, of a directory of the tree that holds `.real/` | the kernel's answer with a link fewer and, on ZFS, btrfs and tmpfs, a size an entry smaller (8.3) |
 | Reverse-translate results | `getcwd`; `readlinkat` of `/proc/self/{exe,cwd,fd/*}` and of the process's own pid; `readlinkat` of an identity file; `statfs` and `fstatfs` on exclave paths | strip the tree's prefix, and the `.real/` of an original, which then names its wrapper; answer the program's virtual path for `exe` on the loader path (7.6); answer the host's link text for an identity file (8.4); report `ST_RDONLY`. Any other link's text is returned as stored, as the kernel returns it |
 | Self-defence | `rt_sigaction` with a new action; the mask-carrying calls above | scrub `SIGSYS` from the mask (7.5.1), with no canonicalisation |
 | Denied | `clone3`, `io_uring_setup`, `seccomp` except the availability query, `prctl(PR_SET_SECCOMP)`, `uselib`, the mount API (`open_tree`, `open_tree_attr`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr`) | `ENOSYS` |
@@ -1970,6 +1971,20 @@ directory still opens by name. On the gcc exclave,
 best of five, November 2026, `find /usr` takes 13 ms and `ls -lR /usr`
 65 ms with the listings trapped, against 13 ms and 64 ms without.
 
+A directory of the tree that holds `.real/` stats as upstream's too: a
+link fewer, where links count subdirectories, so not on btrfs, which
+gives a directory one, and a size an entry smaller on the filesystems
+whose directory size counts entries, ZFS one an entry, btrfs twice the
+name and tmpfs 20 bytes; another filesystem's size is 13 item 53. Every
+stat corrects it, `fstat` among them, which the filter traps from
+version 8 (`directory_stats_hide_real`); a path the canonicalisation
+cache knows is no directory costs nothing more, and whether a directory
+holds `.real/` is asked once a process and kept there (7.4.4). On the
+gcc exclave, alternating the two launchers, best of seven, November
+2026, `find /usr` takes about 15.5 ms and `ls -lR /usr` 71 ms with the
+stats corrected, against 14 ms and 69 ms with the listings alone: a
+stat of each directory a process has not stat'd before.
+
 ### 8.4 Host identity files
 
 At startup the launcher resolves each identity file's symlink chain on
@@ -2713,7 +2728,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 99 named regressions and every oracle its kernel can run; 17
+suite's 100 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher
 inside its copy of the exclave (`scripts/reproduce`, 10.5) and
 compares its bytes with the reference machine's build; a row whose
@@ -3216,6 +3231,13 @@ and stay fixed.
     under an overlay key other than 0 would be checked against the
     kernel's own `POR_EL0`, and a copy into one would pass where the
     program denied it.
+53. **A directory's size on XFS counts `.real/`'s entry.** The size
+    of a directory that holds `.real/` is corrected on ZFS, btrfs and
+    tmpfs, whose sizes count entries by a rule (8.3); XFS sizes a small
+    directory by its entries' bytes in its own format, and ext4 and
+    others by blocks, which one entry rarely moves, and those sizes are
+    left as the kernel gives them. Nothing reads a directory's size for
+    its contents; its link count is corrected everywhere.
 
 ### 13.1 Debugging and profiling recipe
 
@@ -4234,7 +4256,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus nineteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones` and `memfd_exec` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 99 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 100 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

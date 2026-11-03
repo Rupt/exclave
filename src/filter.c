@@ -126,11 +126,12 @@ const int path_syscalls[] = {
 };
 const int n_path_syscalls = sizeof path_syscalls / sizeof path_syscalls[0];
 
-/* descriptor syscalls that could change an exclave file's attributes (8.2), need a read-only answer, or list a
- * directory of the tree, whose .real/ upstream's tree does not have (8.3); the listings are version 7's addition */
-static const int fd_syscalls[] = {NR_fchmod,     NR_fchown,  NR_fsetxattr, NR_fremovexattr, NR_fstatfs,
+/* descriptor syscalls that could change an exclave file's attributes (8.2), need a read-only answer, or list or
+ * stat a directory of the tree, whose .real/ upstream's tree does not have (8.3); the listings are version 7's
+ * addition and fstat version 8's */
+static const int fd_syscalls[] = {NR_fchmod,     NR_fchown,   NR_fsetxattr, NR_fremovexattr, NR_fstatfs,
 #ifndef EXCLAVE_TEST_OLD
-                                  NR_getdents64, NR_getdents
+                                  NR_getdents64, NR_getdents, NR_fstat
 #endif
 };
 /* signal-mask syscalls the handler scrubs (7.5.2) */

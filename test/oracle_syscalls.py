@@ -1235,13 +1235,14 @@ def generate(
             add("ioctl", n + "/fssetxattr", f, I(FS_IOC_FSSETXATTR), B("raw", 28))
             add("ioctl", n + "/setflags_null", f, I(FS_IOC_SETFLAGS), "n:")
             add("ioctl", n + "/fssetxattr_null", f, I(FS_IOC_FSSETXATTR), "n:")
-    # listings: a directory of the tree with a wrapper, whose .real/ the kernel's tree has not, and
-    # the host's own .real/, which stays (8.3); getdents is x86-64's alone
+    # listings and fstat: a directory of the tree with a wrapper, whose .real/ the kernel's tree has
+    # not, and the host's own .real/, which stays (8.3); getdents is x86-64's alone
     listed = [*forms.fds, ("wrapped_dir", F(O_RDONLY | O_DIRECTORY, "/maze/xd"))]
     listed.append(("host_real", F(O_RDONLY | O_DIRECTORY, forms.host + "/hreal")))
     for n, f in listed:
         add("getdents64", n, f, B("dents64", 4096), I(4096))
         add("getdents", n, f, B("dents", 4096), I(4096))
+        add("fstat", n, f, B("stat", 256))
     # relative paths from a working directory the exclave owns
     rel = [
         "",

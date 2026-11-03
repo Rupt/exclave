@@ -652,6 +652,53 @@ def protection_keys(ctx: Ctx) -> None:
     expect(rc == 0 and out.splitlines() == want, f"rc={rc} {out!r} {err!r}")
 
 
+def fs_type(path: str) -> str:
+    """The filesystem type of the mount path is on, from /proc/self/mountinfo."""
+    path, best, kind = os.path.realpath(path), "", ""
+    with open("/proc/self/mountinfo", encoding="utf-8") as f:
+        for line in f:
+            fields = line.split()
+            point, fstype = fields[4], fields[fields.index("-") + 1]
+            if (path == point or path.startswith(point.rstrip("/") + "/")) and len(point) > len(
+                best
+            ):
+                best, kind = point, fstype
+    return kind
+
+
+@test
+def directory_stats_hide_real(ctx: Ctx) -> None:
+    """8.3: a directory of the tree stats as upstream's, without its .real/, by every stat call.
+
+    One link fewer where links count subdirectories, and on ZFS, btrfs and tmpfs, whose directory
+    sizes count entries, a size without .real's entry; a host directory's own .real/ stays counted.
+    """
+    bindir = os.path.dirname(ctx.vbin("sh"))
+    hostdir = os.path.join(ctx.work, "host-real")
+    os.makedirs(os.path.join(hostdir, ".real"), exist_ok=True)
+    calls = (
+        "stat",
+        "lstat",
+        "newfstatat",
+        "fstat",
+        "newfstatat AT_EMPTY_PATH",
+        "statx",
+        "statx AT_EMPTY_PATH",
+        "fstat O_PATH",
+    )
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "dirstat"), [bindir, hostdir])
+    want = []
+    real = os.path.join(ctx.root, bindir.lstrip("/"))
+    st = os.lstat(real)
+    entry = {"zfs": 1, "btrfs": 10, "tmpfs": 20}.get(fs_type(real), 0)
+    nlink = st.st_nlink - 1 if st.st_nlink >= 3 else st.st_nlink
+    size = st.st_size - entry if entry and st.st_size >= entry else st.st_size
+    want += [f"{bindir} {c}: nlink={nlink} size={size}" for c in calls]
+    host = os.lstat(hostdir)
+    want += [f"{hostdir} {c}: nlink={host.st_nlink} size={host.st_size}" for c in calls]
+    expect(rc == 0 and out.splitlines() == want, f"rc={rc} {out!r}, wanted {want!r} {err!r}")
+
+
 @test
 def listings_hide_real(ctx: Ctx) -> None:
     """8.3: a listing of a wrapped directory is upstream's, as the kernel would give it.

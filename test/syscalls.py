@@ -452,7 +452,7 @@ HIGHEST_KNOWN = 471
 # trap_digest computes it. A launcher reuses an inherited filter of its own version, so a set or a
 # page changed under the same version would send a nested launcher's new trap to the host
 # untranslated: a change moves FILTER_VERSION (src/common.h) and records the new digest here.
-SHIPPED = {6: "98bd90f1e7eeffbb", 7: "b56b5e8d86ee308d"}
+SHIPPED = {6: "98bd90f1e7eeffbb", 7: "b56b5e8d86ee308d", 8: "7e1d35ebfb23759e"}
 
 
 HEADERS = (
