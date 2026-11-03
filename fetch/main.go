@@ -1,13 +1,14 @@
 // The fetch command: a package closure resolved from a distribution's repository, every file
 // checked against the repository's signatures, and downloaded (DESIGN.md 10.1):
 //
-//	fetch debs ...    a Debian or Ubuntu closure, from an archive's Packages indexes
-//	fetch apks ...    an Alpine closure, from a branch's APKINDEX files
-//	fetch rpms ...    an rpm closure, from yum or dnf repositories' primary indexes
+//	exclave fetch debs ...    a Debian or Ubuntu closure, from an archive's Packages indexes
+//	exclave fetch apks ...    an Alpine closure, from a branch's APKINDEX files
+//	exclave fetch rpms ...    an rpm closure, from yum or dnf repositories' primary indexes
 //
 // Each is a worked example of the step before the tool, and takes the arguments its own
-// documentation lists. Neither unpack nor the tool fetches: `unpack OUT DIR/*` takes whatever
-// directory of package files this command, a package manager, a mirror or a person has made.
+// documentation lists. Nothing else of the command fetches: `exclave unpack OUT DIR/*` takes
+// whatever directory of package files this subcommand, a package manager, a mirror or a person
+// has made. A refusal is one line, "fetch-KIND: " and the reason.
 package fetch
 
 import (

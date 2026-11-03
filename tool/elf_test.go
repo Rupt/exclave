@@ -268,8 +268,42 @@ func TestReadLog(t *testing.T) {
 	}
 }
 
+// sectioned is a 64-bit ELF header alone whose section table starts at shoff with shnum entries,
+// as a loader read for its table of directories is.
+func sectioned(shoff uint64, shnum uint16) []byte {
+	le := binary.LittleEndian
+	h := append([]byte("\x7fELF\x02\x01\x01"), make([]byte, 57)...)
+	le.PutUint64(h[40:], shoff)
+	le.PutUint16(h[58:], 64)
+	le.PutUint16(h[60:], shnum)
+	return h
+}
+
+// TestDirsTable: a loader whose section offset wraps, or lies past the end, has no table and no
+// panic; one whose read-only data holds the run of directories gives them.
+func TestDirsTable(t *testing.T) {
+	for _, data := range [][]byte{sectioned(0xFFFFFFFFFFFFFFF8, 1), sectioned(1<<62, 1<<15), sectioned(100, 0xFFFF)} {
+		if got := dirsTable(data); got != nil {
+			t.Errorf("a lying section table gives %v", got)
+		}
+	}
+	// one SHT_PROGBITS, SHF_ALLOC section at 128 holding the run, the header's table at 64
+	run := []byte("\x00/lib/\x00/usr/lib/\x00x\x00")
+	data := append(sectioned(64, 1), make([]byte, 64)...)
+	le := binary.LittleEndian
+	le.PutUint32(data[64+4:], 1)
+	le.PutUint64(data[64+8:], 2)
+	le.PutUint64(data[64+24:], 128)
+	le.PutUint64(data[64+32:], uint64(len(run)))
+	data = append(data, run...)
+	if got := dirsTable(data); len(got) != 2 || got[0] != "/lib" || got[1] != "/usr/lib" {
+		t.Errorf("the loader's table read as %v", got)
+	}
+}
+
 func FuzzElf(f *testing.F) {
 	f.Add(makeELF(elfOpts{interp: new("/lib/ld.so"), needed: []string{"libc.so.6"}, soname: "x"}))
+	f.Add(sectioned(64, 2))
 	f.Add(makeELF(elfOpts{strtabAt: new(uint64(1 << 20)), needed: []string{"libfoo.so.1"}}))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		p := filepath.Join(t.TempDir(), "f")

@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
 	"strings"
@@ -319,7 +320,7 @@ func grammarParse(data []byte, k kind) ([]record, error) {
 	line = 1
 	for pos := 0; pos < n; line++ {
 		raw := data[pos:]
-		raw = raw[:strings.IndexByte(string(raw), '\n')]
+		raw = raw[:bytes.IndexByte(raw, '\n')]
 		pos += len(raw) + 1
 		if len(raw) == 0 {
 			continue

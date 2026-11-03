@@ -282,7 +282,8 @@ func cmdPrune(args []string) int {
 				continue
 			}
 			// originals and plain files; a wrapper is a link to the launcher
-			isWrap := !inReal && lexists(pathJoin(pathJoin(dir, ".real"), e[i].name))
+			_, err := os.Stat(pathJoin(pathJoin(dir, ".real"), e[i].name))
+			isWrap := !inReal && err == nil
 			if isReg(&e[i].st) && !isWrap {
 				freed += uint64(e[i].st.Size)
 			}
@@ -292,7 +293,7 @@ func cmdPrune(args []string) int {
 			removed++
 		}
 	})
-	fmt.Printf("pruned %s: kept %d files, removed %d, %d bytes freed\n", ex, kept, removed, freed)
+	fmt.Fprintf(out, "pruned %s: kept %d files, removed %d, %d bytes freed\n", ex, kept, removed, freed)
 	if hasTreeRecord(ex) {
 		writeHashes(ex, "", false, true)
 	}

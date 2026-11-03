@@ -7,6 +7,7 @@ package main
 
 import (
 	"bytes"
+	"math"
 	"os"
 	"runtime"
 	"strings"
@@ -98,8 +99,8 @@ func searchDir(root, d, name string) string {
 
 func splitAdd(out *[]string, list, origin string) {
 	for part := range strings.SplitSeq(list, ":") {
-		if part != "" {
-			*out = append(*out, expand(part, origin))
+		if part != "" { // a part is at most a path's 4095 bytes, as the C's buffer held it
+			*out = append(*out, expand(part[:min(len(part), 4095)], origin))
 		}
 	}
 }
@@ -234,11 +235,16 @@ func dirsTable(data []byte) []string {
 	shoff, shentsize, shnum := f(32, 4, 40, 8), f(46, 2, 58, 2), f(48, 2, 60, 2)
 	var found []string
 	seen := 0
+	entsz := uint64(64)
+	if cls == 1 {
+		entsz = 40
+	}
 	for i := uint64(0); i < shnum && found == nil; i++ {
-		o := shoff + i*shentsize
-		if o+map[bool]uint64{true: 40, false: 64}[cls == 1] > n {
+		// the header's place, checked without overflow: shoff and i*shentsize each within the file first
+		if shoff > n || i*shentsize > n-shoff || n-shoff-i*shentsize < entsz {
 			break
 		}
+		o := shoff + i*shentsize
 		kind := le(data[o+4:], 4)
 		var flags, off, size uint64
 		if cls == 1 {
@@ -296,17 +302,20 @@ func isAlnum(c byte) bool {
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
-// digits parses the decimal number at data[t:], as strtol reads one, and says where it ends.
+// digits parses the decimal number at data[t:] as the C read it, strtol's long saturating at its
+// largest and then cast to int, and says where it ends.
 func digits(data []byte, t int) (int, int) {
-	v := 0
+	var v int64
 	end := t
 	for end < len(data) && isDigit(data[end]) {
-		if v < 1<<40 {
-			v = v*10 + int(data[end]-'0')
+		if d := int64(data[end] - '0'); v > (math.MaxInt64-d)/10 {
+			v = math.MaxInt64
+		} else {
+			v = v*10 + d
 		}
 		end++
 	}
-	return v, end
+	return int(int32(v)), end
 }
 
 // glibcVersion is the major and minor version libc.so.6's banner names, found in the default

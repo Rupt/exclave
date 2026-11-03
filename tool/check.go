@@ -567,7 +567,7 @@ func wrapperProblems(ex string, data []string) []string {
 // Packages never make one; one added by hand would break when the exclave is moved or copied,
 // so wrap and check refuse it, naming the fix.
 func locatedLinks(ex string) []string {
-	cwd, err := os.Getwd()
+	cwd, err := unix.Getwd() // the physical directory, as getcwd gives it, never $PWD's spelling
 	if err != nil {
 		failErrno(".", err)
 	}
@@ -577,7 +577,8 @@ func locatedLinks(ex string) []string {
 	}
 	abs := normpath(joined)
 	places := []string{abs}
-	if real, err := filepath.EvalSymlinks(abs); err == nil && real != abs {
+	// realpath of the path as given: every link resolved as met, a .. after one taken physically
+	if real, err := filepath.EvalSymlinks(joined); err == nil && real != abs {
 		places = append(places, real)
 	}
 	var out []string
@@ -608,10 +609,10 @@ func locatedLinks(ex string) []string {
 
 func printReport(rep *report) {
 	for _, w := range rep.warnings {
-		fmt.Printf("warning: %s\n", w)
+		fmt.Fprintf(out, "warning: %s\n", w)
 	}
 	for _, e := range rep.errors {
-		fmt.Printf("error: %s\n", e)
+		fmt.Fprintf(out, "error: %s\n", e)
 	}
 }
 
@@ -620,7 +621,7 @@ func staticReport(ex string) int {
 	data := dataPrefixes(ex)
 	rep := staticCheck(ex, ownershipOf(ex), data)
 	printReport(rep)
-	fmt.Printf("static check: %d ELF files, %d static executables, %d warnings, %d errors\n", rep.seen,
+	fmt.Fprintf(out, "static check: %d ELF files, %d static executables, %d warnings, %d errors\n", rep.seen,
 		len(rep.statics), len(rep.warnings), len(rep.errors))
 	return len(rep.errors)
 }
@@ -671,9 +672,9 @@ func cmdCheck(args []string) int {
 		}
 	}
 	for _, p := range problems {
-		fmt.Println(p)
+		fmt.Fprintln(out, p)
 	}
-	fmt.Printf("%d wrapper problems\n", len(problems))
+	fmt.Fprintf(out, "%d wrapper problems\n", len(problems))
 	errors := staticReport(ex)
 	rc := 0
 	if len(problems) > 0 || errors > 0 {
@@ -682,7 +683,7 @@ func cmdCheck(args []string) int {
 	if len(args) > 1 {
 		d := dynamicCheck(ex, args[1:], ownershipOf(ex))
 		printReport(d)
-		fmt.Printf("dynamic check: %d log lines, %d errors\n", d.lines, len(d.errors))
+		fmt.Fprintf(out, "dynamic check: %d log lines, %d errors\n", d.lines, len(d.errors))
 		if len(d.errors) > 0 {
 			rc = 1
 		}

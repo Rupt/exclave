@@ -412,7 +412,7 @@ func (r *debRepo) download(st stanza, dst string) error {
 }
 
 func fetchDebs(args []string) error {
-	fs := flag.NewFlagSet("fetch-debs", flag.ContinueOnError)
+	fs := flag.NewFlagSet("exclave fetch debs", flag.ContinueOnError)
 	var keyrings, suites, choose multi
 	out := fs.String("out", "", "directory to fill with .deb files")
 	fs.Var(&keyrings, "keyring", "a keyring InRelease must be signed by: binary, or a key file in ASCII armour")

@@ -197,7 +197,9 @@ func cacheStr(data []byte, at uint64) (string, bool) {
 
 // readCache reads the tree's /etc/ld.so.cache in the glibc-ld.so.cache1.1 format: each soname's
 // paths in the cache's order, entries for a hardware capability left out. Returns false when the
-// tree has no cache, true otherwise, an unreadable or truncated cache having no entries.
+// tree has no regular file there, true otherwise: a cache cut inside its header or its table has
+// no entries, and one whose entries cannot all be read under either base keeps those the second
+// base read before the first that failed.
 func readCache(root string) ([]cacheEntry, bool) {
 	r := treeResolve(root, "/etc/ld.so.cache", true, nil)
 	if r == "" {

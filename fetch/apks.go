@@ -416,7 +416,7 @@ func (r *apkRepo) download(st stanza) (string, []byte, error) {
 }
 
 func fetchApks(args []string) error {
-	fs := flag.NewFlagSet("fetch-apks", flag.ContinueOnError)
+	fs := flag.NewFlagSet("exclave fetch apks", flag.ContinueOnError)
 	var keys multi
 	out := fs.String("out", "", "directory to fill with .apk files")
 	fs.Var(&keys, "key", "a PEM public key an index may be signed by, named as apk names it")

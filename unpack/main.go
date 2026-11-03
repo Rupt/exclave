@@ -1,16 +1,18 @@
 // The unpack command line (DESIGN.md 10.1):
 //
-//	unpack OUT PKG...      Make the unwrapped exclave OUT from package files: extract, synthesise
-//	                       what maintainer scripts would have done, strip the volatile
-//	                       directories, record every input in OUT/.exclave/hashes, report
-//	                       dependencies the set does not satisfy.
-//	unpack ldconfig TREE   Write TREE/etc/ld.so.cache as the tree's own ldconfig would, for a
-//	                       tree made by hand: the links it makes and removes, then the ldconfig
-//	                       and the loader it read and the loader's directories.
+//	exclave unpack OUT PKG...      Make the unwrapped exclave OUT from package files: extract,
+//	                               synthesise what maintainer scripts would have done, strip the
+//	                               volatile directories, record every input in
+//	                               OUT/.exclave/hashes, report dependencies the set does not
+//	                               satisfy.
+//	exclave unpack ldconfig TREE   Write TREE/etc/ld.so.cache as the tree's own ldconfig would,
+//	                               for a tree made by hand: the links it makes and removes, then
+//	                               the ldconfig and the loader it read and the loader's
+//	                               directories.
 //
 // `exclave wrap OUT` then makes it an exclave. Between the two OUT is a directory, and anything
 // may be done to it. Unpack never opens a network connection: the files it is given are its
-// inputs, whoever fetched them.
+// inputs, whoever fetched them. A refusal is one line, "unpack: " and the reason.
 package unpack
 
 import (

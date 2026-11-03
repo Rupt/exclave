@@ -19,11 +19,12 @@
 //	exclave fetch debs|apks|rpms ...    A package closure from a repository, verified (10.1, fetch/).
 //
 // Paths are bytes, as the kernel has them, and every list the command prints or hashes is sorted
-// by its bytes. A refusal prints one line, "exclave: " and the reason, and exits 1; a usage error
-// exits 2.
+// by its bytes. A refusal prints one line, "exclave: " and the reason (unpack's and the fetchers'
+// their own prefixes, "unpack: " and "fetch-KIND: "), and exits 1; a usage error exits 2.
 package main
 
 import (
+	"bufio"
 	"bytes"
 	_ "embed"
 	"errors"
@@ -54,9 +55,14 @@ var readmeBlob []byte
 
 // ---------------------------------------------------------------- failures
 
+// out is standard output, buffered as stdio buffers it on a pipe: what a command printed before a
+// refusal comes out after the refusal's line, and the end of main flushes it and reports a failure.
+var out = bufio.NewWriter(os.Stdout)
+
 // fail prints "exclave: " and the reason and exits 1.
 func fail(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "exclave: "+format+"\n", a...)
+	out.Flush()
 	os.Exit(1)
 }
 
@@ -75,12 +81,14 @@ func failErrno(path string, err error) { fail("%s: %s", path, errnoText(err)) }
 // failGrammar fails on a manifest or hashes file the grammar refuses: "grammar: " and where.
 func failGrammar(err error) {
 	fmt.Fprintf(os.Stderr, "grammar: %s\n", err)
+	out.Flush()
 	os.Exit(1)
 }
 
 // usage prints the command's usage line and exits 2.
 func usage(line string) {
 	fmt.Fprintf(os.Stderr, "usage: exclave %s\n", line)
+	out.Flush()
 	os.Exit(2)
 }
 
@@ -151,7 +159,7 @@ func cmdVersion(args []string) int {
 	if len(args) != 0 {
 		usage("version")
 	}
-	fmt.Printf("exclave %s\n", version)
+	fmt.Fprintf(out, "exclave %s\n", version)
 	return 0
 }
 
@@ -160,7 +168,7 @@ func cmdHash(args []string) int {
 		usage("hash EXCLAVE")
 	}
 	requireExclave(args[0], "hash")
-	fmt.Println(treeHash(pathJoin(args[0], "tree")))
+	fmt.Fprintln(out, treeHash(pathJoin(args[0], "tree")))
 	return 0
 }
 
@@ -202,18 +210,18 @@ func cmdFormat(args []string) int {
 		}
 		rs, err := grammarParse(data, k)
 		if err != nil {
-			fmt.Printf("%s: %s\n", path, err)
+			fmt.Fprintf(out, "%s: %s\n", path, err)
 			rc = 1
 			continue
 		}
 		canon := grammarDump(rs, k)
 		if !bytes.Equal(canon, data) {
 			if check {
-				fmt.Printf("%s: not canonical\n", path)
+				fmt.Fprintf(out, "%s: not canonical\n", path)
 				rc = 1
 			} else {
 				writeFile(path, canon, 0o666)
-				fmt.Printf("%s: rewritten\n", path)
+				fmt.Fprintf(out, "%s: rewritten\n", path)
 			}
 		}
 	}
@@ -235,5 +243,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "exclave: unknown command %s\n", os.Args[1])
 		os.Exit(2)
 	}
-	os.Exit(run(os.Args[2:]))
+	rc := run(os.Args[2:])
+	if err := out.Flush(); err != nil {
+		fail("standard output: %s", errnoText(err))
+	}
+	os.Exit(rc)
 }

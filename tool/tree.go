@@ -101,7 +101,8 @@ func hashFile(p string) (string, error) {
 // hashAll hashes the files' contents on several goroutines, each taking the next job, after the
 // walk has listed them in order; each writes only its own job, so the listing, and the hash of it,
 // are the walk's alone. The first file the walk listed that could not be read is named, as a
-// serial hash would name it.
+// serial hash would name it; the walk is in the order of the names' bytes, so the file named is
+// the same on every filesystem.
 func (h *hashing) hashAll() {
 	n := min(max(runtime.NumCPU(), 1), 8, max(len(h.jobs), 1))
 	var next atomic.Int64
@@ -143,11 +144,7 @@ func (h *hashing) addEntry(rel, real string, st *unix.Stat_t) {
 		if st.Mode&0o111 != 0 {
 			k = "x\x00"
 		}
-		original := pathJoin(path.Dir(real), ".real/"+path.Base(real))
-		if _, err := stat(original); err != nil {
-			original = real
-		}
-		h.jobs = append(h.jobs, hashJob{path: original, e: len(h.entries)})
+		h.jobs = append(h.jobs, hashJob{path: payloadPath(real), e: len(h.entries)})
 		h.entries = append(h.entries, hashEntry{rel, k, len(h.jobs) - 1})
 	}
 }
@@ -222,12 +219,14 @@ func treeHash(root string) string {
 
 // ---------------------------------------------------------------- walks
 
-// dirNames is a directory's entries' names, sorted by their bytes.
+// dirNames is a directory's entries' names, sorted by their bytes. The open is opendir's, a
+// directory or ENOTDIR, so a FIFO or a device under a directory's name does not block it.
 func dirNames(p string) ([]string, error) {
-	f, err := os.Open(p)
+	fd, err := unix.Open(p, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, err
+		return nil, &os.PathError{Op: "open", Path: p, Err: err}
 	}
+	f := os.NewFile(uintptr(fd), p)
 	defer f.Close()
 	names, err := f.Readdirnames(-1)
 	if err != nil {

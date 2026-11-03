@@ -51,15 +51,18 @@ func writeHashes(ex, manifestHash string, tree, keep bool) {
 	if lexists(p) {
 		old = loadHashes(p)
 	}
+	hasManifest := manifestHash != ""
 	if keep {
-		manifestHash = ""
-		if m := find(old, "manifest"); m != nil {
-			manifestHash = m.f[0].v
+		m := find(old, "manifest")
+		hasManifest = m != nil
+		if hasManifest { // the value as a C string of at most 131 bytes, which is how the C kept it
+			manifestHash = cString([]byte(m.f[0].v))
+			manifestHash = manifestHash[:min(len(manifestHash), 131)]
 		}
 		tree = find(old, "tree") != nil
 	}
 	rs := []record{{key: "hashes", f: []field{{'t', "1"}}}, {key: "tool", f: []field{{'s', version}}}}
-	if manifestHash != "" || tree {
+	if hasManifest || tree {
 		rs = append(rs, record{key: "launcher", f: []field{{'s', hashText(readFile(ld))}}})
 	}
 	for _, r := range old {
@@ -67,7 +70,7 @@ func writeHashes(ex, manifestHash string, tree, keep bool) {
 			rs = append(rs, record{key: "pkg", f: append([]field(nil), r.f...)})
 		}
 	}
-	if manifestHash != "" {
+	if hasManifest {
 		rs = append(rs, record{key: "manifest", f: []field{{'s', manifestHash}}})
 	}
 	if tree {
@@ -120,7 +123,7 @@ func cmdUnwrap(args []string) int {
 					failErrno(w, err)
 				}
 			}
-			if err := os.Rename(orig, w); err != nil {
+			if err := unix.Rename(orig, w); err != nil {
 				failErrno(orig, err)
 			}
 			moved++
@@ -129,7 +132,7 @@ func cmdUnwrap(args []string) int {
 			failErrno(dir, err)
 		}
 	})
-	fmt.Printf("unwrapped %d executables\n", moved)
+	fmt.Fprintf(out, "unwrapped %d executables\n", moved)
 	writeHashes(ex, "", false, false)
 	return 0
 }
@@ -160,24 +163,19 @@ func cmdRelink(args []string) int {
 	if len(args) != 1 && len(args) != 2 {
 		usage("relink EXCLAVE [LAUNCHER]")
 	}
-	ex, given := args[0], ""
-	if len(args) == 2 {
-		given = args[1]
-	}
+	ex := args[0]
 	requireExclave(ex, "relink")
-	if given != "" {
-		if st, err := os.Stat(given); err != nil || !st.Mode().IsRegular() {
-			fail("no launcher at %s", given)
+	data := launcherBlob
+	if len(args) == 2 { // the launcher given, read before anything goes, since it may be the file replaced
+		if st, err := os.Stat(args[1]); err != nil || !st.Mode().IsRegular() {
+			fail("no launcher at %s", args[1])
 		}
+		data = readFile(args[1])
 	}
 	ld, root := pathJoin(ex, ".exclave/launcher"), pathJoin(ex, "tree")
 	next := ld + ".new"
 	unix.Unlink(next)
-	if given != "" {
-		writeFile(next, readFile(given), 0o755)
-	} else {
-		writeFile(next, launcherBlob, 0o755)
-	}
+	writeFile(next, data, 0o755)
 	if err := unix.Chmod(next, 0o755); err != nil {
 		failErrno(next, err)
 	}
@@ -199,23 +197,23 @@ func cmdRelink(args []string) int {
 			}
 			tmp := parent + "/." + e[i].name + ".exclave-relink"
 			linkOrCopy(next, tmp)
-			if err := os.Rename(tmp, w); err != nil {
+			if err := unix.Rename(tmp, w); err != nil {
 				failErrno(tmp, err)
 			}
 			n++
 		}
 	})
-	if err := os.Rename(next, ld); err != nil {
+	if err := unix.Rename(next, ld); err != nil {
 		failErrno(next, err)
 	}
 	writeReadme(ex)
 	for _, p := range left {
-		fmt.Printf("original without wrapper, left alone: %s\n", p)
+		fmt.Fprintf(out, "original without wrapper, left alone: %s\n", p)
 	}
 	if hasTreeRecord(ex) {
 		writeHashes(ex, "", false, true)
 	}
-	fmt.Printf("relinked %d wrappers to the new launcher\n", n)
+	fmt.Fprintf(out, "relinked %d wrappers to the new launcher\n", n)
 	return 0
 }
 
@@ -266,7 +264,7 @@ func placeholders(root string) {
 		// the directory as the tree resolves it: Fedora's /etc/ssl/certs is a link into /etc/pki
 		rd := treeResolve(root, d, true, nil)
 		if st, err := lstat(treeReal(root, d)); rd == "" && err == nil && isLnk(&st) {
-			fmt.Printf("identity file %s not placed: its directory is a dangling link in the tree\n", f)
+			fmt.Fprintf(out, "identity file %s not placed: its directory is a dangling link in the tree\n", f)
 			continue
 		}
 		if rd == "" {
@@ -311,7 +309,7 @@ func wrapFiles(ex string, data []string) int {
 			fail("%s has an original in .real/ already: a stale wrapper; run exclave relink", v)
 		}
 		makeDirs(rd)
-		if err := os.Rename(real, orig); err != nil {
+		if err := unix.Rename(real, orig); err != nil {
 			failErrno(real, err)
 		}
 		linkOrCopy(ld, real)
@@ -327,35 +325,28 @@ func cmdWrap(args []string) int {
 	if len(args) != 1 && len(args) != 2 {
 		usage("wrap EXCLAVE [LAUNCHER]")
 	}
-	ex, given := args[0], ""
-	if len(args) == 2 {
-		given = args[1]
-	}
+	ex, given := args[0], len(args) == 2
 	requireExclave(ex, "wrap")
 	ld, root, mp := pathJoin(ex, ".exclave/launcher"), pathJoin(ex, "tree"), pathJoin(ex, ".exclave/manifest")
-	var gdata []byte
-	if given != "" {
-		if st, err := os.Stat(given); err != nil || !st.Mode().IsRegular() {
-			fail("no launcher at %s", given)
+	gdata := launcherBlob
+	if given {
+		if st, err := os.Stat(args[1]); err != nil || !st.Mode().IsRegular() {
+			fail("no launcher at %s", args[1])
 		}
-		gdata = readFile(given)
+		gdata = readFile(args[1])
 	}
 	if _, err := os.Stat(ld); err != nil { // the launcher given, for its own machine, or the one this command carries
 		makeDirs(pathJoin(ex, ".exclave"))
 		unix.Unlink(ld)
-		if given != "" {
-			writeFile(ld, gdata, 0o755)
-		} else {
-			writeFile(ld, launcherBlob, 0o755)
-		}
+		writeFile(ld, gdata, 0o755)
 		if err := unix.Chmod(ld, 0o755); err != nil {
 			failErrno(ld, err)
 		}
 		machineOfLauncher(ex)
-	} else if given != "" { // a launcher already there is kept, since the wrappers are its copies; relink replaces it
+	} else if given { // a launcher already there is kept, since the wrappers are its copies; relink replaces it
 		if !bytes.Equal(readFile(ld), gdata) {
-			fail("%s has a launcher already, which differs from %s; exclave relink %s %s replaces it", ex, given, ex,
-				given)
+			fail("%s has a launcher already, which differs from %s; exclave relink %s %s replaces it", ex, args[1],
+				ex, args[1])
 		}
 	}
 	placeholders(root)
@@ -377,16 +368,16 @@ func cmdWrap(args []string) int {
 	data := dataPrefixes(ex)
 	problems := append(wrapperProblems(ex, data), locatedLinks(ex)...)
 	for _, p := range problems {
-		fmt.Printf("error: %s\n", p)
+		fmt.Fprintf(out, "error: %s\n", p)
 	}
 	errors := staticReport(ex)
 	if len(problems) > 0 || errors > 0 {
-		fmt.Println("refused: nothing was wrapped")
+		fmt.Fprintln(out, "refused: nothing was wrapped")
 		return 1
 	}
-	fmt.Printf("wrapped %d executables\n", wrapFiles(ex, data))
+	fmt.Fprintf(out, "wrapped %d executables\n", wrapFiles(ex, data))
 	writeReadme(ex)
 	writeHashes(ex, hashText(mdata), true, false)
-	fmt.Printf("%s is wrapped\n", ex)
+	fmt.Fprintf(out, "%s is wrapped\n", ex)
 	return 0
 }

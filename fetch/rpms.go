@@ -520,7 +520,7 @@ func sigValue(h rpm.Header, tags ...uint32) []byte {
 }
 
 func fetchRpms(args []string) error {
-	fs := flag.NewFlagSet("fetch-rpms", flag.ContinueOnError)
+	fs := flag.NewFlagSet("exclave fetch rpms", flag.ContinueOnError)
 	var keyrings, repos, choose multi
 	out := fs.String("out", "", "directory to fill with .rpm files")
 	fs.Var(&keyrings, "keyring", "a keyring the packages must be signed by: an RPM-GPG-KEY file, or a binary keyring")
