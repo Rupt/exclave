@@ -23,11 +23,6 @@ import (
 // .exclave/ too for every command but wrap; a wrapped exclave's launcher names its machine.
 func requireExclave(ex, cmd string) {
 	hasExclave := isDir(pathJoin(ex, ".exclave"))
-	// a can, an exclave in the layout from before the project's rename, is named as one (13 item 45)
-	if isDir(pathJoin(ex, ".can")) && !hasExclave {
-		fail("refusing: %s is a can, an exclave from before the rename, with .can/ and root/; convert it first "+
-			"(docs/DESIGN.md 13 item 45)", ex)
-	}
 	if !isDir(pathJoin(ex, "tree")) {
 		fail("refusing: %s has no tree/ directory", ex)
 	}

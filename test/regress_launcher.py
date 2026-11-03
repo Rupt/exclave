@@ -414,8 +414,7 @@ def nested_older_launcher(ctx: Ctx) -> str | None:
     # launcher's child
     gen1 = os.path.join(ctx.work, "launcher-gen1")
     blob = read_bytes(ctx.launcher_src)
-    # its own note and the earlier name's
-    notes = [(n, n + struct.pack("<I", 2)) for n in (b"exclave\0", b"cont\0\0\0\0")]
+    notes = [(n, n + struct.pack("<I", 2)) for n in (b"exclave\0",)]
     expect(
         all(blob.count(w) == 1 for n, w in notes),
         "each note's page generation is found once in the launcher",
@@ -438,56 +437,6 @@ def nested_older_launcher(ctx: Ctx) -> str | None:
         f"a launcher of page generation 1 from inside: {out!r} {err!r}",
     )
     return None
-
-
-@test
-def earlier_note_name(ctx: Ctx) -> None:
-    """A launcher carries its note under two names, exclave and cont.
-
-    The second is the name an opener from before the rename looks for, so that each runs the other
-    as another launcher; a launcher whose only note is cont, as an opener's is, runs from inside
-    this one. Without the cont note such an opener loads a launcher as a program, which then finds
-    the syscall page taken and refuses: measured both ways against such an opener.
-    """
-    gen = struct.pack("<I", 2)
-    blob = read_bytes(ctx.launcher_src)
-    expect(
-        blob.count(b"cont\0\0\0\0" + gen) == 1 and blob.count(b"exclave\0" + gen) == 1,
-        "both notes, at page generation 2",
-    )
-    only = os.path.join(ctx.work, "launcher-exclave-only")
-    with open(only, "wb") as f:
-        # a byte more: a launcher of its own size, not a copy of this one
-        f.write(blob.replace(b"exclave\0" + gen, b"exclavx\0" + gen) + b"\0")
-    os.chmod(only, 0o755)
-    ex3 = os.path.join(ctx.work, "note-exclave")
-    copy_exclave(ctx.mini, ex3)
-    tree.relink(ex3, only)
-    _rc, out, err = run(
-        [wrapper(ctx, "sh"), "-c", "{}/tree{}; echo rc=$?".format(ex3, ctx.vbin("true"))],
-        cwd=ctx.work,
-        env=ctx.env,
-    )
-    expect(
-        out == "rc=0\n", f"a launcher known by the cont note alone, from inside: {out!r} {err!r}"
-    )
-    # and the mirror, which a launcher of a later revision without the earlier name would be
-    only = os.path.join(ctx.work, "launcher-exclave-only")
-    with open(only, "wb") as f:
-        # two bytes more: its own size
-        f.write(blob.replace(b"cont\0\0\0\0" + gen, b"conx\0\0\0\0" + gen) + b"\0\0")
-    os.chmod(only, 0o755)
-    note_copy = os.path.join(ctx.work, "exclave-note-copy")
-    copy_exclave(ctx.mini, note_copy)
-    tree.relink(note_copy, only)
-    _rc, out, err = run(
-        [wrapper(ctx, "sh"), "-c", "{}/tree{}; echo rc=$?".format(note_copy, ctx.vbin("true"))],
-        cwd=ctx.work,
-        env=ctx.env,
-    )
-    expect(
-        out == "rc=0\n", f"a launcher known by the exclave note alone, from inside: {out!r} {err!r}"
-    )
 
 
 @test

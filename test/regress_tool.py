@@ -48,30 +48,6 @@ def tool_version(ctx: Ctx) -> None:
 
 
 @test
-def pre_rename_can_refused(ctx: Ctx) -> None:
-    """A can, an exclave from before the rename (.can/, root/), is refused by name.
-
-    Every command that takes an exclave refuses it before anything is read or written, rather than
-    ending in a traceback; docs/DESIGN.md 13 item 45 says how to convert it.
-    """
-    old = os.path.join(ctx.work, f"old-{os.getpid()}.can")
-    os.makedirs(os.path.join(old, ".can"))
-    os.makedirs(os.path.join(old, "root", "usr", "bin"))
-    with open(os.path.join(old, ".can", "manifest"), "w") as f:
-        f.write("can 1\n")
-    log = os.path.join(ctx.work, "old-can.log")
-    open(log, "w").close()
-    before = sorted(os.walk(old))
-    for args in (["wrap"], ["unwrap"], ["check"], ["prune", log], ["hash"], ["relink"]):
-        rc, _o, e = run([*TOOL, args[0], old, *args[1:]])
-        expect(
-            rc != 0 and "is a can, an exclave from before the rename" in e and "Traceback" not in e,
-            f"{args[0]} on a can: rc={rc} {e[-300:]!r}",
-        )
-    expect(sorted(os.walk(old)) == before, "a refused command changed the can")
-
-
-@test
 def exclave_readme(ctx: Ctx) -> None:
     """6.1: every exclave explains itself to whoever finds it.
 

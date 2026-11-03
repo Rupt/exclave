@@ -123,7 +123,7 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
     return bias;
 }
 
-/* a PT_NOTE segment's launcher note, exclave or cont, read from fd into nb (512 bytes): its page generation, 1 for a
+/* a PT_NOTE segment's launcher note, exclave, read from fd into nb (512 bytes): its page generation, 1 for a
  * note without a word, 0 for no note of ours; the last such note counts */
 static int note_gen(int fd, const Phdr *p, unsigned char *nb)
 {
@@ -132,8 +132,7 @@ static int note_gen(int fd, const Phdr *p, unsigned char *nb)
     while (n >= 12 && o + 12 <= n) {
         uint32_t nsz = *(uint32_t *)(nb + o), dsz = *(uint32_t *)(nb + o + 4);
         long w = o + 12 + (long)((nsz + 3) & ~3U);            /* the word after the name, padded to 4 */
-        if ((nsz == 8 && o + 20 <= n && xmemcmp(nb + o + 12, "exclave", 8) == 0) ||
-            (nsz == 5 && o + 17 <= n && xmemcmp(nb + o + 12, "cont", 5) == 0))
+        if (nsz == 8 && o + 20 <= n && xmemcmp(nb + o + 12, "exclave", 8) == 0)
             g = dsz >= 4 && w + 4 <= n && *(uint32_t *)(nb + w) ? (int)*(uint32_t *)(nb + w) : 1;
         o += 12 + ((nsz + 3) & ~3U) + ((dsz + 3) & ~3U);
     }
@@ -286,8 +285,8 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
             if (g) gen = g;
         }
     if (gen && gen < PAGE_GENERATION)
-        die("a launcher from before the syscall page moved cannot run here; relink its exclave with the current tool, "
-            "converting a can first (docs/DESIGN.md 13 item 45)",
+        die("a launcher from before the syscall page moved cannot run here; relink its exclave with the current "
+            "launcher (docs/DESIGN.md 13 item 45)",
             vpath, 0);
     payload_base = map_elf(fd, &eh, ph_main, &entry, &phdr_va, &has_interp, interp_v, real);
     /* a program run from a descriptor with no path (13 item 25): mapped, the dup goes */

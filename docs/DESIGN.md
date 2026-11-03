@@ -171,7 +171,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 99 named tests, most of them programs that
+- **The regression suite**: 97 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -744,10 +744,9 @@ executable in an exclave's tree is a hard link to it, a *wrapper*, and
 the program a wrapper stands for, its *original*, sits beside it in
 `.real/` (6.1). Besides its code it carries:
 
-- **Two ELF notes** in a `.note.exclave` section, `exclave` and
-  `cont`, each holding one word, the *page generation* (7.4.2), by
-  which one launcher recognises another (7.4.5); `cont` is the name
-  launchers from before the project's rename look for.
+- **An ELF note** in a `.note.exclave` section, `exclave`, holding one
+  word, the *page generation* (7.4.2), by which one launcher recognises
+  another (7.4.5).
 - **The MIT licence text**, in a `.exclave.license` section that is not
   loaded, since the licence's text goes with every copy.
 - **Its version**, in `.exclave.version`: `exclave` and the build's
@@ -2593,7 +2592,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 99 named regressions and every oracle its kernel can run; 17
+suite's 97 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher
 inside its copy of the exclave (`scripts/reproduce`, 10.5) and
 compares its bytes with the reference machine's build; a row whose
@@ -3006,30 +3005,12 @@ and stay fixed.
 44. **Two handlers never share a scratch chunk**: a rule, not a
     limitation (7.5.4).
 
-45. **A bundle made before the project's rename, a "can", is converted
-    by hand.** A can is an exclave in the format's earlier names:
-    `.can/` for `.exclave/`, `root/` for `tree/`, `opener` and `lock`
-    for `launcher` and `hashes`. A can still runs as it is, from
-    anywhere, and runs an exclave's programs as an exclave runs its
-    own. The `exclave` command refuses one by name rather than reading
-    it. A can's launcher whose syscall page is at the earlier address
-    (item 24) and the current launcher cannot run under each other: the
-    current one refuses either nesting and points here (7.4.2); the
-    conversion, which relinks, fixes it. Converting a can is renames,
-    two edits and three commands:
-
-    ```
-    cd OLD.can && mv .can .exclave && mv root tree && mv .exclave/opener .exclave/launcher && mv .exclave/lock .exclave/hashes
-    sed -i -e 's/^can 1$/exclave 1/' -e 's/^isa /cpu /' .exclave/manifest
-    sed -i -e 's/^lock 1$/hashes 1/' -e 's/^cannery /tool /' -e 's/^opener /launcher /' .exclave/hashes
-    cd .. && mv OLD.can OLD.exclave                               # the suffix is a convention; any name works
-    scripts/exclave relink OLD.exclave build/launcher          # the current launcher behind every wrapper
-    scripts/exclave unwrap OLD.exclave && scripts/exclave wrap OLD.exclave   # the manifest's hash, recorded again
-    ```
-
-    The converted exclave's hashes file equals the one a fresh `unpack`
-    and `wrap` of the same packages writes, apart from the launcher's
-    hash.
+45. **A launcher whose syscall page is elsewhere cannot nest with this
+    one.** A launcher of an earlier page generation (7.4.2), whose
+    syscall page sat at another address (item 24), and this one cannot
+    run under each other's filter: this launcher refuses either nesting
+    by name, and relinking the older exclave with the current launcher
+    fixes it.
 
 46. **The launcher's own variables stay in `/proc/<pid>/environ`.**
     `EXCLAVE_EXECFN`, `EXCLAVE_COMM` and, on the loader path,
@@ -4064,8 +4045,7 @@ meaning items 4 and 7.
      tree's own `ldconfig` writes it, byte for byte on copies altered to
      exercise each rule, and the loader's table of directories against
      what it prints, a wrap with the other machine's launcher, the
-     exclave's README and version, and a directory in the pre-rename
-     `.can/` layout refused by name by every command;
+     exclave's README and version;
    - *the tool's check and prune*: the static check's model of the
      loader, a tree naming two loaders, an unreadable file, and
      pruning with logs.
@@ -4125,7 +4105,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus nineteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones` and `memfd_exec` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 99 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 97 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

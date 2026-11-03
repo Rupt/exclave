@@ -96,8 +96,8 @@ launcher() {
     "${tools}objcopy" --strip-all --keep-section=.debug_gdb_scripts --keep-section=.exclave.license \
         --keep-section=.exclave.version "$out.debug" "$out" || return 1
     notes=$("${tools}readelf" -n "$out")
-    if ! printf '%s\n' "$notes" | grep -Eq '^ +exclave +0x' || ! printf '%s\n' "$notes" | grep -Eq '^ +cont +0x'; then
-        echo "build: $out lost a note: the launcher carries exclave and cont (7.4.5)" >&2
+    if ! printf '%s\n' "$notes" | grep -Eq '^ +exclave +0x'; then
+        echo "build: $out lost its note: the launcher carries exclave (7.4.5)" >&2
         return 1
     fi
     "${tools}readelf" -S -W "$out" | grep -q debug_gdb_scripts || {
