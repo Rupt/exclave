@@ -145,10 +145,12 @@ func (r *debRepo) loadIndex() error {
 			return err
 		}
 		for _, comp := range r.components {
+			// gzip before xz, which the archives also serve: the same index, larger to fetch
+			// but decompressed in a fraction of the time, which is most of a warm fetch's
 			base := fmt.Sprintf("%s/binary-%s", comp, r.arch)
-			rel := base + "/Packages.xz"
+			rel := base + "/Packages.gz"
 			if _, ok := digests[rel]; !ok {
-				rel = base + "/Packages.gz"
+				rel = base + "/Packages.xz"
 			}
 			want, ok := digests[rel]
 			if !ok {
