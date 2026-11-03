@@ -3,8 +3,9 @@
 # DIR (docs/DESIGN.md 10.5): its compiler, its binutils and its shell, and nothing of the machine's, so that
 # DIR/build/launcher is the same bytes on any machine the exclave runs on; then, where this checkout has the pinned
 # Go (scripts/install-go), the command built here from that launcher, DIR/build/exclave, which the toolchain builds
-# the same bytes anywhere from the same sources (lib.sh), and DIR/build/NOTICES, its modules' licence texts. Prints the BLAKE2b-256 of each as b2sum does, the launcher's
-# first and alone where there is no Go, as in the matrix's VMs. The commit is the checkout's, or the file COMMIT's in
+# the same bytes anywhere from the same sources (lib.sh), and DIR/build/NOTICES, its modules' licence texts. Prints the
+# BLAKE3-256 of each as b3sum does, by the command (exclave hash FILE): the one built here, or the checkout's where
+# there is no Go, as in the matrix's VMs, where the launcher's is printed alone. The commit is the checkout's, or the file COMMIT's in
 # a copy of the sources without one, as the matrix carries into its VMs. It runs no Python.
 set -eu
 UV_BOOTSTRAP=1 # lib.sh's check for the pinned uv: this script runs no Python
@@ -57,6 +58,12 @@ if [ -x "$GO" ] && [ -e "$dir/go.mod" ]; then
     }
     built="$built exclave"
 fi
+hasher=$dir/build/exclave
+[ -x "$hasher" ] || hasher=$ROOT/build/exclave
+[ -x "$hasher" ] || {
+    echo "reproduce: no command to hash with, here or at $hasher: run scripts/build" >&2
+    exit 2
+}
 for f in $built; do
-    "$ex/tree/usr/bin/b2sum" -l 256 "$dir/build/$f" | sed "s|  .*|  $f|"
+    printf '%s  %s\n' "$("$hasher" hash "$dir/build/$f" | sed 's/^b3://')" "$f"
 done

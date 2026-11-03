@@ -714,7 +714,8 @@ empty directories, and it is the same for an exclave wrapped or
 unwrapped. Every file must be readable for the hash to be computed. The
 launcher and `.exclave/` are excluded from the tree hash; the launcher
 has its own record. `exclave hash` prints the tree hash of an exclave
-as it stands.
+as it stands, and given a file the file's hash as these records write
+it, so the command checks any of them with nothing beside it.
 
 ### 6.5 The formatter
 
@@ -2024,7 +2025,7 @@ exclave unwrap EXCLAVE              unwrap an exclave again
 exclave check EXCLAVE [LOG...]      wrappers, the tree against the hashes file, the static check, and with EXCLAVE_LOG files the dynamic check
 exclave prune EXCLAVE LOG...        drop what no logged workload touched
 exclave format [--check] FILE...    canonical form of a manifest or hashes file; --check only reports
-exclave hash EXCLAVE                the tree hash of 6.4
+exclave hash EXCLAVE|FILE           the tree hash of 6.4, or a file's hash as the hashes file writes it
 exclave relink EXCLAVE [LAUNCHER]   replace the launcher and relink every wrapper
 exclave version                     the build this command is from: the project's version and the commit
 exclave unpack OUT PKG...           an unwrapped exclave from package files (10.1); exclave unpack ldconfig TREE writes ld.so.cache for a tree made by hand
@@ -2524,7 +2525,7 @@ only if it is wrapped with that launcher; the command itself as
 `exclave`, with the licence texts of the Go modules it links as
 `NOTICES`, written at the build from the pinned module cache, since
 their BSD licences ask a binary distribution to carry them; `SHA256SUMS`
-and `B2SUMS` over every file there; and `SHA256SUMS.sig`, the sums signed with the ssh key `KEY`
+and `B3SUMS`, as `b3sum` writes it, over every file there; and `SHA256SUMS.sig`, the sums signed with the ssh key `KEY`
 (`ssh-keygen -Y`, namespace `exclave`). A consumer needs nothing of the
 checkout: the signature is verified against the releaser's public key,
 obtained through a channel the consumer trusts; the sums are checked;
@@ -4176,7 +4177,7 @@ the sysroot of 9, the workloads' exclaves, and the source tarballs of
 their authors' own sites. Packages come through the
 fetchers of `fetch/`, which verify each download against the repository
 index's checksum and cache it under `~/.cache`. Every other third-party
-file is pinned by its BLAKE2b-256 in the script. An item `DIR` already
+file is pinned by its BLAKE3-256 in the script, checked by `exclave hash`. An item `DIR` already
 has is skipped, and whatever is missing is fetched again. The
 repository holds no third-party input.
 

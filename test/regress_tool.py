@@ -373,6 +373,15 @@ def unpack_and_wrap(ctx: Ctx) -> str | None:
     )
     rc, o, e = run([*TOOL, "hash", os.path.join(ctx.work, "not-an-exclave")])
     expect(rc != 0 and "no tree" in e, "hash of a non-exclave is refused")
+    # a file's hash, as the hashes file writes one: the launcher's record, by the command alone
+    rc, o, e = run([*TOOL, "hash", os.path.join(out, ".exclave", "launcher")])
+    expect(
+        rc == 0
+        and [[o.strip()]]
+        == tree.records(os.path.join(out, ".exclave", "hashes")).get("launcher")
+        == [[tree.b3(read_bytes(launcher))]],
+        f"hash of a file is its record: {o}{e}",
+    )
     locked = os.path.join(out, "tree", "usr", "share", "locked")
     os.makedirs(locked)
     os.chmod(locked, 0)

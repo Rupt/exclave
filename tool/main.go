@@ -164,9 +164,20 @@ func cmdVersion(args []string) int {
 	return 0
 }
 
+// cmdHash prints the tree hash of an exclave, or the hash of a file as the hashes file writes it,
+// so that a machine with the command needs no other tool to check one (6.4).
 func cmdHash(args []string) int {
 	if len(args) != 1 {
-		usage("hash EXCLAVE")
+		usage("hash EXCLAVE|FILE")
+	}
+	if st, err := os.Stat(args[0]); err == nil && st.Mode().IsRegular() {
+		j := hashJob{path: args[0]}
+		hashFile(&j, make([]byte, 1<<20))
+		if j.err != nil {
+			failErrno(args[0], j.err)
+		}
+		fmt.Fprintln(out, "b3:"+j.hex)
+		return 0
 	}
 	requireExclave(args[0], "hash")
 	fmt.Fprintln(out, treeHash(pathJoin(args[0], "tree")))

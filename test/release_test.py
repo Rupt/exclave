@@ -110,12 +110,19 @@ def main() -> int:
     step("the signature verifies against the key", rc == 0, out)
     rc, out = run(["sha256sum", "-c", "SHA256SUMS"], consumer)
     step("the sha256 sums check", rc == 0, out)
-    rc, out = run(["b2sum", "-c", "B2SUMS"], consumer)
-    step("the blake2 sums check", rc == 0, out)
-    rc, out = run(["tar", "-xJf", name + ".tar.xz"], consumer)
-    step("the archive unpacks", rc == 0, out)
+    # b3sum where the machine has it, else the release's own command, file by file
     tool = os.path.join(consumer, "exclave")
     os.chmod(tool, 0o755)
+    if shutil.which("b3sum"):
+        rc, out = run(["b3sum", "-c", "B3SUMS"], consumer)
+    else:
+        with open(os.path.join(consumer, "B3SUMS"), encoding="utf-8") as f:
+            listed = [line.split("  ", 1) for line in f.read().splitlines()]
+        bad = [n for h, n in listed if run([tool, "hash", n], consumer)[1].strip() != "b3:" + h]
+        rc, out = (1 if bad or not listed else 0), f"differ: {bad}"
+    step("the BLAKE3 sums check", rc == 0, out)
+    rc, out = run(["tar", "-xJf", name + ".tar.xz"], consumer)
+    step("the archive unpacks", rc == 0, out)
     rc, out = run([tool, "check", name], consumer)
     step("the release's exclave checks the exclave", rc == 0, out[-500:])
     rc, out = run([tool, "hash", name], consumer)

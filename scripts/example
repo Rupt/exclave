@@ -48,7 +48,7 @@ centos=$dir/RPM-GPG-KEY-CentOS-7
 [ -e "$centos" ] || {
     url=https://vault.centos.org/7.9.2009/os/x86_64/RPM-GPG-KEY-CentOS-7
     if command -v curl >/dev/null 2>&1; then curl -fsSL -o "$centos" "$url"; else wget -q -O "$centos" "$url"; fi
-    echo "4a088ee35b0355b8a9cc8b611b72ca76280cb34c4b90346ff08abb30fe0b82a0  $centos" | b2sum -l 256 -c --quiet || {
+    [ "$(exclave hash "$centos")" = b3:0f486068ef5f812ec4780aa667408c34cc2a66e7ac15e66d29cc9c534dfe79ca ] || {
         echo "the CentOS 7 key fetched does not match its hash" >&2
         exit 1
     }

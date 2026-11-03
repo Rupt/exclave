@@ -77,18 +77,21 @@ make_exclave() { # make_exclave NAME PKGDIR [LAUNCHER]: unpack the package files
         return 1
     fi
 }
-file() { # file URL NAME HASH: one file into DIR/src, verified by its BLAKE2b-256
+b3() { # b3 FILE: its BLAKE3-256 as lowercase hex, by the command built here (exclave hash FILE)
+    "$repo/build/exclave" hash "$1" 2>/dev/null | sed 's/^b3://'
+}
+file() { # file URL NAME HASH: one file into DIR/src, verified by its BLAKE3-256
     url=$1
     name=$2
     hash=$3
-    if [ "$(b2sum -l 256 "$dir/src/$name" 2>/dev/null | cut -d' ' -f1)" = "$hash" ]; then
+    if [ "$(b3 "$dir/src/$name")" = "$hash" ]; then
         echo "src/$name: present"
         return 0
     fi
     rm -f "$dir/src/$name"
     # a failed or stalled connection is tried again, five times over about a minute, as scripts/install-uv does
     if download "$url" "$dir/src/$name" >"$dir/log/$name.log" 2>&1 &&
-        [ "$(b2sum -l 256 "$dir/src/$name" | cut -d' ' -f1)" = "$hash" ]; then
+        [ "$(b3 "$dir/src/$name")" = "$hash" ]; then
         echo "src/$name: fetched"
     else
         echo "src/$name: FAIL (download or hash), see $dir/log/$name.log"
@@ -101,10 +104,10 @@ file() { # file URL NAME HASH: one file into DIR/src, verified by its BLAKE2b-25
 fedora=https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/42/Everything/x86_64/os
 centos=https://vault.centos.org/7.9.2009/os/x86_64
 # the archives' signing keys, which the fetchers check every index and package against (10); each pinned here by
-# its BLAKE2b-256, so that the key is this file's and not the network's
-file https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg ubuntu-archive-keyring.gpg a216df0d4d5bbe223c5349283b2661d2e0a321fe4c8910eecdbcf7c12ae8fba5
-file https://src.fedoraproject.org/rpms/fedora-repos/raw/f42/f/RPM-GPG-KEY-fedora-42-primary RPM-GPG-KEY-fedora-42-primary 25bae133be1906e21720637fa4ece7d816b5f3946304166d98e954663d56dc33
-file https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub 7022bd8ba8209c32fad8211dfe5e69d66d7eb9424ea90990a28333f3b7318508
+# its BLAKE3-256, so that the key is this file's and not the network's
+file https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg ubuntu-archive-keyring.gpg b64faba2f5f4999ac818dbd0ea927cc7f76ca7b31d1aa9510bfb8c0f34eb54e4
+file https://src.fedoraproject.org/rpms/fedora-repos/raw/f42/f/RPM-GPG-KEY-fedora-42-primary RPM-GPG-KEY-fedora-42-primary 70651cbc2e636a74c6c70a010b7b33f1fafb58922ee3756f29549e7e3195bc43
+file https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub 279148f0c681a0da044bbc988c7d7a4078e00fe597011c66fe49414ea70e9c63
 ubuntu=$dir/src/ubuntu-archive-keyring.gpg
 # any Ubuntu mirror serves, every index being checked against the archive's key; archive.ubuntu.com has served the
 # reference machine at 13 kB/s
@@ -126,7 +129,7 @@ fetch debs-arm64 debs --keyring "$ubuntu" --arch arm64 --mirror http://ports.ubu
     else
         echo "gcc13-arm64.exclave: no aarch64 launcher built here (aarch64-linux-gnu-gcc missing); skipped"
     fi
-file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json 3d005310d39ca085839ee4d23373c37c5eaeee073951d1fed335c2553559b846
+file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json b5b6b32d9b6c410d6e8c00639ead764745bd4eaf9cb662d2ec25b656e3f17f75
 [ "${2-}" = examples ] || {
     echo "inputs: $fails failed (the gate's; scripts/inputs DIR examples fetches the examples' too)"
     exit $fails
@@ -134,7 +137,7 @@ file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868e
 
 # the examples': test/realsoft.py's packages and sources, the sysroot's CentOS 7 glibc, test/workloads.py's exclaves
 # and files, and test/bench.py's SQLite, some from their authors' own sites
-file https://vault.centos.org/7.9.2009/os/x86_64/RPM-GPG-KEY-CentOS-7 RPM-GPG-KEY-CentOS-7 4a088ee35b0355b8a9cc8b611b72ca76280cb34c4b90346ff08abb30fe0b82a0
+file https://vault.centos.org/7.9.2009/os/x86_64/RPM-GPG-KEY-CentOS-7 RPM-GPG-KEY-CentOS-7 0f486068ef5f812ec4780aa667408c34cc2a66e7ac15e66d29cc9c534dfe79ca
 fetch debs-realsoft debs --keyring "$ubuntu" gcc g++ make libc6-dev python3 && make_exclave realsoft debs-realsoft
 fetch el7 rpms --keyring "$dir/src/RPM-GPG-KEY-CentOS-7" --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
 fetch debs-valgrind-gcc debs --keyring "$ubuntu" --mirror $mirror valgrind gcc libc6-dev && make_exclave valgrind debs-valgrind-gcc
@@ -144,13 +147,13 @@ fetch debs-cmake debs --keyring "$ubuntu" --mirror $mirror cmake ninja-build gcc
 fetch debs-java debs --keyring "$ubuntu" --mirror $mirror openjdk-17-jdk-headless libfreetype6 libharfbuzz0b libasound2t64 && make_exclave java debs-java
 # the packages cmix-neif 1.0's install.sh installs, at the snapshot it pins (test/workloads.py buildimage)
 fetch debs-buildimage debs --keyring "$ubuntu" --snapshot 20260927T160000Z clang-18 lld-18 llvm-18 libclang-rt-18-dev build-essential gawk python3 && make_exclave buildimage debs-buildimage
-file https://marwoelk.de/cmix-neif-1.0/cmix-neif-1.0.tar.gz cmix-neif-1.0.tar.gz f5e09238c88fb7290c8e36cc262bd25d625c9bb32c506237227839fc0aef4bb3
-file https://arxiv.org/pdf/1706.03762v7 attention.pdf 3d56f08914b524d39582df88d31489b197b246bb879406421664896210cb6e70
-file https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz ac034b9c7bbd9f8cc38953efaac07145ce0c8993107a1594d5cedd08fdf2a2bc
-file https://www.lua.org/ftp/lua-5.4.7.tar.gz lua-5.4.7.tar.gz 7a37bca67359c6917fd330eee4e5d9f50852c27a2f5bce4e40b2b3b02ce18830
-file https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz sqlite-autoconf-3460100.tar.gz 12fab9a1ef11d6cb772b7b88ef73102a7c1e02f7ae35f4c2d3263fbe7af706d8
-file https://github.com/skvadrik/re2c/releases/download/3.1/re2c-3.1.tar.xz re2c-3.1.tar.xz 24709a9a1658019d3590f2ceb32c6f0b1c16641f87c961e626a4793061efef02
-file https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip sqlite-amalgamation-3500400.zip 96f33f65b7d2fbdfbb0b8261a85c31e0d72dc033da51dca5de1919a9175067c8 &&
+file https://marwoelk.de/cmix-neif-1.0/cmix-neif-1.0.tar.gz cmix-neif-1.0.tar.gz 656180fdcf33b407502de2abba2098a29ef58aac947c49b8a88e89805a1d40b5
+file https://arxiv.org/pdf/1706.03762v7 attention.pdf 8110b31b13b21ea79c3cf668f3c5dc2aa20a20927d9956343f2442f0536d6600
+file https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz 207c3b0862cb4e3686f8405f76a98c38dbad9c94bcf4be4b9efca0716aba51ec
+file https://www.lua.org/ftp/lua-5.4.7.tar.gz lua-5.4.7.tar.gz e51c2f347e3185479d5ff95cae8ac77511db486853269443c56bedaa0a6ae629
+file https://www.sqlite.org/2024/sqlite-autoconf-3460100.tar.gz sqlite-autoconf-3460100.tar.gz 023516a598e6109db5002f3a8f452d9cc5e496e200c40881d3bc70d8d7415448
+file https://github.com/skvadrik/re2c/releases/download/3.1/re2c-3.1.tar.xz re2c-3.1.tar.xz 15358a2b6d139d566269a6be1c7c0a179be03b4df59d78e12e02647b8da0b594
+file https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip sqlite-amalgamation-3500400.zip 29f027da01fcbecf04e6633b8b878e0e52d4a6b0ed514dd6fc3d92aa240b7a8a &&
     if [ ! -f "$dir/src/sqlite3.c" ]; then
         if py -c 'import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); [open(sys.argv[2], "wb").write(z.read(n)) for n in z.namelist() if n.endswith("/sqlite3.c")]' \
             "$dir/src/sqlite-amalgamation-3500400.zip" "$dir/src/sqlite3.c"; then
