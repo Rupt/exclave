@@ -609,7 +609,11 @@ def wrap_refusals(ctx: Ctx) -> None:
     )
     # shortcuts: into the tree by a relative path, or refused, since the host resolves them
     sc = hand("shortcuts.exclave", [("/usr/bin/hi", script, 0o755)])
-    os.symlink("/usr/bin/true", os.path.join(sc, "tree", "usr", "bin", "abs"))
+    # an absolute link in the tree to a file of the host's: the test's own, which every host has
+    outside = os.path.join(ctx.work, "outside-file")
+    with open(outside, "w") as f:
+        f.write("host\n")
+    os.symlink(outside, os.path.join(sc, "tree", "usr", "bin", "abs"))
     os.symlink("tree/usr/bin/hi", os.path.join(sc, "hi"))
     rc, o, e = run([*TOOL, "wrap", sc])
     expect(rc == 0, f"a shortcut into the tree: {rc} {(o + e)[-300:]}")
