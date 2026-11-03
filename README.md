@@ -364,7 +364,7 @@ launcher, which the command built there carries:
 ```bash
 scripts/reproduce gcc.exclave build/reproduce               # build/reproduce/build/{launcher,exclave}, and their BLAKE2b
 build/reproduce/build/exclave relink app.exclave           # app.exclave wrapped with the reproducible launcher
-scripts/release ~/.ssh/id_ed25519 release gcc.exclave app.exclave    # release/: app.exclave.tar.xz, exclave, SHA256SUMS, B2SUMS, SHA256SUMS.sig
+scripts/release ~/.ssh/id_ed25519 release gcc.exclave app.exclave    # release/: app.exclave.tar.xz, exclave, NOTICES, SHA256SUMS, B2SUMS, SHA256SUMS.sig
 ```
 
 Taking one, with the release's files in a directory and the releaser's
@@ -533,4 +533,5 @@ writes says so. The software in an exclave's tree keeps its packages'
 own licences, and an exclave passed on passes their terms on with it:
 `exclave prune` keeps their texts, and an Alpine exclave has them only
 if the packages' `-doc` packages went in. The Go modules `go.mod` pins
-carry their own licences, BSD and MIT.
+carry their own licences, BSD and MIT; `scripts/build` writes their
+texts to `build/NOTICES`, and a release ships it beside the command.

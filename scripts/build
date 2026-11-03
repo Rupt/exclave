@@ -27,6 +27,8 @@
 #                   the launcher. Where there is no toolchain, as inside an
 #                   exclave under scripts/reproduce, a line says so and the
 #                   launchers alone are built.
+#   NOTICES         the licence texts of the Go modules the command links
+#                   (lib.sh's go_notices), which a release ships beside it.
 #
 # and, on x86-64 with the cross compiler, launcher-aarch64,
 # launcher-old-aarch64 and exclave-aarch64, which the matrix carries into its
@@ -50,7 +52,7 @@ cross=$(c_arches | grep -vx "$native")
 
 fresh=${fresh:-true}
 gobuilds=
-[ -x "$GO" ] && gobuilds=build/exclave
+[ -x "$GO" ] && gobuilds="build/exclave build/NOTICES"
 for f in "$stamp" build/launcher build/launcher-old build/launcher-debug $gobuilds ${gobuilds:+tool/launcher-$native}; do
     [ -e "$f" ] || fresh=false
 done
@@ -139,6 +141,7 @@ for arch in $cross; do
 done
 if [ -n "$gobuilds" ]; then
     go_command "$native" build/exclave || status=1
+    go_notices build/NOTICES ./tool || status=1
     for arch in $cross; do
         [ -e "build/launcher-$arch" ] && { go_command "$arch" "build/exclave-$arch" || status=1; }
     done

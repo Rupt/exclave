@@ -1,6 +1,7 @@
 #!/bin/sh
 # scripts/release KEY DIR TOOLCHAIN EXCLAVE... — a release of the exclaves named (docs/DESIGN.md 10.5): under DIR, each
-# as NAME.exclave.tar.xz, the command itself as `exclave`, SHA256SUMS and B2SUMS over every file there, and
+# as NAME.exclave.tar.xz, the command itself as `exclave` with the licence texts of the Go modules it links as
+# NOTICES, SHA256SUMS and B2SUMS over every file there, and
 # SHA256SUMS.sig, the sums signed with the ssh private key KEY (ssh-keygen -Y, in the namespace "exclave"). The launcher
 # is built inside TOOLCHAIN, a gcc exclave, and the command here from it, by scripts/reproduce, so that anyone can
 # build the same bytes; each exclave must be wrapped with that launcher, and passes `exclave check` first. The README says how a
@@ -56,6 +57,7 @@ for ex; do
     echo "release: $name ($(stat -c %s "$dir/$name.tar.xz") bytes)"
 done
 cp "$command" "$dir/exclave"
+cp "$built/build/NOTICES" "$dir/NOTICES"
 cd "$dir"
 rm -f SHA256SUMS B2SUMS SHA256SUMS.sig
 set -- *

@@ -65,6 +65,38 @@ go_build() {
     echo "built $out ($(stat -c %s "$out") bytes, $arch)"
 }
 
+# go_notices OUT PKG: the licence texts of every module linked into PKG, for a release to ship beside the command
+# (DESIGN.md 10.5), since the modules' BSD licences ask a binary distribution to carry their notices. The modules in
+# the order of their paths, each with the licence files at its root from the pinned cache, so the file is the same
+# from the same go.sum anywhere; a module without one fails the build, loudly.
+go_notices() {
+    out=$1 pkg=$2
+    mods=$("$GO" list -deps -f '{{if and .Module (not .Module.Main)}}{{.Module.Path}} {{.Module.Version}} {{.Module.Dir}}{{end}}' \
+        "$pkg") || return 1
+    [ -n "$mods" ] || {
+        echo "build: $pkg links no module: no notices to write" >&2
+        return 1
+    }
+    {
+        echo "The exclave command links these Go modules, the versions go.mod pins, each under"
+        echo "the licence that follows its name. exclave itself is under the MIT licence (LICENSE)."
+        printf '%s\n' "$mods" | LC_ALL=C sort -u | while read -r path ver dir; do
+            found=false
+            for f in "$dir"/LICENSE* "$dir"/LICENCE* "$dir"/COPYING* "$dir"/NOTICE*; do
+                [ -f "$f" ] || continue
+                found=true
+                printf '\n\n== %s %s, %s\n\n' "$path" "$ver" "$(basename -- "$f")"
+                cat "$f"
+            done
+            $found || {
+                echo "build: $path $ver has no licence file in $dir" >&2
+                exit 1
+            }
+        done
+    } >"$out" || return 1
+    echo "built $out ($(stat -c %s "$out") bytes)"
+}
+
 # The pinned Python, the project's environment brought up to date first:
 # py script.py args. Quiet, so a script's output is its own.
 py() {

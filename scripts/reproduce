@@ -3,7 +3,7 @@
 # DIR (docs/DESIGN.md 10.5): its compiler, its binutils and its shell, and nothing of the machine's, so that
 # DIR/build/launcher is the same bytes on any machine the exclave runs on; then, where this checkout has the pinned
 # Go (scripts/install-go), the command built here from that launcher, DIR/build/exclave, which the toolchain builds
-# the same bytes anywhere from the same sources (lib.sh). Prints the BLAKE2b-256 of each as b2sum does, the launcher's
+# the same bytes anywhere from the same sources (lib.sh), and DIR/build/NOTICES, its modules' licence texts. Prints the BLAKE2b-256 of each as b2sum does, the launcher's
 # first and alone where there is no Go, as in the matrix's VMs. The commit is the checkout's, or the file COMMIT's in
 # a copy of the sources without one, as the matrix carries into its VMs. It runs no Python.
 set -eu
@@ -48,6 +48,11 @@ if [ -x "$GO" ] && [ -e "$dir/go.mod" ]; then
     (cd "$dir" && go_build "$(uname -m)" build/exclave ./tool "$version") >>"$dir/build.log" 2>&1 || {
         tail -n 20 "$dir/build.log" >&2
         echo "reproduce: the command's build from $dir failed; $dir/build.log has its output" >&2
+        exit 1
+    }
+    (cd "$dir" && go_notices build/NOTICES ./tool) >>"$dir/build.log" 2>&1 || {
+        tail -n 20 "$dir/build.log" >&2
+        echo "reproduce: the notices of the command's modules could not be written" >&2
         exit 1
     }
     built="$built exclave"

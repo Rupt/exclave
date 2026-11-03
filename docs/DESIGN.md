@@ -2511,7 +2511,10 @@ it, by `scripts/reproduce`, and puts under `DIR` each exclave as
 `NAME.exclave.tar.xz`, an archive that keeps the hard links, sorted
 and without owners, made only after the exclave passes `check` and
 only if it is wrapped with that launcher; the command itself as
-`exclave`; `SHA256SUMS` and `B2SUMS` over every file there; and `SHA256SUMS.sig`, the sums signed with the ssh key `KEY`
+`exclave`, with the licence texts of the Go modules it links as
+`NOTICES`, written at the build from the pinned module cache, since
+their BSD licences ask a binary distribution to carry them; `SHA256SUMS`
+and `B2SUMS` over every file there; and `SHA256SUMS.sig`, the sums signed with the ssh key `KEY`
 (`ssh-keygen -Y`, namespace `exclave`). A consumer needs nothing of the
 checkout: the signature is verified against the releaser's public key,
 obtained through a channel the consumer trusts; the sums are checked;
@@ -2520,7 +2523,8 @@ the tree with the hashes file and runs the static check, so what runs
 is what was released. The README gives the commands, and
 `test/release_test.py`, a step of `scripts/extra`, runs them on a
 release of the gcc exclave, with a tampered archive and a tampered
-sums file refused (17).
+sums file refused, and `NOTICES` naming every module `go.mod` requires
+(17).
 
 
 ## 11. Layers
@@ -4316,7 +4320,8 @@ steps:
   made by `scripts/release`, the launcher built inside it and the
   command from that by `scripts/reproduce`, signed with a key made there, and taken
   as a consumer takes it, the README's recipe step by step, with a
-  tampered archive and a tampered sums file refused (10.5).
+  tampered archive and a tampered sums file refused and `NOTICES`
+  naming the modules the command links (10.5).
 
 On the reference machine, on the four exclaves, four steps at a time,
 it takes 96 s (measured October 2026).

@@ -8,8 +8,9 @@ exclave under WORK, wrapped again by that command, since a release is of what th
 signed with a key made here. A copy wrapped with another launcher is refused.
 Then, in a directory that holds nothing but the release's files, the README's recipe runs: the
 signature is verified against the key, the sums are checked, the archive is unpacked, the release's
-own `exclave` checks the exclave, its tree hash is the one the hashes file records, and a program in
-it runs. A tampered archive and a tampered sums file are refused. Prints one line per step; the
+own `exclave` checks the exclave, its tree hash is the one the hashes file records, a program in
+it runs, and NOTICES names every module go.mod requires with its licence. A tampered archive and a
+tampered sums file are refused. Prints one line per step; the
 exit status is the number of failures.
 """
 
@@ -129,6 +130,17 @@ def main() -> int:
     shell = os.path.join(root, tree.vbin(root, "sh").lstrip("/"))
     rc, out = run([shell, "-c", "echo from inside"], consumer)
     step("a program in the unpacked exclave runs", rc == 0 and "from inside" in out, out)
+    # the modules go.mod requires directly, each named in NOTICES with a licence's conditions
+    with open(os.path.join(REPO, "go.mod"), encoding="utf-8") as f:
+        required = re.findall(r"^\t(\S+) (v\S+)$", f.read(), re.MULTILINE)
+    with open(os.path.join(consumer, "NOTICES"), encoding="utf-8") as f:
+        notices = f.read()
+    missing = [m for m, v in required if f"\n== {m} {v}, " not in notices]
+    step(
+        "NOTICES names every module go.mod requires, with its licence",
+        required and not missing and notices.count("Redistribution") >= len(required),
+        f"missing {missing}" if missing else notices[:300],
+    )
 
     # tampering: a byte of the archive, and a sum in the sums file
     with open(os.path.join(consumer, name + ".tar.xz"), "r+b") as f:
