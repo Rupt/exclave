@@ -805,6 +805,30 @@ def damaged_payloads(ctx: Ctx) -> None:
 
 
 @test
+def first_failure_in_order(ctx: Ctx) -> None:
+    """10.1: of two damaged packages, the refusal names the one given first, as a serial pass would.
+
+    The payloads are read on several goroutines before anything is written; the first, a large
+    payload cut near its end, is found damaged long after the second, whose payload is not
+    compressed at all.
+    """
+    os.makedirs(os.path.join(ctx.work, "pkgs"))
+    body = os.urandom(1 << 20) * 8  # 8 MiB that xz cannot shrink much, so the first is slow to read
+    members: list[Member] = [("usr", "dir", None, 0o755), ("usr/big", "file", body, 0o644)]
+    good = compress(tar_bytes(members), ".xz")
+    first = os.path.join(ctx.work, "pkgs", "a-cut.deb")
+    make_deb(first, "a-cut", members, suffix=".xz", data=good[:-4096])
+    second = os.path.join(ctx.work, "pkgs", "b-plain.deb")
+    make_deb(second, "b-plain", members[:1], suffix=".xz", data=b"not compressed at all")
+    rc, _, e, out = unpack(ctx, "order", [first, second])
+    expect(
+        rc == 1 and "a-cut.deb: corrupt data.tar.xz: unexpected EOF" in e and "b-plain" not in e,
+        f"the refusal is not the first package's: rc={rc} {e[-300:]!r}",
+    )
+    expect(not os.path.lexists(out), f"the refusal left {out} behind")
+
+
+@test
 def tar_structure(ctx: Ctx) -> None:
     """10.1: what tar spells long or large is read; an archive with anything after it is refused.
 

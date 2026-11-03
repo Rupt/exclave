@@ -12,9 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -78,49 +81,31 @@ func extractInto(r *root.Root, packages []*Package, log logger) error {
 	// the files' declared sizes: a set that cannot fit is refused before it is written, the free
 	// space asked once per package and whenever the total has grown by 64 MiB since it was asked
 	var total, asked int64
-	for _, pkg := range packages {
-		t, err := readerFor(pkg.Path).OpenData(pkg.Path)
-		if err != nil {
-			return err
-		}
-		for {
-			m, err := t.Next()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				t.Close()
-				return err
-			}
-			rel, err := safeRel(m.Name)
-			if err != nil {
-				t.Close()
-				return err
-			}
-			if rel == "" {
-				continue
-			}
-			if m.Kind == reader.File {
-				total += m.Size
+	for i, sc := range scanAll(packages) {
+		pkg := packages[i]
+		for _, m := range sc.members {
+			if m.kind == reader.File {
+				total += m.size
 				if total-asked >= 64<<20 {
-					what := fmt.Sprintf("the files up to /%s in %s declare", rel, pkg.Name)
+					what := fmt.Sprintf("the files up to /%s in %s declare", m.rel, pkg.Name)
 					if err := r.Room(total, what); err != nil {
-						t.Close()
 						return err
 					}
 					asked = total
 				}
 			}
-			if m.Kind == reader.Symlink {
-				links[rel] = m.Linkname
-			} else if m.Kind != reader.Dir {
-				parts := strings.Split(rel, "/")
+			if m.kind == reader.Symlink {
+				links[m.rel] = m.linkname
+			} else if m.kind != reader.Dir {
+				parts := strings.Split(m.rel, "/")
 				for i := 1; i < len(parts); i++ {
 					parents[strings.Join(parts[:i], "/")] = true
 				}
 			}
 		}
-		t.Close()
+		if sc.err != nil {
+			return sc.err
+		}
 		if err := r.Room(total, fmt.Sprintf("the files of the packages up to %s declare", pkg.Name)); err != nil {
 			return err
 		}
@@ -224,6 +209,68 @@ func extractInto(r *root.Root, packages []*Package, log logger) error {
 		}
 	}
 	return nil
+}
+
+// A scan is what the first pass reads of one package: each member's path, kind, size and link
+// target, in the archive's order, up to the first that cannot be read, and why.
+type scan struct {
+	members []scanned
+	err     error
+}
+
+type scanned struct {
+	rel, linkname string
+	kind          reader.Kind
+	size          int64
+}
+
+// scanAll scans every package on several goroutines, each package read whole by one, since
+// nothing is written meanwhile; extractInto takes the scans in the packages' order, so what it
+// makes of them, the first failure too, is what one package read after another would give.
+func scanAll(packages []*Package) []scan {
+	out := make([]scan, len(packages))
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for range min(runtime.GOMAXPROCS(0), 8, len(packages)) {
+		wg.Go(func() {
+			for {
+				i := int(next.Add(1) - 1)
+				if i >= len(packages) {
+					return
+				}
+				out[i] = scanPackage(packages[i])
+			}
+		})
+	}
+	wg.Wait()
+	return out
+}
+
+func scanPackage(pkg *Package) (sc scan) {
+	t, err := readerFor(pkg.Path).OpenData(pkg.Path)
+	if err != nil {
+		sc.err = err
+		return sc
+	}
+	defer t.Close()
+	for {
+		m, err := t.Next()
+		if err == io.EOF {
+			return sc
+		}
+		if err != nil {
+			sc.err = err
+			return sc
+		}
+		rel, err := safeRel(m.Name)
+		if err != nil {
+			sc.err = err
+			return sc
+		}
+		if rel != "" {
+			sc.members = append(sc.members, scanned{rel, m.Linkname, m.Kind, m.Size})
+		}
+	}
 }
 
 // pending is a hard link to make once every member is extracted: the entry it names, and its path.

@@ -2088,7 +2088,11 @@ refused. From `.deb` files, in five steps:
    reserved name `.real` (6.1). Payloads are read as they decompress,
    never held whole, and a set whose files' declared sizes would leave
    the output's filesystem with less than 256 MiB free is refused before
-   a byte of it is written. A package file that cannot
+   a byte of it is written. That first read of every payload, for the
+   sizes and for the links other packages' files land under, runs on up
+   to eight goroutines, a package to each, and is then taken in the
+   packages' order, so what it decides, and the first failure it names,
+   are those of one package read after another. A package file that cannot
    be read is refused in one line, and a failed unpack leaves no
    output behind. An archive ends where its format says: anything but
    NUL padding after a tar archive's last member, where a header that
