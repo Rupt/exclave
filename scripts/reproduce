@@ -1,9 +1,11 @@
 #!/bin/sh
-# scripts/reproduce EXCLAVE DIR — the launcher and the command built inside EXCLAVE, a gcc exclave, from a copy of the
-# sources under DIR (docs/DESIGN.md 10.5): its compiler, its binutils, its static C library and its shell, and nothing
-# of the machine's, so that DIR/build/launcher and DIR/build/exclave are the same bytes on any machine the exclave runs
-# on. Prints the BLAKE2b-256 of each, as b2sum does. The commit is the checkout's, or the file COMMIT's in a copy of
-# the sources without one, as the matrix carries into its VMs. It runs no Python.
+# scripts/reproduce EXCLAVE DIR — the launcher built inside EXCLAVE, a gcc exclave, from a copy of the sources under
+# DIR (docs/DESIGN.md 10.5): its compiler, its binutils and its shell, and nothing of the machine's, so that
+# DIR/build/launcher is the same bytes on any machine the exclave runs on; then, where this checkout has the pinned
+# Go (scripts/install-go), the command built here from that launcher, DIR/build/exclave, which the toolchain builds
+# the same bytes anywhere from the same sources (lib.sh). Prints the BLAKE2b-256 of each as b2sum does, the launcher's
+# first and alone where there is no Go, as in the matrix's VMs. The commit is the checkout's, or the file COMMIT's in
+# a copy of the sources without one, as the matrix carries into its VMs. It runs no Python.
 set -eu
 UV_BOOTSTRAP=1 # lib.sh's check for the pinned uv: this script runs no Python
 . "$(dirname -- "$0")/lib.sh"
@@ -23,7 +25,9 @@ done
 commit=$(git -C "$ROOT" describe --always --dirty --exclude='*' 2>/dev/null) || commit=$(cat "$ROOT/COMMIT")
 rm -rf "$dir"
 mkdir -p "$dir/scripts"
-cp -R "$ROOT/src" "$ROOT/tool" "$ROOT/LICENSE" "$ROOT/pyproject.toml" "$dir/"
+cp -R "$ROOT/src" "$ROOT/tool" "$ROOT/unpack" "$ROOT/fetch" "$ROOT/go.mod" "$ROOT/go.sum" "$ROOT/LICENSE" \
+    "$ROOT/pyproject.toml" "$dir/"
+rm -f "$dir"/tool/launcher-* # the checkout's copies of its launchers: the command here carries the one built inside
 cp "$ROOT/scripts/build" "$ROOT/scripts/lib.sh" "$dir/scripts/"
 printf '%s\n' "$commit" >"$dir/COMMIT"
 # the exclave's own programs alone on PATH, so that no tool of the machine's takes part
@@ -33,6 +37,17 @@ env -i HOME="$dir" PATH="$ex/tree/usr/bin:$ex/tree/bin" CC="$cc" UV_BOOTSTRAP=1 
     echo "reproduce: the build inside $ex failed; $dir/build.log has its output" >&2
     exit 1
 }
-for f in launcher exclave; do
+built="launcher"
+if [ -x "$GO" ]; then
+    version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$dir/pyproject.toml")+$commit
+    cp "$dir/build/launcher" "$dir/tool/launcher-$(uname -m)"
+    (cd "$dir" && go_build "$(uname -m)" build/exclave ./tool "$version") >>"$dir/build.log" 2>&1 || {
+        tail -n 20 "$dir/build.log" >&2
+        echo "reproduce: the command's build from $dir failed; $dir/build.log has its output" >&2
+        exit 1
+    }
+    built="$built exclave"
+fi
+for f in $built; do
     "$ex/tree/usr/bin/b2sum" -l 256 "$dir/build/$f" | sed "s|  .*|  $f|"
 done

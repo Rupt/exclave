@@ -9,7 +9,7 @@
 // against the interests table, and a postinst that calls `update-alternatives` in a form the
 // alternatives rule cannot read is noted too.
 
-package main
+package unpack
 
 import (
 	"fmt"

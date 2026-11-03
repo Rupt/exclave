@@ -2,8 +2,9 @@
 
     test/unpack_test.py [--work DIR] [-k NAME|SUBSTRING]
 
-Each test makes the .deb, .apk and .rpm files it needs (test/packages.py) and runs build/unpack on
-them as scripts/unpack does. A set unpack refuses must be refused in one line, `unpack: ` and the
+Each test makes the .deb, .apk and .rpm files it needs (test/packages.py) and runs build/exclave
+unpack on them as scripts/unpack does. A set unpack refuses must be refused in one line, `unpack: `
+and the
 reason, with no traceback and nothing left at the output; and whatever it does, nothing outside
 the output may change: each test's work directory holds host/, with a file the packages aim at
 through `..`, symlinks and hard links. The tests take no exclave; the readers' own tests, which

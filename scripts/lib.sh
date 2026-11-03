@@ -28,7 +28,7 @@ if [ -z "${UV_BOOTSTRAP-}" ] && [ ! -x "$UV" ]; then
 fi
 
 # The Go: the pinned toolchain scripts/install-go puts in .go/ builds the
-# unpack and fetch commands (DESIGN.md 10.1), never the go on PATH. Its module
+# exclave command (DESIGN.md 10.5), never the go on PATH. Its module
 # and build caches stay inside the repository too; a build is static, with
 # every path in it relative and no version-control stamp, so the same sources
 # give the same bytes anywhere, a checkout or a copy. The modules go.sum pins
@@ -49,6 +49,21 @@ export GOPATH="$GO_HOME/path"
 export GOFLAGS="-trimpath -buildvcs=false"
 export GOPROXY=off
 export CGO_ENABLED=0
+
+# go_build ARCH OUT PKG VERSION: the Go command PKG, a package path from the current directory, for ARCH, static
+# (cgo off and the paths trimmed, above) and stripped, VERSION in it as `exclave version` prints it. scripts/build
+# and scripts/reproduce call it.
+go_build() {
+    arch=$1 out=$2 pkg=$3 ver=$4
+    case $arch in x86_64) goarch=amd64 ;; aarch64) goarch=arm64 ;; *) goarch=$arch ;; esac
+    GOOS=linux GOARCH=$goarch "$GO" build -ldflags="-s -w -X main.version=$ver" -o "$out" "$pkg" || return 1
+    # a static file, as the command is: no interpreter, so nothing of the machine's is loaded
+    if readelf -l "$out" | grep -q 'interpreter'; then
+        echo "build: $out asks for an interpreter: not static" >&2
+        return 1
+    fi
+    echo "built $out ($(stat -c %s "$out") bytes, $arch)"
+}
 
 # The pinned Python, the project's environment brought up to date first:
 # py script.py args. Quiet, so a script's output is its own.

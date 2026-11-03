@@ -1,9 +1,9 @@
 #!/bin/sh
-# scripts/unpack: package files -> an unwrapped exclave (docs/DESIGN.md 10.1), the unpack command as scripts/build built it.
+# scripts/unpack: package files -> an unwrapped exclave (docs/DESIGN.md 10.1), the exclave command's unpack, as scripts/build built it.
 set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-[ -x "$root/build/unpack" ] || {
-    echo "no $root/build/unpack: run scripts/build" >&2
+[ -x "$root/build/exclave" ] || {
+    echo "no $root/build/exclave: run scripts/build" >&2
     exit 1
 }
-exec "$root/build/unpack" "$@"
+exec "$root/build/exclave" unpack "$@"

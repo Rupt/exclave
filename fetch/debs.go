@@ -19,7 +19,7 @@
 // their URLs name their content. The InRelease file, and an index the suite does not serve by
 // hash, are fetched on every run unless the mirror is a snapshot, which never changes.
 
-package main
+package fetch
 
 import (
 	"flag"

@@ -54,9 +54,9 @@ rm -rf "$out" && mkdir -p "$out" || exit 2
 start=$(date +%s)
 
 # shellcheck disable=SC2329  # run through step, by name
-# the parser, the filter, the scratch pool, the cache's lock, the CPU check, the #! rules and the command's BLAKE2b,
-# just built for the host under the sanitisers, the seven builds one after the other (a build never loads the
-# machine with more than one compiler); the command's grammar and readers run under them too, as build/exclave-asan
+# the parser, the filter, the scratch pool, the cache's lock, the CPU check and the #! rules, just built for the
+# host under the sanitisers, the six builds one after the other (a build never loads the machine with more than
+# one compiler); the command's grammar and readers on hostile files, through build/exclave
 unit() {
     sanitized "$out/manifest_test" -DHOST_TEST "$here/manifest_test.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
         sanitized "$out/filter_test" -DHOST_TEST "$here/filter_test.c" "$repo/src/filter.c" "$repo/src/str.c" &&
@@ -64,11 +64,10 @@ unit() {
         sanitized "$out/cache_test" -DHOST_TEST "$here/cache_test.c" "$repo/src/cache.c" "$repo/src/str.c" &&
         sanitized "$out/isa_test" -DHOST_TEST "$here/isa_test.c" "$repo/src/isa.c" "$repo/src/str.c" &&
         sanitized "$out/str_test" -DHOST_TEST "$here/str_test.c" "$repo/src/str.c" &&
-        sanitized "$out/tool_test" "$here/tool_test.c" "$repo/tool/blake2b.c" &&
         "$out/manifest_test" && py "$here/grammar_test.py" --c-parser "$out/manifest_test" &&
         py "$here/readers_test.py" --work "$out/readers" &&
         "$out/filter_test" && py "$here/syscalls.py" && py "$here/tables_test.py" && "$out/scratch_test" &&
-        "$out/cache_test" && "$out/isa_test" && "$out/str_test" && "$out/tool_test"
+        "$out/cache_test" && "$out/isa_test" && "$out/str_test"
 }
 # shellcheck disable=SC2329  # run through step, by name
 stack() {
@@ -105,15 +104,15 @@ fi
 has matrix && echo "gate: the change reaches the VMs: scripts/matrix is due, and runs when approved"
 
 # shellcheck disable=SC2329  # run through step, by name
-gostep() { # the Go commands' unit tests and fuzz seeds, and the modules in the cache as go.sum records them
-    "$GO" -C "$ROOT" test ./fetch/... ./unpack/... && "$GO" -C "$ROOT" mod verify
+gostep() { # the command's unit tests and fuzz seeds, and the modules in the cache as go.sum records them
+    "$GO" -C "$ROOT" test ./tool/... ./fetch/... ./unpack/... && "$GO" -C "$ROOT" mod verify
 }
 
 n=$(basename "$ex" .exclave)
 step check "$ROOT/scripts/check" # ruff, ty, shellcheck, shfmt and taplo, silent when clean
 has unit && step unit unit
 has stack && step stack stack
-has go && step go gostep                                                 # the Go commands' tests, go.sum verified
+has go && step go gostep                                                 # the command's Go tests, go.sum verified
 has unpack && step unpack py "$here/unpack_test.py" --work "$out/unpack" # unpack's rules on hostile package files
 has fetch && step fetch py "$here/fetch_test.py" --work "$out/fetch"     # the fetchers' signature checks
 has suite && step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"

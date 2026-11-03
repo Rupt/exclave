@@ -2,7 +2,7 @@
 // maintainer scripts would have made, the volatile directories stripped, the dependency report,
 // and the hashes file's pkg records.
 
-package main
+package unpack
 
 import (
 	"encoding/hex"

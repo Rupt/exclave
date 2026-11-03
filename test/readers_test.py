@@ -1,12 +1,12 @@
-"""The command's readers on hostile files, under the sanitisers (DESIGN.md 10.3, 17).
+"""The command's readers on hostile files (DESIGN.md 10.3, 17).
 
     test/readers_test.py [--tool PATH] [--work DIR] [-k NAME|SUBSTRING]
 
 The ELF reader, the ld.so.cache reader and the log reader take the files of a tree and the
 EXCLAVE_LOG files given, so each case is a small tree made here by hand, its ELF files and cache
-written byte by byte, and `exclave check` run on it with build/exclave-asan, the command under
-ASan and UBSan, whose finding exits 99 (test/sanitize.c). The answer must be the reader's own,
-by its message, with a check's status, 0 or 1. Each tree beside the case holds a loader the
+written byte by byte, and `exclave check` run on it with build/exclave. The answer must be the
+reader's own, by its message, with a check's status, 0 or 1; a Go panic would exit 2 with its
+trace. Each tree beside the case holds a loader the
 program names and the library it needs, so that a reader that answered nothing would leave a
 message missing. Prints one line per test; the exit status is the number of failures.
 """
@@ -155,10 +155,10 @@ def exclave(ctx: Ctx, name: str) -> tuple[str, str]:
 def check(ctx: Ctx, ex: str, *logs: str) -> tuple[int, list[str], list[str]]:
     """Run the command's check; its status, error lines and warning lines, each without its prefix.
 
-    A status but 0 or 1, or a sanitiser's report, fails the test.
+    A status but 0 or 1, or a panic's trace, fails the test.
     """
     rc, out, err = run([ctx.tool, "check", ex, *logs])
-    expect(rc in (0, 1) and "Sanitizer" not in err, f"check exited {rc}: {err[-1500:]}")
+    expect(rc in (0, 1) and "panic" not in err, f"check exited {rc}: {err[-1500:]}")
     lines = out.splitlines()
     errors = [x.removeprefix("error: ") for x in lines if x.startswith("error: ")]
     warnings = [x.removeprefix("warning: ") for x in lines if x.startswith("warning: ")]
@@ -267,7 +267,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--tool", default=os.path.join(REPO, "build", "exclave-asan"))
+    ap.add_argument("--tool", default=os.path.join(REPO, "build", "exclave"))
     ap.add_argument("--work", default=os.path.join(REPO, "build", "readers-test"))
     ap.add_argument("-k", dest="select", default="")
     args = ap.parse_args()

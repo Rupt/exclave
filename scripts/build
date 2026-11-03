@@ -18,27 +18,23 @@
 #                   one: a failed check kills the program with SIGILL, which
 #                   gdb places from launcher-debug.debug. The gate runs the
 #                   suite on it.
-#   exclave         the exclave command, linked statically, so that the file
-#                   runs with nothing beside it; it carries the launcher, and
-#                   is built after it
-#   exclave-asan    the same under ASan and UBSan, linked dynamically, a
-#                   finding exiting 99 (test/sanitize.c), which the gate's
-#                   unit step runs on hostile input; left out of a copy of
-#                   the sources without the tests, as scripts/reproduce makes
-#
-#   unpack          the unpack command, from unpack/ (10.1), and
-#   fetch           the fetch command, from fetch/: Go, built by the pinned
-#                   toolchain in .go/ (scripts/install-go), static and
-#                   stripped; where there is no toolchain, as inside an exclave
-#                   under scripts/reproduce, a line says so and the C is built
+#   exclave         the exclave command (10.5): Go, built by the pinned
+#                   toolchain in .go/ (scripts/install-go, lib.sh's go_build),
+#                   one static stripped file that carries this architecture's
+#                   launcher, copied to tool/launcher-ARCH for the build to
+#                   embed, and the README every exclave gets, with unpack and
+#                   the fetchers as its subcommands (10.1); so it is built after
+#                   the launcher. Where there is no toolchain, as inside an
+#                   exclave under scripts/reproduce, a line says so and the
+#                   launchers alone are built.
 #
 # and, on x86-64 with the cross compiler, launcher-aarch64,
-# launcher-old-aarch64, exclave-aarch64 and unpack-aarch64, which the matrix
-# carries into its arm64 VM. Nothing is built when every output
-# is there and no source, LICENSE, this script or lib.sh is newer than the last
-# build; a line for each one built. The builds run one after the other, as
-# every build here does, so that building never loads the machine with more
-# than one compiler (the laptop is in use beside it).
+# launcher-old-aarch64 and exclave-aarch64, which the matrix carries into its
+# arm64 VM. Nothing is built when every output is there and no source, LICENSE,
+# this script or lib.sh is newer than the last build; a line for each one
+# built. The builds run one after the other, as every build here does, so that
+# building never loads the machine with more than one compiler (the laptop is
+# in use beside it).
 set -u
 . "$(dirname -- "$0")/lib.sh"
 cd "$ROOT" || exit 2
@@ -53,23 +49,21 @@ version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)+$commit
 cross=$(c_arches | grep -vx "$native")
 
 fresh=${fresh:-true}
-sanitized=test/sanitize.c
-[ -f "$sanitized" ] || sanitized=
 gobuilds=
-[ -x "$GO" ] && gobuilds="build/unpack build/fetch"
-for f in "$stamp" build/launcher build/launcher-old build/launcher-debug build/exclave ${sanitized:+build/exclave-asan} $gobuilds; do
+[ -x "$GO" ] && gobuilds=build/exclave
+for f in "$stamp" build/launcher build/launcher-old build/launcher-debug $gobuilds; do
     [ -e "$f" ] || fresh=false
 done
 for arch in $cross; do
-    [ -e "build/launcher-$arch" ] && [ -e "build/launcher-old-$arch" ] && [ -e "build/exclave-$arch" ] || fresh=false
-    [ -z "$gobuilds" ] || [ -e "build/unpack-$arch" ] || fresh=false
+    [ -e "build/launcher-$arch" ] && [ -e "build/launcher-old-$arch" ] || fresh=false
+    [ -z "$gobuilds" ] || [ -e "build/exclave-$arch" ] || fresh=false
 done
 gosources= # absent from a copy of the sources without the Go, as scripts/reproduce makes
-for p in go.mod go.sum fetch unpack scripts/install-go .go/go/VERSION; do
+for p in go.mod go.sum fetch unpack tool scripts/install-go .go/go/VERSION; do
     [ -e "$p" ] && gosources="$gosources $p"
 done
 # shellcheck disable=SC2086  # the Go sources, one word each
-if $fresh && [ -z "$(find src tool $sanitized $gosources LICENSE scripts/build scripts/lib.sh -newer "$stamp" | head -n 1)" ]; then
+if $fresh && [ -z "$(find src $gosources LICENSE scripts/build scripts/lib.sh -newer "$stamp" | head -n 1)" ]; then
     exit 0
 fi
 
@@ -127,27 +121,10 @@ launcher() {
     echo "built $out ($(stat -c %s "$out") bytes stripped, $arch)"
 }
 
-tool() { # tool ARCH OUT ARGS...: the exclave command for ARCH
-    arch=$1 out=$2
-    shift 2
-    compiler=${CC:-gcc}
-    [ "$arch" = "$native" ] || compiler=$arch-linux-gnu-gcc
+go_command() { # go_command ARCH OUT: the exclave command for ARCH, carrying ARCH's launcher, built just before it
     launcher=build/launcher
-    [ "$arch" = "$native" ] || launcher=build/launcher-$arch
-    tool_cc "$compiler" "-DLAUNCHER=\"$launcher\"" "-DEXCLAVE_VERSION=\"$version\"" "$@" -o "$out" tool/*.c tool/blobs.S || return 1
-    echo "built $out ($(stat -c %s "$out") bytes, $arch)"
-}
-
-go_build() { # go_build ARCH OUT PKG: the Go command PKG for ARCH, static (lib.sh: cgo off, paths trimmed) and stripped
-    arch=$1 out=$2 pkg=$3
-    case $arch in x86_64) goarch=amd64 ;; aarch64) goarch=arm64 ;; *) goarch=$arch ;; esac
-    GOOS=linux GOARCH=$goarch "$GO" build -ldflags="-s -w -X main.version=$version" -o "$out" "$pkg" || return 1
-    # a static file, as the command is: no interpreter, so nothing of the machine's is loaded
-    if readelf -l "$out" | grep -q 'interpreter'; then
-        echo "build: $out asks for an interpreter: not static" >&2
-        return 1
-    fi
-    echo "built $out ($(stat -c %s "$out") bytes, $arch)"
+    [ "$1" = "$native" ] || launcher=build/launcher-$1
+    cp "$launcher" "tool/launcher-$1" && go_build "$1" "$2" ./tool "$version"
 }
 
 rm -f "$stamp" build/launcher*.debug-*.ci
@@ -156,24 +133,17 @@ launcher "$native" build/launcher -fcallgraph-info=su -dumpdir build/launcher.de
 status=0
 launcher "$native" build/launcher-old -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD || status=1
 launcher "$native" build/launcher-debug -fsanitize=undefined -fsanitize-trap=undefined -fsanitize=bounds-strict || status=1
-tool "$native" build/exclave -static -s || status=1
-if [ -n "$sanitized" ]; then
-    tool "$native" build/exclave-asan -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer "$sanitized" || status=1
-fi
-if [ -n "$gobuilds" ]; then
-    go_build "$native" build/unpack ./unpack || status=1
-    go_build "$native" build/fetch ./fetch || status=1
-    for arch in $cross; do
-        go_build "$arch" "build/unpack-$arch" ./unpack || status=1
-    done
-else
-    echo "build: no Go at $GO (scripts/install-go): build/unpack and build/fetch not built"
-fi
 for arch in $cross; do
-    # the command carries the launcher, so is built after it
-    { launcher "$arch" "build/launcher-$arch" -fcallgraph-info=su -dumpdir "build/launcher-$arch.debug-" &&
-        tool "$arch" "build/exclave-$arch" -static -s; } || status=1
+    launcher "$arch" "build/launcher-$arch" -fcallgraph-info=su -dumpdir "build/launcher-$arch.debug-" || status=1
     launcher "$arch" "build/launcher-old-$arch" -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD || status=1
 done
+if [ -n "$gobuilds" ]; then
+    go_command "$native" build/exclave || status=1
+    for arch in $cross; do
+        [ -e "build/launcher-$arch" ] && { go_command "$arch" "build/exclave-$arch" || status=1; }
+    done
+else
+    echo "build: no Go at $GO (scripts/install-go): build/exclave not built"
+fi
 [ $status = 0 ] && touch "$stamp" && printf '%s\n' "$version" >build/.version
 exit $status

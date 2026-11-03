@@ -24,7 +24,7 @@
 // since their names carry their versions, and so is a primary index whose name carries its
 // checksum; repomd.xml is fetched on every run.
 
-package main
+package fetch
 
 import (
 	"bytes"

@@ -43,13 +43,13 @@ if $fix; then
     run "$UV" run --quiet ruff check --fix .
     run "$UV" run --quiet ruff format .
     run "$UV" run --quiet shfmt --indent 4 --posix --simplify --write "$@"
-    run "$UV" run --quiet clang-format -i src/*.[ch] tool/*.[ch] test/*.c test/progs/*.c
+    run "$UV" run --quiet clang-format -i src/*.[ch] test/*.c test/progs/*.c
     if [ -x .venv/bin/taplo ]; then run env RUST_LOG=warn "$UV" run --quiet taplo fmt pyproject.toml; fi
 else
     run "$UV" run --quiet ruff format --check --quiet .
     run "$UV" run --quiet ruff check --quiet .
     run "$UV" run --quiet shfmt --indent 4 --posix --simplify --diff "$@"
-    run "$UV" run --quiet clang-format --dry-run --Werror src/*.[ch] tool/*.[ch] test/*.c test/progs/*.c
+    run "$UV" run --quiet clang-format --dry-run --Werror src/*.[ch] test/*.c test/progs/*.c
     if [ -x .venv/bin/taplo ]; then run env RUST_LOG=warn "$UV" run --quiet taplo fmt --check --diff pyproject.toml; fi
 fi
 # on an aarch64 machine neither is installed (pyproject.toml): the shell and the TOML are checked on x86-64
@@ -65,9 +65,9 @@ run "$UV" run --quiet ty check --quiet
 # The C, formatted above (.clang-format), checked a process to a file. First
 # gcc's warnings as errors and its analyser, nothing kept: the launcher's
 # sources for each architecture there is a compiler for and as
-# build/launcher-old, the command's for each architecture, and the unit
-# tests' for the host (lib.sh's flags). Then clang-tidy (.clang-tidy) on the
-# launcher for each architecture and on the unit tests. A file's output is
+# build/launcher-old, and the unit tests' for the host (lib.sh's flags). Then
+# clang-tidy (.clang-tidy) on the launcher for each architecture and on the
+# unit tests. A file's output is
 # shown only for a finding, since clang counts aloud the warnings it suppressed.
 # shellcheck disable=SC2329  # run through run, by name
 quiet() { # quiet CMD...: CMD's output only when it fails
@@ -96,15 +96,6 @@ for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c src/manifest.c 
     compiled host_cc -DHOST_TEST "$f"
 done
 compiled host_cc -DSCRATCH_TEST src/scratch.c
-# the exclave command, on the C library, for each architecture there is a compiler for
-for f in tool/*.c; do
-    for arch in $(c_arches); do
-        compiler=${CC:-gcc}
-        [ "$arch" = "$(uname -m)" ] || compiler=$arch-linux-gnu-gcc
-        compiled tool_cc "$compiler" "$f"
-    done
-    run quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 -D_GNU_SOURCE
-done
 # the test programs too, but for string literals in an exec's argv, its natural spelling
 for f in test/progs/*.c; do
     run quiet host_cc -pthread -Wno-discarded-qualifiers "$f" -Werror -c -o /dev/null
@@ -126,15 +117,20 @@ done
 # clang-format leaves comments as written, so it does not hold them to it
 if awk '/clang-format off/ { off = 1 } /clang-format on/ { off = 0 }
     !off && length > 120 { print FILENAME ":" FNR ": over 120 columns"; bad = 1 } END { exit bad }' \
-    src/*.[ch] tool/*.[ch] test/*.c test/progs/*.c; then :; else status=1; fi
+    src/*.[ch] test/*.c test/progs/*.c; then :; else status=1; fi
 # a definition in a shared header that nothing uses, which no compiler reports
 run "$UV" run --quiet python test/c_unused.py
 
-# The Go, the two commands' packages (go.mod; copies under build/ are left out): gofmt's layout
+# The Go, the command's packages (go.mod; copies under build/ are left out): gofmt's layout
 # simplified, go fix's modernisations, then go vet, staticcheck and deadcode, the last two the
 # versions go.mod's tool directives pin, run through the pinned toolchain. Each runs one after
-# the other. A line over 120 columns, a tab counted as four, is held to the C's rule.
-gopkgs="./fetch/... ./unpack/..."
+# the other. A line over 120 columns, a tab counted as four, is held to the C's rule. The
+# command embeds the launcher scripts/build copies to tool/, so the Go is checked after a build.
+[ -e "tool/launcher-$(uname -m)" ] || {
+    echo "check: no tool/launcher-$(uname -m) for the command to embed; run scripts/build" >&2
+    exit 2
+}
+gopkgs="./tool/... ./fetch/... ./unpack/..."
 # shellcheck disable=SC2086  # the packages, one word each
 godirs=$("$GO" list -f '{{.Dir}}' $gopkgs) || status=1
 if $fix; then
@@ -158,7 +154,7 @@ run quiet "$GO" tool staticcheck $gopkgs
 # shellcheck disable=SC2086  # the packages, one word each
 run quiet "$GO" tool deadcode -test $gopkgs
 if awk '{ gsub(/\t/, "    ") } length > 120 { print FILENAME ":" FNR ": over 120 columns"; bad = 1 } END { exit bad }' \
-    fetch/*.go unpack/*.go unpack/*/*.go; then :; else status=1; fi
+    tool/*.go fetch/*.go unpack/*.go unpack/*/*.go; then :; else status=1; fi
 
 # A suppression says why on its line: `# noqa: RULE -- reason`.
 if grep -rnE '# (noqa: [A-Z0-9, ]+|ty: ignore\[[a-z0-9, -]+\])$' --include='*.py' test src; then
@@ -170,8 +166,8 @@ fi
 if ! "$UV" run --quiet python -c '
 import sys, tomllib
 want = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
-sys.exit(f"#define TOOL_VERSION \"{want}\"" not in open("tool/tool.h").read())'; then
-    echo "check: tool/tool.h's TOOL_VERSION differs from pyproject.toml's version" >&2
+sys.exit(f"const toolVersion = \"{want}\"" not in open("tool/main.go").read())'; then
+    echo "check: tool/main.go's toolVersion differs from pyproject.toml's version" >&2
     status=1
 fi
 

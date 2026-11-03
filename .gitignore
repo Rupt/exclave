@@ -8,3 +8,6 @@ __pycache__/
 # The pinned Go and its caches (scripts/install-go).
 .go
 .ruff_cache/
+
+# The launchers scripts/build copies in for the command to carry (tool/blob_*.go).
+/tool/launcher-*

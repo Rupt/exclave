@@ -2,7 +2,7 @@
 
 The compiler reports an unused static function or macro of a .c file, but not one of a header: a
 header's definitions are there to be used by someone. This lists each macro, enum constant and
-function that src/sys.h, src/common.h and tool/tool.h define or declare, and fails on one that
+function that src/sys.h and src/common.h define or declare, and fails on one that
 appears in no other place in src/, tool/ or the unit tests, counting a use in the headers
 themselves. A function's
 definition in a .c file, a line that starts with its type, is not a use.
@@ -14,7 +14,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-HEADERS = ("src/sys.h", "src/common.h", "tool/tool.h")
+HEADERS = ("src/sys.h", "src/common.h")
 # Defined for a reader of the kernel's ABI beside the names that are used; none at present.
 KEEP: set[str] = set()
 
@@ -40,7 +40,7 @@ def defined(path: str) -> dict[str, int]:
 def main() -> int:
     sources = [
         os.path.join(d, f)
-        for d in (os.path.join(REPO, "src"), os.path.join(REPO, "tool"), HERE)
+        for d in (os.path.join(REPO, "src"), HERE)
         for f in sorted(os.listdir(d))
         if f.endswith((".c", ".h")) and (d != HERE or f.endswith("_test.c"))
     ]

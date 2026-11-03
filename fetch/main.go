@@ -8,7 +8,7 @@
 // Each is a worked example of the step before the tool, and takes the arguments its own
 // documentation lists. Neither unpack nor the tool fetches: `unpack OUT DIR/*` takes whatever
 // directory of package files this command, a package manager, a mirror or a person has made.
-package main
+package fetch
 
 import (
 	"flag"
@@ -17,7 +17,7 @@ import (
 	"strings"
 )
 
-// version is the build's, set by scripts/build; it names the command to the servers it asks.
+// version is the build's, which Main is given; it names the command to the servers it asks.
 var version = "dev"
 
 func userAgent() string { return "exclave/" + version }
@@ -66,13 +66,16 @@ func splitChoices(choose []string) (map[string]string, error) {
 	return out, nil
 }
 
-func main() {
-	usage := "usage: fetch debs|apks|rpms [ARGS...]; fetch debs --help and the others say which"
-	if len(os.Args) < 2 {
+// Main runs the fetch command, `exclave fetch`, with the build's version and the arguments after
+// the command's name; returns its exit status.
+func Main(v string, args []string) int {
+	version = v
+	usage := "usage: exclave fetch debs|apks|rpms [ARGS...]; exclave fetch debs --help and the others say which"
+	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, usage)
-		os.Exit(2)
+		return 2
 	}
-	kind, args := os.Args[1], os.Args[2:]
+	kind, args := args[0], args[1:]
 	var err error
 	switch kind {
 	case "debs":
@@ -83,22 +86,23 @@ func main() {
 		err = fetchRpms(args)
 	case "-h", "--help":
 		fmt.Println(usage)
-		return
+		return 0
 	default:
 		fmt.Fprintln(os.Stderr, usage)
-		os.Exit(2)
+		return 2
 	}
 	if err != nil {
 		if err == flag.ErrHelp {
-			return
+			return 0
 		}
 		if _, usageErr := err.(*usageError); usageErr {
 			fmt.Fprintf(os.Stderr, "fetch-%s: error: %s\n", kind, err)
-			os.Exit(2)
+			return 2
 		}
 		fmt.Fprintf(os.Stderr, "fetch-%s: %s\n", kind, err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // usageError is an argument the command cannot take.

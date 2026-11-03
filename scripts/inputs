@@ -38,7 +38,7 @@ download() { # download URL FILE: through curl or wget, with their retries
         wget -q -U exclave-inputs --timeout=30 --tries=5 --waitretry=5 -O "$2" "$1"
     fi
 }
-unpack() { "$repo/build/unpack" "$@"; }
+unpack() { "$repo/build/exclave" unpack "$@"; }
 
 fetch() { # fetch NAME KIND ARGS...: package files into DIR/NAME through the fetcher's cache; KIND is debs, apks or rpms
     name=$1
@@ -49,7 +49,7 @@ fetch() { # fetch NAME KIND ARGS...: package files into DIR/NAME through the fet
         return 0
     fi
     rm -rf "${dir:?}/$name"
-    if "$repo/build/fetch" "$kind" --out "$dir/$name" "$@" >"$dir/log/$name.log" 2>&1; then
+    if "$repo/build/exclave" fetch "$kind" --out "$dir/$name" "$@" >"$dir/log/$name.log" 2>&1; then
         echo "$name: $(find "$dir/$name" -type f | wc -l) files"
     else
         echo "$name: FAIL, see $dir/log/$name.log"

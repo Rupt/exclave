@@ -156,9 +156,9 @@ What is built and tested:
   exclave it runs is made on x86-64 (10.1).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The command as one file**: `build/exclave`, 1 018 KB, statically
-  linked, carrying its launcher, wraps, checks and prunes an exclave
-  with nothing beside it (10.5).
+- **The command as one file**: `build/exclave`, 8 827 KB, static Go
+  carrying its launcher, fetches and unpacks packages and wraps,
+  checks and prunes an exclave with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
   CentOS 7 sysroot keeps 226 of the gcc exclave's 9 564 files and
   symlinks, counted as `exclave prune` reports them, the
@@ -1991,14 +1991,14 @@ before a user does.
 ## 10. The `exclave` command
 
 The `exclave` command makes an exclave of a directory, and checks,
-prunes and relinks it. It is C, in `tool/`, built by `scripts/build` as
-one static file per architecture that carries its launcher (10.5), and
-run from a checkout as `build/exclave` or `scripts/exclave`. The tests
-judge it only through its commands. `unpack` (10.1), the step before
-it, and the fetchers are Go, in `unpack/` and `fetch/`, built by
-`scripts/build` into `build/unpack` and `build/fetch`, each one static
-file, with the pinned toolchain `scripts/install-go` puts in `.go/`. The
-tests are Python, run by the pinned Python: the uv that
+prunes and relinks it. It is Go, in `tool/`, built by `scripts/build`
+with the pinned toolchain `scripts/install-go` puts in `.go/` as one
+static file per architecture that carries its launcher (10.5), and run
+from a checkout as `build/exclave` or `scripts/exclave`. The tests judge
+it only through its commands. `unpack` (10.1), the step before it, and
+the fetchers are its subcommands, `exclave unpack` and `exclave fetch`,
+the packages `unpack/` and `fetch/`. The tests are Python, run by the
+pinned Python: the uv that
 `scripts/install-uv` puts in `.uv/` installs the version
 `.python-version` names (3.15) into the checkout, and every script runs
 through it (`scripts/lib.sh`), so nothing the machine has installed
@@ -2010,8 +2010,9 @@ files (10.1), a build's staging directory (10.2), `debootstrap`, a
 container export or `tar`. Neither the tool nor `unpack` opens a
 network connection: the files they are given are their inputs, whoever
 fetched them, and any record of where they came from is the fetcher's
-to keep. Every command takes paths, and `format --check` is the only
-flag:
+to keep. Every command of the tool's own takes paths, and `format
+--check` is the only flag; the fetchers, worked examples of the step
+before it, take the arguments their documentation lists:
 
 ```
 exclave wrap EXCLAVE                wrap an exclave (idempotent; a bare directory holding tree/ becomes an exclave)
@@ -2022,6 +2023,8 @@ exclave format [--check] FILE...    canonical form of a manifest or hashes file;
 exclave hash EXCLAVE                the tree hash of 6.4
 exclave relink EXCLAVE [LAUNCHER]   replace the launcher and relink every wrapper
 exclave version                     the build this command is from: the project's version and the commit
+exclave unpack OUT PKG...           an unwrapped exclave from package files (10.1); exclave unpack ldconfig TREE writes ld.so.cache for a tree made by hand
+exclave fetch debs|apks|rpms ...    a package closure from a repository, verified and downloaded (10.1)
 ```
 
 `wrap` and `relink` also write the exclave's `README` (6.1) where it
@@ -2039,9 +2042,9 @@ ln -s tree/usr/bin/gcc-13 gcc-13.exclave/gcc
 ```
 
 **Unpack** is the step before the tool, as fetching is the step before
-it: the Go program `unpack` beside the tool, `build/unpack`, run as
-`scripts/unpack OUT PKG...`, which shares with the tool only the layout of 6.1 and the
-hashes file of 6.4. It reads `.deb`, `.apk`
+it: the command's `unpack` subcommand, `exclave unpack OUT PKG...`
+(`scripts/unpack`), the package `unpack/`, which shares with the tool's
+other commands only the layout of 6.1 and the hashes file of 6.4. It reads `.deb`, `.apk`
 and `.rpm` files, each through a reader chosen by the file's suffix;
 the three share one interface, and a set that mixes formats is
 refused. From `.deb` files, in five steps:
@@ -2249,10 +2252,10 @@ into `bin` and Fedora's p11-kit CA bundle. The package comments of
 `unpack/apk` and `unpack/rpm` list each format's differences.
 
 **The step before the tool** belongs to whoever makes the exclave.
-Three fetchers, one for each format, the commands of one Go program
-in `fetch/` (`build/fetch`, run as `scripts/fetch-debs`, `fetch-apks`
-and `fetch-rpms`), are worked examples; they are not part of the
-tool's exclave. Each resolves a closure from a
+Three fetchers, one for each format, the commands of `exclave fetch`
+(the package `fetch/`, run as `scripts/fetch-debs`, `fetch-apks` and
+`fetch-rpms`), are worked examples; they are not part of the tool's
+exclave. Each resolves a closure from a
 repository's index, chooses providers of virtual names by priority,
 verifies every download against the index's checksum, and fills a
 directory. They know about mirrors and snapshot services because those
@@ -2458,43 +2461,49 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, 1 018 KB and 795 KB, with nothing beside it to run: no
+the cross compiler, 8 827 KB and 7 996 KB, with nothing beside it to run: no
 interpreter, no library, no file of the checkout. It carries its
 architecture's launcher and the text of every exclave's `README` as data
-(`tool/blobs.S`), so `wrap` and `relink` install the launcher it
-carries unless given another. The launcher's machine is the exclave's:
+(`tool/blob_*.go`, the launcher copied beside them by `scripts/build`),
+so `wrap` and `relink` install the launcher it carries unless given
+another. The launcher's machine is the exclave's:
 the checks read the tree as that machine's loader would, so an exclave
 of either architecture is wrapped on either (10.1).
 
-It is ordinary C on the C library, glibc linked statically, unlike the
-launcher, which is freestanding because it runs inside other programs'
-processes (7.1) and the command never does. The scripts build it with
-the same strict warnings as the launcher, and the gate's unit step runs
-a build under ASan and UBSan, `build/exclave-asan`, on the grammar
-test's files and on hand-made trees whose ELF files, `ld.so.cache` and
-logs lie about themselves (`test/readers_test.py`). Its BLAKE2b is written from
-RFC 7693 and tested against the RFC's vector and Python's `hashlib`
-(17). The tree hash (6.4) walks the tree in order and then hashes the
-files' contents on up to eight threads, each writing only its own
-entry of the listing, so the hash is the walk's whatever the threads
-do; a file it cannot read is named as the walk listed it.
+It is Go, built by the pinned toolchain with cgo off, its paths trimmed
+and no version-control stamp (`scripts/lib.sh`), unlike the launcher,
+which is freestanding C because it runs inside other programs'
+processes (7.1) and the command never does. Its parsers, the ELF
+reader, the `ld.so.cache` reader, the log reader and the grammar, answer
+a hostile file with a refusal and never a crash: the gate's unit step
+runs `check` on hand-made trees whose ELF files, `ld.so.cache` and logs
+lie about themselves (`test/readers_test.py`) and the grammar's
+properties (`test/grammar_test.py`), and the package's own tests and
+fuzz targets (`tool/*_test.go`) hold each reader to its answers (17).
+Its BLAKE2b is `golang.org/x/crypto`'s. The tree hash (6.4) walks the
+tree in order and then hashes the files' contents on up to eight
+goroutines, each writing only its own entry of the listing, so the hash
+is the walk's whatever they do; a file it cannot read is named as the
+walk listed it. `unpack` (10.1) and the fetchers are its subcommands,
+the packages `unpack/` and `fetch/`: one file carries every step from
+the repository to a wrapped exclave.
 
 **A reproducible build.** `scripts/reproduce EXCLAVE DIR` builds the
-launcher and the command inside a gcc exclave, from a copy of the
-sources under `DIR`, with the exclave's compiler, binutils, static C
-library and shell alone on `PATH`: nothing of the machine takes part,
-so the two files are the same bytes wherever the exclave runs. The
-build was already free of its checkout's path and of time; what the
-machine supplied was its toolchain and its `libc.a`, and a host's
-`libc.a` a point release apart from the exclave's gives another
-command, though the freestanding launcher is the same. On the
-reference machine it takes 4.4 s, and every x86-64 row of the kernel
-matrix builds both again inside its copy of the gate's gcc exclave and
-compares them with the reference machine's (12.1).
+launcher inside a gcc exclave, from a copy of the sources under `DIR`,
+with the exclave's compiler, binutils and shell alone on `PATH`:
+nothing of the machine takes part, so the file is the same bytes
+wherever the exclave runs. Then it builds the command here, with the
+pinned Go, from that launcher: the toolchain gives the same bytes from
+the same sources anywhere, so the two files are reproducible together.
+The launcher's build was already free of its checkout's path and of
+time; what the machine supplied was its gcc, which the exclave now
+supplies. Every x86-64 row of the kernel matrix builds the launcher
+again inside its copy of the gate's gcc exclave, with no Go in the VM,
+and compares it with the reference machine's (12.1).
 
 **A release.** `scripts/release KEY DIR TOOLCHAIN EXCLAVE...` builds
-the command and the launcher inside `TOOLCHAIN`, a gcc exclave, by
-`scripts/reproduce`, and puts under `DIR` each exclave as
+the launcher inside `TOOLCHAIN`, a gcc exclave, and the command from
+it, by `scripts/reproduce`, and puts under `DIR` each exclave as
 `NAME.exclave.tar.xz`, an archive that keeps the hard links, sorted
 and without owners, made only after the exclave passes `check` and
 only if it is wrapped with that launcher; the command itself as
@@ -2509,9 +2518,6 @@ is what was released. The README gives the commands, and
 release of the gcc exclave, with a tampered archive and a tampered
 sums file refused (17).
 
-The step before it, `unpack` (10.1), is a Go program of its own,
-`build/unpack`, as the fetchers are; nothing of either is in the
-command.
 
 ## 11. Layers
 
@@ -2551,10 +2557,10 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
 suite's 99 named regressions and every oracle its kernel can run; 17
-describes the procedure. Each x86-64 row also builds the launcher and
-the command inside its copy of the exclave (`scripts/reproduce`,
-10.5) and compares their bytes with the reference machine's build;
-a row whose notes say "reproduced" built the same bytes. The suite's
+describes the procedure. Each x86-64 row also builds the launcher
+inside its copy of the exclave (`scripts/reproduce`, 10.5) and
+compares its bytes with the reference machine's build; a row whose
+notes say "reproduced" built the same bytes. The suite's
 counts are from GitHub's hosted runners in November 2026, the rest
 from the reference machine in October 2026; the runner fetches
 Fedora's newest image, release 44 with kernel 6.19:
@@ -4079,7 +4085,7 @@ meaning items 4 and 7.
 |---|---|
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus nineteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones` and `memfd_exec` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
-| 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `test/tool_test.c` the command's BLAKE2b against RFC 7693 and `hashlib` |
+| 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
 | 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 99 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
@@ -4108,10 +4114,9 @@ includes a bad pointer that must be `EFAULT` either way.
 it. It walks gcc's call graph from `on_sigsys` in both launchers' builds
 and enforces the handler's stack budget of 7.5.4.
 
-**Requirements.** The build needs gcc, and the static C library for the
-command (Ubuntu's `libc6-dev`), and `scripts/install-go` and
-`scripts/install-uv` need curl or wget. `unpack` and the fetchers are
-built by the pinned Go in `.go/`, their modules pinned by `go.sum`;
+**Requirements.** The build needs gcc, and `scripts/install-go` and
+`scripts/install-uv` need curl or wget. The command is built by the
+pinned Go in `.go/`, its modules pinned by `go.sum`;
 every driver runs on the pinned Python uv installs into the checkout,
 and the code checks' ruff, ty, shellcheck, shfmt and taplo come from
 `uv.lock` the same way; none is taken from the machine. The namespace oracle, the syscall probe, the
@@ -4170,17 +4175,17 @@ once before it is pushed.
 `test/affected.py` derives them from what each step runs: its drivers
 and the sources it builds, each Python driver followed through the
 sibling modules it imports and the repository paths it names
-(`build/exclave` is the command, so `tool/`; `build/launcher` the
-launcher, so `src/`; `build/unpack` and `build/fetch` the Go commands,
-so `unpack/` and `fetch/`; `test/progs/probe.c` the probe's program).
-So the command reaches every step whose driver runs it, unpack's tests
-among them; `unpack/` and `fetch/` reach their tests and the Go step;
+(`build/exclave` is the command, so `tool/`, `unpack/` and `fetch/`;
+`build/launcher` the launcher, so `src/`; `test/progs/probe.c` the
+probe's program). So the command reaches every step whose driver runs
+it, unpack's and the fetchers' tests among them, and its packages reach
+the Go step;
 a program reaches the suite, or the one oracle that compiles
 it; a helper reaches whatever imports it. A launcher source,
 `scripts/build`, `scripts/lib.sh`, `scripts/install-go`, `go.mod`,
 `go.sum`, `LICENSE`, `.python-version`, the gate and the derivation
 itself run every step, and all but the last two say the matrix is due,
-as do the command, `unpack/` and the matrix's own code, since the VMs
+as do the command's packages and the matrix's own code, since the VMs
 run them; documents, scripts and settings run the code checks alone;
 and a path nothing names runs everything. `--full` runs every step
 whatever changed.
@@ -4189,18 +4194,18 @@ usable, each with its own log under `build/gate/`, one line each with
 its time, ok, SKIP or FAIL:
 
 - the code checks, `scripts/check`: ruff, ty, shellcheck, shfmt and
-  taplo over the Python, the shell scripts and the TOML; gofmt and go
-  vet over the Go; over the C,
+  taplo over the Python, the shell scripts and the TOML; gofmt, go fix,
+  go vet, staticcheck and deadcode over the Go; over the C,
   clang-format (`.clang-format`), gcc's strict warnings as errors (the
   flags `scripts/lib.sh` gives every C build: the launcher for each
-  architecture and as `build/launcher-old`, the command for each
-  architecture, and the unit tests), gcc's analyser (`-fanalyzer`) on
+  architecture and as `build/launcher-old`, and the unit tests), gcc's
+  analyser (`-fanalyzer`) on
   the same sources compiled at -O0, where it follows the paths of the
   code as written (null and uninitialised uses, memory freed twice or
   never, writes past a bound; the syscalls are opaque calls to it,
   since it cannot see what the kernel writes), and clang-tidy with its
-  static analyser on the launcher for each architecture, on the command
-  and on the unit tests (`.clang-tidy`, `tool/.clang-tidy`); and the
+  static analyser on the launcher for each architecture and on the unit
+  tests (`.clang-tidy`); and the
   figures the documents quote that the tree itself can produce, the
   suite's count of named tests, the resolution oracle's paths and the
   command's size, compared with the documents by `test/figures.py`,
@@ -4208,19 +4213,22 @@ its time, ok, SKIP or FAIL:
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py`, the scratch-pool test, the cache's
   lock across `fork` (`test/cache_test.c`), the `#!` line
-  test, the CPU level test and the command's BLAKE2b test, each built from the current sources for the host under
-  AddressSanitizer and UndefinedBehaviorSanitizer, where a finding
-  exits 99, which no test answers; the command's ELF, `ld.so.cache` and
-  log readers on hostile files, and its grammar, under the same
-  sanitisers (`test/readers_test.py`, `build/exclave-asan`); and `test/tables_test.py`, which
+  test and the CPU level test, each built from the current sources for
+  the host under AddressSanitizer and UndefinedBehaviorSanitizer, where
+  a finding exits 99, which no test answers; the command's ELF,
+  `ld.so.cache` and log readers on hostile files, and its grammar,
+  through `build/exclave` (`test/readers_test.py`,
+  `test/grammar_test.py`); and `test/tables_test.py`, which
   reads the tables more than one part carries, the identity files
   (8.4), the volatile directories (8.1) and the names the launcher
   logs for the syscalls the filter traps, from each source and fails
   when they differ;
 - the stack budget of both launchers (the aarch64 one when it is
   built);
-- the Go step (`go test`, then `go mod verify`): the Go commands' unit
-  tests, the version orders, the dependency parsers and the header
+- the Go step (`go test`, then `go mod verify`): the command's unit
+  tests, the grammar's positions and canonical form, the ELF, cache and
+  log readers on files that lie, the tree hash against its statement,
+  the tree's resolution, the version orders, the dependency parsers and the header
   fields, the root walk's escapes and loops, the ld.so.cache writer on
   a shared object made in the test, the signature checks on keys made
   in the test, and the seeds of their fuzz targets, each reader on a
@@ -4283,29 +4291,26 @@ exclave, the suite under the plain terminal's AppArmor label (`aa-exec
 -p unconfined`), where user namespaces are denied (12), and two more
 steps:
 
-- the fuzz step (`test/fuzz.py`): the parsers under mutation of the
-  exclave's own files, each harness built under the sanitisers of the
-  unit step and run for ten seconds. `test/fuzz.c` is the driver;
-  with `test/tool_fuzz.c` its target is the command's parsers, the
-  grammar of the manifest and the hashes file, the ELF reader, the
-  ld.so.cache reader and the log reader, and with
-  `test/launcher_fuzz.c` the launcher's, the manifest parser and the
-  `#!` line. The seeds are the manifest, the hashes file, the launcher,
-  a few small ELF files of the tree, the tree's ld.so.cache and a log
-  and `#!` lines the step writes. Each seed is run as it is and then
+- the fuzz step (`test/fuzz.py`): the launcher's parsers, the manifest
+  parser and the `#!` line, under mutation of the exclave's own files,
+  the harness `test/fuzz.c` with `test/launcher_fuzz.c` built under the
+  sanitisers of the unit step and run for ten seconds. The seeds are
+  the manifest, the hashes file and a log and `#!` lines the step
+  writes. Each seed is run as it is and then
   mutated, bits and bytes, runs inserted, deleted and copied, integers
   set to boundaries, cuts and splices, the input in a block of exactly
   its size, so that a read past it is the sanitiser's to report. A
   parser answers every input: a refusal is an answer, and a
   sanitiser's finding, a signal or an exit is not, and then the input
-  is kept with the number that remakes it; and the Go commands' parsers
+  is kept with the number that remakes it; and the command's parsers
   under Go's own fuzzer, ten seconds a target from the seeds their tests
-  hold (`unpack/*/fuzz_test.go`, `fetch/fuzz_test.go`), an input that
-  panics kept under the package's `testdata/fuzz`, which the gate's Go
-  step then runs as a case;
+  hold (`tool/*_test.go`, `unpack/*/fuzz_test.go`, `fetch/fuzz_test.go`),
+  the grammar, the ELF reader, the ld.so.cache reader and the log reader
+  among them, an input that panics kept under the package's
+  `testdata/fuzz`, which the gate's Go step then runs as a case;
 - the release test (`test/release_test.py`): a release of the exclave
-  made by `scripts/release`, the command and the launcher built inside
-  it by `scripts/reproduce`, signed with a key made there, and taken
+  made by `scripts/release`, the launcher built inside it and the
+  command from that by `scripts/reproduce`, signed with a key made there, and taken
   as a consumer takes it, the README's recipe step by step, with a
   tampered archive and a tampered sums file refused (10.5).
 
@@ -4762,17 +4767,20 @@ specified.
   trust argument; `fetch/` holds examples of that step (10).
 - **The tool's input is a directory holding `tree/`, and `unpack` is
   the step before it**: what made the tree, package files, `tar` or a
-  build, is not the tool's concern, so `unpack` is a program of its
-  own, apart from the C tool (10, 10.1).
-- **`unpack` and the fetchers are Go, each one static file**: they
-  parse package files and indexes that come from outside, so their
-  parsers are a memory-safe language's, and the delicate ones, tar,
-  gzip, bzip2, XML, HTTP, TLS and RSA, are Go's own standard library's,
-  with xz, zstd and OpenPGP from the pure-Go modules `go.mod` pins and
-  no C compiled in; a static file runs wherever the command does, with
-  nothing to install beside it, which is what portability asks of the
-  step that makes an exclave as much as of the one that wraps it (10,
-  10.1, 10.5).
+  build, is not the tool's concern, so `unpack` is a subcommand apart
+  from `wrap`, sharing with it only the layout and the hashes file (10,
+  10.1).
+- **The command is Go, one static file per architecture carrying its
+  launcher, with `unpack` and the fetchers as its subcommands**: it
+  runs with nothing beside it, and it is the one program that reads
+  what comes from outside, package files, indexes and the trees they
+  make, so its parsers are a memory-safe language's, and the delicate
+  ones, tar, gzip, bzip2, XML, HTTP, TLS and RSA, are Go's own standard
+  library's, with xz, zstd and OpenPGP from the pure-Go modules `go.mod`
+  pins and no C compiled in; one file is what portability asks of every
+  step from the repository to a wrapped exclave; `wrap` takes the other
+  architecture's launcher, since the checks read the tree as the
+  launcher's machine (10, 10.1, 10.5).
 - **Building software is the build system's job**: an exclave of built
   software is a staging directory plus runtime packages, with no
   recipes (10.2).
@@ -4781,17 +4789,12 @@ specified.
   comes from outside and is wrapped (10.1).
 - **Package readers share one interface and are chosen by the file**
   (10.1).
-- **The tool is static C, one file per architecture carrying its
-  launcher**: it runs with nothing beside it, and ordinary C on the C
-  library is enough, since unlike the launcher it never runs inside
-  another program; `wrap` takes the other architecture's launcher, since
-  the checks read the tree as the launcher's machine (10.5).
 - **One pinned Python, never the machine's**, for the tests: uv, pinned
   with a checksum per architecture in `scripts/install-uv`, installs the
   version `.python-version` names into the checkout, and every script
   and the matrix VMs run that one (10, 17).
-- **One pinned Go, never the machine's**, for `unpack` and the
-  fetchers: `scripts/install-go` installs the toolchain `go.mod` names
+- **One pinned Go, never the machine's**, for the command:
+  `scripts/install-go` installs the toolchain `go.mod` names
   into the checkout, checked the same way, with the modules `go.sum`
   pins, the one time anything fetches them; every build is static, its
   paths trimmed and its version-control stamp off, so the same sources
@@ -4806,11 +4809,11 @@ specified.
   with `go mod verify`, and every parser of its own has a fuzz target
   `scripts/extra` runs (17).
 - **The C is clang-formatted and clean under gcc's strict warnings and
-  clang-tidy**, the launcher and the command for both architectures;
+  clang-tidy**, the launcher for both architectures;
   clang-format and clang-tidy come from `uv.lock`, gcc is the one that
   builds them, and the build itself does not stop on a warning, since a
-  newer gcc may find something new. A check `.clang-tidy` or
-  `tool/.clang-tidy` turns off carries its reason (17).
+  newer gcc may find something new. A check `.clang-tidy` turns off
+  carries its reason (17).
 - **`wrap` checks before it touches the tree**: a refused exclave is
   left unwrapped (10.1, 10.3).
 - **Nothing of the tree runs during `unpack` or `wrap`**: the cache is

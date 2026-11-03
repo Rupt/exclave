@@ -651,8 +651,9 @@ def main() -> int:
     # go, the Go regression's programs built for it
     payloads: dict[tuple[str, str], str] = {}
 
-    # 10.5: the launcher and the command built inside this machine's exclave here, which each VM
-    # of the same machine builds again inside its copy and must match byte for byte
+    # 10.5: the launcher built inside this machine's exclave here, which each VM of the same
+    # machine builds again inside its copy and must match byte for byte; the command, built from
+    # it by the pinned Go, is listed after it, and the VMs, with no Go, build the launcher alone
     reproduced: list[str] = []
     if MACHINE in exclaves:
         p = subprocess.run(
@@ -709,7 +710,6 @@ def main() -> int:
             t.add(exclaves[arch], arcname="ex")
             t.add(built("launcher", arch), arcname="repo/build/launcher")
             t.add(built("exclave", arch), arcname="repo/build/exclave")
-            t.add(built("unpack", arch), arcname="repo/build/unpack")
             if os.path.exists(built("launcher-old", arch)):
                 t.add(built("launcher-old", arch), arcname="repo/build/launcher-old")
             # test/sysroot.py's output: runs natively on every glibc of its machine
@@ -810,12 +810,12 @@ def main() -> int:
             if not ok:
                 fails.append("FAIL sysroot output did not run natively: " + sysroot)
             if arch == MACHINE and reproduced:
-                # 10.5: the exclave's own toolchain builds the same bytes on this kernel's host
+                # 10.5: the exclave's own toolchain builds the same launcher on this kernel's host
                 _rc, out = vm.ssh(
-                    "cd m && sh repo/scripts/reproduce $PWD/ex $PWD/repro 2>&1 | tail -2",
+                    "cd m && sh repo/scripts/reproduce $PWD/ex $PWD/repro 2>&1 | tail -1",
                     timeout=600 * slow,
                 )
-                same = out.split() == reproduced
+                same = out.split()[:2] == reproduced[:2]
                 log(name, "reproduced:", "the same bytes" if same else "DIFFER " + out[-200:])
                 notes += "; reproduced" if same else "; reproduce DIFFERS"
                 if not same:

@@ -2,8 +2,8 @@
 
     test/tables_test.py
 
-The host identity files (8.4) are listed in src/vis.c, tool/layout.c and test/tree.py; the
-volatile directories (8.1) in src/vis.c, unpack/steps.go, test/suite.py and
+The host identity files (8.4) are listed in src/vis.c, tool/layout.go and test/tree.py; the
+volatile directories (8.1) in src/vis.c, tool/paths.go, unpack/steps.go, test/suite.py and
 test/unpack_test.py; and the name the
 launcher logs for a trapped syscall (`sysname` in src/handler.c) must cover exactly the syscalls
 src/filter.c traps. Each is read from its source here, so a table changed in one place fails the
@@ -88,7 +88,7 @@ def main() -> int:
         "identity files",
         {
             "src/vis.c": c_strings("src/vis.c", "identity_files"),
-            "tool/layout.c": c_strings("tool/layout.c", "IDENTITY_FILES"),
+            "tool/layout.go": go_strings("tool/layout.go", "identityFiles"),
             "test/tree.py": tree.IDENTITY_FILES,
         },
     )
@@ -96,6 +96,7 @@ def main() -> int:
         "volatile directories",
         {
             "src/vis.c": c_strings("src/vis.c", "volatile_dirs"),
+            "tool/paths.go": go_strings("tool/paths.go", "volatileDirs"),
             "unpack/steps.go": go_strings("unpack/steps.go", "volatile"),
             "test/suite.py": py_tuple("test/suite.py", "VOLATILE"),
             "test/unpack_test.py": py_tuple("test/unpack_test.py", "VOLATILE"),

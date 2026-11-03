@@ -11,7 +11,7 @@
 // `exclave wrap OUT` then makes it an exclave. Between the two OUT is a directory, and anything
 // may be done to it. Unpack never opens a network connection: the files it is given are its
 // inputs, whoever fetched them.
-package main
+package unpack
 
 import (
 	"fmt"
@@ -165,34 +165,32 @@ func pylist(items []string) string {
 	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
-// version is the build's, set by scripts/build.
-var version = "dev"
-
-func main() {
-	args := os.Args[1:]
+// Main runs the unpack command, `exclave unpack`, with the build's version and the arguments after
+// the command's name; returns its exit status.
+func Main(version string, args []string) int {
+	const usage = "usage: exclave unpack OUT PACKAGE [PACKAGE ...]\n       exclave unpack ldconfig TREE\n"
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
-		fmt.Println("usage: unpack OUT PACKAGE [PACKAGE ...]\n       unpack ldconfig TREE\n\n" +
-			"unpack " + version + "\n\n" +
+		fmt.Println(usage + "\nunpack " + version + "\n\n" +
 			"Make the unwrapped exclave OUT from package files (.deb, .apk or .rpm); exclave wrap OUT then makes " +
 			"it an exclave. Or write TREE/etc/ld.so.cache as the tree's own ldconfig would, for a tree made by hand.")
-		return
+		return 0
 	}
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: unpack OUT PACKAGE [PACKAGE ...]\n       unpack ldconfig TREE\n"+
-			"unpack: error: OUT and at least one PACKAGE are required")
-		os.Exit(2)
+		fmt.Fprint(os.Stderr, usage+"unpack: error: OUT and at least one PACKAGE are required\n")
+		return 2
 	}
 	log := func(line string) { fmt.Println(line) }
 	// the ldconfig form names a directory that exists, which no OUT may and no PACKAGE is
 	if st, err := os.Stat(args[1]); args[0] == "ldconfig" && len(args) == 2 && err == nil && st.IsDir() {
 		if err := ldconfigCommand(args[1], log); err != nil {
 			fmt.Fprintf(os.Stderr, "unpack: %s\n", err)
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 	if err := unpack(args[0], args[1:], log); err != nil {
 		fmt.Fprintf(os.Stderr, "unpack: %s\n", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

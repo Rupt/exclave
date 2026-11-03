@@ -19,7 +19,7 @@
 // Package files are cached, since their names carry their versions; APKINDEX is fetched on every
 // run.
 
-package main
+package fetch
 
 import (
 	"archive/tar"

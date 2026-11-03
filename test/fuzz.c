@@ -1,5 +1,5 @@
 /* fuzz.c — mutation fuzzing of the parsers: the driver of scripts/gate's fuzz step (DESIGN.md 17), linked with a
- * target (test/tool_fuzz.c, test/launcher_fuzz.c) under ASan and UBSan.
+ * target (test/launcher_fuzz.c) under ASan and UBSan.
  *
  *     fuzz WORK SECONDS SEED...
  *

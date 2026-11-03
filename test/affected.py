@@ -7,8 +7,8 @@ when a path reaches everything, and `matrix` when the change reaches the VMs. A 
 path when the path is one the step runs or builds from, or one its Python drivers import or name:
 a sibling module in test/ is followed, and a path under the repository
 named through `os.path.join(REPO, ...)` is what the driver runs there (`build/exclave` is the
-command, so `tool/`; `build/launcher` the launcher, so `src/`; `build/unpack` and `build/fetch`
-the Go commands, so `unpack/` and `fetch/`). Nothing here is kept by hand but
+command, so `tool/`, `unpack/` and `fetch/`; `build/launcher` the launcher, so `src/`). Nothing
+here is kept by hand but
 the list of what each step runs, which is the gate's own definition of its steps. --explain names
 the reason for each step.
 """
@@ -32,10 +32,9 @@ STEPS: dict[str, tuple[str, ...]] = {
         "test/syscalls.py",
         "test/tables_test.py",
         "src/*",
-        "tool/blake2b.c",
     ),
     "stack": ("test/stackcheck.py", "src/*"),
-    "go": ("fetch/*", "unpack/*"),
+    "go": ("tool/*", "fetch/*", "unpack/*"),
     "unpack": ("test/unpack_test.py",),
     "fetch": ("test/fetch_test.py",),
     "suite": ("test/run.py",),
@@ -60,12 +59,13 @@ EVERY = (
     "scripts/gate",
     "test/affected.py",
 )
-# What the VMs run: the launcher, the command, unpack (the suite's ld.so.cache regression runs
-# it there), the Python, the licence the launcher carries, and the matrix's own code.
+# What the VMs run: the launcher, the command with its unpack (the suite's ld.so.cache regression
+# runs it there), the Python, the licence the launcher carries, and the matrix's own code.
 MATRIX = (
     "src/*",
     "tool/*",
     "unpack/*",
+    "fetch/*",
     "go.mod",
     "go.sum",
     "scripts/install-go",
@@ -89,12 +89,7 @@ CHECK_ONLY = (
     ".github/*",
 )
 # A path under build/ a driver names stands for the sources it is built from.
-BUILT = {
-    "build/exclave": "tool/*",
-    "build/launcher": "src/*",
-    "build/unpack": "unpack/*",
-    "build/fetch": "fetch/*",
-}
+BUILT = {"build/exclave": ("tool/*", "unpack/*", "fetch/*"), "build/launcher": ("src/*",)}
 
 
 ROOTS = {
@@ -149,7 +144,7 @@ def dependencies(path: str, seen: dict[str, set[str]]) -> set[str]:
     for named in joined_paths(tree):
         for built, source in BUILT.items():
             if named == built or named.startswith(built):
-                deps.add(source)
+                deps.update(source)
                 break
         else:
             deps.add(named + "/*" if os.path.isdir(os.path.join(REPO, named)) else named)

@@ -25,8 +25,8 @@ lazy from collections.abc import Callable
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-# the command under ASan and UBSan, whose finding exits 99 (test/sanitize.c)
-TOOL = os.path.join(REPO, "build", "exclave-asan")
+# the command, whose Go refuses a bad file and never crashes on one; a panic would exit 2
+TOOL = os.path.join(REPO, "build", "exclave")
 
 
 def quote(b: bytes) -> str:

@@ -12,7 +12,7 @@
 // network connection: the keys come from the caller, pinned by hash in scripts/inputs or taken
 // from the machine's own keyrings.
 
-package main
+package fetch
 
 import (
 	"bytes"

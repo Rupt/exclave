@@ -1,9 +1,9 @@
 #!/bin/sh
 # scripts/release KEY DIR TOOLCHAIN EXCLAVE... — a release of the exclaves named (docs/DESIGN.md 10.5): under DIR, each
 # as NAME.exclave.tar.xz, the command itself as `exclave`, SHA256SUMS and B2SUMS over every file there, and
-# SHA256SUMS.sig, the sums signed with the ssh private key KEY (ssh-keygen -Y, in the namespace "exclave"). The command
-# and the launcher are built inside TOOLCHAIN, a gcc exclave, by scripts/reproduce, so that anyone can build the same
-# bytes; each exclave must be wrapped with that launcher, and passes `exclave check` first. The README says how a
+# SHA256SUMS.sig, the sums signed with the ssh private key KEY (ssh-keygen -Y, in the namespace "exclave"). The launcher
+# is built inside TOOLCHAIN, a gcc exclave, and the command here from it, by scripts/reproduce, so that anyone can
+# build the same bytes; each exclave must be wrapped with that launcher, and passes `exclave check` first. The README says how a
 # consumer verifies, unpacks and checks one with nothing but the release's own files; test/release_test.py runs that
 # recipe.
 set -eu

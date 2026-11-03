@@ -28,8 +28,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD_LAUNCHER = os.path.join(REPO, "build", "launcher")
 # the exclave command, as scripts/build built it
 TOOL = (os.path.join(REPO, "build", "exclave"),)
-# the step before it (10.1), Go, built by scripts/build too
-UNPACK = (os.path.join(REPO, "build", "unpack"),)
+# the step before it (10.1), the command's unpack subcommand
+UNPACK = (*TOOL, "unpack")
 # The host identity files (8.4), which an exclave ships empty and the host answers for.
 IDENTITY_FILES = (
     "/etc/passwd",

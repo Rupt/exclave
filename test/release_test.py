@@ -2,10 +2,10 @@
 
     test/release_test.py --exclave EXCLAVE [--work DIR]
 
-The exclave is a gcc exclave, and the release's toolchain too: scripts/reproduce builds the command
-and the launcher inside it, and scripts/release makes a release of a copy of the exclave under
-WORK, wrapped again by that command, since a release is of what the command makes, signed with a
-key made here. A copy wrapped with another launcher is refused.
+The exclave is a gcc exclave, and the release's toolchain too: scripts/reproduce builds the
+launcher inside it and the command from that, and scripts/release makes a release of a copy of the
+exclave under WORK, wrapped again by that command, since a release is of what the command makes,
+signed with a key made here. A copy wrapped with another launcher is refused.
 Then, in a directory that holds nothing but the release's files, the README's recipe runs: the
 signature is verified against the key, the sums are checked, the archive is unpacked, the release's
 own `exclave` checks the exclave, its tree hash is the one the hashes file records, and a program in
@@ -50,7 +50,8 @@ def main() -> int:
     toolchain = os.path.abspath(args.exclave)
     ex = tree.fresh_exclave(toolchain, os.path.join(work, "src", "one.exclave"))
     name = os.path.basename(ex)
-    # the command a release ships: built inside the gcc exclave (scripts/reproduce), and wrapping
+    # the command a release ships: its launcher built inside the gcc exclave and the command from
+    # it (scripts/reproduce), and wrapping
     # the copy with the launcher it carries
     built = os.path.join(work, "reproduce")
     rc, out = run([os.path.join(REPO, "scripts", "reproduce"), toolchain, built], work)

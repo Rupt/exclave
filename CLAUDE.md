@@ -44,7 +44,7 @@ The loop that has served well, in the order it pays:
    EXCLAVE` on the gcc exclave at zero failures, then the commit. It is
    the one gate, and it is fast: every step is a test, which fails on a
    case with the answer expected, in seconds (the code checks, the
-   unit tests, the stack budget, the Go commands' tests, unpack's and the fetchers' tests, the
+   unit tests, the stack budget, the command's Go tests, unpack's and the fetchers' tests, the
    suite once, the oracles, the syscall probe and the Docker profile
    run); it runs the steps the change can affect, in seconds for a
    document or a script, `--full` all of them, and says when the
@@ -127,26 +127,26 @@ The loop that has served well, in the order it pays:
   kernel adds is trapped by the filter's ceiling and answered `ENOSYS`
   until it is classified in `test/syscalls.py` and, if it takes a path,
   handled in `src/handler.c` and listed in `src/filter.c`.
-- **The tool is static C**, in `tool/`: one file per architecture,
-  `build/exclave`, that carries its launcher and the exclave README
-  (`tool/blobs.S`), takes a directory holding `tree/` and does not open
-  a network connection. It is ordinary C on the C library, unlike the
-  launcher, since it never runs inside another program; paths are bytes
-  and every list it prints or hashes is in the order of their bytes.
-  The tests judge it only through its commands. The steps before it are
-  Go, each one static file `scripts/build` builds with the pinned
-  toolchain in `.go/` (`scripts/install-go`, checked against a committed
-  checksum, as uv is): `unpack/` (`build/unpack`, `scripts/unpack`),
-  which makes a tree from package files, and `fetch/` (`build/fetch`,
-  with `debs`, `apks` and `rpms` commands, `scripts/fetch-*`). Their
-  delicate parsers are Go's standard library's where it has them, with
+- **The tool is Go**, in `tool/`: one static file per architecture,
+  `build/exclave`, that `scripts/build` builds with the pinned toolchain
+  in `.go/` (`scripts/install-go`, checked against a committed checksum,
+  as uv is); it carries its launcher (copied to `tool/launcher-ARCH` for
+  `go:embed`, so the Go is checked after a build) and the exclave
+  README, takes a directory holding `tree/` and does not open a network
+  connection; paths are bytes and every list it prints or hashes is in
+  the order of their bytes. The tests judge it only through its
+  commands. The steps before it are its subcommands: `unpack/`
+  (`exclave unpack`, `scripts/unpack`), which makes a tree from package
+  files, and `fetch/` (`exclave fetch debs|apks|rpms`,
+  `scripts/fetch-*`). Their delicate parsers are Go's standard library's
+  where it has them, with
   xz, zstd and OpenPGP from the pure-Go modules `go.mod` pins and no
   cgo; `fetch/verify.go` checks signatures in-process under apt's rule,
   neither expiry nor revocation consulted. A package reader
   (`unpack/deb`, `apk`, `rpm`) has one interface, `unpack/reader`'s
-  `Reader`, and is chosen by the file. `scripts/check` runs gofmt and
-  go vet; the gate's go step runs `go test`, whose fuzz targets
-  `scripts/extra` fuzzes for ten seconds each. `curl` has not been
+  `Reader`, and is chosen by the file. `scripts/check` runs gofmt, go
+  fix, go vet, staticcheck and deadcode; the gate's go step runs `go
+  test`, whose fuzz targets `scripts/extra` fuzzes for ten seconds each. `curl` has not been
   needed. `src/gdb.py`
   is data the launcher carries for gdb, not code it runs, and it runs
   on gdb's own Python (ruff targets 3.7 there).
@@ -175,21 +175,20 @@ The loop that has served well, in the order it pays:
   of the code's own, as opposed to an input, is asserted and allowed to
   fail loudly, never checked and papered over, since a quiet wrong
   answer hides the next defect. The fuzz step of `scripts/extra`
-  (`test/fuzz.c`) mutates an exclave's files through every parser under the sanitisers,
-  and a new parser gets a line in its target (`test/tool_fuzz.c`,
-  `test/launcher_fuzz.c`).
+  (`test/fuzz.c`) mutates an exclave's files through the launcher's parsers under the sanitisers,
+  and a new one gets a line in its target (`test/launcher_fuzz.c`); a
+  Go parser gets a fuzz target beside its tests.
 - **The C is clang-formatted and clean under gcc's strict warnings,
   gcc's analyser and clang-tidy**, as `scripts/check` checks
   (`.clang-format`, `lib.sh`'s flags, `-fanalyzer` at -O0 with the
-  syscalls opaque to it, `.clang-tidy` and `tool/.clang-tidy`);
+  syscalls opaque to it, `.clang-tidy`);
   `scripts/check --fix` formats. A trailing
   comment that does not fit in 120 columns goes above its statement,
   and a table stays one between `clang-format off` and `on`. A check is
   turned off in `.clang-tidy` with its reason, and a `NOLINT(check)`
   carries its reason on the line. The gate's unit step runs the unit
   tests under ASan and UBSan, and the gate runs the suite once on
-  `build/launcher-debug`, whose UBSan checks trap; `build/exclave-asan`
-  is the command under both.
+  `build/launcher-debug`, whose UBSan checks trap.
 - **Hashes are BLAKE2b-256.** Manifest and hashes file use the strict
   grammar of `docs/DESIGN.md` 6.2, and `format` output is the accepted spelling.
   There is no index: the launcher reads the manifest and the tree, and
@@ -200,8 +199,8 @@ The loop that has served well, in the order it pays:
   better left out than quoted.
 - **The gate.** `scripts/gate EXCLAVE` (`EXCLAVE_TEST_INPUTS=DIR`,
   the directory `scripts/inputs` filled, adds the Docker profile) runs,
-  of the code checks, the unit tests, the stack budget, the Go commands'
-  tests, unpack's and the fetchers' tests, the suite, the oracles and the syscall probe on
+  of the code checks, the unit tests, the stack budget, the command's
+  Go tests, unpack's and the fetchers' tests, the suite, the oracles and the syscall probe on
   the one exclave, the ones the changed paths can affect (`--full`: all
   of them), two steps at a time (`--jobs N`; this laptop is in use
   meanwhile) on copies with its time printed, and a 30 s budget per
