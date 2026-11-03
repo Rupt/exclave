@@ -4200,7 +4200,7 @@ has is skipped, and whatever is missing is fetched again. The items
 run three at a time once the signing keys are fetched, each a fetch,
 an unpack and a wrap of a few hundred megabytes on mostly one core; on
 the reference machine, with the fetchers' caches warm, the gate's
-inputs are made in 15 s, 41 s one item after another (November 2026).
+inputs are made in 10 s, 25 s one item after another (November 2026).
 The repository holds no third-party input.
 
 **The gate** (`scripts/gate [--full] [--since REV] [--jobs N] EXCLAVE`)
