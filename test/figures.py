@@ -5,14 +5,13 @@
 
 A figure in a document is measured, never guessed (CLAUDE.md), and the ones here come from the tree
 without running anything: the suite's count of named tests, the resolution oracle's default number
-of paths, the matrix's rows, and the command's size when it is built. The probe's case count needs
-an exclave and a run: the gate's syscalls step prints it on its last line, and the documents quote
-the reference machine's. scripts/check runs --check.
+of paths and the matrix's rows; sizes, which move with every change, are not quoted. The probe's
+case count needs an exclave and a run: the gate's syscalls step prints it on its last line, and the
+documents quote the reference machine's. scripts/check runs --check.
 """
 
 import argparse
 import os
-import platform
 import re
 import sys
 
@@ -23,19 +22,6 @@ DOCS = ("README.md", "docs/DESIGN.md")
 def read(path: str) -> str:
     with open(os.path.join(REPO, path), encoding="utf-8") as f:
         return f.read()
-
-
-def kb(path: str) -> int | None:
-    """A file's size in KB (1000 bytes, rounded) as the documents give it, or None if not built."""
-    try:
-        return round(os.path.getsize(os.path.join(REPO, path)) / 1000)
-    except FileNotFoundError:
-        return None
-
-
-def built(name: str, arch: str) -> str:
-    """scripts/build's output NAME for arch: build/NAME here, build/NAME-ARCH for another."""
-    return os.path.join("build", name if arch == platform.machine() else f"{name}-{arch}")
 
 
 def resolve_paths() -> int:
@@ -56,10 +42,6 @@ def figures() -> dict[str, int | None]:
         ),
         "resolve paths": resolve_paths(),
         "matrix rows": len(re.findall(r"^    VmRow\(", read("test/matrix.py"), re.MULTILINE)),
-        # scripts/build names this machine's command build/exclave and another's by its machine
-        "command KB": kb(built("exclave", "x86_64")),
-        # the cross build's, as the document says; a native aarch64 build is a few KB apart
-        "command KB aarch64": kb("build/exclave-aarch64"),
     }
 
 
@@ -67,9 +49,6 @@ def figures() -> dict[str, int | None]:
 QUOTED = (
     ("named tests", r"(\d[\d ]*) named (?:tests|regressions)"),
     ("resolve paths", r"(\d[\d ]*) paths over (?:a random maze|\w+ random mazes)"),
-    ("command KB", r"`build/exclave`, (\d[\d ]*) KB"),
-    ("command KB", r"the cross compiler, (\d[\d ]*) KB and \d[\d ]* KB"),
-    ("command KB aarch64", r"the cross compiler, \d[\d ]* KB and (\d[\d ]*) KB"),
 )
 
 

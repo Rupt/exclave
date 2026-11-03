@@ -157,8 +157,8 @@ What is built and tested:
   exclave it runs is made on x86-64 (10.1).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
-- **The command as one file**: `build/exclave`, 8 831 KB, static Go
-  carrying its launcher, fetches and unpacks packages and wraps,
+- **The command as one file**: `build/exclave`, static Go carrying its
+  launcher, fetches and unpacks packages and wraps,
   checks and prunes an exclave with nothing beside it (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
   CentOS 7 sysroot keeps 226 of the gcc exclave's 9 564 files and
@@ -2465,8 +2465,7 @@ run the whole workload, add back from an unpruned copy.
 
 The command is one statically linked executable for each architecture,
 `build/exclave` for the machine's own and `build/exclave-aarch64` from
-the cross compiler, 8 831 KB and 7 996 KB, with nothing beside it to run: no
-interpreter, no library, no file of the checkout. It carries its
+the cross compiler, with nothing beside it to run: no interpreter, no library, no file of the checkout. It carries its
 architecture's launcher and the text of every exclave's `README` as data
 (`tool/blob_*.go`, the launcher copied beside them by `scripts/build`),
 so `wrap` and `relink` install the launcher it carries unless given
