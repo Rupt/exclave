@@ -2548,8 +2548,10 @@ carries its packages' terms, and a workload never reads them, so a
 trace alone would drop them. An Alpine exclave has its licence texts
 only if the packages' `-doc` packages went in.
 
-Every other file and symlink is removed. Directories are never removed,
-so ownership (8.1) and what `ls` shows (8.3) do not change. A log that
+Every other file and symlink is removed, and with it a shortcut (6.1)
+to a file removed, which `prune` names, so that the pruned exclave
+passes `check`. Directories are never removed, so ownership (8.1) and
+what `ls` shows (8.3) do not change. A log that
 names no program in the exclave, because it is empty, belongs to
 another exclave, or comes from a workload that died before its first
 `exec`, is refused rather than obeyed, since obeying it would empty the

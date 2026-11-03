@@ -264,6 +264,7 @@ func cmdPrune(args []string) int {
 			keep.add(v)
 		}
 	})
+	shortcuts := resolvingShortcuts(ex)
 	kept, removed := 0, 0
 	var freed uint64
 	walkDirs(root, false, func(dir, rel string, e []entryInfo) {
@@ -293,6 +294,14 @@ func cmdPrune(args []string) int {
 			removed++
 		}
 	})
+	for _, name := range shortcuts { // a shortcut to a file the workloads never touched goes with its file
+		if p := pathJoin(ex, name); !reaches(p) {
+			if err := unix.Unlink(p); err != nil {
+				failErrno(p, err)
+			}
+			fmt.Fprintf(out, "removed the shortcut %s: no workload touched its file\n", name)
+		}
+	}
 	fmt.Fprintf(out, "pruned %s: kept %d files, removed %d, %d bytes freed\n", ex, kept, removed, freed)
 	if hasTreeRecord(ex) {
 		writeHashes(ex, "", false, true)
@@ -301,4 +310,26 @@ func cmdPrune(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// resolvingShortcuts are the exclave's top-level symlinks that reach a file, in the order of their bytes.
+func resolvingShortcuts(ex string) []string {
+	names, err := dirNames(ex)
+	if err != nil {
+		failErrno(ex, err)
+	}
+	var out []string
+	for _, name := range names {
+		p := pathJoin(ex, name)
+		if st, err := lstat(p); err == nil && isLnk(&st) && reaches(p) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// reaches reports whether path reaches a file, through its links.
+func reaches(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

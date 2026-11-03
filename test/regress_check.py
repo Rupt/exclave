@@ -61,7 +61,7 @@ def prune_and_check_with_logs(ctx: Ctx) -> str:
     check and the dynamic check of the EXCLAVE_LOG files a workload wrote, and its manifest is
     canonical; prune keeps what the logs touched plus the libraries kept ELF files need and the
     packages' licence texts, those the tree has and two planted where Debian and RPM put them, and
-    drops the rest, and the pruned exclave still compiles.
+    drops the rest, a shortcut with the file it names, and the pruned exclave still compiles.
     """
     log = os.path.join(ctx.work, "prune.log")
     if os.path.exists(log):
@@ -96,10 +96,22 @@ def prune_and_check_with_logs(ctx: Ctx) -> str:
         os.makedirs(os.path.dirname(os.path.join(ex2, "tree", v.lstrip("/"))), exist_ok=True)
         with open(os.path.join(ex2, "tree", v.lstrip("/")), "w") as f:
             f.write("a licence no workload reads\n")
+    # a shortcut to a program the workload ran, and one to a file it never touched
+    unused = os.path.join(ex2, "tree", "usr", "share", "exclave-unused")
+    with open(unused, "w") as f:
+        f.write("no workload reads this\n")
+    os.symlink("tree" + ctx.vbin(ctx.gcc), os.path.join(ex2, "cc"))
+    os.symlink("tree/usr/share/exclave-unused", os.path.join(ex2, "unused"))
     licences = tree.licence_files(os.path.join(ex2, "tree"))
     before = sum(1 for _ in tree.walk_files(os.path.join(ex2, "tree")))
     rc, out, err = run([*TOOL, "prune", ex2, log])
     expect(rc == 0 and "pruned" in out, "prune: " + out + err)
+    expect(
+        "removed the shortcut unused" in out
+        and not os.path.lexists(os.path.join(ex2, "unused"))
+        and os.path.exists(os.path.join(ex2, "cc")),
+        "prune keeps a shortcut to a kept file and removes one whose file it removed: " + out,
+    )
     after = sum(1 for _ in tree.walk_files(os.path.join(ex2, "tree")))
     expect(after < before // 2, f"pruning removed little: {after} of {before} files remain")
     expect(
