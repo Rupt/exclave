@@ -280,13 +280,15 @@ static void show(struct arg *a, long ret)
             printf(" data=");
             hex(a->buf, ret - 1);
         }
-    } else if (!strcmp(a->bkind, "stat") && ret == 0) {
+    } else if ((!strcmp(a->bkind, "stat") || !strcmp(a->bkind, "dstat")) && ret == 0) {
         struct stat *st = (struct stat *)a->buf;
         /* no uid: a user namespace shows root's files as nobody's */
         printf(" data=mode=%o", (unsigned)st->st_mode);
         if (S_ISREG(st->st_mode) || S_ISLNK(st->st_mode)) printf(",size=%lld", (long long)st->st_size);
-        /* a directory's links, its subdirectories, .real/ not among them (8.3); its size is the filesystem's */
-        if (S_ISDIR(st->st_mode)) printf(",nlink=%lu", (unsigned long)st->st_nlink);
+        /* dstat: a directory's links too, its subdirectories, .real/ not among them (8.3), for the descriptors the
+         * probe makes alone: a host directory others use, /tmp, gains and loses them while it runs; its size is the
+         * filesystem's */
+        if (a->bkind[0] == 'd' && S_ISDIR(st->st_mode)) printf(",nlink=%lu", (unsigned long)st->st_nlink);
     } else if ((!strcmp(a->bkind, "dents64") || !strcmp(a->bkind, "dents")) && ret > 0) {
         /* a listing: its names and types, sorted, since two directories' orders are their own */
         int is64 = a->bkind[5] == '6', k = 0;

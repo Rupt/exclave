@@ -1242,7 +1242,7 @@ def generate(
     for n, f in listed:
         add("getdents64", n, f, B("dents64", 4096), I(4096))
         add("getdents", n, f, B("dents", 4096), I(4096))
-        add("fstat", n, f, B("stat", 256))
+        add("fstat", n, f, B("dstat", 256))
     # relative paths from a working directory the exclave owns
     rel = [
         "",
