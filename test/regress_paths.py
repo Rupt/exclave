@@ -687,15 +687,23 @@ def directory_stats_hide_real(ctx: Ctx) -> None:
         "fstat O_PATH",
     )
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "dirstat"), [bindir, hostdir])
+    # statx is 4.11's: on an older kernel both worlds fail it
+    release = tuple(int(x) for x in re.findall(r"\d+", platform.release())[:2])
+    old = release < (4, 11)
+
+    def line(d: str, c: str, nlink: int, size: int) -> str:
+        failed = old and c.startswith("statx")
+        return f"{d} {c}: failed" if failed else f"{d} {c}: nlink={nlink} size={size}"
+
     want = []
     real = os.path.join(ctx.root, bindir.lstrip("/"))
     st = os.lstat(real)
     entry = {"zfs": 1, "btrfs": 10, "tmpfs": 20}.get(fs_type(real), 0)
     nlink = st.st_nlink - 1 if st.st_nlink >= 3 else st.st_nlink
     size = st.st_size - entry if entry and st.st_size >= entry else st.st_size
-    want += [f"{bindir} {c}: nlink={nlink} size={size}" for c in calls]
+    want += [line(bindir, c, nlink, size) for c in calls]
     host = os.lstat(hostdir)
-    want += [f"{hostdir} {c}: nlink={host.st_nlink} size={host.st_size}" for c in calls]
+    want += [line(hostdir, c, host.st_nlink, host.st_size) for c in calls]
     expect(rc == 0 and out.splitlines() == want, f"rc={rc} {out!r}, wanted {want!r} {err!r}")
 
 
