@@ -462,3 +462,26 @@ static inline void outs(int fd, const char *s)
         n -= (size_t)r;
     }
 }
+
+#if defined(__x86_64__)
+/* ---------- x86-64: cpuid and the protection-key register ---------- */
+struct cpuid {
+    unsigned a, b, c, d;
+};
+static inline struct cpuid cpuid(unsigned leaf, unsigned sub)
+{
+    struct cpuid r;
+    __asm__ volatile("cpuid" : "=a"(r.a), "=b"(r.b), "=c"(r.c), "=d"(r.d) : "a"(leaf), "c"(sub));
+    return r;
+}
+/* PKRU, two bits a key, access and write disabled, which the kernel checks a thread's access to memory against, its
+ * own copies included; rdpkru and wrpkru spelt as bytes, for assemblers without them */
+static inline unsigned rdpkru(void)
+{
+    unsigned v;
+    __asm__ volatile(".byte 0x0f,0x01,0xee" : "=a"(v) : "c"(0) : "rdx");
+    return v;
+}
+static inline void wrpkru(unsigned v)
+{ __asm__ volatile(".byte 0x0f,0x01,0xef" : : "a"(v), "c"(0), "d"(0) : "memory"); }
+#endif

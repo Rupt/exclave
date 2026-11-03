@@ -113,6 +113,12 @@
 #if defined(__x86_64__)
 #define UC_GREGS_OFF 40
 #define UC_SIGMASK_OFF 296
+/* the XSAVE area the kernel saved, which uc_mcontext.fpregs at +224 points to: the software bytes at +464 begin with
+ * FP_XSTATE_MAGIC1 and hold the frame's features at +472, and the XSAVE header at +512 those in use; a component is at
+ * the offset cpuid leaf 0xd gives it, in the standard format a signal frame always uses */
+#define UC_FPREGS_OFF 224
+#define FP_XSTATE_MAGIC1 0x46505853U
+#define XFEATURE_PKRU 9
 enum {
     REG_R8 = 0,
     REG_R9,
@@ -204,6 +210,9 @@ struct exclave {
     unsigned long root_dev, root_ino; /* the tree's root directory, so that any spelling of it is recognised */
     /* the kernel's page size, AT_PAGESZ: 4 KB, or 16 KB or 64 KB on some aarch64 kernels (7.3) */
     unsigned long pagesz;
+    /* x86-64: PKRU's offset in a signal frame's XSAVE area, or 0 where the kernel gives no protection keys (7.5.6) */
+    unsigned pkru_off;
+    unsigned init_pkru; /* x86-64: the PKRU a process starts with */
 };
 extern struct exclave C;
 

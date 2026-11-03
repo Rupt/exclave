@@ -482,6 +482,7 @@ PROGS = (
     "xattrat",
     "readlink_fault",
     "listing",
+    "pkeys",
     "identity_nofollow",
     "rename_dots",
     "program_perm",

@@ -40,6 +40,19 @@ static inline unsigned long *frame_mask(void *uc) { return (unsigned long *)((ch
 /* ---------- copying from the program's memory with EFAULT fidelity (7.5.6) ---------- */
 /* process_vm_readv refused: copies go through a pipe (13 item 15) */
 static int no_readv;
+/* Whether this thread's PKRU, the program's once the handler has loaded it (program_keys), denies a key but 0 and is
+ * not the kernel's initial one, which denies every key a program has not opened, so that it has set its keys itself:
+ * process_vm_readv and process_vm_writev reach memory whatever its key, so a copy then goes through the pipe, whose
+ * write() and read() the kernel checks against the PKRU as it checks the syscall's own copy (7.5.6). */
+static int keys_restricted(void)
+{
+#if defined(__x86_64__)
+    unsigned p = C.pkru_off ? rdpkru() & ~3U : 0;
+    return p && p != (C.init_pkru & ~3U);
+#else
+    return 0;
+#endif
+}
 /* Where process_vm_readv is refused, EPERM under a seccomp profile that gates it on a capability, as Docker's does
  * before kernel 4.8, the copy goes through a pipe: write() from program memory and read() into it fault exactly as the
  * syscall's own copy would, EFAULT or short at the boundary (13 item 15). The pipe lives for the copy alone, a page a
@@ -71,7 +84,7 @@ static long copy_in(pid_t pid, void *dst, const void *src, size_t n)
 {
     unsigned long p = (unsigned long)src;
     if (!p) return -EFAULT;
-    if (!no_readv) {
+    if (!no_readv && !keys_restricted()) {
         struct iovec l = {dst, n}, r[2];
         unsigned long rn = 1;
         unsigned long first = 4096 - (p & 4095);
@@ -115,7 +128,7 @@ static long copy_out(pid_t pid, void *dst, const void *src, size_t n)
 {
     unsigned long p = (unsigned long)dst;
     if (!p) return -EFAULT;
-    if (!no_readv) {
+    if (!no_readv && !keys_restricted()) {
         struct iovec l = {unconst(src), n}, r[2];
         unsigned long rn = 1;
         unsigned long first = 4096 - (p & 4095);
@@ -577,7 +590,7 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
     for (long i = 0; i < envc;) {
         long k = envc - i, done = 0;
         if (k > 256) k = 256;
-        if (!no_readv) {
+        if (!no_readv && !keys_restricted()) {
             for (long j = 0; j < k; j++) {
                 riov[j].iov_base = env[i + j];
                 riov[j].iov_len = sizeof head;
@@ -1892,6 +1905,25 @@ static const char *sysname(int nr)
     }
 }
 
+/* The program's PKRU, loaded from the frame the kernel saved: a handler starts with the kernel's own, which denies
+ * keys a program may have allowed itself, and a syscall the handler issues into the program's memory is checked
+ * against the thread's, so that it answers as the program's own would (7.5.6). Key 0, the launcher's memory, stays
+ * open to the handler; the return through the frame restores the program's PKRU as it was. */
+static void program_keys(void *uc)
+{
+#if defined(__x86_64__)
+    if (!C.pkru_off) return;
+    const char *fp = *(char *const *)((char *)uc + UC_FPREGS_OFF);
+    if (!fp || *(const unsigned *)(fp + 464) != FP_XSTATE_MAGIC1) return;
+    if (!(*(const unsigned long *)(fp + 472) >> XFEATURE_PKRU & 1)) return;
+    /* a component the header does not mark is in its initial state, which for PKRU is every key open */
+    unsigned pkru = *(const unsigned long *)(fp + 512) >> XFEATURE_PKRU & 1 ? *(const unsigned *)(fp + C.pkru_off) : 0;
+    wrpkru(pkru & ~3U);
+#else
+    (void)uc;
+#endif
+}
+
 static void on_sigsys(int sig, void *info, void *uc)
 {
     (void)sig; /* SIGSYS: the handler is installed for nothing else */
@@ -1903,6 +1935,7 @@ static void on_sigsys(int sig, void *info, void *uc)
         sys_tgkill((pid_t)sys_getpid(), (pid_t)sys_gettid(), SIGSYS);
         return;
     }
+    program_keys(uc);
     int nr = *(int *)((char *)info + SI_SYSCALL_OFF);
     unsigned long ip = *(unsigned long *)((char *)info + SI_CALL_ADDR_OFF);
     pid_t pid = (pid_t)sys_getpid(), tid = (pid_t)sys_gettid();
@@ -1932,6 +1965,13 @@ __asm__(".text\n.globl sig_restorer\n.type sig_restorer,%function\nsig_restorer:
 
 void handler_install(void)
 {
+#if defined(__x86_64__)
+    /* OSPKE, cpuid leaf 7's ecx bit 4: the kernel gives protection keys, and PKRU is component 9 of XSAVE */
+    if (cpuid(0, 0).a >= 0xd && cpuid(7, 0).c >> 4 & 1) {
+        C.pkru_off = cpuid(0xd, XFEATURE_PKRU).b;
+        C.init_pkru = rdpkru(); /* the launcher has set none: the kernel's initial PKRU */
+    }
+#endif
     struct {
         void *h;
         unsigned long flags;

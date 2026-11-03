@@ -175,7 +175,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 98 named tests, most of them programs that
+- **The regression suite**: 99 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1631,6 +1631,21 @@ capability, the handler copies through a pipe made for the copy alone,
 whose `write` and `read` fault exactly as the kernel's own copy would;
 the cost is 13 item 15.
 
+The kernel checks a thread's access to memory against its protection
+keys, x86-64's PKRU, and a signal handler starts with the kernel's own
+PKRU, which denies keys a program may have opened for itself. The
+handler loads the program's from the XSAVE area of the frame the kernel
+saved, key 0, the launcher's memory, kept open, so that a syscall it
+issues into the program's buffer is checked as the program's own would
+be; and while the program has set keys of its own, a PKRU that denies
+some key and is not the one a process starts with, it copies through
+the pipe, since `process_vm_readv` and `process_vm_writev` reach
+memory whatever its key, where `write` and `read` are checked, the
+pipe's cost of 13 item 15 on that program alone. A buffer under
+a key the program may write is written, and one under a key it denied
+is `EFAULT`, as natively (`protection_keys`). aarch64's keys are 13
+item 52.
+
 ### 7.6 Identity
 
 For a wrapped program the kernel runs the launcher under the program's
@@ -2698,7 +2713,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 98 named regressions and every oracle its kernel can run; 17
+suite's 99 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher
 inside its copy of the exclave (`scripts/reproduce`, 10.5) and
 compares its bytes with the reference machine's build; a row whose
@@ -3193,6 +3208,14 @@ and stay fixed.
     either and the program is killed. A handler
     that uses more than a few hundred bytes beside a small alternate
     stack is the shape to avoid.
+52. **aarch64's protection keys are not the program's in the handler.**
+    The permission overlay of Arm's FEAT_S1POE, `POR_EL0`, is to aarch64
+    what PKRU is to x86-64 (7.5.6), and the handler does not load the
+    program's from the frame's `poe_context`: no machine here has the
+    feature to test it on. A syscall the handler issues into a buffer
+    under an overlay key other than 0 would be checked against the
+    kernel's own `POR_EL0`, and a copy into one would pass where the
+    program denied it.
 
 ### 13.1 Debugging and profiling recipe
 
@@ -4211,7 +4234,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus nineteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones` and `memfd_exec` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 98 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 99 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

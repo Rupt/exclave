@@ -15,15 +15,6 @@ int isa_supported(const char *isa, const unsigned long *auxv)
     return -1;
 }
 #else
-struct cpuid {
-    unsigned a, b, c, d;
-};
-static struct cpuid cpuid(unsigned leaf, unsigned sub)
-{
-    struct cpuid r;
-    __asm__ volatile("cpuid" : "=a"(r.a), "=b"(r.b), "=c"(r.c), "=d"(r.d) : "a"(leaf), "c"(sub));
-    return r;
-}
 
 /* XCR0, the state components the kernel has enabled; xgetbv faults unless cpuid says OSXSAVE */
 static unsigned long xgetbv0(void)

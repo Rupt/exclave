@@ -625,6 +625,34 @@ def readlink_bad_buffer(ctx: Ctx) -> None:
 
 
 @test
+def protection_keys(ctx: Ctx) -> None:
+    """7.5.6: a syscall into a buffer under a protection key answers as the program's own would.
+
+    A key the program opened for itself is written, by a call the handler issues (stat,
+    getdents64) and by one it copies out (readlink, getcwd); a key whose writes it denied is
+    EFAULT for all four.
+    """
+    bindir = os.path.dirname(ctx.vbin("sh"))
+    links = sorted(
+        n
+        for n in os.listdir(os.path.join(ctx.root, bindir.lstrip("/")))
+        if os.path.islink(os.path.join(ctx.root, bindir.lstrip("/"), n))
+    )
+    if not links:
+        skip(f"no symlink in {bindir}")
+    rc, out, err = inside(
+        ctx, os.path.join(ctx.progs, "pkeys"), [bindir, bindir, f"{bindir}/{links[0]}"]
+    )
+    if out == "no protection keys\n":
+        skip("the machine or its kernel has no protection keys")
+    calls = ("stat", "getdents64", "readlink", "getcwd")
+    want = [f"{c} into a keyed buffer: {'0' if c == 'stat' else '1'} 0" for c in calls] + [
+        f"{c} into a keyed buffer the program may not write: -1 14" for c in calls
+    ]
+    expect(rc == 0 and out.splitlines() == want, f"rc={rc} {out!r} {err!r}")
+
+
+@test
 def listings_hide_real(ctx: Ctx) -> None:
     """8.3: a listing of a wrapped directory is upstream's, as the kernel would give it.
 
