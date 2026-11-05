@@ -9,7 +9,8 @@
 #   EXCLAVE_TEST_INPUTS=DIR scripts/extra DIR/gcc13.exclave DIR/alpine.exclave DIR/f42.exclave DIR/clang.exclave
 #   EXCLAVE_TEST_INPUTS=DIR EXCLAVE_TEST_SRC=DIR/src EXCLAVE_TEST_SQLITE=DIR/src/sqlite3.c EXCLAVE_TEST_RPMS=DIR/el7 EXCLAVE_TEST_ARM64=DIR/gcc13-arm64.exclave scripts/examples DIR/realsoft.exclave
 # The package sets are the ones DESIGN.md measures (10.1, 12, 16.8): the noble gcc-13 and clang-18 closures,
-# the noble Essential set with libnss-sss for test/nss_test.py,
+# the noble Essential set with libnss-sss for test/nss_test.py and with python3-minimal, GLib's tools, the MIME
+# database's generator and GNOME's schemas for test/caches_test.py,
 # Alpine 3.21's gcc, Fedora 42's gcc, the noble gcc, g++, make and python3 that test/realsoft.py builds with,
 # CentOS 7's glibc for the sysroot of 9, the noble arm64 gcc-13 closure, made into an exclave with the aarch64
 # launcher built here (10.1) for the emulated rows and for the gate on an aarch64 machine, the exclaves of

@@ -205,8 +205,9 @@ The loop that has served well, in the order it pays:
   measures it again, and a number the current code has not produced is
   better left out than quoted.
 - **The gate.** `scripts/gate EXCLAVE` (`EXCLAVE_TEST_INPUTS=DIR`,
-  the directory `scripts/inputs` filled, adds the Docker profile and the
-  SSSD lookup on its `sss.exclave`) runs,
+  the directory `scripts/inputs` filled, adds the Docker profile, the
+  SSSD lookup on its `sss.exclave` and `exclave caches` on its
+  `caches.exclave`) runs,
   of the code checks, the unit tests, the stack budget, the command's
   Go tests, unpack's and the fetchers' tests, the suite, the oracles and the syscall probe on
   the one exclave, the ones the changed paths can affect (`--full`: all
@@ -271,8 +272,8 @@ mirror configured on this machine is `http://gb.archive.ubuntu.com/ubuntu`;
 
 Every development input is made by `scripts/inputs DIR`, which holds the
 exact fetch commands: the gcc, Alpine, Fedora and clang exclaves of the
-gate, the arm64 gcc exclave, the SSSD lookup's `sss.exclave` and
-Docker's seccomp profile, from the
+gate, the arm64 gcc exclave, the SSSD lookup's `sss.exclave`, the
+caches test's `caches.exclave` and Docker's seccomp profile, from the
 package archives and GitHub alone, which is all the CI workflow
 fetches; `scripts/inputs DIR examples` adds the examples' inputs, the
 CentOS 7 rpms for `test/sysroot.py`, the workloads' exclaves and the

@@ -263,6 +263,7 @@ scripts/fetch-apks --key alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub --o
 scripts/fetch-rpms --keyring RPM-GPG-KEY-fedora-42-primary --repo URL --out rpms gcc glibc-devel   # Fedora, Rocky, CentOS: any repository with repodata/; every rpm checked against the key, repomd.xml where signed
 scripts/unpack gcc.exclave debs/*.deb                     # package files -> an unwrapped exclave, a directory you may edit; .apk and .rpm files likewise
 scripts/exclave wrap gcc.exclave                          # wrap every executable, run the static check, record the hashes in .exclave/hashes
+scripts/exclave caches py.exclave                         # Python bytecode, GSettings schemas and the MIME database, made by the tree's own programs inside it
 ln -s tree/usr/bin/gcc-13 gcc.exclave/gcc                    # a shortcut, if you want one
 gcc.exclave/gcc -O2 hello.c -o hello                         # any executable in tree/ runs by path
 gcc.exclave/tree/usr/bin/sh -c 'as --version'                # the exclave's own shell, with the exclave's PATH
@@ -428,7 +429,7 @@ each test establishes, 19 the decisions a change is expected to respect.
 
 ```
 scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, clang-format, clang-tidy and gcc's strict warnings; --fix lets them correct
-scripts/inputs build/inputs   # the test inputs: the four exclaves, the arm64 gcc exclave, the lookup test's exclave and Docker's seccomp profile, from the package archives and GitHub; skips what is present
+scripts/inputs build/inputs   # the test inputs: the four exclaves, the arm64 gcc exclave, the lookup and caches tests' exclaves and Docker's seccomp profile, from the package archives and GitHub; skips what is present
 scripts/inputs build/inputs examples   # the examples' inputs too, some from their authors' sites
 D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave   # the commit gate: of the code checks, unit tests, stack budget, the command's Go tests, unpack's and the fetchers' tests, the suite, the oracles, the syscall probe and the Docker profile run, the steps the change can affect, two at a time (--jobs N); --full runs all of them
 D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # beyond the gate, when asked: the suite, the debug launcher, the oracles and the probe on every exclave given; the plain-label suite, the fuzz budget, the release test and, with EXCLAVE_TEST_OLD=DIR, the compatibility test on the first
@@ -506,7 +507,9 @@ test/exercise.py     one program run under bwrap and under the launcher, the ans
 test/docker_profile.py   an exclave under Docker's default seccomp profile, which scripts/inputs fetches
 test/matrix.py       the kernel matrix in VMs, carrying the pinned Python for each; test/vm_run.py one VM
 test/sysroot.py      a glibc sysroot as a data directory and an output built against it with gcc and clang, for the matrix to run natively
-test/bytecode.py     Python's bytecode made by the two-phase pattern, a cache only the tree's own binary can make, timed before and after
+test/bytecode.py     Python's bytecode made by exclave caches, a cache only the tree's own binary can make, timed before and after
+test/caches_test.py  exclave caches on scripts/inputs's caches.exclave: Python's bytecode, GSettings schemas and the MIME database, used before and after
+test/nss_test.py     a user from SSSD looked up inside, through the exclave's own lookup module, in a user namespace
 test/realsoft.py     real projects built inside and outside an exclave; test/bench.py the performance table
 test/workloads.py    valgrind, poppler, cargo, CMake, Java and Python in their own exclaves, against the kernel
 test/syscalls.py     every kernel syscall classified; test/stackcheck.py the stack budget

@@ -558,9 +558,11 @@ func synthesise(rootPath string, packages []*Package, log logger) error {
 // interests are the trigger interests, matched by the longest pattern: what a maintainer script
 // would have built there and the tree lacks; "" for what nothing needs, or what a rule makes.
 var interests = [][2]string{
-	{"/usr/lib/python3*", "Python bytecode: __pycache__ is not generated, so Python compiles each module on import"},
-	{"/usr/share/glib-2.0/schemas", "GSettings schemas are not compiled (gschemas.compiled)"},
-	{"/usr/share/mime", "the MIME database is not built (mime.cache and the index files)"},
+	{"/usr/lib/python3*", "Python bytecode: __pycache__ is not generated, so Python compiles each module on import; " +
+		"exclave caches makes it"},
+	{"/usr/share/glib-2.0/schemas", "GSettings schemas are not compiled (gschemas.compiled); " +
+		"exclave caches compiles them"},
+	{"/usr/share/mime", "the MIME database is not built (mime.cache and the index files); exclave caches builds it"},
 	{"/usr/share/fonts*", "font caches are not built; fontconfig builds its own under the user's cache"},
 	{"/etc/fonts*", "font caches are not built; fontconfig builds its own under the user's cache"},
 	{"/usr/share/icons*", "icon caches are not built (icon-theme.cache)"},

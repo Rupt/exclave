@@ -46,6 +46,7 @@ STEPS: dict[str, tuple[str, ...]] = {
         "test/docker_profile.py",
     ),
     "nss": ("test/nss_test.py",),
+    "caches": ("test/caches_test.py",),
 }
 # What everything runs on: the launcher and its build, the licence it carries, the Python every
 # driver runs on, the Go the commands are built by, the gate and this derivation.

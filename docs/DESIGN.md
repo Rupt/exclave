@@ -2155,6 +2155,7 @@ arguments a download needs, which its `--help` lists:
 ```
 exclave wrap EXCLAVE                wrap an exclave (idempotent; a bare directory holding tree/ becomes an exclave)
 exclave unwrap EXCLAVE              unwrap an exclave again
+exclave caches EXCLAVE              Python bytecode, GSettings schemas and the MIME database, made by the tree's own generators inside the wrapped exclave (10.1)
 exclave check EXCLAVE [LOG...]      wrappers, the tree against the hashes file, the static check, and with EXCLAVE_LOG files the dynamic check
 exclave prune EXCLAVE LOG...        drop what no logged workload touched
 exclave format [--check] FILE...    canonical form of a manifest or hashes file; --check only reports
@@ -2283,25 +2284,49 @@ refused. From `.deb` files, in five steps:
    write), GSettings schemas, the MIME database, font and icon caches,
    the desktop database, GIO and gdk-pixbuf module caches, TeX's index
    and formats; an interest nothing needs, a manual-page index, is
-   passed over. A `postinst` that calls `update-alternatives` in a form
+   passed over, and the notes of the three `exclave caches` makes name
+   it. A `postinst` that calls `update-alternatives` in a form
    the rule cannot read, from shell variables or in a loop, is noted
    too, since its alternatives are not made. Failed opens in an
    `EXCLAVE_LOG` then show what an exclave tried and could not find.
 
-   A cache only the tree's own binary can make, Python's bytecode,
-   compiled GSettings schemas, a locale from `localedef`, TeX's
-   formats, is made in two phases, by the maker and never by `unpack`:
-   wrap; run the generator inside the exclave, writing to a host
-   staging directory; copy its output into the unwrapped tree; wrap
-   again. The maintainer script is still never run, the maker chooses
-   the generator, and the tree hash records the output. `test/bytecode.py`
-   does it for Python: `python3 -m compileall` inside the exclave with
-   `PYTHONPYCACHEPREFIX` on a staging directory, whose tree mirrors the
-   sources' directories without the `__pycache__` level, copied back
-   under it. Measured October 2026 on the realsoft exclave, six standard
-   modules import in 33 ms with the bytecode in the tree against 135 ms
-   without; `PYTHONPYCACHEPREFIX` on a host directory at run time, the
-   zero-code alternative, gives 31 ms after its first run (13 item 48).
+   A cache only the tree's own binary can make is made after `wrap`,
+   by `exclave caches EXCLAVE`, which runs the tree's own generators
+   inside the exclave, under its launcher, and copies what they make
+   into the tree; the maintainer script is still never run. It makes
+   three: Python's bytecode, by each `python3.N` the tree holds, with
+   `compileall` over its standard library and the distribution's
+   package directory; GSettings schemas, by `glib-compile-schemas`
+   into `gschemas.compiled`; and the MIME database, by
+   `update-mime-database`. A generator runs from the exclave's shell
+   by its virtual path, with a fixed environment, and writes to a
+   staging directory in `.exclave/`, which is the host's (8.1 rule 6):
+   `compileall` through `-X pycache_prefix`, whose tree mirrors the
+   sources' directories without the `__pycache__` level, given back
+   under it; the schema compiler through `--targetdir`; and the MIME
+   generator on a copy of `/usr/share/mime/packages`, beside which it
+   writes. Python's bytecode is checked against its source's hash
+   rather than its time, so a copy that loses the times, `cp -r` or a
+   checkout, keeps it valid, and an edited source is compiled again;
+   `-B` keeps the interpreter's own imports from writing theirs first
+   by the time, which `compileall` would take as up to date. A file
+   the generator made replaces the tree's where they differ, through a
+   new file renamed over it, since a tree's files may be hard links
+   shared with a copy (6.1), so a second run changes nothing and a run
+   after the tree changed brings the caches up to date; the tree hash
+   is then recorded again. The generators run on the host's machine,
+   so an exclave of another architecture is refused, its caches made
+   on a machine of its own. On Ubuntu 24.04's `python3-minimal`, ten
+   standard modules import in 110 ms without the bytecode and 23 ms
+   with it; `PYTHONPYCACHEPREFIX` on a host directory at run time, the
+   alternative that needs no command, gives 21 ms after its first run
+   but writes outside the exclave (`test/bytecode.py`, measured
+   November 2026). The other caches the notes name, the GIO and
+   gdk-pixbuf module caches, fonts', icons', locales from `localedef`
+   and TeX's, are made by hand the same way: run the generator inside
+   the exclave writing to a host directory, copy its output into the
+   tree, and record the tree hash with `exclave unwrap` and `wrap`
+   (13 item 48).
 4. **Strip** the volatile directories (8.1). Their empty placeholders,
    the conventional host names' and the eight identity files (8.4) are
    added by `wrap` where the tree lacks them.
@@ -3189,17 +3214,18 @@ and stay fixed.
     packages, whose texts land in `usr/share/licenses/` and survive
     pruning (10.4).
 
-48. **A cache only a tree's own binary can make is not made by
-    `unpack`.** Python bytecode, compiled GSettings schemas, the MIME
-    database, GIO and gdk-pixbuf module caches, locales from
-    `localedef` and TeX's formats are generated by programs in the
-    tree, which `unpack` never runs (10.1). `unpack` names each from
-    the packages' trigger interests; the maker makes it in two phases,
-    the generator run inside the exclave writing to a host directory
-    and its output copied into the unwrapped tree, as `test/bytecode.py`
-    does for Python. Without it, Python compiles each module on import,
-    about four times the import time of the standard library's larger
-    modules (10.1), and a GLib program finds no schemas.
+48. **Some caches only a tree's own binary can make are made by
+    hand.** `unpack` and `wrap` run nothing of the tree (10.1), and
+    `exclave caches`, which runs the tree's generators inside the
+    exclave, makes three: Python bytecode, GSettings schemas and the
+    MIME database. Without it Python compiles each module on import,
+    nearly five times the import time of ten standard modules, and a
+    GLib program finds no schemas. The GIO and gdk-pixbuf module
+    caches, font and icon caches, locales from `localedef` and TeX's
+    formats are not among the three; `unpack` names each from the
+    packages' trigger interests, and the maker runs its generator
+    inside the exclave the same way (10.1). `exclave caches` runs only
+    on a machine of the exclave's architecture.
 
 49. **Shadow stacks are off, by glibc's choice.** The kernel offers
     user shadow stacks on the reference machine (`user_shstk`, kernel
@@ -4219,7 +4245,8 @@ meaning items 4 and 7.
      made by hand, `wrap`'s refusals, `ld.so.cache` written as the
      tree's own `ldconfig` writes it, byte for byte on copies altered to
      exercise each rule, and the loader's table of directories against
-     what it prints, a wrap with the other machine's launcher, the
+     what it prints, a wrap with the other machine's launcher, which
+     `exclave caches` refuses, as it refuses an exclave not wrapped, the
      exclave's README and version;
    - *the tool's check and prune*: the static check's model of the
      loader, a tree naming two loaders, an unreadable file, and
@@ -4341,8 +4368,11 @@ EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave
 24.04's gcc-13 closure, which is the gate's, Alpine 3.21's gcc, Fedora
 42's gcc and Ubuntu 24.04's clang-18 closure, which `scripts/extra`
 takes beside it; the arm64 gcc-13 exclave; `sss.exclave`, Ubuntu
-24.04's Essential set with `libnss-sss`, for `test/nss_test.py`, made
-for the machine's own architecture since its programs run there; and
+24.04's Essential set with `libnss-sss`, for `test/nss_test.py`, and
+`caches.exclave`, with `python3-minimal`, GLib's tools,
+`shared-mime-info` and GNOME's schemas, for `test/caches_test.py`,
+each made for the machine's own architecture since its programs run
+there; and
 Docker's default seccomp profile, from the distributions' package archives and
 GitHub alone, which is all a continuous-integration run fetches.
 `scripts/inputs DIR examples` makes what the example runs take as
@@ -4469,7 +4499,16 @@ its time, ok, SKIP or FAIL:
   namespace, a stand-in for SSSD answers one user on a tmpfs at
   `/var/lib`, `getent` inside finds the user by name and by uid
   through the tree's module, and `exclave check` warns of the module
-  the exclave lacks and not of the one it ships.
+  the exclave lacks and not of the one it ships; and
+  `test/caches_test.py` on its `caches.exclave`, Ubuntu's
+  `python3-minimal`, GLib's tools, `shared-mime-info` and GNOME's
+  schemas: before `exclave caches` and after it, a module imports from
+  its source and then from bytecode checked by the source's hash,
+  `gsettings` finds no schemas and then a key's default, and GIO takes
+  an HTML file for plain text and then for HTML; `exclave check`
+  passes on the tree hash recorded, a second run changes nothing, and
+  the given exclave, whose files the copy shares by hard links, is
+  left as it was.
 
 Every driver runs `build/launcher` on a copy of its own, so the exclave
 given to the gate is never run as it is nor written. The suite wraps a
@@ -4757,8 +4796,7 @@ the gate cannot afford. Each runs when its input variable is set:
   glibc held as a data directory (9), with every compiler the exclave
   has, gcc and clang.
 - python3 in the exclave: `test/bytecode.py` makes Python's bytecode
-  by the two-phase pattern (10.1) and times the imports before and
-  after.
+  with `exclave caches` (10.1) and times the imports before and after.
 - `EXCLAVE_TEST_INPUTS`: `test/workloads.py` runs seven real workloads
   in exclaves of their own, each in the same work directory under
   `bwrap` with the tree read-only at `/` and under the launcher,
@@ -4834,7 +4872,8 @@ questions.
    refusal of a soname only a prior `dlopen` by path provides (10.3).
    Further real software decides which of the tool's synthesis gaps
    close next (10.1): `unpack` does not generate
-   locales, GLib schemas, MIME or font caches, or Python bytecode, and a
+   locales, font caches or the other caches `exclave caches` does not
+   make (Python bytecode, GLib schemas and the MIME database), and a
    gap closes when a real exclave needs it, as a rule in the synthesis
    table rather than an option. `unpack`'s notes name the caches a tree
    lacks from the packages' trigger interests, and failed opens in an
@@ -5059,6 +5098,13 @@ specified.
   directories are read from the loader file, so an exclave of either
   architecture is made on either, and a package's programs run only
   inside an exclave (10.1, 10.3, 13 item 32).
+- **The caches only a tree's own programs can make are made by
+  `exclave caches`, after `wrap`, inside the exclave**: Python's
+  bytecode, GSettings schemas and the MIME database have no writer but
+  their generators, and running them under the exclave's launcher keeps
+  a package's programs inside an exclave, while a command of its own
+  keeps `unpack` and `wrap` the same on every machine (10.1, 13 item
+  48).
 - **The tool applies `host` records as the launcher does**, by longest
   prefix (10.3).
 - **A foreign ELF object is a warning, and a tree stays readable by its

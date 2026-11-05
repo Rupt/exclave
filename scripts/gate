@@ -14,8 +14,8 @@
 # command's Go unit tests and fuzz seeds (go test), unpack's tests on hostile package files (test/unpack_test.py), the
 # fetchers' signature checks (test/fetch_test.py), and on the exclave given the suite, the resolution oracle, the
 # namespace oracle, the syscall probe and, when EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled, the
-# Docker profile run on its src/docker-seccomp.json and a user from SSSD looked up in its sss.exclave
-# (test/nss_test.py). No step touches the network. Everything slower or broader is scripts/extra's and
+# Docker profile run on its src/docker-seccomp.json, a user from SSSD looked up in its sss.exclave
+# (test/nss_test.py) and exclave caches on its caches.exclave (test/caches_test.py). No step touches the network. Everything slower or broader is scripts/extra's and
 # scripts/matrix's, run when the user asks. The steps run two at a time, or N with --jobs, so that the machine
 # stays usable meanwhile; every driver runs build/launcher on a copy of its own (the suite wraps one from the
 # exclave's tree, the oracles keep test/tree.py's kept_worlds, the others take its fresh_exclave), so the exclave
@@ -95,7 +95,7 @@ has() {
     return 1
 } # has STEP: whether the change reaches it
 if $full || has every; then
-    steps="unit stack go unpack fetch suite oracles nss $steps"
+    steps="unit stack go unpack fetch suite oracles nss caches $steps"
     # the resolution oracle's mazes from a seed of the moment rather than the commit's, printed on a failure
     $full && seed=$(($(date +%s) % 100000))
     echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
@@ -129,6 +129,11 @@ if has nss; then # a user from SSSD looked up inside, through the exclave's own 
     if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
         step nss py "$here/nss_test.py" --exclave "$EXCLAVE_TEST_INPUTS/sss.exclave" --work "$out/nss"
     else echo "nss: EXCLAVE_TEST_INPUTS not set; skipped"; fi
+fi
+if has caches; then # the caches only a tree's own programs make, made inside by exclave caches (13 item 48)
+    if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
+        step caches py "$here/caches_test.py" --exclave "$EXCLAVE_TEST_INPUTS/caches.exclave" --work "$out/caches"
+    else echo "caches: EXCLAVE_TEST_INPUTS not set; skipped"; fi
 fi
 wait
 report gate "$start"
