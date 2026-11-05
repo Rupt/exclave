@@ -103,7 +103,7 @@ static void own_from_tree(void)
 
 /* 8.1.5: the identity files and the default host directories join the host table unless an own record names one;
  * the table has room for them after the manifest's records by construction */
-static void host_default(const char *v)
+static void host_default(const char *v, int is_dir)
 {
     for (int j = 0; j < C.nown; j++)
         if (xstrcmp(C.own[j], v) == 0) return;
@@ -111,12 +111,13 @@ static void host_default(const char *v)
     C.host[C.nhost].v = v;
     C.host[C.nhost].r = v;
     C.host[C.nhost].is_file = 0;
+    C.host[C.nhost].is_default_dir = is_dir;
     C.nhost++;
 }
 static void identity_defaults(void)
 {
-    for (int i = 0; i < N_IDENTITY; i++) host_default(identity_files[i]);
-    for (int i = 0; i < N_HOST_DIRS; i++) host_default(host_dirs[i]);
+    for (int i = 0; i < N_IDENTITY; i++) host_default(identity_files[i], 0);
+    for (int i = 0; i < N_HOST_DIRS; i++) host_default(host_dirs[i], 1);
 }
 
 /* 6.2: a data directory is never executed and never a loader */
@@ -128,7 +129,7 @@ int vis_in_data(const char *v)
 }
 
 /* identity files: link text recorded at startup for readlink fidelity (8.4) */
-static const char *id_link[MAX_HOST_RECORDS + N_IDENTITY + N_HOST_DIRS]; /* indexed as C.host */
+static const char *id_link[MAX_HOST_RECORDS + N_IDENTITY + 2 * N_HOST_DIRS]; /* indexed as C.host */
 
 /* resolves host path p's symlink chain on the host, first being p's lstat, already made: 1 with the final path in out
  * and the first link's text in link, 0 when a link cannot be read or the chain is longer than 40 links */
@@ -190,7 +191,8 @@ void vis_init(void)
     identity_defaults();
     own_from_tree();
     /* identity files and host records: resolve each on the host; drop the ones the host lacks */
-    int n = 0;
+    int n = 0, nextra = 0;
+    const char *extra[N_HOST_DIRS] = {0};
     for (int i = 0; i < C.nhost; i++) {
         struct kstat st;
         if (sys_lstat(C.host[i].v, &st) < 0) {
@@ -204,6 +206,25 @@ void vis_init(void)
             n++;
             continue;
         }
+        /* a default directory that is a host link to a directory: the name stays a directory record, and the directory
+         * the host resolves it to, as the kernel names it, is the host's as well, so that the walk, which follows the
+         * link's text in virtual space (7.4.4), reaches it */
+        if (C.host[i].is_default_dir && (st.st_mode & S_IFMT) == S_IFLNK) {
+            static char dir[PATH_MAX];
+            long fd = sys_open(C.host[i].v, O_PATH | O_CLOEXEC | O_DIRECTORY, 0);
+            long len = fd >= 0 ? fd_real_path((int)fd, dir) : -1;
+            if (fd >= 0) sys_close((int)fd);
+            if (len > 0 && dir[0] == '/') {
+                C.host[n] = C.host[i];
+                C.host[n].is_file = 0;
+                id_link[n] = 0;
+                n++;
+                /* one at most for each default directory, by construction */
+                if (nextra >= N_HOST_DIRS) die("host table full", dir, 0);
+                extra[nextra++] = arena_str(dir, (size_t)len);
+                continue;
+            }
+        }
         static char out[PATH_MAX], link[PATH_MAX];
         if (!host_resolve(C.host[i].v, &st, out, link)) {
             log_msg("host path unresolvable, using the exclave's", C.host[i].v);
@@ -212,7 +233,15 @@ void vis_init(void)
         C.host[n].v = C.host[i].v;
         C.host[n].r = arena_str(out, xstrlen(out));
         C.host[n].is_file = 1;
+        C.host[n].is_default_dir = 0;
         id_link[n] = link[0] ? arena_str(link, xstrlen(link)) : 0;
+        n++;
+    }
+    for (int i = 0; i < nextra; i++) {
+        C.host[n].v = C.host[n].r = extra[i];
+        C.host[n].is_file = 0;
+        C.host[n].is_default_dir = 1;
+        id_link[n] = 0;
         n++;
     }
     C.nhost = n;
@@ -284,6 +313,12 @@ static void rule_build(void)
         unsigned len = (unsigned)xstrlen(v);
         if (!C.host[i].is_file) {
             rule_add(v, len, R_HOSTDIR, -1);
+            /* a default directory's way is made of directories, as an identity file's is (8.1.5) */
+            if (C.host[i].is_default_dir) {
+                for (unsigned k = 1; k < len; k++)
+                    if (v[k] == '/') rule_add(v, k, R_LEADS, -1);
+                if (v[0] == '/') root_flags |= R_LEADS;
+            }
             continue;
         }
         rule_add(v, len, R_HOSTFILE, i);

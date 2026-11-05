@@ -169,6 +169,9 @@ struct hostmap {
     const char *v;
     const char *r;
     int is_file;
+    /* a default host directory (8.1.5): the directories on the way to it are directories, as an identity file's are,
+     * and a host link there is followed to a directory that is the host's too */
+    int is_default_dir;
 };
 
 struct exclave {
@@ -196,8 +199,9 @@ struct exclave {
     /* the manifest's own records (at most 256), then every non-empty top-level entry of the tree (at most 256) */
     const char *own[MAX_OWN_RECORDS + MAX_TOP_LEVEL];
     int nown;
-    struct hostmap host[MAX_HOST_RECORDS + N_IDENTITY + N_HOST_DIRS];
-    /* the manifest's host records (at most 32), then the identity files (8.4) and the default host directories */
+    struct hostmap host[MAX_HOST_RECORDS + N_IDENTITY + 2 * N_HOST_DIRS];
+    /* the manifest's host records (at most 32), then the identity files (8.4) and the default host directories, each
+     * with the directory a host link there resolves to */
     int nhost;
     const char *data[MAX_DATA_RECORDS];
     int ndata; /* data directories: never executed, never a loader (6.2) */

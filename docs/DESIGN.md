@@ -1787,10 +1787,14 @@ it, and every part rules it as it rules that directory.
    lacks it, and the path walk treats the directories on the way to an
    identity file as directories whether or not the exclave ships them
    (8.4). SSSD's state directory, `/var/lib/sss`, is the host's by
-   default the same way: SSSD's lookup module finds the daemon there,
-   by its socket and its memory cache, where the host's other directory
-   services keep theirs under `/run` (8.4). `own` on it removes it, and
-   the exclave answers where the host lacks it.
+   default the same way, the directories on the way to it included:
+   SSSD's lookup module finds the daemon there, by its socket and its
+   memory cache, where the host's other directory services keep theirs
+   under `/run` (8.4). Where the host's `/var/lib/sss` is a link to a
+   directory, the directory it resolves to on the host is the host's
+   too, since the walk follows the link's text in virtual space
+   (7.4.4). `own` on it removes it, and the exclave answers where the
+   host lacks it.
 6. **The exclave's own directory** is the host's, with the directories
    on the way to it, whatever prefix it lives under: a program that
    locates its files relative to its real executable path, as gcc does
@@ -4238,7 +4242,8 @@ meaning items 4 and 7.
      8.1 decides them, the root and the exclave's own directory as the
      walk sees them, identity files, the no-follow calls on an
      identity link against the native run of the same program, SSSD's
-     directory the host's and `own` giving it back, the
+     directory the host's, through a host link to a directory and from a
+     tree without `/var/lib`, and `own` giving it back, the
      log's names and escapes, and the log's path refused when relative
      or inside the exclave;
    - *the tool's unpack and wrap*: the three package readers, a tree

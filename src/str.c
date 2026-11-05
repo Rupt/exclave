@@ -69,8 +69,8 @@ int starts_dir(const char *s, const char *pfx)
  * bytes. An array as long as the environment or the arguments is mapped instead, since nothing bounds it here. */
 #define ARENA_SIZE                                                                                                     \
     ((2 + MAX_OWN_RECORDS + MAX_HOST_RECORDS + MAX_DATA_RECORDS + MANIFEST_FIELDS) * (MANIFEST_FIELD_MAX + 17) +       \
-     MAX_TOP_LEVEL * (NAME_MAX + 18) + (MAX_HOST_RECORDS + N_IDENTITY + N_HOST_DIRS) * 2 * (PATH_MAX + 16) + 4 * 64 +  \
-     3 * (PATH_MAX + 32) + 6 * (BINPRM_BUF_SIZE + 17 + 2 * (PATH_MAX + 16)))
+     MAX_TOP_LEVEL * (NAME_MAX + 18) + (MAX_HOST_RECORDS + N_IDENTITY + 2 * N_HOST_DIRS) * 2 * (PATH_MAX + 16) +       \
+     4 * 64 + 3 * (PATH_MAX + 32) + 6 * (BINPRM_BUF_SIZE + 17 + 2 * (PATH_MAX + 16)))
 static char arena[ARENA_SIZE];
 static size_t arena_used;
 void *arena_alloc(size_t n)

@@ -4,6 +4,7 @@ Run by test/run.py, on the fixtures test/suite.py makes.
 """
 
 import os
+import shutil
 import subprocess
 
 import tree
@@ -548,8 +549,11 @@ def directory_service_state(ctx: Ctx) -> None:
 
     SSSD's lookup module finds the daemon by its socket and memory cache under /var/lib/sss, which
     the tree's /var would otherwise hide, so a user the host knows from LDAP was unknown inside.
-    Made in a user namespace with a tmpfs on /var/lib holding a marker where the socket would be;
-    an own record on the directory makes it the tree's again. Skipped without user namespaces.
+    Made in a user namespace with a tmpfs on /var/lib holding a marker where the socket would be:
+    the directory is seen inside; an own record makes it the tree's again; a host link there to a
+    directory, by a relative or an absolute text, is followed to the host's directory; and a tree
+    with a /var but no /var/lib reaches it all the same, its way made of directories as an identity
+    file's is. Skipped without user namespaces.
     """
     if subprocess.run(
         ["unshare", "-Urm", "true"],
@@ -559,31 +563,60 @@ def directory_service_state(ctx: Ctx) -> None:
     ).returncode:
         skip("no user namespaces")
     pid = os.getpid()
-    ex2 = os.path.join(ctx.work, "sss.exclave")
-    copy_exclave(ctx.exclave, ex2)
-    with open(os.path.join(ex2, ".exclave", "manifest"), "w") as f:
+    owned = os.path.join(ctx.work, "sss-own.exclave")
+    copy_exclave(ctx.exclave, owned)
+    with open(os.path.join(owned, ".exclave", "manifest"), "w") as f:
         f.write('exclave 1\n\nown "/var/lib/sss"\n')
-    setup = (
-        "mount -t tmpfs tmpfs /var/lib && mkdir -p /var/lib/sss/pipes && "
-        f"echo sss-{pid} >/var/lib/sss/pipes/marker || exit 99"
+    bare = os.path.join(ctx.work, "sss-novarlib.exclave")
+    copy_exclave(ctx.exclave, bare)
+    shutil.rmtree(os.path.join(bare, "tree", "var", "lib"), ignore_errors=True)
+    expect(
+        os.path.isdir(os.path.join(bare, "tree", "var")), "the copy without /var/lib keeps its /var"
     )
+
+    def sh_of(ex: str) -> str:
+        return os.path.join(ex, "tree", ctx.vbin("sh").lstrip("/"))
+
     show = "cat /var/lib/sss/pipes/marker"
-    sh2 = os.path.join(ex2, "tree", ctx.vbin("sh").lstrip("/"))
-    cmd = f"{setup}; {wrapper(ctx, 'sh')} -c '{show}'; echo rc=$?; {sh2} -c '{show}'; echo rc=$?"
+    cases = [
+        ("a directory", "mkdir -p /var/lib/sss/pipes", wrapper(ctx, "sh"), f"sss-{pid}"),
+        ("a directory, own on it", ":", sh_of(owned), "rc=1"),
+        ("a directory, the tree without /var/lib", ":", sh_of(bare), f"sss-{pid}"),
+        (
+            "a relative link",
+            "rm -r /var/lib/sss && ln -s real /var/lib/sss",
+            wrapper(ctx, "sh"),
+            f"sss-{pid}",
+        ),
+        (
+            "an absolute link",
+            "rm /var/lib/sss && ln -s /var/lib/real /var/lib/sss",
+            wrapper(ctx, "sh"),
+            f"sss-{pid}",
+        ),
+    ]
+    script = (
+        "mount -t tmpfs tmpfs /var/lib && mkdir -p /var/lib/real/pipes && "
+        f"echo sss-{pid} >/var/lib/real/pipes/marker || exit 99; "
+    )
+    for i, (_what, prepare, sh, _want) in enumerate(cases):
+        mark = f" && echo sss-{pid} >/var/lib/sss/pipes/marker" if i == 0 else ""
+        script += f"{prepare}{mark}; echo '== {i}'; {sh} -c '{show}' 2>&1 || echo rc=$?; "
     rc, out, err = run(
-        ["unshare", "-Urm", "sh", "-c", cmd], cwd=ctx.work, env=dict(ctx.env, PATH="/usr/bin:/bin")
+        ["unshare", "-Urm", "sh", "-c", script],
+        cwd=ctx.work,
+        env=dict(ctx.env, PATH="/usr/bin:/bin"),
     )
     if rc == 99:
         skip(f"no tmpfs on /var/lib in a user namespace here: {err.strip()[-120:]}")
-    lines = out.split("\n")
-    expect(
-        lines[:2] == [f"sss-{pid}", "rc=0"],
-        f"the host's /var/lib/sss is seen inside: {out!r} {err!r}",
-    )
-    expect(
-        lines[2:] == ["rc=1", ""] and "No such file" in err,
-        f'own "/var/lib/sss" gives the directory back to the tree: {out!r} {err!r}',
-    )
+    got = {}
+    for block in out.split("== ")[1:]:
+        n, _, rest = block.partition("\n")
+        got[int(n)] = rest.strip().split("\n")
+    for i, (what, _prepare, _sh, want) in enumerate(cases):
+        expect(
+            want in got.get(i, []), f"/var/lib/sss on the host as {what}: {got.get(i)!r} {err!r}"
+        )
 
 
 @test
