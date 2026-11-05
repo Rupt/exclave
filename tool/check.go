@@ -507,6 +507,8 @@ func dynamicCheck(ex string, logs []string, own *ownership) *report {
 		}
 	}
 	sort.Strings(mods)
+	musl := treeResolve(root, "/lib/ld-musl-"+launcherMachine.uname+".so.1", true, nil) != ""
+	var lack []string
 	for _, m := range mods {
 		has := false
 		for _, d := range defaultDirs() {
@@ -515,11 +517,38 @@ func dynamicCheck(ex string, logs []string, own *ownership) *report {
 				break
 			}
 		}
-		if !has {
-			rep.warnf("this host's nsswitch.conf names %s; the exclave has no libnss_%s.so.2", m, m)
+		if has {
+			continue
+		}
+		if musl {
+			lack = append(lack, m)
+		} else if pkg, ok := nssPackages[m]; ok {
+			rep.warnf("this host's nsswitch.conf names %s; the exclave has no libnss_%s.so.2, so what it looks up "+
+				"is unknown inside: add %s (8.4)", m, m, pkg)
+		} else {
+			rep.warnf("this host's nsswitch.conf names %s; the exclave has no libnss_%s.so.2, so what it looks up "+
+				"is unknown inside: add the package that ships it (8.4)", m, m)
 		}
 	}
+	if len(lack) > 0 {
+		rep.warnf("this host's nsswitch.conf names %s; musl loads no NSS modules, so what they look up is unknown "+
+			"inside unless the host runs nscd (8.4)", strings.Join(lack, ", "))
+	}
 	return rep
+}
+
+// nssPackages names, for the NSS modules a host's nsswitch.conf commonly names, the packages that
+// ship them; each module's client finds its daemon under /run, or SSSD's under /var/lib/sss,
+// which are the host's (8.1).
+var nssPackages = map[string]string{
+	"sss":           "libnss-sss on Debian and Ubuntu, sssd-client on Fedora",
+	"systemd":       "libnss-systemd on Debian and Ubuntu, systemd-libs on Fedora",
+	"ldap":          "libnss-ldapd on Debian and Ubuntu, nss-pam-ldapd on Fedora",
+	"winbind":       "libnss-winbind on Debian and Ubuntu, samba-winbind-clients on Fedora",
+	"mdns4_minimal": "libnss-mdns on Debian and Ubuntu, nss-mdns on Fedora",
+	"mdns":          "libnss-mdns on Debian and Ubuntu, nss-mdns on Fedora",
+	"resolve":       "libnss-resolve on Debian and Ubuntu, systemd-resolved on Fedora",
+	"myhostname":    "libnss-myhostname on Debian and Ubuntu, systemd-libs on Fedora",
 }
 
 // ---------------------------------------------------------------- the wrappers (6.1)

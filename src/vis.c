@@ -20,6 +20,10 @@ static const char *identity_files[] = {"/etc/passwd",
                                        0};
 _Static_assert(sizeof identity_files / sizeof identity_files[0] == N_IDENTITY + 1,
                "N_IDENTITY counts the identity files");
+/* 8.1.5: directories the host's by default, as the identity files are: SSSD's state, whose socket and memory cache
+ * its lookup module reads (13 item 17); an own record naming one exactly removes it */
+static const char *host_dirs[] = {"/var/lib/sss", 0};
+_Static_assert(sizeof host_dirs / sizeof host_dirs[0] == N_HOST_DIRS + 1, "N_HOST_DIRS counts the host directories");
 
 struct dirent64 {
     unsigned long d_ino;
@@ -97,21 +101,22 @@ static void own_from_tree(void)
     sys_close((int)fd);
 }
 
-/* 8.1.5: the identity files join the host table unless an own record names one; the table has room for them after
- * the manifest's records by construction */
+/* 8.1.5: the identity files and the default host directories join the host table unless an own record names one;
+ * the table has room for them after the manifest's records by construction */
+static void host_default(const char *v)
+{
+    for (int j = 0; j < C.nown; j++)
+        if (xstrcmp(C.own[j], v) == 0) return;
+    if (C.nhost >= (int)(sizeof C.host / sizeof C.host[0])) die("host table full", v, 0);
+    C.host[C.nhost].v = v;
+    C.host[C.nhost].r = v;
+    C.host[C.nhost].is_file = 0;
+    C.nhost++;
+}
 static void identity_defaults(void)
 {
-    for (int i = 0; identity_files[i]; i++) {
-        int claimed = 0;
-        for (int j = 0; j < C.nown; j++)
-            if (xstrcmp(C.own[j], identity_files[i]) == 0) claimed = 1;
-        if (claimed) continue;
-        if (C.nhost >= (int)(sizeof C.host / sizeof C.host[0])) die("host table full", identity_files[i], 0);
-        C.host[C.nhost].v = identity_files[i];
-        C.host[C.nhost].r = identity_files[i];
-        C.host[C.nhost].is_file = 0;
-        C.nhost++;
-    }
+    for (int i = 0; i < N_IDENTITY; i++) host_default(identity_files[i]);
+    for (int i = 0; i < N_HOST_DIRS; i++) host_default(host_dirs[i]);
 }
 
 /* 6.2: a data directory is never executed and never a loader */
@@ -123,7 +128,7 @@ int vis_in_data(const char *v)
 }
 
 /* identity files: link text recorded at startup for readlink fidelity (8.4) */
-static const char *id_link[MAX_HOST_RECORDS + N_IDENTITY]; /* indexed as C.host */
+static const char *id_link[MAX_HOST_RECORDS + N_IDENTITY + N_HOST_DIRS]; /* indexed as C.host */
 
 /* resolves host path p's symlink chain on the host, first being p's lstat, already made: 1 with the final path in out
  * and the first link's text in link, 0 when a link cannot be read or the chain is longer than 40 links */

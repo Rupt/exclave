@@ -43,6 +43,8 @@ IDENTITY_FILES = (
     "/etc/ssl/certs/ca-certificates.crt",
     "/etc/pki/tls/certs/ca-bundle.crt",
 )
+# The host's directories by default (8.1 rule 5): SSSD's state, where its lookup module finds it.
+HOST_DIRS = ("/var/lib/sss",)
 
 
 def vbin(root: str, name: str) -> str:

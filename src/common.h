@@ -28,6 +28,8 @@
 #define MAX_DATA_RECORDS 32
 #define MAX_TOP_LEVEL 256
 #define N_IDENTITY 8
+/* the host's directories by default (8.1.5): SSSD's state, where its lookup module finds the daemon */
+#define N_HOST_DIRS 1
 /* a manifest record's most fields, and the most bytes a field holds, a string's decoded (6.2) */
 #define MANIFEST_FIELDS 8
 #define MANIFEST_FIELD_MAX (PATH_MAX - 1)
@@ -194,8 +196,9 @@ struct exclave {
     /* the manifest's own records (at most 256), then every non-empty top-level entry of the tree (at most 256) */
     const char *own[MAX_OWN_RECORDS + MAX_TOP_LEVEL];
     int nown;
-    struct hostmap host[MAX_HOST_RECORDS + N_IDENTITY];
-    int nhost; /* the manifest's host records (at most 32), then the identity files (8.4) */
+    struct hostmap host[MAX_HOST_RECORDS + N_IDENTITY + N_HOST_DIRS];
+    /* the manifest's host records (at most 32), then the identity files (8.4) and the default host directories */
+    int nhost;
     const char *data[MAX_DATA_RECORDS];
     int ndata; /* data directories: never executed, never a loader (6.2) */
     /* cwd rule (8.1.4) */

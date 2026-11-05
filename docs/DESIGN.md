@@ -175,7 +175,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 100 named tests, most of them programs that
+- **The regression suite**: 101 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1786,7 +1786,11 @@ it, and every part rules it as it rules that directory.
    tool ships each of the eight as an empty placeholder when the tree
    lacks it, and the path walk treats the directories on the way to an
    identity file as directories whether or not the exclave ships them
-   (8.4).
+   (8.4). SSSD's state directory, `/var/lib/sss`, is the host's by
+   default the same way: SSSD's lookup module finds the daemon there,
+   by its socket and its memory cache, where the host's other directory
+   services keep theirs under `/run` (8.4). `own` on it removes it, and
+   the exclave answers where the host lacks it.
 6. **The exclave's own directory** is the host's, with the directories
    on the way to it, whatever prefix it lives under: a program that
    locates its files relative to its real executable path, as gcc does
@@ -2019,14 +2023,24 @@ such a rule would let a host link into `/usr` reach the host's `/usr`.
 Every other symlink, on a host path or an exclave path, is resolved in
 virtual space (7.4.4).
 
-The host's `nsswitch.conf` may name NSS modules the exclave does not
-ship, `systemd`, `sss`, `mdns4_minimal`. glibc skips them, which is
-right for `hosts` and wrong for `passwd` on a host whose users come
-from LDAP or `systemd-homed`, where `getpwuid` then fails inside the
-exclave (13 item 17). `exclave check` given a log warns of each module
-the checking host's `nsswitch.conf` names that the exclave lacks
-(10.3), so an exclave's maker who checks on such a host learns of it
-before a user does.
+The host's `nsswitch.conf` names NSS modules, `systemd`, `sss`,
+`ldap`, `mdns4_minimal`, which a glibc exclave loads from its own tree,
+since a module is code bound to its libc. Each is a client of a daemon
+of the host's: `systemd`'s, `nslcd`'s, `winbindd`'s and `avahi`'s
+sockets are under `/run`, a volatile directory, and SSSD's socket and
+memory cache under `/var/lib/sss`, the host's by default (8.1 rule 5).
+So an exclave that ships a module finds the host's users through it,
+whatever version the host's daemon is, as long as the protocol holds;
+`test/nss_test.py` looks up a user served in SSSD's protocol, by name
+and by uid, through Ubuntu's `libnss_sss.so.2` (17). glibc skips a
+module the tree lacks, which is right for `hosts` and wrong for
+`passwd` on a host whose users come from LDAP, SSSD or
+`systemd-homed`, where `getpwuid` then fails inside (13 item 17).
+`exclave check` given a log warns of each module the checking host's
+`nsswitch.conf` names that the exclave lacks, naming the package that
+ships the common ones (10.3), so an exclave's maker who checks on such
+a host learns of it before a user does. musl loads no modules: it
+reads `nscd`'s socket, under `/run`, after the files.
 
 ## 9. Compilers specifically
 
@@ -2728,7 +2742,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 100 named regressions and every oracle its kernel can run; 17
+suite's 101 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher
 inside its copy of the exclave (`scripts/reproduce`, 10.5) and
 compares its bytes with the reference machine's build; a row whose
@@ -2910,9 +2924,18 @@ and stay fixed.
     same small static binary at every executable path, and the
     originals in `.real/`. Endpoint security may flag the pattern.
 
-17. **Directory-service users are unknown inside.** On hosts whose
-    users come from LDAP, SSSD or `systemd-homed`, `getpwuid` fails
-    inside an exclave, which sees only the host's identity files (8.4).
+17. **Directory-service users are unknown inside without the
+    module.** On a host whose users come from LDAP, SSSD or
+    `systemd-homed`, `getpwuid` inside an exclave finds them only
+    through the lookup module the host's `nsswitch.conf` names, which a
+    glibc exclave ships from its own distribution: `libnss-sss`,
+    `libnss-systemd` or `libnss-ldapd` on Debian and Ubuntu. The
+    daemons' sockets are the host's (8.4), and `exclave check` names
+    the package a module lacks. Debian's `libnss-systemd` and
+    `libnss-ldapd` depend on the daemons themselves, 38 and 51 packages
+    with their closures, which `prune` removes again; `libnss-sss`
+    needs only libc. A musl exclave loads no modules and finds them
+    only where the host runs `nscd`.
 
 18. **Identity files are resolved once, at startup.** A host change to
     `/etc/resolv.conf` under a running exclave is not seen, and a
@@ -4188,7 +4211,8 @@ meaning items 4 and 7.
      tree and failing closed, `host` and `own` records in the order
      8.1 decides them, the root and the exclave's own directory as the
      walk sees them, identity files, the no-follow calls on an
-     identity link against the native run of the same program, the
+     identity link against the native run of the same program, SSSD's
+     directory the host's and `own` giving it back, the
      log's names and escapes, and the log's path refused when relative
      or inside the exclave;
    - *the tool's unpack and wrap*: the three package readers, a tree
@@ -4256,7 +4280,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus nineteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones` and `memfd_exec` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 100 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 101 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -4316,8 +4340,10 @@ EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave
 `scripts/inputs DIR` makes the test inputs: the four exclaves, Ubuntu
 24.04's gcc-13 closure, which is the gate's, Alpine 3.21's gcc, Fedora
 42's gcc and Ubuntu 24.04's clang-18 closure, which `scripts/extra`
-takes beside it; the arm64 gcc-13 exclave; and Docker's
-default seccomp profile, from the distributions' package archives and
+takes beside it; the arm64 gcc-13 exclave; `sss.exclave`, Ubuntu
+24.04's Essential set with `libnss-sss`, for `test/nss_test.py`, made
+for the machine's own architecture since its programs run there; and
+Docker's default seccomp profile, from the distributions' package archives and
 GitHub alone, which is all a continuous-integration run fetches.
 `scripts/inputs DIR examples` makes what the example runs take as
 well: the packages `test/realsoft.py` builds with, CentOS 7's glibc for
@@ -4399,7 +4425,8 @@ its time, ok, SKIP or FAIL:
   through `build/exclave` (`test/readers_test.py`,
   `test/grammar_test.py`); and `test/tables_test.py`, which
   reads the tables more than one part carries, the identity files
-  (8.4), the volatile directories (8.1) and the names the launcher
+  (8.4), the volatile directories (8.1), the default host directories
+  (8.1 rule 5) and the names the launcher
   logs for the syscalls the filter traps, from each source and fails
   when they differ;
 - the stack budget of both launchers (the aarch64 one when it is
@@ -4437,7 +4464,12 @@ its time, ok, SKIP or FAIL:
 - on the exclave given: the suite, the resolution oracle, the
   namespace oracle and the syscall probe;
 - when `EXCLAVE_TEST_INPUTS` names the directory `scripts/inputs`
-  filled, the Docker profile run on it.
+  filled, the Docker profile run on it, and `test/nss_test.py` on its
+  `sss.exclave`, Ubuntu's Essential set with `libnss-sss`: in a user
+  namespace, a stand-in for SSSD answers one user on a tmpfs at
+  `/var/lib`, `getent` inside finds the user by name and by uid
+  through the tree's module, and `exclave check` warns of the module
+  the exclave lacks and not of the one it ships.
 
 Every driver runs `build/launcher` on a copy of its own, so the exclave
 given to the gate is never run as it is nor written. The suite wraps a

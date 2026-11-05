@@ -46,7 +46,7 @@ package files or from any filesystem tree.
   untested). One source builds both launchers.
 - **gdb** debugs a program in an exclave; the launcher carries the script
   gdb needs.
-- **Tested against the kernel.** A suite of 100 named tests, oracles that
+- **Tested against the kernel.** A suite of 101 named tests, oracles that
   compare the launcher's answers with the kernel's under a read-only bind
   mount, and a differential probe of about 40 000 syscall cases pass on gcc,
   clang, Alpine and Fedora exclaves. An exclave also runs under Docker's
@@ -139,7 +139,7 @@ static check: 24 ELF files, 2 static executables, 0 warnings, 0 errors
 + exclave check hello.exclave log/pruned.log
 0 wrapper problems
 static check: 24 ELF files, 2 static executables, 0 warnings, 0 errors
-warning: this host's nsswitch.conf names sss; the exclave has no libnss_sss.so.2
+warning: this host's nsswitch.conf names sss; the exclave has no libnss_sss.so.2, so what it looks up is unknown inside: add libnss-sss on Debian and Ubuntu, sssd-client on Fedora (8.4)
 dynamic check: 1220 log lines, 0 errors
 ```
 
@@ -341,10 +341,11 @@ object a package ships beside the real ones. Static executables are
 counted, having no loader to verify. With logs it adds the dynamic
 check: every library the workload opened resolved inside the exclave,
 and every NSS module this host's `nsswitch.conf` names that the exclave
-lacks is a warning. glibc skips a missing module, which is right for
-`hosts` and wrong for `passwd` on a host whose users come from LDAP or
-`systemd-homed`, so read that warning before shipping an exclave to such
-a host.
+lacks is a warning, naming the package that ships it. glibc skips a
+missing module, which is right for `hosts` and wrong for `passwd` on a
+host whose users come from LDAP, SSSD or `systemd-homed`; with the
+module in the tree, `libnss-sss` for SSSD, the exclave finds them
+through the host's daemon, whose socket is the host's.
 
 `exclave prune EXCLAVE LOG...` keeps every path a logged syscall
 touched, the entries of any directory a program listed, the symlink
@@ -427,7 +428,7 @@ each test establishes, 19 the decisions a change is expected to respect.
 
 ```
 scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, clang-format, clang-tidy and gcc's strict warnings; --fix lets them correct
-scripts/inputs build/inputs   # the test inputs: the four exclaves, the arm64 gcc exclave and Docker's seccomp profile, from the package archives and GitHub; skips what is present
+scripts/inputs build/inputs   # the test inputs: the four exclaves, the arm64 gcc exclave, the lookup test's exclave and Docker's seccomp profile, from the package archives and GitHub; skips what is present
 scripts/inputs build/inputs examples   # the examples' inputs too, some from their authors' sites
 D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave   # the commit gate: of the code checks, unit tests, stack budget, the command's Go tests, unpack's and the fetchers' tests, the suite, the oracles, the syscall probe and the Docker profile run, the steps the change can affect, two at a time (--jobs N); --full runs all of them
 D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # beyond the gate, when asked: the suite, the debug launcher, the oracles and the probe on every exclave given; the plain-label suite, the fuzz budget, the release test and, with EXCLAVE_TEST_OLD=DIR, the compatibility test on the first

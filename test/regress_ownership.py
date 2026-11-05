@@ -4,6 +4,7 @@ Run by test/run.py, on the fixtures test/suite.py makes.
 """
 
 import os
+import subprocess
 
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
@@ -539,6 +540,50 @@ def host_and_own_records(ctx: Ctx) -> str | None:
         f'host "/etc/hostname" stands for the host\'s file: {out!r} {err!r}',
     )
     return None
+
+
+@test
+def directory_service_state(ctx: Ctx) -> None:
+    """8.1.5, 13 item 17: SSSD's /var/lib/sss is the host's by default, and own gives it back.
+
+    SSSD's lookup module finds the daemon by its socket and memory cache under /var/lib/sss, which
+    the tree's /var would otherwise hide, so a user the host knows from LDAP was unknown inside.
+    Made in a user namespace with a tmpfs on /var/lib holding a marker where the socket would be;
+    an own record on the directory makes it the tree's again. Skipped without user namespaces.
+    """
+    if subprocess.run(
+        ["unshare", "-Urm", "true"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode:
+        skip("no user namespaces")
+    pid = os.getpid()
+    ex2 = os.path.join(ctx.work, "sss.exclave")
+    copy_exclave(ctx.exclave, ex2)
+    with open(os.path.join(ex2, ".exclave", "manifest"), "w") as f:
+        f.write('exclave 1\n\nown "/var/lib/sss"\n')
+    setup = (
+        "mount -t tmpfs tmpfs /var/lib && mkdir -p /var/lib/sss/pipes && "
+        f"echo sss-{pid} >/var/lib/sss/pipes/marker || exit 99"
+    )
+    show = "cat /var/lib/sss/pipes/marker"
+    sh2 = os.path.join(ex2, "tree", ctx.vbin("sh").lstrip("/"))
+    cmd = f"{setup}; {wrapper(ctx, 'sh')} -c '{show}'; echo rc=$?; {sh2} -c '{show}'; echo rc=$?"
+    rc, out, err = run(
+        ["unshare", "-Urm", "sh", "-c", cmd], cwd=ctx.work, env=dict(ctx.env, PATH="/usr/bin:/bin")
+    )
+    if rc == 99:
+        skip(f"no tmpfs on /var/lib in a user namespace here: {err.strip()[-120:]}")
+    lines = out.split("\n")
+    expect(
+        lines[:2] == [f"sss-{pid}", "rc=0"],
+        f"the host's /var/lib/sss is seen inside: {out!r} {err!r}",
+    )
+    expect(
+        lines[2:] == ["rc=1", ""] and "No such file" in err,
+        f'own "/var/lib/sss" gives the directory back to the tree: {out!r} {err!r}',
+    )
 
 
 @test

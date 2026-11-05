@@ -4,7 +4,8 @@
 
 The host identity files (8.4) are listed in src/vis.c, tool/layout.go and test/tree.py; the
 volatile directories (8.1) in src/vis.c, tool/paths.go, unpack/steps.go, test/suite.py and
-test/unpack_test.py; and the name the
+test/unpack_test.py; the default host directories (8.1 rule 5) in src/vis.c,
+tool/paths.go and test/tree.py; and the name the
 launcher logs for a trapped syscall (`sysname` in src/handler.c) must cover exactly the syscalls
 src/filter.c traps. Each is read from its source here, so a table changed in one place fails the
 gate's unit step. Prints one line per table; the exit status is the number that differ.
@@ -102,6 +103,14 @@ def main() -> int:
             "test/unpack_test.py": py_tuple("test/unpack_test.py", "VOLATILE"),
         },
     )
+    same(
+        "default host directories",
+        {
+            "src/vis.c": c_strings("src/vis.c", "host_dirs"),
+            "tool/paths.go": go_strings("tool/paths.go", "hostDirs"),
+            "test/tree.py": tree.HOST_DIRS,
+        },
+    )
     trapped: set[str] = {"ioctl"}  # singled out for chattr (7.4.3)
     for array in ("path_syscalls", "fd_syscalls", "mask_syscalls", "arg_traps"):
         trapped |= c_syscalls("src/filter.c", array)
@@ -109,7 +118,7 @@ def main() -> int:
         "syscall names",
         {"src/filter.c traps": sorted(trapped), "src/handler.c sysname": sorted(sysname_cases())},
     )
-    print(f"{3 - fails} tables agree, {fails} differ")
+    print(f"{4 - fails} tables agree, {fails} differ")
     return fails
 
 

@@ -9,6 +9,7 @@
 #   EXCLAVE_TEST_INPUTS=DIR scripts/extra DIR/gcc13.exclave DIR/alpine.exclave DIR/f42.exclave DIR/clang.exclave
 #   EXCLAVE_TEST_INPUTS=DIR EXCLAVE_TEST_SRC=DIR/src EXCLAVE_TEST_SQLITE=DIR/src/sqlite3.c EXCLAVE_TEST_RPMS=DIR/el7 EXCLAVE_TEST_ARM64=DIR/gcc13-arm64.exclave scripts/examples DIR/realsoft.exclave
 # The package sets are the ones DESIGN.md measures (10.1, 12, 16.8): the noble gcc-13 and clang-18 closures,
+# the noble Essential set with libnss-sss for test/nss_test.py,
 # Alpine 3.21's gcc, Fedora 42's gcc, the noble gcc, g++, make and python3 that test/realsoft.py builds with,
 # CentOS 7's glibc for the sysroot of 9, the noble arm64 gcc-13 closure, made into an exclave with the aarch64
 # launcher built here (10.1) for the emulated rows and for the gate on an aarch64 machine, the exclaves of
@@ -158,6 +159,17 @@ arm64() {
         fi
 }
 item arm64
+# the exclaves of the gate's tests of a host's directory service and of a tree's caches (13 items 17 and 48), whose
+# programs run on this machine, so made for its architecture: Ubuntu's Essential set with SSSD's lookup module, and
+# with Python, GLib's schema compiler and the MIME database's generator
+case $(uname -m) in
+aarch64) here_debs="--arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports" ;;
+*) here_debs="" ;;
+esac
+# shellcheck disable=SC2086  # the architecture's arguments, several words or none
+item both sss debs-sss debs --keyring "$ubuntu" $here_debs libnss-sss
+# shellcheck disable=SC2086  # the architecture's arguments, several words or none
+item both caches debs-caches debs --keyring "$ubuntu" $here_debs python3-minimal libglib2.0-bin shared-mime-info gsettings-desktop-schemas
 item file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json b5b6b32d9b6c410d6e8c00639ead764745bd4eaf9cb662d2ec25b656e3f17f75
 counted
 [ "${2-}" = examples ] || {

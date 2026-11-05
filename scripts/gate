@@ -12,13 +12,14 @@
 #
 # The steps: the code checks (scripts/check), the unit tests under ASan and UBSan, the stack budget, the
 # command's Go unit tests and fuzz seeds (go test), unpack's tests on hostile package files (test/unpack_test.py), the
-# fetchers' signature checks (test/fetch_test.py), and on the exclave given the suite, the resolution oracle, the namespace oracle, the syscall probe and, when
-# EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled, the Docker profile run on its
-# src/docker-seccomp.json. No step touches the network. Everything slower or broader is scripts/extra's and
+# fetchers' signature checks (test/fetch_test.py), and on the exclave given the suite, the resolution oracle, the
+# namespace oracle, the syscall probe and, when EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled, the
+# Docker profile run on its src/docker-seccomp.json and a user from SSSD looked up in its sss.exclave
+# (test/nss_test.py). No step touches the network. Everything slower or broader is scripts/extra's and
 # scripts/matrix's, run when the user asks. The steps run two at a time, or N with --jobs, so that the machine
 # stays usable meanwhile; every driver runs build/launcher on a copy of its own (the suite wraps one from the
 # exclave's tree, the oracles keep test/tree.py's kept_worlds, the others take its fresh_exclave), so the exclave
-# given is never run as it is nor written. One line per step with its time, SKIP for an oracle that could not run
+# given is never run as it is nor written. One line per step with its time, SKIP for a step that could not run
 # here; logs under build/gate/.
 # Exit status: the number of failed steps.
 set -u
@@ -94,7 +95,7 @@ has() {
     return 1
 } # has STEP: whether the change reaches it
 if $full || has every; then
-    steps="unit stack go unpack fetch suite oracles $steps"
+    steps="unit stack go unpack fetch suite oracles nss $steps"
     # the resolution oracle's mazes from a seed of the moment rather than the commit's, printed on a failure
     $full && seed=$(($(date +%s) % 100000))
     echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
@@ -123,6 +124,11 @@ if has oracles; then
     if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
         step "docker-$n" py "$here/docker_profile.py" --exclave "$ex" --profile "$EXCLAVE_TEST_INPUTS/src/docker-seccomp.json" --work "$out/d-$n"
     else echo "docker: EXCLAVE_TEST_INPUTS not set; skipped"; fi
+fi
+if has nss; then # a user from SSSD looked up inside, through the exclave's own lookup module (13 item 17)
+    if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
+        step nss py "$here/nss_test.py" --exclave "$EXCLAVE_TEST_INPUTS/sss.exclave" --work "$out/nss"
+    else echo "nss: EXCLAVE_TEST_INPUTS not set; skipped"; fi
 fi
 wait
 report gate "$start"

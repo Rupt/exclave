@@ -57,7 +57,8 @@ def isolation(ctx: Ctx) -> str | None:
     bad, seen = [], 0
     # 8.1 as the launcher computes it: a top-level name outside it is the host's
     owned = tree.owned(ctx.exclave)
-    allowed_files = set(tree.IDENTITY_FILES)
+    # and the default host directories, each of which the launcher looks at once at startup
+    allowed_files = set(tree.IDENTITY_FILES) | set(tree.HOST_DIRS)
     # the launcher resolves each identity file's host symlink chain at startup
     for f in tree.IDENTITY_FILES:
         p = f

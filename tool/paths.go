@@ -175,9 +175,18 @@ func ownedTop(ex string) []string {
 	return out
 }
 
+// The host's directories by default (8.1.5), as the identity files are: SSSD's state, where its
+// lookup module finds the daemon (13 item 17). An own record naming one exactly removes it.
+var hostDirs = []string{"/var/lib/sss"}
+
 func ownershipOf(ex string) *ownership {
 	m := manifestOf(ex)
 	o := &ownership{own: valuesOf(m, "own"), host: valuesOf(m, "host")}
+	for _, d := range hostDirs {
+		if !slices.Contains(o.own, d) {
+			o.host = append(o.host, d)
+		}
+	}
 	o.own = append(o.own, ownedTop(ex)...)
 	return o
 }

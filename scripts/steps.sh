@@ -35,7 +35,7 @@ report() {
         if [ "$r" != 0 ]; then
             printf '%-22s FAIL %4ss  %s\n' "$name" "$secs" "$last"
             fails=$((fails + 1))
-        elif case $name in resolve-* | ns-* | syscalls-* | docker-*) grep -q 'cannot run' "$out/$name.log" ;; *) false ;; esac then
+        elif case $name in resolve-* | ns-* | syscalls-* | docker-* | nss) grep -q 'cannot run' "$out/$name.log" ;; *) false ;; esac then
             printf '%-22s SKIP %4ss  %s\n' "$name" "$secs" "$last"
             skips=$((skips + 1)) # an oracle without bwrap, namespaces or openat2
         else printf '%-22s ok   %4ss  %s\n' "$name" "$secs" "$last"; fi
