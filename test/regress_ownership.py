@@ -127,20 +127,20 @@ def identity_retargeted(ctx: Ctx) -> None:
         with open(os.path.join(base, name), "w") as f:
             f.write(f"nameserver 192.0.2.{n}\n")
     os.symlink(os.path.join(base, "a"), os.path.join(etc, "resolv.conf"))
-    for fifo in ("ready", "go1", "go2"):
+    for fifo in ("ready1", "ready2", "go1", "go2"):
         os.mkfifo(os.path.join(base, fifo))
     inner = (
         'read l </etc/resolv.conf; echo "1 $l"; [ -L /etc/resolv.conf ] && echo "1 link"; '
-        "echo >ready; "
-        'read x <go1; read l </etc/resolv.conf; echo "2 $l"; '
+        "echo >ready1; "
+        'read x <go1; read l </etc/resolv.conf; echo "2 $l"; echo >ready2; '
         'read x <go2; read l </etc/resolv.conf; echo "3 $l"; '
         '[ -L /etc/resolv.conf ] || echo "3 file"'
     )
     script = (
         f"mount --bind {etc} /etc || exit 99; "
-        f"{wrapper(ctx, 'sh')} -c '{inner}' & read x <ready; "
+        f"{wrapper(ctx, 'sh')} -c '{inner}' & read x <ready1; "
         f"ln -sfn {base}/b /etc/resolv.conf.new && mv -T /etc/resolv.conf.new /etc/resolv.conf "
-        "&& echo >go1; "
+        "&& echo >go1; read x <ready2; "
         "echo 'nameserver 192.0.2.3' >/etc/resolv.conf.new && mv -T /etc/resolv.conf.new "
         "/etc/resolv.conf && echo >go2; wait"
     )
