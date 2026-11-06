@@ -353,22 +353,40 @@ func staticCheck(ex string, own *ownership, data []string, l *listing) *report {
 
 // ---------------------------------------------------------------- the dynamic check
 
-// unescape undoes the path's \n and \\ escapes in one pass from left to right (6.2).
+// unescape undoes the path's escapes in one pass from left to right (6.2): \n, \\ and, from log
+// format 2, \x and two lowercase hex digits for any other control byte. A format 1 log escapes every
+// backslash, so \x never begins an escape there and both formats read alike.
 func unescape(p string) string {
 	var o strings.Builder
 	for i := 0; i < len(p); i++ {
-		if p[i] == '\\' && i+1 < len(p) && (p[i+1] == 'n' || p[i+1] == '\\') {
-			if p[i+1] == 'n' {
-				o.WriteByte('\n')
-			} else {
-				o.WriteByte('\\')
-			}
+		switch {
+		case p[i] != '\\' || i+1 == len(p):
+			o.WriteByte(p[i])
+		case p[i+1] == 'n':
+			o.WriteByte('\n')
 			i++
-		} else {
+		case p[i+1] == '\\':
+			o.WriteByte('\\')
+			i++
+		case p[i+1] == 'x' && i+3 < len(p) && lowerHex(p[i+2]) >= 0 && lowerHex(p[i+3]) >= 0:
+			o.WriteByte(byte(lowerHex(p[i+2])<<4 | lowerHex(p[i+3])))
+			i += 3
+		default:
 			o.WriteByte(p[i])
 		}
 	}
 	return o.String()
+}
+
+// lowerHex is c's value as a lowercase hex digit, -1 when it is not one.
+func lowerHex(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	}
+	return -1
 }
 
 // libraryName reports whether a path ends in .so and any version numbers after it.
@@ -397,16 +415,19 @@ type logLine struct {
 }
 
 // logVersion is the log format's version, which every launcher line carries where other lines carry
-// a result (6.2): a log another format wrote is refused by name rather than misread.
-const logVersion = 1
+// a result (6.2): a log another format wrote is refused by name rather than misread. Format 1, whose
+// escapes are format 2's but for \x, is read as well, since an older exclave's launcher may share a
+// run's log with a newer one.
+const logVersion = 2
 
-// readLogs reads the log at p, refusing it when a launcher line names another format's version.
+// readLogs reads the log at p, refusing it when a launcher line names a format this command does
+// not read.
 func readLogs(p string) []logLine {
 	lines := readLog(p)
 	for _, x := range lines {
-		if x.what == "launcher" && x.result != logVersion {
-			fail("%s: a launcher of log format %d wrote it; this command reads format %d (docs/DESIGN.md 6.2)", p,
-				x.result, logVersion)
+		if x.what == "launcher" && (x.result < 1 || x.result > logVersion) {
+			fail("%s: a launcher of log format %d wrote it; this command reads formats 1 to %d (docs/DESIGN.md 6.2)",
+				p, x.result, logVersion)
 		}
 	}
 	return lines

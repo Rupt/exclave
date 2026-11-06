@@ -387,21 +387,22 @@ def log_path_rules(ctx: Ctx) -> None:
     rc, _, err = with_log(log)
     text = read_text(log) if os.path.exists(log) else ""
     expect(
-        rc == 0 and "launcher 1 border" in text and "launcher 1 inside" in text,
+        rc == 0 and "launcher 2 border" in text and "launcher 2 inside" in text,
         f"one log for every launcher: rc={rc} {err!r} {text[-300:]!r}",
     )
     rc, _, err = with_log("/dev/stderr")
     expect(
-        rc == 0 and "launcher 1 border" in err, f"/dev/stderr as the log: rc={rc} {err[-300:]!r}"
+        rc == 0 and "launcher 2 border" in err, f"/dev/stderr as the log: rc={rc} {err[-300:]!r}"
     )
 
 
 @test
 def log_names_and_escapes(ctx: Ctx) -> None:
-    """6.2: a failed resolution logs the path as given.
+    """6.2, 13 item 34: a failed resolution logs the path as given.
 
-    A path with a newline or backslash is escaped in the log and undone by the tool, so prune keeps
-    the file the workload opened; prune refuses a log that names no program.
+    A path with a newline, a backslash or another control byte is escaped in the log, so no name
+    can end a line or move a terminal's cursor, and the tool undoes the escapes, so prune keeps the
+    file the workload opened; prune refuses a log that names no program.
     """
     log = os.path.join(ctx.work, "names.log")
     if os.path.exists(log):
@@ -420,8 +421,8 @@ def log_names_and_escapes(ctx: Ctx) -> None:
     copy_exclave(ctx.exclave, ex2)
     odd = os.path.join(ex2, "tree", "usr", "share", "odd")
     os.makedirs(odd)
-    # the last a backslash before an n, not a newline
-    names = ("with\nnewline", "back\\slash", "back\\nslash")
+    # the third a backslash before an n, not a newline; the last a terminal's colour and a return
+    names = ("with\nnewline", "back\\slash", "back\\nslash", "esc\x1b[31m\rred\x7f")
     for name in names:
         with open(os.path.join(odd, name), "w") as f:
             f.write(name)
@@ -436,7 +437,8 @@ def log_names_and_escapes(ctx: Ctx) -> None:
     lines = read_text(log2).split("\n")
     expect(
         any(line == "open 3 /usr/share/odd/with\\nnewline" for line in lines)
-        and any(line == "open 3 /usr/share/odd/back\\\\slash" for line in lines),
+        and any(line == "open 3 /usr/share/odd/back\\\\slash" for line in lines)
+        and any(line == "open 3 /usr/share/odd/esc\\x1b[31m\\x0dred\\x7f" for line in lines),
         f"escapes in the log: {[line for line in lines if 'odd' in line]!r}",
     )
     src = hello_source(ctx)
@@ -693,7 +695,7 @@ def nested_and_log(ctx: Ctx) -> None:
     expect(rc == 0 and out.strip(), out + err)
     text = read_text(log)
     expect(
-        "launcher 1 border " + ctx.sh_exe in text
-        and "launcher 1 inside " + ctx.vreal(ctx.vbin(ctx.gcc)) in text,
+        "launcher 2 border " + ctx.sh_exe in text
+        and "launcher 2 inside " + ctx.vreal(ctx.vbin(ctx.gcc)) in text,
         "log: " + text[:400],
     )

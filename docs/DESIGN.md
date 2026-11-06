@@ -613,20 +613,24 @@ the path names the tree or `.exclave/` or a symlink leads there, and
 makes a new log only where no symlink stands, so the log leaves the
 exclave as it was. A log that cannot be opened is not kept, and the
 run goes on. The launcher appends its decisions, as lines beginning
-`launcher 1`, where the 1 is the log format's version, and every
+`launcher 2`, where the 2 is the log format's version, and every
 translated syscall as `<syscall> <result>
 <virtual path>`: one line, in one write unless the path needs more
 than two escapes. A syscall whose path could not be resolved is logged
 with the path as the program gave it. An exec is logged as `exec 0`
 when the handler hands it to the kernel, since one that succeeds never
 returns; one that fails adds a second line with its error. A newline
-in a path is written as `\n` and a backslash as `\\`, the only two
-escapes, which the tool undoes when it reads a log (10.3, 10.4; 13
-item 34). The launcher at the border also logs the working directory
+in a path is written as `\n`, a backslash as `\\` and every other
+control byte, below `0x20` or `0x7f`, as `\x` and two lowercase hex
+digits, so that no name can end a line or move a terminal's cursor;
+the tool undoes the escapes when it reads a log (10.3, 10.4). Format
+1, which escaped the newline and the backslash alone, is read as
+well, since a run's log may hold an older exclave's launcher's lines
+beside a newer one's. The launcher at the border also logs the working directory
 it started in. The log changes nothing else. Every launcher of a run
 writes a line when it starts, so a log several launchers share says
 each one's version; `check` and `prune` refuse by name a log with a
-launcher line of another version rather than misread it.
+launcher line of a later version rather than misread it.
 
 ### 6.3 What the launcher reads
 
@@ -764,7 +768,7 @@ the promise below; builds before it promise nothing (2).
 | The layout: `.exclave/` holding `launcher`, `manifest` and `hashes`, `tree/`, an original in `.real/` beside its wrapper (6.1) | the manifest's | `wrap`, `unwrap`, `relink`, `prune` | the launcher, every command |
 | The manifest (6.2) | `exclave 1` | people, `wrap` | the launcher the exclave carries, every command |
 | The hashes file and the tree hash (6.4) | `hashes 1` | `unpack`, `wrap`, `unwrap`, `relink`, `prune` | `check`, `hash`, anyone with `b3sum` |
-| `EXCLAVE_LOG` (6.2) | the number in each `launcher` line, 1 | every launcher of a run | `check`, `prune` |
+| `EXCLAVE_LOG` (6.2) | the number in each `launcher` line, 2 | every launcher of a run | `check`, `prune`, which read 1 as well |
 | One launcher running another's programs (7.4.2) | the filter version, 8, and the page generation, 2 | each launcher | each launcher |
 | The `exclave` command's commands and their arguments (10) | the project's, `VERSION`'s | | people and scripts |
 | `exclave-fetch`'s commands, their arguments as `--help` lists them, its checks, and its cache's layout, `KIND/DIGEST` (10.1) | the project's, `VERSION`'s | `exclave-fetch` | people, scripts, a later `exclave-fetch` sharing the cache |
@@ -3133,8 +3137,10 @@ and stay fixed.
     tree beyond them is refused, by `exclave wrap` before it is made
     and by the launcher at startup.
 
-34. **`EXCLAVE_LOG` escapes only the newline and the backslash**; a
-    path with any other byte appears in the log as it is. A trailing
+34. **`EXCLAVE_LOG` writes a path's bytes from `0x80` up as they
+    are**: control bytes are escaped (6.2), but a name that is not
+    UTF-8 reads as the bytes it is, and a terminal in an 8-bit mode
+    may take some of them as controls. A trailing
     slash, or an empty, `.` or `..` component, in an `own`, `host` or
     `data` path is refused by both the tool's and the launcher's
     manifest parser, since the visibility rule matches a path by its

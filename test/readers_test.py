@@ -265,21 +265,22 @@ def log_reader(ctx: Ctx) -> None:
 
 @test
 def log_version(ctx: Ctx) -> None:
-    """6.2: a log whose launcher lines name another format's version is refused by name.
+    """6.2: a log whose launcher lines name a later format's version is refused by name.
 
     check reads it for the dynamic check and prune for what to keep; both refuse it rather than
-    misread lines a later launcher may spell otherwise.
+    misread lines a later launcher may spell otherwise, and read formats 1 and 2 alike.
     """
     ex, root = exclave(ctx, "versioned")
     put(root, "/usr/bin/x", elf(interp=b"/lib/ld.so"))
     log = os.path.join(ctx.work, "log2")
     with open(log, "wb") as f:
-        f.write(b"launcher 1 border /usr/bin/x\nlauncher 2 inside /usr/bin/x\nexec 0 /usr/bin/x\n")
+        f.write(b"launcher 1 border /usr/bin/x\nlauncher 3 inside /usr/bin/x\nexec 0 /usr/bin/x\n")
     for cmd in ("check", "prune"):
         rc, out, err = run([ctx.tool, cmd, ex, log])
         expect(
-            rc == 1 and "a launcher of log format 2 wrote it; this command reads format 1" in err,
-            f"{cmd} of a format 2 log: rc={rc} {out[-200:]!r} {err[-300:]!r}",
+            rc == 1
+            and "a launcher of log format 3 wrote it; this command reads formats 1 to 2" in err,
+            f"{cmd} of a format 3 log: rc={rc} {out[-200:]!r} {err[-300:]!r}",
         )
 
 

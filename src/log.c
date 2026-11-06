@@ -79,45 +79,57 @@ static int log_ok(void)
 
 static struct iovec iov(const void *p, size_t n) { return (struct iovec){unconst(p), n}; }
 
-/* one line, one write: "<what> <result> <path>\n"; atomic under O_APPEND. A path may hold any byte: a newline is
- * written as \n and a backslash as \\, the two escapes the tool undoes when it reads a log; the escaped pieces go out
- * as iovecs, no buffer, since this runs on the handler's stack */
-void log_line(const char *what, long result, const char *path)
+/* Ends a line whose first k pieces are in io (k at most 4) with path, escaped, and a newline, in one write unless the
+ * path needs more than two escapes, atomic under O_APPEND. A path may hold any byte: a newline is written as \n, a
+ * backslash as \\ and every other control byte, below 0x20 or 0x7f, as \x and two hex digits, the escapes the tool
+ * undoes when it reads a log (6.2), so that no byte of a name can end a line, move the cursor or recolour a terminal.
+ * The escaped pieces go out as iovecs and their few bytes, no buffer, since this runs on the handler's stack. */
+static void log_end(struct iovec *io, int k, const char *path)
 {
-    if (!log_ok()) return;
-    char n[24];
-    ltoa_(result, n);
-    if (!path) path = "-";
-    struct iovec io[12];
-    int k = 0;
-    io[k++] = iov(what, xstrlen(what));
-    io[k++] = iov(" ", 1);
-    io[k++] = iov(n, xstrlen(n));
-    io[k++] = iov(" ", 1);
+    char hex[6][4];
+    int nh = 0;
     const char *seg = path;
     for (const char *p = path;; p++) {
-        if (*p && *p != '\n' && *p != '\\') continue;
+        unsigned char c = (unsigned char)*p;
+        if (c && c != '\\' && c >= 0x20 && c != 0x7f) continue;
         if (p > seg) io[k++] = iov(seg, (size_t)(p - seg));
-        if (!*p) break;
-        io[k++] = iov(*p == '\n' ? "\\n" : "\\\\", 2);
+        if (!c) break;
+        if (c == '\n' || c == '\\') io[k++] = iov(c == '\n' ? "\\n" : "\\\\", 2);
+        else {
+            char *h = hex[nh++];
+            h[0] = '\\';
+            h[1] = 'x';
+            h[2] = "0123456789abcdef"[c >> 4];
+            h[3] = "0123456789abcdef"[c & 15];
+            io[k++] = iov(h, 4);
+        }
         seg = p + 1;
         /* a pathological path costs a second write */
-        if (k >= 10) {
+        if (k >= 10 || nh == 6) {
             SC3(NR_writev, C.logfd, io, k);
-            k = 0;
+            k = nh = 0;
         }
     }
     io[k++] = iov("\n", 1);
     SC3(NR_writev, C.logfd, io, k);
 }
+
+/* one line: "<what> <result> <path>" */
+void log_line(const char *what, long result, const char *path)
+{
+    if (!log_ok()) return;
+    char n[24];
+    ltoa_(result, n);
+    struct iovec io[12] = {iov(what, xstrlen(what)), iov(" ", 1), iov(n, xstrlen(n)), iov(" ", 1)};
+    log_end(io, 4, path ? path : "-");
+}
+/* one of the launcher's own lines: "launcher <version> <a> <b>", b escaped as a path is */
 void log_msg(const char *a, const char *b)
 {
     if (!log_ok()) return;
     /* the number where other lines carry a result is the log format's version (6.2) */
-    struct iovec io[5] = {iov("launcher " LOG_VERSION " ", 11), iov(a, xstrlen(a)), iov(" ", b ? 1 : 0),
-                          iov(b ? b : "", b ? xstrlen(b) : 0), iov("\n", 1)};
-    /* one write, no buffer: this runs on the handler's stack too */
-    SC3(NR_writev, C.logfd, io, 5);
+    struct iovec io[12] = {iov("launcher " LOG_VERSION " ", 11), iov(a, xstrlen(a)), iov(" ", b ? 1 : 0)};
+    log_end(io, 3, b ? b : "");
 }
 
 /* the message the C library would give for errno e, for the errors the launcher reports */

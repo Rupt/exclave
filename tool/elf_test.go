@@ -254,10 +254,13 @@ func TestReadLog(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "log")
 	write(t, p, []byte("launcher 1 cwd /\nopen 3 /srv/liba.so\x00junk\nopen 3 /srv/libb\\\\c.so\n"+
 		"open 99999999999999999999 /srv/libbig.so\nopen -2 /srv/libgone.so\nbad line\nopen x /y\n"+
-		"open 3 /srv/libz.so\\"))
+		"open 3 /srv/libz.so\\\nlauncher 2 cwd /a\\x1bb\nopen 3 /srv/e\\x1b[31m\\x7f.so\nopen 3 /srv/\\\\x1b\n"+
+		"open 3 /srv/\\xAB\\x4"))
 	lines := readLog(p)
 	want := []logLine{{"launcher", "cwd /", 1}, {"open", "/srv/liba.so", 3}, {"open", "/srv/libb\\c.so", 3},
-		{"open", "/srv/libbig.so", 1<<63 - 1}, {"open", "/srv/libgone.so", -2}, {"open", "/srv/libz.so\\", 3}}
+		{"open", "/srv/libbig.so", 1<<63 - 1}, {"open", "/srv/libgone.so", -2}, {"open", "/srv/libz.so\\", 3},
+		{"launcher", "cwd /a\x1bb", 2}, {"open", "/srv/e\x1b[31m\x7f.so", 3}, {"open", "/srv/\\x1b", 3},
+		{"open", "/srv/\\xAB\\x4", 3}}
 	if len(lines) != len(want) {
 		t.Fatalf("%+v", lines)
 	}

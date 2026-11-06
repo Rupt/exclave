@@ -121,9 +121,9 @@ What it prints on the reference machine, abridged (`exclave` here is
 == 4. a program built inside, run on this host and inside the exclave
 + env EXCLAVE_LOG=/home/me/exclave/build/example/log/hello.log gcc.exclave/gcc --sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/ -o hello hello.c
   log/hello.log: 1220 lines, one per trapped syscall; the first:
-    launcher 1 host path absent, using the exclave's /etc/pki/tls/certs/ca-bundle.crt
-    launcher 1 cwd /home/me/exclave/build/example
-    launcher 1 border /usr/bin/x86_64-linux-gnu-gcc-13
+    launcher 2 host path absent, using the exclave's /etc/pki/tls/certs/ca-bundle.crt
+    launcher 2 cwd /home/me/exclave/build/example
+    launcher 2 border /usr/bin/x86_64-linux-gnu-gcc-13
     load 0 /usr/bin/x86_64-linux-gnu-gcc-13
     access -2 /etc/ld.so.preload
     open 3 /etc/ld.so.cache
