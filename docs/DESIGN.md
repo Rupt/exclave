@@ -4105,9 +4105,20 @@ the pointer gives.
 - The one-step host check before 5.6, through an `O_PATH` open read
   back from `/proc/self/fd`: possible, and not built (16.6 item 4).
 
+A profile of thirty `gcc -O0 hello.c` through the gcc exclave,
+November 2026, finds no hot spot in the launcher's own code: it is 7%
+of the samples, the walk, the rule table, the cache and string copies,
+no function above 1.5%. Against native, the user's cycles rise 14%
+and the kernel's 85%, which is most of the overhead: the signal, the
+fixed calls of each trap, the walk's `lstat`s and process start. Of a
+compile's extra syscalls, 591 are the one-question check of the
+directories above the tree (16.6 item 7), one for each path spelt
+through the tree's real root, as gcc spells its own files.
+
 If overhead matters again, the next steps are the spawn, where `perf`
-puts 78% in the kernel, so a profile with kernel symbols comes first;
-then glibc's `realpath`, which costs *n* traps for a path *n* deep.
+puts 78% in the kernel, so a profile with kernel symbols comes first,
+which `kernel.kptr_restrict` withholds from an unprivileged user; then
+glibc's `realpath`, which costs *n* traps for a path *n* deep.
 
 ### 16.8 Measured results
 
