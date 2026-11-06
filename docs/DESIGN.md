@@ -175,7 +175,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 104 named tests, most of them programs that
+- **The regression suite**: 105 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1748,6 +1748,19 @@ with the right frames once the exclave is in gdb's auto-load safe-path;
 13.1 gives the script's mechanics and the recipe, 13 item 1 what gdb
 does not get, and 14.2 why gdb's JIT interface is not used.
 
+A tracer is the one reader of another process's `exe` that gets the
+kernel's text: gdb learns what it debugs from `/proc/<pid>/exe` at
+every exec event, loads that file and auto-loads its script, so the
+program's path, the answer every other reader gets, would hide the
+launcher and its script from a gdb inside. The handler asks the
+process's `/proc/<pid>/status` whether its `TracerPid` is the caller,
+its process or one of its threads, only when the link is another
+process's `exe`, and then answers the link as the kernel gives it: the
+launcher for a program on the loader path, and for a wrapper of this
+exclave the launcher's own path, the file the wrapper is, since an
+open of the wrapper's path inside reaches its original (7.4.4). `open`
+and `stat` of the link follow the same answer.
+
 ### 7.7 CPU check
 
 The manifest's `cpu` (6.2) is compared on x86-64 with `cpuid` leaves 1,
@@ -2918,7 +2931,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 104 named regressions and every oracle its kernel can run; 17
+suite's 105 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher
 inside its copy of the exclave (`scripts/reproduce`, 10.5) and
 compares its bytes with the reference machine's build; a row whose
@@ -2989,12 +3002,16 @@ and stay fixed.
    starts the program and runs it to its end once it passes the
    translated calls' `SIGSYS` (`handle SIGSYS nostop noprint pass`, on
    the command line or in `.gdbinit`; item 54 for strace and others
-   that start a program by `fork`). A breakpoint set from inside does
-   not hit: the process image is the launcher, while gdb inside is
-   shown the program's own file for it (7.6), so the carried script
-   never loads; a program is debugged from the host, by 13.1's recipe. On musl
-   a breakpoint in the program hits and one in the exclave's libc does
-   not.
+   that start a program by `fork`). Breakpoints from inside hit when
+   gdb runs the program through the positional entry by its host path,
+   `gdb --args <exclave>/.exclave/launcher PROGRAM`, as 13.1 gives for
+   the host: gdb then reads the launcher at the exec it makes, as its
+   tracer (7.6), and the carried script loads, which passes `SIGSYS`
+   itself. `gdb PROGRAM` inside does not: gdb takes the file it was
+   given, the program's own, for the process, whose image is the
+   launcher, and asks nothing at the execs of its start, so the script
+   never loads and a breakpoint never hits. On musl a breakpoint in the
+   program hits and one in the exclave's libc does not.
 
 2. **Translated syscalls cost more than native ones.** Every trapped
    syscall pays for a signal, the handler and its fixed syscalls; an
@@ -3045,8 +3062,9 @@ and stay fixed.
     outputs and host-path programs, `/proc/<pid>/exe` and
     `/proc/<pid>/maps` read from outside the exclave name the launcher
     and `.real/` files; read from inside, by the process itself or by
-    another exclave process, `exe` is the program's (7.6), and `maps`
-    names `.real/` files still.
+    another exclave process, `exe` is the program's (7.6), but for the
+    process's tracer, which reads the launcher, and `maps` names
+    `.real/` files still.
 
 11. **`/proc/mounts` shows the host's mounts.** The exclave is not a
     mount. Its read-only answers (8.2) are the kernel's own for every
@@ -3504,8 +3522,10 @@ gdb -iex 'set auto-load safe-path /' --args <exclave>/.exclave/launcher ./prog  
 through both, and `info files` lists what the script added; `info
 sharedlibrary` is empty (7.6, item 1). Every translated syscall is a
 `SIGSYS` stop that gdb passes through, so a run under gdb slows in
-proportion to its traps. A gdb inside an exclave needs `handle
-SIGSYS nostop noprint pass` to run a program at all, and its
+proportion to its traps. A gdb inside an exclave takes the same
+commands, the exclave's launcher named by its host path, whether
+for a wrapped program or a built one; given the program itself it
+runs it only with `handle SIGSYS nostop noprint pass`, and its
 breakpoints do not hit (item 1).
 
 How the script works. The launcher exports six names: the base, entry
@@ -4510,7 +4530,8 @@ meaning items 4 and 7.
      shadow-stack tunable set, reporting whether glibc enabled one (13
      item 49), a blocked or sent `SIGSYS`, older
      and newer launchers nested and side by side, a child that asks to be
-     traced and execs, by `vfork` and by `fork` (7.4.5, 13 item 54), a program installing
+     traced and execs, by `vfork` and by `fork` (7.4.5, 13 item 54), a tracer's reading of its
+     tracee's `exe` and gdb's breakpoints inside (7.6), a program installing
      its own filter, the speculation state, `x28` as a signal landing
      mid-trap finds it on aarch64 (7.5.3), and an adversarial program
      (`adversarial`), which runs the handler's deepest paths on Rust's
@@ -4602,7 +4623,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus nineteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones` and `memfd_exec` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 104 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 105 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

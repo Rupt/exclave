@@ -492,6 +492,7 @@ PROGS = (
     "exec_auxv",
     "exec_state",
     "traceme",
+    "tracer_exe",
 )
 
 

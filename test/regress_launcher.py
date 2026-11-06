@@ -846,3 +846,74 @@ def traceme_exec(ctx: Ctx) -> str | None:
         f"gdb's run inside runs the program to its end: rc={rc} {out[-400:]!r} {err[-400:]!r}",
     )
     return None
+
+
+@test
+def tracer_reads_exe(ctx: Ctx) -> str | None:
+    """7.6: a tracer reads its tracee's exe link as the kernel gives it; any other reader, 7.6's.
+
+    gdb learns what it debugs from /proc/<pid>/exe at every exec, loads that file's symbols and
+    auto-loads its .debug_gdb_scripts, which is how it gets the launcher's script. So the tracer
+    of a program on the loader path reads the launcher, and of a wrapped program the launcher too,
+    whose file the wrapper is, while a process that does not trace it reads the program's path.
+    Then, where the tree has a gdb, gdb inside runs a wrapped program through the positional entry
+    and stops at a breakpoint in the exclave's libc, the script loaded (13 item 1).
+    """
+    launcher = os.path.realpath(ctx.launcher)
+    prog = os.path.join(ctx.progs, "tracer_exe")
+    true = ctx.vbin("true")
+    # the file the kernel runs for it, busybox in an Alpine tree
+    tree_root = os.path.realpath(ctx.tree)
+    true_file = "/" + os.path.relpath(os.path.realpath(ctx.tree + true), tree_root)
+    for target, other, end in ((prog, prog, "end: exited 2"), (true, true_file, "end: exited 0")):
+        rc, out, err = inside(ctx, prog, [target], timeout=60)
+        expect(
+            rc == 0 and out.splitlines() == [f"tracer: {launcher}", f"other: {other}", end],
+            f"{target}: the tracer reads the launcher, another process the program: rc={rc}\n"
+            f"{out}{err[-300:]}",
+        )
+    if not os.path.exists(os.path.join(ctx.tree, "usr", "bin", "gdb")):
+        return "the tree has no gdb: its breakpoints inside not checked"
+    src = os.path.join(ctx.work, "gdb_hello.c")
+    hello = os.path.join(ctx.work, "gdb_hello")
+    with open(src, "w") as f:
+        f.write('#include <stdio.h>\nint main(void) { puts("hello"); return 0; }\n')
+    rc, _out, err = run(
+        [wrapper(ctx, ctx.gcc), "-g", "-O0", "-o", hello, src], cwd=ctx.work, env=ctx.env
+    )
+    expect(rc == 0, "compile: " + err[-600:])
+    # a program built inside, by the positional entry (13.1), and a wrapped one by its libc
+    for target, brk, want in (
+        (hello, "main", "Breakpoint 1, main () at "),
+        (true, "exit", " in exit ()"),
+    ):
+        rc, out, err = run(
+            [
+                wrapper(ctx, "gdb"),
+                "-batch",
+                "-nx",
+                "-iex",
+                "set auto-load safe-path /",
+                "-iex",
+                "set breakpoint pending on",
+                "-ex",
+                f"break {brk}",
+                "-ex",
+                "run",
+                "-ex",
+                "bt",
+                "-ex",
+                "info auto-load python-scripts",
+                "--args",
+                ctx.launcher,
+                target,
+            ],
+            cwd=ctx.work,
+            env=ctx.env,
+            timeout=120,
+        )
+        expect(
+            want in out and "exclave-launcher.py" in out,
+            f"gdb inside stops at {brk} in {target}: rc={rc} {out[-600:]!r} {err[-400:]!r}",
+        )
+    return None

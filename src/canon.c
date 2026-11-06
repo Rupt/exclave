@@ -112,13 +112,58 @@ static int exec_of_pid(long pid, char *out)
     return found;
 }
 
+/* Whether this process traces another, pid: the TracerPid line of /proc/<pid>/status names the tracing thread, the
+ * caller, its process or one of its threads; not for a file this process may not read. The kernel writes the line
+ * eighth, after a name of at most 64 bytes escaped and six short lines, so the file's first 256 bytes hold it. */
+static int traced_by(long pid, const struct scratch *S)
+{
+    char buf[256];
+    scpy(buf, "/proc/", sizeof buf);
+    ltoa_(pid, buf + 6);
+    scat(buf, "/status", sizeof buf);
+    long fd = sys_open(buf, O_RDONLY | O_CLOEXEC, 0);
+    if (fd < 0) return 0;
+    long have = 0, n;
+    while (have < (long)sizeof buf && (n = sys_read((int)fd, buf + have, sizeof buf - (size_t)have)) > 0) have += n;
+    sys_close((int)fd);
+    long t = status_tracer(buf, have);
+    if (!t) return 0;
+    if (t == S->tid || t == S->pid) return 1;
+    scpy(buf, "/proc/self/task/", sizeof buf);
+    ltoa_(t, buf + 16);
+    return sys_faccessat(AT_FDCWD, buf, 0) == 0; /* F_OK */
+}
+
+/* The TracerPid field of a status file's head, buf of n bytes: the pid, or 0 where the line is absent or cut short */
+long status_tracer(const char *buf, long n)
+{
+    static const char key[] = "\nTracerPid:\t";
+    long k = (long)sizeof key - 1;
+    for (long i = 0; i + k <= n; i++) {
+        if (xmemcmp(buf + i, key, (size_t)k) != 0) continue;
+        long v = 0, j = i + k;
+        for (; j < n && buf[j] >= '0' && buf[j] <= '9'; j++) v = v * 10 + (buf[j] - '0');
+        return j < n && buf[j] == '\n' ? v : 0;
+    }
+    return 0;
+}
+
 /* Another process's exe link whose text names the launcher: that process runs a program on the loader path, the one
  * its EXCLAVE_EXEC names (7.4.5), which the kernel would name natively (7.6, 13 item 10). 1 with text replaced by
- * the program's virtual path; 0 leaves text as it is. */
+ * the program's virtual path; 0 leaves text as it is. -1 for the link of a process the caller traces, whose text is
+ * the kernel's own, a wrapper's answered as the launcher it is: a debugger learns what it debugs from the link, the
+ * launcher and the script it carries (7.6). */
 int other_exe(const struct scratch *S, const char *v, char *text)
 {
     long pid = exe_link_pid(v, S->pid);
-    return pid && pid != S->pid && xstrcmp(text, C.launcher) == 0 && exec_of_pid(pid, text);
+    if (!pid || pid == S->pid) return 0;
+    if (traced_by(pid, S)) {
+        /* a wrapper is the launcher under the program's name: the launcher's own path, since an open of the wrapper's
+         * reaches its original (7.4.4) */
+        if (starts_dir(text, C.root)) scpy(text, C.launcher, PATH_MAX);
+        return -1;
+    }
+    return xstrcmp(text, C.launcher) == 0 && exec_of_pid(pid, text);
 }
 
 /* ---------- the one-step host check (DESIGN.md 16.6 item 4) ----------
@@ -580,7 +625,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         if (w.rf & RESOLVE_NO_SYMLINKS) return -ELOOP;
         if (++w.hops > 40) return -ELOOP;
         /* another process's exe that is the launcher names the program that process runs (7.6) */
-        if (other_exe(S, cur, tmp)) S->touched_exclave = 1;
+        if (other_exe(S, cur, tmp) > 0) S->touched_exclave = 1;
         /* the kernel walks the final link's text as the rest of the path (link_path_walk), so a slash ending it is
          * the path's trailing slash: a directory is meant, and O_CREAT answers EISDIR (open_last_lookups) */
         if (last && tmp[0] && tmp[xstrlen(tmp) - 1] == '/') trailing = 1;

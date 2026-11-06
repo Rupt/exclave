@@ -923,12 +923,14 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
             S->tmp[r] = 0;
         }
         /* another process's exe that is the launcher names the program that process runs (7.6) */
-        if (!other_exe(S, S->v, S->tmp) && xstrncmp(S->v, "/proc/", 6) == 0) from_real(S->tmp); /* real paths */
+        int o = other_exe(S, S->v, S->tmp);
+        if (!o && xstrncmp(S->v, "/proc/", 6) == 0) from_real(S->tmp); /* real paths */
         ans = S->tmp;
         /* another process's exe link that names a wrapped script: that process runs the script's interpreter,
-         * which is what the kernel would report natively */
-        if (xstrncmp(S->v, "/proc/", 6) == 0 && xstrlen(S->v) > 4 && xstrcmp(S->v + xstrlen(S->v) - 4, "/exe") == 0 &&
-            is_exclave_path(ans)) {
+         * which is what the kernel would report natively; a tracer reads its tracee's link as the kernel gives it
+         * (7.6) */
+        if (o >= 0 && xstrncmp(S->v, "/proc/", 6) == 0 && xstrlen(S->v) > 4 &&
+            xstrcmp(S->v + xstrlen(S->v) - 4, "/exe") == 0 && is_exclave_path(ans)) {
             scpy(S->v2, ans, PATH_MAX);
             to_real_exec(S->v2, S->real);
             if (is_wrapper_real(S->real, S->real2) && payload_of(S->real, S->real2)) {

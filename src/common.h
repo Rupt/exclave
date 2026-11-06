@@ -347,6 +347,8 @@ int cwd_virtual(char *out);
 int is_self_exe(const char *p, pid_t pid); /* /proc/self/exe in any spelling, for this process */
 /* another process's exe link v whose text is the launcher: text becomes the program it runs (PATH_MAX); 1 if so */
 int other_exe(const struct scratch *S, const char *v, char *text);
+/* the TracerPid field of a /proc/<pid>/status head of n bytes, 0 for none (7.6) */
+long status_tracer(const char *buf, long n);
 
 /* ---------- loader (loader.c) ---------- */
 /* reads the first bytes of fd, the file the startup loads, for loader_run: returns their count, *bytes the bytes */
