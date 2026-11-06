@@ -13,11 +13,14 @@ package unpack
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
+	"exclave/unpack/apk"
 	"exclave/unpack/ldcache"
 	"exclave/unpack/reader"
 	"exclave/unpack/root"
@@ -272,6 +275,74 @@ func busyboxApplets(r *root.Root, _ []*Package, log logger) (bool, error) {
 	return true, nil
 }
 
+// apkDatabase writes apk's database of installed packages, /lib/apk/db/installed, as apk-tools
+// writes it when it installs them: one record per package from its .PKGINFO, in the order of
+// the packages' names, each keyed by its control section's checksum (C:), and /etc/apk/world,
+// which apk reads with it. It is where an Alpine system records each package's licence, by name,
+// and its origin, the source package, since Alpine ships few licence texts (13 item 47), and where
+// SBOM and vulnerability scanners read an Alpine system's packages. The files a package owns (F:
+// and R:) are not recorded, since prune removes files. A database or a world the packages ship
+// already is left as it is.
+func apkDatabase(r *root.Root, packages []*Package, log logger) (bool, error) {
+	var apks []*Package
+	for _, p := range packages {
+		if packageFormat(p.Path) == "apk" {
+			apks = append(apks, p)
+		}
+	}
+	const db = "/lib/apk/db/installed"
+	if len(apks) == 0 || r.Lexists(db) {
+		return false, nil
+	}
+	sort.Slice(apks, func(i, j int) bool { return apks[i].Name < apks[j].Name })
+	var b, world strings.Builder
+	for _, p := range apks {
+		st, err := os.Stat(p.Path)
+		if err != nil {
+			return false, err
+		}
+		sum, err := apk.ControlChecksum(p.Path)
+		if err != nil {
+			return false, err
+		}
+		world.WriteString(p.Name + "\n")
+		arch := p.Arch()
+		if arch == "all" {
+			arch = "noarch"
+		}
+		for _, kv := range [][2]string{
+			{"C", sum}, {"P", p.Name}, {"V", p.Version()}, {"A", arch}, {"S", strconv.FormatInt(st.Size(), 10)},
+			{"I", p.Fields["Installed-Size"]}, {"T", p.Fields["Description"]}, {"U", p.Fields["Homepage"]},
+			{"L", p.Fields["License"]}, {"o", p.Fields["Origin"]}, {"m", p.Fields["Maintainer"]},
+			{"t", p.Fields["Build-Date"]}, {"c", p.Fields["Commit"]}, {"D", p.Fields["Depends"]},
+			{"p", p.Fields["Provides"]}, {"i", p.Fields["Install-If"]}, {"r", p.Fields["Replaces"]},
+		} {
+			if kv[1] != "" {
+				b.WriteString(kv[0] + ":" + kv[1] + "\n")
+			}
+		}
+		b.WriteString("\n")
+	}
+	if err := r.Makedirs("lib/apk/db"); err != nil {
+		return false, err
+	}
+	if err := r.WriteBytes(db, []byte(b.String()), 0o644); err != nil {
+		return false, err
+	}
+	// the packages asked for, which apk reads with its database: every package, since a closure
+	// does not say which of them were asked for
+	if !r.Lexists("/etc/apk/world") {
+		if err := r.Makedirs("etc/apk"); err != nil {
+			return false, err
+		}
+		if err := r.WriteBytes("/etc/apk/world", []byte(world.String()), 0o644); err != nil {
+			return false, err
+		}
+	}
+	log(fmt.Sprintf("wrote %s: %d packages, their licences by name", db, len(apks)))
+	return true, nil
+}
+
 // sbinMerge does what Fedora 42's filesystem does in its %posttrans: it replaces /usr/sbin and
 // /usr/local/sbin by a link to bin when every entry there is a link ../bin/<name>; the script says
 // so in Lua, and this is its effect.
@@ -516,6 +587,7 @@ var rules = []rule{
 	{"alternatives", alternatives},
 	{"java-jinfo", javaJinfo},
 	{"busybox-applets", busyboxApplets},
+	{"apk-database", apkDatabase},
 	{"sbin-merge", sbinMerge},
 	{"dash-sh", dashSh},
 	{"ca-certificates", caCertificates},

@@ -49,10 +49,13 @@ func licenceFilesAt(dir, rel string, out *[]string) {
 	}
 }
 
+// apkDatabase is apk's database of installed packages, which unpack writes for an Alpine tree.
+const apkDatabase = "/lib/apk/db/installed"
+
 // findShares lists the virtual paths of the packages' licence texts, which prune keeps: under
 // every usr/share/ of the tree, a data directory's included, Debian's doc/PKG/copyright and every
-// file under common-licenses/ and licenses/, where RPM's %license files and Alpine's -doc packages
-// put theirs.
+// file under common-licenses/ and licenses/, where RPM's %license files and the few of Alpine's
+// -doc packages that hold one put theirs.
 func findShares(dir, rel string, out *[]string) {
 	e, err := listDir(dir)
 	if err != nil {
@@ -194,6 +197,10 @@ func cmdPrune(args []string) int {
 	}
 	var licences []string // the packages' licence texts go with every copy
 	findShares(root, "", &licences)
+	// and Alpine's package database, where its packages' licences are recorded by name (10.1)
+	if lexists(treeReal(root, apkDatabase)) {
+		licences = append(licences, apkDatabase)
+	}
 	for _, v := range licences {
 		var links []string
 		final := treeResolve(root, v, true, &links)

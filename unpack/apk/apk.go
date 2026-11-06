@@ -17,10 +17,16 @@
 //     /bin/busybox, so that tree/bin/sh run from outside the exclave reaches the wrapper in the
 //     tree (DESIGN.md 13 item 37).
 //   - musl's loader reads no ld.so.cache, so the tool's static check asks for none.
-//   - A package's licence text comes only in its `-doc` package.
+//   - A package's licence is recorded by name in .PKGINFO, which unpack copies into apk's
+//     database, /lib/apk/db/installed; Alpine ships few licence texts, in some `-doc` packages.
 package apk
 
 import (
+	"bufio"
+	"bytes"
+	"compress/gzip"
+	"crypto/sha1"
+	"encoding/base64"
 	"io"
 	"os"
 	"regexp"
@@ -70,6 +76,67 @@ func open(p string, data bool) (*reader.Tar, error) {
 		keep = func(m *reader.Member) bool { return !strings.HasPrefix(norm(m.Name), ".") }
 	}
 	return reader.NewTar(stream, f, label, keep), nil
+}
+
+// counting reads a file through a buffer one byte at a time if asked, counting the bytes it has
+// handed out, so that a gzip reader on it, which reads a flate.Reader no further than it needs,
+// leaves the count at the end of the member it read.
+type counting struct {
+	r *bufio.Reader
+	n int64
+}
+
+func (c *counting) Read(b []byte) (int, error) {
+	n, err := c.r.Read(b)
+	c.n += int64(n)
+	return n, err
+}
+
+func (c *counting) ReadByte() (byte, error) {
+	b, err := c.r.ReadByte()
+	if err == nil {
+		c.n++
+	}
+	return b, err
+}
+
+// controlCap bounds the plaintext of a member read for the control section, which is small.
+const controlCap = 4 << 20
+
+// ControlChecksum is the package's checksum as apk's index and its database record it: Q1 and the
+// base64 of the SHA-1 of the gzip member that holds .PKGINFO, the control section. The members
+// before it, the signatures, are read to find their ends; the data after it is not read.
+func ControlChecksum(p string) (string, error) {
+	label := p + ": not an apk"
+	f, err := os.Open(p)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	c := &counting{r: bufio.NewReader(f)}
+	for start := int64(0); ; start = c.n {
+		z, err := gzip.NewReader(c)
+		if err != nil {
+			return "", reader.Errorf("%s: no control section: %s", label, err)
+		}
+		z.Multistream(false)
+		plain, err := io.ReadAll(io.LimitReader(z, controlCap+1))
+		if err != nil {
+			return "", reader.Errorf("%s: %s", label, err)
+		}
+		if len(plain) > controlCap {
+			return "", reader.Errorf("%s: no control section within %d bytes", label, controlCap)
+		}
+		if !bytes.Contains(plain, []byte(".PKGINFO")) {
+			continue
+		}
+		raw := make([]byte, c.n-start)
+		if _, err := f.ReadAt(raw, start); err != nil {
+			return "", err
+		}
+		sum := sha1.Sum(raw) // apk-tools records SHA-1
+		return "Q1" + base64.StdEncoding.EncodeToString(sum[:]), nil
+	}
 }
 
 // OpenData returns the package's payload, the files it installs: the archive without its dot-files.
@@ -143,6 +210,17 @@ func (Format) Control(p string) (map[string]string, map[string]string, error) {
 	}
 	if v, ok := raw["triggers"]; ok {
 		fields["Triggers"] = strings.Join(v, " ")
+	}
+	// what apk's database records of a package beside its name, version and relations: the
+	// installed size, the description, the project's address, the licence by name, the origin
+	// (the source package), the maintainer, the build's time and the aports commit
+	for _, kv := range [][2]string{
+		{"size", "Installed-Size"}, {"pkgdesc", "Description"}, {"url", "Homepage"}, {"license", "License"},
+		{"origin", "Origin"}, {"maintainer", "Maintainer"}, {"builddate", "Build-Date"}, {"commit", "Commit"},
+	} {
+		if v, ok := raw[kv[0]]; ok {
+			fields[kv[1]] = v[0]
+		}
 	}
 	return fields, found, nil
 }

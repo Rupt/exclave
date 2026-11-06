@@ -60,8 +60,9 @@ def prune_and_check_with_logs(ctx: Ctx) -> str:
     The shared exclave passes the check, its wrappers, its tree against its hashes, the static
     check and the dynamic check of the EXCLAVE_LOG files a workload wrote, and its manifest is
     canonical; prune keeps what the logs touched plus the libraries kept ELF files need and the
-    packages' licence texts, those the tree has and two planted where Debian and RPM put them, and
-    drops the rest, a shortcut with the file it names, and the pruned exclave still compiles.
+    packages' licence texts, those the tree has and three planted where Debian, RPM and Alpine put
+    them, and drops the rest, a shortcut with the file it names, and the pruned exclave still
+    compiles.
     """
     log = os.path.join(ctx.work, "prune.log")
     if os.path.exists(log):
@@ -91,6 +92,7 @@ def prune_and_check_with_logs(ctx: Ctx) -> str:
     planted = [
         "/usr/share/doc/exclave-planted/copyright",
         "/usr/share/licenses/exclave-planted/COPYING",
+        "/lib/apk/db/installed",
     ]
     for v in planted:
         os.makedirs(os.path.dirname(os.path.join(ex2, "tree", v.lstrip("/"))), exist_ok=True)

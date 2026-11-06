@@ -13,14 +13,17 @@ of failures, at most 255.
 """
 
 import argparse
+import base64
 import dataclasses
 import gzip
+import hashlib
 import io
 import os
 import shutil
 import stat
 import sys
 import tarfile
+import zlib
 from typing import TYPE_CHECKING, Any
 lazy from collections.abc import Sequence
 
@@ -264,8 +267,8 @@ def apk_unpack(ctx: Ctx) -> None:
     """10.1: unpack reads .apk files by the file, with .PKGINFO's depend and provides.
 
     Names and file dependencies are asked of the tree; Alpine's directories are its own, not merged
-    /usr; busybox's applet links are synthesised from /etc/busybox-paths.d as relative links; one
-    format per exclave.
+    /usr; busybox's applet links are synthesised from /etc/busybox-paths.d as relative links; apk's
+    database records each package, its licence by name among its fields; one format per exclave.
     """
     d = os.path.join(ctx.work, "apks")
     os.makedirs(d, exist_ok=True)
@@ -293,7 +296,8 @@ def apk_unpack(ctx: Ctx) -> None:
             ("usr/lib", "dir", None, 0o755),
             ("usr/lib/libfoo.so.1", "file", b"data\n", 0o644),
         ],
-        "provides = so:libfoo.so.1=1\nprovides = cmd:busybox=1.0-r0\n",
+        "provides = so:libfoo.so.1=1\nprovides = cmd:busybox=1.0-r0\n"
+        "license = MIT AND Zlib\norigin = foo\npkgdesc = the foo library\n",
     )
     out = os.path.join(ctx.work, "apk.exclave")
     rc, o, e = run(
@@ -323,6 +327,27 @@ def apk_unpack(ctx: Ctx) -> None:
         and os.readlink(os.path.join(root, "usr", "bin", "tool2")) == "../../bin/busybox",
         "applet links relative to their target: {!r}".format(os.listdir(os.path.join(root, "bin"))),
     )
+    with open(os.path.join(root, "lib", "apk", "db", "installed")) as f:
+        db = f.read()
+    with open(os.path.join(d, "libfoo-1.0-r0.apk"), "rb") as f:
+        raw = f.read()
+    # the control section, the first gzip member here, is what apk's checksum is of
+    inflate = zlib.decompressobj(31)
+    inflate.decompress(raw)
+    control = raw[: len(raw) - len(inflate.unused_data)]
+    checksum = "Q1" + base64.b64encode(hashlib.sha1(control).digest()).decode()  # noqa: S324  apk's own
+    expect(
+        db.startswith(
+            f"C:{checksum}\nP:libfoo\nV:1.0-r0\nA:{MACHINE}\nS:{len(raw)}\nI:1\n"
+            "T:the foo library\nL:MIT AND Zlib\no:foo\np:so:libfoo.so.1=1 cmd:busybox=1.0-r0\n\n"
+            "C:Q1"
+        )
+        and "\nP:tool\n" in db,
+        f"apk's database, the licence by name: {db!r}",
+    )
+    with open(os.path.join(root, "etc", "apk", "world")) as f:
+        world = f.read()
+    expect(world == "libfoo\ntool\n", f"apk's world, every package: {world!r}")
     lock = tree.records(os.path.join(out, ".exclave", "hashes"))
     pkgs = lock.get("pkg", [])
     expect(

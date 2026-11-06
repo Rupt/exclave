@@ -547,7 +547,8 @@ which the MIT licence asks to go with every copy; `readelf -p
 .exclave.license .exclave/launcher` prints it, and the README the tool
 writes says so. The software in an exclave's tree keeps its packages'
 own licences, and an exclave passed on passes their terms on with it:
-`exclave prune` keeps their texts, and an Alpine exclave has them only
-if the packages' `-doc` packages went in. The Go modules `go.mod` pins
+`exclave prune` keeps their texts, and an Alpine exclave, as Alpine
+does, names its packages' licences in apk's database, `/lib/apk/db/installed`,
+and holds few texts. The Go modules `go.mod` pins
 carry their own licences, BSD and MIT; `scripts/build` writes their
 texts to `build/NOTICES`, and a release ships it beside the command.

@@ -49,6 +49,7 @@ func FuzzApk(f *testing.F) {
 		}
 		Reader.Control(p)
 		Reader.Interests(p)
+		ControlChecksum(p)
 		a, err := Reader.OpenData(p)
 		if err != nil {
 			return

@@ -2271,7 +2271,13 @@ refused. From `.deb` files, in five steps:
    `/usr/lib/jvm/.*.jinfo` file it ships for `update-java-alternatives`,
    since its `postinst` makes them in a loop, the highest priority
    winning; `busybox-applets`, Alpine's applet links from
-   `/etc/busybox-paths.d`; `sbin-merge`, Fedora's `/usr/sbin` as a link
+   `/etc/busybox-paths.d`; `apk-database`, apk's database of installed
+   packages, `/lib/apk/db/installed`, as apk writes it, a record of
+   each package's `.PKGINFO` keyed by its control section's checksum,
+   its licence by name and its origin among the fields and the files
+   it owns left out, with `/etc/apk/world` listing every package, so
+   that `apk info` inside answers and a scanner reads the packages;
+   `sbin-merge`, Fedora's `/usr/sbin` as a link
    to `bin`; `dash-sh`; `ca-certificates`, `ca-certificates.crt`
    concatenated from the certificates `ca-certificates.conf` enables;
    `ca-trust`, Fedora's bundle from the p11-kit trust source;
@@ -2646,11 +2652,12 @@ workloads used. It reads `EXCLAVE_LOG` files and keeps:
 The licence texts are the files under every `usr/share/` of the tree,
 including one inside a data directory: Debian's
 `usr/share/doc/PKG/copyright` and the `usr/share/common-licenses` those
-cite, and `usr/share/licenses/`, where RPM's `%license` files and
-Alpine's `-doc` packages put theirs. An exclave that is passed on
+cite, and `usr/share/licenses/`, where RPM's `%license` files and the
+few of Alpine's `-doc` packages that hold one put theirs; and apk's
+database, `/lib/apk/db/installed`, where an Alpine tree records its
+packages' licences by name (10.1). An exclave that is passed on
 carries its packages' terms, and a workload never reads them, so a
-trace alone would drop them. An Alpine exclave has its licence texts
-only if the packages' `-doc` packages went in.
+trace alone would drop them.
 
 Every other file and symlink is removed, and with it a shortcut (6.1)
 to a file removed, which `prune` names, so that the pruned exclave
@@ -3238,13 +3245,13 @@ and stay fixed.
     program that reads its own `/proc/self/environ` sees the name it was
     exec'd by and its `comm`, which are the kernel's own facts about it.
 
-47. **An Alpine exclave has no licence texts unless the `-doc` packages
-    are added.** Alpine ships a package's licence text in its `-doc`
-    package, which a closure of `gcc` does not pull in, and records the
-    licence by name in the package's metadata, which the hashes file
-    does not copy. Whoever passes an Alpine exclave on adds the `-doc`
-    packages, whose texts land in `usr/share/licenses/` and survive
-    pruning (10.4).
+47. **An Alpine exclave carries its licences by name, as Alpine
+    does.** Alpine records each package's licence as an SPDX
+    expression in apk's database, which `unpack` writes (10.1), and
+    ships few licence texts: of the fourteen source packages of the
+    gate's Alpine closure only `mpfr4-doc` holds one. Whoever passes an
+    Alpine exclave on supplies the texts the named licences require,
+    as for an Alpine system.
 
 48. **Some caches only a tree's own binary can make are made by
     hand.** `unpack` and `wrap` run nothing of the tree (10.1), and

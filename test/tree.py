@@ -298,7 +298,8 @@ def licence_files(root: str) -> set[str]:
     """Return the virtual paths of the packages' licence texts, which prune keeps (10.4).
 
     Under every usr/share/ of the tree: doc/PKG/copyright, and every file under common-licenses/
-    and licenses/.
+    and licenses/; and apk's database, /lib/apk/db/installed, which records Alpine's licences by
+    name.
     """
     found = []
     for dirpath, dirnames, _ in os.walk(root):
@@ -314,7 +315,10 @@ def licence_files(root: str) -> set[str]:
         for top in ("common-licenses", "licenses"):
             for d, _, filenames in os.walk(os.path.join(dirpath, top)):
                 found += [os.path.join(d, n) for n in filenames]
-    return {"/" + os.path.relpath(f, root) for f in found}
+    apk_db = os.path.join(root, "lib", "apk", "db", "installed")
+    return {"/" + os.path.relpath(f, root) for f in found} | (
+        {"/lib/apk/db/installed"} if os.path.lexists(apk_db) else set()
+    )
 
 
 def _unquote(field: str) -> str:
