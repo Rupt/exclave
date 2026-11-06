@@ -239,7 +239,10 @@ static struct rule {
     unsigned len, flags;
     int host;
 } rules[RULE_SLOTS];
-static int nrules;                                             /* entries placed, at most half the slots */
+static int nrules;                                             /* entries placed, at most half the slots in use */
+/* the slots in use, less one: the first of the table, enough for twice the entries rule_build can place, so that the
+ * pages a start touches are the ones its entries need (16.6 item 9) */
+static unsigned rule_mask = RULE_SLOTS - 1;
 /* a rule string "/", which starts_dir lets match every absolute path */
 static int root_flags;
 /* the exclave's directory's length, for the subtree there that vis_is_host gives the host */
@@ -249,7 +252,7 @@ static unsigned long rule_hash(unsigned long h, char c) { return (h ^ (unsigned 
 #define RULE_BASIS 1469598103934665603UL
 static struct rule *rule_find(const char *v, unsigned len, unsigned long h)
 {
-    for (unsigned i = (unsigned)h & (RULE_SLOTS - 1), n = 0; n < RULE_SLOTS; i = (i + 1) & (RULE_SLOTS - 1), n++) {
+    for (unsigned i = (unsigned)h & rule_mask, n = 0; n <= rule_mask; i = (i + 1) & rule_mask, n++) {
         if (!rules[i].s) return 0;
         if (rules[i].len == len && xmemcmp(rules[i].s, v, len) == 0) return &rules[i];
     }
@@ -265,10 +268,10 @@ static void rule_add(const char *v, unsigned len, unsigned flags, int host)
     for (unsigned i = 0; i < len; i++) h = rule_hash(h, v[i]);
     struct rule *r = rule_find(v, len, h);
     if (!r) {
-        unsigned i = (unsigned)h & (RULE_SLOTS - 1);
-        while (rules[i].s) i = (i + 1) & (RULE_SLOTS - 1);
+        unsigned i = (unsigned)h & rule_mask;
+        while (rules[i].s) i = (i + 1) & rule_mask;
         /* slack left, so that a probe always meets an empty slot */
-        if (++nrules > RULE_SLOTS / 2) die("visibility table full", v, 0);
+        if (++nrules > (int)(rule_mask + 1) / 2) die("visibility table full", v, 0);
         r = &rules[i];
         r->s = v;
         r->len = len;
@@ -281,6 +284,10 @@ static void rule_add(const char *v, unsigned len, unsigned flags, int host)
 static void rule_build(void)
 {
     dir_len = (unsigned)xstrlen(C.dir);
+    unsigned most = (unsigned)C.nown + (unsigned)(sizeof volatile_dirs / sizeof volatile_dirs[0]);
+    for (int i = 0; i < C.nhost; i++)
+        for (const char *p = C.host[i].v; *p; p++) most += *p == '/';
+    while (rule_mask + 1 > 64 && rule_mask / 2 + 1 >= 2 * most) rule_mask /= 2;
     for (int i = 0; i < C.nown; i++) rule_add(C.own[i], (unsigned)xstrlen(C.own[i]), R_OWN, -1);
     for (int i = 0; volatile_dirs[i]; i++)
         rule_add(volatile_dirs[i], (unsigned)xstrlen(volatile_dirs[i]), R_VOLATILE, -1);

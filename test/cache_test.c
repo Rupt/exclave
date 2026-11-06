@@ -1,19 +1,23 @@
-/* cache_test.c — the canonicalisation cache's insert lock across fork (DESIGN.md 7.4.4). The lock lives on a page the
+/* cache_test.c — the canonicalisation cache's growth from its first table to the full one (16.6 item 9), and its
+ * insert lock across fork (DESIGN.md 7.4.4). The lock lives on a page the
  * kernel wipes at fork, so a child forked while another thread held it starts with it free, where an inherited copy
  * would be held for the child's life and every insert there skipped. Built on the host with src/cache.c and src/str.c
  * under -DHOST_TEST, which adds cache_test_hold and cache_test_release, the lock as a thread mid-insert holds it. The
- * launcher's syscalls go through its page, which this program maps as the launcher's startup does. Prints one line;
- * exit 0 when it holds, and SKIP, exit 0, on a kernel without MADV_WIPEONFORK (before 4.14). */
+ * launcher's syscalls go through its page, which this program maps as the launcher's startup does. Prints a line
+ * for each; exit 0 when both hold, and SKIP, exit 0, on a kernel without MADV_WIPEONFORK (before 4.14). */
 #define _GNU_SOURCE
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #define SC_PAGE 0x7fe00000UL /* src/sys.h */
-#define CK_DIR 2 /* src/common.h */
+#define CK_DIR 2  /* src/common.h */
+#define CK_LINK 3 /* src/common.h */
+#define PATH_MAX_TEST 4096 /* PATH_MAX, the buffer a link's text is copied to */
 #ifndef MADV_WIPEONFORK
 #define MADV_WIPEONFORK 18
 #endif
@@ -38,6 +42,29 @@ int is_wrapper_st(const char *real, const struct kstat *st, char *tmp)
     (void)st;
     tmp[0] = 0; /* no payload */
     return 0;
+}
+
+/* the first table filled past its share and copied into the full one (16.6 item 9): every entry, before the copy and
+ * after, answers with its kind and a link its text, and a name never put is a miss */
+static int grows(void)
+{
+    char v[64], text[PATH_MAX_TEST];
+    int n = 3000, bad = 0;
+    for (int i = 0; i < n; i++) {
+        snprintf(v, sizeof v, "/grow/%d", i);
+        snprintf(text, sizeof text, "t%d", i);
+        cache_put(v, i % 3 ? CK_DIR : CK_LINK, i % 3 ? 0 : text);
+    }
+    for (int i = 0; i < n; i++) {
+        snprintf(v, sizeof v, "/grow/%d", i);
+        snprintf(text, sizeof text, "t%d", i);
+        char got[PATH_MAX_TEST] = "";
+        int k = cache_get(v, got);
+        if (k != (i % 3 ? CK_DIR : CK_LINK) || (k == CK_LINK && strcmp(got, text) != 0)) bad++;
+    }
+    if (cache_get("/grow/never", 0) != 0) bad++;
+    printf("%s cache growth: %d of %d entries wrong after the first table filled\n", bad ? "FAIL" : "PASS", bad, n);
+    return !bad;
 }
 
 int main(void)
@@ -66,6 +93,7 @@ int main(void)
         return 0;
     }
     cache_init();
+    if (!grows()) return 1;
     cache_put("/usr", CK_DIR, 0);
     if (cache_get("/usr", 0) != CK_DIR) {
         printf("FAIL cache lock: an insert with the lock free was not kept\n");

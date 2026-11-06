@@ -14,6 +14,7 @@
 #include "common.h"
 
 #define SLOTS 16384
+#define FIRST_SLOTS 256
 #define STRINGS (1024UL * 1024)
 
 struct slot {
@@ -21,10 +22,21 @@ struct slot {
     unsigned int off;
     unsigned char kind;
 };
-static struct slot table[SLOTS];
+/* A process starts with the first table, 4 KB, one page for a short-lived program's few dozen entries,
+ * where the full table's 256 KB would fault in a page for nearly every entry. The insert that would fill the first
+ * past its share copies its entries into the full table and then publishes that (16.6 item 9). A reader uses the
+ * table it loaded: the live one, or one replaced while it looked, which is never written again, so a lookup racing
+ * the copy at worst misses and asks the kernel. */
+struct table {
+    struct slot *slot;
+    unsigned mask;
+};
+static struct slot first_slots[FIRST_SLOTS], full_slots[SLOTS];
+static const struct table first_table = {first_slots, FIRST_SLOTS - 1}, full_table = {full_slots, SLOTS - 1};
+static const struct table *volatile live = &first_table;
 static char strings[STRINGS];
 static volatile unsigned int used;
-static unsigned int filled;
+static unsigned int filled; /* the entries of the live table */
 static volatile int lock_inherited; /* the lock before cache_init, or on a kernel without MADV_WIPEONFORK */
 static volatile int *lock = &lock_inherited;
 static volatile int full;
@@ -61,18 +73,43 @@ void cache_test_release(void) { __sync_lock_release(lock); }
 int cache_get(const char *v, char *link_out)
 {
     unsigned long h = hash_str(v);
-    for (unsigned i = h & (SLOTS - 1), n = 0; n < SLOTS; i = (i + 1) & (SLOTS - 1), n++) {
-        unsigned long sh = table[i].hash;
+    const struct table *t = live;
+    for (unsigned i = (unsigned)h & t->mask, n = 0; n <= t->mask; i = (i + 1) & t->mask, n++) {
+        unsigned long sh = t->slot[i].hash;
         if (!sh) return 0;
         if (sh != h) continue;
         __sync_synchronize();
-        const char *s = strings + table[i].off;
+        const char *s = strings + t->slot[i].off;
         if (xstrcmp(s, v) != 0) continue;
-        int kind = table[i].kind;
+        int kind = t->slot[i].kind;
         if (kind == CK_LINK && link_out) scpy(link_out, s + xstrlen(s) + 1, PATH_MAX);
         return kind;
     }
     return 0;
+}
+
+/* the slot of t for hash h: the empty one a probe for it ends at, or the one holding v; under the lock */
+static unsigned slot_for(const struct table *t, unsigned long h, const char *v)
+{
+    unsigned i = (unsigned)h & t->mask;
+    for (unsigned n = 0; n <= t->mask && t->slot[i].hash; i = (i + 1) & t->mask, n++)
+        if (v && t->slot[i].hash == h && xstrcmp(strings + t->slot[i].off, v) == 0) break;
+    return i;
+}
+
+/* under the lock: the first table's entries copied into the full one, which then becomes the live table */
+static void grow(void)
+{
+    for (unsigned j = 0; j < FIRST_SLOTS; j++) {
+        if (!first_slots[j].hash) continue;
+        unsigned i = slot_for(&full_table, first_slots[j].hash, 0);
+        full_slots[i].off = first_slots[j].off;
+        full_slots[i].kind = first_slots[j].kind;
+        full_slots[i].hash = first_slots[j].hash;
+    }
+    /* every entry before the table that holds them */
+    __sync_synchronize();
+    live = &full_table;
 }
 
 void cache_put(const char *v, int kind, const char *link)
@@ -81,16 +118,19 @@ void cache_put(const char *v, int kind, const char *link)
     if (full || __sync_lock_test_and_set(lock, 1)) return;
     size_t vl = xstrlen(v) + 1, ll = (kind == CK_LINK && link) ? xstrlen(link) + 1 : 0;
     unsigned long h = hash_str(v);
-    unsigned i = h & (SLOTS - 1), n = 0;
-    for (; n < SLOTS; i = (i + 1) & (SLOTS - 1), n++) {
-        if (!table[i].hash) break;
-        if (table[i].hash == h && xstrcmp(strings + table[i].off, v) == 0) {
-            __sync_lock_release(lock);
-            return;
-        }
+    const struct table *t = live;
+    unsigned i = slot_for(t, h, v);
+    if (t->slot[i].hash) { /* there already */
+        __sync_lock_release(lock);
+        return;
     }
     /* stop with slack left: a probe must always meet an empty slot, or a miss would scan the whole table */
-    if (table[i].hash || ++filled > SLOTS - SLOTS / 8 || used + vl + ll > STRINGS) {
+    if (filled + 1 > t->mask + 1 - (t->mask + 1) / 8 && t == &first_table) {
+        grow();
+        t = live;
+        i = slot_for(t, h, v);
+    }
+    if (++filled > t->mask + 1 - (t->mask + 1) / 8 || used + vl + ll > STRINGS) {
         full = 1;
         __sync_lock_release(lock);
         return;
@@ -99,11 +139,11 @@ void cache_put(const char *v, int kind, const char *link)
     xmemcpy(strings + off, v, vl);
     if (ll) xmemcpy(strings + off + vl, link, ll);
     used += (unsigned)(vl + ll);
-    table[i].off = off;
-    table[i].kind = (unsigned char)kind;
+    t->slot[i].off = off;
+    t->slot[i].kind = (unsigned char)kind;
     /* strings and kind before the hash that publishes them */
     __sync_synchronize();
-    table[i].hash = h;
+    t->slot[i].hash = h;
     __sync_lock_release(lock);
 }
 
