@@ -482,6 +482,7 @@ func dynamicCheck(ex string, logs []string, own *ownership) *report {
 	}
 	root := pathJoin(ex, "tree")
 	var mods []string
+	userDB := map[string]bool{} // a module named for passwd or group, which musl reaches through nscd
 	if _, err := os.Stat("/etc/nsswitch.conf"); err == nil {
 		for line := range strings.FieldsFuncSeq(cString(readFile("/etc/nsswitch.conf")),
 			func(r rune) bool { return r == '\r' || r == '\n' }) {
@@ -492,6 +493,7 @@ func dynamicCheck(ex string, logs []string, own *ownership) *report {
 			if colon < 0 {
 				continue
 			}
+			db := strings.TrimSpace(line[:colon])
 			// a module name, mdns4_minimal included; not [NOTFOUND=return]
 			for _, word := range strings.FieldsFunc(line[colon+1:], func(r rune) bool {
 				return r == ' ' || r == '\t' || r == '\v' || r == '\f'
@@ -503,12 +505,17 @@ func dynamicCheck(ex string, logs []string, own *ownership) *report {
 				if ok && word != "files" && word != "dns" && !slices.Contains(mods, word) {
 					mods = append(mods, word)
 				}
+				if ok && (db == "passwd" || db == "group") {
+					userDB[word] = true
+				}
 			}
 		}
 	}
 	sort.Strings(mods)
-	musl := treeResolve(root, "/lib/ld-musl-"+launcherMachine.uname+".so.1", true, nil) != ""
-	var lack []string
+	// a musl tree: musl's loader and not glibc's, since a glibc tree may ship musl beside it
+	musl := treeResolve(root, "/lib/ld-musl-"+launcherMachine.uname+".so.1", true, nil) != "" &&
+		treeResolve(root, glibcLoaders[launcherMachine.uname], true, nil) == ""
+	var lack, lackUsers []string
 	for _, m := range mods {
 		has := false
 		for _, d := range defaultDirs() {
@@ -520,7 +527,9 @@ func dynamicCheck(ex string, logs []string, own *ownership) *report {
 		if has {
 			continue
 		}
-		if musl {
+		if musl && userDB[m] {
+			lackUsers = append(lackUsers, m)
+		} else if musl {
 			lack = append(lack, m)
 		} else if pkg, ok := nssPackages[m]; ok {
 			rep.warnf("this host's nsswitch.conf names %s; the exclave has no libnss_%s.so.2, so what it looks up "+
@@ -530,12 +539,19 @@ func dynamicCheck(ex string, logs []string, own *ownership) *report {
 				"is unknown inside: add the package that ships it (8.4)", m, m)
 		}
 	}
+	if len(lackUsers) > 0 {
+		rep.warnf("this host's nsswitch.conf names %s for users or groups; musl loads no NSS modules, so the users "+
+			"and groups they know are unknown inside unless the host runs nscd (8.4)", strings.Join(lackUsers, ", "))
+	}
 	if len(lack) > 0 {
 		rep.warnf("this host's nsswitch.conf names %s; musl loads no NSS modules, so what they look up is unknown "+
-			"inside unless the host runs nscd (8.4)", strings.Join(lack, ", "))
+			"inside (8.4)", strings.Join(lack, ", "))
 	}
 	return rep
 }
+
+// glibcLoaders are glibc's loaders by machine, as their ELF interpreters name them.
+var glibcLoaders = map[string]string{"x86_64": "/lib64/ld-linux-x86-64.so.2", "aarch64": "/lib/ld-linux-aarch64.so.1"}
 
 // nssPackages names, for the NSS modules a host's nsswitch.conf commonly names, the packages that
 // ship them; each module's client finds its daemon under /run, or SSSD's under /var/lib/sss,

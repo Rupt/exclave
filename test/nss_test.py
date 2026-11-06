@@ -1,15 +1,18 @@
 """A user the host knows from SSSD, looked up inside an exclave (DESIGN.md 8.4, 13 item 17).
 
-    test/nss_test.py --exclave EXCLAVE [--work DIR]
+    test/nss_test.py --exclave EXCLAVE [--musl EXCLAVE] [--work DIR]
 
 The exclave holds SSSD's lookup module, libnss_sss.so.2, and getent: scripts/inputs makes
 sss.exclave, Ubuntu's Essential set with libnss-sss added. In a user namespace a tmpfs on /var/lib
 holds the socket of a stand-in for SSSD served here, which answers one user by name and by uid in
-SSSD's protocol (sssd's src/sss_client/sss_cli.h), and an nsswitch.conf naming sss and winbind
-stands over the host's. getent inside the exclave answers the user both ways, as it would on a host
-whose users come from LDAP through SSSD; exclave check, under the same nsswitch.conf, warns of no
-module for sss and of winbind's, naming its package. Says so and exits 0 when it cannot run, without
-user namespaces.
+SSSD's protocol (sssd's src/sss_client/sss_cli.h), and an nsswitch.conf naming sss and winbind for
+users and mdns4_minimal for hosts stands over the host's. getent inside the exclave answers the
+user both ways, as it would on a host whose users come from LDAP through SSSD; exclave check, under
+the same nsswitch.conf, warns of no module for sss and of winbind's and mdns4_minimal's, naming
+their packages; and with --musl, on a musl exclave, it warns that the users of sss and winbind are
+found only through the host's nscd and that mdns4_minimal's names are not found. Says so and exits
+0 when it cannot run, without user namespaces or with a work directory too deep for the socket's
+path.
 """
 
 import argparse
@@ -97,6 +100,7 @@ def main() -> int:
     ap.add_argument(
         "--exclave", required=True, help="an exclave holding libnss_sss.so.2 and getent"
     )
+    ap.add_argument("--musl", help="a musl exclave, whose check warns of musl's own case")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "nss-work"))
     args = ap.parse_args()
     if subprocess.run(["unshare", "-Urm", "true"], capture_output=True, check=False).returncode:
@@ -112,8 +116,13 @@ def main() -> int:
     ):
         sys.exit(f"no libnss_sss.so.2 in {args.exclave}")
     with open(os.path.join(work, "nsswitch.conf"), "w") as f:
-        f.write("passwd: files sss winbind\ngroup: files sss\n")
+        f.write("passwd: files sss winbind\ngroup: files sss\nhosts: files mdns4_minimal dns\n")
     path = os.path.join(work, "sss", "pipes", "nss")
+    if len(path.encode()) > 107:
+        print(
+            f"nss: cannot run here: the socket's path passes the 107 bytes sun_path holds: {path}"
+        )
+        return 0
     server = socketserver.ThreadingUnixStreamServer(path, Handler)
     server.daemon_threads = True
     os.chmod(path, 0o666)
@@ -139,10 +148,38 @@ def main() -> int:
             f"EXCLAVE_LOG={log} {getent} passwd {NAME} >/dev/null; {tree.TOOL[0]} check {ex} {log}",
         )
         warns = [x for x in p.stdout.split("\n") if "nsswitch.conf" in x]
-        ok = len(warns) == 1 and "names winbind" in warns[0] and "libnss-winbind" in warns[0]
+        ok = (
+            len(warns) == 2
+            and "names mdns4_minimal" in warns[0]
+            and "libnss-mdns" in warns[0]
+            and "names winbind" in warns[1]
+            and "libnss-winbind" in warns[1]
+        )
         got = f"{warns!r} {p.stderr[-200:]!r}"
-        print(f"{'ok' if ok else 'FAIL'}: exclave check warns of winbind alone: {got}")
+        what = "exclave check warns of mdns4_minimal and winbind, not sss"
+        print(f"{'ok' if ok else 'FAIL'}: {what}: {got}")
         fails += not ok
+        if args.musl:
+            # a musl tree: no module loads, users and groups only through the host's nscd
+            mx = tree.fresh_exclave(os.path.abspath(args.musl), os.path.join(work, "musl.exclave"))
+            mroot = os.path.join(mx, "tree")
+            msh = os.path.join(mroot, tree.vbin(mroot, "sh").lstrip("/"))
+            mlog = os.path.join(work, "musl.log")
+            p = in_namespace(
+                work, f"EXCLAVE_LOG={mlog} {msh} -c true; {tree.TOOL[0]} check {mx} {mlog}"
+            )
+            warns = [x for x in p.stdout.split("\n") if "nsswitch.conf" in x]
+            ok = (
+                len(warns) == 2
+                and "names sss, winbind for users or groups" in warns[0]
+                and "nscd" in warns[0]
+                and "names mdns4_minimal; musl loads no NSS modules" in warns[1]
+                and "nscd" not in warns[1]
+            )
+            got = f"{warns!r} {p.stderr[-200:]!r}"
+            what = "on musl, users through nscd and mdns4_minimal unknown"
+            print(f"{'ok' if ok else 'FAIL'}: {what}: {got}")
+            fails += not ok
     finally:
         server.shutdown()
         server.server_close()

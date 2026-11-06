@@ -176,14 +176,16 @@ func ownedTop(ex string) []string {
 }
 
 // The host's directories by default (8.1.5), as the identity files are: SSSD's state, where its
-// lookup module finds the daemon (13 item 17). An own record naming one exactly removes it.
+// lookup module finds the daemon (13 item 17). An own record naming one exactly removes it, and
+// the launcher drops one this host lacks, as the model of it here does, so that prune keeps what
+// a tree ships there when the exclave answers for it.
 var hostDirs = []string{"/var/lib/sss"}
 
 func ownershipOf(ex string) *ownership {
 	m := manifestOf(ex)
 	o := &ownership{own: valuesOf(m, "own"), host: valuesOf(m, "host")}
 	for _, d := range hostDirs {
-		if !slices.Contains(o.own, d) {
+		if !slices.Contains(o.own, d) && lexists(d) {
 			o.host = append(o.host, d)
 		}
 	}

@@ -128,7 +128,11 @@ if has oracles; then
 fi
 if has nss; then # a user from SSSD looked up inside, through the exclave's own lookup module (13 item 17)
     if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
-        step nss py "$here/nss_test.py" --exclave "$EXCLAVE_TEST_INPUTS/sss.exclave" --work "$out/nss"
+        # with the Alpine exclave, for musl's warning, where scripts/inputs made it
+        musl=$EXCLAVE_TEST_INPUTS/alpine.exclave
+        [ -d "$musl" ] || musl=''
+        step nss py "$here/nss_test.py" --exclave "$EXCLAVE_TEST_INPUTS/sss.exclave" ${musl:+--musl "$musl"} \
+            --work "$out/nss"
     else echo "nss: EXCLAVE_TEST_INPUTS not set; skipped"; fi
 fi
 if has caches; then # the caches only a tree's own programs make, made inside by exclave caches (13 item 48)

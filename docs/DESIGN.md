@@ -2031,8 +2031,11 @@ The host's `nsswitch.conf` names NSS modules, `systemd`, `sss`,
 `ldap`, `mdns4_minimal`, which a glibc exclave loads from its own tree,
 since a module is code bound to its libc. Each is a client of a daemon
 of the host's: `systemd`'s, `nslcd`'s, `winbindd`'s and `avahi`'s
-sockets are under `/run`, a volatile directory, and SSSD's socket and
-memory cache under `/var/lib/sss`, the host's by default (8.1 rule 5).
+sockets are under `/run`, a volatile directory, reached as well
+through the `/var/run` link Debian's and Alpine's trees ship, and
+SSSD's socket and memory cache under `/var/lib/sss`, the host's by
+default (8.1 rule 5). The user records systemd reads from
+`/etc/userdb` are the tree's, since `/etc` is.
 So an exclave that ships a module finds the host's users through it,
 whatever version the host's daemon is, as long as the protocol holds;
 `test/nss_test.py` looks up a user served in SSSD's protocol, by name
@@ -2043,8 +2046,11 @@ module the tree lacks, which is right for `hosts` and wrong for
 `exclave check` given a log warns of each module the checking host's
 `nsswitch.conf` names that the exclave lacks, naming the package that
 ships the common ones (10.3), so an exclave's maker who checks on such
-a host learns of it before a user does. musl loads no modules: it
-reads `nscd`'s socket, under `/run`, after the files.
+a host learns of it before a user does. musl loads no modules: for
+users and groups it reads `nscd`'s socket, under `/var/run`, after
+the files, and for host names it asks DNS alone, so `exclave check` on
+a musl tree, one with musl's loader and not glibc's, says which of
+the host's modules nscd could stand in for.
 
 ## 9. Compilers specifically
 
@@ -2975,9 +2981,10 @@ and stay fixed.
     daemons' sockets are the host's (8.4), and `exclave check` names
     the package a module lacks. Debian's `libnss-systemd` and
     `libnss-ldapd` depend on the daemons themselves, 38 and 51 packages
-    with their closures, which `prune` removes again; `libnss-sss`
-    needs only libc. A musl exclave loads no modules and finds them
-    only where the host runs `nscd`.
+    on Ubuntu 24.04 as `exclave-fetch debs --no-essential` resolves
+    their closures, which `prune` removes again; `libnss-sss` needs
+    only libc. A musl exclave loads no modules and finds the users only
+    where the host runs `nscd`.
 
 18. **Identity files are resolved once, at startup.** A host change to
     `/etc/resolv.conf` under a running exclave is not seen, and a
@@ -4519,8 +4526,9 @@ its time, ok, SKIP or FAIL:
   `sss.exclave`, Ubuntu's Essential set with `libnss-sss`: in a user
   namespace, a stand-in for SSSD answers one user on a tmpfs at
   `/var/lib`, `getent` inside finds the user by name and by uid
-  through the tree's module, and `exclave check` warns of the module
-  the exclave lacks and not of the one it ships; and
+  through the tree's module, and `exclave check` warns of the modules
+  the exclave lacks and not of the one it ships, and on the Alpine
+  exclave that musl finds the users only through `nscd`; and
   `test/caches_test.py` on its `caches.exclave`, Ubuntu's
   `python3-minimal`, GLib's tools, `shared-mime-info` and GNOME's
   schemas, and on x86-64 its `alpine-caches.exclave`, Alpine's, whose
