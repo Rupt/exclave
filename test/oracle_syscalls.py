@@ -1610,17 +1610,21 @@ def exec_errnos(b: str, o: str) -> tuple[int, int]:
 
 
 MAXSYMLINKS_RETRY = (
-    "a walk of exactly MAXSYMLINKS links: filename_lookup retries a walk whose RCU attempt failed "
-    "(ECHILD) with the same nameidata, and total_link_count carries on from where that attempt "
-    "stopped, so the links it followed count twice and the retry may answer ELOOP, as the dentry "
-    "cache decides; the launcher's own walk counts each link once"
+    "a walk of more than MAXSYMLINKS / 2 links: filename_lookup and filename_parentat retry a walk "
+    "whose RCU attempt failed (ECHILD) with the same nameidata, and total_link_count carries on "
+    "from where that attempt stopped, so the links it followed count twice and the retry may "
+    "answer ELOOP, as the dentry cache decides; the launcher's own walk counts each link once"
 )
 
 
 def at_maxsymlinks(label: str, errs: tuple[int, int]) -> bool:
-    """A walk of exactly MAXSYMLINKS links the kernel answered ELOOP and the launcher did not."""
+    """A walk of more than MAXSYMLINKS / 2 links the kernel answered ELOOP and the launcher did not.
+
+    chain_40 and dir_links_40 walk 40 links; dir_links_41 walks 21 to the parent of its last name,
+    where a call that does not follow that name stops (symlink, lstat, unlink).
+    """
     return (
-        ("chain_40" in label or "dir_links_40" in label)
+        ("chain_40" in label or "dir_links_40" in label or "dir_links_41" in label)
         and errs[0] == errno.ELOOP
         and errs[1] != errno.ELOOP
     )
