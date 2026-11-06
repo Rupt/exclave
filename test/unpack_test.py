@@ -629,6 +629,46 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
 
 
 @test
+def shells_from_debianutils(ctx: Ctx) -> None:
+    """10.1: /etc/shells is written as update-shells writes it, from the template and shells.d.
+
+    Each listed shell follows the template's lines, with its merged-/usr spelling beside it, as
+    update-shells lists them, so a shell two files list comes twice. The interests that need
+    nothing, or that the rules and extraction make, are not noted: shells.d, base-files' multilib
+    links, ca-certificates' named triggers and man-db's other manual paths.
+    """
+    du = package(
+        ctx,
+        "deb",
+        "debianutils",
+        [
+            ("usr/bin/sh", "file", b"#!/bin/sh\n", 0o755),
+            ("usr/share/debianutils/shells", "file", b"# valid login shells\n/bin/sh\n", 0o644),
+            ("usr/share/debianutils/shells.d/bash", "file", b"/bin/bash\n/bin/rbash\n", 0o644),
+            ("usr/share/debianutils/shells.d/dash", "file", b"/usr/bin/dash\n/bin/sh\n", 0o644),
+        ],
+        control_files=[
+            (
+                "triggers",
+                (
+                    "interest-noawait /usr/share/debianutils/shells.d\ninterest-noawait lib32\n"
+                    "interest-noawait /usr/local/man\ninterest-noawait update-ca-certificates\n"
+                ),
+            )
+        ],
+    )
+    root, out = accepted(ctx, "shells", [du])
+    want = (
+        "# valid login shells\n/bin/sh\n/usr/bin/sh\n/bin/bash\n/usr/bin/bash\n"
+        "/bin/rbash\n/usr/bin/rbash\n/usr/bin/dash\n/usr/bin/sh\n"
+    )
+    got = read_text(os.path.join(root, "etc", "shells"))
+    expect(got == want, f"/etc/shells is {got!r}, not {want!r}")
+    expect("synthesis rules applied: shells" in out, "the shells rule is not named: " + out)
+    expect("note:" not in out, "an interest that needs nothing is noted: " + out)
+
+
+@test
 def synthesis_stays_in_the_tree(ctx: Ctx) -> str | None:
     """10.1, 8.1: synthesis reads and writes the tree as its root, and so does the volatile step.
 

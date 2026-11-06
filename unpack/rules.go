@@ -629,6 +629,71 @@ func ldconfigRule(r *root.Root, packages []*Package, log logger) (bool, error) {
 	return made, nil
 }
 
+// shells writes /etc/shells as debianutils' update-shells writes it on a fresh system, from its
+// template and the shells.d files packages ship, which its trigger reads: the template's lines,
+// then each listed shell, and its spelling with the directory resolved in the tree where that
+// differs (/bin/bash and /usr/bin/bash on a merged /usr), that the template does not list. A tree
+// that ships /etc/shells keeps it.
+func shells(r *root.Root, _ []*Package, log logger) (bool, error) {
+	const template, dir, target = "/usr/share/debianutils/shells", "/usr/share/debianutils/shells.d", "/etc/shells"
+	if !r.IsFile(template) || r.Lexists(target) {
+		return false, nil
+	}
+	sources := []string{template}
+	if r.IsDir(dir) {
+		ents := r.Listdir(dir)
+		sort.Strings(ents)
+		for _, e := range ents {
+			sources = append(sources, dir+"/"+e)
+		}
+	}
+	var listed []string
+	for _, src := range sources {
+		if !r.IsFile(src) {
+			continue
+		}
+		text, err := r.ReadText(src)
+		if err != nil {
+			return false, err
+		}
+		for raw := range strings.SplitSeq(text, "\n") {
+			line, _, _ := strings.Cut(raw, "#")
+			if line == "" {
+				continue
+			}
+			listed = append(listed, line)
+			if real, err := r.Realpath(filepath.Dir(line)); err == nil {
+				if real = strings.TrimSuffix(real, "/") + "/" + filepath.Base(line); real != line {
+					listed = append(listed, real)
+				}
+			}
+		}
+	}
+	text, err := r.ReadText(template)
+	if err != nil {
+		return false, err
+	}
+	var out strings.Builder
+	present := map[string]bool{}
+	for line := range strings.SplitSeq(strings.TrimSuffix(text, "\n"), "\n") {
+		shell, _, _ := strings.Cut(line, "#")
+		if shell == "" || !present[shell] {
+			out.WriteString(line + "\n")
+			present[shell] = true
+		}
+	}
+	for _, shell := range listed {
+		if !present[shell] {
+			out.WriteString(shell + "\n")
+		}
+	}
+	if err := r.WriteBytes(target, []byte(out.String()), 0o666); err != nil {
+		return false, err
+	}
+	log(fmt.Sprintf("synthesised %s from %d files", target, len(sources)))
+	return true, nil
+}
+
 var rules = []rule{
 	{"alternatives", alternatives},
 	{"java-jinfo", javaJinfo},
@@ -640,6 +705,7 @@ var rules = []rule{
 	{"ca-trust", caTrust},
 	{"ssl-paths", sslPaths},
 	{"base-passwd", basePasswd},
+	{"shells", shells},
 	{"ldconfig", ldconfigRule},
 }
 
@@ -694,6 +760,16 @@ var interests = [][2]string{
 	{"/usr/share/texmf*", "TeX's file index and formats are not generated (mktexlsr, fmtutil)"},
 	{"/usr/share/texlive*", "TeX's file index and formats are not generated (mktexlsr, fmtutil)"},
 	{"/usr/share/man*", ""},
+	{"/usr/man", ""},
+	{"/usr/local/man", ""},
+	{"/usr/local/share/man", ""},
+	{"/usr/X11R6/man", ""},
+	{"/opt/man", ""},
+	{"/usr/share/debianutils/shells.d", ""},
+	{"lib32", ""},
+	{"libo32", ""},
+	{"libx32", ""},
+	{"update-ca-certificates*", ""},
 	{"/usr/share/info*", ""},
 	{"/usr/share/doc*", ""},
 	{"/usr/share/lintian*", ""},

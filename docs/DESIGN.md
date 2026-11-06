@@ -2286,9 +2286,12 @@ refused. From `.deb` files, in five steps:
    `ssl-paths`, OpenSSL's compiled-in trust paths when a libssl is
    present, so that the host's bundle at the identity path (8.4) is
    consulted; `base-passwd`, `/etc/passwd` and `/etc/group` from its
-   masters; and `ldconfig`, `ld.so.cache` written as the exclave's own
-   static `ldconfig` would write it, from the tree's files alone
-   (`unpack/ldcache`, from glibc's `ldconfig` source): the directories
+   masters; `shells`, `/etc/shells` as debianutils' `update-shells`
+   writes it from its template and the `shells.d` files packages ship,
+   each shell with its merged-`/usr` spelling; and `ldconfig`,
+   `ld.so.cache` written as the exclave's own static `ldconfig` would
+   write it, from the tree's files alone (`unpack/ldcache`, from
+   glibc's `ldconfig` source): the directories
    `ld.so.conf` names and then the loader's trusted directories, read
    from the loader's own table (10.3), the soname links made and the
    dangling `.so.` links removed in them as `ldconfig` makes and removes
@@ -2307,12 +2310,12 @@ refused. From `.deb` files, in five steps:
    bytecode (Python compiles each module on import where it cannot
    write), GSettings schemas, the MIME database, font and icon caches,
    the desktop database, GIO and gdk-pixbuf module caches, TeX's index
-   and formats; an interest nothing needs, a manual-page index, is
-   passed over, and the notes of the caches `exclave caches` makes
-   name it. A `postinst` that calls `update-alternatives` in a form
-   the rule cannot read, from shell variables other than a literal
-   loop's, is noted too, since its alternatives are not made. Failed
-   opens in an
+   and formats; an interest a rule or the extraction makes, or that
+   nothing needs, a manual-page index, is passed over, and the notes
+   of the caches `exclave caches` makes name it. A `postinst` that
+   calls `update-alternatives` in a form the rule cannot read, from
+   shell variables other than a literal loop's, is noted too, since
+   its alternatives are not made. Failed opens in an
    `EXCLAVE_LOG` then show what an exclave tried and could not find.
 
    A cache only the tree's own binary can make is made after `wrap`,

@@ -644,3 +644,17 @@ func (r *Root) WriteBytes(vpath string, data []byte, mode uint32) error {
 	}
 	return f.Close()
 }
+
+// Realpath is vpath with every link on the way resolved in the tree, as dpkg-realpath --root
+// gives it, for a path that does not resolve to the tree's root itself; "/" is "/". A directory
+// missing on the way is ErrMissing, and the last component need not exist.
+func (r *Root) Realpath(vpath string) (string, error) {
+	if len(parts(vpath)) == 0 {
+		return "/", nil
+	}
+	comps, name, err := r.walk(vpath, true, false)
+	if err != nil {
+		return "", err
+	}
+	return "/" + strings.Join(append(comps, name), "/"), nil
+}
