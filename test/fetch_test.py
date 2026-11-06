@@ -70,6 +70,11 @@ def run(cmd: Sequence[str], inp: bytes = b"", env: dict[str, str] | None = None)
 
 
 # ---------------------------------------------------------------- keys
+# every key made, so that main can stop the gpg-agent gpg starts for each home: one left behind
+# outlives the test, holding an inotify instance, and 27 of them exhausted a user's 128
+KEYS: list[PgpKey] = []
+
+
 class PgpKey:
     """An OpenPGP signing key of its own, in a GNUPGHOME under d."""
 
@@ -77,6 +82,7 @@ class PgpKey:
         self.home = os.path.join(d, f"gnupg-{name}")
         os.makedirs(self.home, mode=0o700)
         self.env = dict(os.environ, GNUPGHOME=self.home)
+        KEYS.append(self)
         run(
             [
                 "gpg",
@@ -95,6 +101,10 @@ class PgpKey:
 
     def _gpg(self, *args: str, inp: bytes = b"") -> bytes:
         return run(["gpg", "--batch", "--quiet", *args], inp=inp, env=self.env)
+
+    def kill_agent(self) -> None:
+        """Stop the gpg-agent gpg started for this home, if one runs."""
+        subprocess.run(["gpgconf", "--kill", "gpg-agent"], env=self.env, check=False, timeout=60)
 
     def export(self, d: str, name: str, *, armor: bool = False) -> str:
         """Write the public key as a binary keyring, or in ASCII armour, and return its path."""
@@ -718,6 +728,10 @@ def main() -> int:
             failures += 1
             print(f"FAIL {t.__name__:<34} {time.monotonic() - start:5.1f}s {str(e)[:700]}")
             continue
+        finally:
+            for key in KEYS:
+                key.kill_agent()
+            KEYS.clear()
         print(f"PASS {t.__name__:<34} {time.monotonic() - start:5.1f}s")
     print(f"{len(chosen)} tests, {failures} failures")
     return min(failures, 255)
