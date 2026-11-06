@@ -109,6 +109,8 @@ static uint32_t rule(const struct data *d)
     if (is_path(nr) || in(nr, 0) || in(nr, 1)) return SECCOMP_RET_TRAP;
     int a = arg_trap(nr);
     if (a >= 0) return d->args[a] ? SECCOMP_RET_TRAP : SECCOMP_RET_ALLOW;
+    /* PTRACE_TRACEME, request 0, by the whole word (7.4.2) */
+    if (nr == NR_ptrace) return d->args[0] ? SECCOMP_RET_ALLOW : SECCOMP_RET_TRAP;
     if (nr == NR_ioctl)
         return (uint32_t)d->args[1] == (uint32_t)FS_IOC_SETFLAGS || (uint32_t)d->args[1] == (uint32_t)FS_IOC_FSSETXATTR
                    ? SECCOMP_RET_TRAP
@@ -123,8 +125,8 @@ static uint32_t rule(const struct data *d)
 }
 static int singled_out(int nr)                                /* a number the rule answers by more than the number */
 {
-    return nr == NR_uname || is_path(nr) || in(nr, 0) || in(nr, 1) || arg_trap(nr) >= 0 || nr == NR_ioctl ||
-           nr == NR_seccomp || nr == NR_prctl || in(nr, 2) || in(nr, 3) || nr > HIGHEST;
+    return nr == NR_uname || is_path(nr) || in(nr, 0) || in(nr, 1) || arg_trap(nr) >= 0 || nr == NR_ptrace ||
+           nr == NR_ioctl || nr == NR_seccomp || nr == NR_prctl || in(nr, 2) || in(nr, 3) || nr > HIGHEST;
 }
 
 int main(void)

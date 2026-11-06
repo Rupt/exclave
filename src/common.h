@@ -10,7 +10,7 @@
 #ifndef FILTER_VERSION
 /* 7.4.2: versioned reuse; the version moves whenever the trap set grows or the syscall page moves. build/launcher-old
  * is these sources at version 3, without bind and connect, which version 4 added (EXCLAVE_TEST_OLD). */
-#define FILTER_VERSION 8
+#define FILTER_VERSION 9
 #endif
 /* an inherited filter older than this allows another page's syscalls and traps this launcher's */
 #define FILTER_PAGE_SINCE 6
@@ -90,6 +90,10 @@
 #define MAP_ANONYMOUS 0x20
 #define MADV_WIPEONFORK 18 /* 4.14+: the range reads as zero in a fork child; a vfork child shares it */
 #define MAP_FIXED_NOREPLACE 0x100000
+
+/* the ptrace request the filter traps (7.4.2): a vfork child's is deferred to its exec (7.4.5) */
+#define PTRACE_TRACEME 0
+#define KCMP_VM 1
 
 /* ---------- ioctl requests the filter traps (chattr) ---------- */
 #define FS_IOC_SETFLAGS 0x40086602UL
@@ -290,10 +294,16 @@ struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame);
 void scratch_put(struct scratch *s);
 /* returns depth, 1 for outermost; releases frames left by longjmp */
 int nest_enter(pid_t pid, pid_t tid, unsigned long frame);
+/* a vfork child's PTRACE_TRACEME, deferred to its exec (7.4.5): kept marks s as holding it, past the handler's return;
+ * deferred answers the tracer the caller's names, 0 for none, and with take releases it */
+void scratch_keep(struct scratch *s, pid_t tracer);
+pid_t scratch_deferred(pid_t pid, pid_t tid, int take);
 
 /* ---------- visibility (vis.c) ---------- */
 void vis_init(void);
 void cache_init(void);
+/* 1 when the caller, pid, shares the memory of its parent, ppid: a vfork child (7.5.4) */
+int vfork_child(pid_t pid, pid_t ppid);
 int vis_is_host(const char *v, const char **real); /* 1 if host-owned; *real = host path */
 char *to_real(const char *v, char *out, char *tmp); /* v -> real, with wrapper redirect; tmp PATH_MAX */
 char *to_real_exec(const char *v, char *out); /* v -> real, no wrapper redirect */

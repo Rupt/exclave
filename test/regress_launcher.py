@@ -782,3 +782,67 @@ def start_reads_once(ctx: Ctx) -> str | None:
     twice = {p: n for p, n in lstats.items() if n > 1}
     expect(not twice, f"real paths lstat'ed more than once: {twice!r}")
     return f"{len(originals)} originals, {sum(lstats.values())} lstats"
+
+
+@test
+def traceme_exec(ctx: Ctx) -> str | None:
+    """7.4.5, 13 item 54: a child that asks to be traced and execs, as gdb and strace start one.
+
+    A traced task's trapped execve stops for its tracer at the SIGSYS, before the handler runs, so
+    a vfork child's PTRACE_TRACEME is deferred to its exec: gdb's vfork child would otherwise stop
+    while gdb waits in vfork for that very exec, both for ever. The vfork cases are the kernel's
+    answers, a second request's EPERM, an exec that fails before the one that runs, and a child that
+    exits without one, measured under bwrap. A fork child's request is made at once, since it may
+    stop for its tracer before its exec, so its tracer's first stop after the exec is that SIGSYS
+    where the kernel's is the SIGTRAP that follows the exec (13 item 54). Then, where the tree has a
+    gdb, gdb runs a program to its end inside, its SIGSYS stops passed (13 item 1).
+    """
+    true = ctx.vbin("true")
+    rc, out, _err = inside(ctx, os.path.join(ctx.progs, "traceme"), [true], timeout=120)
+    kernel = [
+        "vfork-traceme-exec first stop: stopped TRAP",
+        "vfork-traceme-exec end: exited 0",
+        "vfork-traceme-twice requests: 0, -1 EPERM",
+        "vfork-traceme-twice first stop: stopped TRAP",
+        "vfork-traceme-twice end: exited 0",
+        "vfork-traceme-fail-exec first stop: stopped TRAP",
+        "vfork-traceme-fail-exec end: exited 0",
+        "vfork-traceme-exit end: exited 7",
+        "vfork-exec end: exited 0",
+    ]
+    # 13 item 54: the kernel's first stop is TRAP, after a SIGSTOP of the child's own too
+    launcher = [
+        "fork-traceme-exec first stop: stopped SYS",
+        "fork-traceme-exec end: exited 0",
+        "fork-traceme-stop-exec first stop: stopped STOP",
+        "fork-traceme-stop-exec second stop: stopped SYS",
+        "fork-traceme-stop-exec end: exited 0",
+    ]
+    expect(
+        rc == 0 and out.splitlines() == kernel + launcher,
+        f"traced children's execs: rc={rc}\n{out}",
+    )
+    gdb = os.path.join(ctx.tree, "usr", "bin", "gdb")
+    if not os.path.exists(gdb):
+        return "the tree has no gdb: its run inside not checked"
+    rc, out, err = run(
+        [
+            wrapper(ctx, "gdb"),
+            "-batch",
+            "-nx",
+            "-iex",
+            "handle SIGSYS nostop noprint pass",
+            "-ex",
+            "run",
+            "--args",
+            true,
+        ],
+        cwd=ctx.work,
+        env=ctx.env,
+        timeout=120,
+    )
+    expect(
+        "exited normally" in out,
+        f"gdb's run inside runs the program to its end: rc={rc} {out[-400:]!r} {err[-400:]!r}",
+    )
+    return None

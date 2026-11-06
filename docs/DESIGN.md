@@ -175,7 +175,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 103 named tests, most of them programs that
+- **The regression suite**: 104 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1043,7 +1043,11 @@ requires without privilege (13 item 3), and falls back to
 installed. `rt_sigprocmask` and `rt_sigsuspend` always trap; `ppoll`,
 `pselect6`, `epoll_pwait`, `epoll_pwait2` and `io_pgetevents` trap when
 they carry a mask. `ioctl` traps for `FS_IOC_SETFLAGS` and
-`FS_IOC_FSSETXATTR`, the `chattr` requests, and nothing else.
+`FS_IOC_FSSETXATTR`, the `chattr` requests, and nothing else. `ptrace`
+traps for `PTRACE_TRACEME`, request 0, and no other request: a check
+by equality on the whole word, where the others trap on a non-zero
+argument, for a `vfork` child's request, which waits for its exec
+(7.4.5).
 
 **Two stages.** The first is a binary tree on the syscall number alone,
 whose leaf for every number the rule does not single out is `ALLOW`, so
@@ -1052,10 +1056,11 @@ skips the filter, and a kernel without the cache runs about a dozen
 instructions. The other numbers go to the second stage, the rule in
 order: the argument checks that can only allow (an `ioctl` other than
 `chattr`'s, a query of a signal action, a wait without a mask, a
-`prctl` other than seccomp's, the availability query) and the version
+`ptrace` request other than `PTRACE_TRACEME`, a `prctl` other than
+seccomp's, the availability query) and the version
 probe; the syscall page; the refusals; then the trap. On x86-64 the
-program is 284 instructions and 376 of the 471 numbers are allowed by
-number alone; on aarch64, 240 and 396. 16.3 gives why a tree and what
+program is 295 instructions and 373 of the 472 numbers up to the
+ceiling are allowed by number alone. 16.3 gives why a tree and what
 an untrapped syscall costs. `test/filter_test.c` runs the program in an
 interpreter against the rule written out on its own, for every number
 and the arguments each check reads, and `test/syscalls.py` matches the
@@ -1085,8 +1090,9 @@ kernel has added has a libc fallback and a re-issue would be an
 untranslated host access.
 
 The version moves whenever the trap set grows or the syscall page
-moves, and is 8: 7 added the listings, `getdents64` and `getdents`,
-and 8 `fstat`, for a directory's `.real/` (8.3); `test/syscalls.py`
+moves, and is 9: 7 added the listings, `getdents64` and `getdents`,
+8 `fstat`, for a directory's `.real/` (8.3), and 9
+`ptrace(PTRACE_TRACEME)`, for a `vfork` child's request (7.4.5); `test/syscalls.py`
 records a digest of the set and the page each version shipped with and fails when either changes under the
 same version. Filters before 6 allow a page at another address, so
 neither launcher can run under the other's filter: a launcher under a
@@ -1094,9 +1100,10 @@ filter older than 6 refuses by name at startup, and a handler sends a
 launcher whose note carries a page generation older than the present
 2, or no word, to its own child, which refuses it by name (7.4.5, 13
 item 45). `scripts/build` also builds `build/launcher-old`, the same sources at
-version 3, without `bind` and `connect`, which version 4 added, the
-last version to add syscalls; the regression of 17 item 4 nests it
-inside the current launcher.
+version 3, without `bind` and `connect`, which version 4 added; the
+regression of 17 item 4 nests it inside the current launcher, where it
+answers `ENOSYS` for every trap a later version added, which version 3
+shows as well as any later one would.
 
 #### 7.4.3 Intercepted syscalls
 
@@ -1111,6 +1118,7 @@ inside the current launcher.
 | A directory's stat | `fstat`, and every stat above, of a directory of the tree that holds `.real/` | the kernel's answer with a link fewer and, on ZFS, btrfs and tmpfs, a size an entry smaller (8.3) |
 | Reverse-translate results | `getcwd`; `readlinkat` of `/proc/self/{exe,cwd,fd/*}` and of the process's own pid; `readlinkat` of an identity file; `statfs` and `fstatfs` on exclave paths | strip the tree's prefix, and the `.real/` of an original, which then names its wrapper; answer the program's virtual path for `exe` on the loader path (7.6); answer the host's link text for an identity file (8.4); report `ST_RDONLY`. Any other link's text is returned as stored, as the kernel returns it |
 | Self-defence | `rt_sigaction` with a new action; the mask-carrying calls above | scrub `SIGSYS` from the mask (7.5.1), with no canonicalisation |
+| Deferred to the exec | `ptrace(PTRACE_TRACEME)` in a `vfork` child | recorded and answered 0, `EPERM` for a second request, and made right before the exec's re-issue (7.4.5); in any other process re-issued at once |
 | Denied | `clone3`, `io_uring_setup`, `seccomp` except the availability query, `prctl(PR_SET_SECCOMP)`, `uselib`, the mount API (`open_tree`, `open_tree_attr`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr`) | `ENOSYS` |
 | Denied | `mount`, `umount2`, `pivot_root`, `chroot`, `acct` | `EPERM` |
 | Deferred | `name_to_handle_at` | `ENOSYS`; no program seen issues it, and a handle would name a real inode |
@@ -1399,6 +1407,36 @@ never replaced. Then:
   left to the child launcher, which refuses it by name (7.3), where the
   kernel would load it, an `ET_EXEC` included.
 
+**A traced `vfork` child.** A debugger starts its program by `vfork`,
+`ptrace(PTRACE_TRACEME)` and `execve`, as gdb's `fork_inferior` does.
+A traced task's trapped `execve` stops for its tracer at the `SIGSYS`,
+before the handler runs (`get_signal` calls `ptrace_signal` before any
+handler), and the tracer, the parent, waits in `vfork` for that very
+exec: both would wait for ever. So the handler does not make a `vfork`
+child's request when it traps (7.4.2): it answers 0, or `EPERM` for a
+second request as the kernel answers a task already traced, keeps the
+request in the trap's scratch chunk (7.5.4) and makes it through the
+syscall page right before it re-issues the exec, of a wrapper, of
+another launcher or of the launcher itself, once it has answered what
+`execve` would refuse without exec'ing. An exec that fails first, as
+`execvp` tries each directory of `PATH`, leaves the request waiting
+for the next; the kernel's `SIGTRAP` after the exec that runs stops the
+new image for the tracer, as natively. Nothing but an exec or an exit
+can follow the request in a `vfork` child, natively too, since its
+parent is blocked until one of them, so the deferral changes no program
+that runs natively. A child that exits without exec'ing leaves its
+request to be dropped by the next search (7.5.4), and one whose parent
+died meanwhile, which would have
+detached its tracee, has none made for its new parent. A `vfork` child
+is one whose memory is its parent's: `kcmp(KCMP_VM)` compares the two
+address spaces, and where it is refused (Docker's default profile,
+without `CAP_SYS_PTRACE`) the pid the launcher started as, on a page
+wiped at fork, tells it: a `vfork` child reads its parent's pid there,
+a `fork` child zero. In any other process, a `fork` child or a thread,
+the request is re-issued at once, since such a child may stop for its
+tracer before it execs, `raise(SIGSTOP)` after the request being the
+classic pattern (13 item 54).
+
 **The launcher's own protocol.** `EXCLAVE_EXEC`, `EXCLAVE_EXECFN` and
 `EXCLAVE_COMM` are how one launcher tells the next what to run and under
 what name, not an interface. `EXCLAVE_EXEC`, set by a handler or the
@@ -1572,6 +1610,14 @@ buffer of a chunk has one role and is named for it: the path as the
 program gave it, the walk's working buffers, the real path of a second
 name, the `stat` the kernel's order asks for; none is cast to another
 use, so no site depends on which buffer another is finished with.
+
+A `vfork` child's deferred `PTRACE_TRACEME` (7.4.5) keeps its trap's
+chunk past the handler's return, marked as holding the request and
+named for the parent the child had: the frame comparison below passes
+it by, the exec takes and releases it before its re-issue, and a sweep
+releases it once its owner is gone, as any search for a request does,
+so that a later child given the same pid finds none of its own once
+any search has run (13 item 54).
 
 Two ways of leaving a chunk busy are expected. A `vfork` child that
 replaces its image from inside the handler leaves its chunk busy in the
@@ -2872,7 +2918,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 103 named regressions and every oracle its kernel can run; 17
+suite's 104 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher
 inside its copy of the exclave (`scripts/reproduce`, 10.5) and
 compares its bytes with the reference machine's build; a row whose
@@ -2939,8 +2985,16 @@ and stay fixed.
    stays empty, and a `dlopen` between two traps is seen at the next
    `r_brk` call. A program built inside an exclave is debugged with a
    gdb in the exclave, since the host's gdb runs in the host's world
-   without the exclave's libraries. On musl a breakpoint in the
-   program hits and one in the exclave's libc does not.
+   without the exclave's libraries, and from inside, gdb's `run`
+   starts the program and runs it to its end once it passes the
+   translated calls' `SIGSYS` (`handle SIGSYS nostop noprint pass`, on
+   the command line or in `.gdbinit`; item 54 for strace and others
+   that start a program by `fork`). A breakpoint set from inside does
+   not hit: the process image is the launcher, while gdb inside is
+   shown the program's own file for it (7.6), so the carried script
+   never loads; a program is debugged from the host, by 13.1's recipe. On musl
+   a breakpoint in the program hits and one in the exclave's libc does
+   not.
 
 2. **Translated syscalls cost more than native ones.** Every trapped
    syscall pays for a signal, the handler and its fixed syscalls; an
@@ -3409,6 +3463,26 @@ and stay fixed.
     left as the kernel gives them. Nothing reads a directory's size for
     its contents; its link count is corrected everywhere.
 
+54. **A traced `fork` child's exec stops its tracer with `SIGSYS`
+    first.** A child that asks to be traced, `PTRACE_TRACEME`, and then
+    execs stops for its tracer at its trapped `execve`'s `SIGSYS`, before
+    the handler runs, where the kernel's first stop is the `SIGTRAP`
+    after the exec. A tracer that passes the signal on, as strace and
+    gdb's start do, then meets the `SIGTRAP` and carries on; one that
+    takes any first stop for the exec is a stop early. A `vfork` child's
+    request waits for its exec and its tracer sees the kernel's stops
+    (7.4.5), but a `fork` child's is made at once, since it may stop for
+    its tracer before it execs. Where `kcmp` is refused, a `vfork` child
+    of a `fork` child that has not exec'd since the fork is told apart
+    from a `fork` child by nothing the launcher can read, and is taken
+    for one: its request is made at once, and its tracer, blocked in
+    `vfork`, and it wait for each other for ever. A `vfork` child that
+    exits without exec'ing after its request leaves the request in its
+    parent's scratch until the next search for one, which a later child
+    given the same pid, after the pid space has wrapped, could find first.
+    A deferred request is answered 0 where the kernel would refuse it
+    (Yama's `ptrace_scope` 2 or 3); the exec then runs untraced.
+
 ### 13.1 Debugging and profiling recipe
 
 Yama's `ptrace_scope` forbids attaching to a non-descendant on most
@@ -3430,7 +3504,9 @@ gdb -iex 'set auto-load safe-path /' --args <exclave>/.exclave/launcher ./prog  
 through both, and `info files` lists what the script added; `info
 sharedlibrary` is empty (7.6, item 1). Every translated syscall is a
 `SIGSYS` stop that gdb passes through, so a run under gdb slows in
-proportion to its traps.
+proportion to its traps. A gdb inside an exclave needs `handle
+SIGSYS nostop noprint pass` to run a program at all, and its
+breakpoints do not hit (item 1).
 
 How the script works. The launcher exports six names: the base, entry
 and real file of the program, the base and file of its loader, and
@@ -4418,7 +4494,8 @@ meaning items 4 and 7.
    - *the launcher and its filter*: a CET-marked program inside with the
      shadow-stack tunable set, reporting whether glibc enabled one (13
      item 49), a blocked or sent `SIGSYS`, older
-     and newer launchers nested and side by side, a program installing
+     and newer launchers nested and side by side, a child that asks to be
+     traced and execs, by `vfork` and by `fork` (7.4.5, 13 item 54), a program installing
      its own filter, the speculation state, `x28` as a signal landing
      mid-trap finds it on aarch64 (7.5.3), and an adversarial program
      (`adversarial`), which runs the handler's deepest paths on Rust's
@@ -4510,7 +4587,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus nineteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones` and `memfd_exec` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 103 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 104 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

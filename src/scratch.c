@@ -30,8 +30,12 @@ struct chunk {
     volatile int busy;
     volatile int ready;
     volatile unsigned long seq;
+    volatile int deferred;
+    pid_t tracer;
 };
-/* ready: the owner fields are those of the holder of busy; seq: advanced by every claim and release */
+/* ready: the owner fields are those of the holder of busy; seq: advanced by every claim and release; deferred: the
+ * chunk holds a vfork child's PTRACE_TRACEME past the handler's return, until its exec or its end, and tracer the
+ * parent it named (7.4.5) */
 
 /* Whether c's owner fields are set, read with acquire ordering: a reader that sees ready sees the fields the claim
  * stored before it, on aarch64 too, where loads may otherwise pass one another. */
@@ -65,6 +69,7 @@ static struct chunk *try_claim(pid_t pid, pid_t tid, unsigned long frame)
             c->pid = pid;
             c->tid = tid;
             c->frame = frame;
+            c->deferred = 0;
             __sync_synchronize();
             c->ready = 1;
             return c;
@@ -135,7 +140,38 @@ static void release(struct chunk *c)
 
 void scratch_put(struct scratch *s)
 {
-    if (s) release((struct chunk *)s);
+    if (s && !((struct chunk *)s)->deferred) release((struct chunk *)s);
+}
+
+void scratch_keep(struct scratch *s, pid_t tracer)
+{
+    ((struct chunk *)s)->tracer = tracer;
+    ((struct chunk *)s)->deferred = 1;
+}
+
+/* The caller's deferred request, taken when take is set; on the way, a deferred chunk whose owner is gone, a vfork
+ * child that exited without exec'ing, is released, by the sequence rule, so that a later child given the same pid finds
+ * no request of its own until it makes one (13 item 54). */
+pid_t scratch_deferred(pid_t pid, pid_t tid, int take)
+{
+    int n = slots();
+    pid_t found = 0;
+    for (int i = 0; i < n; i++) {
+        struct chunk *c = chunks[i];
+        if (!c) continue;
+        unsigned long q = c->seq;
+        __sync_synchronize();
+        if (!c->busy || !owner_set(c) || !c->deferred) continue;
+        if (c->pid == pid && c->tid == tid) {
+            found = c->tracer;
+            if (take) release(c);
+        } else if (!owner_alive(c, pid) && __sync_bool_compare_and_swap(&c->seq, q, q + 1)) {
+            c->ready = 0;
+            __sync_synchronize();
+            __sync_lock_release(&c->busy);
+        }
+    }
+    return found;
 }
 
 /* Nesting depth of this thread: the chunks it still holds, plus one. A chunk whose frame is at or below the current
@@ -147,8 +183,9 @@ int nest_enter(pid_t pid, pid_t tid, unsigned long frame)
     int n = slots(), d = 1;
     for (int i = 0; i < n; i++) {
         struct chunk *c = chunks[i];
-        /* ready: a chunk mid-claim by another thread has stale fields */
-        if (!c || !c->busy || !owner_set(c) || c->pid != pid || c->tid != tid) continue;
+        /* ready: a chunk mid-claim by another thread has stale fields; deferred: no frame of this stack holds it
+         * (7.4.5) */
+        if (!c || !c->busy || !owner_set(c) || c->pid != pid || c->tid != tid || c->deferred) continue;
         if (c->frame <= frame) release(c);
         else d++;
     }

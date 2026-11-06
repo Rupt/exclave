@@ -452,7 +452,12 @@ HIGHEST_KNOWN = 471
 # trap_digest computes it. A launcher reuses an inherited filter of its own version, so a set or a
 # page changed under the same version would send a nested launcher's new trap to the host
 # untranslated: a change moves FILTER_VERSION (src/common.h) and records the new digest here.
-SHIPPED = {6: "98bd90f1e7eeffbb", 7: "b56b5e8d86ee308d", 8: "7e1d35ebfb23759e"}
+SHIPPED = {
+    6: "98bd90f1e7eeffbb",
+    7: "b56b5e8d86ee308d",
+    8: "7e1d35ebfb23759e",
+    9: "ad237bdd2e612cf5",
+}
 
 
 HEADERS = (
@@ -627,6 +632,7 @@ def trap_digest() -> tuple[int, str]:
         "enosys_syscalls",
         "eperm_syscalls",
         "arg_traps",
+        "zero_traps",
     ):
         body = re.search(table + r"\[\](?:\[2\])? = \{(.*?)\};", src, re.DOTALL)
         assert body, f"no {table} in src/filter.c"

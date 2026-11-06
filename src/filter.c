@@ -147,16 +147,25 @@ static const int eperm_syscalls[] = {NR_chroot, NR_acct, NR_pivot_root, NR_mount
  * (5.11) proves those calls allowed and skips the filter for them, and a kernel without the cache runs a dozen
  * instructions rather than the whole rule. The other leaves join the second stage, the rule in its order: the
  * arguments that can only allow (an ioctl that is not chattr, a query of a signal action, a wait without a mask, a
- * prctl that is not seccomp's, the availability query, an ordinary uname) and the probe, then the syscall page, then
- * the refusals, and every other number traps: the path syscalls, the descriptor and mask calls, an install that
- * carries a mask, the chattr requests, and anything above the ceiling. test/filter_test.c checks the program against
- * the rule written out on its own, and that every number the rule does not single out is allowed by number alone. */
+ * ptrace request other than PTRACE_TRACEME, a prctl that is not seccomp's, the availability query, an ordinary uname)
+ * and the probe, then the syscall page, then the refusals, and every other number traps: the path syscalls, the
+ * descriptor and mask calls, an install that carries a mask, the chattr requests, PTRACE_TRACEME, and anything above
+ * the ceiling. test/filter_test.c checks the program against the rule written out on its own, and that every number
+ * the rule does not single out is allowed by number alone. */
 #define JGE_K 0x35 /* BPF_JMP | BPF_JGE | BPF_K */
 #define JA 0x05 /* BPF_JMP | BPF_JA: a 32-bit offset, where a conditional jump's is 8 bits */
 
 /* installs trap for the mask scrub (7.5.2); queries report the truth */
 static const int arg_traps[][2] = {{NR_rt_sigaction, 1}, {NR_ppoll, 3},        {NR_pselect6, 5},
                                    {NR_epoll_pwait, 4},  {NR_epoll_pwait2, 4}, {NR_io_pgetevents, 5}};
+/* ptrace(PTRACE_TRACEME), request 0, traps for a vfork child's deferral (7.4.5); every other request is allowed */
+static const int zero_traps[][2] = {
+#ifndef EXCLAVE_TEST_OLD
+    {NR_ptrace, 0},
+#else
+    {-1, 0}, /* build/launcher-old, version 3, traps no request */
+#endif
+};
 
 static int singled(int nr)
 {
@@ -169,6 +178,8 @@ static int singled(int nr)
         if (mask_syscalls[i] == nr) return 1;
     for (unsigned i = 0; i < sizeof arg_traps / sizeof arg_traps[0]; i++)
         if (arg_traps[i][0] == nr) return 1;
+    for (unsigned i = 0; i < sizeof zero_traps / sizeof zero_traps[0]; i++)
+        if (zero_traps[i][0] == nr) return 1;
     for (unsigned i = 0; i < sizeof enosys_syscalls / sizeof enosys_syscalls[0]; i++)
         if (enosys_syscalls[i] == nr) return 1;
     for (unsigned i = 0; i < sizeof eperm_syscalls / sizeof eperm_syscalls[0]; i++)
@@ -251,6 +262,18 @@ static void build(void)
         emit(JEQ_K, 0, 3, 0);
         emit(LD_ABS, 0, 0, OFF_ARG(arg_traps[i][1]) + 4); /* high */
         emit(JEQ_K, 0, 1, 0);
+        ret(SECCOMP_RET_ALLOW);
+        page[npage++] = np;
+        emit(JA, 0, 0, 0);
+    }
+    /* the argument checks by equality: a zero argument traps, any other is allowed */
+    for (unsigned i = 0; i < sizeof zero_traps / sizeof zero_traps[0]; i++) {
+        if (zero_traps[i][0] < 0) continue;
+        emit(JEQ_K, 0, 6, (uint32_t)zero_traps[i][0]);
+        emit(LD_ABS, 0, 0, OFF_ARG(zero_traps[i][1])); /* low */
+        emit(JEQ_K, 0, 2, 0);
+        emit(LD_ABS, 0, 0, OFF_ARG(zero_traps[i][1]) + 4); /* high */
+        emit(JEQ_K, 1, 0, 0);
         ret(SECCOMP_RET_ALLOW);
         page[npage++] = np;
         emit(JA, 0, 0, 0);

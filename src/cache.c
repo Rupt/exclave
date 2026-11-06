@@ -39,17 +39,39 @@ static volatile unsigned int used;
 static unsigned int filled; /* the entries of the live table */
 static volatile int lock_inherited; /* the lock before cache_init, or on a kernel without MADV_WIPEONFORK */
 static volatile int *lock = &lock_inherited;
+/* on the lock's page: the pid of the process whose memory this is, 0 in a fork child until it execs, and 0 throughout
+ * on a kernel without the advice */
+static volatile int no_owner;
+static volatile int *owner = &no_owner;
 static volatile int full;
 
 /* The lock on a page that reads as zero in a fork child (MADV_WIPEONFORK, 4.14+), since the holder's release never
  * reaches a copy; a vfork child shares the page, and the parent's release does reach it. On a kernel without the
- * advice the lock is inherited as a copy, held until the child execs: inserts are skipped there, never wrong. */
+ * advice the lock is inherited as a copy, held until the child execs: inserts are skipped there, never wrong. The
+ * same page holds the pid the launcher started as, which tells a vfork child (7.5.4). */
 void cache_init(void)
 {
     long m = sys_mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m < 0 && m > -4096) return;
-    sys_madvise((void *)m, 4096, MADV_WIPEONFORK);
+    long w = sys_madvise((void *)m, 4096, MADV_WIPEONFORK);
     lock = (volatile int *)m;
+    if (w == 0) {
+        owner = (volatile int *)m + 16;
+        *owner = (int)sys_getpid();
+    }
+}
+
+/* Whether the caller, pid, child of ppid, is a vfork child: one that shares its parent's memory. The kernel answers
+ * by kcmp, comparing the two address spaces, where it can (CONFIG_KCMP; Docker's default profile refuses it without
+ * CAP_SYS_PTRACE). Elsewhere the page answers: a vfork child reads its parent's pid there, a fork child zero, and so
+ * does a vfork child of a fork child that has not exec'd since, which is taken for a fork child (13 item 54); a thread
+ * reads its own process's. A process made by clone with CLONE_VM and without CLONE_VFORK reads as a vfork child. */
+int vfork_child(pid_t pid, pid_t ppid)
+{
+    long k = SC5(NR_kcmp, pid, ppid, KCMP_VM, 0, 0);
+    if (k >= 0) return k == 0;
+    int o = *owner;
+    return o != 0 && o != pid;
 }
 
 static unsigned long hash_str(const char *s)

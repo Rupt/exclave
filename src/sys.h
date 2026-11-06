@@ -92,7 +92,7 @@ enum {
     NR_fanotify_mark = 301, NR_writev = 20, NR_process_vm_writev = 311,
     NR_setxattrat = 463, NR_getxattrat = 464, NR_listxattrat = 465, NR_removexattrat = 466, NR_open_tree_attr = 467,
     NR_file_getattr = 468, NR_file_setattr = 469, NR_bind = 49, NR_connect = 42,
-    NR_pipe2 = 293, NR_prlimit64 = 302,
+    NR_pipe2 = 293, NR_prlimit64 = 302, NR_ptrace = 101, NR_getppid = 110, NR_kcmp = 312,
 };
 /* clang-format on */
 #define ARCH_NAME "x86_64"
@@ -166,7 +166,7 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
     NR_fanotify_mark = 263, NR_writev = 66, NR_process_vm_writev = 271,
     NR_setxattrat = 463, NR_getxattrat = 464, NR_listxattrat = 465, NR_removexattrat = 466, NR_open_tree_attr = 467,
     NR_file_getattr = 468, NR_file_setattr = 469, NR_bind = 200, NR_connect = 203,
-    NR_pipe2 = 59, NR_prlimit64 = 261,
+    NR_pipe2 = 59, NR_prlimit64 = 261, NR_ptrace = 117, NR_getppid = 173, NR_kcmp = 272,
 };
 /* clang-format on */
 #define ARCH_NAME "aarch64"
@@ -355,6 +355,7 @@ static inline __attribute__((noreturn)) void sys_exit(int c)
     for (;;) SC1(NR_exit_group, c);
 }
 static inline long sys_getpid(void) { return SC0(NR_getpid); }
+static inline long sys_getppid(void) { return SC0(NR_getppid); }
 static inline long sys_getdents64(int fd, void *b, size_t n) { return SC3(NR_getdents64, fd, b, n); }
 static inline long sys_prctl(int op, unsigned long a, unsigned long b, unsigned long c, unsigned long d)
 { return SC5(NR_prctl, op, a, b, c, d); }
