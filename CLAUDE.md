@@ -273,7 +273,8 @@ mirror configured on this machine is `http://gb.archive.ubuntu.com/ubuntu`;
 Every development input is made by `scripts/inputs DIR`, which holds the
 exact fetch commands: the gcc, Alpine, Fedora and clang exclaves of the
 gate, the arm64 gcc exclave, the SSSD lookup's `sss.exclave`, the
-caches test's `caches.exclave` and Docker's seccomp profile, from the
+caches test's `caches.exclave` and `alpine-caches.exclave` and
+Docker's seccomp profile, from the
 package archives and GitHub alone, which is all the CI workflow
 fetches; `scripts/inputs DIR examples` adds the examples' inputs, the
 CentOS 7 rpms for `test/sysroot.py`, the workloads' exclaves and the

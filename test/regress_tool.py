@@ -808,7 +808,8 @@ def wrap_takes_a_launcher(ctx: Ctx) -> str | None:
     machine's program is checked and wrapped, this machine's is a foreign object, warned about and
     not checked; the hashes file records the launcher given; a second wrap with the same launcher
     passes, one with another launcher is refused naming relink, and check passes. exclave caches,
-    which runs the tree's generators, refuses it before the wrap and after, on this machine.
+    which runs the tree's generators, refuses it before the wrap, after it, on this machine, and
+    once it is unwrapped again.
     """
     other = os.path.join(REPO, "build", "launcher-aarch64")
     if (
@@ -850,5 +851,9 @@ def wrap_takes_a_launcher(ctx: Ctx) -> str | None:
         rc == 1 and "make its caches on an aarch64 machine" in e,
         "caches refuses an exclave of another machine: " + o + e,
     )
+    rc, o, e = run([*TOOL, "unwrap", ex])
+    expect(rc == 0, "unwrap of the foreign exclave: " + o + e)
+    rc, o, e = run([*TOOL, "caches", ex])
+    expect(rc == 1 and "is not wrapped" in e, "caches refuses an exclave unwrapped again: " + o + e)
     shutil.rmtree(ex, ignore_errors=True)
     return None

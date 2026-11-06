@@ -244,7 +244,9 @@ func makeDirs(p string) {
 		}
 		prefix := p[:c]
 		if err := unix.Mkdir(prefix, 0o777); err != nil {
-			if !isErrno(err, syscall.EEXIST) || !isDir(prefix) {
+			if !isErrno(err, syscall.EEXIST) {
+				failErrno(prefix, err)
+			} else if !isDir(prefix) {
 				fail("%s: %s", prefix, errnoText(syscall.EEXIST))
 			}
 		}

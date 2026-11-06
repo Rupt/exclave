@@ -508,7 +508,7 @@ test/docker_profile.py   an exclave under Docker's default seccomp profile, whic
 test/matrix.py       the kernel matrix in VMs, carrying the pinned Python for each; test/vm_run.py one VM
 test/sysroot.py      a glibc sysroot as a data directory and an output built against it with gcc and clang, for the matrix to run natively
 test/bytecode.py     Python's bytecode made by exclave caches, a cache only the tree's own binary can make, timed before and after
-test/caches_test.py  exclave caches on scripts/inputs's caches.exclave: Python's bytecode, GSettings schemas and the MIME database, used before and after
+test/caches_test.py  exclave caches on scripts/inputs's caches.exclave and alpine-caches.exclave: Python's bytecode, GSettings schemas and the MIME database, used before and after
 test/nss_test.py     a user from SSSD looked up inside, through the exclave's own lookup module, in a user namespace
 test/realsoft.py     real projects built inside and outside an exclave; test/bench.py the performance table
 test/workloads.py    valgrind, poppler, cargo, CMake, Java and Python in their own exclaves, against the kernel

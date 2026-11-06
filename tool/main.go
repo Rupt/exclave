@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -61,11 +62,26 @@ var readmeBlob []byte
 // refusal comes out after the refusal's line, and the end of main flushes it and reports a failure.
 var out = bufio.NewWriter(os.Stdout)
 
+// failing are what a refusal undoes before it exits, last registered first: a command's
+// temporary files.
+var failing []func()
+
+// atFail registers f to run when the command refuses.
+func atFail(f func()) { failing = append(failing, f) }
+
+// exit1 runs what atFail registered, flushes the output and exits 1.
+func exit1() {
+	for _, f := range slices.Backward(failing) {
+		f()
+	}
+	out.Flush()
+	os.Exit(1)
+}
+
 // fail prints "exclave: " and the reason and exits 1.
 func fail(format string, a ...any) {
 	fmt.Fprintf(os.Stderr, "exclave: "+format+"\n", a...)
-	out.Flush()
-	os.Exit(1)
+	exit1()
 }
 
 // errnoText is the reason of an OS error as strerror spells it, capitalised.
@@ -83,8 +99,7 @@ func failErrno(path string, err error) { fail("%s: %s", path, errnoText(err)) }
 // failGrammar fails on a manifest or hashes file the grammar refuses: "grammar: " and where.
 func failGrammar(err error) {
 	fmt.Fprintf(os.Stderr, "grammar: %s\n", err)
-	out.Flush()
-	os.Exit(1)
+	exit1()
 }
 
 // usage prints the command's usage line and exits 2.

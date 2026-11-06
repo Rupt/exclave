@@ -2302,25 +2302,38 @@ refused. From `.deb` files, in five steps:
    `compileall` over its standard library and the distribution's
    package directory; GSettings schemas, by `glib-compile-schemas`
    into `gschemas.compiled`; and the MIME database, by
-   `update-mime-database`. A generator runs from the exclave's shell
-   by its virtual path, with a fixed environment, and writes to a
-   staging directory in `.exclave/`, which is the host's (8.1 rule 6):
-   `compileall` through `-X pycache_prefix`, whose tree mirrors the
+   `update-mime-database`. A generator runs by its virtual path from
+   the exclave's shell, itself run by the name `sh`, since a
+   multi-call shell such as Alpine's busybox chooses its applet by
+   the name; with a fixed environment; and writes to a staging
+   directory in `.exclave/`, which is the host's (8.1 rule 6):
+   `compileall` through `PYTHONPYCACHEPREFIX`, whose tree mirrors the
    sources' directories without the `__pycache__` level, given back
    under it; the schema compiler through `--targetdir`; and the MIME
    generator on a copy of `/usr/share/mime/packages`, beside which it
-   writes. Python's bytecode is checked against its source's hash
-   rather than its time, so a copy that loses the times, `cp -r` or a
-   checkout, keeps it valid, and an edited source is compiled again;
-   `-B` keeps the interpreter's own imports from writing theirs first
-   by the time, which `compileall` would take as up to date. A file
-   the generator made replaces the tree's where they differ, through a
-   new file renamed over it, since a tree's files may be hard links
-   shared with a copy (6.1), so a second run changes nothing and a run
-   after the tree changed brings the caches up to date; the tree hash
-   is then recorded again. The generators run on the host's machine,
-   so an exclave of another architecture is refused, its caches made
-   on a machine of its own. On Ubuntu 24.04's `python3-minimal`, ten
+   writes. `compileall` runs in one process, since its workers need
+   `concurrent.futures`, which a minimal Python lacks, and a
+   forkserver socket, whose path under the staging directory can pass
+   the 108 bytes a socket's may have. Python's bytecode is checked
+   against its source's hash rather than its time, so a copy that
+   loses the times, `cp -r` or a checkout, keeps it valid, and an
+   edited source is compiled again; `PYTHONDONTWRITEBYTECODE` keeps
+   the interpreter's own imports from writing theirs first by the
+   time, which `compileall` would take as up to date. What a generator
+   says is printed after its name, a schema it passed over among it.
+   The tree changes only once every generator has succeeded, so a
+   failure leaves the exclave as it was: each file made replaces the
+   tree's where they differ, through a new file renamed over it, since
+   a tree's files may be hard links shared with a copy (6.1), at the
+   path its directory resolves to in the tree, so that a link in the
+   tree leads inside it; and the tree hash is recorded again. A second
+   run changes nothing, and a run after the tree changed remakes the
+   caches, though a file a generator no longer makes, the bytecode of
+   a source since removed, stays. A tree that differs from its
+   recorded hash is refused, so that the hash recorded vouches for no
+   edit `exclave caches` has not seen. The generators run on the
+   host's machine, so an exclave of another architecture is refused,
+   its caches made on a machine of its own. On Ubuntu 24.04's `python3-minimal`, ten
    standard modules import in 110 ms without the bytecode and 23 ms
    with it; `PYTHONPYCACHEPREFIX` on a host directory at run time, the
    alternative that needs no command, gives 21 ms after its first run
@@ -4251,7 +4264,8 @@ meaning items 4 and 7.
      tree's own `ldconfig` writes it, byte for byte on copies altered to
      exercise each rule, and the loader's table of directories against
      what it prints, a wrap with the other machine's launcher, which
-     `exclave caches` refuses, as it refuses an exclave not wrapped, the
+     `exclave caches` refuses, as it refuses an exclave not wrapped or
+     unwrapped again, the
      exclave's README and version;
    - *the tool's check and prune*: the static check's model of the
      loader, a tree naming two loaders, an unreadable file, and
@@ -4377,7 +4391,9 @@ takes beside it; the arm64 gcc-13 exclave; `sss.exclave`, Ubuntu
 `caches.exclave`, with `python3-minimal`, GLib's tools,
 `shared-mime-info` and GNOME's schemas, for `test/caches_test.py`,
 each made for the machine's own architecture since its programs run
-there; and
+there, and on x86-64 `alpine-caches.exclave`, Alpine 3.21's
+`python3`, `glib`, `shared-mime-info` and GNOME's schemas, for the
+same test; and
 Docker's default seccomp profile, from the distributions' package archives and
 GitHub alone, which is all a continuous-integration run fetches.
 `scripts/inputs DIR examples` makes what the example runs take as
@@ -4507,13 +4523,17 @@ its time, ok, SKIP or FAIL:
   the exclave lacks and not of the one it ships; and
   `test/caches_test.py` on its `caches.exclave`, Ubuntu's
   `python3-minimal`, GLib's tools, `shared-mime-info` and GNOME's
-  schemas: before `exclave caches` and after it, a module imports from
-  its source and then from bytecode checked by the source's hash,
-  `gsettings` finds no schemas and then a key's default, and GIO takes
-  an HTML file for plain text and then for HTML; `exclave check`
-  passes on the tree hash recorded, a second run changes nothing, and
-  the given exclave, whose files the copy shares by hard links, is
-  left as it was.
+  schemas, and on x86-64 its `alpine-caches.exclave`, Alpine's, whose
+  shell is busybox: before `exclave caches` and after it, a module
+  imports from its source and then from bytecode checked by the
+  source's hash, `gsettings` finds no schemas and then a key's
+  default, and GIO takes an HTML file for plain text and then for
+  HTML; `exclave check` passes on the tree hash recorded, a second run
+  changes no file and records the same hash, a tree changed since is
+  refused, and the given exclave, whose files the copy shares by hard
+  links, is left as it was; a generator that fails, on a MIME package
+  that is a directory, leaves the tree, its hash and `.exclave/` as
+  they were.
 
 Every driver runs `build/launcher` on a copy of its own, so the exclave
 given to the gate is never run as it is nor written. The suite wraps a
