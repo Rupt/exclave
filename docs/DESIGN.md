@@ -175,7 +175,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 101 named tests, most of them programs that
+- **The regression suite**: 102 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1288,8 +1288,8 @@ A symlink's target is a virtual path whoever created the link. A host
 link `/tmp/x -> /usr/bin/gcc` reaches the exclave's gcc, as it would
 under bwrap; an exclave link `/var/run -> /run` reaches the host's
 `/run` by 8.1 rule 3. The identity files of 8.4 are the one place a host
-symlink keeps its host meaning, and they are resolved at startup, not
-here.
+symlink keeps its host meaning, and the kernel follows them on the
+host, not here.
 
 The real path of `tree/` is an alias of `/` (8.1 rule 6), and so is
 any directory with the tree root's device and inode. A path that begins
@@ -1808,8 +1808,8 @@ it, and every part rules it as it rules that directory.
 `host <path>` adds a host path at its own name; `own <path>` makes one
 the exclave's. A `host` record whose host path is a directory gives
 the host that subtree; one whose host path is a file or a symlink is
-resolved on the host at startup like an identity file (8.4) and stands
-for that one name; one whose host path does not exist is dropped, and
+followed on the host like an identity file (8.4) and stands for that
+one name; one whose host path does not exist is dropped, and
 the exclave answers.
 
 When several parts apply, the launcher decides in this order:
@@ -1995,12 +1995,16 @@ stat of each directory a process has not stat'd before.
 
 ### 8.4 Host identity files
 
-At startup the launcher resolves each identity file's symlink chain on
-the host, `readlink` by `readlink`, from `/etc/resolv.conf` to
-`/run/systemd/resolve/stub-resolv.conf` for instance, and records the
-final host path in the host table under the identity file's name.
-Inside the exclave the identity file then behaves as the host's link
-does: `readlink` answers the host's first link text, `lstat` and an
+At startup the launcher records in the host table each identity file
+the host has: a file, or a symlink whose chain the host resolves, from
+`/etc/resolv.conf` to `/run/systemd/resolve/stub-resolv.conf` for
+instance. A call on an identity file is re-issued on its host name,
+and the kernel follows the host's link, at the moment of the call and
+in the host's space, as it follows it for the host's own programs. A
+running program therefore sees the host retarget `/etc/resolv.conf`, as
+a VPN client or a change of resolver does, or rename a file over the
+link. Inside the exclave the identity file behaves as the host's link
+does: `readlink` answers the host's link text, `lstat` and an
 `O_PATH | O_NOFOLLOW` open see the host's symlink itself, and an
 `O_NOFOLLOW` open fails with `ELOOP`. Every other call that does not
 follow the last component is the host's own call on the host's link,
@@ -2013,16 +2017,14 @@ link, `ENODATA` for one read), `inotify_add_watch` with `IN_DONT_FOLLOW`
 and `fanotify_mark` with `FAN_MARK_DONT_FOLLOW`, which watch the link,
 `link` with the link as its old name, `rename` of either name and
 `unlink`, which move or delete the link and leave its target, and
-`execveat` with `AT_SYMLINK_NOFOLLOW`, `ELOOP`. A call that follows
-reaches the host path recorded at startup. The directories on the way
-to an identity file are traversable in the path walk whether the
-exclave ships them or not (8.1 rule 5). The table is fixed for the
-process's life: a host retargeting `/etc/resolv.conf` under a running
-exclave is not seen (13 item 18).
+`execveat` with `AT_SYMLINK_NOFOLLOW`, `ELOOP`. The directories on the
+way to an identity file are traversable in the path walk whether the
+exclave ships them or not (8.1 rule 5). Which identity files are the
+host's is fixed for the process's life (13 item 18).
 
 The translator never follows an identity file's host link in virtual
-space, where `/usr` is the exclave's; it uses the host path it recorded
-at startup. Nor do host symlinks in general keep their host meaning:
+space, where `/usr` is the exclave's; the kernel follows it on the
+host. Nor do host symlinks in general keep their host meaning:
 such a rule would let a host link into `/usr` reach the host's `/usr`.
 Every other symlink, on a host path or an exclave path, is resolved in
 virtual space (7.4.4).
@@ -2790,7 +2792,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 101 named regressions and every oracle its kernel can run; 17
+suite's 102 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher
 inside its copy of the exclave (`scripts/reproduce`, 10.5) and
 compares its bytes with the reference machine's build; a row whose
@@ -2986,11 +2988,11 @@ and stay fixed.
     only libc. A musl exclave loads no modules and finds the users only
     where the host runs `nscd`.
 
-18. **Identity files are resolved once, at startup.** A host change to
-    `/etc/resolv.conf` under a running exclave is not seen, and a
-    delete or a rename of the link itself from inside, where the host
-    allows it, leaves the table as it was, so a call that follows the
-    name still reaches the target recorded at startup.
+18. **Which identity files are the host's is decided at startup.** One
+    the host lacks then is the exclave's for the process's life, even
+    once the host makes it, and one the host removes later is absent
+    inside rather than the exclave's again. Its contents and its link
+    are the host's at each call (8.4).
 
 19. **Per-user state under an exclave path has no target.** The tree is
     read-only and the visibility rule has no per-user directory, so
@@ -3475,7 +3477,7 @@ every file at its base, originals included.
 | Alternative | Why not |
 |---|---|
 | `chmod -R a-w` for read-only | The tree resists `rm -r`, loses its modes to version control and careless copies, and its owner can restore the bits. Refusal in the handler depends on nothing; its price is 8.2's error precedence. |
-| Resolving host symlinks in the host's domain | A host link into `/usr` would reach the host's `/usr`. Links resolve in the exclave's view; the identity files are handled at startup (8.4). |
+| Resolving host symlinks in the host's domain | A host link into `/usr` would reach the host's `/usr`. Links resolve in the exclave's view; the identity files' host links are followed by the kernel on the host (8.4). |
 | Honouring `clone3` by copying the signal frame onto the child's stack | The FPU save area must be copied with the frame and the frame's pointer to it moved, or every new thread starts with a corrupt `MXCSR`. That can be done, but it ties the handler to the kernel's signal-frame layout on both architectures, a layout that grows with each new register set, where `ENOSYS` costs a few traps per `posix_spawn` (7.5.5). |
 | Reclaiming scratch by comparing stack pointers across threads | Meaningless across alternate stacks and coroutines; scratch is reclaimed by liveness sweeps (7.5.4). |
 | Synthesising host entries into `getdents64` | Invents results: a listing would name what no directory holds, merged in an order no choice gets right for every program. Empty placeholders in the tree give `ls /` the same answer for free (8.3). |
@@ -4261,8 +4263,9 @@ meaning items 4 and 7.
      tree and failing closed, `host` and `own` records in the order
      8.1 decides them, the root and the exclave's own directory as the
      walk sees them, identity files, the no-follow calls on an
-     identity link against the native run of the same program, SSSD's
-     directory the host's, through a host link to a directory and from a
+     identity link against the native run of the same program, an
+     identity link retargeted and replaced by a file under a running
+     shell, SSSD's directory the host's, through a host link to a directory and from a
      tree without `/var/lib`, and `own` giving it back, the
      log's names and escapes, and the log's path refused when relative
      or inside the exclave;
@@ -4333,7 +4336,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus nineteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones` and `memfd_exec` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 101 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 102 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -5013,8 +5016,9 @@ specified.
   `chmod`**: careless copies lose modes; refusal depends on nothing
   (8.2).
 - **Symlinks resolve in virtual space; identity files' host links are
-  resolved once at startup**: a host link into `/usr` must never reach
-  the host's `/usr` (8.4).
+  followed by the kernel on the host, at each call**: a host link into
+  `/usr` must never reach the host's `/usr` through the exclave's
+  (8.4).
 - **The environment passes through, minus the loader and libc
   variables that name host files, with four constants set at the
   border**: locale data is bound to its libc, the time zone is not a

@@ -128,39 +128,6 @@ int vis_in_data(const char *v)
     return 0;
 }
 
-/* identity files: link text recorded at startup for readlink fidelity (8.4) */
-static const char *id_link[MAX_HOST_RECORDS + N_IDENTITY + 2 * N_HOST_DIRS]; /* indexed as C.host */
-
-/* resolves host path p's symlink chain on the host, first being p's lstat, already made: 1 with the final path in out
- * and the first link's text in link, 0 when a link cannot be read or the chain is longer than 40 links */
-static int host_resolve(const char *p, const struct kstat *first, char *out, char *link)
-{
-    char cur[PATH_MAX], t[PATH_MAX];
-    scpy(cur, p, PATH_MAX);
-    link[0] = 0;
-    for (int hops = 0; hops < 40; hops++) {
-        struct kstat st;
-        if (hops == 0) st = *first;
-        else if (sys_lstat(cur, &st) < 0) return 0;
-        if ((st.st_mode & S_IFMT) != S_IFLNK) {
-            scpy(out, cur, PATH_MAX);
-            return 1;
-        }
-        long n = sys_readlink(cur, t, PATH_MAX - 1);
-        if (n < 0) return 0;
-        t[n] = 0;
-        if (!link[0]) scpy(link, t, PATH_MAX);
-        if (t[0] == '/') scpy(cur, t, PATH_MAX);
-        else {
-            char *s = xstrrchr(cur, '/');
-            if (s) s[1] = 0;
-            else cur[0] = 0;
-            scat(cur, t, PATH_MAX);
-        }
-    }
-    return 0;
-}
-
 static int base_is_host(const char *v, const char **real);
 static void rule_build(void);
 
@@ -202,7 +169,6 @@ void vis_init(void)
         if ((st.st_mode & S_IFMT) == S_IFDIR) {
             C.host[n] = C.host[i];
             C.host[n].is_file = 0;
-            id_link[n] = 0;
             n++;
             continue;
         }
@@ -217,7 +183,6 @@ void vis_init(void)
             if (len > 0 && dir[0] == '/') {
                 C.host[n] = C.host[i];
                 C.host[n].is_file = 0;
-                id_link[n] = 0;
                 n++;
                 /* one at most for each default directory, by construction */
                 if (nextra >= N_HOST_DIRS) die("host table full", dir, 0);
@@ -225,23 +190,21 @@ void vis_init(void)
                 continue;
             }
         }
-        static char out[PATH_MAX], link[PATH_MAX];
-        if (!host_resolve(C.host[i].v, &st, out, link)) {
+        /* a file, or a link the host resolves: the host's name is its real path, so that a call follows the host's
+         * link as the host has it at that moment, in the host's space (8.4) */
+        if ((st.st_mode & S_IFMT) == S_IFLNK && sys_stat(C.host[i].v, &st) < 0) {
             log_msg("host path unresolvable, using the exclave's", C.host[i].v);
             continue;
         }
-        C.host[n].v = C.host[i].v;
-        C.host[n].r = arena_str(out, xstrlen(out));
+        C.host[n].v = C.host[n].r = C.host[i].v;
         C.host[n].is_file = 1;
         C.host[n].is_default_dir = 0;
-        id_link[n] = link[0] ? arena_str(link, xstrlen(link)) : 0;
         n++;
     }
     for (int i = 0; i < nextra; i++) {
         C.host[n].v = C.host[n].r = extra[i];
         C.host[n].is_file = 0;
         C.host[n].is_default_dir = 1;
-        id_link[n] = 0;
         n++;
     }
     C.nhost = n;
@@ -569,7 +532,9 @@ int vis_readlink_identity(const char *v, char *out)
 {
     struct rule *r = rule_exact(v);
     if (!r || !(r->flags & R_HOSTFILE)) return 0;
-    if (!id_link[r->host]) return -EINVAL;
-    scpy(out, id_link[r->host], PATH_MAX);
+    /* the host's link as it is now: the kernel's EINVAL for a file, ENOENT for a name the host has removed */
+    long n = sys_readlink(C.host[r->host].v, out, PATH_MAX - 1);
+    if (n < 0) return (int)n;
+    out[n] = 0;
     return 1;
 }

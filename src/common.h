@@ -280,7 +280,9 @@ struct scratch {
     unsigned resolve; /* openat2's resolve flags for the walk (7.4.3); 0 for every other syscall */
     /* set by canon: the walk started at, passed through or ended in the exclave's domain, or rewrote a magic link */
     int touched_exclave;
-    int magic_end; /* the walk ended on a magic link to an object with no path, which a re-issue must follow */
+    /* the walk ended on a link the re-issue must follow: a magic link to an object with no path, or an identity
+     * file's host link, followed on the host (8.4) */
+    int follow_end;
     /* openat2's struct open_how as given, for a walk that never touched the exclave (7.4.3) */
     unsigned long how0[3];
 };

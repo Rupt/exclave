@@ -438,7 +438,7 @@ static int host_component(struct scratch *S, struct walk *w, int last, int *err)
     if (magic && pathless(real, tmp, n)) {
         /* reachable only through the link itself: the walk ends here, and the re-issue follows it */
         if (!last) return -ENOTDIR;
-        S->magic_end = 1;
+        S->follow_end = 1;
         return CK_FILE;
     }
     if (xstrncmp(cur, "/proc/", 6) == 0) from_real(tmp); /* procfs links report real paths */
@@ -456,10 +456,12 @@ static int walk_classify(struct scratch *S, struct walk *w, int last, int *err)
     int host = vis_walk_facts(cur, &idf, &leads, &hreal);
     leads = leads && !last;
     if (idf || leads || !host) S->touched_exclave = 1; /* anything but a plain host component */
-    /* 8.4: resolved on the host at startup; its host symlinks are not ours to follow */
+    /* 8.4: followed on the host, by its host name, at each call; its host symlinks are not ours to follow */
     if (idf) {
         /* it is a symlink where the walk sees it */
         if ((w->rf & RESOLVE_NO_SYMLINKS) && vis_readlink_identity(cur, tmp) == 1) return -ELOOP;
+        /* followed as the last component: the re-issue on the host name follows the host's link */
+        if (last) S->follow_end = 1;
         return CK_FILE;
     }
     if (leads) return CK_DIR; /* on the way to an identity file: a directory (8.4) */
@@ -498,7 +500,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
                                                                          : 0;
     /* a walk that stays in the host's domain is the kernel's own to make (7.4.3) */
     S->touched_exclave = 0;
-    S->magic_end = 0;
+    S->follow_end = 0;
     int r = walk_start(S, &w, path, dfd, out);
     if (r) return r < 0 ? r : 0;
     w.rp = S->rest;

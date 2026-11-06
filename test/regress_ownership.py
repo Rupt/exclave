@@ -98,6 +98,67 @@ def identity_link_consistency(ctx: Ctx) -> str | None:
     return None
 
 
+@test
+def identity_retargeted(ctx: Ctx) -> None:
+    """8.4, 13 item 18: an identity file follows the host's link as the host has it at each call.
+
+    A VPN client or a change of resolver retargets /etc/resolv.conf, or replaces the link with a
+    file, under programs already running. Made in a user namespace with a directory of the test's
+    bound on /etc, the steps taken in turn through fifos: one shell inside the exclave reads
+    /etc/resolv.conf, the host retargets the link, the shell reads it again, the host renames a file
+    over the link, and the shell reads it and tests for a link a third time. Skipped without user
+    namespaces.
+    """
+    if subprocess.run(
+        ["unshare", "-Urm", "true"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode:
+        skip("no user namespaces")
+    pid = os.getpid()
+    base = os.path.join(ctx.work, f"retarget-{pid}")
+    shutil.rmtree(base, ignore_errors=True)
+    etc = os.path.join(base, "etc")
+    os.makedirs(etc)
+    if os.path.exists("/etc/ld.so.cache"):  # the host's tools run under the bound /etc
+        shutil.copy("/etc/ld.so.cache", etc)
+    for name, n in (("a", 1), ("b", 2)):
+        with open(os.path.join(base, name), "w") as f:
+            f.write(f"nameserver 192.0.2.{n}\n")
+    os.symlink(os.path.join(base, "a"), os.path.join(etc, "resolv.conf"))
+    for fifo in ("ready", "go1", "go2"):
+        os.mkfifo(os.path.join(base, fifo))
+    inner = (
+        'read l </etc/resolv.conf; echo "1 $l"; [ -L /etc/resolv.conf ] && echo "1 link"; '
+        "echo >ready; "
+        'read x <go1; read l </etc/resolv.conf; echo "2 $l"; '
+        'read x <go2; read l </etc/resolv.conf; echo "3 $l"; '
+        '[ -L /etc/resolv.conf ] || echo "3 file"'
+    )
+    script = (
+        f"mount --bind {etc} /etc || exit 99; "
+        f"{wrapper(ctx, 'sh')} -c '{inner}' & read x <ready; "
+        f"ln -sfn {base}/b /etc/resolv.conf.new && mv -T /etc/resolv.conf.new /etc/resolv.conf "
+        "&& echo >go1; "
+        "echo 'nameserver 192.0.2.3' >/etc/resolv.conf.new && mv -T /etc/resolv.conf.new "
+        "/etc/resolv.conf && echo >go2; wait"
+    )
+    rc, out, err = run(
+        ["unshare", "-Urm", "sh", "-c", script], cwd=base, env=dict(ctx.env, PATH="/usr/bin:/bin")
+    )
+    if rc == 99:
+        skip(f"no bind mount on /etc in a user namespace here: {err.strip()[-120:]}")
+    want = [
+        "1 nameserver 192.0.2.1",
+        "1 link",
+        "2 nameserver 192.0.2.2",
+        "3 nameserver 192.0.2.3",
+        "3 file",
+    ]
+    expect(out.splitlines() == want, f"/etc/resolv.conf retargeted under a shell: {out!r} {err!r}")
+
+
 def native_identity_run(ctx: Ctx, hostdir: str, paths: list[str]) -> list[str]:
     """identity_nofollow's answers from the kernel itself: the program run natively.
 
