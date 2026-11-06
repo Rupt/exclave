@@ -66,7 +66,52 @@ var (
 	uaSetRe = regexp.MustCompile(`(?:update-)?alternatives\s+(?:--(?:quiet|verbose|force)\s+)*--set\s+(\S+)\s+(\S+)`)
 	uaAnyRe = regexp.MustCompile(`(?:update-)?alternatives\s+--(?:install|set)\b`)
 	slaveRe = regexp.MustCompile(`--slave\s+(\S+)\s+(\S+)\s+(\S+)`)
+	forRe   = regexp.MustCompile(`\bfor\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([^;\n]*?)\s*(?:;|\n)\s*do\b`)
+	doRe    = regexp.MustCompile(`\b(?:do|done)\b`)
 )
+
+// unrollLoops repeats the body of every `for VAR in WORDS; do ... done` whose words are literal,
+// once per word with $VAR and ${VAR} replaced by it, outermost first, as the shell would run it;
+// a loop over anything else, a variable, a glob or a command's output, is left as it is.
+// ImageMagick's postinst installs its alternatives in such a loop over its programs' names.
+func unrollLoops(text string) string {
+	for {
+		changed := false
+		for _, m := range forRe.FindAllStringSubmatchIndex(text, -1) {
+			words := strings.Fields(text[m[4]:m[5]])
+			if len(words) == 0 || strings.ContainsAny(text[m[4]:m[5]], "$`*?[\"'\\") {
+				continue
+			}
+			// the body ends at the done that closes this do, nested loops counted
+			depth, end := 1, -1
+			for _, d := range doRe.FindAllStringIndex(text[m[1]:], -1) {
+				if text[m[1]+d[0]:m[1]+d[1]] == "do" {
+					depth++
+				} else if depth--; depth == 0 {
+					end = m[1] + d[0]
+					break
+				}
+			}
+			if end < 0 {
+				continue
+			}
+			body := text[m[1]:end]
+			name := text[m[2]:m[3]]
+			ref := regexp.MustCompile(`\$\{` + name + `\}|\$` + name + `\b`)
+			var out strings.Builder
+			for _, w := range words {
+				out.WriteString(ref.ReplaceAllLiteralString(body, w))
+				out.WriteString("\n")
+			}
+			text = text[:m[0]] + out.String() + text[end+len("done"):]
+			changed = true
+			break
+		}
+		if !changed {
+			return text
+		}
+	}
+}
 
 // alternative is one `alternatives --install` line: its priority first, so the greatest wins.
 type alternative struct {
@@ -98,8 +143,9 @@ func (a alternative) less(b alternative) bool {
 }
 
 // alternatives makes every `update-alternatives --install` line in a postinst, with its slaves.
-// The highest priority wins, unless a `--set` names a candidate; a line the rule cannot read, one
-// built from shell variables or in a loop, is noted, since its alternatives are not made.
+// The highest priority wins, unless a `--set` names a candidate. A loop over literal words is
+// unrolled first; a line the rule still cannot read, one built from other shell variables, is
+// noted, since its alternatives are not made.
 func alternatives(r *root.Root, packages []*Package, log logger) (bool, error) {
 	groups := map[string][]alternative{}
 	var order []string
@@ -109,7 +155,7 @@ func alternatives(r *root.Root, packages []*Package, log logger) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		text := strings.ReplaceAll(scripts["postinst"], "\\\n", " ")
+		text := unrollLoops(strings.ReplaceAll(scripts["postinst"], "\\\n", " "))
 		matched := 0
 		for _, m := range uaRe.FindAllStringSubmatch(text, -1) {
 			at, gname, target, prio := m[1], m[2], m[3], m[4]
@@ -136,7 +182,7 @@ func alternatives(r *root.Root, packages []*Package, log logger) (bool, error) {
 		}
 		if uaAnyRe.MatchString(text) && matched == 0 {
 			log(fmt.Sprintf("note: %s's postinst calls update-alternatives in a form the "+
-				"alternatives rule does not read, variables or a loop: its alternatives are made "+
+				"alternatives rule does not read, shell variables: its alternatives are made "+
 				"only where another rule makes them", pkg.Name))
 		}
 	}

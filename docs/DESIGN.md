@@ -2267,7 +2267,9 @@ refused. From `.deb` files, in five steps:
    `update-alternatives --install` line in a `postinst`, with its
    slaves, the highest priority winning unless a `--set` names one,
    which yields `awk`, `which`, `pager`, `cc` and the rest without a
-   per-package list; `java-jinfo`, a Debian JDK's tool links from the
+   per-package list, a `for` loop over literal words unrolled first,
+   as ImageMagick installs `convert` and its other programs;
+   `java-jinfo`, a Debian JDK's tool links from the
    `/usr/lib/jvm/.*.jinfo` file it ships for `update-java-alternatives`,
    since its `postinst` makes them in a loop, the highest priority
    winning; `busybox-applets`, Alpine's applet links from
@@ -2308,8 +2310,9 @@ refused. From `.deb` files, in five steps:
    and formats; an interest nothing needs, a manual-page index, is
    passed over, and the notes of the caches `exclave caches` makes
    name it. A `postinst` that calls `update-alternatives` in a form
-   the rule cannot read, from shell variables or in a loop, is noted
-   too, since its alternatives are not made. Failed opens in an
+   the rule cannot read, from shell variables other than a literal
+   loop's, is noted too, since its alternatives are not made. Failed
+   opens in an
    `EXCLAVE_LOG` then show what an exclave tried and could not find.
 
    A cache only the tree's own binary can make is made after `wrap`,

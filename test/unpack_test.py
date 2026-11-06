@@ -503,8 +503,10 @@ def escapes_stay_in_the_tree(ctx: Ctx) -> str | None:
 def synthesis_rules_and_notes(ctx: Ctx) -> None:
     """10.1: the rules are a table, named in the log as they apply; --set picks the alternative.
 
-    A postinst that builds its update-alternatives lines from variables is noted, since its
-    alternatives are not made, and a trigger interest the tree lacks a cache for is noted by name.
+    A loop over literal words is unrolled, as ImageMagick's postinst needs, around a loop it cannot
+    unroll; a postinst that builds its update-alternatives lines from other variables is noted,
+    since its alternatives are not made, and a trigger interest the tree lacks a cache for is
+    noted by name.
     A JDK's tools are linked from its .jinfo file, the highest priority's winning.
     """
     alt = package(
@@ -530,14 +532,35 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
         ctx,
         "deb",
         "loopy",
-        [("usr/lib/j1", "file", b"#!/bin/sh\n", 0o755)],
+        [
+            (f"usr/lib/{n}-q{v}", "file", b"#!/bin/sh\n", 0o755)
+            for n in ("conv", "ident")
+            for v in ("", ".1")
+        ],
         control_files=[
             (
                 "postinst",
                 (
-                    "#!/bin/sh\nfor v in 1; do update-alternatives --install /usr/bin/j$v j$v "
-                    "/usr/lib/j$v 1; done\n"
+                    "#!/bin/sh\nfor prog in conv ident; do\n"
+                    "  if true; then update-alternatives --remove-all $prog; fi\n"
+                    "  for v in '' .1; do :; done\n"
+                    "  update-alternatives --install /usr/bin/$prog \\\n"
+                    "    $prog /usr/lib/${prog}-q 10 \\\n"
+                    "    --slave /usr/bin/$prog.1 $prog.1 /usr/lib/$prog-q.1\n"
+                    "done\n"
                 ),
+            )
+        ],
+    )
+    varied = package(
+        ctx,
+        "deb",
+        "varied",
+        [("usr/lib/j1", "file", b"#!/bin/sh\n", 0o755)],
+        control_files=[
+            (
+                "postinst",
+                "#!/bin/sh\nupdate-alternatives --install /usr/bin/j$1 j$1 /usr/lib/j$1 1\n",
             )
         ],
     )
@@ -566,7 +589,7 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
         )
         for n in (1, 2)
     ]
-    root, out = accepted(ctx, "rules", [alt, loopy, py, *jdks])
+    root, out = accepted(ctx, "rules", [alt, loopy, varied, py, *jdks])
     expect(
         os.readlink(os.path.join(root, "usr", "bin", "java")) == "/etc/alternatives/java"
         and os.readlink(os.path.join(root, "etc", "alternatives", "java"))
@@ -582,7 +605,7 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
         "the applied rules are not named: " + out,
     )
     expect(
-        "note: loopy's postinst calls update-alternatives in a form the alternatives rule does not"
+        "note: varied's postinst calls update-alternatives in a form the alternatives rule does not"
         in out,
         "a postinst with variables is not noted: " + out,
     )
@@ -591,8 +614,18 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
         "a trigger interest the tree lacks a cache for is not noted: " + out,
     )
     expect(
-        not os.path.lexists(os.path.join(root, "usr", "bin", "j1")), "a loop's alternative was made"
+        not os.path.lexists(os.path.join(root, "usr", "bin", "j1")),
+        "an alternative named by a variable was made",
     )
+    for n in ("conv", "ident"):
+        for link, name, target in ((n, n, f"{n}-q"), (f"{n}.1", f"{n}.1", f"{n}-q.1")):
+            alt_link = os.path.join(root, "etc", "alternatives", name)
+            expect(
+                os.path.lexists(os.path.join(root, "usr", "bin", link))
+                and os.readlink(alt_link) == f"/usr/lib/{target}",
+                f"the loop over literal words did not make {link}: " + out[-400:],
+            )
+    expect("note: loopy's" not in out, "an unrolled loop is noted: " + out)
 
 
 @test
