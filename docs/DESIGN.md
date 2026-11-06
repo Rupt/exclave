@@ -2171,7 +2171,7 @@ arguments a download needs, which its `--help` lists:
 ```
 exclave wrap EXCLAVE                wrap an exclave (idempotent; a bare directory holding tree/ becomes an exclave)
 exclave unwrap EXCLAVE              unwrap an exclave again
-exclave caches EXCLAVE              Python bytecode, GSettings schemas and the MIME database, made by the tree's own generators inside the wrapped exclave (10.1)
+exclave caches EXCLAVE              Python bytecode, GSettings schemas, the MIME database and GIO's, gdk-pixbuf's, icon, desktop and font caches, made by the tree's own generators inside the wrapped exclave (10.1)
 exclave check EXCLAVE [LOG...]      wrappers, the tree against the hashes file, the static check, and with EXCLAVE_LOG files the dynamic check
 exclave prune EXCLAVE LOG...        drop what no logged workload touched
 exclave format [--check] FILE...    canonical form of a manifest or hashes file; --check only reports
@@ -2306,8 +2306,8 @@ refused. From `.deb` files, in five steps:
    write), GSettings schemas, the MIME database, font and icon caches,
    the desktop database, GIO and gdk-pixbuf module caches, TeX's index
    and formats; an interest nothing needs, a manual-page index, is
-   passed over, and the notes of the three `exclave caches` makes name
-   it. A `postinst` that calls `update-alternatives` in a form
+   passed over, and the notes of the caches `exclave caches` makes
+   name it. A `postinst` that calls `update-alternatives` in a form
    the rule cannot read, from shell variables or in a loop, is noted
    too, since its alternatives are not made. Failed opens in an
    `EXCLAVE_LOG` then show what an exclave tried and could not find.
@@ -2316,20 +2316,49 @@ refused. From `.deb` files, in five steps:
    by `exclave caches EXCLAVE`, which runs the tree's own generators
    inside the exclave, under its launcher, and copies what they make
    into the tree; the maintainer script is still never run. It makes
-   three: Python's bytecode, by each `python3.N` the tree holds, with
-   `compileall` over its standard library and the distribution's
+   eight, each where the tree holds its generator and something for
+   it to index: Python's bytecode, by each `python3.N` the tree holds,
+   with `compileall` over its standard library and the distribution's
    package directory; GSettings schemas, by `glib-compile-schemas`
-   into `gschemas.compiled`; and the MIME database, by
-   `update-mime-database`. A generator runs by its virtual path from
-   the exclave's shell, itself run by the name `sh`, since a
-   multi-call shell such as Alpine's busybox chooses its applet by
-   the name; with a fixed environment; and writes to a staging
+   into `gschemas.compiled`; the MIME database, by
+   `update-mime-database`; GIO's `giomodule.cache` in each module
+   directory, by `gio-querymodules`, without which GIO loads every
+   module to ask what it implements; gdk-pixbuf's `loaders.cache`,
+   beside the loader directory `gdk-pixbuf-query-loaders` names on
+   its standard output, without which gdk-pixbuf reads only the
+   formats built into it; `icon-theme.cache` for each theme under
+   `/usr/share/icons` with an `index.theme`, by `gtk-update-icon-cache
+   -q -t -f`; the desktop database, `mimeinfo.cache`, by
+   `update-desktop-database`; and fontconfig's caches of the system's
+   font directories, by `fc-cache -s -f`, into the first cache
+   directory the tree's `fonts.conf` names outside the home,
+   `/var/cache/fontconfig`, so that `fc-list` inside finds them valid
+   and writes none under the user's home. A generator runs by its
+   virtual path from the exclave's shell, itself run by the name
+   `sh`, since a multi-call shell such as Alpine's busybox chooses its
+   applet by the name; with a fixed environment; and writes to a staging
    directory in `.exclave/`, which is the host's (8.1 rule 6):
    `compileall` through `PYTHONPYCACHEPREFIX`, whose tree mirrors the
    sources' directories without the `__pycache__` level, given back
-   under it; the schema compiler through `--targetdir`; and the MIME
+   under it; the schema compiler through `--targetdir`; the MIME
    generator on a copy of `/usr/share/mime/packages`, beside which it
-   writes. `compileall` runs in one process, since its workers need
+   writes; GIO's, the icon and the desktop generators, which write
+   beside what they read, on a mirror of the directory made of links
+   to its entries' virtual paths, which the launcher's walk follows
+   into the tree, so that nothing of the tree is copied; and `fc-cache`
+   through a configuration that includes the tree's and names the
+   staging directory after the tree's cache directories, which are
+   read-only inside, so that it is the first writable one, where
+   `fc-cache` writes, and the last, whose cache answers its check of
+   what it wrote, which a stale cache of the tree's would fail. A
+   font cache is named by its directory's virtual path, which is why
+   `fc-cache` runs inside, and records the directory's modification
+   time; GTK takes an icon cache older than its theme's directory for
+   stale, so the directory is given the cache's time where its own is
+   later, as `gtk-update-icon-cache` gives it. A copy that loses the times,
+   `cp -r`, leaves the font caches stale, and fontconfig then writes
+   its own under the user's home, until `exclave caches` runs on the
+   copy. `compileall` runs in one process, since its workers need
    `concurrent.futures`, which a minimal Python lacks, and a
    forkserver socket, whose path under the staging directory can pass
    the 108 bytes a socket's may have. Python's bytecode is checked
@@ -2356,9 +2385,11 @@ refused. From `.deb` files, in five steps:
    with it; `PYTHONPYCACHEPREFIX` on a host directory at run time, the
    alternative that needs no command, gives 21 ms after its first run
    but writes outside the exclave (`test/bytecode.py`, measured
-   November 2026). The other caches the notes name, the GIO and
-   gdk-pixbuf module caches, fonts', icons', locales from `localedef`
-   and TeX's, are made by hand the same way: run the generator inside
+   November 2026). GLib's own application lookup, `gio mime`, reads
+   the desktop files rather than `mimeinfo.cache`, which is for the
+   programs that still read it. The other caches the notes name,
+   locales from `localedef` and TeX's index and formats, are made by
+   hand the same way: run the generator inside
    the exclave writing to a host directory, copy its output into the
    tree, and record the tree hash with `exclave unwrap` and `wrap`
    (13 item 48).
@@ -3256,15 +3287,21 @@ and stay fixed.
 48. **Some caches only a tree's own binary can make are made by
     hand.** `unpack` and `wrap` run nothing of the tree (10.1), and
     `exclave caches`, which runs the tree's generators inside the
-    exclave, makes three: Python bytecode, GSettings schemas and the
-    MIME database. Without it Python compiles each module on import,
-    nearly five times the import time of ten standard modules, and a
-    GLib program finds no schemas. The GIO and gdk-pixbuf module
-    caches, font and icon caches, locales from `localedef` and TeX's
-    formats are not among the three; `unpack` names each from the
-    packages' trigger interests, and the maker runs its generator
-    inside the exclave the same way (10.1). `exclave caches` runs only
-    on a machine of the exclave's architecture.
+    exclave, makes eight: Python bytecode, GSettings schemas, the MIME
+    database, GIO's module cache, gdk-pixbuf's loader cache, icon
+    caches, the desktop database and fontconfig's caches. Without it
+    Python compiles each module on import, nearly five times the import
+    time of ten standard modules, a GLib program finds no schemas,
+    gdk-pixbuf reads only its built-in formats, and fontconfig writes
+    its caches under the user's home. The font and icon caches are
+    valid while the tree keeps its directories' modification times: a
+    copy that loses them, `cp -r`, leaves fontconfig writing its own
+    under the home until `exclave caches` runs on the copy. Locales
+    from `localedef` and TeX's index and formats are not among the
+    eight; `unpack` names each from the packages' trigger interests,
+    and the maker runs its generator inside the exclave the same way
+    (10.1). `exclave caches` runs only on a machine of the exclave's
+    architecture.
 
 49. **Shadow stacks are off, by glibc's choice.** The kernel offers
     user shadow stacks on the reference machine (`user_shstk`, kernel
@@ -4557,13 +4594,21 @@ its time, ok, SKIP or FAIL:
   the exclave lacks and not of the one it ships, and on the Alpine
   exclave that musl finds the users only through `nscd`; and
   `test/caches_test.py` on its `caches.exclave`, Ubuntu's
-  `python3-minimal`, GLib's tools, `shared-mime-info` and GNOME's
-  schemas, and on x86-64 its `alpine-caches.exclave`, Alpine's, whose
+  `python3-minimal`, GLib's tools, `shared-mime-info`, GNOME's schemas
+  and the generators of the other caches with something for each to
+  index, and on x86-64 its `alpine-caches.exclave`, Alpine's, whose
   shell is busybox: before `exclave caches` and after it, a module
   imports from its source and then from bytecode checked by the
   source's hash, `gsettings` finds no schemas and then a key's
   default, and GIO takes an HTML file for plain text and then for
-  HTML; `exclave check` passes on the tree hash recorded, a second run
+  HTML; and, each where the tree holds its generator and skipped with
+  the reason where it does not, GIO opens its modules and then only
+  `giomodule.cache`, `gdk-pixbuf-pixdata` cannot read a BMP image and
+  then reads it, each icon theme's cache is missing and then
+  validates, names every icon and is no older than its directory, the
+  desktop database maps each MIME type to the desktop files that name
+  it, and `fc-list` writes font caches under the home and then lists
+  the same fonts and writes none; `exclave check` passes on the tree hash recorded, a second run
   changes no file and records the same hash, a tree changed since is
   refused, and the given exclave, whose files the copy shares by hard
   links, is left as it was; a generator that fails, on a MIME package
@@ -4932,9 +4977,10 @@ questions.
    refusal of a soname only a prior `dlopen` by path provides (10.3).
    Further real software decides which of the tool's synthesis gaps
    close next (10.1): `unpack` does not generate
-   locales, font caches or the other caches `exclave caches` does not
-   make (Python bytecode, GLib schemas and the MIME database), and a
-   gap closes when a real exclave needs it, as a rule in the synthesis
+   locales, TeX's formats or the other caches `exclave caches` does
+   not make (it makes Python bytecode, GLib schemas, the MIME
+   database and the GIO, gdk-pixbuf, icon, desktop and font caches),
+   and a gap closes when a real exclave needs it, as a rule in the synthesis
    table rather than an option. `unpack`'s notes name the caches a tree
    lacks from the packages' trigger interests, and failed opens in an
    `EXCLAVE_LOG` show where an exclave misses one (10.1).
@@ -5161,8 +5207,9 @@ specified.
   inside an exclave (10.1, 10.3, 13 item 32).
 - **The caches only a tree's own programs can make are made by
   `exclave caches`, after `wrap`, inside the exclave**: Python's
-  bytecode, GSettings schemas and the MIME database have no writer but
-  their generators, and running them under the exclave's launcher keeps
+  bytecode, GSettings schemas, the MIME database and the GIO,
+  gdk-pixbuf, icon, desktop and font caches have no writer but their
+  generators, and running them under the exclave's launcher keeps
   a package's programs inside an exclave, while a command of its own
   keeps `unpack` and `wrap` the same on every machine (10.1, 13 item
   48).
