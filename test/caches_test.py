@@ -6,9 +6,10 @@ Each exclave holds Python, GLib's schema compiler and gsettings and gio, schemas
 the MIME database's generator with its packages: scripts/inputs makes caches.exclave, Ubuntu's
 python3-minimal, libglib2.0-bin, shared-mime-info and gsettings-desktop-schemas with
 libgdk-pixbuf2.0-bin, dconf-gsettings-backend, desktop-file-utils, gtk-update-icon-cache,
-hicolor-icon-theme, vim-common, fontconfig and fonts-dejavu-core, and on x86-64
+hicolor-icon-theme, vim-common, fontconfig, fonts-dejavu-core and graphviz, and on x86-64
 alpine-caches.exclave, Alpine's, whose shell is busybox, with gdk-pixbuf, dconf,
-desktop-file-utils, gtk-update-icon-cache, hicolor-icon-theme, htop, fontconfig and font-dejavu.
+desktop-file-utils, gtk-update-icon-cache, hicolor-icon-theme, htop, fontconfig, font-dejavu
+and graphviz.
 On a copy of each, before and after `exclave caches`: Python imports a module from its source,
 then from bytecode in __pycache__, checked by the source's hash; gsettings finds no schemas, then
 reads a key's default; GIO takes an HTML file for plain text, then for HTML. Where the tree holds
@@ -17,8 +18,9 @@ every module in its module directory, then reads giomodule.cache and opens none;
 gdk-pixbuf-pixdata cannot read a BMP image, whose loader is a module, then reads it; each icon
 theme's cache does not exist, then validates, names every icon of the theme and is no older than
 the theme's directory; the desktop database does not exist, then maps each MIME type to the
-desktop files that name it; and fc-list writes fontconfig's caches under the home, then lists
-the same fonts and writes none. exclave check passes on the tree hash recorded; a second run
+desktop files that name it; fc-list writes fontconfig's caches under the home, then lists
+the same fonts and writes none; and dot refuses svg, not recognising the format, then draws a
+one-edge graph as an SVG document. exclave check passes on the tree hash recorded; a second run
 changes no file and leaves the tree hash as it was; font directories given new times, as a copy
 that loses them gives them, leave the font caches stale until a run remakes them; a tree changed
 since its hash was recorded is refused; and the given exclave, whose files the copy shares by
@@ -229,6 +231,17 @@ class Generators:
             and real(root, "/etc/fonts/fonts.conf"),
             "no fc-cache, fc-list or /etc/fonts/fonts.conf",
         )
+        self.case(
+            "graphviz",
+            "graphviz plugin configuration",
+            real(root, "/usr/bin/dot")
+            and any(
+                (r := real(root, f"{lib}/graphviz"))
+                and glob.glob(os.path.join(r, "libgvplugin_*.so*"))
+                for lib in libs
+            ),
+            "no dot or graphviz plugin directory",
+        )
 
     def case(self, case: str, line: str, applies: object, reason: str) -> None:
         if applies:
@@ -278,6 +291,9 @@ class Generators:
         if "fonts" in self.cases:
             rc, out, _log, home = probe.run("fc-list")
             s["fonts"] = (rc, len(out.strip().split("\n")), len(home_files(home)))
+        if "graphviz" in self.cases:
+            rc, out, _log, _home = probe.run("echo 'digraph { a -> b }' | dot -Tsvg")
+            s["graphviz"] = (rc, 'Format: "svg" not recognized' in out, "<svg" in out)
         return s
 
     def check(self, before: dict[str, Any], after: dict[str, Any]) -> None:
@@ -318,6 +334,13 @@ class Generators:
                 b[0] == 0 and b[1] > 0 and b[2] > 0 and a == (0, b[1], 0),
                 f"{n}: before, fc-list writes font caches under the home; after, it lists the "
                 "same fonts and writes none",
+                (b, a),
+            )
+        if "graphviz" in self.cases:
+            b, a = before["graphviz"], after["graphviz"]
+            expect(
+                b[0] != 0 and b[1] and not b[2] and a == (0, False, True),
+                f"{n}: before, dot knows no svg format; after, it draws a graph as SVG",
                 (b, a),
             )
 

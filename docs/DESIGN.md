@@ -2325,7 +2325,7 @@ refused. From `.deb` files, in five steps:
    by `exclave caches EXCLAVE`, which runs the tree's own generators
    inside the exclave, under its launcher, and copies what they make
    into the tree; the maintainer script is still never run. It makes
-   eight, each where the tree holds its generator and something for
+   nine, each where the tree holds its generator and something for
    it to index: Python's bytecode, by each `python3.N` the tree holds,
    with `compileall` over its standard library and the distribution's
    package directory; GSettings schemas, by `glib-compile-schemas`
@@ -2342,7 +2342,17 @@ refused. From `.deb` files, in five steps:
    font directories, by `fc-cache -s -f`, into the first cache
    directory the tree's `fonts.conf` names outside the home,
    `/var/cache/fontconfig`, so that `fc-list` inside finds them valid
-   and writes none under the user's home. A generator runs by its
+   and writes none under the user's home; and graphviz's plugin
+   configuration, `config6a` on Ubuntu 24.04 and `config6` on Alpine
+   3.21, the plugins and the formats each provides, without which `dot`
+   knows no output format, by `dot -c` with `GVBINDIR` naming a mirror
+   of the plugin directory (`/usr/lib/TRIPLET/graphviz` on Debian,
+   `/usr/lib/graphviz` on Alpine), since `dot -c` writes into the
+   directory it takes its plugins from, which in place is read-only
+   and is found from `/proc/self/maps`, which names the tree's host
+   path (13 item 10); the file names each plugin relative to its
+   directory, so it is valid at the directory's virtual path. A
+   generator runs by its
    virtual path from the exclave's shell, itself run by the name
    `sh`, since a multi-call shell such as Alpine's busybox chooses its
    applet by the name; with a fixed environment; and writes to a staging
@@ -2351,10 +2361,10 @@ refused. From `.deb` files, in five steps:
    sources' directories without the `__pycache__` level, given back
    under it; the schema compiler through `--targetdir`; the MIME
    generator on a copy of `/usr/share/mime/packages`, beside which it
-   writes; GIO's, the icon and the desktop generators, which write
-   beside what they read, on a mirror of the directory made of links
-   to its entries' virtual paths, which the launcher's walk follows
-   into the tree, so that nothing of the tree is copied; and `fc-cache`
+   writes; GIO's, the icon, the desktop and graphviz's generators,
+   which write beside what they read, on a mirror of the directory
+   made of links to its entries' virtual paths, which the launcher's
+   walk follows into the tree, so that nothing of the tree is copied; and `fc-cache`
    through a configuration that includes the tree's and names the
    staging directory after the tree's cache directories, which are
    read-only inside, so that it is the first writable one, where
@@ -3296,18 +3306,19 @@ and stay fixed.
 48. **Some caches only a tree's own binary can make are made by
     hand.** `unpack` and `wrap` run nothing of the tree (10.1), and
     `exclave caches`, which runs the tree's generators inside the
-    exclave, makes eight: Python bytecode, GSettings schemas, the MIME
+    exclave, makes nine: Python bytecode, GSettings schemas, the MIME
     database, GIO's module cache, gdk-pixbuf's loader cache, icon
-    caches, the desktop database and fontconfig's caches. Without it
-    Python compiles each module on import, nearly five times the import
-    time of ten standard modules, a GLib program finds no schemas,
-    gdk-pixbuf reads only its built-in formats, and fontconfig writes
-    its caches under the user's home. The font and icon caches are
+    caches, the desktop database, fontconfig's caches and graphviz's
+    plugin configuration. Without it Python compiles each module on
+    import, nearly five times the import time of ten standard modules,
+    a GLib program finds no schemas, gdk-pixbuf reads only its built-in
+    formats, fontconfig writes its caches under the user's home, and
+    `dot` knows no output format. The font and icon caches are
     valid while the tree keeps its directories' modification times: a
     copy that loses them, `cp -r`, leaves fontconfig writing its own
     under the home until `exclave caches` runs on the copy. Locales
     from `localedef` and TeX's index and formats are not among the
-    eight; `unpack` names each from the packages' trigger interests,
+    nine; `unpack` names each from the packages' trigger interests,
     and the maker runs its generator inside the exclave the same way
     (10.1). `exclave caches` runs only on a machine of the exclave's
     architecture.
@@ -5284,9 +5295,9 @@ specified.
   inside an exclave (10.1, 10.3, 13 item 32).
 - **The caches only a tree's own programs can make are made by
   `exclave caches`, after `wrap`, inside the exclave**: Python's
-  bytecode, GSettings schemas, the MIME database and the GIO,
-  gdk-pixbuf, icon, desktop and font caches have no writer but their
-  generators, and running them under the exclave's launcher keeps
+  bytecode, GSettings schemas, the MIME database, the GIO,
+  gdk-pixbuf, icon, desktop and font caches and graphviz's plugin
+  configuration have no writer but their generators, and running them under the exclave's launcher keeps
   a package's programs inside an exclave, while a command of its own
   keeps `unpack` and `wrap` the same on every machine (10.1, 13 item
   48).

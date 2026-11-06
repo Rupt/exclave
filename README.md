@@ -263,7 +263,7 @@ scripts/fetch-apks --key alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub --o
 scripts/fetch-rpms --keyring RPM-GPG-KEY-fedora-42-primary --repo URL --out rpms gcc glibc-devel   # Fedora, Rocky, CentOS: any repository with repodata/; every rpm checked against the key, repomd.xml where signed
 scripts/unpack gcc.exclave debs/*.deb                     # package files -> an unwrapped exclave, a directory you may edit; .apk and .rpm files likewise
 scripts/exclave wrap gcc.exclave                          # wrap every executable, run the static check, record the hashes in .exclave/hashes
-scripts/exclave caches py.exclave                         # Python bytecode, GSettings schemas, the MIME database and the GIO, gdk-pixbuf, icon, desktop and font caches, made by the tree's own programs inside it
+scripts/exclave caches py.exclave                         # Python bytecode, GSettings schemas, the MIME database, the GIO, gdk-pixbuf, icon, desktop and font caches and graphviz's plugin configuration, made by the tree's own programs inside it
 ln -s tree/usr/bin/gcc-13 gcc.exclave/gcc                    # a shortcut, if you want one
 gcc.exclave/gcc -O2 hello.c -o hello                         # any executable in tree/ runs by path
 gcc.exclave/tree/usr/bin/sh -c 'as --version'                # the exclave's own shell, with the exclave's PATH

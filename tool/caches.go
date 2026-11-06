@@ -1,7 +1,7 @@
 // The caches only a tree's own programs can make, made by them inside the exclave (DESIGN.md
 // 10.1, 13 item 48): Python's bytecode, GLib's compiled GSettings schemas, the MIME database,
-// GIO's module cache, gdk-pixbuf's loader cache, icon caches, the desktop database and
-// fontconfig's caches.
+// GIO's module cache, gdk-pixbuf's loader cache, icon caches, the desktop database,
+// fontconfig's caches and graphviz's plugin configuration.
 // unpack and wrap run nothing of the tree, so that an exclave of either architecture is made on
 // either; this command runs the tree's generators under the exclave's launcher, on a machine of
 // the exclave's architecture, writing to a staging directory in the exclave's own directory,
@@ -447,6 +447,46 @@ func desktopDatabase(c *cacheRun, root string) []cache {
 	return []cache{{what: "desktop database", files: [][2]string{made}}}
 }
 
+// graphvizPlugins writes graphviz's plugin configuration, config6a or config6 as its version names
+// it, the plugins and the formats each provides, without which dot knows no output format at all.
+// dot -c writes it into the directory it finds its plugins in, which it takes from GVBINDIR, so
+// the generator runs on a mirror of the plugin directory; in place it could not, since the tree
+// is read-only and dot finds the directory from /proc/self/maps, which names the tree's host path
+// (13 item 10). The file names each plugin by its file name, relative to its directory, so it is
+// valid at the directory's virtual path.
+func graphvizPlugins(c *cacheRun, root string) []cache {
+	tool := findTool(root, "/usr/bin/dot")
+	dir := ""
+	for _, d := range []string{"/usr/lib/" + launcherMachine.triplet + "/graphviz", "/usr/lib/graphviz",
+		"/usr/lib64/graphviz"} {
+		if dir = treeDir(root, d); dir != "" {
+			break
+		}
+	}
+	if tool == "" || dir == "" {
+		return nil
+	}
+	at := pathJoin(c.staging, "graphviz")
+	plugin := func(n string) bool { return strings.HasPrefix(n, "libgvplugin_") && strings.Contains(n, ".so") }
+	if mirror(root, dir, at, plugin) == 0 {
+		return nil
+	}
+	rc, text := c.run([]string{"GVBINDIR=" + at}, tool, "-c")
+	ran(tool, rc, text)
+	// its name is the configuration format's: config6a for graphviz 2.43, config6 for later ones
+	m := cache{what: "graphviz plugin configuration"}
+	names, _ := dirNames(at)
+	for _, n := range names {
+		if st, err := lstat(pathJoin(at, n)); err == nil && isReg(&st) && strings.HasPrefix(n, "config") {
+			m.files = append(m.files, [2]string{pathJoin(at, n), dir + "/" + n})
+		}
+	}
+	if len(m.files) != 1 {
+		fail("%s -c wrote %d configuration files, not one: %s", tool, len(m.files), strings.TrimSpace(text))
+	}
+	return []cache{m}
+}
+
 // systemCacheDir is the first cache directory a fontconfig configuration names outside the
 // user's home, the one the system's caches are read from, or "".
 func systemCacheDir(conf []byte) string {
@@ -586,7 +626,7 @@ func cmdCaches(args []string) int {
 	c := &cacheRun{sh: treeReal(root, sh), staging: staging}
 	var made []cache
 	for _, g := range []func(*cacheRun, string) []cache{pythonBytecode, gsettingsSchemas, mimeDatabase, gioModules,
-		pixbufLoaders, iconCaches, desktopDatabase, fontCaches} {
+		pixbufLoaders, iconCaches, desktopDatabase, fontCaches, graphvizPlugins} {
 		made = append(made, g(c, root)...)
 	}
 	if len(made) == 0 {
