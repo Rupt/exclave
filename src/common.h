@@ -304,6 +304,8 @@ int vis_walk_facts(const char *v, int *identity, int *leads, const char **real);
 /* every prefix from that long the host's plainly: the one-step check may stand in */
 int vis_plain_host_chain(const char *p, unsigned from);
 int is_wrapper_real(const char *real, char *tmp); /* tmp PATH_MAX */
+/* the same for a file real whose lstat is st */
+int is_wrapper_st(const char *real, const struct kstat *st, char *tmp);
 /* payload = the wrapper's original's path, dir/.real/base; 1 if it fits; no wrapper check */
 int payload_of(const char *wrapper, char *payload);
 /* 1 if v is an identity file that is a host symlink, out = its text; -EINVAL if not a symlink; 0 otherwise */
@@ -337,8 +339,11 @@ int is_self_exe(const char *p, pid_t pid); /* /proc/self/exe in any spelling, fo
 int other_exe(const struct scratch *S, const char *v, char *text);
 
 /* ---------- loader (loader.c) ---------- */
-__attribute__((noreturn)) void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp,
-                                          const unsigned long *auxv);
+/* reads the first bytes of fd, the file the startup loads, for loader_run: returns their count, *bytes the bytes */
+long loader_head(int fd, const char **bytes);
+/* fd: real, open, its head read by loader_head */
+__attribute__((noreturn)) void loader_run(const char *vpath, const char *real, int fd, long argc, char **argv,
+                                          char **envp, const unsigned long *auxv);
 /* real opened O_RDONLY|O_CLOEXEC, the soft descriptor limit raised to the hard one for the open when the program is at
  * it (7.4.5): the descriptor or -errno */
 long open_borrowed(const char *real);

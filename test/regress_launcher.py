@@ -14,7 +14,7 @@ lazy import resource
 
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
-from suite import Ctx, copy_exclave, inside, wrapper
+from suite import VOLATILE, Ctx, copy_exclave, inside, wrapper
 
 
 @test
@@ -723,3 +723,62 @@ def shadow_stack_if_glibc_enables_it(ctx: Ctx) -> str | None:
         f"the marked program inside: rc={rc} {out!r} {err[-300:]!r}",
     )
     return "shadow stack " + ("on" if "shstk on" in out else "off, as glibc leaves it")
+
+
+@test
+def start_reads_once(ctx: Ctx) -> str | None:
+    """16.4: a start reads what it needs of the tree once.
+
+    A wrapper of true run from outside, under strace: no volatile top-level directory of the tree
+    is opened, since the host owns it whatever the tree ships there (8.1 rule 3); the manifest is
+    opened once and never stat'ed; each original, the program's and its loader's, is opened once,
+    its headers read through that descriptor; and no real path is lstat'ed twice, since a
+    classification makes its wrapper check from its own lstat.
+    """
+    if not shutil.which("strace"):
+        skip("no strace")
+    tr = os.path.join(ctx.work, f"start-{os.getpid()}.trace")
+    rc, _out, err = run(
+        [
+            "strace",
+            "-f",
+            "-s",
+            "4096",
+            "-o",
+            tr,
+            "-e",
+            "trace=openat,newfstatat,stat,lstat",
+            wrapper(ctx, "true"),
+        ],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    expect(rc == 0, f"true under strace: {err!r}")
+    root = os.path.realpath(ctx.root)
+    manifest = os.path.join(os.path.dirname(root), ".exclave", "manifest")
+    opens: dict[str, int] = {}
+    lstats: dict[str, int] = {}
+    stats: list[str] = []
+    with open(tr) as f:
+        for line in f:
+            m = re.search(r'\b(openat|newfstatat|stat|lstat)\((?:AT_FDCWD, )?"([^"]*)"(.*)', line)
+            if not m:
+                continue
+            call, path, rest = m.groups()
+            if call == "openat":
+                opens[path] = opens.get(path, 0) + 1
+            elif call == "lstat" or "AT_SYMLINK_NOFOLLOW" in rest:
+                lstats[path] = lstats.get(path, 0) + 1
+            else:
+                stats.append(path)
+    volatile = [p for p in opens if any(p == root + v for v in VOLATILE)]
+    expect(not volatile, f"volatile top-level directories read: {volatile!r}")
+    expect(opens.get(manifest) == 1, f"the manifest opened {opens.get(manifest, 0)} times")
+    expect(manifest not in stats and manifest not in lstats, "the manifest stat'ed")
+    originals = {p: n for p, n in opens.items() if "/.real/" in p}
+    expect(len(originals) >= 1, f"no original opened: {sorted(opens)!r}")
+    again = {p: n for p, n in originals.items() if n > 1}
+    expect(not again, f"originals opened more than once: {again!r}")
+    twice = {p: n for p, n in lstats.items() if n > 1}
+    expect(not twice, f"real paths lstat'ed more than once: {twice!r}")
+    return f"{len(originals)} originals, {sum(lstats.values())} lstats"

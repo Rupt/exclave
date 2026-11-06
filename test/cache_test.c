@@ -30,10 +30,12 @@ __attribute__((noreturn)) void die(const char *what, const char *detail, long er
     exit(1);
 }
 /* cache_classify's wrapper check, which this test never reaches */
-int is_wrapper_real(const char *real, char *tmp);
-int is_wrapper_real(const char *real, char *tmp)
+struct kstat;
+int is_wrapper_st(const char *real, const struct kstat *st, char *tmp);
+int is_wrapper_st(const char *real, const struct kstat *st, char *tmp)
 {
     (void)real;
+    (void)st;
     tmp[0] = 0; /* no payload */
     return 0;
 }

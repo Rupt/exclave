@@ -167,6 +167,7 @@ static void unborrow(void)
     }
 }
 
+static long manifest_fd;
 static void find_exclave(const char *exe)
 {
     char d[PATH_MAX];
@@ -181,8 +182,12 @@ static void find_exclave(const char *exe)
         char p[PATH_MAX];
         scpy(p, d, PATH_MAX);
         scat(p, "/.exclave/manifest", PATH_MAX);
+        /* opened where it is found, for read_manifest; one that fails to open for another reason than its absence
+         * is still found, and read_manifest says why it cannot be read */
+        manifest_fd = sys_open(p, O_RDONLY | O_CLOEXEC, 0);
+        if (manifest_fd >= 0) break;
         struct kstat st;
-        if (sys_stat(p, &st) == 0) break;
+        if (manifest_fd != -ENOENT && manifest_fd != -ENOTDIR && sys_stat(p, &st) == 0) break;
     }
     scpy(C.dir, d, PATH_MAX);
     scpy(C.root, d, PATH_MAX);
@@ -205,17 +210,28 @@ static void read_manifest(unsigned long *auxv)
     char p[PATH_MAX];
     scpy(p, C.dir, PATH_MAX);
     scat(p, "/.exclave/manifest", PATH_MAX);
-    long fd = sys_open(p, O_RDONLY | O_CLOEXEC, 0);
+    long fd = manifest_fd;
     if (fd < 0) die("cannot open manifest", p, fd);
-    struct kstat st;
-    if (SC2(NR_fstat, fd, &st) < 0) die("cannot stat manifest", p, 0);
-    if (st.st_size == 0) die("manifest is empty", p, 0);
-    long m = sys_mmap(0, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, (int)fd, 0);
-    if (m < 0 && m > -4096) die("cannot map manifest", p, m);
+    /* one that fits a page, as most do, is read whole, with no stat and no mapping (16.4); a longer one is mapped */
+    static char small[4096];
+    long n = 0, r = 0;
+    while (n < (long)sizeof small && (r = sys_read((int)fd, small + n, sizeof small - (size_t)n)) > 0) n += r;
+    if (r < 0) die("cannot read manifest", p, r);
+    const char *m = small;
+    size_t size = (size_t)n;
+    if (n == (long)sizeof small) {
+        struct kstat st;
+        if (SC2(NR_fstat, fd, &st) < 0) die("cannot stat manifest", p, 0);
+        long a = sys_mmap(0, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, (int)fd, 0);
+        if (a < 0 && a > -4096) die("cannot map manifest", p, a);
+        m = (const char *)a;
+        size = (size_t)st.st_size;
+    }
     sys_close((int)fd);
+    if (size == 0) die("manifest is empty", p, 0);
     char err[256];
-    if (manifest_parse((const char *)m, (size_t)st.st_size, &C, err, sizeof err) < 0) die("bad manifest", err, 0);
-    SC2(NR_munmap, m, st.st_size);
+    if (manifest_parse(m, size, &C, err, sizeof err) < 0) die("bad manifest", err, 0);
+    if (m != small) SC2(NR_munmap, m, size);
     int ok = isa_supported(C.cpu, auxv);
     if (ok < 0) die("the exclave names a CPU level this launcher does not know", C.cpu, 0);
     if (ok == 0) die("this CPU lacks the exclave's CPU level", C.cpu, 0);
@@ -322,14 +338,17 @@ static __attribute__((noreturn)) void run(const char *v, const char *given, long
     if (is_wrapper_real(real, payload) && payload_of(real, payload)) scpy(real, payload, PATH_MAX);
     long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
     if (fd < 0) die("cannot open program", v, fd);
-    char *line = arena_alloc(BINPRM_BUF_SIZE + 1);
-    long n = sys_read((int)fd, line, BINPRM_BUF_SIZE);
-    sys_close((int)fd);
-    if (n >= 4 && line[0] == 0x7f && line[1] == 'E' && line[2] == 'L' && line[3] == 'F') {
+    /* the head the loader reads its headers from, of which a #! line is the first BINPRM_BUF_SIZE bytes */
+    const char *head;
+    long n = loader_head((int)fd, &head);
+    if (n >= 4 && head[0] == 0x7f && head[1] == 'E' && head[2] == 'L' && head[3] == 'F') {
         if (!C.exe_fixed) scpy(C.exe, v, PATH_MAX);
-        loader_run(v, real, argc, argv, envp, auxv);
+        loader_run(v, real, (int)fd, argc, argv, envp, auxv);
     }
-    if (n < 0) n = 0;
+    sys_close((int)fd);
+    if (n > BINPRM_BUF_SIZE) n = BINPRM_BUF_SIZE;
+    char *line = arena_alloc(BINPRM_BUF_SIZE + 1);
+    xmemcpy(line, head, (size_t)n);
     /* a script: the kernel's argv convention, with buffers that outlive this level of the interpreter chain */
     long cap = argc + 4;
     char **nargv = pointers(cap);

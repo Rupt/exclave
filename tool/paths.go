@@ -154,7 +154,8 @@ func valuesOf(rs []record, key string) []string {
 func dataPrefixes(ex string) []string { return valuesOf(manifestOf(ex), "data") }
 
 // ownedTop lists the tree's top-level entries the exclave owns by 8.1 rule 1: all but the empty
-// directories.
+// directories, and none that is a volatile directory, which is the host's whatever the tree ships
+// there (rule 3), as the launcher reads it.
 func ownedTop(ex string) []string {
 	root := pathJoin(ex, "tree")
 	e, err := listDir(root)
@@ -163,6 +164,9 @@ func ownedTop(ex string) []string {
 	}
 	var out []string
 	for i := range e {
+		if slices.Contains(volatileDirs, "/"+e[i].name) {
+			continue
+		}
 		empty := false
 		if !isLnk(&e[i].st) && e[i].isDir {
 			sub, err := listDir(pathJoin(root, e[i].name))

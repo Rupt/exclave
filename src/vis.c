@@ -33,13 +33,15 @@ struct dirent64 {
     char d_name[];
 };
 
-/* one getdents64: does the directory hold anything but . and ..? A directory that cannot be listed is not a
- * placeholder: it counts as the exclave's, and a failure that is not the directory's own, no
- * descriptor left or an I/O error, is fatal rather than a silent answer of "the host's" */
-static int dir_nonempty(const char *real)
+/* does name, an entry of the tree's top level open as dfd, hold anything but . and ..? Read until an entry or the end,
+ * since only a read that returns nothing proves a directory empty. A directory that cannot be listed is not a
+ * placeholder: it counts as the exclave's, and a failure that is not the directory's own, no descriptor left or an
+ * I/O error, is fatal rather than a silent answer of "the host's"; real names it in the message. The buffer holds .
+ * and .. and one name of the longest kind, all an answer needs */
+static int dir_nonempty(int dfd, const char *name, const char *real)
 {
-    static char buf[4096];
-    long fd = sys_open(real, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+    static char buf[512];
+    long fd = sys_openat(dfd, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
     if (fd == -EACCES || fd == -EPERM) return 1;
     if (fd < 0) die("cannot read a top-level directory of tree/", real, fd);
     for (;;) {
@@ -60,9 +62,19 @@ static int dir_nonempty(const char *real)
     }
 }
 
+/* 8.1.3: a top-level name that is a volatile directory, /tmp say, is the host's whatever the tree ships there, so
+ * whether it is a placeholder decides nothing */
+static int volatile_top(const char *name)
+{
+    for (int i = 0; volatile_dirs[i]; i++)
+        if (xstrcmp(volatile_dirs[i] + 1, name) == 0) return 1;
+    return 0;
+}
+
 /* 8.1.1: the exclave owns every top-level entry of its tree that is not an empty directory. Read from the tree at
  * startup, so an edited tree needs no index to be refreshed; the manifest's own records are added by the parser before
- * this runs. About one directory read per top-level entry. */
+ * this runs. One directory read per top-level directory, opened by its name in tree/, and none for a volatile
+ * directory, which takes no slot either (8.1.3). */
 static void own_from_tree(void)
 {
     static char buf[16384];
@@ -79,17 +91,18 @@ static void own_from_tree(void)
             struct dirent64 *d = (struct dirent64 *)(buf + o);
             o += d->d_reclen;
             if (d->d_name[0] == '.' && (d->d_name[1] == 0 || (d->d_name[1] == '.' && d->d_name[2] == 0))) continue;
+            if (volatile_top(d->d_name)) continue;
             scpy(real, C.root, PATH_MAX);
             scat(real, "/", PATH_MAX);
             scat(real, d->d_name, PATH_MAX);
             int type = d->d_type;
             if (type == DT_UNKNOWN) {
                 struct kstat st;
-                if (sys_lstat(real, &st) < 0) continue;
+                if (sys_fstatat((int)fd, d->d_name, &st, AT_SYMLINK_NOFOLLOW) < 0) continue;
                 type = (st.st_mode & S_IFMT) == S_IFDIR ? DT_DIR : (st.st_mode & S_IFMT) == S_IFLNK ? DT_LNK : DT_REG;
             }
             /* a placeholder: ls / shows it, the host owns it */
-            if (type == DT_DIR && !dir_nonempty(real)) continue;
+            if (type == DT_DIR && !dir_nonempty((int)fd, d->d_name, real)) continue;
             if (C.nown - first >= MAX_TOP_LEVEL) die("more than 256 top-level entries in tree/", C.root, 0);
             size_t l = xstrlen(d->d_name);
             char *v = arena_alloc(l + 2);
@@ -465,14 +478,19 @@ int vis_walk_facts(const char *v, int *identity, int *leads, const char **real)
     return is_host_facts(v, &f, real);
 }
 
+int is_wrapper_st(const char *real, const struct kstat *st, char *tmp)
+{
+    if ((st->st_mode & S_IFMT) != S_IFREG) return 0;
+    if ((st->st_dev != C.launcher_dev || st->st_ino != C.launcher_ino) && st->st_size != C.launcher_size) return 0;
+    /* the launcher's inode or a copy: a wrapper only where its original exists;
+     * .exclave/launcher itself is not one */
+    struct kstat pst;
+    return payload_of(real, tmp) && sys_lstat(tmp, &pst) == 0;
+}
 int is_wrapper_real(const char *real, char *tmp)
 {
     struct kstat st;
-    if (sys_lstat(real, &st) < 0 || (st.st_mode & S_IFMT) != S_IFREG) return 0;
-    if ((st.st_dev != C.launcher_dev || st.st_ino != C.launcher_ino) && st.st_size != C.launcher_size) return 0;
-    /* the launcher's inode or a copy: a wrapper only where its original exists;
-     * .exclave/launcher itself is not one */
-    return payload_of(real, tmp) && sys_lstat(tmp, &st) == 0;
+    return sys_lstat(real, &st) == 0 && is_wrapper_st(real, &st, tmp);
 }
 int payload_of(const char *wrapper, char *payload)
 {

@@ -107,7 +107,7 @@ void cache_put(const char *v, int kind, const char *link)
     __sync_lock_release(lock);
 }
 
-/* classify an exclave path (a virtual path) by one lstat, two more for a regular file's wrapper check, and remember it;
+/* classify an exclave path (a virtual path) by one lstat, one more for a wrapper's original, and remember it;
  * real is its real path, tmp is PATH_MAX. No path buffer lives on the stack here: the handler runs on whatever
  * alternate stack the program set up. */
 int cache_classify(const char *v, const char *real, char *tmp)
@@ -122,7 +122,7 @@ int cache_classify(const char *v, const char *real, char *tmp)
         if (n < 0) return 0;                                          /* raced or unreadable: not cached */
         tmp[n] = 0;
         k = CK_LINK;
-    } else if ((st.st_mode & S_IFMT) == S_IFREG && is_wrapper_real(real, tmp)) k = CK_WRAPPER;
+    } else if (is_wrapper_st(real, &st, tmp)) k = CK_WRAPPER; /* by the lstat just made */
     else k = CK_FILE;
     cache_put(v, k, k == CK_LINK ? tmp : 0);
     return k;

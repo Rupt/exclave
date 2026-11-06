@@ -31,25 +31,41 @@ __asm__(".pushsection .debug_gdb_scripts,\"MS\",@progbits,1\n"
         " .byte 0\n"
         ".popsection\n");
 
-/* Opens real and reads its ELF header into eh and its program headers, at most maxph, into ph; returns the descriptor,
- * and exits with a message on any failure. */
-static int open_elf(const char *real, Ehdr *eh, Phdr *ph, int maxph)
+/* The first bytes of the file being loaded, read once (16.4): its header, program headers, notes and PT_INTERP lie
+ * there in nearly every file, so each is copied from them, and what lies beyond is read from the descriptor. Only the
+ * startup's loading uses them; the handler's probes of a file read it themselves. */
+static unsigned char head[4096];
+static long head_n;
+long loader_head(int fd, const char **bytes)
 {
-    long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
-    if (fd < 0) die("cannot open program", real, fd);
-    if (sys_pread((int)fd, eh, sizeof *eh, 0) != sizeof *eh || eh->e_ident[0] != 0x7f || eh->e_ident[1] != 'E')
+    head_n = sys_pread(fd, head, sizeof head, 0);
+    if (head_n < 0) head_n = 0;
+    *bytes = (const char *)head;
+    return head_n;
+}
+static long elf_read(int fd, void *dst, size_t n, unsigned long off)
+{
+    if (off <= (unsigned long)head_n && n <= (unsigned long)head_n - off) {
+        xmemcpy(dst, head + off, n);
+        return (long)n;
+    }
+    return sys_pread(fd, dst, n, (long)off);
+}
+
+/* Reads the ELF header of fd, the file real, into eh and its program headers, at most maxph, into ph, through head,
+ * which loader_head has filled; exits with a message on any failure. */
+static void read_elf(int fd, const char *real, Ehdr *eh, Phdr *ph, int maxph)
+{
+    if (elf_read(fd, eh, sizeof *eh, 0) != sizeof *eh || eh->e_ident[0] != 0x7f || eh->e_ident[1] != 'E')
         die("not an ELF file", real, 0);
     /* load_elf_binary's checks: the type, then the machine alone (elf_check_arch; the class byte is not read) */
     if (eh->e_type != ET_EXEC && eh->e_type != ET_DYN) die("not an executable", real, ENOEXEC);
     if (eh->e_machine != EM_NATIVE) die("not an ELF file for " ARCH_NAME, real, 0);
     if (eh->e_phnum == 0 || eh->e_phnum > maxph || eh->e_phentsize != sizeof(Phdr))
         die("unsupported program headers", real, 0);
-    if (sys_pread((int)fd, ph, (size_t)eh->e_phnum * sizeof(Phdr), (long)eh->e_phoff) !=
-        (long)(eh->e_phnum * sizeof(Phdr)))
+    if (elf_read(fd, ph, (size_t)eh->e_phnum * sizeof(Phdr), eh->e_phoff) != (long)(eh->e_phnum * sizeof(Phdr)))
         die("cannot read program headers", real, 0);
-    return (int)fd;
 }
-
 /* Maps every PT_LOAD of fd as the kernel would; returns the load bias, and sets *entry, the program headers' address
  * and, when the file names an interpreter, its path in interp. A failure here is one the kernel meets past its point
  * of no return, where it kills the new image with SIGSEGV (bprm_execve): the message names the segment, then the
@@ -62,7 +78,7 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
     for (int i = 0; i < eh->e_phnum; i++) {
         if (ph[i].p_type == PT_INTERP) {
             if (ph[i].p_filesz >= PATH_MAX) die("interpreter path too long", name, 0);
-            if (sys_pread(fd, interp, ph[i].p_filesz, (long)ph[i].p_offset) != (long)ph[i].p_filesz)
+            if (elf_read(fd, interp, ph[i].p_filesz, ph[i].p_offset) != (long)ph[i].p_filesz)
                 die("cannot read interpreter path", name, 0);
             interp[ph[i].p_filesz] = 0;
             *has_interp = 1;
@@ -123,11 +139,12 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
     return bias;
 }
 
-/* a PT_NOTE segment's launcher note, exclave, read from fd into nb (512 bytes): its page generation, 1 for a
- * note without a word, 0 for no note of ours; the last such note counts */
-static int note_gen(int fd, const Phdr *p, unsigned char *nb)
+/* a PT_NOTE segment's launcher note, exclave, read from fd into nb (512 bytes), through head when loading: its page
+ * generation, 1 for a note without a word, 0 for no note of ours; the last such note counts */
+static int note_gen(int fd, const Phdr *p, unsigned char *nb, int loading)
 {
-    long n = sys_pread(fd, nb, p->p_filesz, (long)p->p_offset), o = 0;
+    long n = loading ? elf_read(fd, nb, p->p_filesz, p->p_offset) : sys_pread(fd, nb, p->p_filesz, (long)p->p_offset),
+         o = 0;
     int g = 0;
     while (n >= 12 && o + 12 <= n) {
         uint32_t nsz = *(uint32_t *)(nb + o), dsz = *(uint32_t *)(nb + o + 4);
@@ -204,7 +221,7 @@ int elf_probe(const char *real, char *interp, int *is_launcher, void *buf)
                 }
                 ret = 1;
             } else if (ph[i].p_type == PT_NOTE && ph[i].p_filesz <= 512) {
-                int g = note_gen((int)fd, &ph[i], nb);
+                int g = note_gen((int)fd, &ph[i], nb, 0);
                 if (g) *is_launcher = g;
             }
         }
@@ -269,19 +286,20 @@ static void stack_make_exec(void)
     }
 }
 
-void loader_run(const char *vpath, const char *real, long argc, char **argv, char **envp, const unsigned long *auxv)
+void loader_run(const char *vpath, const char *real, int fd, long argc, char **argv, char **envp,
+                const unsigned long *auxv)
 {
     Ehdr eh;
     unsigned long entry, phdr_va, base = 0, jump;
     int has_interp;
     char interp_v[PATH_MAX];
-    int fd = open_elf(real, &eh, ph_main, 128);
+    read_elf(fd, real, &eh, ph_main, 128);
     /* another exclave's launcher of an older page generation, which a handler sends here (7.4.2) */
     static unsigned char nb[512];
     int gen = 0;
     for (int i = 0; i < eh.e_phnum; i++)
         if (ph_main[i].p_type == PT_NOTE && ph_main[i].p_filesz <= 512) {
-            int g = note_gen(fd, &ph_main[i], nb);
+            int g = note_gen(fd, &ph_main[i], nb, 1);
             if (g) gen = g;
         }
     if (gen && gen < PAGE_GENERATION)
@@ -308,18 +326,22 @@ void loader_run(const char *vpath, const char *real, long argc, char **argv, cha
         char dummy[PATH_MAX];
         struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0);
         if (!S) die("out of memory", 0, ENOMEM);
-        struct kstat ist;
-        /* through the wrapper redirect: ld.so is wrapped */
-        if (canon(S, interp_v, AT_FDCWD, 1, S->v) < 0 || sys_stat(to_real(S->v, ireal, S->tmp), &ist) < 0)
+        /* through the wrapper redirect: ld.so is wrapped; a loader that is not there fails to open, below */
+        if (canon(S, interp_v, AT_FDCWD, 1, S->v) < 0)
             die("program wants a loader this exclave does not have", interp_v, 0);
+        to_real(S->v, ireal, S->tmp);
         /* one world (7.4.5): the loader must be the exclave's own file, not one the visibility rule found on the
          * host (a Nix or --dynamic-linker binary) and not one parked in a data directory */
         if (!is_exclave_path(S->v) || vis_in_data(S->v))
             die("program wants a loader this exclave does not have", interp_v, 0);
         scratch_put(S);
-        int ifd = open_elf(ireal, &ih, ph_interp, 64);
-        base = map_elf(ifd, &ih, ph_interp, &ientry, &iphdr, &ii, dummy, ireal);
-        sys_close(ifd);
+        long ifd = sys_open(ireal, O_RDONLY | O_CLOEXEC, 0);
+        if (ifd < 0) die("program wants a loader this exclave does not have", interp_v, 0);
+        const char *ihead;
+        loader_head((int)ifd, &ihead);
+        read_elf((int)ifd, ireal, &ih, ph_interp, 64);
+        base = map_elf((int)ifd, &ih, ph_interp, &ientry, &iphdr, &ii, dummy, ireal);
+        sys_close((int)ifd);
         jump = ientry;
         interp_base = base;
         scpy(interp_path, ireal, PATH_MAX);
