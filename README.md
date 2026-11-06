@@ -199,7 +199,11 @@ ones a first user meets, with the rule behind each and what to do:
   works; each wrapper is then a copy of the launcher. From outside,
   `/proc/<pid>/exe` of a built output or a host program run inside names
   `.exclave/launcher`, and a wrapped program's names its own path; from
-  inside both are right.
+  inside both are right. A copy of an original that a program inside
+  makes at a host path, as `python3 -m venv --copies` does, is a plain
+  host program from outside, which reads the tree's executable files
+  as the launcher, and runs inside only through `.exclave/launcher`
+  (`docs/DESIGN.md` 13 item 16).
 - **Nothing elevates.** seccomp needs `no_new_privs`, which also
   disables setuid, file capabilities and AppArmor transitions on exec:
   `sudo`, `su`, `ping` and setcap binaries fail inside an exclave, from
@@ -247,6 +251,12 @@ Whatever made the tree is the step before it. For package files that is
   would have done: alternatives, `ld.so.cache` as the exclave's own
   `ldconfig` would write it, the CA bundle, `/etc/passwd`;
 - it records every input by hash in the hashes file.
+
+The fetchers resolve hard dependencies alone, `Depends` and
+`Pre-Depends`, `Requires` and `D:`, never the `Recommends` that apt and
+dnf install by default; name a recommended package the program needs
+along with it: `gcc` for Go's cgo and `-race`, `openssl` for its
+`openssl.cnf`.
 
 The result is a directory; `ar` and `tar`, `debootstrap` or a container
 export make others (`docs/DESIGN.md` 10.1). `wrap` adds the launcher and

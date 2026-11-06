@@ -2545,6 +2545,18 @@ are locators; the tool does not, because a hash is not a locator.
   the header signature over the header, whose payload digest covers the
   payload, or a signature over header and payload together.
 
+None follows a weak dependency. `fetch debs` resolves `Depends` and
+`Pre-Depends` and never `Recommends`, which apt installs by default,
+or `Suggests`; `fetch rpms` resolves `Requires` and never the weak
+`Recommends` and `Supplements` dnf installs by default; and `fetch
+apks` resolves `D:` and never an `install_if` package apk adds when
+its conditions are installed. A closure is therefore smaller than the
+package manager's, and a program that needs what it only recommends
+works in part: Ubuntu's `golang-go` recommends `gcc`, without which Go
+builds with cgo off and refuses `-race`, and `libssl3t64` does not
+bring the `openssl` package's `openssl.cnf`. The maker names such a
+package among those the fetch is given.
+
 Given a cache directory (`--cache DIR`), each fetcher keeps there every
 file a signed one names by its digest as `KIND/DIGEST`, whatever
 mirror, snapshot or URL served it: the packages and the indexes, an apk
@@ -3040,7 +3052,13 @@ and stay fixed.
 16. **From the host, every executable in an exclave is the launcher.**
     `ldd`, `file`, `debsums`, IDE indexers, antivirus and gdb see the
     same small static binary at every executable path, and the
-    originals in `.real/`. Endpoint security may flag the pattern.
+    originals in `.real/`. Endpoint security may flag the pattern. A
+    copy of an original that a program inside makes at a host path, as
+    `python3 -m venv --copies` copies `python3.12`, is the original
+    itself: run from outside it is a host program, which reads the
+    tree's executable files as the launcher (the venv's `pip` dies on
+    the standard library's executable `platform.py` with a syntax
+    error), and it runs inside through `.exclave/launcher` (7.2).
 
 17. **Directory-service users are unknown inside without the
     module.** On a host whose users come from LDAP, SSSD or
