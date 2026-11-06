@@ -128,9 +128,9 @@ if has oracles; then
 fi
 if has nss; then # a user from SSSD looked up inside, through the exclave's own lookup module (13 item 17)
     if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
-        # with the Alpine exclave, for musl's warning, where scripts/inputs made it
+        # with the Alpine exclave, for musl's warning, where it runs: scripts/inputs makes it for x86-64 alone
         musl=$EXCLAVE_TEST_INPUTS/alpine.exclave
-        [ -d "$musl" ] || musl=''
+        [ -d "$musl" ] && [ "$(uname -m)" = x86_64 ] || musl=''
         step nss py "$here/nss_test.py" --exclave "$EXCLAVE_TEST_INPUTS/sss.exclave" ${musl:+--musl "$musl"} \
             --work "$out/nss"
     else echo "nss: EXCLAVE_TEST_INPUTS not set; skipped"; fi
