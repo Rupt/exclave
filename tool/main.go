@@ -3,8 +3,9 @@
 // it, unpack, is its subcommand. It opens no network connection and holds no code that could:
 // fetching package files is exclave-fetch's (fetch/exclave-fetch).
 //
-//	exclave caches EXCLAVE              Run the tree's generators of Python bytecode, GSettings schemas and the MIME
-//	                                    database inside the wrapped exclave, on its machine, and add what they make.
+//	exclave caches EXCLAVE              Run the tree's generators of Python bytecode, GSettings schemas, the MIME
+//	                                    database and GIO's, gdk-pixbuf's, icon, desktop and font caches inside the
+//	                                    wrapped exclave, on its machine, and add what they make.
 //	exclave check EXCLAVE [LOG...]      Wrappers, originals, the tree against its recorded hash and the static
 //	                                    check; with EXCLAVE_LOG files, the dynamic check of what a workload opened.
 //	exclave format [--check] FILE...    Parse with the strict grammar and rewrite in canonical form; --check

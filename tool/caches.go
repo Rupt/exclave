@@ -1,5 +1,7 @@
 // The caches only a tree's own programs can make, made by them inside the exclave (DESIGN.md
-// 10.1, 13 item 48): Python's bytecode, GLib's compiled GSettings schemas and the MIME database.
+// 10.1, 13 item 48): Python's bytecode, GLib's compiled GSettings schemas, the MIME database,
+// GIO's module cache, gdk-pixbuf's loader cache, icon caches, the desktop database and
+// fontconfig's caches.
 // unpack and wrap run nothing of the tree, so that an exclave of either architecture is made on
 // either; this command runs the tree's generators under the exclave's launcher, on a machine of
 // the exclave's architecture, writing to a staging directory in the exclave's own directory,
@@ -10,12 +12,15 @@ package main
 
 import (
 	"bytes"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,20 +36,33 @@ type cacheRun struct {
 	sh, staging string
 }
 
+// run runs argv inside the exclave and answers its exit status and what it said on both outputs.
 func (c *cacheRun) run(env []string, argv ...string) (int, string) {
+	var buf bytes.Buffer
+	rc := c.exec(env, &buf, &buf, argv)
+	return rc, buf.String()
+}
+
+// output runs argv as run does, with its standard output apart from what it says on its error
+// output: the cache a generator such as gdk-pixbuf-query-loaders writes there.
+func (c *cacheRun) output(env []string, argv ...string) (int, []byte, string) {
+	var o, e bytes.Buffer
+	rc := c.exec(env, &o, &e, argv)
+	return rc, o.Bytes(), e.String()
+}
+
+func (c *cacheRun) exec(env []string, stdout, stderr io.Writer, argv []string) int {
 	cmd := &exec.Cmd{Path: c.sh, Args: append([]string{"sh", "-c", `exec "$0" "$@"`}, argv...)}
 	cmd.Env = append([]string{"PATH=/usr/bin:/bin", "HOME=" + c.staging, "TMPDIR=" + c.staging}, env...)
 	cmd.Dir = c.staging
-	var buf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &buf, &buf
-	err := cmd.Run()
-	if err != nil {
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	if err := cmd.Run(); err != nil {
 		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
-			return ee.ExitCode(), buf.String()
+			return ee.ExitCode()
 		}
 		fail("%s: %s", argv[0], errnoText(err))
 	}
-	return 0, buf.String()
+	return 0
 }
 
 // say prints what a generator said, each line after its name: a warning it gave on success too,
@@ -58,10 +76,11 @@ func say(name, text string) {
 }
 
 // cache is what one generator made: each file in the staging directory and the virtual path in
-// the tree it becomes.
+// the tree it becomes; with dirTimes, the directory it lands in is made no newer than it.
 type cache struct {
-	what  string
-	files [][2]string
+	what     string
+	files    [][2]string
+	dirTimes bool
 }
 
 // treeDest is the real path at which the tree's virtual path v is written: its directory resolved
@@ -224,7 +243,7 @@ func gsettingsSchemas(c *cacheRun, root string) []cache {
 	}
 	say(basenameOf(tool), text)
 	made := [2]string{pathJoin(target, "gschemas.compiled"), dir + "/gschemas.compiled"}
-	return []cache{{"GSettings schemas", [][2]string{made}}}
+	return []cache{{what: "GSettings schemas", files: [][2]string{made}}}
 }
 
 // mimeDatabase builds the shared MIME database from /usr/share/mime/packages: the generator runs
@@ -276,6 +295,250 @@ func mimeDatabase(c *cacheRun, root string) []cache {
 	return []cache{m}
 }
 
+// mirror makes dst the tree's directory v in links: a directory for each of its directories, and
+// for each other entry keep accepts a link to the entry's virtual path, which the launcher's walk
+// follows into the tree, a link of the tree's own included. A generator that writes its cache
+// beside what it reads runs on the mirror, so that it writes nothing to the tree and nothing of
+// the tree is copied. Reports how many entries were linked.
+func mirror(root, v, dst string, keep func(name string) bool) int {
+	makeDirs(dst)
+	names, err := dirNames(treeReal(root, v))
+	if err != nil {
+		fail("%s: %s", treeReal(root, v), errnoText(err))
+	}
+	n := 0
+	for _, name := range names {
+		if name == ".real" {
+			continue // the wrappers' originals, which the launcher hides
+		}
+		real := treeReal(root, v+"/"+name)
+		st, err := lstat(real)
+		if err != nil {
+			failErrno(real, err)
+		}
+		switch {
+		case isDirM(&st):
+			n += mirror(root, v+"/"+name, pathJoin(dst, name), keep)
+		case keep(name):
+			if err := unix.Symlink(v+"/"+name, pathJoin(dst, name)); err != nil {
+				failErrno(pathJoin(dst, name), err)
+			}
+			n++
+		}
+	}
+	return n
+}
+
+// ran fails a generator that exited other than 0 and prints what it said, after its name.
+func ran(tool string, rc int, text string) {
+	if rc != 0 {
+		fail("%s exited %d: %s", tool, rc, strings.TrimSpace(text))
+	}
+	say(basenameOf(tool), text)
+}
+
+// gioModules writes GIO's giomodule.cache for each directory of GIO modules, the extension points
+// each module implements, without which GIO loads every module in the directory to ask; the
+// generator runs on a mirror of the directory, since it writes beside the modules.
+func gioModules(c *cacheRun, root string) []cache {
+	t := launcherMachine.triplet
+	tool := findTool(root, "/usr/bin/gio-querymodules", "/usr/bin/gio-querymodules-64",
+		"/usr/lib/"+t+"/glib-2.0/gio-querymodules")
+	if tool == "" {
+		return nil
+	}
+	m := cache{what: "GIO module cache"}
+	var seen []string
+	for _, d := range []string{"/usr/lib/gio/modules", "/usr/lib/" + t + "/gio/modules", "/usr/lib64/gio/modules"} {
+		dir := treeDir(root, d)
+		if dir == "" || slices.Contains(seen, dir) {
+			continue
+		}
+		seen = append(seen, dir)
+		at := pathJoin(c.staging, "gio/"+strconv.Itoa(len(seen)))
+		if mirror(root, dir, at, func(n string) bool { return strings.HasSuffix(n, ".so") }) == 0 {
+			continue
+		}
+		rc, text := c.run(nil, tool, at)
+		ran(tool, rc, text)
+		m.files = append(m.files, [2]string{pathJoin(at, "giomodule.cache"), dir + "/giomodule.cache"})
+	}
+	if len(m.files) == 0 {
+		return nil
+	}
+	return []cache{m}
+}
+
+// loaderDir is the line of gdk-pixbuf-query-loaders' output that names the loaders' directory.
+var loaderDir = regexp.MustCompile(`(?m)^# LoaderDir = (/[^\n]*)$`)
+
+// pixbufLoaders writes gdk-pixbuf's loaders.cache, beside the loaders' directory the generator
+// names, which it writes on its standard output; without it gdk-pixbuf knows only the formats
+// built into it.
+func pixbufLoaders(c *cacheRun, root string) []cache {
+	tool := findTool(root, "/usr/bin/gdk-pixbuf-query-loaders", "/usr/bin/gdk-pixbuf-query-loaders-64",
+		"/usr/lib/"+launcherMachine.triplet+"/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders")
+	if tool == "" {
+		return nil
+	}
+	rc, list, text := c.output(nil, tool)
+	ran(tool, rc, text)
+	at := loaderDir.FindSubmatch(list)
+	if at == nil {
+		fail("%s named no loader directory: %s", tool, strings.TrimSpace(string(list)))
+	}
+	if dir := treeDir(root, string(at[1])); dir == "" || len(suffixed(root, dir, ".so")) == 0 {
+		return nil // every loader built in
+	}
+	file := pathJoin(c.staging, "loaders.cache")
+	writeFile(file, list, 0o644)
+	made := [2]string{file, dirnameOf(string(at[1])) + "/loaders.cache"}
+	return []cache{{what: "gdk-pixbuf loader cache", files: [][2]string{made}}}
+}
+
+// iconCaches writes icon-theme.cache for each theme under /usr/share/icons with an index.theme,
+// which an icon lookup reads in place of walking the theme's directories; the generator runs on
+// a mirror of the theme, since it writes into it. GTK takes a cache older than its theme's
+// directory for stale, so the directory gets the cache's time where its own is later, as the
+// generator gives it.
+func iconCaches(c *cacheRun, root string) []cache {
+	base := treeDir(root, "/usr/share/icons")
+	tool := findTool(root, "/usr/bin/gtk-update-icon-cache", "/usr/bin/gtk4-update-icon-cache")
+	if base == "" || tool == "" {
+		return nil
+	}
+	names, _ := dirNames(treeReal(root, base))
+	m := cache{what: "icon caches", dirTimes: true}
+	var seen []string
+	for _, n := range names {
+		theme := treeDir(root, base+"/"+n)
+		if theme == "" || slices.Contains(seen, theme) || treeResolve(root, theme+"/index.theme", true, nil) == "" {
+			continue
+		}
+		seen = append(seen, theme)
+		at := pathJoin(c.staging, "icons/"+strconv.Itoa(len(seen)))
+		mirror(root, theme, at, func(n string) bool { return n != "icon-theme.cache" })
+		rc, text := c.run(nil, tool, "-q", "-t", "-f", at)
+		ran(tool, rc, text)
+		m.files = append(m.files, [2]string{pathJoin(at, "icon-theme.cache"), theme + "/icon-theme.cache"})
+	}
+	if len(m.files) == 0 {
+		return nil
+	}
+	return []cache{m}
+}
+
+// desktopDatabase writes /usr/share/applications/mimeinfo.cache, the applications that open each
+// MIME type, from the desktop files; the generator runs on a mirror of the directory, since it
+// writes beside them.
+func desktopDatabase(c *cacheRun, root string) []cache {
+	dir := treeDir(root, "/usr/share/applications")
+	tool := findTool(root, "/usr/bin/update-desktop-database")
+	if dir == "" || tool == "" {
+		return nil
+	}
+	at := pathJoin(c.staging, "applications")
+	if mirror(root, dir, at, func(n string) bool { return strings.HasSuffix(n, ".desktop") }) == 0 {
+		return nil
+	}
+	rc, text := c.run(nil, tool, at)
+	ran(tool, rc, text)
+	made := [2]string{pathJoin(at, "mimeinfo.cache"), dir + "/mimeinfo.cache"}
+	return []cache{{what: "desktop database", files: [][2]string{made}}}
+}
+
+// systemCacheDir is the first cache directory a fontconfig configuration names outside the
+// user's home, the one the system's caches are read from, or "".
+func systemCacheDir(conf []byte) string {
+	d := xml.NewDecoder(bytes.NewReader(conf))
+	depth, in := 0, false
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return ""
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			depth++
+			in = depth == 2 && t.Name.Local == "cachedir" && !slices.ContainsFunc(t.Attr, func(a xml.Attr) bool {
+				return a.Name.Local == "prefix"
+			})
+		case xml.EndElement:
+			depth--
+			in = false
+		case xml.CharData:
+			if s := strings.TrimSpace(string(t)); in && strings.HasPrefix(s, "/") {
+				return s
+			}
+		}
+	}
+}
+
+// fontCaches writes fontconfig's caches of the system's font directories into the cache
+// directory its configuration names, /var/cache/fontconfig, so that a program finds them valid
+// and writes none of its own under the user's home. A cache is named by its font directory's
+// path and records the directory's modification time, so fc-cache runs inside, where the
+// directories have their virtual paths, with a configuration that includes the tree's and names
+// the staging directory after its cache directories: theirs are read-only inside, so the staging
+// directory is the first writable one, where fc-cache writes, and the last, the one whose cache
+// answers fc-cache's check of what it wrote, which a stale cache of the tree's, left by a copy
+// that lost the times, would otherwise fail. -f, since the tree's caches from a run before are
+// valid and would be passed over; -s, the system's directories alone.
+func fontCaches(c *cacheRun, root string) []cache {
+	tool := findTool(root, "/usr/bin/fc-cache")
+	conf := treeResolve(root, "/etc/fonts/fonts.conf", true, nil)
+	if tool == "" || conf == "" {
+		return nil
+	}
+	dir := systemCacheDir(readFile(treeReal(root, conf)))
+	if dir == "" {
+		fmt.Fprint(out, "font caches: /etc/fonts/fonts.conf names no cache directory outside the home; none made\n")
+		return nil
+	}
+	at := pathJoin(c.staging, "fontconfig")
+	var cfg strings.Builder
+	cfg.WriteString("<?xml version=\"1.0\"?>\n<fontconfig>\n" +
+		"<include ignore_missing=\"no\">/etc/fonts/fonts.conf</include>\n<cachedir>")
+	if err := xml.EscapeText(&cfg, []byte(at)); err != nil {
+		fail("%s: %s", at, err)
+	}
+	cfg.WriteString("</cachedir>\n</fontconfig>\n")
+	writeFile(pathJoin(c.staging, "fonts.conf"), []byte(cfg.String()), 0o644)
+	rc, text := c.run([]string{"FONTCONFIG_FILE=" + pathJoin(c.staging, "fonts.conf")}, tool, "-s", "-f")
+	ran(tool, rc, text)
+	names, _ := dirNames(at)
+	m := cache{what: "font caches"}
+	for _, n := range names {
+		if st, err := lstat(pathJoin(at, n)); err == nil && isReg(&st) {
+			m.files = append(m.files, [2]string{pathJoin(at, n), dir + "/" + n})
+		}
+	}
+	if len(m.files) == 0 {
+		return nil
+	}
+	return []cache{m}
+}
+
+// notOlder gives the directory holding the file real the file's modification time where its own
+// is later.
+func notOlder(real string) {
+	f, err := stat(real)
+	if err != nil {
+		failErrno(real, err)
+	}
+	dir := dirnameOf(real)
+	d, err := stat(dir)
+	if err != nil {
+		failErrno(dir, err)
+	}
+	if d.Mtim.Nano() > f.Mtim.Nano() {
+		ts := []unix.Timespec{{Nsec: unix.UTIME_OMIT}, f.Mtim}
+		if err := unix.UtimesNanoAt(unix.AT_FDCWD, dir, ts, 0); err != nil {
+			failErrno(dir, err)
+		}
+	}
+}
+
 // plural is n and the noun, made plural unless n is 1.
 func plural(n int, noun string) string {
 	if n == 1 {
@@ -322,20 +585,25 @@ func cmdCaches(args []string) int {
 	makeDirs(staging)
 	c := &cacheRun{sh: treeReal(root, sh), staging: staging}
 	var made []cache
-	made = append(made, pythonBytecode(c, root)...)
-	made = append(made, gsettingsSchemas(c, root)...)
-	made = append(made, mimeDatabase(c, root)...)
+	for _, g := range []func(*cacheRun, string) []cache{pythonBytecode, gsettingsSchemas, mimeDatabase, gioModules,
+		pixbufLoaders, iconCaches, desktopDatabase, fontCaches} {
+		made = append(made, g(c, root)...)
+	}
 	if len(made) == 0 {
 		os.RemoveAll(staging)
-		fmt.Fprintf(out, "%s: no generator of Python bytecode, GSettings schemas or the MIME database applies\n", ex)
+		fmt.Fprintf(out, "%s: no generator applies: the tree holds none of the programs exclave caches runs\n", ex)
 		return 0
 	}
 	// every generator has succeeded: now the tree changes
 	for _, m := range made {
 		changed := 0
 		for _, f := range m.files {
-			if placeFile(treeDest(root, f[1]), readFile(f[0])) {
+			dest := treeDest(root, f[1])
+			if placeFile(dest, readFile(f[0])) {
 				changed++
+			}
+			if m.dirTimes {
+				notOlder(dest)
 			}
 		}
 		fmt.Fprintf(out, "%s: %s, %d new or changed\n", m.what, plural(len(m.files), "file"), changed)
