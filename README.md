@@ -46,7 +46,7 @@ package files or from any filesystem tree.
   untested). One source builds both launchers.
 - **gdb** debugs a program in an exclave; the launcher carries the script
   gdb needs.
-- **Tested against the kernel.** A suite of 102 named tests, oracles that
+- **Tested against the kernel.** A suite of 103 named tests, oracles that
   compare the launcher's answers with the kernel's under a read-only bind
   mount, and a differential probe of about 40 000 syscall cases pass on gcc,
   clang, Alpine and Fedora exclaves. An exclave also runs under Docker's
@@ -518,7 +518,7 @@ test/tables_test.py  the tables the launcher, the command, unpack and the tests 
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule
 test/readers_test.py the command's ELF, ld.so.cache and log readers on hostile files; tool/*_test.go the command's own tests and fuzz targets
 test/compat_test.py  this build against an earlier build's command and launcher, as docs/DESIGN.md 6.7 promises; a step of scripts/extra with EXCLAVE_TEST_OLD
-test/scratch_test.c  the scratch pool's sweep under the interleaving that once shared a chunk; test/cache_test.c the cache's lock across fork
+test/scratch_test.c  the scratch pool's sweep under the interleaving that once shared a chunk; test/cache_test.c the cache's growth and its lock across fork
 test/isa_test.c      the CPU level check against made-up cpuid and XCR0 values and against gcc's own answer
 test/fuzz.c          mutation fuzzing of the launcher's parsers; test/launcher_fuzz.c its target, test/fuzz.py the step of scripts/extra
 LICENSE              the MIT licence; the launcher carries its text

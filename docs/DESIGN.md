@@ -175,7 +175,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 102 named tests, most of them programs that
+- **The regression suite**: 103 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -1747,16 +1747,19 @@ it, and every part rules it as it rules that directory.
    empty directory.** An empty directory is a placeholder, which the
    exclave does not own; a directory that cannot be listed is not a
    placeholder. The launcher reads the set from `tree/` at startup, one
-   directory listing per entry, so the tree is its only source. The
+   directory listing per top-level directory, so the tree is its only
+   source; a volatile directory (rule 3) is the host's whatever it
+   holds, so it is not read and is no entry of the set. The
    tool ships empty placeholders for `/home`, `/root`, `/boot`, `/mnt`,
    `/media`, `/opt`, `/srv`, `/tmp`, `/proc`, `/dev`, `/sys` and `/run`,
    and for `/var/tmp`, so that `ls /` lists them and `cd /home` works;
    a file dropped into a placeholder makes the directory the exclave's
    with nothing to refresh. The root directory itself is the tree's
    (8.3). The tables behind the rule are fixed: 256 top-level entries,
-   256 `own` records, 32 `host` records and 32 `data` records. The
-   launcher refuses to start beyond them and `exclave wrap` refuses to
-   wrap, with the same numbers (13 item 33).
+   a volatile one not counted, 256 `own` records, 32 `host` records
+   and 32 `data` records. The launcher refuses to start beyond them
+   and `exclave wrap` refuses to wrap, with the same numbers (13 item
+   33).
 2. **The host owns everything else.** `/srv`, `/mnt`, `/opt`, `/home`,
    whatever the host has. Reading data anywhere needs no configuration.
 3. **The kernel's volatile directories are always the host's:** `/proc`,
@@ -2840,7 +2843,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 102 named regressions and every oracle its kernel can run; 17
+suite's 103 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher
 inside its copy of the exclave (`scripts/reproduce`, 10.5) and
 compares its bytes with the reference machine's build; a row whose
@@ -3539,9 +3542,8 @@ every file at its base, originals included.
 | Synthesising host entries into `getdents64` | Invents results: a listing would name what no directory holds, merged in an order no choice gets right for every program. Empty placeholders in the tree give `ls /` the same answer for free (8.3). |
 | A canonicalisation cache shared across processes | Would save a few hundred `lstat`s per compile, but an inherited descriptor is visible to the program (descriptor counts, `close_range`, leak checks), and a file outside the exclave is state an edited tree makes wrong (14.5). |
 | Caching host paths | A host directory can be replaced at any time. The one-step host check (7.4.4) gets most of the benefit without remembering anything. |
-| Skipping the empty top-level directories at startup | The placeholders are how `ls /` lists the host's directories (8.3), and only reading a directory says it is empty: twelve reads per start in the gcc exclave. |
+| Skipping the empty top-level directories at startup | The placeholders are how `ls /` lists the host's directories (8.3), and only reading a directory says it is empty: seven placeholders read per start in the gcc exclave, the five volatile ones not at all, since the host owns them whatever they hold (8.1 rule 3). |
 | Dropping `getpid` and `gettid` per trap | About 100 ns a trap, but a process-wide value is wrong in a `vfork` child while a parent's thread is in its handler (7.5.4), and the launcher has no thread-local storage. |
-| A smaller first cache table | The cache's 256 KB table and 1 MB string area fault in as entries land, part of about 70 extra page faults per process; a smaller table trades them for rehashing. |
 
 ### 14.4 The environment
 
@@ -3989,27 +3991,58 @@ per number.
 
 ### 16.4 Process start
 
-A `posix_spawn` of `/usr/bin/true` from inside an exclave costs about
-twice the native time (2.0 times, alternated runs) and makes 550
-syscalls. `perf` puts 78% of a spawn in the kernel: process creation,
-`execve` and page faults (124 per spawn against 55 natively). At the
-border the filter install adds 75 to 100 µs (16.3).
+A `posix_spawn` of `/usr/bin/true` from inside an exclave costs 2.1
+times the native time (956 µs against 453, the medians of eleven
+alternated runs of 300 spawns, November 2026) and makes 281 syscalls
+against 37 (`strace -f -c`, the difference between 60 spawns and 20).
+Each process it starts takes 110 page faults against 55. `perf stat`
+puts about two thirds of a spawn's CPU time in the kernel: process
+creation, `execve`, page faults and the syscalls of the launcher's
+start. At the border the
+filter install adds 75 to 100 µs (16.3).
 
-The launcher's part of a start is its startup (7.2), which reads each
-empty top-level directory of the tree once to know it is a placeholder
-(8.1 rule 1), twelve in the gcc exclave, and `lstat`s each identity
-file once (8.4); the loader (7.3), which reads the program's notes
-through the descriptor it maps from; and, in the parent, the exec
-handler (7.4.5), which reads the head of every environment variable to
-drop the launcher's own. It reads the heads with one `process_vm_readv`
-for up to 256 variables rather than one call each, about a hundred
-calls in a desktop session, and reads a variable on its own when the
-batch cannot read it whole, at the end of a mapping.
+Where the time goes, by stamps of the cycle counter at each step of a
+scratch build, medians of 300 spawns: in the parent, about 70 µs from
+the call to the trapped `execve`, `clone3` refused (7.5.5) and glibc's
+fallback resetting each signal's disposition by hand, 64
+`rt_sigaction` calls, two of them trapped; the exec handler (7.4.5),
+50 µs; the kernel's exec of the launcher, about 120 µs; the launcher's
+start (7.2), about 360 µs; then the loader `ld.so` and the program's
+own start, where `ld.so`'s three path calls and two `fstat`s trap. A
+syscall in a process that has just started costs 2 to 3 µs on this
+machine rather than the fraction of that a warm loop measures, so the
+start's syscalls are most of its time. Of the launcher's start, the
+ownership set (8.1 rule 1) takes about 97 µs: the tree's top level is
+read and each of its directories opened and read, seven placeholders
+in the gcc exclave read twice each, since only an empty read proves a
+directory empty; the identity files' `lstat`s (8.4) 19 µs; the
+search for the manifest and its read 40 µs; and the loading of the
+program and its loader, with the loader's name walked through the tree
+in a cache that is empty in a new process, about 150 µs.
+
+The start reads what it needs of the tree once: a volatile top-level
+directory is not read at all, since the host owns it whatever it holds
+(8.1 rule 3), and the others are opened by name in the tree's open
+directory; the manifest is opened where the search finds it and read
+whole when it fits a page; the program's original is opened once and
+its header, program headers, notes and `PT_INTERP` taken from one read
+of its first page, as are the loader's; and a classification makes its
+wrapper check from its own `lstat` (7.4.4). The tables a start touches
+are sized to it (16.6 item 9). Together these took a spawn from 1 060
+µs to 956, 315 syscalls to 281 and 142 page faults to 110; a wrapper
+of `true` run from outside makes 166 syscalls rather than 200, where
+the native `true` makes 29.
+
+In the parent, the exec handler reads the head of every environment
+variable to drop the launcher's own. It reads the heads with one
+`process_vm_readv` for up to 256 variables rather than one call each,
+about a hundred calls in a desktop session, and reads a variable on
+its own when the batch cannot read it whole, at the end of a mapping.
 
 A spawn traps little: glibc 2.39's `posix_spawn` makes two trapping
 `rt_sigaction` calls and one trapping `rt_sigprocmask`, since queries
 of a signal action do not trap (7.5.5). 100 000 spawns from one process
-leave its RSS flat, +152 kB against +200 kB natively (`test/bench.py`),
+leave its RSS flat, +140 kB against +256 kB natively (`test/bench.py`),
 and the regression of 17 item 4 fails when 300 in a row grow the
 address space by more than 256 kB, where it measures no growth at all.
 
@@ -4099,10 +4132,13 @@ as a whole.
 6. **Exec and startup trimmed** (16.4). The environment's heads are
    read in batches; the exec's wrapper check is the walk's remembered
    answer; the loader reads the program's notes through the descriptor
-   it maps from; an identity file is `lstat`ed once. A `posix_spawn` of
-   `true` makes 550 syscalls rather than 679, within the run-to-run
-   spread in time. Check: `exec_vectors` places a variable at the end
-   of a mapping.
+   it maps from, out of one read of its first page; an identity file is
+   `lstat`ed once; a volatile top-level directory is never read; the
+   manifest is opened once and read without a stat or a mapping.
+   Checks: `exec_vectors` places a variable at the end of a mapping,
+   and `start_reads_once` fails on a start that reads a volatile
+   directory, opens an original twice, stats the manifest or `lstat`s a
+   real path twice.
 7. **Paths through the tree's real root start at the root.** A program
    that finds its files from its `argv[0]`, as gcc does, spells them
    through `<exclave>/tree/` when run by that path from outside. The
@@ -4124,6 +4160,22 @@ as a whole.
    traps (16.2), each now one trap and no syscall. Check: the probe's
    `readlink` groups, and `realpath` in 16.8.
 
+9. **The tables a start touches are sized to it.** The rule table
+   (item 3) uses the first slots of its array, at least twice what the
+   start can place, a power of two: 128 slots and one page in the gcc
+   exclave rather than 2 048 and twelve pages, each faulted in twice,
+   as a lookup reads it and then an entry writes it. The
+   canonicalisation cache (7.4.4) starts in a table of 256 slots, one
+   page, where `true` puts a few dozen entries; the insert that would
+   fill it past seven eighths copies its entries into the full table
+   of 16 384 slots and publishes that, so a compile, about a thousand
+   entries, pays for the copy once. A reader uses the table it loaded,
+   and a table replaced is never written again. With the start's reads
+   (16.4), a process `posix_spawn` starts takes 110 page faults rather
+   than 140, against 55 natively. Checks: the copy in
+   `test/cache_test.c`, every entry answering after it, and the
+   page-fault row of 16.8.
+
 Items 4 and 7 are shortcuts past the walk, and a shortcut drops every
 question the walk asked, the ones nobody wrote down included. Each
 therefore asks the kernel what it actually reached: item 4 reads back
@@ -4144,9 +4196,25 @@ the pointer gives.
 - Caching host paths (14.3).
 - Skipping the empty top-level directories at startup (14.3).
 - Dropping `getpid` and `gettid` per trap (14.3).
-- A smaller first cache table (14.3).
 - The one-step host check before 5.6, through an `O_PATH` open read
   back from `/proc/self/fd`: possible, and not built (16.6 item 4).
+- Reading the placeholders when a path first reaches one rather than
+  at startup. The seven of the gcc exclave cost a start 28 syscalls,
+  about 60 µs of the ownership set's 97 (16.4), and `true` never asks
+  about one; but the rule table is written once before anything traps
+  (16.6 item 3), and a set filled in under the handler, from any
+  thread or a `vfork` child, would be state written while it is read.
+- Deciding which identity files are the host's at each call rather
+  than at startup (13 item 18): 10 syscalls and 19 µs of a start. The
+  directories on the way to one the host has are directories to the
+  walk whether or not the tree ships them (8.4), so the walk would
+  have to ask the host about the file at every such directory, or
+  treat them as directories for an absent file too, which changes
+  answers in a tree made by hand.
+- The handler's `.real/` question after a trapped `fstat` (8.3), one
+  `newfstatat` per `fstat` of a file, two per start of a dynamic
+  program: telling a directory from a file first needs the program's
+  buffer read back, which is as many syscalls.
 
 A profile of thirty `gcc -O0 hello.c` through the gcc exclave,
 November 2026, finds no hot spot in the launcher's own code: it is 7%
@@ -4158,8 +4226,8 @@ compile's extra syscalls, 591 are the one-question check of the
 directories above the tree (16.6 item 7), one for each path spelt
 through the tree's real root, as gcc spells its own files.
 
-If overhead matters again, the next steps are the spawn, where `perf`
-puts 78% in the kernel, so a profile with kernel symbols comes first,
+If overhead matters again, the next steps are the spawn, whose kernel
+side, the exec and the faults, wants a profile with kernel symbols,
 which `kernel.kptr_restrict` withholds from an unprivileged user; then
 glibc's `realpath`, which costs *n* traps for a path *n* deep.
 
@@ -4169,7 +4237,8 @@ Best of three, October 2026, on a machine running other work, whose
 pace moved between whole runs (the native `posix_spawn` took 170 to
 410 µs). The per-call rows are from `test/bench.py --launcher`; the
 compile rows alternated native and exclave runs, so both saw the same
-pace.
+pace. The `posix_spawn` rows are from November 2026, the ratio the
+median of eleven alternated runs (16.4).
 
 | Workload | native | exclave |
 |---|---|---|
@@ -4179,8 +4248,9 @@ pace.
 | `stat()`, relative name, working directory six deep on the host | 276 ns | 2.72 µs |
 | `realpath()` of that working directory | 0.77 µs | 10.9 µs |
 | `getppid()`, untrapped | 44 ns | 53 ns |
-| `posix_spawn` of `/usr/bin/true`, against native | 1 | 2.0 times |
-| 100 000 `posix_spawn`s from one process, RSS | +200 kB | +152 kB |
+| `posix_spawn` of `/usr/bin/true`, against native | 1 | 2.1 times |
+| page faults of each process `posix_spawn` starts | 55 | 110 |
+| 100 000 `posix_spawn`s from one process, RSS | +256 kB | +140 kB |
 | thirty `gcc -O0 hello.c` | 0.56 s | 0.74 s |
 | a 61-file project, `-O1 -c` each then link | 0.55 s | 0.74 s |
 | CPU time of one `gcc -O0 hello.c`, `perf stat` | 19.0 ms | 24.2 ms |
@@ -4299,8 +4369,8 @@ meaning items 4 and 7.
      item 5; the walk from the root under a second mount of the
      tree's filesystem, which failed on the matrix's btrfs row until
      the failed walk was re-issued as given), the scratch pool under contention
-     (`test/scratch_test.c`), and the cache's lock across `fork`
-     (`test/cache_test.c`);
+     (`test/scratch_test.c`), and the cache's growth from its first
+     table and its lock across `fork` (`test/cache_test.c`);
    - *spawning and exec*: 300 `posix_spawn`s in a row, which must leave
      the address space as it was (16),
      `fexecve`, `memfd`
@@ -4316,7 +4386,8 @@ meaning items 4 and 7.
      its own filter, the speculation state, `x28` as a signal landing
      mid-trap finds it on aarch64 (7.5.3), and an adversarial program
      (`adversarial`), which runs the handler's deepest paths on Rust's
-     alternate stack too;
+     alternate stack too, and a start that reads what it needs of the
+     tree once (16.4);
    - *paths and the border*: working directories on either side, host
      symlinks, the read-only matrix of 8.2, the open flags the kernel
      judges before the walk, unix sockets, `PATH_MAX`,
@@ -4403,7 +4474,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus nineteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones` and `memfd_exec` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 102 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 103 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -4545,7 +4616,7 @@ its time, ok, SKIP or FAIL:
   which `scripts/figures` prints;
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py`, the scratch-pool test, the cache's
-  lock across `fork` (`test/cache_test.c`), the `#!` line
+  growth and its lock across `fork` (`test/cache_test.c`), the `#!` line
   test and the CPU level test, each built from the current sources for
   the host under AddressSanitizer and UndefinedBehaviorSanitizer, where
   a finding exits 99, which no test answers; the command's ELF,

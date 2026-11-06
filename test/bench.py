@@ -50,15 +50,19 @@ int main(int c, char **v) { int n = 200000; char buf[PATH_MAX]; double a = now()
 SPAWN_C = r"""
 #include <spawn.h>
 #include <stdio.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <time.h>
 extern char **environ;
-int main(void) { struct timespec a, b; int n = 300; char *av[] = { "true", 0 };
+int main(int c, char **v) { struct timespec a, b; int n = 300; char *av[] = { "true", 0 };
   clock_gettime(CLOCK_MONOTONIC, &a);
   for (int i = 0; i < n; i++) {
     pid_t p; if (posix_spawn(&p, "/usr/bin/true", 0, 0, av, environ)) return 1;
     int st; waitpid(p, &st, 0); }
   clock_gettime(CLOCK_MONOTONIC, &b);
+  /* f: the page faults of each spawned process, its start included */
+  if (c > 1 && v[1][0] == 'f') {
+    struct rusage u; getrusage(RUSAGE_CHILDREN, &u); printf("%ld\n", u.ru_minflt / n); return 0; }
   printf("%.0f\n", ((b.tv_sec - a.tv_sec) * 1e6 + (b.tv_nsec - a.tv_nsec) / 1e3) / n); return 0; }
 """
 
@@ -211,6 +215,13 @@ def main() -> None:
             "posix_spawn of /usr/bin/true, us per spawn",
             best(lambda: int(native(spawnb))),
             best(lambda: int(inside(spawnb))),
+        )
+    )
+    rows.append(
+        (
+            "page faults of each process posix_spawn starts",
+            int(native(spawnb, "f")),
+            int(inside(spawnb, "f")),
         )
     )
     # 17.4: 100 000 spawns from one process, RSS before and after, one run
