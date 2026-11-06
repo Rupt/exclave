@@ -2227,7 +2227,14 @@ refused. From `.deb` files, in five steps:
    `Replaces` on the other; the merged-`/usr` spellings of a path count
    as one path. A maintainer script that adds a renaming diversion is
    refused with a message, since the tree would have to hold the file
-   under dpkg's renamed name. Diversions with `--no-rename`, and the
+   under dpkg's renamed name. One a package makes for itself, with
+   `--package` naming it, of a path the rule cannot read, built from
+   shell variables, moves aside other packages' files at that path for
+   the package's own: it is admitted with a note where no other package
+   of the set ships a file the package ships, since then it has nothing
+   to move, and refused where one does. vim-runtime's, which diverts
+   vim-tiny's copies of its help files, is the case: `vim` unpacks
+   without `vim-tiny`. Diversions with `--no-rename`, and the
    merged-`/usr` and `zutils` transitions that every Ubuntu 24.04
    closure carries, leave a fresh tree unchanged and are ignored.
    Every path, a member's, a hard link's target, and each one the next

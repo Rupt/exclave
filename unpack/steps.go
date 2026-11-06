@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -64,7 +65,24 @@ func extract(rootPath string, packages []*Package, log logger) error {
 	return refusing(extractInto(r, packages, log))
 }
 
-var divertRe = regexp.MustCompile(`--(remove|list|listpackage|truename)\b`)
+var (
+	divertRe        = regexp.MustCompile(`--(remove|list|listpackage|truename)\b`)
+	divertPackageRe = regexp.MustCompile(`--package(?:\s+|=)(\S+)`)
+)
+
+// unreadDiversion is whether a dpkg-divert line diverts on behalf of the package name, with
+// --package, a path the rule cannot read, one built from shell variables. Such a diversion moves
+// aside other packages' files at the path for name's own, so where no other package of the set
+// ships a file name ships it has nothing to move, whatever the path.
+func unreadDiversion(line, name string) bool {
+	m := divertPackageRe.FindStringSubmatch(line)
+	if m == nil || strings.Trim(m[1], `"'`) != name {
+		return false
+	}
+	fields := strings.Fields(line[strings.Index(line, "dpkg-divert"):])
+	last := strings.TrimRight(fields[len(fields)-1], ";")
+	return strings.ContainsAny(last, "$`")
+}
 
 // extractInto extracts into the open tree; owner, the package that owns each extracted path by
 // its /usr-merged spelling, is how a file shipped twice is told from one replaced.
@@ -153,6 +171,7 @@ func extractInto(r *root.Root, packages []*Package, log logger) error {
 	}
 	owner := map[string]string{}
 	replaces := map[string]map[string]bool{}
+	diverts := map[string]string{} // a package with a diversion unpack cannot read, and its line
 	var hardlinks []pending
 	for _, pkg := range packages {
 		name, rd := pkg.Name, readerFor(pkg.Path)
@@ -163,7 +182,9 @@ func extractInto(r *root.Root, packages []*Package, log logger) error {
 		// 10.1 step 2: a diversion that renames a file changes where the tree must hold it, and
 		// dpkg's database is not reproduced here; those are refused. Diversions with --no-rename,
 		// and the merged-usr and zutils transitions every noble closure carries, leave a fresh
-		// tree unchanged.
+		// tree unchanged. One a package makes for itself of a path the rule cannot read, as
+		// vim-runtime's of vim-tiny's help files, is refused only where another package ships a
+		// file it ships too, which extractPackage finds.
 		for _, sname := range []string{"preinst", "postinst"} {
 			for line := range strings.SplitSeq(strings.ReplaceAll(scripts[sname], "\\\n", " "), "\n") {
 				if strings.HasPrefix(strings.TrimSpace(line), "#") || !strings.Contains(line, "dpkg-divert") {
@@ -171,6 +192,10 @@ func extractInto(r *root.Root, packages []*Package, log logger) error {
 				}
 				if divertRe.MatchString(line) || strings.Contains(line, "--no-rename") ||
 					strings.Contains(line, ".usr-is-merged") {
+					continue
+				}
+				if unreadDiversion(line, name) {
+					diverts[name] = cut(strings.TrimSpace(line), 100)
 					continue
 				}
 				return refuse("%s adds a renaming diversion in its %s (%s); diversions are refused (10.1)",
@@ -191,11 +216,15 @@ func extractInto(r *root.Root, packages []*Package, log logger) error {
 		if err != nil {
 			return err
 		}
-		if err := extractPackage(r, t, name, replaces, owner, &hardlinks, log); err != nil {
+		if err := extractPackage(r, t, name, replaces, diverts, owner, &hardlinks, log); err != nil {
 			t.Close()
 			return err
 		}
 		t.Close()
+	}
+	for _, n := range slices.Sorted(maps.Keys(diverts)) {
+		log(fmt.Sprintf("note: %s adds a renaming diversion the rule cannot read (%s); no other package "+
+			"of the set ships a file it ships, so it moves nothing", n, diverts[n]))
 	}
 	for _, h := range hardlinks {
 		if r.Lexists(h.dst) {
@@ -277,7 +306,7 @@ func scanPackage(pkg *Package) (sc scan) {
 type pending struct{ src, dst string }
 
 func extractPackage(r *root.Root, t reader.Archive, name string, replaces map[string]map[string]bool,
-	owner map[string]string, hardlinks *[]pending, log logger) error {
+	diverts, owner map[string]string, hardlinks *[]pending, log logger) error {
 	for {
 		m, err := t.Next()
 		if err == io.EOF {
@@ -312,6 +341,12 @@ func extractPackage(r *root.Root, t reader.Archive, name string, replaces map[st
 		}
 		if r.Lexists(rel) && (r.IsLink(rel) || !r.IsDir(rel)) {
 			prev := owner[key]
+			for _, p := range []string{prev, name} {
+				if line, ok := diverts[p]; ok && prev != "" && prev != name {
+					return refuse("%s adds a renaming diversion the rule cannot read (%s), and %s and %s both "+
+						"ship /%s; diversions are refused (10.1)", p, line, prev, name, rel)
+				}
+			}
 			if m.Kind == reader.Symlink && r.IsLink(rel) {
 				if target, err := r.Readlink(rel); err == nil && target == m.Linkname {
 					// identical symlink from two packages, or a merged-usr link: normal

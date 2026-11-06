@@ -789,6 +789,53 @@ def modes_and_types(ctx: Ctx) -> None:
 
 
 @test
+def unreadable_diversions(ctx: Ctx) -> None:
+    """10.1 step 2: a renaming diversion a package makes for itself of a path the rule cannot read.
+
+    vim-runtime's preinst diverts vim-tiny's copies of its help files through a shell function's
+    argument. Alone it has nothing to move and is admitted with a note naming it; with a package
+    that ships one of its files, the diversion would move that file, and the set is refused. A
+    renaming diversion of a path the rule reads is refused as before.
+    """
+    preinst = (
+        "#!/bin/sh\nset -e\nadd_diversion() {\n"
+        '  dpkg-divert --package rt --add --rename --divert "$1.tiny" "$1"\n'
+        "}\nadd_diversion /usr/share/rt/help.txt\n"
+    )
+    rt = package(
+        ctx,
+        "deb",
+        "rt",
+        [("usr/share/rt/help.txt", "file", b"full\n", 0o644)],
+        control_files=[("preinst", preinst)],
+    )
+    _root, out = accepted(ctx, "alone", [rt])
+    expect(
+        "note: rt adds a renaming diversion the rule cannot read" in out,
+        "an admitted diversion is not noted: " + out,
+    )
+    tiny = package(ctx, "deb", "tiny", [("usr/share/rt/help.txt", "file", b"tiny\n", 0o644)])
+    refused(ctx, "shared", [rt, tiny], "rt adds a renaming diversion the rule cannot read")
+    refused(ctx, "shared-first", [tiny, rt], "rt adds a renaming diversion the rule cannot read")
+    literal = package(
+        ctx,
+        "deb",
+        "literal",
+        [("usr/bin/x", "file", b"#!/bin/sh\n", 0o755)],
+        control_files=[
+            (
+                "preinst",
+                (
+                    "#!/bin/sh\ndpkg-divert --package literal --add --rename "
+                    "--divert /usr/bin/x.real /usr/bin/x\n"
+                ),
+            )
+        ],
+    )
+    refused(ctx, "literal", [literal], "literal adds a renaming diversion in its preinst")
+
+
+@test
 def conflicts_and_replaces(ctx: Ctx) -> None:
     """10.1: a path two packages ship is refused unless one replaces the other, which then wins.
 
