@@ -2446,12 +2446,20 @@ refused. From `.deb` files, in five steps:
    identical symlinks shipped by several packages are normal. A regular
    file shipped by two packages is an error unless one declares
    `Replaces` on the other; the merged-`/usr` spellings of a path count
-   as one path. A maintainer script that adds a renaming diversion is
-   refused with a message, since the tree would have to hold the file
-   under dpkg's renamed name. One a package makes for itself, with
-   `--package` naming it, of a path the rule cannot read, built from
-   shell variables, moves aside other packages' files at that path for
-   the package's own: it is admitted with a note where no other package
+   as one path. A diversion a package makes for itself, with
+   `--package` naming it, `--rename` and both paths literal, puts every
+   other package's file at the path, in any of its merged-`/usr`
+   spellings, under the diverted name, whichever package comes first,
+   and the package's own at the path, which is where dpkg leaves them;
+   each file moved is named in the log. postgresql-common's, which
+   diverts libpq-dev's `/usr/bin/pg_config` to
+   `pg_config.libpq-dev`, is the case. Any other renaming diversion is
+   refused with a message, since the tree would have to hold a file
+   under a renamed name the rule cannot read, or the package's own
+   file too (`--local`), but for one a package makes for itself of a
+   path the rule cannot read, built from shell variables, which moves
+   aside other packages' files at that path for the package's own:
+   it is admitted with a note where no other package
    of the set ships a file the package ships, since then it has nothing
    to move, and refused where one does. vim-runtime's, which diverts
    vim-tiny's copies of its help files, is the case: `vim` unpacks

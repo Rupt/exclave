@@ -794,8 +794,7 @@ def unreadable_diversions(ctx: Ctx) -> None:
 
     vim-runtime's preinst diverts vim-tiny's copies of its help files through a shell function's
     argument. Alone it has nothing to move and is admitted with a note naming it; with a package
-    that ships one of its files, the diversion would move that file, and the set is refused. A
-    renaming diversion of a path the rule reads is refused as before.
+    that ships one of its files, the diversion would move that file, and the set is refused.
     """
     preinst = (
         "#!/bin/sh\nset -e\nadd_diversion() {\n"
@@ -817,22 +816,70 @@ def unreadable_diversions(ctx: Ctx) -> None:
     tiny = package(ctx, "deb", "tiny", [("usr/share/rt/help.txt", "file", b"tiny\n", 0o644)])
     refused(ctx, "shared", [rt, tiny], "rt adds a renaming diversion the rule cannot read")
     refused(ctx, "shared-first", [tiny, rt], "rt adds a renaming diversion the rule cannot read")
-    literal = package(
+
+
+@test
+def literal_diversions(ctx: Ctx) -> None:
+    """10.1 step 2: a renaming diversion a package makes for itself of a literal path.
+
+    postgresql-common's preinst diverts libpq-dev's /usr/bin/pg_config to pg_config.libpq-dev and
+    ships its own. Alone the package's file stays at the path; with another package that ships
+    the path, under its /lib or /usr/lib spelling too, that package's file lands under the
+    diverted name whichever comes first, as dpkg would leave it. A diversion for another package,
+    or with --local, which diverts the package's own file too, is refused.
+    """
+
+    def diverting(name: str, line: str) -> str:
+        return package(
+            ctx,
+            "deb",
+            name,
+            [("usr/bin/x", "file", b"own\n", 0o755), ("usr/lib/y", "file", b"own\n", 0o644)],
+            control_files=[("preinst", f"#!/bin/sh\nset -e\n{line}\n")],
+        )
+
+    pg = diverting(
+        "pg",
+        "dpkg-divert --package pg --add --rename --divert /usr/bin/x.other /usr/bin/x\n"
+        "dpkg-divert --package pg --rename --divert=/lib/y.other --add /lib/y",
+    )
+    root, _out = accepted(ctx, "lit-alone", [pg])
+
+    def content(root: str, rel: str) -> bytes | None:
+        p = os.path.join(root, rel)
+        if not os.path.exists(p):
+            return None
+        with open(p, "rb") as f:
+            return f.read()
+
+    expect(
+        content(root, "usr/bin/x") == b"own\n" and content(root, "usr/bin/x.other") is None,
+        "a diversion with nothing to move leaves the package's file at its path",
+    )
+    other = package(
         ctx,
         "deb",
-        "literal",
-        [("usr/bin/x", "file", b"#!/bin/sh\n", 0o755)],
-        control_files=[
-            (
-                "preinst",
-                (
-                    "#!/bin/sh\ndpkg-divert --package literal --add --rename "
-                    "--divert /usr/bin/x.real /usr/bin/x\n"
-                ),
-            )
-        ],
+        "other",
+        [("usr/bin/x", "file", b"other\n", 0o755), ("lib/y", "file", b"other\n", 0o644)],
     )
-    refused(ctx, "literal", [literal], "literal adds a renaming diversion in its preinst")
+    for case, pkgs in (("lit-after", [pg, other]), ("lit-before", [other, pg])):
+        root, out = accepted(ctx, case, pkgs)
+        paths = ("usr/bin/x", "usr/bin/x.other", "usr/lib/y", "lib/y.other")
+        got = [content(root, r) for r in paths]
+        expect(
+            got == [b"own\n", b"other\n", b"own\n", b"other\n"],
+            f"{case}: the other package's files under the diverted names: {got!r}",
+        )
+        expect(
+            "other's /usr/bin/x diverted to /usr/bin/x.other by pg" in out,
+            f"{case}: the diversion is not in the log: {out!r}",
+        )
+    foreign = diverting(
+        "foreign", "dpkg-divert --package else --add --rename --divert /usr/bin/x.o /usr/bin/x"
+    )
+    refused(ctx, "lit-foreign", [foreign], "foreign adds a renaming diversion in its preinst")
+    local = diverting("local", "dpkg-divert --local --rename --divert /usr/bin/x.o /usr/bin/x")
+    refused(ctx, "lit-local", [local], "local adds a renaming diversion in its preinst")
 
 
 @test
