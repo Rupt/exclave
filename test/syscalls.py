@@ -457,6 +457,7 @@ SHIPPED = {
     7: "b56b5e8d86ee308d",
     8: "7e1d35ebfb23759e",
     9: "ad237bdd2e612cf5",
+    10: "c95c98b9fe99231e",
 }
 
 
@@ -612,7 +613,7 @@ def trap_digest() -> tuple[int, str]:
 
     That is every syscall the filter singles out, by its table in src/filter.c and by name, with
     the argument an argument trap reads; the ioctl requests it traps; and the syscall page's
-    address in src/sys.h.
+    address in src/sys.h and its judge slot.
     """
     with open(os.path.join(REPO, "src", "filter.c")) as f:
         src = f.read()
@@ -621,9 +622,14 @@ def trap_digest() -> tuple[int, str]:
         assert m, "no FILTER_VERSION in src/common.h"
         version = int(m.group(1))
     with open(os.path.join(REPO, "src", "sys.h")) as f:
-        page = re.search(r"#define SC_PAGE (0x[0-9a-f]+)UL", f.read())
-        assert page, "no SC_PAGE in src/sys.h"
+        sys_h = f.read()
+    page = re.search(r"#define SC_PAGE (0x[0-9a-f]+)UL", sys_h)
+    assert page, "no SC_PAGE in src/sys.h"
     lines = [f"page {page.group(1)}"]
+    # the judge slot, from version 10: the filter answers it, a program's own filter is built on it
+    judge = re.search(r"#define SC_JUDGE \((.*?)\)", sys_h)
+    if judge:
+        lines.append(f"judge {judge.group(1)}")
     lines += [f"ioctl {r}" for r in set(re.findall(r"\(uint32_t\)(FS_IOC_\w+)", src))]
     for table in (
         "path_syscalls",

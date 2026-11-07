@@ -10,11 +10,6 @@
  */
 #include "common.h"
 
-struct sock_filter {
-    uint16_t code;
-    uint8_t jt, jf;
-    uint32_t k;
-};
 struct sock_fprog {
     unsigned short len;
     struct sock_filter *filter;
@@ -278,19 +273,27 @@ static void build(void)
         page[npage++] = np;
         emit(JA, 0, 0, 0);
     }
-    /* a program's own sandbox is refused (7.4.2): prctl(PR_SET_SECCOMP), and seccomp(2) but its availability query */
+    /* a program's own sandbox (7.4.2): prctl(PR_SET_SECCOMP), and seccomp(2) but its two queries, which stay allowed;
+     * version 10 traps them for the handler to install, build/launcher-old refuses them below */
     emit(JEQ_K, 0, 4, NR_prctl);
     emit(LD_ABS, 0, 0, OFF_ARG(0));
     emit(JEQ_K, 1, 0, PR_SET_SECCOMP);
     ret(SECCOMP_RET_ALLOW);
     page[npage++] = np;
     emit(JA, 0, 0, 0);
+#ifndef EXCLAVE_TEST_OLD
+    emit(JEQ_K, 0, 5, NR_seccomp);
+    emit(LD_ABS, 0, 0, OFF_ARG(0));
+    emit(JEQ_K, 2, 0, SECCOMP_GET_ACTION_AVAIL);
+    emit(JEQ_K, 1, 0, SECCOMP_GET_NOTIF_SIZES);
+#else
     emit(JEQ_K, 0, 4, NR_seccomp);
     emit(LD_ABS, 0, 0, OFF_ARG(0));
-    emit(JEQ_K, 0, 1, SECCOMP_GET_ACTION_AVAIL);
-    ret(SECCOMP_RET_ALLOW);
+    emit(JEQ_K, 1, 0, SECCOMP_GET_ACTION_AVAIL);
+#endif
     page[npage++] = np;
     emit(JA, 0, 0, 0);
+    ret(SECCOMP_RET_ALLOW);
     /* the probe: uname with MAGIC as its argument answers the filter version, from anywhere */
     emit(JEQ_K, 0, 6, NR_uname);
     emit(LD_ABS, 0, 0, OFF_ARG(0));
@@ -299,19 +302,30 @@ static void build(void)
     emit(JEQ_K, 0, 1, (uint32_t)(MAGIC >> 32));
     ret(SECCOMP_RET_ERRNO | PROBE_ERRNO(FILTER_VERSION));
     ret(SECCOMP_RET_ALLOW);
-    /* the launcher's own syscalls: issued from the syscall page */
+    /* the launcher's own syscalls: issued from the syscall page; from version 10 a call from its judge slot is answered
+     * MARK_NONE first, which a program's filter, newer, overrides with its own ERRNO (7.4.2) */
     for (int i = 0; i < npage; i++) prog[page[i]].k = (uint32_t)(np - page[i] - 1);
     emit(LD_ABS, 0, 0, OFF_IP + 4);
+#ifndef EXCLAVE_TEST_OLD
+    emit(JEQ_K, 0, 7, (uint32_t)(SC_PAGE >> 32));
+    emit(LD_ABS, 0, 0, OFF_IP);
+    emit(AND_K, 0, 0, ~0xfU);
+    emit(JEQ_K, 0, 1, (uint32_t)SC_JUDGE);
+    ret(SECCOMP_RET_ERRNO | MARK_NONE);
+#else
     emit(JEQ_K, 0, 4, (uint32_t)(SC_PAGE >> 32));
     emit(LD_ABS, 0, 0, OFF_IP);
+#endif
     emit(AND_K, 0, 0, ~0xfffU);
     emit(JEQ_K, 0, 1, (uint32_t)SC_PAGE);
     ret(SECCOMP_RET_ALLOW);
     /* the refusals; everything else that reaches here traps, and a syscall newer than this filter knows is answered
      * ENOSYS by the handler (7.4.2): a future path-taking syscall must not reach the host untranslated */
     emit(LD_ABS, 0, 0, OFF_NR);
+#ifdef EXCLAVE_TEST_OLD
     on_nr(NR_seccomp, SECCOMP_RET_ERRNO | ENOSYS);
     on_nr(NR_prctl, SECCOMP_RET_ERRNO | ENOSYS);
+#endif
     for (unsigned i = 0; i < sizeof enosys_syscalls / sizeof enosys_syscalls[0]; i++)
         on_nr(enosys_syscalls[i], SECCOMP_RET_ERRNO | ENOSYS);
     for (unsigned i = 0; i < sizeof eperm_syscalls / sizeof eperm_syscalls[0]; i++)
@@ -342,6 +356,111 @@ void filter_install(void)
     if (r == -ENOSYS) r = sys_prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, (unsigned long)&fp, 0, 0);
     if (r < 0) die("cannot install the seccomp filter", 0, r);
 }
+
+#ifndef EXCLAVE_TEST_OLD
+#define LDX_IMM 0x01 /* BPF_LDX | BPF_W | BPF_IMM */
+#define LD_IMM 0x00 /* BPF_LD | BPF_W | BPF_IMM */
+#define TXA 0x87 /* BPF_MISC | BPF_TXA */
+#define RET_A 0x16 /* BPF_RET | BPF_A */
+#define JMP_CLASS 0x05
+#define PROLOGUE 14
+#define EPILOGUE 10
+/* the actions honoured (7.4.2): an undefined one kills (__seccomp_filter), TRAP's SIGSYS is the launcher's (13 item
+ * 23), and TRACE and USER_NOTIF need a supervisor */
+static int honoured(uint32_t k)
+{
+    uint32_t a = k & SECCOMP_RET_ACTION_FULL;
+    if (a == SECCOMP_RET_ERRNO) return (k & 0xffffU) != MARK_NONE;
+    return a == SECCOMP_RET_ALLOW || a == SECCOMP_RET_LOG || a == SECCOMP_RET_KILL_PROCESS ||
+           a == SECCOMP_RET_KILL_THREAD;
+}
+static struct sock_filter ins(uint16_t code, uint8_t jt, uint8_t jf, uint32_t k)
+{
+    struct sock_filter f = {code, jt, jf, k};
+    return f;
+}
+
+/* The filter the handler installs for a program's own (7.4.2). The prologue answers the probe, uname with MAGIC, before
+ * the body can: allowed from anywhere, so that the version probe of a launcher exec'd under the filter reads the
+ * launcher filter's answer, and MARK_PRESENT from the judge slot, by which that launcher learns the filter is there.
+ * The body follows verbatim with A cleared, as the kernel starts a program, but for every return of an action other
+ * than ALLOW, which goes through a stub that keeps the action in X to the epilogue: a call from the syscall page, the
+ * launcher's own, is allowed there, one from the judge slot or anywhere else gets the body's action. The instruction
+ * pointer is read only on that path, so that a number the body allows by itself stays a constant for the kernel's
+ * action cache. Jumps are relative and bounded within the body, so each stays where the body put it. */
+long filter_wrap(const struct sock_filter *body, long n, struct sock_filter *out)
+{
+    if (n <= 0 || n > BPF_MAXINSNS) return -EINVAL;
+    /* the kernel's own refusals that a copy inside a longer program would escape: a jump past the body's end, and a
+     * last instruction that is not a return (bpf_check_classic) */
+    for (long i = 0; i < n; i++) {
+        const struct sock_filter *f = &body[i];
+        if ((f->code & 0x07) != JMP_CLASS) continue;
+        if (f->code == JA ? f->k >= (uint32_t)(n - i - 1) : i + 1 + f->jt >= n || i + 1 + f->jf >= n) return -EINVAL;
+    }
+    if (body[n - 1].code != RET_K && body[n - 1].code != RET_A) return -EINVAL;
+    /* the launcher's refusals: a return of A, an action not honoured, a read of the instruction pointer, which a judged
+     * call would answer with the judge slot's */
+    long stubs = 0;
+    for (long i = 0; i < n; i++) {
+        const struct sock_filter *f = &body[i];
+        if (f->code == RET_A) return -ENOSYS;
+        if (f->code == LD_ABS && (f->k == OFF_IP || f->k == OFF_IP + 4)) return -ENOSYS;
+        if (f->code != RET_K) continue;
+        if (!honoured(f->k)) return -ENOSYS;
+        if ((f->k & SECCOMP_RET_ACTION_FULL) == SECCOMP_RET_ALLOW) continue;
+        long j = 0;
+        for (; j < i; j++)
+            if (body[j].code == RET_K && body[j].k == f->k) break;
+        stubs += j == i; /* the first return of this action */
+    }
+    long total = PROLOGUE + n + 2 * stubs + EPILOGUE;
+    if (total > BPF_MAXINSNS) return -ENOSYS;
+    long o = 0, epi = total - EPILOGUE, stub = PROLOGUE + n;
+    out[o++] = ins(LD_ABS, 0, 0, OFF_NR);
+    out[o++] = ins(JEQ_K, 0, 11, (uint32_t)NR_uname);
+    out[o++] = ins(LD_ABS, 0, 0, OFF_ARG(0));
+    out[o++] = ins(JEQ_K, 0, 9, (uint32_t)MAGIC);
+    out[o++] = ins(LD_ABS, 0, 0, OFF_ARG(0) + 4);
+    out[o++] = ins(JEQ_K, 0, 7, (uint32_t)(MAGIC >> 32));
+    out[o++] = ins(LD_ABS, 0, 0, OFF_IP + 4);
+    out[o++] = ins(JEQ_K, 0, 3, (uint32_t)(SC_JUDGE >> 32));
+    out[o++] = ins(LD_ABS, 0, 0, OFF_IP);
+    out[o++] = ins(AND_K, 0, 0, ~0xfU);
+    out[o++] = ins(JEQ_K, 1, 0, (uint32_t)SC_JUDGE);
+    out[o++] = ins(RET_K, 0, 0, SECCOMP_RET_ALLOW);
+    out[o++] = ins(RET_K, 0, 0, SECCOMP_RET_ERRNO | MARK_PRESENT);
+    out[o++] = ins(LD_IMM, 0, 0, 0);
+    if (o != PROLOGUE) die("the prologue's length", 0, o);
+    for (long i = 0; i < n; i++, o++) {
+        out[o] = body[i];
+        if (body[i].code != RET_K || (body[i].k & SECCOMP_RET_ACTION_FULL) == SECCOMP_RET_ALLOW) continue;
+        long s = PROLOGUE + n; /* this action's stub, made by its first return */
+        for (; s < stub; s += 2)
+            if (out[s].k == body[i].k) break;
+        if (s == stub) {
+            out[stub] = ins(LDX_IMM, 0, 0, body[i].k);
+            out[stub + 1] = ins(JA, 0, 0, (uint32_t)(epi - stub - 2));
+            stub += 2;
+        }
+        out[o] = ins(JA, 0, 0, (uint32_t)(s - o - 1));
+    }
+    if (stub != epi) die("the stubs' count", 0, stub);
+    o = epi;
+    out[o++] = ins(LD_ABS, 0, 0, OFF_IP + 4);
+    out[o++] = ins(JEQ_K, 0, 6, (uint32_t)(SC_PAGE >> 32));
+    out[o++] = ins(LD_ABS, 0, 0, OFF_IP);
+    out[o++] = ins(AND_K, 0, 0, ~0xfU);
+    out[o++] = ins(JEQ_K, 3, 0, (uint32_t)SC_JUDGE);
+    out[o++] = ins(AND_K, 0, 0, ~0xfffU);
+    out[o++] = ins(JEQ_K, 0, 1, (uint32_t)SC_PAGE);
+    out[o++] = ins(RET_K, 0, 0, SECCOMP_RET_ALLOW);
+    out[o++] = ins(TXA, 0, 0, 0);
+    out[o++] = ins(RET_A, 0, 0, 0);
+    if (o != total) die("the epilogue's length", 0, o);
+    return total;
+}
+#endif
 
 #ifdef HOST_TEST
 /* test/filter_test.c: the built program and the lists it was built from, for the model of 7.4.2 */

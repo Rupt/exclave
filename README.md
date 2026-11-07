@@ -209,9 +209,11 @@ ones a first user meets, with the rule behind each and what to do:
   `sudo`, `su`, `ping` and setcap binaries fail inside an exclave, from
   build scripts too.
 - **Programs that need their own kernel features are refused:**
-  `io_uring`, `clone3` extensions and a seccomp filter of their own.
-  That rules out container runtimes, browsers and `rr` inside an
-  exclave. `strace` works but shows a `SIGSYS` for every translated
+  `io_uring`, `clone3` extensions, and a seccomp filter of their own
+  that traps, traces or asks a supervisor. That rules out container
+  runtimes, browsers and `rr` inside an exclave. A filter that allows,
+  logs, fails or kills, as `sshd`'s and `qemu -sandbox`'s do, is
+  installed and applied by the kernel as natively. `strace` works but shows a `SIGSYS` for every translated
   call.
 - **A `noexec` filesystem cannot hold an exclave.** The kernel refuses
   to execute or map anything there, and a `noexec /tmp` in CI is the
@@ -231,7 +233,10 @@ ones a first user meets, with the rule behind each and what to do:
   either way.
 - **Not a sandbox.** A program that wants to can bypass the translation.
   An exclave isolates software from the host's files, not the host from
-  the software.
+  the software. A program's own seccomp sandbox inside one confines the
+  program's own calls, not an attacker who has gained code execution in
+  it: the syscall page at a fixed address is a gadget its filter lets
+  through.
 
 ## Making your own exclave
 

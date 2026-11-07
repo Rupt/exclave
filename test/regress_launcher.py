@@ -12,6 +12,7 @@ import subprocess
 import time
 lazy import resource
 
+import kernel_answers
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
 from suite import VOLATILE, Ctx, copy_exclave, inside, wrapper
@@ -997,4 +998,58 @@ def gdb_given_program(ctx: Ctx) -> str | None:
                 )
     finally:
         os.unlink(alias)
+    return None
+
+
+@test
+def own_seccomp_filter(ctx: Ctx) -> str | None:
+    """7.4.2, 13 item 5: a program's own seccomp filter is honoured as the kernel applies it.
+
+    test/progs/seccomp_filter.c installs ERRNO, LOG and ALLOW filters and an sshd-shaped allow-list
+    whose default kills, in both forms, with TSYNC and without, and over fork, vfork and an exec of
+    itself, and the answers are the kernel's under bwrap (test/kernel_answers.py), but for the
+    installs the launcher refuses with ENOSYS. While a program's filter is in force a launcher
+    before filter version 10, which would re-issue a trapped call unjudged, is not exec'd: EACCES.
+    The cases use actions and flags of 5.0, so an older kernel skips.
+    """
+    release = tuple(int(x) for x in re.findall(r"\d+", os.uname().release)[:2])
+    if release < (5, 0):
+        skip(f"kernel {os.uname().release}: the cases use seccomp(2)'s actions and flags of 5.0")
+    d = os.path.join(ctx.work, "seccomp-filter-host")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "seccomp_filter"), [d])
+    expect(rc == 0, f"seccomp_filter: rc={rc} {out!r} {err!r}")
+    bad = kernel_answers.seccomp_filter_wrong(out)
+    expect(not bad, "; ".join(bad))
+    old = os.path.join(os.path.dirname(ctx.launcher_src), "launcher-old")
+    if not os.path.exists(old):
+        return "no build/launcher-old: the refusal of an older launcher is untested"
+    ex2 = os.path.join(ctx.work, "seccomp-old-exclave")
+    copy_exclave(ctx.mini, ex2)
+    tree.relink(ex2, old)
+    src = os.path.join(ctx.work, "seccomp_exec.c")
+    with open(src, "w") as f:  # an ALLOW filter, then an exec of the older launcher's true
+        f.write(
+            "#include <stdio.h>\n#include <errno.h>\n#include <unistd.h>\n#include <stddef.h>\n"
+            "#include <sys/prctl.h>\n#include <sys/syscall.h>\n#include <linux/filter.h>\n"
+            "#include <linux/seccomp.h>\n"
+            "int main(int c, char **v) { struct sock_filter f[] = "
+            "{BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW)}; struct sock_fprog p = {1, f};\n"
+            " prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);\n"
+            " if (c > 2 && syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &p)) return 3;\n"
+            ' execl(v[1], v[1], (char *)0); printf("%d\\n", errno); return 0; }\n'
+        )
+    prog = os.path.join(ctx.work, "seccomp_exec")
+    rc, _out, err = run([wrapper(ctx, ctx.gcc), "-O0", "-o", prog, src], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "compile: " + err)
+    true_old = f"{ex2}/tree{ctx.vbin('true')}"
+    log = os.path.join(ctx.work, "seccomp-old.log")
+    rc, out, err = inside(ctx, prog, [true_old, "filter"], env=dict(ctx.env, EXCLAVE_LOG=log))
+    expect(
+        rc == 0 and out == "13\n" and "before filter version 10" in read_text(log),
+        f"under a program's filter the older launcher is refused with EACCES: {out!r} {err!r}",
+    )
+    rc, out, err = inside(ctx, prog, [true_old])
+    expect(rc == 0 and out == "", f"without one it runs: rc={rc} {out!r} {err!r}")
     return None

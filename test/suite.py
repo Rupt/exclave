@@ -493,6 +493,7 @@ PROGS = (
     "exec_state",
     "traceme",
     "tracer_exe",
+    "seccomp_filter",
 )
 
 

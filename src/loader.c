@@ -142,8 +142,9 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
 }
 
 /* a PT_NOTE segment's launcher note, exclave, read from fd into nb (512 bytes), through head when loading: its page
- * generation, 1 for a note without a word, 0 for no note of ours; the last such note counts */
-static int note_gen(int fd, const Phdr *p, unsigned char *nb, int loading)
+ * generation, 1 for a note without a word, 0 for no note of ours, and in *ver its filter version, 0 for a note without
+ * the second word (7.4.2); the last such note counts */
+static int note_gen(int fd, const Phdr *p, unsigned char *nb, int loading, int *ver)
 {
     long n = loading ? elf_read(fd, nb, p->p_filesz, p->p_offset) : sys_pread(fd, nb, p->p_filesz, (long)p->p_offset),
          o = 0;
@@ -151,8 +152,10 @@ static int note_gen(int fd, const Phdr *p, unsigned char *nb, int loading)
     while (n >= 12 && o + 12 <= n) {
         uint32_t nsz = *(uint32_t *)(nb + o), dsz = *(uint32_t *)(nb + o + 4);
         long w = o + 12 + (long)((nsz + 3) & ~3U);            /* the word after the name, padded to 4 */
-        if (nsz == 8 && o + 20 <= n && xmemcmp(nb + o + 12, "exclave", 8) == 0)
+        if (nsz == 8 && o + 20 <= n && xmemcmp(nb + o + 12, "exclave", 8) == 0) {
             g = dsz >= 4 && w + 4 <= n && *(uint32_t *)(nb + w) ? (int)*(uint32_t *)(nb + w) : 1;
+            *ver = dsz >= 8 && w + 8 <= n ? (int)*(uint32_t *)(nb + w + 4) : 0;
+        }
         o += 12 + ((nsz + 3) & ~3U) + ((dsz + 3) & ~3U);
     }
     return g;
@@ -190,9 +193,10 @@ static int header_ok(const Ehdr *eh)
 /* 1: dynamic (interp filled), 0: static, <0: -errno as load_elf_binary answers before its point of no return (7.4.5),
  * the program headers beyond the loader's own table counted as a header it cannot load; is_launcher: a launcher
  * note's page generation, 0 without one */
-int elf_probe(const char *real, char *interp, int *is_launcher, void *buf)
+int elf_probe(const char *real, char *interp, int *is_launcher, int *filter_version, void *buf)
 {
     *is_launcher = 0;
+    *filter_version = 0;
     interp[0] = 0;
     long fd = open_borrowed(real);
     if (fd < 0) return (int)fd;
@@ -223,8 +227,11 @@ int elf_probe(const char *real, char *interp, int *is_launcher, void *buf)
                 }
                 ret = 1;
             } else if (ph[i].p_type == PT_NOTE && ph[i].p_filesz <= 512) {
-                int g = note_gen((int)fd, &ph[i], nb, 0);
-                if (g) *is_launcher = g;
+                int v = 0, g = note_gen((int)fd, &ph[i], nb, 0, &v);
+                if (g) {
+                    *is_launcher = g;
+                    *filter_version = v;
+                }
             }
         }
     }
@@ -301,7 +308,7 @@ void loader_run(const char *vpath, const char *real, int fd, long argc, char **a
     int gen = 0;
     for (int i = 0; i < eh.e_phnum; i++)
         if (ph_main[i].p_type == PT_NOTE && ph_main[i].p_filesz <= 512) {
-            int g = note_gen(fd, &ph_main[i], nb, 1);
+            int v, g = note_gen(fd, &ph_main[i], nb, 1, &v);
             if (g) gen = g;
         }
     if (gen && gen < PAGE_GENERATION)

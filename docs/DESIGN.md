@@ -242,7 +242,11 @@ Goals:
 Non-goals:
 
 - **Security sandboxing.** The translation can be bypassed by a program
-  that wants to; untrusted code needs a real sandbox.
+  that wants to; untrusted code needs a real sandbox. A program's own
+  seccomp sandbox inside an exclave confines the program's own calls,
+  not an attacker who has gained code execution in it: the syscall page
+  at a fixed address holds `syscall; ret`, and the program's filter lets
+  every call from it through (7.4.2, 13 item 5).
 - **Resource control, networking and process namespaces.**
 - **Anything but little-endian 64-bit Linux**, and cross-architecture
   emulation, including 32-bit programs in a 64-bit exclave.
@@ -986,13 +990,22 @@ ABI, an `arch` other than the launcher's own or the x32 bit, kills the
 process: loud, never a silent host access.
 
 **The syscall page.** A call whose instruction pointer lies in the page
-at `0x7fe00000` is allowed. Before anything else runs, every launcher
-maps that page with `MAP_FIXED_NOREPLACE`, writes `syscall; ret` into
-it (`svc #0; ret` on aarch64, then flushes the instruction cache) and
-makes it read-only and executable; every later syscall of the launcher
-is a `call` into the page, a `blr` on aarch64. Only that bootstrap, the
-version probe below and the signal restorer use a bare syscall
-instruction.
+at `0x7fe00000` is allowed, but for its judge slot (below). Before
+anything else runs, every launcher maps that page with
+`MAP_FIXED_NOREPLACE`, writes three 16-byte slots into it and makes it
+read-only and executable (on aarch64 after flushing the instruction
+cache): at offset 0 `syscall; ret` (`svc #0; ret`), through which every
+later syscall of the launcher is made by a `call` into the page, a
+`blr` on aarch64; at 16 the same two instructions, the *judge slot*;
+and at 32 the signal restorer, `rt_sigreturn` by a bare instruction,
+which the kernel jumps to after the handler and which a call would
+break, since the kernel reads the frame from the stack. A call's
+instruction pointer, the address after its syscall instruction, lies in
+its own slot on both architectures. Only the bootstrap that maps the
+page and the version probe below use a bare syscall instruction in the
+launcher's text; after an `execve` under a program's own filter those
+few calls, `mmap`, `mprotect` and the probe's `uname`, are judged by
+that filter as a native dynamic program's loader would be.
 
 The address is a constant, so the filters of any number of ancestor
 generations agree after `execve`. It lies above program images, which
@@ -1006,8 +1019,10 @@ launcher is resident); a program whose image covers it cannot run in an
 exclave (13 item 24). It is an address rather than a marker in a spare
 register, which a signal handler interrupting a launcher syscall would
 inherit, sending its own first path syscall to the host untranslated.
-A program can trivially exempt itself by jumping through the page; an
-exclave is not a security boundary (3).
+The page at a fixed address is a gadget: a program can trivially exempt
+itself, from the translation and from its own seccomp filter alike, by
+jumping through it, so neither contains an attacker with code execution
+in the process; an exclave is not a security boundary (3, 13 item 5).
 
 **No forced speculation mitigation.** The filter is installed with
 `SECCOMP_FILTER_FLAG_SPEC_ALLOW`, or without it where a kernel before
@@ -1028,18 +1043,93 @@ requires without privilege (13 item 3), and falls back to
   are out of scope; `CLONE_PIDFD` is available through `clone` from 5.2.
 - `io_uring_setup` returns `ENOSYS`, so file operations cannot bypass
   translation.
-- `seccomp(2)` and `prctl(PR_SET_SECCOMP)` return `ENOSYS`, which more
-  programs read as "no sandbox available, continue" than `EPERM`;
-  `seccomp(SECCOMP_GET_ACTION_AVAIL)` is allowed as a harmless query. A
-  program that insists on its own sandbox fails visibly at install
-  time. A program's filter cannot be honoured: where it and the
-  launcher's both answer a call, the kernel takes the action of higher
-  precedence, and a trap outranks an error, so the launcher would make
-  a trapped call the program's own filter refuses. To honour it, the
-  handler would run the program's filter itself on every trapped call,
-  keep it per thread and carry it across `exec`; a refusal instead tells
-  the program at once that it has no sandbox.
+- A program's own filter is installed for it, below, or refused with
+  `ENOSYS`.
 - The rest are in the table of 7.4.3.
+
+**A program's own filter.** `seccomp(2)` and `prctl(PR_SET_SECCOMP)`
+trap, but for the two queries, `SECCOMP_GET_ACTION_AVAIL` and
+`SECCOMP_GET_NOTIF_SIZES`, which stay allowed. The kernel runs every
+filter of a thread on each call and takes the action of highest
+precedence (`seccomp_run_filters`), and the launcher's trap outranks a
+program's `ERRNO`, so the program's filter alone would never refuse a
+call the launcher translates. The handler therefore installs, on the
+program's behalf, a filter built around the program's, and lets the
+kernel judge each trapped call by it:
+
+- **The installed filter** is a prologue, the program's body and an
+  epilogue. The prologue answers the probe, `uname` with the magic
+  argument, before the body can: allowed from anywhere, so that the
+  version probe of a launcher exec'd under the filter reads the
+  launcher filter's answer, and `ERRNO(MARK_PRESENT)`, 4093, from the
+  judge slot. It then clears A, as the kernel starts a program, and
+  falls into the body. The body is the program's, instruction for
+  instruction, but for each return of an action other than `ALLOW`,
+  which becomes a jump to a stub that loads the action into X and jumps
+  to the epilogue: there a call from the syscall page, the launcher's
+  own and its restorer's, is allowed, and one from the judge slot or
+  from anywhere else gets the body's action. The instruction pointer is
+  read only on that path, so a number the program's body allows by
+  itself stays a constant for the kernel's action cache. Jumps are
+  relative and the kernel bounds them within the body, so each stays
+  where the body put it; the handler checks those bounds itself, and
+  that the body ends in a return, since inside a longer program the
+  kernel's own check would not see a body that runs off its end.
+- **The judge.** In a process where a program's filter may exist, the
+  handler first re-issues each trapped call unchanged, its number and
+  six arguments, from the judge slot. The launcher's filter answers any
+  call from there with `ERRNO(MARK_NONE)`, 4094, ahead of the page's
+  `ALLOW`, so a judge call never executes: the kernel evaluates the
+  thread's whole chain, the program's filters, any outer filter such as
+  Docker's, and the launcher's, and takes the action of highest
+  precedence and, among `ERRNO` answers, the newest filter's. A
+  program's filters are newer than the launcher's, so the judge returns
+  `-MARK_NONE` when none of them refuses the call, and the handler
+  translates it as for any program; otherwise the errno, or 0, of the
+  refusal, which is returned to the program untranslated. Any `ERRNO`
+  outranks an `ALLOW` in whichever filter, as natively. A `KILL` for
+  the original call outranked the trap and the kernel killed the
+  process before the handler ran; one that a concurrent install by
+  `TSYNC` adds is the kernel's to apply. An outer filter's `ERRNO`
+  applies to the re-issue as it did before.
+- **The flag.** Whether to judge is one word of the launcher's data,
+  copied by `fork` and shared by threads, set before an install, so
+  that a thread a `TSYNC` install reaches is judged from its next trap,
+  and never cleared: a thread whose own chain lacks the filter, or an
+  install that fails, costs a judge call that answers `-MARK_NONE`. A
+  process that installs no filter makes no judge call. After an
+  `execve` the new launcher, under an inherited filter of version 10 or
+  later, issues the probe from the judge slot, which a program filter's
+  prologue answers `MARK_PRESENT`, and sets the flag. A launcher newer
+  than the filter it finds stacks its own over the program's, whose
+  judge answer would then be the newest and hide the program's
+  refusals, so it refuses to start under one, by name; and while the
+  flag is set, the handler refuses to exec a launcher whose note gives
+  a filter version below 10, or none, since its handler would re-issue
+  every trapped call through the page unjudged: `EACCES`, the kernel's
+  answer for an exec a security policy refuses, and a line in the log.
+- **Installed as given.** The re-issue is the form the program used,
+  `seccomp` or `prctl`, so kernels before 3.17 keep working, with the
+  program's flags: `TSYNC`, `TSYNC_ESRCH`, `LOG` and `SPEC_ALLOW`. Its
+  answer is returned, `TSYNC`'s failure the offending thread's id. The
+  kernel's own refusals come first, in its order: the flags, by asking
+  the kernel with no program (`EINVAL`, or `EFAULT` that the handler
+  takes as their acceptance), the header's address (`EFAULT`), a
+  length of 0 or above 4 096 or a null program (`EINVAL`), the
+  program's address (`EFAULT`), the jump bounds and the final return
+  (`EINVAL`), and the rest of the kernel's checks on the installed
+  filter. The body and the built filter live in a transient anonymous
+  mapping, up to 64 KB, made and removed by the install.
+- **Refused with `ENOSYS`**, visibly, at install: strict mode in either
+  form; the flags `NEW_LISTENER`, `WAIT_KILLABLE_RECV` and any the
+  launcher does not know; a return of A; any action but `ALLOW`, `LOG`,
+  `ERRNO`, `KILL_PROCESS` and `KILL_THREAD` (`TRAP`'s `SIGSYS` is the
+  launcher's, 13 item 23; `TRACE` and `USER_NOTIF` need a supervisor;
+  an undefined action kills); `ERRNO(MARK_NONE)`; a read of the
+  instruction pointer, which a judged call would see as the judge
+  slot's; and a body longer than the room the prologue, 14
+  instructions, the epilogue, 10, and two per distinct action left
+  leave of 4 096 (13 item 5).
 
 **Argument checks.** `rt_sigaction` traps only when a new action is
 installed. `rt_sigprocmask` and `rt_sigsuspend` always trap; `ppoll`,
@@ -1059,8 +1149,8 @@ instructions. The other numbers go to the second stage, the rule in
 order: the argument checks that can only allow (an `ioctl` other than
 `chattr`'s, a query of a signal action, a wait without a mask, a
 `ptrace` request other than `PTRACE_TRACEME`, a `prctl` other than
-seccomp's, the availability query) and the version
-probe; the syscall page; the refusals; then the trap. On x86-64 the
+seccomp's, the two `seccomp` queries) and the version
+probe; the judge slot and the syscall page; the refusals; then the trap. On x86-64 the
 program is 295 instructions and 373 of the 472 numbers up to the
 ceiling are allowed by number alone. 16.3 gives why a tree and what
 an untrapped syscall costs. `test/filter_test.c` runs the program in an
@@ -1092,17 +1182,22 @@ kernel has added has a libc fallback and a re-issue would be an
 untranslated host access.
 
 The version moves whenever the trap set grows or the syscall page
-moves, and is 9: 7 added the listings, `getdents64` and `getdents`,
-8 `fstat`, for a directory's `.real/` (8.3), and 9
-`ptrace(PTRACE_TRACEME)`, for a `vfork` child's request (7.4.5); `test/syscalls.py`
-records a digest of the set and the page each version shipped with and fails when either changes under the
-same version. Filters before 6 allow a page at another address, so
+moves, and is 10: 7 added the listings, `getdents64` and `getdents`,
+8 `fstat`, for a directory's `.real/` (8.3), 9
+`ptrace(PTRACE_TRACEME)`, for a `vfork` child's request (7.4.5), and 10
+the judge slot and the installs of a program's own filter, which
+earlier versions refused in the filter; a launcher's note carries its
+filter version as a second word from 10 on. `test/syscalls.py`
+records a digest of the set, the page and its judge slot each version
+shipped with and fails when any changes under the same version.
+Filters before 6 allow a page at another address, so
 neither launcher can run under the other's filter: a launcher under a
 filter older than 6 refuses by name at startup, and a handler sends a
 launcher whose note carries a page generation older than the present
 2, or no word, to its own child, which refuses it by name (7.4.5, 13
 item 45). `scripts/build` also builds `build/launcher-old`, the same sources at
-version 3, without `bind` and `connect`, which version 4 added; the
+version 3, without `bind` and `connect`, which version 4 added, and
+without the judge slot's rule and the installs, which it refuses; the
 regression of 17 item 4 nests it inside the current launcher, where it
 answers `ENOSYS` for every trap a later version added, which version 3
 shows as well as any later one would.
@@ -1121,7 +1216,8 @@ shows as well as any later one would.
 | Reverse-translate results | `getcwd`; `readlinkat` of `/proc/self/{exe,cwd,fd/*}` and of the process's own pid; `readlinkat` of an identity file; `statfs` and `fstatfs` on exclave paths | strip the tree's prefix, and the `.real/` of an original, which then names its wrapper; answer the program's virtual path for `exe` on the loader path (7.6); answer the host's link text for an identity file (8.4); report `ST_RDONLY`. Any other link's text is returned as stored, as the kernel returns it |
 | Self-defence | `rt_sigaction` with a new action; the mask-carrying calls above | scrub `SIGSYS` from the mask (7.5.1), with no canonicalisation |
 | Deferred to the exec | `ptrace(PTRACE_TRACEME)` in a `vfork` child | recorded and answered 0, `EPERM` for a second request, and made right before the exec's re-issue (7.4.5); in any other process re-issued at once |
-| Denied | `clone3`, `io_uring_setup`, `seccomp` except the availability query, `prctl(PR_SET_SECCOMP)`, `uselib`, the mount API (`open_tree`, `open_tree_attr`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr`) | `ENOSYS` |
+| A program's own filter | `seccomp(SECCOMP_SET_MODE_FILTER)` and `prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER)`; every trapped call while one may be in force | install a filter built around the program's, through the page with the program's flags, or answer `ENOSYS` for what cannot be honoured, strict mode included; judge each trapped call first by re-issuing it from the judge slot, and return a refusal untranslated (7.4.2) |
+| Denied | `clone3`, `io_uring_setup`, `uselib`, the mount API (`open_tree`, `open_tree_attr`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr`) | `ENOSYS` |
 | Denied | `mount`, `umount2`, `pivot_root`, `chroot`, `acct` | `EPERM` |
 | Deferred | `name_to_handle_at` | `ENOSYS`; no program seen issues it, and a handle would name a real inode |
 | Unknown | anything a newer ancestor filter traps | `ENOSYS`, logged |
@@ -1548,7 +1644,8 @@ since only installs trap. The frame is read at the offsets of the
 architecture, `uc_sigmask` at 296 and the registers at 40 on x86-64,
 at 40 and 184 on aarch64, where `x0` is both the first argument and the
 result and the handler copies the arguments before it writes. A
-restorer of the launcher's own returns through `rt_sigreturn` on both.
+restorer of the launcher's own, in the syscall page (7.4.2), returns
+through `rt_sigreturn` on both.
 
 #### 7.5.3 The handler is interruptible, and nesting is legal
 
@@ -3082,16 +3179,59 @@ and stay fixed.
 4. **Foreign-ABI programs are killed, not run.** A program for another
    architecture or ABI than the launcher's dies by the filter.
 
-5. **`io_uring`, `clone3` and a program's own seccomp filter are
-   refused.** `io_uring_setup` and `clone3` answer `ENOSYS` (libcs fall
-   back to `clone`), since either would let a program act past the
-   translator, and installing a filter is refused, since the launcher's
-   trap would outrank the filter's refusal of a translated call, leaving
-   the program's sandbox silently weaker (7.4.2). Programs that depend on
-   them, container runtimes, browsers' sandboxes, `rr`, `qemu -sandbox`,
-   are out of scope. `strace` inside an exclave works but shows a
-   `SIGSYS` for every translated call. `valgrind`'s memcheck runs, its
-   report the same as the kernel's (17).
+5. **`io_uring` and `clone3` are refused, and a program's own seccomp
+   filter is honoured only in part.** `io_uring_setup` and `clone3`
+   answer `ENOSYS` (libcs fall back to `clone`), since either would let
+   a program act past the translator. A program's own filter whose
+   actions are `ALLOW`, `LOG`, `ERRNO`, `KILL_PROCESS` and `KILL_THREAD`
+   is installed for it and judges every call as the kernel would, the
+   translated ones through the judge slot (7.4.2): the sandboxes of
+   `sshd`'s privilege separation, `qemu -sandbox on` and
+   libseccomp-built `ERRNO` and `KILL` filters generally. The
+   differences:
+   - **A program's own sandbox inside an exclave confines the program's
+     own calls, not an attacker who has gained code execution in it.**
+     The syscall page at a fixed address holds `syscall; ret`, and the
+     program's filter lets every call from it through, so code that
+     jumps there escapes the filter as it escapes the translation. An
+     exclave is not a security boundary (3), and anyone who runs a
+     sandboxed daemon in one gives up the containment that sandbox
+     exists for.
+   - Refused with `ENOSYS` at install, visibly: strict mode; the `TRAP`
+     action, whose `SIGSYS` is the launcher's (item 23); `TRACE` and
+     `USER_NOTIF`, which need a supervisor, and the `NEW_LISTENER` and
+     `WAIT_KILLABLE_RECV` flags; a return of A; an `ERRNO` of 4094,
+     the judge's own answer; a read of the instruction pointer, which a
+     judged call would see as the judge slot's; and a body longer than
+     the room the filter built around it leaves, 4 072 instructions
+     less two per distinct action other than `ALLOW`. So Chromium's and
+     tor's sandboxes, container runtimes and bubblewrap still fail at
+     install, or before it.
+   - `LOG` writes no audit line for a translated call, whose final
+     action is the launcher's trap; a judge call that the program's
+     filter refuses under `SECCOMP_FILTER_FLAG_LOG` is logged as the
+     original would be.
+   - Each filter built around a program's takes 24 instructions and the
+     stubs from the kernel's 32 768 a thread's chain may hold.
+   - An install succeeds where natively it would be `EACCES`, without
+     `no_new_privs` or `CAP_SYS_ADMIN`, since the launcher set
+     `no_new_privs` at the border (item 3).
+   - A `vfork` child's install marks its parent's memory too, which
+     then makes a judge call per trap that answers that no filter
+     refuses: a cost, not a difference.
+   - While a program's filter may be in force, a launcher before filter
+     version 10, which would re-issue every trapped call unjudged, is
+     not exec'd (`EACCES`), and a launcher newer than the filter it
+     finds refuses to start under one by name.
+   - After an `execve` under the filter, the new launcher's bootstrap,
+     `mmap`, `mprotect` and the version probe's `uname`, is judged by
+     it, as a native dynamic program's loader would be, so a filter
+     that kills `mmap` kills the new image at its start.
+
+   Programs that depend on the rest, container runtimes, browsers'
+   sandboxes, `rr`, are out of scope. `strace` inside an exclave works
+   but shows a `SIGSYS` for every translated call. `valgrind`'s memcheck
+   runs, its report the same as the kernel's (17).
 
 6. **Listings differ from the host's.** A directory listing omits
    host-owned files inside exclave-owned directories (8.3); a `.real/`
@@ -4153,6 +4293,13 @@ ahead (16.6 item 4).
 then start the walk in the working directory as the kernel names it,
 since that name has no symlink in it (16.6 item 5).
 
+**A program's own filter** adds the judge call to every trap (7.4.2):
+a warm exclave-path `stat`, 2.15 µs in a process with no filter of its
+own, costs 2.38 µs under a 152-instruction filter the program installed,
+0.23 µs more, the kernel running the program's filter and the launcher's
+once more and a syscall that does not execute. A process that installs
+no filter makes no judge call.
+
 **What a small compile traps.** `gcc -O0 hello.c` through an exclave
 makes about 1 250 traps. 746 of them are `readlink`, almost all
 answered `EINVAL` on a directory: glibc's `realpath` reads every
@@ -4170,14 +4317,14 @@ syscall number whose leaf for every number the rule does not single
 out is `ALLOW` (7.4.2 gives the program's size and how many numbers
 that is). The action cache proves those numbers allowed and skips the
 filter for them; where the cache is absent an allowed syscall runs
-11.7 instructions on average and 27 at most.
+11.8 instructions on average and 28 at most.
 
 An untrapped `getppid` costs 53 to 55 ns against 43 to 45 natively,
 and `read(-1)` 54 against 46; what is left is the kernel's seccomp
 entry, which any filter costs. The install takes 75 to 100 µs, most of
 it the kernel compiling and checking the program.
 `test/filter_test.c`, in the gate's unit step, runs the program in an
-interpreter against the rule written out separately, in 569 590 cases,
+interpreter against the rule written out separately, in 1 052 640 cases,
 and asks of every number what the action cache asks.
 
 Why a tree: a filter that tests the instruction pointer first makes no
@@ -4688,9 +4835,9 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus nineteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones` and `memfd_exec` (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus twenty of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones`, `memfd_exec`, and `seccomp_filter`, a program's own filter (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
-| 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
+| 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2, and a program's filter as the handler builds it from the program's, the page's and the judge slot's addresses; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
 | 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 106 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
@@ -5399,8 +5546,9 @@ specified.
   tree it cannot read correctly is refused by name (6.3).
 - **A fixed syscall page at `0x7fe00000` identifies the launcher's own
   syscalls**: the same in every process, above every linker's program
-  images; a bare syscall instruction appears only in the bootstrap, the
-  version probe and the restorer (7.4.2).
+  images; a bare syscall instruction appears in the launcher's text only
+  in the bootstrap and the version probe, and the restorer lies in the
+  page (7.4.2).
 - **The filter's trap set is versioned; an equal or newer inherited
   filter is reused, an older one stacked under**: no syscall a launcher
   needs translated goes untrapped, and a trap it does not know is
@@ -5414,12 +5562,18 @@ specified.
   kernel's frame layout on both architectures, to save a few traps per
   spawn (7.5.5). A flag only `clone3` offers, which a library came to
   need and so dropped its fallback to `clone`, would reopen it.
-- **A program's own seccomp filter is refused with `ENOSYS`**: the
-  launcher's trap outranks the filter's refusal, so honouring the filter
-  means running it in the handler on every trapped call, per thread and
-  across `exec`, in the code least able to afford a mistake, for
-  sandboxes an exclave does not promise (7.4.2, 13 item 5). A program
-  people need inside an exclave that stops when refused would reopen it.
+- **A program's own seccomp filter is honoured by the kernel, through a
+  judge slot in the syscall page, for the actions `ALLOW`, `LOG`,
+  `ERRNO` and `KILL`, and refused with `ENOSYS` otherwise**: the handler
+  installs the program's filter with a prologue and an epilogue that
+  exempt the page but for that slot, and re-issues each trapped call
+  from the slot, which the launcher's filter answers with a mark that
+  any refusal of the program's outranks, so the kernel applies the
+  program's filters per thread, across `fork`, `exec` and `TSYNC`, as
+  natively, and no handler interprets them. A sandbox is never silently
+  weaker than natively for the program's own calls, and what cannot be
+  honoured fails visibly at install; it does not contain code that
+  jumps through the page (7.4.2, 13 item 5).
 - **A program's `rt_sigaction` install traps; its queries do not**
   (7.5.2).
 - **Handler memory comes from scratch chunks reclaimed by liveness,

@@ -90,18 +90,19 @@ int main(int argc, char **argv)
     if (!strcmp(mode, "seccomp")) {
         struct sock_filter f[] = {BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW)};
         struct sock_fprog p = {1, f};
-        /* 7.4.2: a program's own sandbox is refused with ENOSYS; the availability query is answered */
+        /* 7.4.2: a program's own sandbox is installed, in either form, the queries are answered, and the filter is
+         * inherited by the exec that follows, which runs under it */
         if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) {
             perror("no_new_privs");
             return 1;
         }
         errno = 0;
-        if (syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &p) != -1 || errno != ENOSYS) {
+        if (syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &p) != 0) {
             printf("FAIL seccomp install: errno=%d\n", errno);
             return 1;
         }
         errno = 0;
-        if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &p) != -1 || errno != ENOSYS) {
+        if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &p) != 0) {
             printf("FAIL prctl seccomp: errno=%d\n", errno);
             return 1;
         }
@@ -112,7 +113,7 @@ int main(int argc, char **argv)
         }
         struct stat st;
         if (stat("/usr/share/exclave-test-marker", &st)) {
-            printf("FAIL stat after refused filter\n");
+            printf("FAIL stat under the filter\n");
             return 1;
         }
         execl(getenv("EXCLAVE_TEST_TRUE") ? getenv("EXCLAVE_TEST_TRUE") : "/usr/bin/true", "true", (char *)0);

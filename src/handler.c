@@ -717,6 +717,22 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
 
 /* cloexec: the script came through a close-on-exec descriptor, which its interpreter could not open: the kernel refuses
  * such an exec with ENOENT before it runs anything (fs/exec.c, BINPRM_FLAGS_PATH_INACCESSIBLE) */
+/* 7.4.2: while a program's own filter may be in force, a launcher whose filter has no judge rule, before version
+ * 10, would re-issue every trapped call through the page unjudged, so it is not exec'd: EACCES, the kernel's answer
+ * for an exec a security policy refuses (security_bprm_check), and a line in the log. real is a launcher file, whose
+ * note says; one that cannot be read is refused too. S->tmp and S->extra are the probe's buffers. */
+static long launcher_unjudged(struct scratch *S, const char *real, int version)
+{
+    if (!program_filters) return 0;
+    if (version < 0) {
+        int gen;
+        if (elf_probe(real, S->tmp, &gen, &version, S->extra) < 0) version = 0;
+    }
+    if (version >= FILTER_JUDGE_SINCE) return 0;
+    log_msg("a launcher before filter version 10 is not run under a program's own seccomp filter", real);
+    return -EACCES;
+}
+
 static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth,
                         int cloexec)
 {
@@ -749,18 +765,22 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     if (!S->comm[0] && elf) scpy(S->comm, base_name(v), sizeof S->comm);
     if (wrapper) {
         if (!script && !elf) return -ENOEXEC;
+        if ((e = launcher_unjudged(S, S->real, -1))) return e;
         return exec_env(S, S->real, argv, envp, v, 0); /* the kernel runs the launcher under the program's name */
     }
     /* not a wrapper: a host program, or an unwrapped exclave file */
     if (script) return exec_script(S, given, argv, envp, depth);
     if (!elf) return -ENOEXEC;
     /* 7.4.5: a file carrying a launcher's note is another launcher: exec it as it is, with the launcher's variables */
-    int another;
-    int pr = elf_probe(S->real, S->tmp, &another, S->extra);
+    int another, version;
+    int pr = elf_probe(S->real, S->tmp, &another, &version, S->extra);
     /* load_elf_binary's answer before its point of no return: ENOEXEC for a type, a machine or program headers it
      * cannot load, or an interpreter path without its NUL, EIO for one the file does not hold whole */
     if (pr < 0) return pr;
-    if (another >= PAGE_GENERATION) return exec_env(S, S->real, argv, envp, v, 0);
+    if (another >= PAGE_GENERATION) {
+        if ((e = launcher_unjudged(S, S->real, version))) return e;
+        return exec_env(S, S->real, argv, envp, v, 0);
+    }
     /* a launcher whose page this filter traps: the child refuses it by name */
     if (another) return exec_env(S, C.launcher, argv, envp, v, 1);
     /* the loader the header names, resolved as loader_run resolves it (7.3), checked as load_elf_binary checks it
@@ -1808,6 +1828,62 @@ static long do_ptrace(struct scratch *S, long *a)
 }
 #endif
 
+#ifndef EXCLAVE_TEST_OLD /* build/launcher-old, version 3, refuses the install in its filter */
+/* A program's own filter (7.4.2): the kernel's answers for what it refuses, in its order (seccomp_set_mode_filter,
+ * seccomp_prepare_filter, bpf_prog_create_from_user), ENOSYS for what the launcher refuses, and otherwise the filter
+ * filter_wrap makes of it, installed through the page with the flags and in the form given. The body and the built
+ * filter live in a transient mapping, not the scratch, which holds neither. The flag is set before the install, so
+ * that a thread the install reaches by TSYNC is judged from its next trap on; an install that fails leaves it set,
+ * which costs a judge call that answers MARK_NONE. A vfork child's install sets it in the parent too: stricter. */
+#define SECCOMP_FLAGS_HONOURED                                                                                         \
+    (SECCOMP_FILTER_FLAG_TSYNC | SECCOMP_FILTER_FLAG_LOG | SECCOMP_FILTER_FLAG_SPEC_ALLOW |                            \
+     SECCOMP_FILTER_FLAG_TSYNC_ESRCH)
+static __attribute__((noinline)) long do_seccomp(struct scratch *S, int nr, long *a)
+{
+    unsigned long flags = 0;
+    const void *uargs;
+    if (nr == NR_prctl) {
+        if (a[0] != PR_SET_SECCOMP) return -ENOSYS; /* a newer filter's trap */
+        if (a[1] == SECCOMP_MODE_STRICT) return -ENOSYS;
+        if (a[1] != SECCOMP_MODE_FILTER) return -EINVAL;
+        uargs = (const void *)a[2];
+    } else {
+        unsigned op = (unsigned)a[0]; /* the kernel's unsigned int */
+        if (op == SECCOMP_SET_MODE_STRICT) return a[1] || a[2] ? -EINVAL : -ENOSYS;
+        if (op == SECCOMP_GET_ACTION_AVAIL || op == SECCOMP_GET_NOTIF_SIZES)
+            return RE5(NR_seccomp, op, a[1], a[2], 0, 0);
+        if (op != SECCOMP_SET_MODE_FILTER) return -EINVAL;
+        flags = (unsigned)a[1];
+        uargs = (const void *)a[2];
+        /* the kernel's answer for the flags, which it checks before it reads the program: EFAULT for none */
+        long r = RE5(NR_seccomp, SECCOMP_SET_MODE_FILTER, a[1], 0, 0, 0);
+        if (r != -EFAULT) return r;
+        if (flags & ~(unsigned long)SECCOMP_FLAGS_HONOURED) return -ENOSYS; /* a listener, or a flag newer than this */
+    }
+    struct {
+        unsigned short len;
+        const struct sock_filter *filter;
+    } fp;
+    if (copy_exact(S->pid, &fp, uargs, sizeof fp)) return -EFAULT;
+    if (fp.len == 0 || fp.len > BPF_MAXINSNS || !fp.filter) return -EINVAL;
+    size_t room = 2UL * BPF_MAXINSNS * sizeof(struct sock_filter);
+    long m = sys_mmap(0, room, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (m < 0 && m > -4096) return -ENOMEM;
+    struct sock_filter *body = (struct sock_filter *)m, *out = body + BPF_MAXINSNS;
+    long r = copy_exact(S->pid, body, fp.filter, fp.len * sizeof *body);
+    if (r == 0) r = filter_wrap(body, fp.len, out);
+    if (r > 0) {
+        fp.len = (unsigned short)r;
+        fp.filter = out;
+        program_filters = 1;
+        r = nr == NR_prctl ? RE5(NR_prctl, PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &fp, a[3], a[4])
+                           : RE5(NR_seccomp, SECCOMP_SET_MODE_FILTER, flags, &fp, 0, 0);
+    }
+    SC2(NR_munmap, m, room);
+    return r;
+}
+#endif
+
 static long dispatch(struct scratch *S, int nr, long *a, void *uc)
 {
     long r;
@@ -1931,6 +2007,10 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
 #ifndef EXCLAVE_TEST_OLD
     case NR_ptrace: return do_ptrace(S, a);
 #endif
+#ifndef EXCLAVE_TEST_OLD
+    case NR_seccomp:
+    case NR_prctl: return do_seccomp(S, nr, a);
+#endif
     default: return -ENOSYS; /* 7.4.3: a trapped syscall the handler does not know */
     }
 }
@@ -2042,6 +2122,29 @@ static void program_keys(void *uc)
 #endif
 }
 
+volatile int program_filters;
+
+/* The program's own filters' answer for a trapped call (7.4.2): the call re-issued unchanged from the judge slot, which
+ * the launcher's filter answers MARK_NONE and a program filter's prologue leaves to its body, so that the kernel takes
+ * the answer of highest precedence as it did for the original, and among ERRNO answers the newest filter's, which a
+ * program's are: MARK_NONE where none refuses the call, else the errno, or 0, of the refusal, returned without
+ * translating. A KILL would have killed the original before the handler ran, unless an install by TSYNC came between,
+ * which the kernel then applies. No call, and no cost, in a process where no program installed a filter. */
+static long judge(int nr, const long *a)
+{
+#ifndef EXCLAVE_TEST_OLD
+    if (!program_filters) return -MARK_NONE;
+    long r = __sc6_judge(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
+    /* the launcher's filter answers every call from the slot that it traps */
+    if (r > 0) die("the judge call ran", 0, nr);
+    return r;
+#else
+    (void)nr;
+    (void)a;
+    return -MARK_NONE;
+#endif
+}
+
 static void on_sigsys(int sig, void *info, void *uc)
 {
     (void)sig; /* SIGSYS: the handler is installed for nothing else */
@@ -2067,19 +2170,12 @@ static void on_sigsys(int sig, void *info, void *uc)
         S->resolve = 0;
         S->v[0] = 0;
     }
-    long r = S ? dispatch(S, nr, a, uc) : -ENOMEM;
+    long r = judge(nr, a);
+    if (r == -MARK_NONE) r = S ? dispatch(S, nr, a, uc) : -ENOMEM;
     if (C.logfd >= 0 && S) log_line(sysname(nr), r, S->v[0] ? S->v : 0);
     if (S) scratch_put(S);
     g[REG_RESULT] = r;
 }
-
-/* the restorer the kernel returns through after the handler: rt_sigreturn, 15 on x86-64 and 139 on aarch64, by a bare
- * instruction, since a call to the syscall page would push onto the stack the kernel reads the frame from */
-#if defined(__x86_64__)
-__asm__(".text\n.globl sig_restorer\n.type sig_restorer,@function\nsig_restorer:\n mov $15, %eax\n syscall\n");
-#elif defined(__aarch64__)
-__asm__(".text\n.globl sig_restorer\n.type sig_restorer,%function\nsig_restorer:\n mov x8, #139\n svc #0\n");
-#endif
 
 void handler_install(void)
 {
@@ -2090,12 +2186,13 @@ void handler_install(void)
         C.init_pkru = rdpkru(); /* the launcher has set none: the kernel's initial PKRU */
     }
 #endif
+    /* the restorer is the page's (sys.h), so that a program's own filter lets the return from every trap through */
     struct {
         void *h;
         unsigned long flags;
         void *restorer;
         unsigned long mask;
-    } sa = {(void *)on_sigsys, SA_SIGINFO | SA_ONSTACK | SA_RESTORER | SA_NODEFER, (void *)sig_restorer, 0};
+    } sa = {(void *)on_sigsys, SA_SIGINFO | SA_ONSTACK | SA_RESTORER | SA_NODEFER, (void *)SC_RESTORER, 0};
     if (sys_rt_sigaction(SIGSYS, &sa, 0, 8) < 0) die("cannot install the SIGSYS handler", 0, 0);
     unsigned long m = SIGSYS_BIT;
     sys_rt_sigprocmask(SIG_UNBLOCK, &m, 0, 8);

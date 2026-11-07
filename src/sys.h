@@ -19,12 +19,19 @@ typedef unsigned int mode_t;
 /* The syscall page (DESIGN.md 7.4.2): one page at a fixed address holding the syscall instruction and a return.
  * Every syscall the launcher makes goes through it, and the filter allows a syscall by that instruction address alone.
  * The address is the same in every process, so one filter serves the whole tree. The page is mapped by page_init()
- * before anything else runs; only the bootstrap, the filter probe (7.4.2) and the signal restorer use a raw
- * instruction. It lies high in the low 2 GB, above program images, which every linker starts low and grows upward
- * (Go's on aarch64 from 0x10000, 13 item 24), and below 0x7fff8000, where ASan's shadow begins on x86-64; 64K-aligned
- * for kernels with 64K pages. Filters before version 6 allow a page at 0x3f0000 instead, so neither launcher runs
- * under the other's filter (FILTER_PAGE_SINCE). */
+ * before anything else runs; only the bootstrap and the filter probe (7.4.2) use a raw instruction, and the signal
+ * restorer lies in the page. It lies high in the low 2 GB, above program images, which every linker starts low and
+ * grows upward (Go's on aarch64 from 0x10000, 13 item 24), and below 0x7fff8000, where ASan's shadow begins on
+ * x86-64; 64K-aligned for kernels with 64K pages. Filters before version 6 allow a page at 0x3f0000 instead, so
+ * neither launcher runs under the other's filter (FILTER_PAGE_SINCE). */
 #define SC_PAGE 0x7fe00000UL
+/* The page's layout (7.4.2), three 16-byte slots: at 0 the launcher's syscall and a return; at 16 the judge slot, the
+ * same two instructions, from which the handler re-issues a trapped call for the kernel to judge by the program's own
+ * filters, and which every filter from version 10 answers rather than allows; at 32 the signal restorer, rt_sigreturn,
+ * jumped to and never called, since the kernel reads the frame from the stack. A call's instruction pointer, the
+ * address after its syscall instruction, lies in its slot on both architectures. */
+#define SC_JUDGE (SC_PAGE + 16)
+#define SC_RESTORER (SC_PAGE + 32)
 /* A syscall the architecture lacks gets a sentinel below zero, unique so that the handler's switch compiles, and
  * the filter skips it (a legacy form the kernel of the other architecture has: open, stat, fork, ...). */
 #define ABSENT(k) (-1000 - (k))
@@ -33,6 +40,7 @@ typedef unsigned int mode_t;
  * through the pointers an asm statement passes, and would otherwise read every stat buffer as uninitialised. */
 long __sc6(long n, long a, long b, long c, long d, long e, long f);
 long __sc6_raw(long n, long a, long b, long c, long d, long e, long f);
+long __sc6_judge(long n, long a, long b, long c, long d, long e, long f);
 #endif
 #if defined(__x86_64__)
 #ifndef __ANALYZER__
@@ -57,6 +65,19 @@ static inline long __sc6_raw(long n, long a, long b, long c, long d, long e, lon
     __asm__ volatile("syscall"
                      : "=a"(ret)
                      : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8), "r"(r9)
+                     : "rcx", "r11", "memory");
+    return ret;
+}
+/* the same call from the judge slot (7.4.2) */
+static inline long __sc6_judge(long n, long a, long b, long c, long d, long e, long f)
+{
+    long ret;
+    register long r10 __asm__("r10") = d;
+    register long r8 __asm__("r8") = e;
+    register long r9 __asm__("r9") = f;
+    __asm__ volatile("call *%[pg]"
+                     : "=a"(ret)
+                     : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8), "r"(r9), [pg] "r"(SC_JUDGE)
                      : "rcx", "r11", "memory");
     return ret;
 }
@@ -135,6 +156,23 @@ static inline long __sc6_raw(long n, long a, long b, long c, long d, long e, lon
     __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5) : "memory");
     return x0;
 }
+/* the same call from the judge slot (7.4.2) */
+static inline long __sc6_judge(long n, long a, long b, long c, long d, long e, long f)
+{
+    register long x8 __asm__("x8") = n;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    register long x2 __asm__("x2") = c;
+    register long x3 __asm__("x3") = d;
+    register long x4 __asm__("x4") = e;
+    register long x5 __asm__("x5") = f;
+    register long x9 __asm__("x9") = (long)SC_JUDGE;
+    __asm__ volatile("blr x9"
+                     : "+r"(x0)
+                     : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x9)
+                     : "x30", "memory");
+    return x0;
+}
 #endif
 /* clang-format off */
 enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absent */
@@ -188,6 +226,8 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
 #ifdef __clang_analyzer__
 long __sc6_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define __sc6 __sc6_opaque
+long __sc6_judge_opaque(long n, long a, long b, long c, long d, long e, long f);
+#define __sc6_judge __sc6_judge_opaque
 #endif
 #define SC0(n) __sc6(n, 0, 0, 0, 0, 0, 0)
 #define SC1(n, a) __sc6(n, (long)(a), 0, 0, 0, 0, 0)

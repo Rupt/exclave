@@ -10,8 +10,11 @@
 #ifndef FILTER_VERSION
 /* 7.4.2: versioned reuse; the version moves whenever the trap set grows or the syscall page moves. build/launcher-old
  * is these sources at version 3, without bind and connect, which version 4 added (EXCLAVE_TEST_OLD). */
-#define FILTER_VERSION 9
+#define FILTER_VERSION 10
 #endif
+/* filters from this version answer a call from the syscall page's judge slot rather than allow it (7.4.2), so that a
+ * program's own filter can be honoured: a launcher whose note names an older one is not exec'd while one exists */
+#define FILTER_JUDGE_SINCE 10
 /* an inherited filter older than this allows another page's syscalls and traps this launcher's */
 #define FILTER_PAGE_SINCE 6
 /* the word of the launcher's notes (launcher.c); 1 marks a launcher whose page is at 0x3f0000 */
@@ -74,7 +77,22 @@
 #define SECCOMP_MODE_FILTER 2
 #define SECCOMP_SET_MODE_FILTER 1
 #define SECCOMP_GET_ACTION_AVAIL 2
+#define SECCOMP_SET_MODE_STRICT 0
+#define SECCOMP_MODE_STRICT 1
+#define SECCOMP_GET_NOTIF_SIZES 3
+#define SECCOMP_FILTER_FLAG_TSYNC 1
+#define SECCOMP_FILTER_FLAG_LOG 2
 #define SECCOMP_FILTER_FLAG_SPEC_ALLOW 4    /* 4.17 */
+#define SECCOMP_FILTER_FLAG_TSYNC_ESRCH 16
+#define SECCOMP_RET_KILL_THREAD 0U
+#define SECCOMP_RET_LOG 0x7ffc0000U
+#define SECCOMP_RET_ACTION_FULL 0xffff0000U
+#define BPF_MAXINSNS 4096
+/* 7.4.2: the judge's answers, errnos a program's filter is not let give (one of 4095 or below, which the kernel
+ * returns unclamped): MARK_NONE, the launcher filter's to a call from the judge slot, and MARK_PRESENT, a program
+ * filter's prologue's to the probe from it */
+#define MARK_NONE 4094
+#define MARK_PRESENT 4093
 #define SECCOMP_RET_KILL_PROCESS 0x80000000U
 #define SECCOMP_RET_TRAP 0x00030000U
 #define SECCOMP_RET_ERRNO 0x00050000U
@@ -364,22 +382,33 @@ __attribute__((noreturn)) void loader_run(const char *vpath, const char *real, i
  * it (7.4.5): the descriptor or -errno */
 long open_borrowed(const char *real);
 /* 1 has interp, 0 none, <0 -errno as load_elf_binary answers before its point of no return; buf >= 7680 bytes;
- * is_launcher: the note's page generation, 0 for no launcher */
-int elf_probe(const char *real, char *interp, int *is_launcher, void *buf);
+ * is_launcher: the note's page generation, 0 for no launcher, filter_version its filter version, 0 for none */
+int elf_probe(const char *real, char *interp, int *is_launcher, int *filter_version, void *buf);
 /* the kernel's checks of a program's interpreter once opened (load_elf_binary, before begin_new_exec): 0 or -errno,
  * EIO for a header the file does not hold whole, ELIBBAD for one that is not this machine's ELF; buf >= 208 bytes */
 int elf_interp_probe(const char *real, void *buf);
 
 /* ---------- filter (filter.c) ---------- */
+struct sock_filter {
+    uint16_t code;
+    uint8_t jt, jf;
+    uint32_t k;
+};
 /* 0: no filter of ours inherited; otherwise the newest inherited filter's version (7.4.2) */
 int filter_probe(void);
 void filter_install(void);
+/* a program's own filter, body of n instructions, made into the one the handler installs for it (7.4.2): the
+ * prologue, the body with each return of an action other than ALLOW sent through the page's exemption, and the
+ * epilogue, in out, which holds BPF_MAXINSNS; returns its length, or -EINVAL where the kernel refuses the body,
+ * -ENOSYS where the launcher does */
+long filter_wrap(const struct sock_filter *body, long n, struct sock_filter *out);
+/* 1 once a program's filter may exist in this process: set before an install, and by the start under one (7.4.2) */
+extern volatile int program_filters;
 extern const int path_syscalls[];
 extern const int n_path_syscalls;
 
 /* ---------- handler (handler.c) ---------- */
 void handler_install(void);
-void sig_restorer(void);
 
 /* ---------- CPU level (isa.c) ---------- */
 /* 1 yes, 0 no, -1 unknown string; auxv for AT_HWCAP on aarch64 */
