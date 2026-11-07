@@ -2,9 +2,10 @@
  * a hand-made static ELF of one segment whose entry exits 42, then its variants: no PT_LOAD, overlapping and
  * unordered PT_LOADs, p_memsz below p_filesz, a PT_INTERP naming a text file, a script, the program itself and an
  * absent path, a PT_INTERP without a NUL, two PT_INTERPs, an entry outside every segment and one of zero, a p_vaddr
- * and p_offset that differ within a page, a segment at address zero and one past the end of the file, a terabyte of
- * bss, PT_GNU_STACK absent, with PF_X and without, the 32-bit class, another machine, the other byte order, ET_REL,
- * e_phnum 0 and PN_XNUM, a wrong e_phentsize, an e_phoff past the file, and an ET_DYN at a fixed address. On x86-64
+ * and p_offset that differ within a page, a bss segment whose offset is unaligned, a segment at address zero and
+ * one past the end of the file, a terabyte of bss, PT_GNU_STACK absent, with PF_X and without, the 32-bit class,
+ * another machine, the other byte order, ET_REL, e_phnum 0 and PN_XNUM, a wrong e_phentsize, an e_phoff past the
+ * file, and an ET_DYN at a fixed address. On x86-64
  * the entry copies the exit onto the stack and jumps there, so that the stack's executability shows in the answer; on
  * aarch64 it exits in place. usage: exec_elf HOSTDIR. Prints one line per case, "<case>: <answer>", the same in every
  * world, so the kernel under bwrap is the oracle. Exit 0 always. */
@@ -21,6 +22,7 @@
 
 extern char **environ;
 static const char *hd;
+static size_t page; /* the kernel's page: the images put a segment a page apart as it counts one */
 
 #if defined(__x86_64__)
 #define MACHINE EM_X86_64
@@ -171,6 +173,7 @@ int main(int argc, char **argv)
         return 2;
     }
     hd = argv[1];
+    page = (size_t)sysconf(_SC_PAGESIZE);
     static struct img m;
     char p[4096];
     base(&m);
@@ -205,6 +208,17 @@ int main(int argc, char **argv)
                               .p_memsz = 0x100,
                               .p_align = 0x1000};
     run("PT_LOADs out of address order", &m);
+    base(&m);
+    eh(&m)->e_phnum = 3;
+    *ph(&m, 2) = *ph(&m, 1);
+    *ph(&m, 1) = (Elf64_Phdr){.p_type = PT_LOAD,
+                              .p_flags = PF_R | PF_W,
+                              .p_offset = 0x10,
+                              .p_vaddr = BASE + page,
+                              .p_filesz = 0,
+                              .p_memsz = 0x100,
+                              .p_align = 0x1000};
+    run("bss segment whose offset is unaligned", &m);
     base(&m);
     ph(&m, 0)->p_memsz = CODE_OFF;
     run("p_memsz below p_filesz", &m);

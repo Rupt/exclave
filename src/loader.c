@@ -85,8 +85,9 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
         }
         if (ph[i].p_type != PT_LOAD) continue;
         /* an address and an offset that differ within a page cannot be mapped at this page size, and the kernel refuses
-         * such a program too (EINVAL from its mmap): a binary linked for 4 KB pages on a 16 KB or 64 KB kernel */
-        if ((ph[i].p_vaddr - ph[i].p_offset) & mask)
+         * such a program too (EINVAL from its mmap): a binary linked for 4 KB pages on a 16 KB or 64 KB kernel. A
+         * segment without file bytes has no offset to map: the kernel gives it memory at its page (elf_load, 6.7) */
+        if (ph[i].p_filesz && ((ph[i].p_vaddr - ph[i].p_offset) & mask))
             die_signal(SIGSEGV, "a segment is not aligned to this kernel's page size", name, EINVAL);
         /* load_elf_binary: a segment with more file than memory, or past the task's address space, is EINVAL */
         if (ph[i].p_filesz > ph[i].p_memsz || ph[i].p_memsz > TASK_SIZE || ph[i].p_vaddr > TASK_SIZE - ph[i].p_memsz)
@@ -107,7 +108,8 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
         int prot = (ph[i].p_flags & PF_R ? PROT_READ : 0) | (ph[i].p_flags & PF_W ? PROT_WRITE : 0) |
                    (ph[i].p_flags & PF_X ? PROT_EXEC : 0);
         unsigned long va = bias + ph[i].p_vaddr, off = ph[i].p_vaddr & mask;
-        unsigned long mstart = va - off, flen = ph[i].p_filesz + off, mlen = ph[i].p_memsz + off;
+        unsigned long mstart = va - off, flen = ph[i].p_filesz ? ph[i].p_filesz + off : 0,
+                      mlen = ph[i].p_memsz ? ph[i].p_memsz + off : 0;
         int fixed = (eh->e_type == ET_DYN) ? MAP_FIXED : MAP_FIXED_NOREPLACE;
         if (flen) {
             long m = sys_mmap((void *)mstart, flen, prot, MAP_PRIVATE | fixed, fd, (long)(ph[i].p_offset - off));

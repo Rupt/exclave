@@ -1169,6 +1169,7 @@ EXEC_ELF: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("two identical PT_LOADs", OLD_RIE_ANSWER),
     ("PT_LOAD page overlapping the first", OLD_RIE_ANSWER),
     ("PT_LOADs out of address order", "status=42"),
+    ("bss segment whose offset is unaligned", "status=42"),
     ("p_memsz below p_filesz", "signal=11"),
     ("a terabyte of bss", None),
     ("p_vaddr off p_offset within the page", "signal=11"),

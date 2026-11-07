@@ -931,8 +931,10 @@ to the kernel's page size from `AT_PAGESZ`, as the kernel rounds them,
 16 or 64 KB on some aarch64 kernels (13 item 43). What the kernel meets
 past its point of no return kills the new image with `SIGSEGV`
 (`bprm_execve`), and so does the loader, with a message naming the
-segment first: one whose address and offset differ within a page, which
-the kernel's own `mmap` refuses, one with more file than memory or past
+segment first: one with file bytes whose address and offset differ within
+a page, which the kernel's own `mmap` refuses (a segment without file
+bytes is memory at its page whatever its offset, as `elf_load` places it
+since 6.7), one with more file than memory or past
 the address space (`EINVAL` in `load_elf_binary`), one at an address the
 kernel will not map, zero or one already in use, no `PT_LOAD` at all,
 and a `.bss` the kernel cannot give; the oracle's `exec_elf` measures
