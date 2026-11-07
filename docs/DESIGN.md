@@ -3376,7 +3376,7 @@ and stay fixed.
     in the suite's exercisers, guard pages, faulting paths and crafted
     segments sized in 4 KB, since made the kernel's page, and one rule
     of the loader, a bss segment's offset checked where the kernel
-    reads none (7.3); the oracles passed again in full (12.1).
+    reads none (7.3); corrected, the row passes in full again (12.1).
 
 44. **Two handlers never share a scratch chunk**: a rule, not a
     limitation (7.5.4).
