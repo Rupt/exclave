@@ -3187,8 +3187,16 @@ and stay fixed.
    is installed for it and judges every call as the kernel would, the
    translated ones through the judge slot (7.4.2): the sandboxes of
    `sshd`'s privilege separation, `qemu -sandbox on` and
-   libseccomp-built `ERRNO` and `KILL` filters generally. The
-   differences:
+   libseccomp-built `ERRNO` and `KILL` filters generally. Measured on
+   the reference machine with Ubuntu 24.04's packages: `sshd` (OpenSSH
+   9.6), run as the user on a high port, attaches its pre-authentication
+   sandbox and logs a client of the tree's `ssh` in by key, as under
+   `bwrap` on the unwrapped tree; and `qemu-system-x86_64` 8.2 with
+   `-sandbox on` and every deny option installs its filter, which
+   `/proc/<pid>/status` counts beside the launcher's, and runs and quits
+   over QMP. Refused, `sshd` carried on without its
+   sandbox, saying so only at debug level, and `qemu` refused the
+   option. The differences:
    - **A program's own sandbox inside an exclave confines the program's
      own calls, not an attacker who has gained code execution in it.**
      The syscall page at a fixed address holds `syscall; ret`, and the
