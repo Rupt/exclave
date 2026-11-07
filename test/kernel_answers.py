@@ -1776,8 +1776,11 @@ SECCOMP_FILTER_LAUNCHER: dict[str, str] = {
 # the cases that need a kernel of at least a version, answered as that kernel decides before it:
 # seccomp(2) itself (3.17), whose absence the program meets with the prctl form where it can; the
 # LOG action and the availability query (4.14), where an older kernel kills on LOG and the launcher
-# refuses it, since the judge would not; a listener and the notification sizes (5.0)
+# refuses it, since the judge would not; a listener and the notification sizes (5.0); the cap of an
+# ERRNO action's data at MAX_ERRNO (3.19), before which -65535 reaches the program uncapped and
+# its libc reads it as success
 SECCOMP_FILTER_SINCE: tuple[tuple[tuple[int, int], tuple[str, ...]], ...] = (
+    ((3, 19), ("errno 65535 mkdirat",)),
     ((5, 0), ("new listener", "notification sizes")),
     ((4, 14), ("log ", "action available")),
     (
