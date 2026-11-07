@@ -175,7 +175,7 @@ exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 105 named tests, most of them programs that
+- **The regression suite**: 106 named tests, most of them programs that
   compute, run on the gcc, Alpine, Fedora and clang exclaves
   (17 item 4).
 - **Kernel oracles**, where user namespaces are available: the same
@@ -827,7 +827,7 @@ the program a wrapper stands for, its *original*, sits beside it in
   name, the project's version and the commit it was built from, as
   `exclave version` prints it and the hashes file's `tool` record says
   it (6.4); `readelf -p .exclave.version` shows it.
-- **gdb's script**, in `.debug_gdb_scripts`, and six exported names for
+- **gdb's script**, in `.debug_gdb_scripts`, and seven exported names for
   it to read (7.6).
 
 The build of either architecture strips everything else and fails if
@@ -1451,10 +1451,11 @@ component (from 6.12, for a bare descriptor the name of the file it
 finally loads, a script's interpreter's) and a script's `$0`. The handler spells the name the same way and carries it,
 with the `comm` it computed, in `EXCLAVE_EXECFN` and `EXCLAVE_COMM` on
 every exec it makes, of a wrapper or of the launcher, dropping any
-inherited copy of the three. The launcher it execs takes them for the
+inherited copy of the three and of `EXCLAVE_TRACED`, which marks the
+exec that leaves a process newly traced (7.6). The launcher it execs takes them for the
 program's identity (7.6), a wrapper only when a filter is inherited, so
 that from the host they are as inert as `EXCLAVE_EXEC`.
-Every launcher removes all three from the environment a program is
+Every launcher removes all four from the environment a program is
 given; the kernel's copy in `/proc/<pid>/environ` keeps them (13 item
 46). A script's interpreter therefore receives the script's path as the
 caller spelt it, for a wrapped script too, and a script behind a
@@ -1493,8 +1494,8 @@ descriptors. From a soft limit of 16 up the child needs a free
 descriptor, as a dynamically linked program's loader does natively. At
 the hard limit the exec is `EMFILE` (13 item 12).
 
-The three variables go after the program's own in the environment the
-launcher is exec'd with, so that the kernel lays the program's strings
+The launcher's variables go after the program's own in the environment
+it is exec'd with, so that the kernel lays the program's strings
 out contiguously after its arguments, as a program that writes its
 title over them expects; where they end up is 13 item 50.
 
@@ -1739,9 +1740,10 @@ that file, and leaves it to the child launcher for a wrapped script,
 whose interpreter the child resolves.
 
 gdb sees the launcher, the executable of every wrapper, so the
-launcher exports six names, the base, entry and real file of the
-program it mapped, the base and file of the loader, and
-`exclave_debug_hook`, which it calls once before the jump, and carries
+launcher exports seven names, the base, entry and real file of the
+program it mapped, the base and file of the loader,
+`exclave_debug_hook`, which it calls once before the jump, and
+`exclave_retraced`, set by the second exec below, and carries
 a Python script, `src/gdb.py`, that gdb auto-loads from
 `.debug_gdb_scripts` at launch and at every exec of a launcher. The
 script adds the program's, the loader's and every library's symbols
@@ -1762,6 +1764,37 @@ launcher for a program on the loader path, and for a wrapper of this
 exclave the launcher's own path, the file the wrapper is, since an
 open of the wrapper's path inside reaches its original (7.4.4). `open`
 and `stat` of the link follow the same answer.
+
+**The second exec.** gdb given a program, `gdb PROGRAM`, starts it by
+`vfork`, `PTRACE_TRACEME` and an exec of `SHELL -c "exec PROGRAM"`
+(`fork_inferior`), counts the execs that start expects, the shell's
+and the program's or the program's alone (`startup_inferior`), takes
+the image they leave for the file it was given, and reads
+`/proc/<pid>/exe` only at an exec past that count (`follow_exec`).
+Inside, that image is the launcher, so gdb would place the program's
+breakpoints in the launcher's image and never load the script. So the
+exec that makes a `vfork` child's deferred request (7.4.5) carries
+`EXCLAVE_TRACED`, and the launcher it starts, when its `TracerPid` is
+nonzero, execs its own file once more, by its real path, with the same
+arguments and environment: gdb meets an exec past its count, reads the
+launcher there, loads its symbols and auto-loads the script, and a
+`break main` given before `run` waits pending until the script adds the
+program. A launcher started as the shell gdb told to exec the program
+(`-c` and a command beginning `exec `) leaves the second exec to the
+program's, marking that exec in turn, since gdb counts the shell's
+among its start's and a second exec of the shell would end the count
+early, with the shell's traps still to come. The second exec sets
+`exclave_retraced`, and the script then gives gdb the program back as
+its file when the process exits (`exec-file`), so that the next `run`
+starts it as the first did. It costs no syscall when nothing is traced:
+the handler's check is a search of its own scratch chunks, and the
+launcher's a search of its environment. Under a tracer that started its
+program so, it costs one exec and one read of `/proc/self/status`, and
+the tracer meets one exec stop more than the kernel gives (13 item 54).
+A `fork` child's request, as strace makes it, is made at once and its
+exec carries no mark, and an attached process or a fork child gdb
+follows needs none: gdb reads the launcher at the attach or at the
+child's exec.
 
 ### 7.7 CPU check
 
@@ -2933,7 +2966,7 @@ the kernel ABI, the CPU level (7.7), and the eight host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 105 named regressions and every oracle its kernel can run; 17
+suite's 106 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher
 inside its copy of the exclave (`scripts/reproduce`, 10.5) and
 compares its bytes with the reference machine's build; a row whose
@@ -3000,20 +3033,23 @@ and stay fixed.
    stays empty, and a `dlopen` between two traps is seen at the next
    `r_brk` call. A program built inside an exclave is debugged with a
    gdb in the exclave, since the host's gdb runs in the host's world
-   without the exclave's libraries, and from inside, gdb's `run`
-   starts the program and runs it to its end once it passes the
-   translated calls' `SIGSYS` (`handle SIGSYS nostop noprint pass`, on
-   the command line or in `.gdbinit`; item 54 for strace and others
-   that start a program by `fork`). Breakpoints from inside hit when
-   gdb runs the program through the positional entry by its host path,
-   `gdb --args <exclave>/.exclave/launcher PROGRAM`, as 13.1 gives for
-   the host: gdb then reads the launcher at the exec it makes, as its
-   tracer (7.6), and the carried script loads, which passes `SIGSYS`
-   itself. `gdb PROGRAM` inside does not: gdb takes the file it was
-   given, the program's own, for the process, whose image is the
-   launcher, and asks nothing at the execs of its start, so the script
-   never loads and a breakpoint never hits. On musl a breakpoint in the
-   program hits and one in the exclave's libc does not.
+   without the exclave's libraries. From inside, breakpoints hit
+   whether gdb is given the program, `gdb PROGRAM`, or runs it through
+   the positional entry by its host path, `gdb --args
+   <exclave>/.exclave/launcher PROGRAM`, as 13.1 gives for the host:
+   gdb reads the launcher at an exec past its start, for a program it
+   was given the launcher's second (7.6), and the carried script loads,
+   which passes the translated calls' `SIGSYS`; gdb prints that exec as
+   the process "executing new program", the launcher. The second exec
+   needs gdb's own start, a `vfork` child's `PTRACE_TRACEME`. With `set
+   exec-wrapper` gdb counts one exec more, the wrapper's, which the
+   second then ends, and the script loads only after the wrapper's first
+   `SIGSYS`; that stop, and every one of a run without the script, the
+   exclave outside the auto-load safe-path, is passed by `handle SIGSYS
+   nostop noprint pass`, on the command line or in `.gdbinit` (item 54
+   for strace and others that start a program by `fork`). From the
+   host, a breakpoint in a musl program hits and one in the exclave's
+   libc does not.
 
 2. **Translated syscalls cost more than native ones.** Every trapped
    syscall pays for a signal, the handler and its fixed syscalls; an
@@ -3505,7 +3541,12 @@ and stay fixed.
     parent's scratch until the next search for one, which a later child
     given the same pid, after the pid space has wrapped, could find first.
     A deferred request is answered 0 where the kernel would refuse it
-    (Yama's `ptrace_scope` 2 or 3); the exec then runs untraced.
+    (Yama's `ptrace_scope` 2 or 3); the exec then runs untraced. The
+    exec that makes a deferred request is followed by a second, the
+    launcher's own (7.6), so its tracer meets one exec stop more than the
+    kernel gives, two `SIGTRAP`s or `PTRACE_EVENT_EXEC` stops where the
+    kernel gives one; a tracer that detaches at the first is not met by a
+    second.
 
 ### 13.1 Debugging and profiling recipe
 
@@ -3519,6 +3560,7 @@ safe-path /` for a session:
 ```
 gdb -iex 'set auto-load safe-path /' --args <exclave>/gcc -O2 -c file.c          # a wrapped program
 gdb -iex 'set auto-load safe-path /' --args <exclave>/.exclave/launcher ./prog    # a built output, through the positional entry (7.2)
+gdb -iex 'set auto-load safe-path /' ./prog                                    # with the exclave's gdb, inside: the program itself
 (gdb) break main                   # pending until the script adds the program
 (gdb) set follow-fork-mode child   # to stop inside cc1 rather than the driver
 (gdb) run
@@ -3529,15 +3571,16 @@ through both, and `info files` lists what the script added; `info
 sharedlibrary` is empty (7.6, item 1). Every translated syscall is a
 `SIGSYS` stop that gdb passes through, so a run under gdb slows in
 proportion to its traps. A gdb inside an exclave takes the same
-commands, the exclave's launcher named by its host path, whether
-for a wrapped program or a built one; given the program itself it
-runs it only with `handle SIGSYS nostop noprint pass`, and its
-breakpoints do not hit (item 1).
+commands, and the program itself as well as the launcher by its host
+path, `gdb ./prog` or `gdb /usr/bin/gcc`: gdb then prints the
+launcher's second exec as the process "executing new program" (7.6),
+and runs the program again at the next `run` (item 1).
 
-How the script works. The launcher exports six names: the base, entry
-and real file of the program, the base and file of its loader, and
+How the script works. The launcher exports seven names: the base, entry
+and real file of the program, the base and file of its loader,
 `exclave_debug_hook`, a function it calls once before jumping into the
-program. `src/gdb.py`, carried in `.debug_gdb_scripts`, is auto-loaded
+program, and `exclave_retraced`, which says gdb was given the program
+(7.6). `src/gdb.py`, carried in `.debug_gdb_scripts`, is auto-loaded
 at launch and at every exec of a launcher. It makes gdb pass `SIGSYS`
 without stopping and breaks on the hook, where it adds the program's
 symbol file at its base and the loader's at its own. At the program's
@@ -3547,7 +3590,9 @@ resolving names in the tree as the translator does and taking a
 wrapper's original; a breakpoint on `r_brk` repeats the walk after
 every `dlopen`. `info sharedlibrary` is empty because the launcher
 carries no `DT_DEBUG`. With `set follow-fork-mode child` the same
-happens in `cc1`.
+happens in `cc1`. Where gdb was given the program, the script makes the
+program's path inside the exclave gdb's file again when the process
+exits, since following the launcher's exec made the launcher its file.
 
 `perf record` needs nothing special and symbolises `cc1` down to
 functions. perf cannot read the maps of a process under a different
@@ -4537,7 +4582,8 @@ meaning items 4 and 7.
      item 49), a blocked or sent `SIGSYS`, older
      and newer launchers nested and side by side, a child that asks to be
      traced and execs, by `vfork` and by `fork` (7.4.5, 13 item 54), a tracer's reading of its
-     tracee's `exe` and gdb's breakpoints inside (7.6), a program installing
+     tracee's `exe` and gdb's breakpoints inside, given the launcher or the
+     program itself, run after run (7.6), a program installing
      its own filter, the speculation state, `x28` as a signal landing
      mid-trap finds it on aarch64 (7.5.3), and an adversarial program
      (`adversarial`), which runs the handler's deepest paths on Rust's
@@ -4629,7 +4675,7 @@ meaning items 4 and 7.
 | 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus nineteen of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones` and `memfd_exec` (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 105 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 106 named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |

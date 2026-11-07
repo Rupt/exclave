@@ -200,10 +200,38 @@ class _Hook(gdb.Breakpoint):
     def _hook(self) -> None:
         state = {"root": _exclave_tree(), "loaded": set(), "brk": None}
         _add(state, _path("exclave_original_path"), _var("exclave_original_base"))
+        if _var("exclave_retraced"):
+            program = _virtual(state["root"], _path("exclave_original_path"))
+            gdb._exclave_program = program  # noqa: SLF001 -- as _arm's
         interp = _path("exclave_interp_path")
         if interp:
             _add(state, interp, _var("exclave_interp_base"))
         _Entry(_var("exclave_original_entry"), state)
+
+
+def _virtual(root: str | None, real: str) -> str:
+    """The path inside the exclave of the real file real: a wrapper's for its original."""
+    real = os.path.realpath(real)
+    if not root or not real.startswith(root + "/"):
+        return real
+    d, b = os.path.split(real[len(root) :])
+    return (
+        os.path.join(os.path.dirname(d), b)
+        if os.path.basename(d) == ".real"
+        else os.path.join(d, b)
+    )
+
+
+def _exited(_event: object) -> None:
+    """The program made gdb's file again once the process exits, where gdb was given it.
+
+    Following the launcher's second exec (7.6) made the launcher gdb's file; the next run starts the
+    program as the first did.
+    """
+    program = getattr(gdb, "_exclave_program", None)
+    gdb._exclave_program = None  # noqa: SLF001 -- as _arm's
+    if program:
+        _guarded(_quiet, 'exec-file "{}"'.format(program.replace("\\", "\\\\").replace('"', '\\"')))
 
 
 def _arm() -> None:
@@ -227,3 +255,6 @@ def _arm() -> None:
 # every translated syscall is a SIGSYS (7.4.1)
 gdb.execute("handle SIGSYS nostop noprint pass", to_string=True)
 _arm()
+if not getattr(gdb, "_exclave_exited", False):
+    gdb.events.exited.connect(_exited)
+    gdb._exclave_exited = True  # noqa: SLF001 -- as _arm's

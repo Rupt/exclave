@@ -596,14 +596,14 @@ static long exec_reissue(struct scratch *S, const char *path, char **argv, char 
 /* The exec of a wrapper, or of the launcher for a program on the loader path, with the identity the kernel would
  * give the program carried in the launcher's own variables (7.4.5, 7.6): EXCLAVE_EXEC names the loader-path
  * target, EXCLAVE_EXECFN the path the program is exec'd by as the kernel spells it, EXCLAVE_COMM the name the
- * kernel would set as comm. S->v2 and S->comm hold the last two from do_execve; an inherited copy of any of the
- * three is dropped, and every launcher strips them before a program runs. The strings are the kernel's to
- * validate. Returns execve's -errno when it fails. */
+ * kernel would set as comm, and EXCLAVE_TRACED a process its exec leaves newly traced. S->v2 and S->comm hold the
+ * second and third from do_execve; an inherited copy of any of the four is dropped, and every launcher strips them
+ * before a program runs. The strings are the kernel's to validate. Returns execve's -errno when it fails. */
 static long exec_env(struct scratch *S, const char *path, char **argv, char **envp, const char *v, int loader)
 {
     void *big;
     char **env;
-    long envc = vec_read(S, S->extra, sizeof S->extra, envp, 3, &env, &big);
+    long envc = vec_read(S, S->extra, sizeof S->extra, envp, 4, &env, &big);
     if (envc < 0) return envc;
     /* the head of every variable, 16 bytes, room for EXCLAVE_EXECFN=, read in one process_vm_readv for up to 256 at a
      * time rather than one call each (16.4); a variable the batch could not read whole, near the end of a mapping, is
@@ -631,15 +631,16 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
                 got = copy_in(S->pid, head, env[i], sizeof head);
                 h = head;
             }
-            if (got >= 13 && (xmemcmp(h, "EXCLAVE_EXEC=", 13) == 0 || xmemcmp(h, "EXCLAVE_COMM=", 13) == 0 ||
-                              (got >= 15 && xmemcmp(h, "EXCLAVE_EXECFN=", 15) == 0)))
+            if (got >= 13 &&
+                (xmemcmp(h, "EXCLAVE_EXEC=", 13) == 0 || xmemcmp(h, "EXCLAVE_COMM=", 13) == 0 ||
+                 (got >= 15 && (xmemcmp(h, "EXCLAVE_EXECFN=", 15) == 0 || xmemcmp(h, "EXCLAVE_TRACED=", 15) == 0))))
                 continue;
             env[n++] = env[i];
         }
     }
     /* a name the child launcher would read cut short is refused, as a path too long to re-issue is (13 item 13) */
     if (xstrlen(S->v2) + 15 >= PATH_MAX || (loader && xstrlen(v) + 13 >= PATH_MAX)) {
-        vector_free(big, envc + 4);
+        vector_free(big, envc + 5);
         return -ENAMETOOLONG;
     }
     /* after the program's own variables, so that the kernel lays the program's strings out contiguously after its
@@ -655,10 +656,16 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
         scat(S->tmp, v, PATH_MAX);
         env[n++] = S->tmp;
     }
+    /* a vfork child whose deferred PTRACE_TRACEME exec_reissue makes, or a debugger's shell that has passed it on: the
+     * launcher execs itself once more, so that a debugger counting its start's execs meets a later one and reads the
+     * launcher (7.6) */
+    static char traced[] = "EXCLAVE_TRACED=1";
+    pid_t tracer = scratch_deferred(S->pid, S->tid, 0);
+    if ((tracer && sys_getppid() == tracer) || C.traced_pid == S->pid) env[n++] = traced;
     env[n] = 0;
     log_line("exec", 0, v);
     long r = exec_reissue(S, path, argv, env);
-    vector_free(big, envc + 4); /* only reached when execve failed */
+    vector_free(big, envc + 5); /* only reached when execve failed */
     return r;
 }
 

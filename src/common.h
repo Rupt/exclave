@@ -198,6 +198,8 @@ struct exclave {
     /* exe holds the descriptor's link text, the kernel's identity for such a program; run() leaves it */
     int exe_fixed;
     int boundary; /* 1: no filter of ours inherited: this process is at the border (7.2) */
+    /* a process newly traced whose launcher left the second exec to its next one, a debugger's shell (7.6): its pid */
+    long traced_pid;
     /* the manifest (6.2) and what the tree says (8.1); the limits are stated in 8.1 and enforced by exclave wrap */
     char cpu[32];
     /* the manifest's own records (at most 256), then every non-empty top-level entry of the tree (at most 256) */
@@ -349,6 +351,7 @@ int is_self_exe(const char *p, pid_t pid); /* /proc/self/exe in any spelling, fo
 int other_exe(const struct scratch *S, const char *v, char *text);
 /* the TracerPid field of a /proc/<pid>/status head of n bytes, 0 for none (7.6) */
 long status_tracer(const char *buf, long n);
+extern unsigned long debug_retraced; /* loader.c, exported to gdb as exclave_retraced (7.6) */
 
 /* ---------- loader (loader.c) ---------- */
 /* reads the first bytes of fd, the file the startup loads, for loader_run: returns their count, *bytes the bytes */

@@ -118,11 +118,14 @@ static const char *denied[] = {"GLIBC_TUNABLES",   "GCONV_PATH",   "LOCPATH", "N
                                "LANGUAGE",         "TZ",           "SHELL",   0};
 static const char *fixed[] = {"PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "TZ=UTC0", "SHELL=/bin/sh", 0};
 /* the launcher's protocol with itself (7.4.5): EXCLAVE_EXEC names a loader-path target, EXCLAVE_EXECFN and
- * EXCLAVE_COMM the identity the kernel would give the program; set by a handler or the positional entry, read by the
- * launcher they exec, removed from the environment a program is given (the kernel's copy in /proc/<pid>/environ keeps
- * them, 13 item 46) */
+ * EXCLAVE_COMM the identity the kernel would give the program, EXCLAVE_TRACED a process newly traced (retrace); set
+ * by a handler or the positional entry, read by the launcher they exec, removed from the environment a program is
+ * given (the kernel's copy in /proc/<pid>/environ keeps them, 13 item 46) */
 static int internal_var(const char *e)
-{ return xstarts(e, "EXCLAVE_EXEC=") || xstarts(e, "EXCLAVE_EXECFN=") || xstarts(e, "EXCLAVE_COMM="); }
+{
+    return xstarts(e, "EXCLAVE_EXEC=") || xstarts(e, "EXCLAVE_EXECFN=") || xstarts(e, "EXCLAVE_COMM=") ||
+           xstarts(e, "EXCLAVE_TRACED=");
+}
 static int env_denied(const char *e)
 {
     if (xstarts(e, "LD_") || xstarts(e, "LC_") || internal_var(e)) return 1;
@@ -165,6 +168,32 @@ static void unborrow(void)
         SC4(NR_prlimit64, 0, RLIMIT_NOFILE, C.rlim, 0);
         C.borrowed = 0;
     }
+}
+
+/* 7.6: a process a handler's exec has left newly traced, by a vfork child's deferred PTRACE_TRACEME, as a debugger
+ * starts its program, execs the file the kernel ran, by its real path, once more with the same arguments and the
+ * marker's value 2, which that launcher takes for the second exec and exports to the script. A debugger counts the
+ * execs its start expects, the shell's and the program's, and takes the program's image for the file it was given; it
+ * reads /proc/<pid>/exe only at an exec past that count, where it reads the launcher (7.6), loads its symbols and the
+ * script it carries. Nothing when no tracer remains, a request the kernel refused or a tracer gone since; an exec that
+ * fails runs the program without the second. */
+static void retrace(const char *exe, char **argv, char **envp)
+{
+    char buf[256];
+    long fd = sys_open("/proc/self/status", O_RDONLY | O_CLOEXEC, 0);
+    if (fd < 0) return;
+    long have = 0, n;
+    while (have < (long)sizeof buf && (n = sys_read((int)fd, buf + have, sizeof buf - (size_t)have)) > 0) have += n;
+    sys_close((int)fd);
+    if (!status_tracer(buf, have)) return;
+    long k = 0;
+    while (envp[k]) k++;
+    static char again[] = "EXCLAVE_TRACED=2";
+    char **env = pointers(k + 1);
+    for (long i = 0; i < k; i++) env[i] = xstarts(envp[i], "EXCLAVE_TRACED=") ? again : envp[i];
+    env[k] = 0;
+    unborrow();
+    sys_execve(exe, argv, env);
 }
 
 static long manifest_fd;
@@ -411,6 +440,15 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
     long n = sys_readlink("/proc/self/exe", exe, PATH_MAX - 1);
     if (n < 0) die("cannot read /proc/self/exe", 0, n);
     exe[n] = 0;
+    /* only from inside, where a handler sets it, as the other three are read; a debugger's shell, told to exec the
+     * program (gdb's startup-with-shell runs SHELL -c "exec PROGRAM ARGS"), leaves the second exec to the program's,
+     * which its handler marks, since the debugger counts the shell's exec among its start's */
+    const char *traced = have ? find_env(envp, "EXCLAVE_TRACED") : 0;
+    if (traced && traced[0] == '2') debug_retraced = 1;
+    else if (traced) {
+        if (argc >= 3 && xstrcmp(argv[1], "-c") == 0 && xstarts(argv[2], "exec ")) C.traced_pid = sys_getpid();
+        else retrace(exe, argv, envp);
+    }
     find_exclave(exe);
     log_open(envp);
     read_manifest(auxv);

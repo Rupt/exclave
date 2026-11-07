@@ -24,6 +24,9 @@ extern unsigned long exclave_interp_base __attribute__((alias("interp_base"), vi
 extern char exclave_original_path[PATH_MAX] __attribute__((alias("payload_path"), visibility("default")));
 extern char exclave_interp_path[PATH_MAX] __attribute__((alias("interp_path"), visibility("default")));
 extern void exclave_debug_hook(void) __attribute__((alias("debug_hook"), visibility("default")));
+/* 1 in a launcher retrace exec'd (7.6): gdb was given the program, whose path the script restores as its exec file */
+unsigned long debug_retraced;
+extern unsigned long exclave_retraced __attribute__((alias("debug_retraced"), visibility("default")));
 __asm__(".pushsection .debug_gdb_scripts,\"MS\",@progbits,1\n"
         " .byte 4\n" /* SECTION_SCRIPT_ID_PYTHON_TEXT: the script's name, a newline, the text */
         " .ascii \"exclave-launcher.py\\n\"\n"

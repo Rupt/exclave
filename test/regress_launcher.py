@@ -917,3 +917,66 @@ def tracer_reads_exe(ctx: Ctx) -> str | None:
             f"gdb inside stops at {brk} in {target}: rc={rc} {out[-600:]!r} {err[-400:]!r}",
         )
     return None
+
+
+@test
+def gdb_given_program(ctx: Ctx) -> str | None:
+    """7.6, 13 item 1: gdb inside, given the program itself, stops at its breakpoints, every run.
+
+    gdb counts the execs its start expects and takes the image they leave for the file it was
+    given, so a vfork child's deferred PTRACE_TRACEME has the launcher exec itself once more: gdb
+    meets an exec past its count, reads the launcher there and auto-loads its script. The script
+    gives gdb the program back as its file when the process exits, so that a second run starts it
+    as the first did. A program built inside stops at main, a wrapped one in the exclave's libc,
+    with no SIGSYS handling given and gdb's start through the shell, its default, and without.
+    """
+    if not os.path.exists(os.path.join(ctx.tree, "usr", "bin", "gdb")):
+        return "the tree has no gdb: its breakpoints inside not checked"
+    src = os.path.join(ctx.work, "gdb_given.c")
+    hello = os.path.join(ctx.work, "gdb_given")
+    with open(src, "w") as f:
+        f.write('#include <stdio.h>\nint main(void) { puts("hello"); return 0; }\n')
+    rc, _out, err = run(
+        [wrapper(ctx, ctx.gcc), "-g", "-O0", "-o", hello, src], cwd=ctx.work, env=ctx.env
+    )
+    expect(rc == 0, "compile: " + err[-600:])
+    for target, brk, want in (
+        (hello, "main", "Breakpoint 1, main () at "),
+        (ctx.vbin("true"), "exit", " in exit ()"),
+    ):
+        for shell in ("on", "off"):
+            rc, out, err = run(
+                [
+                    wrapper(ctx, "gdb"),
+                    "-batch",
+                    "-nx",
+                    "-iex",
+                    "set auto-load safe-path /",
+                    "-iex",
+                    "set breakpoint pending on",
+                    "-iex",
+                    "set debuginfod enabled off",
+                    "-iex",
+                    f"set startup-with-shell {shell}",
+                    "-ex",
+                    f"break {brk}",
+                    "-ex",
+                    "run",
+                    "-ex",
+                    "kill",
+                    "-ex",
+                    "run",
+                    "-ex",
+                    "info auto-load python-scripts",
+                    target,
+                ],
+                cwd=ctx.work,
+                env=ctx.env,
+                timeout=120,
+            )
+            expect(
+                out.count(want) == 2 and "exclave-launcher.py" in out,
+                f"gdb {target} inside, startup-with-shell {shell}, stops at {brk} in both runs: "
+                f"rc={rc} {out[-800:]!r} {err[-400:]!r}",
+            )
+    return None
