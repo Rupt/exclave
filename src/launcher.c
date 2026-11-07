@@ -391,7 +391,8 @@ static int join_path(char *out, const char *dir, const char *name)
  * AT_EXECFN, names the file in the host's world; its chain of host links is followed, each name's directory resolved
  * on the host, to the first name that lies in the tree, and that name's virtual path, its last component kept, is $0
  * when it leads to the script, v. A script a link in the tree names, as /usr/bin/psql names postgresql-common's
- * pg_wrapper, which dispatches on its $0, thus gets the link's name, as the kernel gives it; otherwise $0 is v. */
+ * pg_wrapper, which dispatches on its $0, thus gets the link's name, the last component the kernel would give it;
+ * otherwise $0 is v. */
 static void outside_spelling(const char *v, const unsigned long *auxv, char *out)
 {
     scpy(out, v, PATH_MAX);

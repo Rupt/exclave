@@ -2901,11 +2901,15 @@ outside data directories, reading originals in place of wrappers.
   path, as the JVM opens `lib/server/libjvm.so` before the libraries
   that need `libjvm.so`. One the tree lacks altogether is an error, a
   package missing from the set, but for a `dlopen` candidate, where it
-  is a warning: Ubuntu ships plugins whose package does not require
-  what they need, iproute2's `tc` modules (`libatm1t64`) and
-  libcaca's GL driver, so the closures of `nginx` and `ffmpeg` hold
-  one, and such a plugin fails to load on a host without that package
-  as it does inside.
+  is a warning: a library nothing reaches is loaded only by a
+  `dlopen`, a plugin, an NSS or PAM module or a Python extension among
+  them, and Ubuntu ships plugins whose package does not require what
+  they need, iproute2's `tc` modules (`libatm1t64`) and libcaca's GL
+  driver, so the closures of `nginx` and `ffmpeg` hold one; such a
+  library fails to load on a host without that package as it does
+  inside. A missing package that such a library needs is thus a
+  warning rather than a refusal, and its failed open shows in
+  `EXCLAVE_LOG`.
 - A search directory the exclave does not own, on an `RPATH` or among
   the defaults, is an error, since the host's library would load from
   it. A tree that does not own `/etc` is an error, since the loader
@@ -3591,8 +3595,9 @@ and stay fixed.
     host links, each name's directory resolved on the host, to the first
     name in the tree, and gives that name's virtual path, its last
     component kept, where it leads to the script: a script a link in the
-    tree names gets the link's name, as the kernel gives it, which a
-    script that dispatches on its name needs (postgresql-common's
+    tree names gets the link's name, which is the name's last component
+    the kernel would give it and what a script that dispatches on its
+    name needs (postgresql-common's
     `pg_wrapper`, behind `/usr/bin/psql` and the other client
     commands); otherwise its own canonical virtual path. A script run
     from inside, wrapped or not, gets the path as the caller spelt it,

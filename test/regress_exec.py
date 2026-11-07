@@ -225,8 +225,9 @@ def wrapped_script_from_outside(ctx: Ctx) -> None:
 
     Its own, by a host symlink to it or a relative spelling; through a link in the tree, by the
     link's tree path, a relative spelling, a host symlink to the link or the positional entry, the
-    link's virtual path, as the kernel gives a script reached by a link the link's name: postgresql-
-    common's pg_wrapper, behind /usr/bin/psql and the rest, dispatches on it.
+    link's virtual path: the launcher's rule (13 item 39), whose last component is the name the
+    kernel gives a script reached by a link, on which postgresql-common's pg_wrapper, behind
+    /usr/bin/psql and the rest, dispatches.
     """
     link = os.path.join(ctx.work, f"shortcut-{os.getpid()}")
     os.symlink(os.path.join(ctx.root, "usr", "bin", "exclave-test-script2"), link)
