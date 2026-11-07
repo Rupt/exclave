@@ -2507,7 +2507,9 @@ refused. From `.deb` files, in five steps:
    slaves, the highest priority winning unless a `--set` names one,
    which yields `awk`, `which`, `pager`, `cc` and the rest without a
    per-package list, a `for` loop over literal words unrolled first,
-   as ImageMagick installs `convert` and its other programs;
+   as ImageMagick installs `convert` and its other programs (a script
+   whose loops would unroll past a megabyte or a thousand loops is
+   refused, as nested loops multiply);
    `java-jinfo`, a Debian JDK's tool links from the
    `/usr/lib/jvm/.*.jinfo` file it ships for `update-java-alternatives`,
    since its `postinst` makes them in a loop, the highest priority

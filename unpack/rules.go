@@ -70,12 +70,25 @@ var (
 	doRe    = regexp.MustCompile(`\b(?:do|done)\b`)
 )
 
+// unrolledMax bounds the text unrollLoops makes, and unrollsMax the loops it unrolls, each of which
+// scans the text again: nested loops multiply, and eight of ten words in a kilobyte of script
+// would unroll to a hundred million copies. The largest real postinst unrolls a few loops to a
+// few kilobytes.
+const (
+	unrolledMax = 1 << 20
+	unrollsMax  = 1024
+)
+
 // unrollLoops repeats the body of every `for VAR in WORDS; do ... done` whose words are literal,
 // once per word with $VAR and ${VAR} replaced by it, outermost first, as the shell would run it;
 // a loop over anything else, a variable, a glob or a command's output, is left as it is.
 // ImageMagick's postinst installs its alternatives in such a loop over its programs' names.
-func unrollLoops(text string) string {
-	for {
+// ok is false when the text would grow past unrolledMax or take more than unrollsMax loops.
+func unrollLoops(text string) (_ string, ok bool) {
+	for unrolls := 0; ; unrolls++ {
+		if unrolls > unrollsMax {
+			return "", false
+		}
 		changed := false
 		for _, m := range forRe.FindAllStringSubmatchIndex(text, -1) {
 			words := strings.Fields(text[m[4]:m[5]])
@@ -98,6 +111,13 @@ func unrollLoops(text string) string {
 			body := text[m[1]:end]
 			name := text[m[2]:m[3]]
 			ref := regexp.MustCompile(`\$\{` + name + `\}|\$` + name + `\b`)
+			// the size the copies would have, each word in place of every reference, before any is made
+			refs, size := len(ref.FindAllStringIndex(body, -1)), len(text)-(end+len("done")-m[0])
+			for _, w := range words {
+				if size += len(body) + 1 + refs*len(w); size > unrolledMax {
+					return "", false
+				}
+			}
 			var out strings.Builder
 			for _, w := range words {
 				out.WriteString(ref.ReplaceAllLiteralString(body, w))
@@ -108,9 +128,24 @@ func unrollLoops(text string) string {
 			break
 		}
 		if !changed {
-			return text
+			return text, true
 		}
 	}
+}
+
+// postinstText is a package's postinst as the rules read it: continued lines joined, and loops over
+// literal words unrolled; a script that would unroll past unrolledMax is refused.
+func postinstText(pkg *Package) (string, error) {
+	_, scripts, err := readerFor(pkg.Path).Control(pkg.Path)
+	if err != nil {
+		return "", err
+	}
+	text, ok := unrollLoops(strings.ReplaceAll(scripts["postinst"], "\\\n", " "))
+	if !ok {
+		return "", refuse("%s's postinst unrolls its loops past %d bytes or %d loops", pkg.Name, unrolledMax,
+			unrollsMax)
+	}
+	return text, nil
 }
 
 // alternative is one `alternatives --install` line: its priority first, so the greatest wins.
@@ -151,11 +186,10 @@ func alternatives(r *root.Root, packages []*Package, log logger) (bool, error) {
 	var order []string
 	chosen := map[string]string{}
 	for _, pkg := range packages {
-		_, scripts, err := readerFor(pkg.Path).Control(pkg.Path)
+		text, err := postinstText(pkg)
 		if err != nil {
 			return false, err
 		}
-		text := unrollLoops(strings.ReplaceAll(scripts["postinst"], "\\\n", " "))
 		matched := 0
 		for _, m := range uaRe.FindAllStringSubmatch(text, -1) {
 			at, gname, target, prio := m[1], m[2], m[3], m[4]
@@ -781,11 +815,10 @@ func expand(word string, vars map[string]string) string {
 func ucfFiles(r *root.Root, packages []*Package, log logger) (bool, error) {
 	made := false
 	for _, pkg := range packages {
-		_, scripts, err := readerFor(pkg.Path).Control(pkg.Path)
+		text, err := postinstText(pkg)
 		if err != nil {
 			return false, err
 		}
-		text := unrollLoops(strings.ReplaceAll(scripts["postinst"], "\\\n", " "))
 		vars := map[string]string{}
 		filled := map[string]string{} // a variable naming a file, and the template it was filled from
 		for line := range strings.SplitSeq(text, "\n") {

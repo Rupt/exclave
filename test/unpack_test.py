@@ -783,6 +783,21 @@ def dpkg_database(ctx: Ctx) -> None:
 
 
 @test
+def unrolled_loops_are_bounded(ctx: Ctx) -> None:
+    """10.1: a postinst whose loops over literal words would unroll past the bound is refused.
+
+    Eight nested loops of ten words in a few hundred bytes would make a hundred million copies;
+    unpack refuses the set, naming the package, rather than running out of memory.
+    """
+    head = "".join(f"for v{i} in 0 1 2 3 4 5 6 7 8 9; do\n" for i in range(8))
+    body = "update-alternatives --install /usr/bin/x x /usr/bin/x$v0$v7 1\n"
+    nested = package(
+        ctx, "deb", "nested", [], control_files=[("postinst", head + body + "done\n" * 8)]
+    )
+    refused(ctx, "nested", [nested], "nested's postinst unrolls its loops past")
+
+
+@test
 def synthesis_stays_in_the_tree(ctx: Ctx) -> str | None:
     """10.1, 8.1: synthesis reads and writes the tree as its root, and so does the volatile step.
 
