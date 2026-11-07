@@ -396,13 +396,24 @@ func pixbufLoaders(c *cacheRun, root string) []cache {
 	return []cache{{what: "gdk-pixbuf loader cache", files: [][2]string{made}}}
 }
 
+// namesDirectories reports whether an icon theme's index has a Directories= key with a value.
+func namesDirectories(index []byte) bool {
+	for line := range strings.SplitSeq(string(index), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "Directories="); ok && strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // iconCaches writes icon-theme.cache for each theme under /usr/share/icons with an index.theme,
 // which an icon lookup reads in place of walking the theme's directories; the generator runs on
 // a mirror of the theme, since it writes into it. GTK takes a cache older than its theme's
 // directory for stale, so the directory gets the cache's time where its own is later, as the
-// generator gives it. A theme whose index names no directory of icons, as the cursor theme
-// /usr/share/icons/default does, gets no cache from the generator, which then writes none, and
-// none is made, as the maintainer script makes none.
+// generator gives it. A theme whose index names no directory of icons, an empty or absent
+// Directories= key, as the cursor theme /usr/share/icons/default's, is passed over: it has no
+// icons to index, the generator writes nothing for it, and the maintainer script makes nothing.
+// Any other theme the generator writes no cache for fails the run before the tree changes.
 func iconCaches(c *cacheRun, root string) []cache {
 	base := treeDir(root, "/usr/share/icons")
 	tool := findTool(root, "/usr/bin/gtk-update-icon-cache", "/usr/bin/gtk4-update-icon-cache")
@@ -414,7 +425,11 @@ func iconCaches(c *cacheRun, root string) []cache {
 	var seen []string
 	for _, n := range names {
 		theme := treeDir(root, base+"/"+n)
-		if theme == "" || slices.Contains(seen, theme) || treeResolve(root, theme+"/index.theme", true, nil) == "" {
+		if theme == "" || slices.Contains(seen, theme) {
+			continue
+		}
+		index := treeResolve(root, theme+"/index.theme", true, nil)
+		if index == "" || !namesDirectories(readFile(treeReal(root, index))) {
 			continue
 		}
 		seen = append(seen, theme)
@@ -422,9 +437,6 @@ func iconCaches(c *cacheRun, root string) []cache {
 		mirror(root, theme, at, func(n string) bool { return n != "icon-theme.cache" })
 		rc, text := c.run(nil, tool, "-q", "-t", "-f", at)
 		ran(tool, rc, text)
-		if !lexists(pathJoin(at, "icon-theme.cache")) {
-			continue
-		}
 		m.files = append(m.files, [2]string{pathJoin(at, "icon-theme.cache"), theme + "/icon-theme.cache"})
 	}
 	if len(m.files) == 0 {

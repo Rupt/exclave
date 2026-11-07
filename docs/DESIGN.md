@@ -2590,8 +2590,9 @@ refused. From `.deb` files, in five steps:
    its standard output, without which gdk-pixbuf reads only the
    formats built into it; `icon-theme.cache` for each theme under
    `/usr/share/icons` with an `index.theme`, by `gtk-update-icon-cache
-   -q -t -f`, none for one whose index names no directory, as the
-   cursor theme `default`'s, for which the generator writes none; the
+   -q -t -f`, none for one whose index names no directory (`Directories=`
+   empty or absent), as the cursor theme `default`'s, which has no icons
+   to index; the
    desktop database, `mimeinfo.cache`, by
    `update-desktop-database`; and fontconfig's caches of the system's
    font directories, by `fc-cache -s -f`, into the first cache
