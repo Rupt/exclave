@@ -221,7 +221,13 @@ def script_argv0_as_given(ctx: Ctx) -> None:
 
 @test
 def wrapped_script_from_outside(ctx: Ctx) -> None:
-    """A wrapped script run from outside gets its own virtual path as $0 (13 item 39)."""
+    """A wrapped script run from outside gets a virtual path as $0 (13 item 39).
+
+    Its own, by a host symlink to it or a relative spelling; through a link in the tree, by the
+    link's tree path, a relative spelling, a host symlink to the link or the positional entry, the
+    link's virtual path, as the kernel gives a script reached by a link the link's name: postgresql-
+    common's pg_wrapper, behind /usr/bin/psql and the rest, dispatches on it.
+    """
     link = os.path.join(ctx.work, f"shortcut-{os.getpid()}")
     os.symlink(os.path.join(ctx.root, "usr", "bin", "exclave-test-script2"), link)
     rc, out, err = run([link, "a", "b"], cwd=ctx.work, env=ctx.env)
@@ -235,6 +241,28 @@ def wrapped_script_from_outside(ctx: Ctx) -> None:
     expect(
         rc == 0 and out.startswith("script ok /usr/bin/exclave-test-script2 "),
         f"by a relative spelling from outside: {out!r} {err!r}",
+    )
+    bindir = os.path.join(ctx.root, "usr", "bin")
+    shortcut = os.path.join(ctx.work, f"link-shortcut-{os.getpid()}")
+    os.symlink(os.path.join(bindir, "exclave-test-argv0-link"), shortcut)
+    for how, argv, cwd in (
+        ("by its tree path", [os.path.join(bindir, "exclave-test-argv0-link")], ctx.work),
+        ("by a relative spelling", ["./exclave-test-argv0-link"], bindir),
+        ("through a host symlink to the link", [shortcut], ctx.work),
+        (
+            "through the positional entry",
+            [ctx.launcher, "/usr/bin/exclave-test-argv0-link"],
+            ctx.work,
+        ),
+    ):
+        rc, out, err = run(argv, cwd=cwd, env=ctx.env)
+        expect(
+            rc == 0 and out == "/usr/bin/exclave-test-argv0-link\n",
+            f"a link in the tree to a script, {how}: {out!r} {err!r}",
+        )
+    rc, out, err = run([os.path.join(bindir, "exclave-test-argv0")], cwd=ctx.work, env=ctx.env)
+    expect(
+        rc == 0 and out == "/usr/bin/exclave-test-argv0\n", f"the script itself: {out!r} {err!r}"
     )
 
 

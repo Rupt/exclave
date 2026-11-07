@@ -377,6 +377,73 @@ static void loader_mode_check(char **argv, char **env2)
     scratch_put(S);
 }
 
+/* joins dir and name into out, PATH_MAX bytes; 0 when it does not fit */
+static int join_path(char *out, const char *dir, const char *name)
+{
+    if (xstrlen(dir) + xstrlen(name) + 2 > PATH_MAX) return 0;
+    scpy(out, dir, PATH_MAX);
+    if (xstrcmp(dir, "/") != 0) scat(out, "/", PATH_MAX);
+    scat(out, name, PATH_MAX);
+    return 1;
+}
+
+/* 13 item 39: the $0 of a wrapped script run from outside, written to out. The spelling the kernel was given,
+ * AT_EXECFN, names the file in the host's world; its chain of host links is followed, each name's directory resolved
+ * on the host, to the first name that lies in the tree, and that name's virtual path, its last component kept, is $0
+ * when it leads to the script, v. A script a link in the tree names, as /usr/bin/psql names postgresql-common's
+ * pg_wrapper, which dispatches on its $0, thus gets the link's name, as the kernel gives it; otherwise $0 is v. */
+static void outside_spelling(const char *v, const unsigned long *auxv, char *out)
+{
+    scpy(out, v, PATH_MAX);
+    const char *fn = 0;
+    for (long i = 0; auxv[i * 2] != AT_NULL; i++)
+        if (auxv[i * 2] == AT_EXECFN) fn = (const char *)auxv[i * 2 + 1];
+    if (!fn || !fn[0]) return;
+    char *p = arena_alloc(PATH_MAX), *dir = arena_alloc(PATH_MAX), *at = arena_alloc(PATH_MAX);
+    char *text = arena_alloc(PATH_MAX);
+    if (fn[0] == '/') {
+        if (xstrlen(fn) >= PATH_MAX) return;
+        scpy(p, fn, PATH_MAX);
+    } else {
+        if (sys_getcwd(dir, PATH_MAX) < 0 || !join_path(p, dir, fn)) return;
+    }
+    for (int hop = 0; hop < 40; hop++) {
+        long slash = (long)xstrlen(p) - 1;
+        while (slash > 0 && p[slash] != '/') slash--;
+        const char *base = p + slash + 1;
+        if (!base[0] || xstrcmp(base, ".") == 0 || xstrcmp(base, "..") == 0) return;
+        if (slash == 0) scpy(dir, "/", PATH_MAX);
+        else {
+            xmemcpy(dir, p, (size_t)slash);
+            dir[slash] = 0;
+        }
+        long fd = sys_open(dir, O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
+        if (fd < 0) return;
+        long n = fd_real_path((int)fd, text);
+        sys_close((int)fd);
+        if (n < 0 || !join_path(at, text, base)) return;
+        if (starts_dir(at, C.root) && xstrcmp(at, C.root) != 0) {
+            from_real(at);
+            struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0);
+            if (!S) return;
+            if (canon(S, at, AT_FDCWD, 1, S->v) >= 0 && xstrcmp(S->v, v) == 0) scpy(out, at, PATH_MAX);
+            scratch_put(S);
+            return;
+        }
+        struct kstat st;
+        if (sys_lstat(at, &st) < 0 || (st.st_mode & S_IFMT) != S_IFLNK) return;
+        long len = sys_readlink(at, text, PATH_MAX - 1);
+        if (len <= 0) return;
+        text[len] = 0;
+        if (text[0] == '/') scpy(p, text, PATH_MAX);
+        else {
+            /* the link's directory, resolved above, is at without its last component */
+            at[xstrlen(at) - xstrlen(base) - 1] = 0;
+            if (!join_path(p, at[0] ? at : "/", text)) return;
+        }
+    }
+}
+
 /* 7.3, 7.4.5: load the program at virtual path v; scripts go through their interpreter (kernel convention) */
 static __attribute__((noreturn)) void run(const char *v, const char *given, long argc, char **argv, char **envp,
                                           unsigned long *auxv, int depth)
@@ -404,9 +471,10 @@ static __attribute__((noreturn)) void run(const char *v, const char *given, long
     char **nargv = pointers(cap);
     char *script = arena_alloc(PATH_MAX);
     /* the script's path as it was spelt, as the kernel passes it (7.4.5); a wrapped script run from outside the
-     * exclave gets its own virtual path instead, since the spelling names the file in the host's world, where "$0.bin"
+     * exclave gets a virtual path instead, since the spelling names the file in the host's world, where "$0.bin"
      * and $(dirname "$0")/sibling are not (13 item 39) */
-    scpy(script, depth == 0 && C.boundary && !C.loader_mode ? v : given, PATH_MAX);
+    if (depth == 0 && C.boundary && !C.loader_mode) outside_spelling(v, auxv, script);
+    else scpy(script, given, PATH_MAX);
     long k = shebang_argv(line, n, script, argv, argc, nargv, cap);
     if (k == -1) die_status(126, "not an executable", v, ENOEXEC);
     if (k == -2) die_status(126, "argument list too long", v, E2BIG);

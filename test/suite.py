@@ -362,8 +362,14 @@ def make_exclave(ctx: Ctx) -> None:
         ("exclave-test-script2", "#!/usr/bin/exclave-test-script\n"),
         ("exclave-test-exe", "#!/bin/sh\nreadlink /proc/$$/exe\n"),
         ("exclave-test-comm", '#!/bin/sh\nread c </proc/self/comm\necho "$L comm: $c"\n'),
+        ("exclave-test-argv0", '#!/bin/sh\necho "$0"\n'),
     ):
         add(os.path.join(root, "usr", "bin", name), body, 0o755)
+    # a link in the tree to a script that dispatches on its $0, as /usr/bin/psql to pg_wrapper
+    link = os.path.join(root, "usr", "bin", "exclave-test-argv0-link")
+    if os.path.lexists(link):
+        os.remove(link)
+    os.symlink("exclave-test-argv0", link)
     top = "/" + ctx.work.split("/")[1]
     ctx.cwd_given = top not in VOLATILE
     # wrapped by the suite, since the tree it is given need not pass the static check

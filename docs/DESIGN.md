@@ -3555,15 +3555,22 @@ and stay fixed.
 38. **A static link against a Red Hat tree needs `glibc-static`**,
     which no closure of `gcc` pulls in; add it to the package list.
 
-39. **A wrapped script run from outside the exclave gets its
-    canonical virtual path as `$0`**, whatever the spelling: through
-    the positional entry, by its real path, by a relative one, or
-    through a host symlink such as a shortcut (6.1). The spelling names
-    the file in the host's world, where a script's `"$0.bin"` or
-    `$(dirname "$0")/sibling` is not, and a wrapper exec'd from outside
-    any filter takes no spelling from the environment (7.4.5). A script
-    run from inside, wrapped or not, gets the path as the caller spelt
-    it, which is in the exclave's own world.
+39. **A wrapped script run from outside the exclave gets a virtual
+    path as `$0`**, whatever the spelling: through the positional entry,
+    by its real path, by a relative one, or through a host symlink such
+    as a shortcut (6.1). The spelling names the file in the host's world,
+    where a script's `"$0.bin"` or `$(dirname "$0")/sibling` is not, and
+    a wrapper exec'd from outside any filter takes no spelling from the
+    environment (7.4.5). The launcher follows the spelling's chain of
+    host links, each name's directory resolved on the host, to the first
+    name in the tree, and gives that name's virtual path, its last
+    component kept, where it leads to the script: a script a link in the
+    tree names gets the link's name, as the kernel gives it, which a
+    script that dispatches on its name needs (postgresql-common's
+    `pg_wrapper`, behind `/usr/bin/psql` and the other client
+    commands); otherwise its own canonical virtual path. A script run
+    from inside, wrapped or not, gets the path as the caller spelt it,
+    which is in the exclave's own world.
 
 40. **A running program on a host path is not protected from other
     processes' writes.** The kernel executes the launcher, not the
