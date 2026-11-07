@@ -3371,8 +3371,12 @@ and stay fixed.
     resolution oracle's 3 000 paths, the namespace oracle's 21 workloads,
     the probe's 18 293 cases with no unexplained difference, and both
     Docker profiles; the suite's two failures were the tests' own 4 KB
-    assumptions, since corrected, and the row now passes in full
-    (12.1).
+    assumptions, since corrected, and the row then passed in full. Its
+    second run (November 2026, 6.8.0-149-generic-64k) found four more
+    in the suite's exercisers, guard pages, faulting paths and crafted
+    segments sized in 4 KB, since made the kernel's page, and one rule
+    of the loader, a bss segment's offset checked where the kernel
+    reads none (7.3); the oracles passed again in full (12.1).
 
 44. **Two handlers never share a scratch chunk**: a rule, not a
     limitation (7.5.4).

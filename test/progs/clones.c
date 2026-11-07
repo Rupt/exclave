@@ -71,14 +71,15 @@ static int clone_one_trap(void *arg)
     (void)arg;
     return syscall(SYS_newfstatat, AT_FDCWD, "/usr/share/exclave-test-marker", &st, 0) == 0 ? 0 : 1;
 }
-/* a stack of size bytes at the top of a mapping with a guard page below; its top */
+/* a stack of size bytes, rounded to 4 KB, at the top of a mapping with a guard page of the kernel's size below; its
+ * top: the same stack on every page size */
 static void *stack_top(size_t size)
 {
-    size_t rounded = (size + 4095) & ~(size_t)4095;
-    char *m = mmap(0, rounded + 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    size_t page = (size_t)sysconf(_SC_PAGESIZE), rounded = (size + 4095) & ~(size_t)4095;
+    char *m = mmap(0, rounded + page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m == MAP_FAILED) return 0;
-    mprotect(m, 4096, PROT_NONE);
-    return m + 4096 + rounded;
+    mprotect(m, page, PROT_NONE);
+    return m + page + rounded;
 }
 
 static void *thread_traps(void *arg)

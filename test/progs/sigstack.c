@@ -45,14 +45,15 @@ static const char *status(int st)
     else snprintf(b, sizeof b, "status %d", st);
     return b;
 }
-/* an alternate stack of size bytes at the top of a mapping, a PROT_NONE guard page below it */
+/* an alternate stack of size bytes at the top of a mapping rounded to 4 KB, a PROT_NONE guard page of the kernel's
+ * size below it: the same stack on every page size */
 static void *guarded(size_t size)
 {
-    size_t rounded = (size + 4095) & ~(size_t)4095;
-    char *m = mmap(0, rounded + 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    size_t page = (size_t)sysconf(_SC_PAGESIZE), rounded = (size + 4095) & ~(size_t)4095;
+    char *m = mmap(0, rounded + page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m == MAP_FAILED) return 0;
-    mprotect(m, 4096, PROT_NONE);
-    return m + 4096 + rounded - size;
+    mprotect(m, page, PROT_NONE);
+    return m + page + rounded - size;
 }
 static int arm(void *sp, size_t size, int flags) /* 0, or errno: ENOMEM for a size under MINSIGSTKSZ */
 {

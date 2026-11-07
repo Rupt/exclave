@@ -298,28 +298,29 @@ int main(int argc, char **argv)
                sigismember(&o, SIGUSR2) ? "yes" : "no", sigismember(&o, SIGHUP) ? "yes" : "no");
     }
     /* 7. a path that faults: in a file mapping past its end, where a load takes SIGBUS, and one that runs off the end
-     * of a mapping; the kernel's copy answers EFAULT and no signal is delivered */
+     * of a mapping; the kernel's copy answers EFAULT and no signal is delivered. The pages are the kernel's */
     {
+        size_t page = (size_t)sysconf(_SC_PAGESIZE);
         char f[4096];
         snprintf(f, sizeof f, "%s/short", argv[1]);
         int fd = open(f, O_RDWR | O_CREAT | O_TRUNC, 0600);
         if (fd >= 0 && write(fd, "/", 1) == 1) {
-            char *m = mmap(0, 8192, PROT_READ, MAP_PRIVATE, fd, 0);
+            char *m = mmap(0, 2 * page, PROT_READ, MAP_PRIVATE, fd, 0);
             if (m != MAP_FAILED) {
                 errno = 0;
-                int r = stat(m + 4096, &st);
+                int r = stat(m + page, &st);
                 printf("stat with a path in a file mapping past its end: %s\n", r ? strerror(errno) : "ok");
                 /* the page's last byte is a slash and the next page cannot be read */
-                char *m2 = mmap(0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                char *m2 = mmap(0, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
                 if (m2 != MAP_FAILED) {
-                    memset(m2, '/', 4096);
-                    mprotect(m2 + 4096, 4096, PROT_NONE);
+                    memset(m2, '/', page);
+                    mprotect(m2 + page, page, PROT_NONE);
                     errno = 0;
-                    r = stat(m2 + 4000, &st);
+                    r = stat(m2 + page - 96, &st);
                     printf("stat with a path running off its mapping: %s\n", r ? strerror(errno) : "ok");
-                    munmap(m2, 8192);
+                    munmap(m2, 2 * page);
                 }
-                munmap(m, 8192);
+                munmap(m, 2 * page);
             }
             close(fd);
             unlink(f);

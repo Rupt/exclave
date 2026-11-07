@@ -194,7 +194,7 @@ int main(int argc, char **argv)
     run("two identical PT_LOADs", &m);
     base(&m);
     *ph(&m, 1) = *ph(&m, 0);
-    ph(&m, 1)->p_vaddr = BASE + 0x1000;
+    ph(&m, 1)->p_vaddr = BASE + page;
     ph(&m, 1)->p_filesz = ph(&m, 1)->p_memsz = 0x100;
     run("PT_LOAD page overlapping the first", &m);
     base(&m);
@@ -202,8 +202,8 @@ int main(int argc, char **argv)
     *ph(&m, 2) = *ph(&m, 1);
     *ph(&m, 1) = (Elf64_Phdr){.p_type = PT_LOAD,
                               .p_flags = PF_R | PF_W,
-                              .p_offset = 0x1000,
-                              .p_vaddr = BASE - 0x1000,
+                              .p_offset = page,
+                              .p_vaddr = BASE - page,
                               .p_filesz = 0,
                               .p_memsz = 0x100,
                               .p_align = 0x1000};
@@ -238,10 +238,10 @@ int main(int argc, char **argv)
     eh(&m)->e_entry = 0x10000 + CODE_OFF;
     run("segment at 0x10000", &m);
     base(&m);
-    ph(&m, 0)->p_filesz = ph(&m, 0)->p_memsz = 0x3000;
+    ph(&m, 0)->p_filesz = ph(&m, 0)->p_memsz = 3 * page;
     run("segment past the end of the file", &m);
     base(&m);
-    ph(&m, 0)->p_offset = 0x3000;
+    ph(&m, 0)->p_offset = 3 * page;
     run("segment whose offset is past the file", &m);
     base(&m);
     ph(&m, 0)->p_flags = PF_R;
