@@ -5038,8 +5038,9 @@ pushed, rather than before each commit. Each VM
 boots its distribution's cloud image under QEMU with KVM behind a
 copy-on-write overlay; cloud-init installs strace and, where the
 distribution has it, bubblewrap. The exclave, the test tree, the
-checkout's launcher, command and `unpack`, built for the VM's machine,
-and the pinned Python are copied in, and the exclave is relinked there
+checkout's launcher, command and `unpack`, built for the VM's machine
+by `scripts/build` first, which takes no time when they are up to
+date, and the pinned Python are copied in, and the exclave is relinked there
 by the command, which runs as it is on every kernel of
 the matrix, CentOS 7's 3.10 included. The
 Python is built for the VM's machine and libc and
