@@ -439,7 +439,7 @@ each test establishes, 19 the decisions a change is expected to respect.
 
 ```
 scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, clang-format, clang-tidy and gcc's strict warnings; --fix lets them correct
-scripts/inputs build/inputs   # the test inputs: the four exclaves, the arm64 gcc exclave, the lookup and caches tests' exclaves and Docker's seccomp profile, from the package archives and GitHub; skips what is present
+scripts/inputs build/inputs   # the test inputs: the four exclaves, the arm64 gcc exclave, the lookup, caches and gdb tests' exclaves and Docker's seccomp profile, from the package archives and GitHub; skips what is present
 scripts/inputs build/inputs examples   # the examples' inputs too, some from their authors' sites
 D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave   # the commit gate: of the code checks, unit tests, stack budget, the command's Go tests, unpack's and the fetchers' tests, the suite, the oracles, the syscall probe and the Docker profile run, the steps the change can affect, two at a time (--jobs N); --full runs all of them
 D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # beyond the gate, when asked: the suite, the debug launcher, the oracles and the probe on every exclave given; the plain-label suite, the fuzz budget, the release test and, with EXCLAVE_TEST_OLD=DIR, the compatibility test on the first

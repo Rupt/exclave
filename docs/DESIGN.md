@@ -4693,6 +4693,8 @@ takes beside it; the arm64 gcc-13 exclave; `sss.exclave`, Ubuntu
 24.04's Essential set with `libnss-sss`, for `test/nss_test.py`, and
 `caches.exclave`, with `python3-minimal`, GLib's tools,
 `shared-mime-info` and GNOME's schemas, for `test/caches_test.py`,
+and `gdb.exclave`, the gcc-13 closure with `gdb`, for the suite's gdb
+tests, which the gate's gcc exclave cannot run,
 each made for the machine's own architecture since its programs run
 there, and on x86-64 `alpine-caches.exclave`, Alpine 3.21's
 `python3`, `glib`, `shared-mime-info` and GNOME's schemas, for the
@@ -4833,7 +4835,8 @@ its time, ok, SKIP or FAIL:
   imports from its source and then from bytecode checked by the
   source's hash, `gsettings` finds no schemas and then a key's
   default, and GIO takes an HTML file for plain text and then for
-  HTML; and, each where the tree holds its generator and skipped with
+  HTML; and the suite's gdb tests (`-k gdb`) on its `gdb.exclave`,
+  since the gate's gcc exclave carries no gdb; and, each where the tree holds its generator and skipped with
   the reason where it does not, GIO opens its modules and then only
   `giomodule.cache`, `gdk-pixbuf-pixdata` cannot read a BMP image and
   then reads it, each icon theme's cache is missing and then
