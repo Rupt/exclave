@@ -172,6 +172,7 @@ type walkCtx struct {
 	rep           *report
 	seen, reached map[string]bool
 	libraries     []object // every library in the tree, for a soname no search finds
+	candidate     bool     // walking from a library nothing reaches, which only a dlopen loads
 }
 
 // bySoname is a library of the tree whose DT_SONAME is name, outside the data directories, or "";
@@ -225,6 +226,10 @@ func (w *walkCtx) object(vpath string, e *elfFile, rpaths, chain []string) {
 			if elsewhere := w.bySoname(n); elsewhere != "" {
 				w.rep.warnf("%s needs %s, which no search finds; the tree has it at %s, loaded only once a "+
 					"program has opened it by its path (chain %s)", vpath, n, elsewhere, path)
+			} else if w.candidate {
+				// a plugin whose package only recommends what it needs, as iproute2's tc modules and
+				// libcaca's GL driver: on a host without that package its dlopen fails as it does here
+				w.rep.warnf("%s needs %s, which the tree lacks: a dlopen of it fails (chain %s)", vpath, n, path)
 			} else {
 				w.rep.errorf("%s needs %s, which does not resolve in the tree (chain %s)", vpath, n, path)
 			}
@@ -343,6 +348,7 @@ func staticCheck(ex string, own *ownership, data []string, l *listing) *report {
 	for _, o := range s.executables { // executables first, so that RPATH inheritance is seen
 		w.object(o.vpath, o.e, nil, nil)
 	}
+	w.candidate = true
 	for _, o := range s.libraries { // a library nothing reaches is a dlopen candidate: checked alone
 		if !w.reached[o.vpath] {
 			w.object(o.vpath, o.e, nil, nil)

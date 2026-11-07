@@ -152,7 +152,9 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
     where it points; a separate debug file, whose segments carry no bytes, is not a program; a
     DT_NEEDED that is a path through $ORIGIN resolves where glibc's loader expands it, and not under
     musl's, which does not; a soname no search finds is a warning naming where the tree has it,
-    as the JVM's libjvm.so, which it opens by path before the libraries that need it.
+    as the JVM's libjvm.so, which it opens by path before the libraries that need it; a soname the
+    tree lacks is an error for a program and a warning for a library nothing reaches, a plugin
+    whose package only recommends what it needs, as iproute2's tc modules do.
     """
     # the libraries are placed in a copy's tree, which the shared exclave's must not see
     model = os.path.join(ctx.work, f"loader-model-{os.getpid()}.exclave")
@@ -240,6 +242,24 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
                 "-L" + built,
                 "-l:libjvmish.so",
             ],
+            [
+                "-shared",
+                "-fPIC",
+                "-Wl,-soname,libabsent.so",
+                "-o",
+                os.path.join(built, "libabsent.so"),
+                "bar.c",
+            ],
+            [
+                "-shared",
+                "-fPIC",
+                "-o",
+                os.path.join(built, "libplug.so"),
+                "foo.c",
+                "-L" + built,
+                "-l:libabsent.so",
+            ],
+            ["-o", os.path.join(built, "absentprog"), "dst.c", "-L" + built, "-l:libabsent.so"],
         ):
             rc, out, err = run([gcc, *cmd], cwd=src, env=ctx.env)
             expect(rc == 0, err)
@@ -267,7 +287,17 @@ def static_check_loader_model(ctx: Ctx) -> str | None:
         for d, f in (("server", "libjvmish.so"), ("jvmlib", "libneed.so")):
             os.makedirs(os.path.join(x, d), exist_ok=True)
             shutil.copy2(os.path.join(built, f), os.path.join(x, d, f))
+        # libabsent.so itself stays out of the tree
+        os.makedirs(os.path.join(x, "plugins"), exist_ok=True)
+        shutil.copy2(os.path.join(built, "libplug.so"), os.path.join(x, "plugins", "libplug.so"))
+        shutil.copy2(os.path.join(built, "absentprog"), os.path.join(x, "absentprog"))
         errors, warnings, _out = check(model)
+        expect(
+            any("libplug.so needs libabsent.so, which the tree lacks" in w for w in warnings)
+            and not [e for e in errors if "libplug" in e]
+            and any("absentprog needs libabsent.so, which does not resolve" in e for e in errors),
+            f"a soname the tree lacks: a program's an error, a plugin's a warning: {errors[:3]!r}",
+        )
         expect(
             not [e for e in errors if "libjvmish" in e]
             and any(

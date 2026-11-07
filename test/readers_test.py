@@ -197,10 +197,12 @@ def elf_strings(ctx: Ctx) -> None:
     """10.3: a DT_NEEDED past DT_STRSZ, and a PT_INTERP that runs past the end without its NUL.
 
     The string table is read to DT_STRSZ and no further, so the name is empty and resolves
-    nowhere; the interpreter is the bytes up to the end of the file, which name the tree's loader.
+    nowhere, an error for a program; the interpreter is the bytes up to the end of the file, which
+    name the tree's loader.
     """
     ex, root = exclave(ctx, "needed")
-    put(root, "/usr/bin/x", elf(needed=("libfoo.so.1",), strsz=4, needed_at=100))
+    prog = elf(interp=b"/lib/ld.so", needed=("libfoo.so.1",), strsz=4, needed_at=100)
+    put(root, "/usr/bin/x", prog)
     rc, errors, _ = check(ctx, ex)
     expect(
         rc == 1 and any(e.startswith("/usr/bin/x needs , which does not resolve") for e in errors),

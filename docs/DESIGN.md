@@ -2866,7 +2866,12 @@ outside data directories, reading originals in place of wrappers.
   stand in for it, and it loads once a program has opened it by its
   path, as the JVM opens `lib/server/libjvm.so` before the libraries
   that need `libjvm.so`. One the tree lacks altogether is an error, a
-  package missing from the set.
+  package missing from the set, but for a `dlopen` candidate, where it
+  is a warning: Ubuntu ships plugins whose package does not require
+  what they need, iproute2's `tc` modules (`libatm1t64`) and
+  libcaca's GL driver, so the closures of `nginx` and `ffmpeg` hold
+  one, and such a plugin fails to load on a host without that package
+  as it does inside.
 - A search directory the exclave does not own, on an `RPATH` or among
   the defaults, is an error, since the host's library would load from
   it. A tree that does not own `/etc` is an error, since the loader
