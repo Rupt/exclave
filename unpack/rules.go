@@ -694,6 +694,150 @@ func shells(r *root.Root, _ []*Package, log logger) (bool, error) {
 	return true, nil
 }
 
+// ---------------------------------------------------------------- ucf
+
+var (
+	ucfRe    = regexp.MustCompile(`^\s*ucf\s+((?:--?[a-z-]+\s+)*)(\S+)\s+(\S+)\s*;?\s*$`)
+	assignRe = regexp.MustCompile(`^\s*(?:local\s+)?([A-Za-z_][A-Za-z0-9_]*)=(\S*)\s*;?\s*$`)
+	catToRe  = regexp.MustCompile(`^\s*(?:cat|cp)\s+(\S+)\s*>?\s*(\S+)\s*;?\s*$`)
+	varRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+)
+
+// expand replaces each $NAME and ${NAME} the shell variables vars hold, and strips the quotes
+// around a word.
+func expand(word string, vars map[string]string) string {
+	word = varRefRe.ReplaceAllStringFunc(word, func(m string) string {
+		n := varRefRe.FindStringSubmatch(m)
+		name := n[1] + n[2]
+		if v, ok := vars[name]; ok {
+			return v
+		}
+		return m
+	})
+	return strings.Trim(word, `"'`)
+}
+
+// ucfFiles installs the configuration files a postinst installs with `ucf SOURCE DEST`, which
+// copies a template the package ships to a path under /etc that no package ships: R's Renviron,
+// PHP's php.ini and the ini files of its modules. The script is read as the shell would run it as
+// far as literal words go: loops over literal words unrolled, variables assigned literal words
+// substituted, and a file filled from a template by cat or cp taken for the template. A DEST that
+// stands already is left; one whose source the rule cannot read, from other shell variables or a
+// file the tree lacks, is noted.
+func ucfFiles(r *root.Root, packages []*Package, log logger) (bool, error) {
+	made := false
+	for _, pkg := range packages {
+		_, scripts, err := readerFor(pkg.Path).Control(pkg.Path)
+		if err != nil {
+			return false, err
+		}
+		text := unrollLoops(strings.ReplaceAll(scripts["postinst"], "\\\n", " "))
+		vars := map[string]string{}
+		filled := map[string]string{} // a variable naming a file, and the template it was filled from
+		for line := range strings.SplitSeq(text, "\n") {
+			if m := assignRe.FindStringSubmatch(line); m != nil {
+				if v := expand(m[2], vars); !strings.ContainsAny(v, "$`()") {
+					vars[m[1]] = v
+				} else {
+					delete(vars, m[1])
+				}
+				continue
+			}
+			if m := catToRe.FindStringSubmatch(line); m != nil {
+				if src := expand(m[1], vars); strings.HasPrefix(src, "/") && !strings.Contains(src, "$") {
+					filled[strings.Trim(m[2], `"'`)] = src
+				}
+				continue
+			}
+			m := ucfRe.FindStringSubmatch(line)
+			if m == nil || strings.Contains(m[1], "--purge") {
+				continue
+			}
+			src, dest := expand(m[2], vars), expand(m[3], vars)
+			if t, ok := filled[strings.Trim(m[2], `"'`)]; ok {
+				src = t
+			}
+			if !strings.HasPrefix(src, "/") || !strings.HasPrefix(dest, "/") || strings.Contains(src+dest, "$") {
+				log(fmt.Sprintf("note: %s's postinst installs a configuration file with ucf from shell variables "+
+					"the ucf rule does not read (%s): the tree lacks it", pkg.Name, cut(strings.TrimSpace(line), 80)))
+				continue
+			}
+			if r.Lexists(dest) {
+				continue
+			}
+			if !r.IsFile(src) {
+				log(fmt.Sprintf("note: %s's postinst installs %s with ucf from %s, which the tree lacks", pkg.Name,
+					dest, src))
+				continue
+			}
+			data, err := r.ReadBytes(src)
+			if err != nil {
+				return false, err
+			}
+			if err := r.WriteBytes(dest, data, 0o644); err != nil {
+				return false, err
+			}
+			log(fmt.Sprintf("synthesised %s from %s", dest, src))
+			made = true
+		}
+	}
+	return made, nil
+}
+
+// ---------------------------------------------------------------- php-modules
+
+var phpPrioRe = regexp.MustCompile(`(?m)^;\s*priority\s*=\s*([0-9]+)\s*$`)
+
+// phpModules enables Debian's PHP modules as phpenmod does for each package's postinst, which
+// enables every module it installs in every SAPI: for each ini file in /etc/php/VERSION/mods-
+// available, a link PRIORITY-MODULE.ini to it in every /etc/php/VERSION/SAPI/conf.d, the
+// priority from the file's `; priority=` line, 20 without one. Without them PHP loads none of
+// the modules its packages ship as shared objects, ctype, iconv, phar and tokenizer among them.
+func phpModules(r *root.Root, _ []*Package, log logger) (bool, error) {
+	made := false
+	if !r.IsDir("/etc/php") {
+		return false, nil
+	}
+	versions := r.Listdir("/etc/php")
+	sort.Strings(versions)
+	for _, v := range versions {
+		avail := "/etc/php/" + v + "/mods-available"
+		if !r.IsDir(avail) {
+			continue
+		}
+		mods := r.Listdir(avail)
+		sort.Strings(mods)
+		sapis := r.Listdir("/etc/php/" + v)
+		sort.Strings(sapis)
+		for _, ini := range mods {
+			mod, ok := strings.CutSuffix(ini, ".ini")
+			if !ok || mod == "" || !r.IsFile(avail+"/"+ini) {
+				continue
+			}
+			text, err := r.ReadText(avail + "/" + ini)
+			if err != nil {
+				return false, err
+			}
+			prio := "20"
+			if m := phpPrioRe.FindStringSubmatch(text); m != nil {
+				prio = m[1]
+			}
+			for _, sapi := range sapis {
+				confd := "/etc/php/" + v + "/" + sapi + "/conf.d"
+				if sapi == "mods-available" || !r.IsDir(confd) {
+					continue
+				}
+				ok, err := link(r, confd+"/"+prio+"-"+ini, avail+"/"+ini, log, false)
+				if err != nil {
+					return false, err
+				}
+				made = made || ok
+			}
+		}
+	}
+	return made, nil
+}
+
 var rules = []rule{
 	{"alternatives", alternatives},
 	{"java-jinfo", javaJinfo},
@@ -706,6 +850,8 @@ var rules = []rule{
 	{"ssl-paths", sslPaths},
 	{"base-passwd", basePasswd},
 	{"shells", shells},
+	{"ucf", ucfFiles},
+	{"php-modules", phpModules},
 	{"ldconfig", ldconfigRule},
 }
 

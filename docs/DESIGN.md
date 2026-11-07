@@ -2527,7 +2527,18 @@ refused. From `.deb` files, in five steps:
    consulted; `base-passwd`, `/etc/passwd` and `/etc/group` from its
    masters; `shells`, `/etc/shells` as debianutils' `update-shells`
    writes it from its template and the `shells.d` files packages ship,
-   each shell with its merged-`/usr` spelling; and `ldconfig`,
+   each shell with its merged-`/usr` spelling; `ucf`, each
+   configuration file a `postinst` installs with `ucf SOURCE DEST` from
+   a template the package ships, R's `/etc/R/Renviron` and PHP's
+   `php.ini` and module files among them, the script read as far as
+   literal words go (a loop over them unrolled, variables assigned them
+   substituted, a temporary file filled from a template by `cat` taken
+   for the template), a destination a package ships left as it is and
+   one whose source the rule cannot read noted; `php-modules`, each
+   module in `/etc/php/VERSION/mods-available` enabled in every SAPI's
+   `conf.d` under its `; priority=` line, as `phpenmod` enables it for
+   the packages' scripts, without which PHP loads none of the modules
+   it ships as shared objects; and `ldconfig`,
    `ld.so.cache` written as the exclave's own static `ldconfig` would
    write it, from the tree's files alone (`unpack/ldcache`, from
    glibc's `ldconfig` source): the directories

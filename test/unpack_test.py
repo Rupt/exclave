@@ -669,6 +669,85 @@ def shells_from_debianutils(ctx: Ctx) -> None:
 
 
 @test
+def ucf_and_php_modules(ctx: Ctx) -> None:
+    """10.1: configuration files a postinst installs with ucf, and PHP's modules enabled.
+
+    As PHP's packages do, a loop over literal words and variables assigned literal words name each
+    ucf source and destination; as R's does, a file made by mktemp is filled from a template by cat;
+    a destination a package ships stays as it is; a source the tree lacks and one built from a
+    command's output are noted. Each module in mods-available is linked into every SAPI's conf.d
+    under its priority, 20 without a priority line.
+    """
+    phpc = (
+        '#!/bin/sh\nset -e\nif [ "$1" = configure ]; then\n  inidir=/etc/php/9.9/mods-available\n'
+        "  for dsoname in ctype pdo; do\n    inifile=${dsoname}.ini\n"
+        "    ucf /usr/share/phpc/${inifile} ${inidir}/${inifile}\n"
+        "    php_invoke enmod 9.9 ALL ${dsoname}\n  done\nfi\n"
+    )
+    php = package(
+        ctx,
+        "deb",
+        "phpc",
+        [
+            ("usr/share/phpc/ctype.ini", "file", b"extension=ctype.so\n", 0o644),
+            ("usr/share/phpc/pdo.ini", "file", b"; priority=10\nextension=pdo.so\n", 0o644),
+            ("etc/php/9.9/cli/conf.d", "dir", None, 0o755),
+            ("etc/php/9.9/fpm/conf.d", "dir", None, 0o755),
+        ],
+        control_files=[("postinst", phpc)],
+    )
+    rpost = (
+        '#!/bin/sh\nset -e\ntmp=$(mktemp)\ncat /usr/lib/rr/Renviron.ucf > "$tmp"\n'
+        'ucf "$tmp" /etc/rr/Renviron\nucf /usr/lib/rr/shipped /etc/rr/shipped\n'
+        "ucf /usr/lib/rr/absent /etc/rr/absent\nconf=$(pick)\nucf $conf /etc/rr/picked\n"
+    )
+    rr = package(
+        ctx,
+        "deb",
+        "rr",
+        [
+            ("usr/lib/rr/Renviron.ucf", "file", b"R_LIBS_SITE=x\n", 0o644),
+            ("usr/lib/rr/shipped", "file", b"template\n", 0o644),
+            ("etc/rr/shipped", "file", b"the package's own\n", 0o644),
+        ],
+        control_files=[("postinst", rpost)],
+    )
+    root, out = accepted(ctx, "ucf", [php, rr])
+    mods = os.path.join(root, "etc", "php", "9.9", "mods-available")
+    expect(
+        read_text(os.path.join(mods, "pdo.ini")) == "; priority=10\nextension=pdo.so\n"
+        and read_text(os.path.join(mods, "ctype.ini")) == "extension=ctype.so\n",
+        "the modules' ini files from a loop over literal words: " + out,
+    )
+    links = {
+        sapi: sorted(
+            (n, os.readlink(os.path.join(root, "etc", "php", "9.9", sapi, "conf.d", n)))
+            for n in os.listdir(os.path.join(root, "etc", "php", "9.9", sapi, "conf.d"))
+        )
+        for sapi in ("cli", "fpm")
+    }
+    want = [
+        ("10-pdo.ini", "/etc/php/9.9/mods-available/pdo.ini"),
+        ("20-ctype.ini", "/etc/php/9.9/mods-available/ctype.ini"),
+    ]
+    expect(links == {"cli": want, "fpm": want}, f"each module in each SAPI: {links!r}")
+    expect(
+        read_text(os.path.join(root, "etc", "rr", "Renviron")) == "R_LIBS_SITE=x\n"
+        and read_text(os.path.join(root, "etc", "rr", "shipped")) == "the package's own\n",
+        "a template filled into a temporary file, and a shipped destination kept",
+    )
+    expect(
+        "rr's postinst installs /etc/rr/absent with ucf from /usr/lib/rr/absent, which the tree "
+        "lacks"
+        in out
+        and "rr's postinst installs a configuration file with ucf from shell variables" in out
+        and not os.path.lexists(os.path.join(root, "etc", "rr", "picked"))
+        and "synthesis rules applied: ucf, php-modules" in out,
+        "the sources the rule cannot read are noted: " + out,
+    )
+
+
+@test
 def synthesis_stays_in_the_tree(ctx: Ctx) -> str | None:
     """10.1, 8.1: synthesis reads and writes the tree as its root, and so does the volatile step.
 
