@@ -2518,6 +2518,12 @@ refused. From `.deb` files, in five steps:
    its licence by name and its origin among the fields and the files
    it owns left out, with `/etc/apk/world` listing every package, so
    that `apk info` inside answers and a scanner reads the packages;
+   `dpkg-database`, dpkg's database of installed packages,
+   `/var/lib/dpkg/status`, each package's control file with `Status:
+   install ok installed` after its `Package` field, in the order of the
+   packages' names, so that `dpkg-query` inside answers, a script that
+   asks whether a package is configured before it acts does (TeX's
+   `update-language`), and a scanner reads the packages;
    `sbin-merge`, Fedora's `/usr/sbin` as a link
    to `bin`; `dash-sh`; `ca-certificates`, `ca-certificates.crt`
    concatenated from the certificates `ca-certificates.conf` enables;

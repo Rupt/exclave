@@ -601,7 +601,7 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
         "--set did not choose the alternative: " + out[-400:],
     )
     expect(
-        "synthesis rules applied: alternatives, java-jinfo\n" in out,
+        "synthesis rules applied: alternatives, java-jinfo, dpkg-database\n" in out,
         "the applied rules are not named: " + out,
     )
     expect(
@@ -664,7 +664,10 @@ def shells_from_debianutils(ctx: Ctx) -> None:
     )
     got = read_text(os.path.join(root, "etc", "shells"))
     expect(got == want, f"/etc/shells is {got!r}, not {want!r}")
-    expect("synthesis rules applied: shells" in out, "the shells rule is not named: " + out)
+    expect(
+        "synthesis rules applied: dpkg-database, shells" in out,
+        "the shells rule is not named: " + out,
+    )
     expect("note:" not in out, "an interest that needs nothing is noted: " + out)
 
 
@@ -742,8 +745,40 @@ def ucf_and_php_modules(ctx: Ctx) -> None:
         in out
         and "rr's postinst installs a configuration file with ucf from shell variables" in out
         and not os.path.lexists(os.path.join(root, "etc", "rr", "picked"))
-        and "synthesis rules applied: ucf, php-modules" in out,
+        and "synthesis rules applied: dpkg-database, ucf, php-modules" in out,
         "the sources the rule cannot read are noted: " + out,
+    )
+
+
+@test
+def dpkg_database(ctx: Ctx) -> None:
+    """10.1: dpkg's database of installed packages, as dpkg writes it once they are configured.
+
+    Each package's control file with `Status: install ok installed` after its Package field, in
+    the order of the packages' names, so that dpkg-query answers and a script that asks whether a
+    package is configured, as TeX's update-language does, acts. A database a package ships stays.
+    """
+    zz = package(ctx, "deb", "zz", [("usr/share/zz", "file", b"z", 0o644)])
+    aa = package(ctx, "deb", "aa", [("usr/share/aa", "file", b"a", 0o644)], replaces="zz")
+    root, out = accepted(ctx, "dpkg-db", [zz, aa])
+    got = read_text(os.path.join(root, "var", "lib", "dpkg", "status"))
+    stanzas = [s.split("\n") for s in got.rstrip("\n").split("\n\n")]
+    expect(
+        [s[:2] for s in stanzas]
+        == [
+            ["Package: aa", "Status: install ok installed"],
+            ["Package: zz", "Status: install ok installed"],
+        ]
+        and "Replaces: zz" in stanzas[0]
+        and "Description: t" in stanzas[1]
+        and "dpkg-database" in out,
+        f"the database: {got!r}",
+    )
+    own = package(ctx, "deb", "own", [("var/lib/dpkg/status", "file", b"shipped\n", 0o644)])
+    root, _out = accepted(ctx, "dpkg-db-own", [own])
+    expect(
+        read_text(os.path.join(root, "var", "lib", "dpkg", "status")) == "shipped\n",
+        "a shipped database is left as it is",
     )
 
 

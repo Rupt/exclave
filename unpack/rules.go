@@ -389,6 +389,60 @@ func apkDatabase(r *root.Root, packages []*Package, log logger) (bool, error) {
 	return true, nil
 }
 
+// dpkgDatabase writes dpkg's database of installed packages, /var/lib/dpkg/status, as dpkg writes
+// it once it has configured them: each package's control file with its Status, `install ok
+// installed`, after the Package field, in the order of the packages' names. dpkg-query reads it,
+// and through it the scripts that ask whether a package is configured before they act, as TeX's
+// update-language does, and so do SBOM and vulnerability scanners. The files a package owns and
+// its conffiles' checksums are not recorded, since prune removes files and nothing here is
+// configured twice. A database the packages ship already is left as it is.
+func dpkgDatabase(r *root.Root, packages []*Package, log logger) (bool, error) {
+	var debs []*Package
+	for _, p := range packages {
+		if packageFormat(p.Path) == "deb" {
+			debs = append(debs, p)
+		}
+	}
+	const db = "/var/lib/dpkg/status"
+	if len(debs) == 0 || r.Lexists(db) {
+		return false, nil
+	}
+	sort.Slice(debs, func(i, j int) bool { return debs[i].Name < debs[j].Name })
+	var b strings.Builder
+	for _, p := range debs {
+		_, files, err := readerFor(p.Path).Control(p.Path)
+		if err != nil {
+			return false, err
+		}
+		text := strings.TrimRight(strings.ReplaceAll(files["control"], "\r\n", "\n"), "\n")
+		lines := strings.Split(text, "\n")
+		for i, line := range lines {
+			b.WriteString(line + "\n")
+			// Essential, where a package has it, comes between Package and Status, as dpkg orders them
+			if strings.HasPrefix(line, "Package:") {
+				next := ""
+				if i+1 < len(lines) {
+					next = lines[i+1]
+				}
+				if !strings.HasPrefix(next, "Essential:") {
+					b.WriteString("Status: install ok installed\n")
+				}
+			} else if strings.HasPrefix(line, "Essential:") && i > 0 && strings.HasPrefix(lines[i-1], "Package:") {
+				b.WriteString("Status: install ok installed\n")
+			}
+		}
+		b.WriteString("\n")
+	}
+	if err := r.Makedirs("var/lib/dpkg"); err != nil {
+		return false, err
+	}
+	if err := r.WriteBytes(db, []byte(b.String()), 0o644); err != nil {
+		return false, err
+	}
+	log(fmt.Sprintf("wrote %s: %d packages", db, len(debs)))
+	return true, nil
+}
+
 // sbinMerge does what Fedora 42's filesystem does in its %posttrans: it replaces /usr/sbin and
 // /usr/local/sbin by a link to bin when every entry there is a link ../bin/<name>; the script says
 // so in Lua, and this is its effect.
@@ -843,6 +897,7 @@ var rules = []rule{
 	{"java-jinfo", javaJinfo},
 	{"busybox-applets", busyboxApplets},
 	{"apk-database", apkDatabase},
+	{"dpkg-database", dpkgDatabase},
 	{"sbin-merge", sbinMerge},
 	{"dash-sh", dashSh},
 	{"ca-certificates", caCertificates},
