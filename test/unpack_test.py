@@ -954,7 +954,8 @@ def literal_diversions(ctx: Ctx) -> None:
     postgresql-common's preinst diverts libpq-dev's /usr/bin/pg_config to pg_config.libpq-dev and
     ships its own. Alone the package's file stays at the path; with another package that ships
     the path, under its /lib or /usr/lib spelling too, that package's file lands under the
-    diverted name whichever comes first, as dpkg would leave it. A diversion for another package,
+    diverted name whichever comes first, as dpkg would leave it, and its hard link to the path
+    links to the diverted file. A diversion for another package,
     or with --local, which diverts the package's own file too, is refused.
     """
 
@@ -989,14 +990,18 @@ def literal_diversions(ctx: Ctx) -> None:
         ctx,
         "deb",
         "other",
-        [("usr/bin/x", "file", b"other\n", 0o755), ("lib/y", "file", b"other\n", 0o644)],
+        [
+            ("usr/bin/x", "file", b"other\n", 0o755),
+            ("usr/bin/z", "hard", "usr/bin/x", 0o755),
+            ("lib/y", "file", b"other\n", 0o644),
+        ],
     )
     for case, pkgs in (("lit-after", [pg, other]), ("lit-before", [other, pg])):
         root, out = accepted(ctx, case, pkgs)
-        paths = ("usr/bin/x", "usr/bin/x.other", "usr/lib/y", "lib/y.other")
+        paths = ("usr/bin/x", "usr/bin/x.other", "usr/lib/y", "lib/y.other", "usr/bin/z")
         got = [content(root, r) for r in paths]
         expect(
-            got == [b"own\n", b"other\n", b"own\n", b"other\n"],
+            got == [b"own\n", b"other\n", b"own\n", b"other\n", b"other\n"],
             f"{case}: the other package's files under the diverted names: {got!r}",
         )
         expect(

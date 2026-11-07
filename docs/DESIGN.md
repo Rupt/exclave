@@ -2447,10 +2447,10 @@ refused. From `.deb` files, in five steps:
    file shipped by two packages is an error unless one declares
    `Replaces` on the other; the merged-`/usr` spellings of a path count
    as one path. A diversion a package makes for itself, with
-   `--package` naming it, `--rename` and both paths literal, puts every
-   other package's file at the path, in any of its merged-`/usr`
-   spellings, under the diverted name, whichever package comes first,
-   and the package's own at the path, which is where dpkg leaves them;
+   `--package` naming it and both paths literal puts every other
+   package's file at the path, in any of its merged-`/usr` spellings,
+   under the diverted name, whichever package comes first, a hard link
+   to the path linking to it there, and the package's own at the path, which is where dpkg leaves them;
    each file moved is named in the log. postgresql-common's, which
    diverts libpq-dev's `/usr/bin/pg_config` to
    `pg_config.libpq-dev`, is the case. Any other renaming diversion is

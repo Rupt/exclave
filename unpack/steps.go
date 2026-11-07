@@ -443,6 +443,10 @@ func extractPackage(r *root.Root, t reader.Archive, name string, replaces map[st
 			if err != nil {
 				return err
 			}
+			// the entry it names was diverted with it, as dpkg diverts a hard link's target
+			if d, ok := literal[aliasRe.ReplaceAllString(src, "usr/$1$2")]; ok && d.pkg != name {
+				src = d.to
+			}
 			*hardlinks = append(*hardlinks, pending{src, rel})
 		case reader.File:
 			f, err := r.Create(rel, m.Size)
