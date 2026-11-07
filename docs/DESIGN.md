@@ -165,7 +165,7 @@ What is built and tested:
   with nothing beside it, and `build/exclave-fetch` beside it fetches
   the packages (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
-  CentOS 7 sysroot keeps 226 of the gcc exclave's 9 564 files and
+  CentOS 7 sysroot keeps 226 of the gcc exclave's 9 566 files and
   symlinks, counted as `exclave prune` reports them, the
   originals in `.real/` included; the pruned copy compiles the program
   again. 10.4 gives the figure for the test suite's gcc exclave.
@@ -3006,12 +3006,12 @@ ran appears in the log as the gcc it resolved to.
 
 Afterwards the hashes file's tree hash is rewritten and the static
 check runs. On the gcc 13 exclave that `scripts/inputs` makes, a
-hello-world compile keeps 220 of 5 204 files and symlinks, counted as
+hello-world compile keeps 220 of 5 206 files and symlinks, counted as
 `prune` prints them, originals included; 87 of them are licence texts.
 The count moves by a file or two with where the work directory lies.
 The pruned exclave compiles the same program and passes the static
 check. (The README's example, an exclave with a CentOS 7 sysroot copied
-in, keeps 226 of 9 564 by the same count.)
+in, keeps 226 of 9 566 by the same count.)
 
 Failed opens in a later `EXCLAVE_LOG` show what pruning removed, by
 name, including a missing intermediate directory. The cycle is: prune,

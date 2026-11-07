@@ -105,7 +105,7 @@ hand:
    natively. The program runs on this host and, through
    `.exclave/launcher`, inside the exclave on the exclave's loader.
 5. `exclave prune` keeps, in a copy, the files the compile touched and
-   the packages' licence texts: 226 of the 9 564 files and links under
+   the packages' licence texts: 226 of the 9 566 files and links under
    `tree/`. The copy compiles the program again, and `exclave check`
    reads the new log. That copy is the exclave you would ship for that
    workload, and the check is the one you would run on it.
@@ -120,13 +120,13 @@ What it prints on the reference machine, abridged (`exclave` here is
   gcc.exclave is wrapped (46 warnings; log/wrap.log)
 == 4. a program built inside, run on this host and inside the exclave
 + env EXCLAVE_LOG=/home/me/exclave/build/example/log/hello.log gcc.exclave/gcc --sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/ -o hello hello.c
-  log/hello.log: 1220 lines, one per trapped syscall; the first:
+  log/hello.log: 1508 lines, one per trapped syscall; the first:
     launcher 2 host path absent, using the exclave's /etc/pki/tls/certs/ca-bundle.crt
     launcher 2 cwd /home/me/exclave/build/example
     launcher 2 border /usr/bin/x86_64-linux-gnu-gcc-13
     load 0 /usr/bin/x86_64-linux-gnu-gcc-13
     access -2 /etc/ld.so.preload
-    open 3 /etc/ld.so.cache
+    open 4 /etc/ld.so.cache
   glibc symbol versions bound: hello-plain: GLIBC_2.2.5 GLIBC_2.34  hello: GLIBC_2.2.5
 + ./hello
 hello from an exclave
@@ -134,13 +134,13 @@ hello from an exclave
 hello from an exclave
 == 5. the exclave pruned to what the compile touched, and the checks on it
 + exclave prune hello.exclave log/hello.log
-pruned hello.exclave: kept 226 files, removed 9338, 359454788 bytes freed
+pruned hello.exclave: kept 226 files, removed 9340, 359535525 bytes freed
 static check: 24 ELF files, 2 static executables, 0 warnings, 0 errors
 + exclave check hello.exclave log/pruned.log
 0 wrapper problems
 static check: 24 ELF files, 2 static executables, 0 warnings, 0 errors
 warning: this host's nsswitch.conf names sss; the exclave has no libnss_sss.so.2, so what it looks up is unknown inside: add libnss-sss on Debian and Ubuntu, sssd-client on Fedora (8.4)
-dynamic check: 1220 log lines, 0 errors
+dynamic check: 1508 log lines, 0 errors
 ```
 
 The 46 warnings of `wrap` are dangling symlinks: 45 are `coreutils`'
