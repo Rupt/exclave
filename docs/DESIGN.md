@@ -1701,10 +1701,10 @@ for it (13 item 51).
 #### 7.5.4 Scratch memory and the stack budget
 
 The handler uses at most 3 KB of the program's stack beyond the
-kernel's signal frame: 2 568 bytes on x86-64
-and 2 480 on aarch64 (measured October 2026) for a five-deep chain of
+kernel's signal frame: 2 776 bytes on x86-64
+and 2 672 on aarch64 (measured November 2026) for a five-deep chain of
 host `#!` scripts, whose six nested exec frames keep their buffers in
-scratch, and under 1.7 KB on every other path. The kernel's frame is
+scratch. The kernel's frame is
 `AT_MINSIGSTKSZ` bytes, about 3 KB on AVX-512 hardware and up to 11 KB
 with AMX; a trap costs the two together, multiplied under nesting (13
 item 30), and glibc's `posix_spawn` child runs on a 36 KB stack with
