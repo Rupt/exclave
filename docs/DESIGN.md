@@ -2523,7 +2523,9 @@ refused. From `.deb` files, in five steps:
    `dpkg-database`, dpkg's database of installed packages,
    `/var/lib/dpkg/status`, each package's control file with `Status:
    install ok installed` after its `Package` field, in the order of the
-   packages' names, so that `dpkg-query` inside answers, a script that
+   packages' names (one that is not a single stanza, repeats a field,
+   its name's case aside, or carries a `Status` of its own is refused,
+   as dpkg refuses such a database), so that `dpkg-query` inside answers, a script that
    asks whether a package is configured before it acts does (TeX's
    `update-language`), and a scanner reads the packages;
    `sbin-merge`, Fedora's `/usr/sbin` as a link

@@ -756,7 +756,8 @@ def dpkg_database(ctx: Ctx) -> None:
 
     Each package's control file with `Status: install ok installed` after its Package field, in
     the order of the packages' names, so that dpkg-query answers and a script that asks whether a
-    package is configured, as TeX's update-language does, acts. A database a package ships stays.
+    package is configured, as TeX's update-language does, acts. A database a package ships stays;
+    a control file with a Status of its own is refused.
     """
     zz = package(ctx, "deb", "zz", [("usr/share/zz", "file", b"z", 0o644)])
     aa = package(ctx, "deb", "aa", [("usr/share/aa", "file", b"a", 0o644)], replaces="zz")
@@ -780,6 +781,9 @@ def dpkg_database(ctx: Ctx) -> None:
         read_text(os.path.join(root, "var", "lib", "dpkg", "status")) == "shipped\n",
         "a shipped database is left as it is",
     )
+    # a control file with a Status of its own would give the database a second, which dpkg refuses
+    forged = package(ctx, "deb", "forged", [], replaces="zz\nStatus: purge ok not-installed")
+    refused(ctx, "dpkg-db-forged", [forged], "forged's control file: a Status field of its own")
 
 
 @test

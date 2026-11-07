@@ -74,11 +74,16 @@ type Archive interface {
 	Close() error
 }
 
+// ControlText is the key under which Control gives a .deb's control file as its text, which
+// dpkg's database records.
+const ControlText = "control"
+
 // Reader is a package format: the package that reads it.
 type Reader interface {
 	// MergedUsr says whether the format's distributions merge /bin, /sbin and /lib into /usr.
 	MergedUsr() bool
-	// Control returns the package's control fields and its maintainer scripts by name.
+	// Control returns the package's control fields and its maintainer scripts by name; a .deb's
+	// control file's own text is among them under ControlText, which names no maintainer script.
 	Control(path string) (fields, scripts map[string]string, err error)
 	// Interests returns the paths, or named triggers, the package's maintainer scripts are run
 	// for: where a package keeps a cache or an index other packages' files feed, which unpack does

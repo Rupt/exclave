@@ -80,3 +80,40 @@ func FuzzLiteralDiversion(f *testing.F) {
 		}
 	})
 }
+
+func TestStatusStanza(t *testing.T) {
+	got, err := statusStanza("Package: a\nVersion: 1\nDescription: t\n long\n .\n more\n")
+	want := "Package: a\nStatus: install ok installed\nVersion: 1\nDescription: t\n long\n .\n more\n"
+	if err != nil || got != want {
+		t.Fatalf("%q %v, want %q", got, err, want)
+	}
+	for _, bad := range []string{
+		"Package: a\nStatus: purge ok not-installed\n",
+		"Package: a\nstatus: install ok installed\n",
+		"Package: a\n\nPackage: b\n",
+		"Package: a\npackage: b\n",
+		"Version: 1\n",
+		" continued\nPackage: a\n",
+		"Package: a\nnot a field\n",
+	} {
+		if got, err := statusStanza(bad); err == nil {
+			t.Errorf("%q: accepted as %q", bad, got)
+		}
+	}
+}
+
+func FuzzStatusStanza(f *testing.F) {
+	f.Add("Package: a\nVersion: 1\nDescription: t\n long\n")
+	f.Add("Package: a\nStatus: x\n")
+	f.Fuzz(func(t *testing.T, control string) {
+		got, err := statusStanza(control)
+		if err != nil {
+			return
+		}
+		// one stanza, one Status, which is ours
+		if strings.Contains(strings.TrimRight(got, "\n"), "\n\n") ||
+			strings.Count(strings.ToLower(got), "\nstatus:") != 1 {
+			t.Fatalf("%q gave %q", control, got)
+		}
+	})
+}

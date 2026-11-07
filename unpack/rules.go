@@ -423,13 +423,56 @@ func apkDatabase(r *root.Root, packages []*Package, log logger) (bool, error) {
 	return true, nil
 }
 
+var debFieldRe = regexp.MustCompile(`^([!-9;-~][!-9;-~]*):`)
+
+// statusStanza is a .deb's control file as dpkg's database records the package once configured:
+// the file's fields as they stand, its Status, `install ok installed`, after the Package field.
+// dpkg puts the fields in its own order when it rewrites the database, and dpkg-query reads them
+// in any. A control file that is not one stanza of fields, one that repeats a field, its name's
+// case aside, as dpkg refuses, or one that carries a Status or no Package, is refused.
+func statusStanza(control string) (string, error) {
+	text := strings.TrimRight(strings.ReplaceAll(control, "\r\n", "\n"), "\n")
+	seen := map[string]bool{}
+	var b strings.Builder
+	for i, line := range strings.Split(text, "\n") {
+		switch m := debFieldRe.FindStringSubmatch(line); {
+		case strings.TrimSpace(line) == "":
+			return "", fmt.Errorf("a blank line at line %d: more than one stanza", i+1)
+		case line[0] == ' ' || line[0] == '\t':
+			if i == 0 {
+				return "", fmt.Errorf("a continuation before any field")
+			}
+			b.WriteString(line + "\n")
+		case m == nil:
+			return "", fmt.Errorf("line %d is not a field", i+1)
+		default:
+			name := strings.ToLower(m[1])
+			if seen[name] {
+				return "", fmt.Errorf("the field %s twice", m[1])
+			}
+			seen[name] = true
+			if name == "status" {
+				return "", fmt.Errorf("a Status field of its own")
+			}
+			b.WriteString(line + "\n")
+			if name == "package" {
+				b.WriteString("Status: install ok installed\n")
+			}
+		}
+	}
+	if !seen["package"] {
+		return "", fmt.Errorf("no Package field")
+	}
+	return b.String(), nil
+}
+
 // dpkgDatabase writes dpkg's database of installed packages, /var/lib/dpkg/status, as dpkg writes
-// it once it has configured them: each package's control file with its Status, `install ok
-// installed`, after the Package field, in the order of the packages' names. dpkg-query reads it,
-// and through it the scripts that ask whether a package is configured before they act, as TeX's
-// update-language does, and so do SBOM and vulnerability scanners. The files a package owns and
-// its conffiles' checksums are not recorded, since prune removes files and nothing here is
-// configured twice. A database the packages ship already is left as it is.
+// it once it has configured them: each package's control file with its Status (statusStanza), in
+// the order of the packages' names. dpkg-query reads it, and through it the scripts that ask
+// whether a package is configured before they act, as TeX's update-language does, and so do SBOM
+// and vulnerability scanners. The files a package owns and its conffiles' checksums are not
+// recorded, since prune removes files and nothing here is configured twice. A database the
+// packages ship already is left as it is; a control file statusStanza refuses is refused.
 func dpkgDatabase(r *root.Root, packages []*Package, log logger) (bool, error) {
 	var debs []*Package
 	for _, p := range packages {
@@ -448,24 +491,11 @@ func dpkgDatabase(r *root.Root, packages []*Package, log logger) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		text := strings.TrimRight(strings.ReplaceAll(files["control"], "\r\n", "\n"), "\n")
-		lines := strings.Split(text, "\n")
-		for i, line := range lines {
-			b.WriteString(line + "\n")
-			// Essential, where a package has it, comes between Package and Status, as dpkg orders them
-			if strings.HasPrefix(line, "Package:") {
-				next := ""
-				if i+1 < len(lines) {
-					next = lines[i+1]
-				}
-				if !strings.HasPrefix(next, "Essential:") {
-					b.WriteString("Status: install ok installed\n")
-				}
-			} else if strings.HasPrefix(line, "Essential:") && i > 0 && strings.HasPrefix(lines[i-1], "Package:") {
-				b.WriteString("Status: install ok installed\n")
-			}
+		stanza, err := statusStanza(files[reader.ControlText])
+		if err != nil {
+			return false, refuse("%s's control file: %s; dpkg's database cannot record it", p.Name, err)
 		}
-		b.WriteString("\n")
+		b.WriteString(stanza + "\n")
 	}
 	if err := r.Makedirs("var/lib/dpkg"); err != nil {
 		return false, err

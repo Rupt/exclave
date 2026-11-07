@@ -166,7 +166,7 @@ var scriptNames = map[string]bool{
 }
 
 // Control returns the package's control fields and its maintainer scripts by name, with the
-// control file's own text under "control", which dpkg's database records.
+// control file's own text under reader.ControlText.
 func (Format) Control(p string) (map[string]string, map[string]string, error) {
 	fields, scripts := map[string]string{}, map[string]string{}
 	t, err := openTar(p, "control.tar", nil)
@@ -191,7 +191,7 @@ func (Format) Control(p string) (map[string]string, map[string]string, error) {
 			return nil, nil, err
 		}
 		if n == "control" {
-			scripts[n] = string(data)
+			scripts[reader.ControlText] = string(data)
 			if stanzas := ParseStanzas(string(data)); len(stanzas) > 0 {
 				fields = stanzas[0]
 			}
