@@ -827,7 +827,7 @@ the program a wrapper stands for, its *original*, sits beside it in
   name, the project's version and the commit it was built from, as
   `exclave version` prints it and the hashes file's `tool` record says
   it (6.4); `readelf -p .exclave.version` shows it.
-- **gdb's script**, in `.debug_gdb_scripts`, and seven exported names for
+- **gdb's script**, in `.debug_gdb_scripts`, and six exported names for
   it to read (7.6).
 
 The build of either architecture strips everything else and fails if
@@ -1385,7 +1385,8 @@ never replaced. Then:
 - **A wrapper** is `execve`d: the kernel runs the launcher under the
   program's name, and identity is the kernel's.
 - **A file carrying a launcher's note**, under either name, is another
-  launcher and is `execve`d as it is; one whose note names an older
+  launcher and is `execve`d as it is, with the launcher's variables
+  below as for a wrapper; one whose note names an older
   page generation goes to this launcher's child, which refuses it by
   name (7.4.2).
 - **Anything else** re-execs the launcher with the original `argv`
@@ -1740,10 +1741,9 @@ that file, and leaves it to the child launcher for a wrapped script,
 whose interpreter the child resolves.
 
 gdb sees the launcher, the executable of every wrapper, so the
-launcher exports seven names, the base, entry and real file of the
-program it mapped, the base and file of the loader,
-`exclave_debug_hook`, which it calls once before the jump, and
-`exclave_retraced`, set by the second exec below, and carries
+launcher exports six names, the base, entry and real file of the
+program it mapped, the base and file of the loader, and
+`exclave_debug_hook`, which it calls once before the jump, and carries
 a Python script, `src/gdb.py`, that gdb auto-loads from
 `.debug_gdb_scripts` at launch and at every exec of a launcher. The
 script adds the program's, the loader's and every library's symbols
@@ -1774,27 +1774,43 @@ the image they leave for the file it was given, and reads
 Inside, that image is the launcher, so gdb would place the program's
 breakpoints in the launcher's image and never load the script. So the
 exec that makes a `vfork` child's deferred request (7.4.5) carries
-`EXCLAVE_TRACED`, and the launcher it starts, when its `TracerPid` is
-nonzero, execs its own file once more, by its real path, with the same
-arguments and environment: gdb meets an exec past its count, reads the
-launcher there, loads its symbols and auto-loads the script, and a
-`break main` given before `run` waits pending until the script adds the
-program. A launcher started as the shell gdb told to exec the program
-(`-c` and a command beginning `exec `) leaves the second exec to the
-program's, marking that exec in turn, since gdb counts the shell's
-among its start's and a second exec of the shell would end the count
-early, with the shell's traps still to come. The second exec sets
-`exclave_retraced`, and the script then gives gdb the program back as
-its file when the process exits (`exec-file`), so that the next `run`
-starts it as the first did. It costs no syscall when nothing is traced:
-the handler's check is a search of its own scratch chunks, and the
-launcher's a search of its environment. Under a tracer that started its
-program so, it costs one exec and one read of `/proc/self/status`, and
-the tracer meets one exec stop more than the kernel gives (13 item 54).
-A `fork` child's request, as strace makes it, is made at once and its
-exec carries no mark, and an attached process or a fork child gdb
-follows needs none: gdb reads the launcher at the attach or at the
-child's exec.
+`EXCLAVE_TRACED=1`, and the launcher it starts, of this exclave or
+another, when its `TracerPid` is nonzero, execs its own file once
+more, by its real path, with the same arguments and the variable set to
+2: gdb meets an exec past its count, reads the launcher there, loads its
+symbols and auto-loads the script, and a `break main` given before
+`run` waits pending until the script adds the program.
+
+gdb counts the shell's exec among its start's, and a second exec of the
+shell would end the count early, with the shell's traps still to come.
+So a launcher whose arguments are `-c` and a command beginning `exec `,
+the shape of gdb's, makes no second exec but marks the next exec its
+process makes, and that exec's launcher makes it. The rule reads the
+arguments, not the program, so it holds for any shell and for a shell
+of another exclave, and it matches any traced program run so: `gdb
+--args sh -c 'exec PROGRAM'` with `startup-with-shell off` counts the
+shell's exec alone, and meets the program's exec and its second after
+it. With `set exec-wrapper` gdb counts the wrapper's exec too, which
+the wrapper's second then ends, so the wrapper's first trap stops gdb
+before the program's exec loads the script (13 item 1).
+
+At the second exec the script reads the kernel's copy of the process's
+environment, which holds `EXCLAVE_TRACED=2` and the name the program
+was exec'd by, `EXCLAVE_EXECFN`, as gdb spelt it, and gives gdb that
+name back as its file when the process exits (`exec-file`), so that
+the next `run` starts the program as the first did and under the same
+name, a link unresolved, which a program that reads its `argv[0]`
+needs; a later exec of a launcher in the same run gives gdb that
+program's name instead, as gdb's own following of an exec would. It
+costs no syscall when nothing is traced: the handler's check is a
+search of its own scratch chunks, and the launcher's a search of its
+environment. Under a tracer that started its program so, it costs one
+exec and one read of `/proc/self/status`, and the tracer meets one exec
+stop more than the kernel gives (13 item 54). A `fork` child's request,
+as strace makes it, is made at once and its exec carries no mark, and
+an attached process or a fork child gdb follows needs none: gdb reads
+the launcher at the attach or at the child's exec. A launcher older
+than the variable passes it to its program and makes no second exec.
 
 ### 7.7 CPU check
 
@@ -3485,7 +3501,7 @@ and stay fixed.
     not the program it loaded; `arg_start`, `cmdline` and `comm` are the
     program's. The program's argument and environment strings lie where
     the kernel put them for the launcher, the program's environment
-    contiguous after its arguments and the launcher's three variables
+    contiguous after its arguments and the launcher's variables
     after that (item 46), and `AT_EXECFN` names a string of the
     launcher's own rather than the top of the stack; at the border the
     four fixed variables of 6.2 are the launcher's strings. Moving the
@@ -3576,11 +3592,10 @@ path, `gdb ./prog` or `gdb /usr/bin/gcc`: gdb then prints the
 launcher's second exec as the process "executing new program" (7.6),
 and runs the program again at the next `run` (item 1).
 
-How the script works. The launcher exports seven names: the base, entry
-and real file of the program, the base and file of its loader,
+How the script works. The launcher exports six names: the base, entry
+and real file of the program, the base and file of its loader, and
 `exclave_debug_hook`, a function it calls once before jumping into the
-program, and `exclave_retraced`, which says gdb was given the program
-(7.6). `src/gdb.py`, carried in `.debug_gdb_scripts`, is auto-loaded
+program. `src/gdb.py`, carried in `.debug_gdb_scripts`, is auto-loaded
 at launch and at every exec of a launcher. It makes gdb pass `SIGSYS`
 without stopping and breaks on the hook, where it adds the program's
 symbol file at its base and the loader's at its own. At the program's
@@ -3590,9 +3605,10 @@ resolving names in the tree as the translator does and taking a
 wrapper's original; a breakpoint on `r_brk` repeats the walk after
 every `dlopen`. `info sharedlibrary` is empty because the launcher
 carries no `DT_DEBUG`. With `set follow-fork-mode child` the same
-happens in `cc1`. Where gdb was given the program, the script makes the
-program's path inside the exclave gdb's file again when the process
-exits, since following the launcher's exec made the launcher its file.
+happens in `cc1`. Where gdb was given the program, the script reads at
+the launcher's second exec the name the program was exec'd by, from the
+kernel's copy of its environment, and makes it gdb's file again when the
+process exits, since following that exec made the launcher its file (7.6).
 
 `perf record` needs nothing special and symbolises `cc1` down to
 functions. perf cannot read the maps of a process under a different

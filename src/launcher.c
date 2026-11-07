@@ -160,8 +160,19 @@ static char **env_prepare(char **envp, int boundary)
     return out;
 }
 
-/* the descriptor room borrowed at startup (7.4.5), given back before the launcher execs another launcher, which
- * borrows for itself */
+/* a program at its descriptor limit may still exec, since the kernel's exec needs no descriptor (7.4.5): the launcher's
+ * own opens, the manifest, the tree's top level, the program and its loader, borrow under the hard limit, the soft one
+ * raised to it since the lowest free number may lie anywhere above a limit the program lowered below its open
+ * descriptors, and given back in loader_run before the program runs. C.rlim holds the program's limits */
+static void borrow(void)
+{
+    if (C.rlim[0] < 16 && C.rlim[0] < C.rlim[1]) {
+        unsigned long more[2] = {C.rlim[1], C.rlim[1]};
+        C.borrowed = SC4(NR_prlimit64, 0, RLIMIT_NOFILE, more, 0) == 0;
+    }
+}
+/* the descriptor room borrowed at startup, given back before the launcher execs another launcher, which borrows for
+ * itself */
 static void unborrow(void)
 {
     if (C.borrowed) {
@@ -172,28 +183,26 @@ static void unborrow(void)
 
 /* 7.6: a process a handler's exec has left newly traced, by a vfork child's deferred PTRACE_TRACEME, as a debugger
  * starts its program, execs the file the kernel ran, by its real path, once more with the same arguments and the
- * marker's value 2, which that launcher takes for the second exec and exports to the script. A debugger counts the
+ * marker's value 2, which that launcher takes for the second exec and gdb's script reads. A debugger counts the
  * execs its start expects, the shell's and the program's, and takes the program's image for the file it was given; it
  * reads /proc/<pid>/exe only at an exec past that count, where it reads the launcher (7.6), loads its symbols and the
  * script it carries. Nothing when no tracer remains, a request the kernel refused or a tracer gone since; an exec that
  * fails runs the program without the second. */
 static void retrace(const char *exe, char **argv, char **envp)
 {
-    char buf[256];
-    long fd = sys_open("/proc/self/status", O_RDONLY | O_CLOEXEC, 0);
-    if (fd < 0) return;
-    long have = 0, n;
-    while (have < (long)sizeof buf && (n = sys_read((int)fd, buf + have, sizeof buf - (size_t)have)) > 0) have += n;
-    sys_close((int)fd);
-    if (!status_tracer(buf, have)) return;
+    if (!tracer_of("/proc/self/status")) return;
     long k = 0;
     while (envp[k]) k++;
     static char again[] = "EXCLAVE_TRACED=2";
     char **env = pointers(k + 1);
     for (long i = 0; i < k; i++) env[i] = xstarts(envp[i], "EXCLAVE_TRACED=") ? again : envp[i];
     env[k] = 0;
+    int had = C.borrowed;
     unborrow();
     sys_execve(exe, argv, env);
+    /* the exec failed: the room borrowed again for the launcher's own opens, the vector given back */
+    if (had) borrow();
+    SC2(NR_munmap, env, ((size_t)(k + 1) * sizeof(char *) + 0xfff) & ~(size_t)0xfff);
 }
 
 static long manifest_fd;
@@ -428,24 +437,17 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
 
     unsigned long m = SIGSYS_BIT;                    /* 7.5.2: SIGSYS must never be blocked */
     sys_rt_sigprocmask(SIG_UNBLOCK, &m, 0, 8);
-    /* a program at its descriptor limit may still exec, since the kernel's exec needs no descriptor (7.4.5): the
-     * launcher's own opens, the manifest, the tree's top level, the program and its loader, borrow under the hard
-     * limit, the soft one raised to it since the lowest free number may lie anywhere above a limit the program lowered
-     * below its open descriptors, and given back in loader_run before the program runs */
-    if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, C.rlim) == 0 && C.rlim[0] < 16 && C.rlim[0] < C.rlim[1]) {
-        unsigned long more[2] = {C.rlim[1], C.rlim[1]};
-        C.borrowed = SC4(NR_prlimit64, 0, RLIMIT_NOFILE, more, 0) == 0;
-    }
+    if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, C.rlim) == 0) borrow();
     static char exe[PATH_MAX];
     long n = sys_readlink("/proc/self/exe", exe, PATH_MAX - 1);
     if (n < 0) die("cannot read /proc/self/exe", 0, n);
     exe[n] = 0;
-    /* only from inside, where a handler sets it, as the other three are read; a debugger's shell, told to exec the
-     * program (gdb's startup-with-shell runs SHELL -c "exec PROGRAM ARGS"), leaves the second exec to the program's,
-     * which its handler marks, since the debugger counts the shell's exec among its start's */
+    /* 7.6: only from inside, where a handler sets it, as the launcher's other variables are read. A process whose
+     * arguments are -c and a command beginning "exec ", the shape of a debugger's shell (gdb's startup-with-shell runs
+     * SHELL -c "exec PROGRAM ARGS"), leaves the second exec to its next, which its handler marks, since the debugger
+     * counts the shell's exec among its start's */
     const char *traced = have ? find_env(envp, "EXCLAVE_TRACED") : 0;
-    if (traced && traced[0] == '2') debug_retraced = 1;
-    else if (traced) {
+    if (traced && traced[0] == '1') {
         if (argc >= 3 && xstrcmp(argv[1], "-c") == 0 && xstarts(argv[2], "exec ")) C.traced_pid = sys_getpid();
         else retrace(exe, argv, envp);
     }

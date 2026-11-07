@@ -351,7 +351,8 @@ int is_self_exe(const char *p, pid_t pid); /* /proc/self/exe in any spelling, fo
 int other_exe(const struct scratch *S, const char *v, char *text);
 /* the TracerPid field of a /proc/<pid>/status head of n bytes, 0 for none (7.6) */
 long status_tracer(const char *buf, long n);
-extern unsigned long debug_retraced; /* loader.c, exported to gdb as exclave_retraced (7.6) */
+/* the TracerPid of the status file at path, 0 for none or one unreadable (7.6) */
+long tracer_of(const char *path);
 
 /* ---------- loader (loader.c) ---------- */
 /* reads the first bytes of fd, the file the startup loads, for loader_run: returns their count, *bytes the bytes */

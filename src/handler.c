@@ -585,11 +585,11 @@ static long vec_read(struct scratch *S, void *region, size_t region_size, char *
  * answered what the kernel would refuse without exec'ing, so the request is made where the kernel's exec follows it at
  * once, and the post-exec SIGTRAP stops the new image for the tracer as it would natively. An exec the kernel still
  * refuses leaves the child traced, as the request made at its own time would have. A parent that died meanwhile, which
- * would have detached its tracee, has no request made for it: the child's new parent, a reaper, never asked. */
-static long exec_reissue(struct scratch *S, const char *path, char **argv, char **envp)
+ * would have detached its tracee, has no request made for it: the child's new parent, a reaper, never asked. asked:
+ * the request is to be made. */
+static long exec_reissue(const char *path, char **argv, char **envp, int asked)
 {
-    pid_t tracer = scratch_deferred(S->pid, S->tid, 1);
-    if (tracer && sys_getppid() == tracer) RE5(NR_ptrace, PTRACE_TRACEME, 0, 0, 0, 0);
+    if (asked) RE5(NR_ptrace, PTRACE_TRACEME, 0, 0, 0, 0);
     return RE5(NR_execve, path, argv, envp, 0, 0);
 }
 
@@ -644,7 +644,7 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
         return -ENAMETOOLONG;
     }
     /* after the program's own variables, so that the kernel lays the program's strings out contiguously after its
-     * arguments, as a program that writes its title over them expects, with the launcher's three at the end */
+     * arguments, as a program that writes its title over them expects, with the launcher's at the end */
     scpy(S->cur, "EXCLAVE_EXECFN=", PATH_MAX);
     scat(S->cur, S->v2, PATH_MAX);
     scpy(S->rest, "EXCLAVE_COMM=", PATH_MAX);
@@ -660,11 +660,12 @@ static long exec_env(struct scratch *S, const char *path, char **argv, char **en
      * launcher execs itself once more, so that a debugger counting its start's execs meets a later one and reads the
      * launcher (7.6) */
     static char traced[] = "EXCLAVE_TRACED=1";
-    pid_t tracer = scratch_deferred(S->pid, S->tid, 0);
-    if ((tracer && sys_getppid() == tracer) || C.traced_pid == S->pid) env[n++] = traced;
+    pid_t tracer = scratch_deferred(S->pid, S->tid, 1);
+    int asked = tracer && sys_getppid() == tracer;
+    if (asked || C.traced_pid == S->pid) env[n++] = traced;
     env[n] = 0;
     log_line("exec", 0, v);
-    long r = exec_reissue(S, path, argv, env);
+    long r = exec_reissue(path, argv, env, asked);
     vector_free(big, envc + 5); /* only reached when execve failed */
     return r;
 }
@@ -753,16 +754,13 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     /* not a wrapper: a host program, or an unwrapped exclave file */
     if (script) return exec_script(S, given, argv, envp, depth);
     if (!elf) return -ENOEXEC;
-    /* 7.4.5: a file carrying a launcher's note is another launcher: exec it as it is */
+    /* 7.4.5: a file carrying a launcher's note is another launcher: exec it as it is, with the launcher's variables */
     int another;
     int pr = elf_probe(S->real, S->tmp, &another, S->extra);
     /* load_elf_binary's answer before its point of no return: ENOEXEC for a type, a machine or program headers it
      * cannot load, or an interpreter path without its NUL, EIO for one the file does not hold whole */
     if (pr < 0) return pr;
-    if (another >= PAGE_GENERATION) {
-        log_line("exec", 0, v);
-        return exec_reissue(S, S->real, argv, envp);
-    }
+    if (another >= PAGE_GENERATION) return exec_env(S, S->real, argv, envp, v, 0);
     /* a launcher whose page this filter traps: the child refuses it by name */
     if (another) return exec_env(S, C.launcher, argv, envp, v, 1);
     /* the loader the header names, resolved as loader_run resolves it (7.3), checked as load_elf_binary checks it

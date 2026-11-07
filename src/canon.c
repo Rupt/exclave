@@ -113,25 +113,33 @@ static int exec_of_pid(long pid, char *out)
 }
 
 /* Whether this process traces another, pid: the TracerPid line of /proc/<pid>/status names the tracing thread, the
- * caller, its process or one of its threads; not for a file this process may not read. The kernel writes the line
- * eighth, after a name of at most 64 bytes escaped and six short lines, so the file's first 256 bytes hold it. */
+ * caller, its process or one of its threads; not for a file this process may not read */
 static int traced_by(long pid, const struct scratch *S)
 {
     char buf[256];
     scpy(buf, "/proc/", sizeof buf);
     ltoa_(pid, buf + 6);
     scat(buf, "/status", sizeof buf);
-    long fd = sys_open(buf, O_RDONLY | O_CLOEXEC, 0);
-    if (fd < 0) return 0;
-    long have = 0, n;
-    while (have < (long)sizeof buf && (n = sys_read((int)fd, buf + have, sizeof buf - (size_t)have)) > 0) have += n;
-    sys_close((int)fd);
-    long t = status_tracer(buf, have);
+    long t = tracer_of(buf);
     if (!t) return 0;
     if (t == S->tid || t == S->pid) return 1;
     scpy(buf, "/proc/self/task/", sizeof buf);
     ltoa_(t, buf + 16);
     return sys_faccessat(AT_FDCWD, buf, 0) == 0; /* F_OK */
+}
+
+/* The TracerPid of the status file at path, /proc/<pid>/status: 0 for none or a file this process may not read. The
+ * kernel writes the line eighth, after a name of at most 64 bytes escaped and six short lines, so the file's first 256
+ * bytes hold it. */
+long tracer_of(const char *path)
+{
+    char buf[256];
+    long fd = sys_open(path, O_RDONLY | O_CLOEXEC, 0);
+    if (fd < 0) return 0;
+    long have = 0, n;
+    while (have < (long)sizeof buf && (n = sys_read((int)fd, buf + have, sizeof buf - (size_t)have)) > 0) have += n;
+    sys_close((int)fd);
+    return status_tracer(buf, have);
 }
 
 /* The TracerPid field of a status file's head, buf of n bytes: the pid, or 0 where the line is absent or cut short */

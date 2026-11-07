@@ -5,7 +5,8 @@ launcher is the executable, provided the exclave is in gdb's auto-load safe-path
 launcher; the script tells it about the program the launcher loaded and the libraries that
 program's loader mapped, so that no command is needed by hand. It reads what the launcher exports:
 exclave_original_base, _entry and _path; exclave_interp_base and _path; and exclave_debug_hook, a
-function called once before the jump into the program.
+function called once before the jump into the program. At a launcher's exec it reads the kernel's
+copy of the process's environment for the name the program was exec'd by (7.6).
 """
 
 from __future__ import annotations
@@ -200,26 +201,35 @@ class _Hook(gdb.Breakpoint):
     def _hook(self) -> None:
         state = {"root": _exclave_tree(), "loaded": set(), "brk": None}
         _add(state, _path("exclave_original_path"), _var("exclave_original_base"))
-        if _var("exclave_retraced"):
-            program = _virtual(state["root"], _path("exclave_original_path"))
-            gdb._exclave_program = program  # noqa: SLF001 -- as _arm's
         interp = _path("exclave_interp_path")
         if interp:
             _add(state, interp, _var("exclave_interp_base"))
         _Entry(_var("exclave_original_entry"), state)
 
 
-def _virtual(root: str | None, real: str) -> str:
-    """The path inside the exclave of the real file real: a wrapper's for its original."""
-    real = os.path.realpath(real)
-    if not root or not real.startswith(root + "/"):
-        return real
-    d, b = os.path.split(real[len(root) :])
-    return (
-        os.path.join(os.path.dirname(d), b)
-        if os.path.basename(d) == ".real"
-        else os.path.join(d, b)
-    )
+def _given() -> None:
+    """At a launcher's exec, the name the program was exec'd by, where gdb was given the program.
+
+    The kernel's copy of the process's environment holds the launcher's variables (7.4.5): the
+    second exec gdb's start meets carries EXCLAVE_TRACED=2 (7.6), and EXCLAVE_EXECFN is the name the
+    program was exec'd by, as gdb spelt it, never a link resolved, so that a program that reads its
+    argv[0] runs again under it. A later exec in the same run gives gdb that program's name, as
+    gdb's own following of an exec does.
+    """
+    pid = gdb.selected_inferior().pid
+    if not pid:
+        return
+    with open(f"/proc/{pid}/environ", "rb") as f:
+        env = {k: v for k, _, v in (e.partition(b"=") for e in f.read().split(b"\0"))}
+    name = env.get(b"EXCLAVE_EXECFN")
+    if not name or (
+        env.get(b"EXCLAVE_TRACED") != b"2" and not getattr(gdb, "_exclave_program", None)
+    ):
+        return
+    program = os.fsdecode(name)
+    if not program.startswith("/"):
+        program = os.path.join(os.readlink(f"/proc/{pid}/cwd"), program)
+    gdb._exclave_program = program  # noqa: SLF001 -- as _arm's
 
 
 def _exited(_event: object) -> None:
@@ -255,6 +265,7 @@ def _arm() -> None:
 # every translated syscall is a SIGSYS (7.4.1)
 gdb.execute("handle SIGSYS nostop noprint pass", to_string=True)
 _arm()
+_guarded(_given)
 if not getattr(gdb, "_exclave_exited", False):
     gdb.events.exited.connect(_exited)
     gdb._exclave_exited = True  # noqa: SLF001 -- as _arm's

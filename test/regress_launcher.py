@@ -792,15 +792,21 @@ def traceme_exec(ctx: Ctx) -> str | None:
     a vfork child's PTRACE_TRACEME is deferred to its exec: gdb's vfork child would otherwise stop
     while gdb waits in vfork for that very exec, both for ever. The vfork cases are the kernel's
     answers, a second request's EPERM, an exec that fails before the one that runs, and a child that
-    exits without one, measured under bwrap. A fork child's request is made at once, since it may
-    stop for its tracer before its exec, so its tracer's first stop after the exec is that SIGSYS
-    where the kernel's is the SIGTRAP that follows the exec (13 item 54). Then, where the tree has a
-    gdb, gdb runs a program to its end inside, its SIGSYS stops passed (13 item 1).
+    exits without one, measured under bwrap, but for the exec stops: the launcher's second exec
+    (7.6) is one more, for the program's exec and for sh -c "exec PROGRAM" alike, the shell leaving
+    it to the program. A fork child's request is made at once, since it may stop for its tracer
+    before its exec, so its tracer's first stop after the exec is that SIGSYS where the kernel's is
+    the SIGTRAP that follows the exec (13 item 54). Then, where the tree has a gdb, gdb runs a
+    program to its end inside, its SIGSYS stops passed (13 item 1).
     """
     true = ctx.vbin("true")
     rc, out, _err = inside(ctx, os.path.join(ctx.progs, "traceme"), [true], timeout=120)
-    kernel = [
+    # the kernel's answers but the exec stops: the exec that makes a deferred request is followed by
+    # the launcher's second (7.6, 13 item 54), one stop more than the kernel's 1 and, through
+    # sh -c "exec PROGRAM", its 2
+    vfork = [
         "vfork-traceme-exec first stop: stopped TRAP",
+        "vfork-traceme-exec exec stops: 2",
         "vfork-traceme-exec end: exited 0",
         "vfork-traceme-twice requests: 0, -1 EPERM",
         "vfork-traceme-twice first stop: stopped TRAP",
@@ -809,6 +815,9 @@ def traceme_exec(ctx: Ctx) -> str | None:
         "vfork-traceme-fail-exec end: exited 0",
         "vfork-traceme-exit end: exited 7",
         "vfork-exec end: exited 0",
+        "vfork-traceme-shell first stop: stopped TRAP",
+        "vfork-traceme-shell exec stops: 3",
+        "vfork-traceme-shell end: exited 0",
     ]
     # 13 item 54: the kernel's first stop is TRAP, after a SIGSTOP of the child's own too
     launcher = [
@@ -819,8 +828,7 @@ def traceme_exec(ctx: Ctx) -> str | None:
         "fork-traceme-stop-exec end: exited 0",
     ]
     expect(
-        rc == 0 and out.splitlines() == kernel + launcher,
-        f"traced children's execs: rc={rc}\n{out}",
+        rc == 0 and out.splitlines() == vfork + launcher, f"traced children's execs: rc={rc}\n{out}"
     )
     gdb = os.path.join(ctx.tree, "usr", "bin", "gdb")
     if not os.path.exists(gdb):
@@ -874,17 +882,10 @@ def tracer_reads_exe(ctx: Ctx) -> str | None:
         )
     if not os.path.exists(os.path.join(ctx.tree, "usr", "bin", "gdb")):
         return "the tree has no gdb: its breakpoints inside not checked"
-    src = os.path.join(ctx.work, "gdb_hello.c")
-    hello = os.path.join(ctx.work, "gdb_hello")
-    with open(src, "w") as f:
-        f.write('#include <stdio.h>\nint main(void) { puts("hello"); return 0; }\n')
-    rc, _out, err = run(
-        [wrapper(ctx, ctx.gcc), "-g", "-O0", "-o", hello, src], cwd=ctx.work, env=ctx.env
-    )
-    expect(rc == 0, "compile: " + err[-600:])
+    hello = gdb_hello(ctx)
     # a program built inside, by the positional entry (13.1), and a wrapped one by its libc
     for target, brk, want in (
-        (hello, "main", "Breakpoint 1, main () at "),
+        (hello, "main", "Breakpoint 1, main ("),
         (true, "exit", " in exit ()"),
     ):
         rc, out, err = run(
@@ -919,6 +920,20 @@ def tracer_reads_exe(ctx: Ctx) -> str | None:
     return None
 
 
+def gdb_hello(ctx: Ctx) -> str:
+    """A program built inside with debug information, that prints its argv[0]: its path."""
+    hello = os.path.join(ctx.work, "gdb_hello")
+    if not os.path.exists(hello):
+        src = hello + ".c"
+        with open(src, "w") as f:
+            f.write("#include <stdio.h>\nint main(int c, char **v) { puts(v[0]); return 0; }\n")
+        rc, _out, err = run(
+            [wrapper(ctx, ctx.gcc), "-g", "-O0", "-o", hello, src], cwd=ctx.work, env=ctx.env
+        )
+        expect(rc == 0, "compile: " + err[-600:])
+    return hello
+
+
 @test
 def gdb_given_program(ctx: Ctx) -> str | None:
     """7.6, 13 item 1: gdb inside, given the program itself, stops at its breakpoints, every run.
@@ -926,57 +941,60 @@ def gdb_given_program(ctx: Ctx) -> str | None:
     gdb counts the execs its start expects and takes the image they leave for the file it was
     given, so a vfork child's deferred PTRACE_TRACEME has the launcher exec itself once more: gdb
     meets an exec past its count, reads the launcher there and auto-loads its script. The script
-    gives gdb the program back as its file when the process exits, so that a second run starts it
-    as the first did. A program built inside stops at main, a wrapped one in the exclave's libc,
-    with no SIGSYS handling given and gdb's start through the shell, its default, and without.
+    gives gdb the program back as its file when the process exits, by the name it was exec'd by,
+    so that a second run starts it as the first did, a link not resolved: a program built inside,
+    given by a link to it, stops at main and prints the link's path both times, and a wrapped one
+    stops in the exclave's libc, with no SIGSYS handling given and gdb's start through the shell,
+    its default, and without.
     """
     if not os.path.exists(os.path.join(ctx.tree, "usr", "bin", "gdb")):
         return "the tree has no gdb: its breakpoints inside not checked"
-    src = os.path.join(ctx.work, "gdb_given.c")
-    hello = os.path.join(ctx.work, "gdb_given")
-    with open(src, "w") as f:
-        f.write('#include <stdio.h>\nint main(void) { puts("hello"); return 0; }\n')
-    rc, _out, err = run(
-        [wrapper(ctx, ctx.gcc), "-g", "-O0", "-o", hello, src], cwd=ctx.work, env=ctx.env
-    )
-    expect(rc == 0, "compile: " + err[-600:])
-    for target, brk, want in (
-        (hello, "main", "Breakpoint 1, main () at "),
-        (ctx.vbin("true"), "exit", " in exit ()"),
-    ):
-        for shell in ("on", "off"):
-            rc, out, err = run(
-                [
-                    wrapper(ctx, "gdb"),
-                    "-batch",
-                    "-nx",
-                    "-iex",
-                    "set auto-load safe-path /",
-                    "-iex",
-                    "set breakpoint pending on",
-                    "-iex",
-                    "set debuginfod enabled off",
-                    "-iex",
-                    f"set startup-with-shell {shell}",
-                    "-ex",
-                    f"break {brk}",
-                    "-ex",
-                    "run",
-                    "-ex",
-                    "kill",
-                    "-ex",
-                    "run",
-                    "-ex",
-                    "info auto-load python-scripts",
-                    target,
-                ],
-                cwd=ctx.work,
-                env=ctx.env,
-                timeout=120,
-            )
-            expect(
-                out.count(want) == 2 and "exclave-launcher.py" in out,
-                f"gdb {target} inside, startup-with-shell {shell}, stops at {brk} in both runs: "
-                f"rc={rc} {out[-800:]!r} {err[-400:]!r}",
-            )
+    hello = gdb_hello(ctx)
+    alias = os.path.join(ctx.work, f"gdb_alias_{os.getpid()}")
+    os.symlink(hello, alias)
+    try:
+        for target, brk, want in (
+            (alias, "main", "Breakpoint 1, main ("),
+            (ctx.vbin("true"), "exit", " in exit ()"),
+        ):
+            for shell in ("on", "off"):
+                rc, out, err = run(
+                    [
+                        wrapper(ctx, "gdb"),
+                        "-batch",
+                        "-nx",
+                        "-iex",
+                        "set auto-load safe-path /",
+                        "-iex",
+                        "set breakpoint pending on",
+                        "-iex",
+                        "set debuginfod enabled off",
+                        "-iex",
+                        f"set startup-with-shell {shell}",
+                        "-ex",
+                        f"break {brk}",
+                        "-ex",
+                        "run",
+                        "-ex",
+                        "continue",
+                        "-ex",
+                        "run",
+                        "-ex",
+                        "continue",
+                        "-ex",
+                        "info auto-load python-scripts",
+                        target,
+                    ],
+                    cwd=ctx.work,
+                    env=ctx.env,
+                    timeout=120,
+                )
+                names = out.splitlines().count(alias) if target == alias else 2
+                expect(
+                    out.count(want) == 2 and names == 2 and "exclave-launcher.py" in out,
+                    f"gdb {target} inside, startup-with-shell {shell}, stops at {brk} in both "
+                    f"runs, under its name: rc={rc} {out[-800:]!r} {err[-400:]!r}",
+                )
+    finally:
+        os.unlink(alias)
     return None
