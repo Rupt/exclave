@@ -815,10 +815,13 @@ func shells(r *root.Root, _ []*Package, log logger) (bool, error) {
 // ---------------------------------------------------------------- ucf
 
 var (
-	ucfRe    = regexp.MustCompile(`^\s*ucf\s+((?:--?[a-z-]+\s+)*)(\S+)\s+(\S+)\s*;?\s*$`)
-	assignRe = regexp.MustCompile(`^\s*(?:local\s+)?([A-Za-z_][A-Za-z0-9_]*)=(\S*)\s*;?\s*$`)
-	catToRe  = regexp.MustCompile(`^\s*(?:cat|cp)\s+(\S+)\s*>?\s*(\S+)\s*;?\s*$`)
-	varRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+	ucfRe     = regexp.MustCompile(`^\s*ucf\s+((?:--?[a-z-]+\s+)*)(\S+)\s+(\S+)\s*;?\s*$`)
+	ucfCallRe = regexp.MustCompile(`(?:^|[;&|(]|\bthen|\belse|\bdo)\s*ucf\s`)
+	trailRe   = regexp.MustCompile(`\s*(?:\|\|\s*(?:true|:)|[0-9]?>>?\s*/dev/null|[0-9]?>&[0-9])\s*;?\s*$`)
+	assignRe  = regexp.MustCompile(`^\s*(?:local\s+)?([A-Za-z_][A-Za-z0-9_]*)=(\S*)\s*;?\s*$`)
+	catToRe   = regexp.MustCompile(`^\s*cat\s+(\S+)\s*>\s*(\S+)\s*;?\s*$`)
+	cpToRe    = regexp.MustCompile(`^\s*cp\s+(\S+)\s+(\S+)\s*;?\s*$`)
+	varRefRe  = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
 )
 
 // expand replaces each $NAME and ${NAME} the shell variables vars hold, and strips the quotes
@@ -835,13 +838,118 @@ func expand(word string, vars map[string]string) string {
 	return strings.Trim(word, `"'`)
 }
 
+var keywordRe = regexp.MustCompile(`^\s*(?:(?:then|else|do|\{)\s+)+`)
+
+// commands splits a script into its simple commands as far as the rule reads them: at each line's
+// end and at each semicolon, a then, else, do or brace before a command dropped, so that a
+// one-line if is read as its branches. A semicolon in a quoted word splits it too.
+func commands(text string) []string {
+	var out []string
+	for line := range strings.SplitSeq(text, "\n") {
+		for part := range strings.SplitSeq(line, ";") {
+			out = append(out, keywordRe.ReplaceAllString(part, ""))
+		}
+	}
+	return out
+}
+
+// ucfInstall is one configuration file a postinst installs with ucf: its source and destination.
+type ucfInstall struct{ src, dest string }
+
+// readUcf reads a postinst's `ucf SOURCE DEST` lines as the shell would run them as far as literal
+// words go: variables assigned literal words substituted (loops are unrolled before), and a file
+// filled from a template by `cat TEMPLATE > FILE` or `cp TEMPLATE FILE` taken for the template. A
+// trailing `|| true` or redirection to /dev/null is passed over. Neither an if's nor a case's
+// branches are evaluated: every branch is read, and where two lines name one destination the first
+// wins. notes say what the rule cannot read: a ucf line built from other shell variables or of
+// another form, a second line for one destination, and a template file edited after it was filled,
+// which is installed without the edit.
+func readUcf(text string) (installs []ucfInstall, notes []string) {
+	vars := map[string]string{}
+	filled := map[string]string{} // a variable naming a file, and the template it was filled from
+	edited := map[string]bool{}
+	dests := map[string]bool{}
+	for _, line := range commands(text) {
+		if m := assignRe.FindStringSubmatch(line); m != nil {
+			if v := expand(m[2], vars); !strings.ContainsAny(v, "$`()") {
+				vars[m[1]] = v
+			} else {
+				delete(vars, m[1])
+			}
+			delete(filled, "$"+m[1])
+			continue
+		}
+		m := catToRe.FindStringSubmatch(line)
+		if m == nil {
+			m = cpToRe.FindStringSubmatch(line)
+		}
+		if m != nil {
+			if src := expand(m[1], vars); strings.HasPrefix(src, "/") && !strings.Contains(src, "$") {
+				f := strings.Trim(m[2], `"'`)
+				filled[f], edited[f] = src, false
+			}
+			continue
+		}
+		if !ucfCallRe.MatchString(line) {
+			// any other line naming a filled file may edit it, as R's sed of its Renviron does, but for
+			// those that change only its mode or remove it
+			if w := strings.Fields(line); len(w) > 0 && (w[0] == "chmod" || w[0] == "chown" || w[0] == "rm") {
+				continue
+			}
+			for f := range filled {
+				if strings.Contains(line, f) || strings.Contains(line, "${"+strings.TrimPrefix(f, "$")+"}") {
+					edited[f] = true
+				}
+			}
+			continue
+		}
+		if strings.Contains(line, "--purge") {
+			continue
+		}
+		bare := line
+		for {
+			t := trailRe.ReplaceAllString(bare, "")
+			if t == bare {
+				break
+			}
+			bare = t
+		}
+		u := ucfRe.FindStringSubmatch(bare)
+		if u == nil {
+			notes = append(notes, "calls ucf in a form the ucf rule does not read ("+cut(strings.TrimSpace(line), 80)+
+				"): the tree lacks what it installs")
+			continue
+		}
+		src, dest := expand(u[2], vars), expand(u[3], vars)
+		f := strings.Trim(u[2], `"'`)
+		if t, ok := filled[f]; ok {
+			src = t
+			if edited[f] {
+				notes = append(notes, "edits the template it installs as "+dest+" before ucf installs it: "+
+					"installed from "+t+" without the edit")
+			}
+		}
+		if !strings.HasPrefix(src, "/") || !strings.HasPrefix(dest, "/") || strings.Contains(src+dest, "$") {
+			notes = append(notes, "installs a configuration file with ucf from shell variables the ucf rule does "+
+				"not read ("+cut(strings.TrimSpace(line), 80)+"): the tree lacks it")
+			continue
+		}
+		if dests[dest] {
+			notes = append(notes, "installs "+dest+" with ucf on more than one line, of which the rule, "+
+				"evaluating no condition, takes the first")
+			continue
+		}
+		dests[dest] = true
+		installs = append(installs, ucfInstall{src, dest})
+	}
+	return installs, notes
+}
+
 // ucfFiles installs the configuration files a postinst installs with `ucf SOURCE DEST`, which
 // copies a template the package ships to a path under /etc that no package ships: R's Renviron,
-// PHP's php.ini and the ini files of its modules. The script is read as the shell would run it as
-// far as literal words go: loops over literal words unrolled, variables assigned literal words
-// substituted, and a file filled from a template by cat or cp taken for the template. A DEST that
-// stands already is left; one whose source the rule cannot read, from other shell variables or a
-// file the tree lacks, is noted.
+// PHP's php.ini and the ini files of its modules, as readUcf reads them, the first line for a
+// destination winning, since no condition is evaluated. A DEST that stands already is left; one
+// whose source the tree lacks is noted, as is what readUcf cannot read.
 func ucfFiles(r *root.Root, packages []*Package, log logger) (bool, error) {
 	made := false
 	for _, pkg := range packages {
@@ -849,52 +957,27 @@ func ucfFiles(r *root.Root, packages []*Package, log logger) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		vars := map[string]string{}
-		filled := map[string]string{} // a variable naming a file, and the template it was filled from
-		for line := range strings.SplitSeq(text, "\n") {
-			if m := assignRe.FindStringSubmatch(line); m != nil {
-				if v := expand(m[2], vars); !strings.ContainsAny(v, "$`()") {
-					vars[m[1]] = v
-				} else {
-					delete(vars, m[1])
-				}
+		installs, notes := readUcf(text)
+		for _, n := range notes {
+			log(fmt.Sprintf("note: %s's postinst %s", pkg.Name, n))
+		}
+		for _, u := range installs {
+			if r.Lexists(u.dest) {
 				continue
 			}
-			if m := catToRe.FindStringSubmatch(line); m != nil {
-				if src := expand(m[1], vars); strings.HasPrefix(src, "/") && !strings.Contains(src, "$") {
-					filled[strings.Trim(m[2], `"'`)] = src
-				}
-				continue
-			}
-			m := ucfRe.FindStringSubmatch(line)
-			if m == nil || strings.Contains(m[1], "--purge") {
-				continue
-			}
-			src, dest := expand(m[2], vars), expand(m[3], vars)
-			if t, ok := filled[strings.Trim(m[2], `"'`)]; ok {
-				src = t
-			}
-			if !strings.HasPrefix(src, "/") || !strings.HasPrefix(dest, "/") || strings.Contains(src+dest, "$") {
-				log(fmt.Sprintf("note: %s's postinst installs a configuration file with ucf from shell variables "+
-					"the ucf rule does not read (%s): the tree lacks it", pkg.Name, cut(strings.TrimSpace(line), 80)))
-				continue
-			}
-			if r.Lexists(dest) {
-				continue
-			}
-			if !r.IsFile(src) {
+			if !r.IsFile(u.src) {
 				log(fmt.Sprintf("note: %s's postinst installs %s with ucf from %s, which the tree lacks", pkg.Name,
-					dest, src))
+					u.dest, u.src))
 				continue
 			}
-			data, err := r.ReadBytes(src)
+			data, err := r.ReadBytes(u.src)
 			if err != nil {
 				return false, err
 			}
-			if err := r.WriteBytes(dest, data, 0o644); err != nil {
+			if err := r.WriteBytes(u.dest, data, 0o644); err != nil {
 				return false, err
 			}
-			log(fmt.Sprintf("synthesised %s from %s", dest, src))
+			log(fmt.Sprintf("synthesised %s from %s", u.dest, u.src))
 			made = true
 		}
 	}

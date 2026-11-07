@@ -117,3 +117,70 @@ func FuzzStatusStanza(f *testing.F) {
 		}
 	})
 }
+
+func TestReadUcf(t *testing.T) {
+	text := `#!/bin/sh
+inidir=/etc/php/9/mods
+for m in a b; do
+  ucf /usr/share/p/$m.ini ${inidir}/$m.ini
+done
+if [ -e /etc/foo.old ]; then ucf /usr/share/foo/A /etc/foo; else ucf /usr/share/foo/B /etc/foo; fi
+tmp=$(mktemp)
+chmod 0644 "$tmp"
+cat /usr/lib/R/Renviron.ucf > "$tmp"
+sed -i -e s/x/y/ "$tmp"
+ucf "$tmp" /etc/R/Renviron
+cat /usr/share/q/one /usr/share/q/two > "$t2"
+ucf "$t2" /etc/q
+ucf /usr/share/z/conf /etc/z.conf || true
+ucf --debconf-ok /usr/share/w/conf /etc/w.conf 2>/dev/null
+ucf --three-way $(pick) /etc/v.conf
+ucf --purge /etc/old.conf
+`
+	expanded, ok := unrollLoops(text)
+	if !ok {
+		t.Fatal("unrolled past the bound")
+	}
+	installs, notes := readUcf(expanded)
+	want := []ucfInstall{
+		{"/usr/share/p/a.ini", "/etc/php/9/mods/a.ini"}, {"/usr/share/p/b.ini", "/etc/php/9/mods/b.ini"},
+		{"/usr/share/foo/A", "/etc/foo"}, {"/usr/lib/R/Renviron.ucf", "/etc/R/Renviron"},
+		{"/usr/share/z/conf", "/etc/z.conf"}, {"/usr/share/w/conf", "/etc/w.conf"},
+	}
+	if !slices.Equal(installs, want) {
+		t.Errorf("installs %q, want %q", installs, want)
+	}
+	all := strings.Join(notes, "\n")
+	for _, n := range []string{
+		"installs /etc/foo with ucf on more than one line",
+		"edits the template it installs as /etc/R/Renviron",
+		`ucf "$t2" /etc/q`,
+		"ucf --three-way $(pick) /etc/v.conf",
+	} {
+		if !strings.Contains(all, n) {
+			t.Errorf("no note naming %q in %q", n, all)
+		}
+	}
+	if len(notes) != 4 {
+		t.Errorf("%d notes, want 4: %q", len(notes), notes)
+	}
+}
+
+func FuzzReadUcf(f *testing.F) {
+	f.Add("inidir=/etc/x\nfor m in a b; do ucf /usr/share/$m ${inidir}/$m; done\n")
+	f.Add("t=$(mktemp)\ncat /a > \"$t\"\nsed -i s/a/b/ \"$t\"\nucf \"$t\" /etc/a || true\n")
+	f.Fuzz(func(t *testing.T, text string) {
+		expanded, ok := unrollLoops(text)
+		if !ok {
+			return
+		}
+		installs, _ := readUcf(expanded)
+		seen := map[string]bool{}
+		for _, u := range installs {
+			if !strings.HasPrefix(u.src, "/") || !strings.HasPrefix(u.dest, "/") || seen[u.dest] {
+				t.Fatalf("%q gave %q", text, installs)
+			}
+			seen[u.dest] = true
+		}
+	})
+}

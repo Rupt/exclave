@@ -2542,9 +2542,13 @@ refused. From `.deb` files, in five steps:
    a template the package ships, R's `/etc/R/Renviron` and PHP's
    `php.ini` and module files among them, the script read as far as
    literal words go (a loop over them unrolled, variables assigned them
-   substituted, a temporary file filled from a template by `cat` taken
-   for the template), a destination a package ships left as it is and
-   one whose source the rule cannot read noted; `php-modules`, each
+   substituted, a file filled from a template by `cat TEMPLATE > FILE`
+   or `cp` taken for the template, a trailing `|| true` or redirection
+   passed over), a destination a package ships left as it is and one
+   whose source the rule cannot read noted; no condition is evaluated,
+   so every branch is read and the first line naming a destination
+   wins, a second noted, and a template the script edits after filling
+   it, as R's papersize, is installed without the edit, with a note; `php-modules`, each
    module in `/etc/php/VERSION/mods-available` enabled in every SAPI's
    `conf.d` under its `; priority=` line, as `phpenmod` enables it for
    the packages' scripts, without which PHP loads none of the modules
