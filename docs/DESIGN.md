@@ -2662,12 +2662,12 @@ refused. From `.deb` files, in five steps:
    but writes outside the exclave (`test/bytecode.py`, measured
    November 2026). GLib's own application lookup, `gio mime`, reads
    the desktop files rather than `mimeinfo.cache`, which is for the
-   programs that still read it. The other caches the notes name,
-   locales from `localedef` and TeX's index and formats, are made by
-   hand the same way: run the generator inside
-   the exclave writing to a host directory, copy its output into the
-   tree, and record the tree hash with `exclave unwrap` and `wrap`
-   (13 item 48).
+   programs that still read it. Locales from `localedef`, which the
+   notes name too, are made by hand the same way: run the generator
+   inside the exclave writing to a host directory, copy its output into
+   the tree, and record the tree hash with `exclave unwrap` and `wrap`
+   (13 item 48). TeX's index and formats, which they name as well, are
+   made in place by scripts that cannot run so (13 item 56).
 4. **Strip** the volatile directories (8.1). Their empty placeholders,
    the conventional host names' and the eight identity files (8.4) are
    added by `wrap` where the tree lacks them.
@@ -3676,8 +3676,8 @@ and stay fixed.
     under the home until `exclave caches` runs on the copy. Locales
     from `localedef` and TeX's index and formats are not among the
     nine; `unpack` names each from the packages' trigger interests,
-    and the maker runs its generator inside the exclave the same way
-    (10.1). `exclave caches` runs only on a machine of the exclave's
+    and the maker runs `localedef` inside the exclave the same way
+    (10.1), while TeX's are made in place (item 56). `exclave caches` runs only on a machine of the exclave's
     architecture.
 
 49. **Shadow stacks are off, by glibc's choice.** The kernel offers
@@ -3765,6 +3765,36 @@ and stay fixed.
     kernel gives, two `SIGTRAP`s or `PTRACE_EVENT_EXEC` stops where the
     kernel gives one; a tracer that detaches at the first is not met by a
     second.
+
+55. **OpenSSL's certificate directory is the exclave's.** Of the trust
+    paths only the bundle at the identity path is the host's (8.4);
+    `/etc/ssl/certs` is the tree's directory, which holds that bundle
+    and none of the links to single certificates and their subject
+    hashes that `update-ca-certificates` makes. A program that verifies
+    through the directory alone, `openssl s_client -CApath
+    /etc/ssl/certs -no-CAfile` or a `capath` given to Python's `ssl` or
+    to curl, therefore trusts nothing inside where the host trusts its
+    set: against a public server, verify code 20 inside and 0 natively
+    (Ubuntu 24.04, measured November 2026). A program that loads
+    OpenSSL's defaults reads the bundle as well and verifies. The host's
+    directory holds absolute links into `/usr/share/ca-certificates`,
+    which inside lead into the tree, so `host "/etc/ssl/certs"` gives it
+    to the exclave only with `host "/usr/share/ca-certificates"` beside
+    it, with which the same check verifies inside.
+
+56. **TeX Live's configuration, indexes and formats are made in place.**
+    Debian's TeX scripts write `fmtutil.cnf`, `updmap.cfg`, the
+    hyphenation files and the `ls-R` indexes under `/var/lib/texmf`, at
+    fixed paths the packages ship links to (`texmf-dist/ls-R` names
+    `/var/lib/texmf/ls-R-TEXLIVEDIST`), and build the formats from
+    them. In an unpacked tree `pdflatex` finds no format and
+    `mktexfmt` no entry to build one from. Inside an exclave the scripts
+    cannot write there, the tree being read-only, and with `TEXMFSYSVAR`
+    on a host directory `fmtutil-sys` still finds no `pdflatex.ini`,
+    since Debian's kpathsea searches the distribution's tree only
+    through its `ls-R`, which dangles; `exclave caches` does not make
+    them (item 48). An exclave of TeX Live is made from a tree whose
+    scripts ran, from `debootstrap` or a container export (10.1).
 
 ### 13.1 Debugging and profiling recipe
 
