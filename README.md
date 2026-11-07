@@ -213,8 +213,8 @@ ones a first user meets, with the rule behind each and what to do:
   that traps, traces or asks a supervisor. That rules out container
   runtimes, browsers and `rr` inside an exclave. A filter that allows,
   logs, fails or kills, as `sshd`'s and `qemu -sandbox`'s do, is
-  installed and applied by the kernel as natively. `strace` works but shows a `SIGSYS` for every translated
-  call.
+  installed and applied by the kernel as natively. `strace` works but
+  shows a `SIGSYS` for every translated call.
 - **A `noexec` filesystem cannot hold an exclave.** The kernel refuses
   to execute or map anything there, and a `noexec /tmp` in CI is the
   common case.

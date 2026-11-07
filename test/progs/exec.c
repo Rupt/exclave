@@ -97,7 +97,10 @@ int main(int argc, char **argv)
             return 1;
         }
         errno = 0;
-        if (syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &p) != 0) {
+        /* a kernel before 3.17 has no seccomp(2): the prctl form below then stands alone */
+        long r = syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &p);
+        int no_syscall = r != 0 && errno == ENOSYS;
+        if (r != 0 && !no_syscall) {
             printf("FAIL seccomp install: errno=%d\n", errno);
             return 1;
         }
@@ -107,7 +110,8 @@ int main(int argc, char **argv)
             return 1;
         }
         unsigned act = SECCOMP_RET_TRAP;
-        if (syscall(SYS_seccomp, SECCOMP_GET_ACTION_AVAIL, 0, &act) != 0) {
+        /* 4.14's query, which a kernel without seccomp(2) cannot be asked */
+        if (!no_syscall && syscall(SYS_seccomp, SECCOMP_GET_ACTION_AVAIL, 0, &act) != 0 && errno != EINVAL) {
             printf("FAIL seccomp availability query\n");
             return 1;
         }

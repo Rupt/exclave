@@ -359,7 +359,6 @@ void filter_install(void)
 
 #ifndef EXCLAVE_TEST_OLD
 #define LDX_IMM 0x01 /* BPF_LDX | BPF_W | BPF_IMM */
-#define LD_IMM 0x00 /* BPF_LD | BPF_W | BPF_IMM */
 #define TXA 0x87 /* BPF_MISC | BPF_TXA */
 #define RET_A 0x16 /* BPF_RET | BPF_A */
 #define JMP_CLASS 0x05
@@ -430,7 +429,7 @@ long filter_wrap(const struct sock_filter *body, long n, struct sock_filter *out
     out[o++] = ins(JEQ_K, 1, 0, (uint32_t)SC_JUDGE);
     out[o++] = ins(RET_K, 0, 0, SECCOMP_RET_ALLOW);
     out[o++] = ins(RET_K, 0, 0, SECCOMP_RET_ERRNO | MARK_PRESENT);
-    out[o++] = ins(LD_IMM, 0, 0, 0);
+    out[o++] = ins(AND_K, 0, 0, 0); /* A cleared by an instruction the action cache models (seccomp_is_const_allow) */
     if (o != PROLOGUE) die("the prologue's length", 0, o);
     for (long i = 0; i < n; i++, o++) {
         out[o] = body[i];

@@ -2,15 +2,16 @@
 
     fuzz.py --exclave EXCLAVE --work DIR --launcher BIN [--seconds N]
 
-The seeds are the exclave's manifest and hashes file, and an EXCLAVE_LOG file and #! lines written
-here. The harness, test/fuzz.c built with test/launcher_fuzz.c under ASan and UBSan, runs for N
-seconds (10 by default) on every seed. A finding's input is at DIR/launcher/crash, and the exit
-status is the number of harnesses with one. The command's parsers are Go's, fuzzed by Go's own
-fuzzer (scripts/extra's gofuzz step).
+The seeds are the exclave's manifest and hashes file, and an EXCLAVE_LOG file, #! lines and a
+seccomp filter written here. The harness, test/fuzz.c built with test/launcher_fuzz.c under ASan
+and UBSan, runs for N seconds (10 by default) on every seed. A finding's input is at
+DIR/launcher/crash, and the exit status is the number of harnesses with one. The command's parsers
+are Go's, fuzzed by Go's own fuzzer (scripts/extra's gofuzz step).
 """
 
 import argparse
 import os
+import struct
 import subprocess
 import sys
 
@@ -22,6 +23,21 @@ readlink -22 /proc/self/exe
 openat 4 /tmp/a\\x20b\\n
 """
 SHEBANGS = [b"#!/bin/sh -e\nexit 0\n", b"#! /usr/bin/env  python3  \n", b"#!" + b"x" * 300 + b"\n"]
+
+# a program's seccomp filter for filter_wrap (7.4.2): an sshd-shaped allow-list, its actions ALLOW,
+# ERRNO, LOG and KILL_PROCESS, eight-byte instructions as the kernel takes them
+BPF = [
+    (0x20, 0, 0, 0),
+    (0x15, 2, 0, 257),
+    (0x15, 2, 0, 39),
+    (0x06, 0, 0, 0x80000000),
+    (0x06, 0, 0, 0x7FFF0000),
+    (0x15, 0, 1, 110),
+    (0x06, 0, 0, 0x50001),
+    (0x20, 0, 0, 16),
+    (0x54, 0, 0, 0xFF),
+    (0x06, 0, 0, 0x7FFC0000),
+]
 
 
 def main() -> int:
@@ -42,8 +58,10 @@ def main() -> int:
         shebangs.append(os.path.join(seeds, f"shebang{i}"))
         with open(shebangs[-1], "wb") as f:
             f.write(text)
+    with open(os.path.join(seeds, "bpf"), "wb") as f:
+        f.write(b"".join(struct.pack("<HBBI", *i) for i in BPF))
     files = [os.path.join(ex, ".exclave", name) for name in ("manifest", "hashes")]
-    launcher_seeds = [*files, *shebangs, os.path.join(seeds, "log")]
+    launcher_seeds = [*files, *shebangs, os.path.join(seeds, "log"), os.path.join(seeds, "bpf")]
 
     runs = []
     harnesses = (("launcher", args.launcher, launcher_seeds),)

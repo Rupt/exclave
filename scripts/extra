@@ -42,7 +42,7 @@ seed=$(($(date +%s) % 100000))
 # shellcheck disable=SC2329  # run through step, by name
 # the launcher's parsers, built with test/fuzz.c under the sanitisers, under mutation of EXCLAVE's own files
 fuzz() { # fuzz EXCLAVE
-    sanitized "$out/launcher_fuzz" -DHOST_TEST "$here/fuzz.c" "$here/launcher_fuzz.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
+    sanitized "$out/launcher_fuzz" -DHOST_TEST "$here/fuzz.c" "$here/launcher_fuzz.c" "$repo/src/manifest.c" "$repo/src/filter.c" "$repo/src/str.c" &&
         py "$here/fuzz.py" --exclave "$1" --work "$out/fuzz" --launcher "$out/launcher_fuzz"
 }
 

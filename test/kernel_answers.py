@@ -1646,9 +1646,8 @@ def exec_state_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
 
 
 # seccomp_filter HOSTDIR (test/progs/seccomp_filter.c), measured under bwrap on 7.0: a program's own
-# filter as the kernel applies it, every install in a child of its own. The cases use seccomp(2)'s
-# actions and flags up to 5.0's (LOG, KILL_PROCESS, NEW_LISTENER, GET_NOTIF_SIZES), and the suite
-# skips on an older kernel.
+# filter as the kernel applies it, every install in a child of its own. An older kernel lacks some
+# of what the cases use, and those answer as it decides (SECCOMP_FILTER_SINCE).
 SECCOMP_FILTER: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("PR_GET_SECCOMP before", "0"),
     ("errno install openat", "ok"),
@@ -1774,6 +1773,48 @@ SECCOMP_FILTER_LAUNCHER: dict[str, str] = {
 }
 
 
+# the cases that need a kernel of at least a version, answered as that kernel decides before it:
+# seccomp(2) itself (3.17), whose absence the program meets with the prctl form where it can; the
+# LOG action and the availability query (4.14), where an older kernel kills on LOG and the launcher
+# refuses it, since the judge would not; a listener and the notification sizes (5.0)
+SECCOMP_FILTER_SINCE: tuple[tuple[tuple[int, int], tuple[str, ...]], ...] = (
+    ((5, 0), ("new listener", "notification sizes")),
+    ((4, 14), ("log ", "action available")),
+    (
+        (3, 17),
+        (
+            "tsync ",
+            "strict seccomp",
+            "unknown flag",
+            "tsync probe",
+            "strict with a flag",
+            "empty program",
+            "4097 instructions",
+            "a jump past the end",
+            "no return at the end",
+            "program at",
+            "header at",
+            "unknown operation",
+        ),
+    ),
+)
+
+
 def seccomp_filter_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     """The lines of seccomp_filter's output that differ from the kernel's answers."""
-    return lines_wrong(out, SECCOMP_FILTER, SECCOMP_FILTER_LAUNCHER, by_the_kernel=by_the_kernel)
+    k = kernel()
+    want = tuple(
+        (
+            case,
+            None
+            if any(k < v and case.startswith(p) for v, ps in SECCOMP_FILTER_SINCE for p in ps)
+            else a,
+        )
+        for case, a in SECCOMP_FILTER
+    )
+    launcher = {
+        c: a
+        for c, a in SECCOMP_FILTER_LAUNCHER.items()
+        if not any(k < v and c.startswith(p) for v, ps in SECCOMP_FILTER_SINCE for p in ps)
+    }
+    return lines_wrong(out, want, launcher, by_the_kernel=by_the_kernel)

@@ -54,11 +54,25 @@ static uint32_t run(const struct sock_filter *p, int n, const struct data *d, in
             }
             break;
         }
-        case 0x54: A &= f->k; break;                          /* ALU AND K */
-        case 0x00: A = f->k; break;                           /* LD IMM */
-        case 0x01: X = f->k; break;                           /* LDX IMM */
-        case 0x87: A = X; break;                              /* TXA */
-        case 0x16: return A;                                  /* RET A */
+        case 0x54:
+            A &= f->k;
+            break;                          /* ALU AND K */
+        /* the kernel's action cache models none of these four (seccomp_is_const_allow): not constant there */
+        case 0x00:
+            if (known) return NOT_CONST;
+            A = f->k;
+            break;  /* LD IMM */
+        case 0x01:
+            if (known) return NOT_CONST;
+            X = f->k;
+            break;  /* LDX IMM */
+        case 0x87:
+            if (known) return NOT_CONST;
+            A = X;
+            break;     /* TXA */
+        case 0x16:
+            if (known) return NOT_CONST;
+            return A;         /* RET A */
         case 0x05: pc += (int)f->k; break;                    /* JA */
         case 0x15: pc += A == f->k ? f->jt : f->jf; break;    /* JEQ K */
         case 0x25: pc += A > f->k ? f->jt : f->jf; break;     /* JGT K */
@@ -159,7 +173,7 @@ static int wrapped(void)
         J(0x15, 7, 0, NR_getppid),                               /* -> errno EPERM */
         J(0x15, 8, 0, NR_mkdirat),                               /* -> kill process */
         J(0x15, 8, 0, NR_readlinkat),                            /* -> log */
-        J(0x15, 0, 2, NR_ioctl),                                 /* ioctl: its request in X */
+        J(0x15, 0, 2, NR_ioctl),                                 /* ioctl: its request next */
         J(0x20, 0, 0, 24),                                       /* ld arg1 */
         J(0x05, 0, 0, 6),                                        /* ja -> the request's test */
         J(0x25, 2, 0, 400),                                      /* nr > 400 -> errno 0 */

@@ -1843,13 +1843,14 @@ static __attribute__((noinline)) long do_seccomp(struct scratch *S, int nr, long
     unsigned long flags = 0;
     const void *uargs;
     if (nr == NR_prctl) {
-        if (a[0] != PR_SET_SECCOMP) return -ENOSYS; /* a newer filter's trap */
+        if ((int)a[0] != PR_SET_SECCOMP) return -ENOSYS; /* the kernel's int; another is a newer filter's trap */
         if (a[1] == SECCOMP_MODE_STRICT) return -ENOSYS;
         if (a[1] != SECCOMP_MODE_FILTER) return -EINVAL;
         uargs = (const void *)a[2];
     } else {
         unsigned op = (unsigned)a[0]; /* the kernel's unsigned int */
-        if (op == SECCOMP_SET_MODE_STRICT) return a[1] || a[2] ? -EINVAL : -ENOSYS;
+        /* the flags an unsigned int, as the kernel takes them */
+        if (op == SECCOMP_SET_MODE_STRICT) return (unsigned)a[1] || a[2] ? -EINVAL : -ENOSYS;
         if (op == SECCOMP_GET_ACTION_AVAIL || op == SECCOMP_GET_NOTIF_SIZES)
             return RE5(NR_seccomp, op, a[1], a[2], 0, 0);
         if (op != SECCOMP_SET_MODE_FILTER) return -EINVAL;
@@ -1872,6 +1873,13 @@ static __attribute__((noinline)) long do_seccomp(struct scratch *S, int nr, long
     struct sock_filter *body = (struct sock_filter *)m, *out = body + BPF_MAXINSNS;
     long r = copy_exact(S->pid, body, fp.filter, fp.len * sizeof *body);
     if (r == 0) r = filter_wrap(body, fp.len, out);
+    /* LOG before 4.14 is an action the kernel kills on, which the judge would not: refused where the kernel lacks it */
+    for (long i = 0; r > 0 && i < fp.len; i++)
+        if (body[i].code == 0x06 && (body[i].k & SECCOMP_RET_ACTION_FULL) == SECCOMP_RET_LOG) {
+            unsigned action = SECCOMP_RET_LOG;
+            if (RE5(NR_seccomp, SECCOMP_GET_ACTION_AVAIL, 0, &action, 0, 0)) r = -ENOSYS;
+            break;
+        }
     if (r > 0) {
         fp.len = (unsigned short)r;
         fp.filter = out;
@@ -2135,7 +2143,8 @@ static long judge(int nr, const long *a)
 #ifndef EXCLAVE_TEST_OLD
     if (!program_filters) return -MARK_NONE;
     long r = __sc6_judge(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
-    /* the launcher's filter answers every call from the slot that it traps */
+    /* the launcher's filter answers every call from the slot that it traps; a foreign outer filter's TRAP, which no
+     * launcher filter answers, would end here, or in the nesting limit should the call trap again: loud either way */
     if (r > 0) die("the judge call ran", 0, nr);
     return r;
 #else

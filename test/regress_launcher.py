@@ -1010,11 +1010,8 @@ def own_seccomp_filter(ctx: Ctx) -> str | None:
     itself, and the answers are the kernel's under bwrap (test/kernel_answers.py), but for the
     installs the launcher refuses with ENOSYS. While a program's filter is in force a launcher
     before filter version 10, which would re-issue a trapped call unjudged, is not exec'd: EACCES.
-    The cases use actions and flags of 5.0, so an older kernel skips.
+    A case an older kernel lacks answers as that kernel decides (SECCOMP_FILTER_SINCE).
     """
-    release = tuple(int(x) for x in re.findall(r"\d+", os.uname().release)[:2])
-    if release < (5, 0):
-        skip(f"kernel {os.uname().release}: the cases use seccomp(2)'s actions and flags of 5.0")
     d = os.path.join(ctx.work, "seccomp-filter-host")
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)

@@ -86,7 +86,10 @@ static long sys_mkdir(const char *p) { return syscall(SYS_mkdirat, AT_FDCWD, p, 
 static long install(struct sock_filter *f, unsigned short n, unsigned long flags)
 {
     struct sock_fprog p = {n, f};
-    return syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, flags, &p);
+    long r = syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, flags, &p);
+    /* a kernel before 3.17 has no seccomp(2): the prctl form, which takes no flags */
+    if (r < 0 && errno == ENOSYS && !flags) r = prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &p, 0, 0);
+    return r;
 }
 #define LD_NR BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr))
 /* "nr answers action, everything else is allowed" */

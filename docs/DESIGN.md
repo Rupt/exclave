@@ -1003,9 +1003,10 @@ break, since the kernel reads the frame from the stack. A call's
 instruction pointer, the address after its syscall instruction, lies in
 its own slot on both architectures. Only the bootstrap that maps the
 page and the version probe below use a bare syscall instruction in the
-launcher's text; after an `execve` under a program's own filter those
-few calls, `mmap`, `mprotect` and the probe's `uname`, are judged by
-that filter as a native dynamic program's loader would be.
+launcher's text; after an `execve` under a program's own filter the
+bootstrap's `mmap` and `mprotect` are judged by that filter as a
+native dynamic program's loader would be, and the probe is allowed by
+the filter's prologue (below).
 
 The address is a constant, so the filters of any number of ancestor
 generations agree after `execve`. It lies above program images, which
@@ -1062,15 +1063,21 @@ kernel judge each trapped call by it:
   argument, before the body can: allowed from anywhere, so that the
   version probe of a launcher exec'd under the filter reads the
   launcher filter's answer, and `ERRNO(MARK_PRESENT)`, 4093, from the
-  judge slot. It then clears A, as the kernel starts a program, and
-  falls into the body. The body is the program's, instruction for
+  judge slot. It then clears A, as the kernel starts a program, with
+  `and #0`, and falls into the body. The body is the program's, instruction for
   instruction, but for each return of an action other than `ALLOW`,
   which becomes a jump to a stub that loads the action into X and jumps
   to the epilogue: there a call from the syscall page, the launcher's
   own and its restorer's, is allowed, and one from the judge slot or
   from anywhere else gets the body's action. The instruction pointer is
   read only on that path, so a number the program's body allows by
-  itself stays a constant for the kernel's action cache. Jumps are
+  itself stays a constant for the kernel's action cache, as natively,
+  but for `uname`, whose argument the prologue reads. The cache models
+  only loads of the number and the architecture, jumps on constants,
+  `and` with a constant and a constant return
+  (`seccomp_is_const_allow`), which is why A is cleared with `and #0`:
+  an `ld #0` would put every number out of its reach, in the process
+  and its descendants. Jumps are
   relative and the kernel bounds them within the body, so each stays
   where the body put it; the handler checks those bounds itself, and
   that the body ends in a return, since inside a longer program the
@@ -1112,14 +1119,21 @@ kernel judge each trapped call by it:
   `seccomp` or `prctl`, so kernels before 3.17 keep working, with the
   program's flags: `TSYNC`, `TSYNC_ESRCH`, `LOG` and `SPEC_ALLOW`. Its
   answer is returned, `TSYNC`'s failure the offending thread's id. The
-  kernel's own refusals come first, in its order: the flags, by asking
-  the kernel with no program (`EINVAL`, or `EFAULT` that the handler
-  takes as their acceptance), the header's address (`EFAULT`), a
+  kernel's refusals that do not depend on the body's instructions come
+  first, in its order: the flags, by asking the kernel with no program
+  (`EINVAL`, or `EFAULT` that the handler takes as their acceptance),
+  the header's address (`EFAULT`), a
   length of 0 or above 4 096 or a null program (`EINVAL`), the
   program's address (`EFAULT`), the jump bounds and the final return
-  (`EINVAL`), and the rest of the kernel's checks on the installed
-  filter. The body and the built filter live in a transient anonymous
-  mapping, up to 64 KB, made and removed by the install.
+  (`EINVAL`); then the launcher's refusals below; then the kernel's
+  checks of the instructions themselves, an opcode it does not admit, a
+  misaligned load, a read of scratch memory before a write
+  (`EINVAL`), on the installed filter, so a body with faults of both
+  kinds is `ENOSYS` here where natively it is `EINVAL`. `LOG` on a
+  kernel before 4.14, which kills on it, is refused as well, by asking
+  the kernel whether the action is available. The body and the built
+  filter live in a transient anonymous mapping, up to 64 KB, made and
+  removed by the install.
 - **Refused with `ENOSYS`**, visibly, at install: strict mode in either
   form; the flags `NEW_LISTENER`, `WAIT_KILLABLE_RECV` and any the
   launcher does not know; a return of A; any action but `ALLOW`, `LOG`,
@@ -3194,9 +3208,7 @@ and stay fixed.
    `bwrap` on the unwrapped tree; and `qemu-system-x86_64` 8.2 with
    `-sandbox on` and every deny option installs its filter, which
    `/proc/<pid>/status` counts beside the launcher's, and runs and quits
-   over QMP. Refused, `sshd` carried on without its
-   sandbox, saying so only at debug level, and `qemu` refused the
-   option. The differences:
+   over QMP. The differences:
    - **A program's own sandbox inside an exclave confines the program's
      own calls, not an attacker who has gained code execution in it.**
      The syscall page at a fixed address holds `syscall; ret`, and the
@@ -3209,8 +3221,9 @@ and stay fixed.
      action, whose `SIGSYS` is the launcher's (item 23); `TRACE` and
      `USER_NOTIF`, which need a supervisor, and the `NEW_LISTENER` and
      `WAIT_KILLABLE_RECV` flags; a return of A; an `ERRNO` of 4094,
-     the judge's own answer; a read of the instruction pointer, which a
-     judged call would see as the judge slot's; and a body longer than
+     the judge's own answer; `LOG` on a kernel before 4.14, which kills
+     on it; a read of the instruction pointer, which a judged call would
+     see as the judge slot's; and a body longer than
      the room the filter built around it leaves, 4 072 instructions
      less two per distinct action other than `ALLOW`. So Chromium's and
      tor's sandboxes, container runtimes and bubblewrap still fail at
@@ -3232,9 +3245,10 @@ and stay fixed.
      not exec'd (`EACCES`), and a launcher newer than the filter it
      finds refuses to start under one by name.
    - After an `execve` under the filter, the new launcher's bootstrap,
-     `mmap`, `mprotect` and the version probe's `uname`, is judged by
-     it, as a native dynamic program's loader would be, so a filter
-     that kills `mmap` kills the new image at its start.
+     `mmap` and `mprotect`, is judged by it, as a native dynamic
+     program's loader would be, so a filter that kills `mmap` kills the
+     new image at its start; the version probe is the prologue's to
+     allow.
 
    Programs that depend on the rest, container runtimes, browsers'
    sandboxes, `rr`, are out of scope. `strace` inside an exclave works
@@ -4302,11 +4316,14 @@ then start the walk in the working directory as the kernel names it,
 since that name has no symlink in it (16.6 item 5).
 
 **A program's own filter** adds the judge call to every trap (7.4.2):
-a warm exclave-path `stat`, 2.15 µs in a process with no filter of its
-own, costs 2.38 µs under a 152-instruction filter the program installed,
-0.23 µs more, the kernel running the program's filter and the launcher's
+a warm exclave-path `stat`, 2.13 µs in a process with no filter of its
+own, costs 2.27 µs under a 152-instruction filter the program installed,
+0.14 µs more, the kernel running the program's filter and the launcher's
 once more and a syscall that does not execute. A process that installs
-no filter makes no judge call.
+no filter makes no judge call. An untrapped `getppid` costs 53 to 54 ns
+with the program's filter and without, since the action cache still
+proves it allowed; natively that filter takes it from 46 to 50 ns to 54
+to 57, the seccomp entry any first filter costs.
 
 **What a small compile traps.** `gcc -O0 hello.c` through an exclave
 makes about 1 250 traps. 746 of them are `readlink`, almost all

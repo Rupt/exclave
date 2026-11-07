@@ -359,6 +359,11 @@ static void loader_mode_check(char **argv, char **env2)
      * host, though, where an absolute link of the tree leads to the host's file: the spelling is exec'd only when it
      * reaches this wrapper, and the wrapper by its own path otherwise (13 item 39) */
     if (is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp)) {
+        /* 7.4.2: under a program's own filter a launcher without the judge rule is not run, as a handler refuses it */
+        int gen, version;
+        if (program_filters &&
+            (elf_probe(S->real, S->rest, &gen, &version, S->extra) < 0 || version < FILTER_JUDGE_SINCE))
+            die("a launcher before filter version 10 is not run under a program's own seccomp filter", C.program, 0);
         if (canon(S, S->arg, AT_FDCWD, 0, S->v2) < 0) scpy(S->v2, C.program, PATH_MAX);
         to_real_exec(S->v2, S->real2);
         long fd = sys_open(S->real2, O_PATH | O_CLOEXEC, 0);
