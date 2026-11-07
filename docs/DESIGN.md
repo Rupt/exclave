@@ -2565,7 +2565,9 @@ refused. From `.deb` files, in five steps:
    its standard output, without which gdk-pixbuf reads only the
    formats built into it; `icon-theme.cache` for each theme under
    `/usr/share/icons` with an `index.theme`, by `gtk-update-icon-cache
-   -q -t -f`; the desktop database, `mimeinfo.cache`, by
+   -q -t -f`, none for one whose index names no directory, as the
+   cursor theme `default`'s, for which the generator writes none; the
+   desktop database, `mimeinfo.cache`, by
    `update-desktop-database`; and fontconfig's caches of the system's
    font directories, by `fc-cache -s -f`, into the first cache
    directory the tree's `fonts.conf` names outside the home,
@@ -5074,7 +5076,8 @@ its time, ok, SKIP or FAIL:
   the reason where it does not, GIO opens its modules and then only
   `giomodule.cache`, `gdk-pixbuf-pixdata` cannot read a BMP image and
   then reads it, each icon theme's cache is missing and then
-  validates, names every icon and is no older than its directory, the
+  validates, names every icon and is no older than its directory, a
+  cursor theme whose index names no directory gets none, the
   desktop database maps each MIME type to the desktop files that name
   it, and `fc-list` writes font caches under the home and then lists
   the same fonts and writes none; `exclave check` passes on the tree hash recorded, a second run

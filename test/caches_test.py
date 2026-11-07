@@ -17,15 +17,16 @@ the generator and something for it to index, and otherwise skipped with the reas
 every module in its module directory, then reads giomodule.cache and opens none;
 gdk-pixbuf-pixdata cannot read a BMP image, whose loader is a module, then reads it; each icon
 theme's cache does not exist, then validates, names every icon of the theme and is no older than
-the theme's directory; the desktop database does not exist, then maps each MIME type to the
-desktop files that name it; fc-list writes fontconfig's caches under the home, then lists
-the same fonts and writes none; and dot refuses svg, not recognising the format, then draws a
-one-edge graph as an SVG document. exclave check passes on the tree hash recorded; a second run
-changes no file and leaves the tree hash as it was; font directories given new times, as a copy
-that loses them gives them, leave the font caches stale until a run remakes them; a tree changed
-since its hash was recorded is refused; and the given exclave, whose files the copy shares by
-hard links, is left as it was. On a second copy, a generator that fails, the MIME generator on a
-package that is a directory, leaves the tree, its hash and the exclave's directory as they were.
+the theme's directory; a cursor theme, whose index names no directory, gets none; the desktop
+database does not exist, then maps each MIME type to the desktop files that name it; fc-list
+writes fontconfig's caches under the home, then lists the same fonts and writes none; and dot
+refuses svg, not recognising the format, then draws a one-edge graph as an SVG document. exclave
+check passes on the tree hash recorded; a second run changes no file and leaves the tree hash as
+it was; font directories given new times, as a copy that loses them gives them, leave the
+font caches stale until a run remakes them; a tree changed since its hash was recorded is refused;
+and the given exclave, whose files the copy shares by hard links, is left as it was. On a second
+copy, a generator that fails, the MIME generator on a package that is a directory, leaves the
+tree, its hash and the exclave's directory as they were.
 """
 
 import argparse
@@ -98,6 +99,12 @@ def desktop_types(apps: str) -> dict[str, set[str]]:
                             if t:
                                 types.setdefault(t, set()).add(ident)
     return types
+
+
+def icon_dirs(root: str, theme: str) -> bool:
+    """Whether a theme's index.theme names a directory of icons, as Directories= does."""
+    with open(str(real(root, f"{theme}/index.theme")), encoding="utf-8", errors="replace") as f:
+        return any(line.startswith("Directories=") and line[12:].strip() for line in f)
 
 
 def mimeinfo(path: str) -> dict[str, set[str]]:
@@ -201,13 +208,14 @@ class Generators:
             root, "/usr/bin/gtk-update-icon-cache", "/usr/bin/gtk4-update-icon-cache"
         )
         icons = real(root, "/usr/share/icons")
-        self.themes = sorted(
-            {
-                tree.resolve(root, f"/usr/share/icons/{n}")
-                for n in (os.listdir(icons) if icons and os.path.isdir(icons) else [])
-                if real(root, f"/usr/share/icons/{n}/index.theme")
-            }
-        )
+        indexed = {
+            tree.resolve(root, f"/usr/share/icons/{n}")
+            for n in (os.listdir(icons) if icons and os.path.isdir(icons) else [])
+            if real(root, f"/usr/share/icons/{n}/index.theme")
+        }
+        # a theme whose index names no directory, as the cursor theme default, gets no cache
+        self.bare = sorted(t for t in indexed if not icon_dirs(root, t))
+        self.themes = sorted(indexed - set(self.bare))
         self.case(
             "icons",
             "icon caches",
@@ -285,6 +293,10 @@ class Generators:
                 fresh = os.stat(cache).st_mtime_ns >= os.stat(d).st_mtime_ns
                 got.append((theme, rc, (missing, fresh)))
             s["icons"] = got
+            s["bare"] = [
+                os.path.exists(os.path.join(root, t.lstrip("/"), "icon-theme.cache"))
+                for t in self.bare
+            ]
         if "desktop" in self.cases:
             cache = os.path.join(str(self.apps), "mimeinfo.cache")
             s["desktop"] = mimeinfo(cache) if os.path.exists(cache) else None
@@ -319,6 +331,11 @@ class Generators:
                 f"{n}: before, no icon cache; after, each theme's validates, names every icon "
                 "and is no older than its directory",
                 (b, a),
+            )
+            expect(
+                not any(after["bare"]),
+                f"{n}: a theme whose index names no directory gets no cache, and the run succeeds",
+                (self.bare, after["bare"]),
             )
         if "desktop" in self.cases:
             want = desktop_types(str(self.apps))
@@ -372,6 +389,14 @@ def one(given: str, work: str) -> None:
         "enum.cpython-" + py[len("python") :].replace(".", "") + ".pyc",
     )
     sh = os.path.join(root, tree.vbin(root, "sh").lstrip("/"))
+    icons = real(root, "/usr/share/icons")
+    if icons and os.path.isdir(icons):
+        # a cursor theme's index, as /usr/share/icons/default holds one: no directory of icons
+        os.makedirs(os.path.join(icons, "zz-cursors"))
+        with open(os.path.join(icons, "zz-cursors", "index.theme"), "w") as f:
+            f.write("[Icon Theme]\nInherits=hicolor\n")
+        rc, out = tool("wrap", ex)
+        expect(rc == 0, f"{name}: the copy with a cursor theme wraps again", out[-300:])
     probe = (
         'python3 -v -c "import enum" 2>&1 | grep "code object from .*/enum"; '
         "GSETTINGS_BACKEND=memory gsettings get org.gnome.desktop.interface clock-format 2>&1; "

@@ -400,7 +400,9 @@ func pixbufLoaders(c *cacheRun, root string) []cache {
 // which an icon lookup reads in place of walking the theme's directories; the generator runs on
 // a mirror of the theme, since it writes into it. GTK takes a cache older than its theme's
 // directory for stale, so the directory gets the cache's time where its own is later, as the
-// generator gives it.
+// generator gives it. A theme whose index names no directory of icons, as the cursor theme
+// /usr/share/icons/default does, gets no cache from the generator, which then writes none, and
+// none is made, as the maintainer script makes none.
 func iconCaches(c *cacheRun, root string) []cache {
 	base := treeDir(root, "/usr/share/icons")
 	tool := findTool(root, "/usr/bin/gtk-update-icon-cache", "/usr/bin/gtk4-update-icon-cache")
@@ -420,6 +422,9 @@ func iconCaches(c *cacheRun, root string) []cache {
 		mirror(root, theme, at, func(n string) bool { return n != "icon-theme.cache" })
 		rc, text := c.run(nil, tool, "-q", "-t", "-f", at)
 		ran(tool, rc, text)
+		if !lexists(pathJoin(at, "icon-theme.cache")) {
+			continue
+		}
 		m.files = append(m.files, [2]string{pathJoin(at, "icon-theme.cache"), theme + "/icon-theme.cache"})
 	}
 	if len(m.files) == 0 {
