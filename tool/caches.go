@@ -639,6 +639,14 @@ func cmdCaches(args []string) int {
 		fmt.Fprintf(out, "%s: no generator applies: the tree holds none of the programs exclave caches runs\n", ex)
 		return 0
 	}
+	// a generator that exits 0 and writes nothing fails here, before the tree changes
+	for _, m := range made {
+		for _, f := range m.files {
+			if st, err := os.Lstat(f[0]); err != nil || !st.Mode().IsRegular() {
+				fail("%s: the generator made no %s", m.what, f[1])
+			}
+		}
+	}
 	// every generator has succeeded: now the tree changes
 	for _, m := range made {
 		changed := 0

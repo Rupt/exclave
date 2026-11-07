@@ -2617,7 +2617,8 @@ refused. From `.deb` files, in five steps:
    the interpreter's own imports from writing theirs first by the
    time, which `compileall` would take as up to date. What a generator
    says is printed after its name, a schema it passed over among it.
-   The tree changes only once every generator has succeeded, so a
+   The tree changes only once every generator has succeeded and every
+   file it was to make is there, so a
    failure leaves the exclave as it was: each file made replaces the
    tree's where they differ, through a new file renamed over it, since
    a tree's files may be hard links shared with a copy (6.1), at the
