@@ -172,7 +172,8 @@ esac
 # shellcheck disable=SC2086  # the architecture's arguments, several words or none
 item both sss debs-sss debs --keyring "$ubuntu" $here_debs libnss-sss
 # the suite's gdb tests (13 item 1), which the gate's gcc exclave cannot run for want of a gdb
-item both gdb debs-gdb debs --keyring "$ubuntu" gcc-13 libc6-dev gdb
+# shellcheck disable=SC2086  # the architecture's arguments, several words or none
+item both gdb debs-gdb debs --keyring "$ubuntu" $here_debs gcc-13 libc6-dev gdb
 # shellcheck disable=SC2086  # the architecture's arguments, several words or none
 item both caches debs-caches debs --keyring "$ubuntu" $here_debs python3-minimal libglib2.0-bin shared-mime-info gsettings-desktop-schemas \
     libgdk-pixbuf2.0-bin dconf-gsettings-backend desktop-file-utils gtk-update-icon-cache hicolor-icon-theme vim-common fontconfig fonts-dejavu-core graphviz
