@@ -72,9 +72,11 @@ documents, gate, one commit per item. Status is in brackets.
    host's answer recorded (old hosts lack `ssh-keygen -Y` and
    `tar --zstd`); the README's consumer section says what the recipe
    needs.
-5. **The trust directory** [design in progress]: identity directories,
-   their walk on the host, the oracles' model of them, the probe's path
-   forms, the tool's part; item 55 rewritten as what remains.
+5. **The trust directory** [done]: three identity directories and eleven
+   identity files, Java's keystores among them, the host's with their
+   links followed on the host; designed, reviewed against kernel facts,
+   implemented and reviewed three times more; item 55 states what
+   remains (DESIGN 8.4).
 6. **The sweep over Python, a JDK and TeX Live** [done]: real
    exclaves of the three run against the kernel's answers; each gap a
    rule in `unpack` or a generator of `exclave caches` with a test, or a
