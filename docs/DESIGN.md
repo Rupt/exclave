@@ -3902,6 +3902,25 @@ and stay fixed.
     `texlive-latex-recommended` and `texlive-fonts-recommended`,
     measured November 2026).
 
+57. **A link a program inside makes at a host path names a virtual
+    path.** A program inside sees the tree at `/`, so a symlink it
+    writes at a host path holds the virtual path as its text: `python3
+    -m venv DIR` without `--copies` makes `DIR/bin/python3 ->
+    /usr/bin/python3`, and the scripts `pip` installs there start
+    `#!DIR/bin/python`. Inside the exclave the link leads to the
+    tree's interpreter and the venv works, `pip install` into it
+    included; run from outside, the kernel follows the link on the
+    host, to the host's `/usr/bin/python3` or to nothing, so the venv
+    runs the host's interpreter where the host has one and fails
+    where it has none (Ubuntu 24.04's `python3-venv`, measured
+    November 2026). A link's text is data the launcher does not
+    rewrite, since which world a link is meant for is the program's
+    to know. Run the venv from inside, by the exclave's shell, or point
+    the link at the wrapper's host path, `ln -sfn
+    EXCLAVE/tree/usr/bin/python3 DIR/bin/python3`, with which it runs
+    the exclave's interpreter from outside too, `sys.prefix` the
+    venv's; `--copies` copies the original instead (item 16).
+
 ### 13.1 Debugging and profiling recipe
 
 Yama's `ptrace_scope` forbids attaching to a non-descendant on most
