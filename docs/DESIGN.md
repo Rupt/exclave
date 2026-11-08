@@ -2703,10 +2703,11 @@ refused. From `.deb` files, in five steps:
    files with one alias the later, as `update-ca-certificates`
    leaves the link. No rule makes Alpine's `java-cacerts` keystore
    or Fedora's `/etc/pki/ca-trust/extracted/java/cacerts`, so a JDK
-   unpacked from those trusts no authority. The keystore holds the distribution's set, not the host's, since
-   no identity file stands for it (8.4); `host
-   "/etc/ssl/certs/java/cacerts"` gives an exclave the host's where
-   the host has one;
+   unpacked from those trusts no authority without a host's. The
+   keystore holds the distribution's set, which answers where the host
+   has none: `/etc/ssl/certs/java/cacerts` and `/etc/pki/java/cacerts`
+   are identity files (8.1 rule 5), so a JDK inside reads the host's
+   keystore where the host has one;
    `ca-trust`, Fedora's bundle from the p11-kit trust source;
    `ssl-paths`, OpenSSL's compiled-in trust paths when a libssl is
    present, so that the host's bundle at the identity path (8.4) is
