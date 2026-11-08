@@ -4158,6 +4158,33 @@ and stay fixed.
     the exclave's interpreter from outside too, `sys.prefix` the
     venv's; `--copies` copies the original instead (item 16).
 
+58. **A deferred `pthread_cancel` does not end a blocked trapped call
+    on musl or a later glibc.** A thread blocked in a trapped call
+    that waits, an `open` of a FIFO with no writer, is cancelled by a
+    deferred `pthread_cancel` natively, and under the launcher stays
+    blocked. The libc's cancellation handler judges the interrupted
+    place by the signal frame's program counter, which must lie in
+    its own cancellable wrapper; during the re-issued call it lies in
+    the launcher's syscall page. musl then blocks its cancel signal in
+    that frame and sends it again, and the kernel restarts the call
+    (`SA_RESTART`) with the signal blocked, so the call waits on.
+    glibc 2.39 (Ubuntu 24.04) switches to asynchronous cancellation
+    around the call and unwinds through the launcher's frames; a later
+    glibc, as Fedora 42's 2.41 with its
+    `__syscall_cancel_arch_start` and `_end` markers, judges by the
+    counter as musl does (`test/progs/clones.c`, measured on musl
+    1.2.5 and glibc 2.41, both cancelled under bwrap). The thread is
+    freed when the call completes, a writer opening the FIFO in the
+    exerciser, and the cancellation is acted on at its next
+    cancellation point. Any trapped call that blocks meets the same,
+    `connect` among them. A program that must cancel such a thread
+    sets asynchronous cancellation around the call
+    (`PTHREAD_CANCEL_ASYNCHRONOUS`, which passes under the launcher),
+    or interrupts it with a signal whose handler of its own ends the
+    thread, `pthread_exit` from the handler as the exerciser does, or
+    waits in a cancellation point that is no trapped call, `poll` on
+    a descriptor opened beforehand.
+
 ### 13.1 Debugging and profiling recipe
 
 Yama's `ptrace_scope` forbids attaching to a non-descendant on most
@@ -5188,9 +5215,12 @@ meaning items 4 and 7.
      trapped calls with every disposition and the restart rules, the
      alternate stack at each size with `SS_AUTODISARM` and a handler
      landing on it (13 items 30 and 51), `vfork` and `clone` children
-     trapping on stacks down to 2 KB, `pthread_cancel` and
-     `pthread_exit` unwinding through a blocking trap, Go's
-     goroutines beside a collector, 64 threads trapping at once and threads trapping while
+     trapping on stacks down to 2 KB and a thread on the least stack
+     its libc allows (13 item 30), `pthread_cancel` and `pthread_exit`
+     unwinding through a blocking trap, a deferred `pthread_cancel`
+     left blocked where the libc judges it by the program counter (13
+     item 58), Go's goroutines beside a collector, 64 threads trapping
+     at once and threads trapping while
      another spawns, a descriptor-relative path looked up while its
      directory's parent is renamed, in both forms of the walk (16.6
      item 5; the walk from the root under a second mount of the

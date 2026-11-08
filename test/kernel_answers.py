@@ -596,13 +596,24 @@ CLONES = (
 )
 
 
-def clones_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
+# a deferred cancellation that the blocked open does not act on, ended by the exerciser's writer
+CLONES_CANCEL_LATE = (
+    "pthread_cancel in a blocking trapped open: cancelled once a writer released the open"
+)
+
+
+def clones_wrong(
+    out: str, *, by_the_kernel: bool = False, cancel_by_counter: bool = False
+) -> list[str]:
     """The lines of clones's output that differ from the kernel's answers.
 
     by_the_kernel: the kernel itself answered. Otherwise the launcher did, and a clone(CLONE_VM)
     child trapping on a 4 KB or 2 KB stack is its stated limitation (13 item 30), 8 KB too where
     the kernel's frame passes 3.5 KB; so is a thread on the least stack its libc allows where that
-    is as small, musl's 2 KB, a death reported with the stack's size.
+    is as small, musl's 2 KB, a death reported with the stack's size. cancel_by_counter: the
+    tree's libc judges a cancellation by the interrupted program counter, as musl and a glibc
+    with __syscall_cancel_arch_start do, and a deferred cancellation leaves a blocked trapped open
+    blocked until a writer releases it (13 item 58).
     """
     got = out.splitlines()
     wrong = []
@@ -615,6 +626,8 @@ def clones_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
             and case.startswith("clone(CLONE_VM) child trapping on a ")
             and ("4 KB" in case or "2 KB" in case or minsigstksz() > 3500)
         ):
+            continue
+        if not by_the_kernel and cancel_by_counter and g == CLONES_CANCEL_LATE:
             continue
         least = re.fullmatch(
             r"thread with the least stack, 100 traps: killed by .* on (\d+) bytes", g
