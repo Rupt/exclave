@@ -61,12 +61,13 @@ documents, gate, one commit per item. Status is in brackets.
    the figures rule applied throughout `docs/DESIGN.md`, `README.md` and
    the exclave README.
 2. **Versioning `0.0.n`** [done]: `VERSION` is `0.0.1`.
-3. **The compatibility baseline** [in progress]: a record of the
-   baseline release's assets that `scripts/inputs` fetches, the
-   compatibility test as a step of `scripts/extra` and of CI, reporting
-   SKIP until a release exists.
-4. **The consumer's recipe on every kernel of the matrix** [in
-   progress]: a release of the gcc exclave verified, unpacked and
+3. **The compatibility baseline** [done]: a record of the baseline
+   release's assets that `scripts/inputs` fetches, the compatibility
+   test a step of the gate, and so of CI, reporting SKIP until a release
+   exists; a later `wrap` may add only its identity placeholders to an
+   earlier exclave (DESIGN 6.7).
+4. **The consumer's recipe on every kernel of the matrix** [done, the
+   matrix run on it due]: a release of the gcc exclave verified, unpacked and
    checked in each matrix VM with the release's own command, each
    host's answer recorded (old hosts lack `ssh-keygen -Y` and
    `tar --zstd`); the README's consumer section says what the recipe

@@ -5241,9 +5241,7 @@ test that crawls fails instead of stalling the gate: every program a
 test runs is started in a session of its own, its timeout is cut to what
 is left of the budget, and when that runs out its whole process group is
 killed, a launcher's children with it, and the test fails by name. The exit status is the
-number of failed steps. On the reference machine the whole gate
-(`--full`), on the gcc exclave with its fixture and with the Docker
-profile, two steps at a time, takes 47 s (measured October 2026).
+number of failed steps.
 
 **Beyond the gate** (`scripts/extra [--jobs N] EXCLAVE...`) runs, with
 the gate's step runner (`scripts/steps.sh`) and when the maintainer

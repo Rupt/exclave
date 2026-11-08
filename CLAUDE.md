@@ -53,8 +53,7 @@ The loop that has served well, in the order it pays:
    discretionary, run only when the user asks for it in so many words:
    `scripts/extra EXCLAVE...` (the suite on the other exclaves, on the
    debug launcher and under the plain terminal's label, the fuzz
-   budget, the release test, and with `EXCLAVE_TEST_OLD` the compatibility
-   test against an earlier build), `scripts/matrix --exclave EXCLAVE` (the
+   budget and the release test), `scripts/matrix --exclave EXCLAVE` (the
    kernels, about sixteen minutes on this laptop), the examples, and
    the workflow `.github/workflows/ci.yml`, dispatched from the
    Actions tab or as `gh workflow run ci.yml -f matrix=true` (`false`:
