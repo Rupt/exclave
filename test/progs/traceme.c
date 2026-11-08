@@ -53,7 +53,9 @@ static void child(int how)
     }
     if (how == 2) execv("/nonexistent/traceme", av);
     if (how == 3) _exit(7);
-    if (how == 4) raise(SIGSTOP);
+    /* kill rather than raise: musl's raise blocks signals around its tkill, a trapped rt_sigprocmask whose SIGSYS
+     * would stop a traced child before its SIGSTOP */
+    if (how == 4) kill(getpid(), SIGSTOP);
     if (how == 6) {
         char *sv[] = {sh_path, sh_c, sh_cmd, 0};
         execv(sh_path, sv);
