@@ -14,6 +14,7 @@ package unpack
 import (
 	"bytes"
 	"crypto/sha1"
+	"encoding/asn1"
 	"encoding/binary"
 	"encoding/pem"
 	"fmt"
@@ -23,6 +24,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"exclave/unpack/apk"
 	"exclave/unpack/ldcache"
@@ -632,8 +635,14 @@ func enabledCertificates(r *root.Root) ([]string, error) {
 	var certs []string
 	find := func(top string) {
 		var found []string
+		seen := map[string]bool{} // directories by their real path: a loop of links is walked once, as find -L
 		var walk func(dir string)
 		walk = func(dir string) {
+			real, err := r.Realpath(dir)
+			if err != nil || seen[real] {
+				return
+			}
+			seen[real] = true
 			for _, n := range r.Listdir(dir) {
 				switch p := dir + "/" + n; {
 				case r.IsDir(p):
@@ -674,9 +683,13 @@ var pemAlias = strings.NewReplacer(" ", "_", "(", "=", ")", "=", ",", "_")
 // /etc/ssl/certs/java/cacerts, which a Debian JDK's lib/security/cacerts links to and without
 // which Java trusts no authority: a JKS keystore of each enabled certificate (enabledCertificates)
 // as a trusted entry under the alias "debian:NAME.pem", NAME the certificate's file name as
-// update-ca-certificates spells it, the first certificate of each file, with the store password
-// the package's default, "changeit". An entry's date is the epoch, so the tree is the same on
-// every run, and the entries are in their aliases' order.
+// update-ca-certificates spells it, the first certificate of each file (firstCertificate), with
+// the store password the package's default, "changeit". A file without a certificate, or whose
+// name a keystore cannot hold, is passed over with a note, as the package's program passes over
+// one it cannot read, since one entry Java cannot read makes it refuse the keystore; of two files
+// with one alias the later wins, as update-ca-certificates' ln -sf leaves the link. An entry's
+// date is the epoch, so the tree is the same on every run, and the entries are in their aliases'
+// order.
 func javaCacerts(r *root.Root, packages []*Package, log logger) (bool, error) {
 	store := "/etc/ssl/certs/java/cacerts"
 	if !names(packages)["ca-certificates-java"] || r.Lexists(store) {
@@ -686,46 +699,52 @@ func javaCacerts(r *root.Root, packages []*Package, log logger) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	type entry struct {
-		alias string
-		der   []byte
-	}
-	var entries []entry
+	// each alias's certificate, the later file's where two share one, as ln -sf leaves the link
+	ders := map[string][]byte{}
 	for _, c := range certs {
 		data, err := r.ReadBytes(c)
 		if err != nil {
 			return false, err
 		}
-		for rest := data; ; {
-			var b *pem.Block
-			if b, rest = pem.Decode(rest); b == nil {
-				log("note: " + c + " holds no PEM certificate; java-cacerts passed over it")
-				break
-			}
-			if b.Type == "CERTIFICATE" {
-				name := strings.TrimSuffix(filepath.Base(c), ".crt")
-				entries = append(entries, entry{"debian:" + strings.ToLower(pemAlias.Replace(name)) + ".pem", b.Bytes})
-				break
-			}
+		name := strings.TrimSuffix(filepath.Base(c), ".crt")
+		alias := "debian:" + strings.ToLower(pemAlias.Replace(name)) + ".pem"
+		if !utf8.ValidString(alias) || len(modifiedUTF8(alias)) > 0xffff {
+			log("note: " + c + "'s name is not valid UTF-8 of a length a keystore holds; java-cacerts passed over it")
+			continue
 		}
+		der := firstCertificate(data)
+		if der == nil {
+			log("note: " + c + " holds no certificate; java-cacerts passed over it")
+			continue
+		}
+		if _, ok := ders[alias]; ok {
+			log("note: " + c + " is named " + alias + " as an earlier certificate is; the keystore holds the later")
+		}
+		ders[alias] = der
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].alias < entries[j].alias })
+	aliases := make([]string, 0, len(ders))
+	for a := range ders {
+		aliases = append(aliases, a)
+	}
+	sort.Strings(aliases)
 	var ks bytes.Buffer
 	u32 := func(v uint32) { ks.Write(binary.BigEndian.AppendUint32(nil, v)) }
-	utf := func(s string) { ks.Write(binary.BigEndian.AppendUint16(nil, uint16(len(s)))); ks.WriteString(s) }
+	utf := func(s string) {
+		m := modifiedUTF8(s)
+		ks.Write(binary.BigEndian.AppendUint16(nil, uint16(len(m))))
+		ks.Write(m)
+	}
 	u32(0xfeedfeed) // JKS, version 2
 	u32(2)
-	u32(uint32(len(entries)))
-	for i, e := range entries {
-		if i > 0 && e.alias == entries[i-1].alias {
-			return false, fmt.Errorf("%s: two certificates named %s", store, e.alias)
-		}
+	u32(uint32(len(aliases)))
+	for _, alias := range aliases {
+		der := ders[alias]
 		u32(2) // a trusted certificate
-		utf(e.alias)
+		utf(alias)
 		ks.Write(make([]byte, 8)) // its date, the epoch in milliseconds
 		utf("X.509")
-		u32(uint32(len(e.der)))
-		ks.Write(e.der)
+		u32(uint32(len(der)))
+		ks.Write(der)
 	}
 	// the keyed digest: SHA-1 over the password in UTF-16, "Mighty Aphrodite" and the store
 	h := sha1.New()
@@ -741,8 +760,60 @@ func javaCacerts(r *root.Root, packages []*Package, log logger) (bool, error) {
 	if err := r.WriteBytes(store, ks.Bytes(), 0o644); err != nil {
 		return false, err
 	}
-	log(fmt.Sprintf("synthesised %s from %d certificates", store, len(entries)))
+	log(fmt.Sprintf("synthesised %s from %d certificates", store, len(aliases)))
 	return true, nil
+}
+
+// firstCertificate is the DER of the first certificate in a file as Java's CertificateFactory
+// reads one, the first PEM block of type CERTIFICATE or, with none, the file itself as DER; nil
+// where that is not an X.509 certificate's structure: a SEQUENCE of a SEQUENCE, a SEQUENCE and a
+// BIT STRING, nothing after it. Only the structure is checked, since Go's parser refuses
+// certificates Java's accepts, and one entry Java cannot read makes it refuse the whole keystore.
+func firstCertificate(data []byte) []byte {
+	der := data
+	if bytes.Contains(data, []byte("-----BEGIN")) {
+		der = nil
+		for rest := data; der == nil; {
+			var b *pem.Block
+			if b, rest = pem.Decode(rest); b == nil {
+				return nil
+			}
+			if b.Type == "CERTIFICATE" {
+				der = b.Bytes
+			}
+		}
+	}
+	var cert struct {
+		TBS, Algorithm asn1.RawValue
+		Signature      asn1.BitString
+	}
+	rest, err := asn1.Unmarshal(der, &cert)
+	if err != nil || len(rest) != 0 || cert.TBS.Tag != asn1.TagSequence || !cert.TBS.IsCompound ||
+		cert.Algorithm.Tag != asn1.TagSequence || !cert.Algorithm.IsCompound {
+		return nil
+	}
+	return der
+}
+
+// modifiedUTF8 is s as Java's DataOutput.writeUTF writes it, which a JKS keystore's names are:
+// NUL as two bytes, and a character beyond the Basic Multilingual Plane as its UTF-16 surrogates,
+// three bytes each. s is valid UTF-8.
+func modifiedUTF8(s string) []byte {
+	var out []byte
+	for _, c := range s {
+		switch {
+		case c == 0:
+			out = append(out, 0xc0, 0x80)
+		case c > 0xffff:
+			hi, lo := utf16.EncodeRune(c)
+			for _, u := range []rune{hi, lo} {
+				out = append(out, byte(0xe0|u>>12), byte(0x80|(u>>6)&0x3f), byte(0x80|u&0x3f))
+			}
+		default:
+			out = utf8.AppendRune(out, c)
+		}
+	}
+	return out
 }
 
 var pemRe = regexp.MustCompile(`(?s)-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----`)

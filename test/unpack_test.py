@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 lazy from collections.abc import Sequence
 
 import tree
-from harness import TESTS, expect, read_text, run, run_tests, select, test
+from harness import TESTS, expect, read_bytes, read_text, run, run_tests, select, test
 from packages import MACHINE, MTIME, Member, compress, cpio, make_apk, make_deb, make_rpm, tar_bytes
 
 if TYPE_CHECKING:
@@ -663,7 +663,9 @@ def jks_entries(path: str) -> list[tuple[str, int, bytes]] | None:
     for _ in range(int.from_bytes(body[8:12])):
         assert body[at : at + 4] == b"\0\0\0\2"  # a trusted certificate
         n = int.from_bytes(body[at + 4 : at + 6])
-        alias = body[at + 6 : at + 6 + n].decode()
+        # modified UTF-8: a character beyond the BMP as its two surrogates, three bytes each
+        raw = body[at + 6 : at + 6 + n].decode("utf-8", "surrogatepass")
+        alias = raw.encode("utf-16-be", "surrogatepass").decode("utf-16-be")
         at += 6 + n
         date = int.from_bytes(body[at : at + 8])
         at += 8
@@ -674,17 +676,52 @@ def jks_entries(path: str) -> list[tuple[str, int, bytes]] | None:
     return out if at == len(body) else None
 
 
+def certificates(work: str, names: Sequence[str]) -> dict[str, bytes] | None:
+    """A small self-signed certificate's DER for each name, made by openssl, or None without it."""
+    if not shutil.which("openssl"):
+        return None
+    out = {}
+    for i, name in enumerate(names):
+        key, pem = os.path.join(work, f"k{i}.pem"), os.path.join(work, f"c{i}.pem")
+        run(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", key])
+        run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-new",
+                "-key",
+                key,
+                "-subj",
+                f"/CN={name}",
+                "-days",
+                "1",
+                "-outform",
+                "DER",
+                "-out",
+                pem,
+            ]
+        )
+        with open(pem, "rb") as f:
+            out[name] = f.read()
+    return out
+
+
 @test
-def ca_certificates_and_java(ctx: Ctx) -> None:
+def ca_certificates_and_java(ctx: Ctx) -> str | None:
     """10.1: the CA bundle and ca-certificates-java's keystore, of one set of certificates.
 
     Without /etc/ca-certificates.conf every certificate under /usr/share/ca-certificates is
     enabled, as on a first install, in the order of the paths' bytes; with it, those it enables,
-    in its order. The bundle is their files concatenated as update-ca-certificates concatenates
+    in its order; then those under /usr/local/share/ca-certificates, a loop of links among them
+    walked once. The bundle is their files concatenated as update-ca-certificates concatenates
     them, a newline added to one that lacks its last, a file without a certificate among them.
-    Each is a trusted entry of the keystore under "debian:" and the name update-ca-certificates
-    links it under, lowercased, as the package's own program writes them; a file without a PEM
-    certificate is passed over with a note.
+    Each certificate is a trusted entry of the keystore under "debian:" and the name
+    update-ca-certificates links it under, lowercased, in modified UTF-8 (a name beyond the BMP
+    as surrogates), as the package's own program writes them; a file in DER is read as Java
+    reads it; a file without a PEM certificate, or with a block that is not one, is passed over
+    with a note; and of two with one alias the later wins, with a note. Needs openssl to make
+    the certificates, and says so without it.
     """
 
     def pem(der: bytes) -> bytes:
@@ -692,21 +729,42 @@ def ca_certificates_and_java(ctx: Ctx) -> None:
         lines = b"\n".join(b[i : i + 64] for i in range(0, len(b), 64))
         return b"-----BEGIN CERTIFICATE-----\n" + lines + b"\n-----END CERTIFICATE-----\n"
 
+    made = certificates(ctx.work, ["A", "B", "C", "D", "E", "L"])
+    if made is None:
+        return "no openssl to make the certificates"
     ders = {
-        "A_Root.crt": b"\x30\x03\x02\x01\x01",
-        "B (Root), Two.crt": b"\x30\x03\x02\x01\x02" * 40,
-        "C.crt": b"\x30\x03\x02\x01\x03",
+        "A_Root.crt": made["A"],
+        "B (Root), Two.crt": made["B"],
+        "C.crt": made["C"],
+        "Der.crt": made["D"],
+        "\U0001f600.crt": made["E"],
     }
-    # A's file lacks its last newline, which the bundle adds
+    # A's file lacks its last newline, which the bundle adds; Der's is DER
     files = {n: pem(d).rstrip(b"\n") if n == "A_Root.crt" else pem(d) for n, d in ders.items()}
+    files["Der.crt"] = ders["Der.crt"]
     files["Empty.crt"] = b"no PEM\n"
+    files["Bad.crt"] = pem(b"\x30\x03\x02\x01\x01")
     members: list[Member] = [
         (f"usr/share/ca-certificates/mozilla/{n}", "file", b, 0o644) for n, b in files.items()
     ]
+    # a local certificate named as A is, which wins in the keystore, and a loop of links
+    members += [
+        ("usr/local/share/ca-certificates/A_Root.crt", "file", pem(made["L"]), 0o644),
+        ("usr/local/share/ca-certificates/loop", "sym", ".", 0o777),
+    ]
+    local = "/usr/local/share/ca-certificates/A_Root.crt"
     java = package(ctx, "deb", "ca-certificates-java", [("etc/ssl/certs/java", "dir", None, 0o755)])
     conf = "# comment\nmozilla/B (Root), Two.crt\n !mozilla/C.crt\nmozilla/A_Root.crt\n"
+    every = sorted(files, key=lambda n: n.encode())
+    names = {
+        "A_Root.crt": "a_root",
+        "B (Root), Two.crt": "b_=root=__two",
+        "C.crt": "c",
+        "Der.crt": "der",
+        "\U0001f600.crt": "\U0001f600",
+    }
     for enabled, extra in (
-        (["A_Root.crt", "B (Root), Two.crt", "C.crt", "Empty.crt"], []),
+        (every, []),
         (
             ["B (Root), Two.crt", "A_Root.crt"],
             [("etc/ca-certificates.conf", "file", conf.encode(), 0o644)],
@@ -714,20 +772,25 @@ def ca_certificates_and_java(ctx: Ctx) -> None:
     ):
         cas = package(ctx, "deb", "ca-certificates", members + extra)
         root, out = accepted(ctx, f"cacerts-{bool(extra)}", [cas, java])
-        bundle = read_text(os.path.join(root, "etc", "ssl", "certs", "ca-certificates.crt"))
-        want_bundle = "".join(
-            files[n].decode() + ("" if files[n].endswith(b"\n") else "\n") for n in enabled
-        )
-        expect(bundle == want_bundle, f"the bundle with the conf={bool(extra)} is {bundle!r}")
+        bundle = read_bytes(os.path.join(root, "etc", "ssl", "certs", "ca-certificates.crt"))
+        parts = [files[n] for n in enabled] + [pem(made["L"])]
+        want_bundle = b"".join(b + (b"" if b.endswith(b"\n") else b"\n") for b in parts)
+        expect(bundle == want_bundle, f"the bundle with the conf={bool(extra)} is {bundle[:200]!r}")
         got = jks_entries(os.path.join(root, "etc", "ssl", "certs", "java", "cacerts"))
-        names = {"A_Root.crt": "a_root", "B (Root), Two.crt": "b_=root=__two", "C.crt": "c"}
-        want = sorted((f"debian:{names[n]}.pem", 0, ders[n]) for n in enabled if n in ders)
+        want = sorted(
+            (f"debian:{names[n]}.pem", 0, made["L"] if n == "A_Root.crt" else ders[n])
+            for n in enabled
+            if n in ders
+        )
         expect(got == want, f"the keystore with the conf={bool(extra)} holds {got!r}")
         expect(
             "ca-certificates, java-cacerts" in out
-            and ("Empty.crt holds no PEM" in out) == (not extra),
+            and ("Empty.crt holds no certificate" in out) == (not extra)
+            and ("Bad.crt holds no certificate" in out) == (not extra)
+            and f"{local} is named debian:a_root.pem as an earlier certificate is" in out,
             out,
         )
+    return None
 
 
 @test

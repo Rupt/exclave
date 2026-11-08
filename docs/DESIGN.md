@@ -2563,8 +2563,15 @@ refused. From `.deb` files, in five steps:
    `changeit`, of the same certificates as the bundle,
    each under the alias the package's own program gives it,
    `debian:` and the name of its link in `/etc/ssl/certs`, lowercased,
-   and dated at the epoch, so that the tree is the same on every run.
-   The keystore holds the distribution's set, not the host's, since
+   and dated at the epoch, so that the tree is the same on every run:
+   the first certificate of each file, PEM or, with none, the file
+   as DER, as Java reads one; a file holding none, or whose name a
+   keystore cannot hold, passed over with a note, since one entry
+   Java cannot read makes it refuse the whole keystore; and of two
+   files with one alias the later, as `update-ca-certificates`
+   leaves the link. No rule makes Alpine's `java-cacerts` keystore
+   or Fedora's `/etc/pki/ca-trust/extracted/java/cacerts`, so a JDK
+   unpacked from those trusts no authority. The keystore holds the distribution's set, not the host's, since
    no identity file stands for it (8.4); `host
    "/etc/ssl/certs/java/cacerts"` gives an exclave the host's where
    the host has one;
