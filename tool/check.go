@@ -254,6 +254,39 @@ func (w *walkCtx) object(vpath string, e *elfFile, rpaths, chain []string) {
 	}
 }
 
+// trustWarnings names each file the tree ships in a trust directory, as the tree resolves it,
+// other than the identity files there: the host's directory hides it wherever the host has one,
+// and an own record keeps it (10.3). The links a trust tool made there are the host's to replace.
+func trustWarnings(root string, rep *report) {
+	var seen []string
+	for _, d := range trustDirs {
+		r := treeResolve(root, d, true, nil)
+		if r == "" || slices.Contains(seen, r) || !isDir(treeReal(root, r)) {
+			continue
+		}
+		seen = append(seen, r)
+		names, err := dirNames(treeReal(root, r))
+		if err != nil {
+			continue
+		}
+		for _, n := range names {
+			st, err := lstat(pathJoin(treeReal(root, r), n))
+			if err != nil || isLnk(&st) {
+				continue
+			}
+			v := pathJoin(d, n)
+			if slices.ContainsFunc(identityFiles, func(f string) bool {
+				return f == v || strings.HasPrefix(f, v+"/") || f == pathJoin(r, n) ||
+					strings.HasPrefix(f, pathJoin(r, n)+"/")
+			}) {
+				continue
+			}
+			rep.warnf("%s: the tree ships it in a trust directory, which the host's hides where the host has "+
+				"one (8.1 rule 5); own %s keeps it", v, grammarQuote(v))
+		}
+	}
+}
+
 func staticCheck(ex string, own *ownership, data []string, l *listing) *report {
 	rep := &report{}
 	// the tree is read as its launcher's machine's loader reads it (10.1): nothing of it runs
@@ -294,6 +327,7 @@ func staticCheck(ex string, own *ownership, data []string, l *listing) *report {
 			}
 		}
 	}
+	trustWarnings(root, rep)
 	s := scan{root: root, data: data, own: own, rep: rep, l: l}
 	s.dir(root, "")
 	// one loader, and so one libc, per exclave (7.3): read from the ELF files, not declared anywhere

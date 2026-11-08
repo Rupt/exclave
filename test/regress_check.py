@@ -61,8 +61,10 @@ def prune_and_check_with_logs(ctx: Ctx) -> str:
     check and the dynamic check of the EXCLAVE_LOG files a workload wrote, and its manifest is
     canonical; prune keeps what the logs touched plus the libraries kept ELF files need and the
     packages' licence texts, those the tree has and three planted where Debian, RPM and Alpine put
-    them, and drops the rest, a shortcut with the file it names, and the pruned exclave still
-    compiles.
+    them, and what the tree ships in its trust directory with what its links there lead to, which a
+    host without the directory reads (8.1 rule 5), and drops the rest, a shortcut with the file it
+    names, and the pruned exclave still compiles. The static check names a file planted in the
+    trust directory, which the host's hides, and not the links there.
     """
     log = os.path.join(ctx.work, "prune.log")
     if os.path.exists(log):
@@ -104,6 +106,31 @@ def prune_and_check_with_logs(ctx: Ctx) -> str:
         f.write("no workload reads this\n")
     os.symlink("tree" + ctx.vbin(ctx.gcc), os.path.join(ex2, "cc"))
     os.symlink("tree/usr/share/exclave-unused", os.path.join(ex2, "unused"))
+    # the tree's own trust set: a file, a hash link to it and a link out to a certificate (8.4)
+    root2 = os.path.join(ex2, "tree")
+    certs = tree.resolve(root2, "/etc/ssl/certs")
+    os.makedirs(os.path.join(root2, certs.lstrip("/")), exist_ok=True)
+    trust = {
+        certs + "/exclave-planted.pem": None,
+        certs + "/e0e0e0e0.0": "exclave-planted.pem",
+        certs + "/exclave-planted-ca.pem": "/usr/share/exclave-planted-ca/ca.crt",
+        "/usr/share/exclave-planted-ca/ca.crt": None,
+    }
+    for v, text in trust.items():
+        p = os.path.join(root2, v.lstrip("/"))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        if text is None:
+            with open(p, "w") as f:
+                f.write("a certificate no workload reads\n")
+        else:
+            os.symlink(text, p)
+    rc, out, err = run([*TOOL, "check", ex2])
+    expect(
+        "/etc/ssl/certs/exclave-planted.pem: the tree ships it in a trust directory" in out
+        and "e0e0e0e0.0" not in out
+        and "exclave-planted-ca" not in out,
+        "check names the file planted in the trust directory, not its links: " + out[-800:] + err,
+    )
     licences = tree.licence_files(os.path.join(ex2, "tree"))
     before = sum(1 for _ in tree.walk_files(os.path.join(ex2, "tree")))
     rc, out, err = run([*TOOL, "prune", ex2, log])
@@ -128,6 +155,8 @@ def prune_and_check_with_logs(ctx: Ctx) -> str:
         not lost and set(planted) <= licences,
         f"the licence texts stay: {len(lost)} of {len(licences)} lost, {lost[:3]}",
     )
+    gone = [v for v in trust if not os.path.lexists(os.path.join(root2, v.lstrip("/")))]
+    expect(not gone, f"the tree's trust set stays: {gone}")
     gcc2 = os.path.join(ex2, "tree", ctx.vbin(ctx.gcc).lstrip("/"))
     rc, out, err = run(
         [gcc2, "-O1", src, "-o", os.path.join(ctx.work, "hello-pruned")], cwd=ctx.work, env=ctx.env

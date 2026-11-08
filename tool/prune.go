@@ -195,6 +195,34 @@ func cmdPrune(args []string) int {
 			keep.add(f)
 		}
 	}
+	// what the tree ships in the identity directories, with what its links there lead to in the tree:
+	// it answers on a host that lacks them, whatever this host traced (8.1 rule 5, 10.4)
+	for _, d := range identityDirs {
+		var links []string
+		r := treeResolve(root, d, true, &links)
+		for _, k := range links {
+			keep.add(k)
+		}
+		if r == "" || !isDir(treeReal(root, r)) {
+			continue
+		}
+		keep.add(r)
+		names, err := dirNames(treeReal(root, r))
+		if err != nil {
+			continue
+		}
+		for _, n := range names {
+			var ls []string
+			v := pathJoin(r, n)
+			keep.add(v)
+			if final := treeResolve(root, v, true, &ls); final != "" {
+				keep.add(final)
+			}
+			for _, k := range ls {
+				keep.add(k)
+			}
+		}
+	}
 	var licences []string // the packages' licence texts go with every copy
 	findShares(root, "", &licences)
 	// and Alpine's package database, where its packages' licences are recorded by name (10.1)
