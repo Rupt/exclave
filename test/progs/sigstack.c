@@ -25,9 +25,10 @@
 static volatile int hits, inner_stat, inner_rearm, inner_stat2;
 static volatile unsigned inner_flags;
 
-static const char *flags_name(unsigned f)
+/* the flags spelt into b, the caller's, since two spellings meet in one printf, whose arguments a compiler may
+ * evaluate in either order */
+static const char *flags_name(unsigned f, char b[64])
 {
-    static char b[64];
     if (f == 0) return "0";
     b[0] = 0;
     if (f & SS_ONSTACK) strcat(b, "SS_ONSTACK ");
@@ -69,6 +70,23 @@ static void handler_with(int sig, void (*h)(int), int flags)
     sigaction(sig, &sa, 0);
 }
 
+/* the signal sent by kill, which every libc makes the bare syscall, where musl's raise blocks signals around its
+ * tkill and so traps twice, the second time with the signal pending, beside the handler under test */
+static void signal_self(int sig) { kill(getpid(), sig); }
+/* the child's wait status, or SIGKILL's after five seconds: a stack overrun that lands in mapped memory below an
+ * alternate stack can corrupt a frame rather than fault, and loop */
+static int wait_bounded(pid_t p)
+{
+    int st = 0;
+    for (int i = 0; i < 500; i++) {
+        if (waitpid(p, &st, WNOHANG) == p) return st;
+        usleep(10000);
+    }
+    kill(p, SIGKILL);
+    waitpid(p, &st, 0);
+    return st;
+}
+
 static void h_trap(int s)
 {
     struct stat st;
@@ -105,7 +123,7 @@ static void h_nested(int s)
     (void)s;
     struct stat st;
     if (stat("/usr/share/exclave-test-marker", &st) == 0) hits++;
-    raise(SIGUSR2);
+    signal_self(SIGUSR2);
 }
 /* a handler that uses 5 KB of stack: natively on the main stack, where the signal lands */
 static void h_wide(int s)
@@ -121,7 +139,7 @@ static void child_altstack(size_t size, int trap)
     /* the kernel refuses a stack under its MINSIGSTKSZ (5 KB on aarch64, 2 KB on x86-64): exit 3 says so */
     if (arm(sp, size, 0)) _exit(3);
     handler_with(SIGUSR1, trap ? h_trap : h_nothing, SA_ONSTACK);
-    raise(SIGUSR1);
+    signal_self(SIGUSR1);
     _exit(hits);
 }
 /* a SIGSEGV handler that reports rather than returns to the fault, which would fault again for ever */
@@ -170,8 +188,7 @@ int main(void)
             size_t size = sizes[i].size ? sizes[i].size : (size_t)minsz;
             pid_t p = fork();
             if (p == 0) child_altstack(size, trap);
-            int st = 0;
-            waitpid(p, &st, 0);
+            int st = wait_bounded(p);
             printf("alternate stack of %s, handler %s: %s\n", sizes[i].name, trap ? "traps" : "does nothing",
                    status(st));
         }
@@ -187,8 +204,7 @@ int main(void)
             child_wide();
         }
         close(fds[1]);
-        int st = 0;
-        waitpid(p, &st, 0);
+        int st = wait_bounded(p);
         printf("5 KB handler without SA_ONSTACK during traps, 8 KB alternate stack: %s\n", status(st));
     }
     /* 3. queries and changes from inside a handler on the alternate stack, with and without SS_AUTODISARM */
@@ -200,29 +216,31 @@ int main(void)
             continue;
         }
         handler_with(SIGUSR1, h_query, SA_ONSTACK);
-        raise(SIGUSR1);
+        signal_self(SIGUSR1);
         stack_t o;
         sigaltstack(0, &o);
+        char inside[64], after[64];
         printf("%s: inside flags %s, stat %s, rearm %s, stat %s; after flags %s\n",
-               autodisarm ? "SS_AUTODISARM" : "plain alternate stack", flags_name(inner_flags),
+               autodisarm ? "SS_AUTODISARM" : "plain alternate stack", flags_name(inner_flags, inside),
                inner_stat ? "ok" : "failed", inner_rearm ? strerror(inner_rearm) : "ok", inner_stat2 ? "ok" : "failed",
-               flags_name((unsigned)o.ss_flags));
+               flags_name((unsigned)o.ss_flags, after));
         arm(sp, 65536, 0);
     }
     /* 4. traps nested on the alternate stack: USR1's handler traps and raises USR2, whose handler traps */
     hits = 0;
     handler_with(SIGUSR1, h_nested, SA_ONSTACK);
     handler_with(SIGUSR2, h_usr2, SA_ONSTACK);
-    raise(SIGUSR1);
+    signal_self(SIGUSR1);
     printf("nested handlers on the alternate stack: %s\n", hits == 11 ? "both trapped" : "FAIL");
     /* 5. a handler on the main stack while an alternate stack is armed, trapping, and raising one that is on it */
     hits = 0;
     handler_with(SIGUSR1, h_nested, 0);
-    raise(SIGUSR1);
+    signal_self(SIGUSR1);
     printf("handler on the main stack beside an armed alternate stack: %s\n", hits == 11 ? "both trapped" : "FAIL");
     /* 6. the query after everything */
     stack_t o;
     sigaltstack(0, &o);
-    printf("sigaltstack outside any handler: flags %s\n", flags_name((unsigned)o.ss_flags));
+    char b[64];
+    printf("sigaltstack outside any handler: flags %s\n", flags_name((unsigned)o.ss_flags, b));
     return 0;
 }

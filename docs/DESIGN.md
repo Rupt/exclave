@@ -3764,15 +3764,23 @@ and stay fixed.
     handler on the alternate stack that traps adds the kernel's frame
     a second time, its own: `test/progs/sigstack.c` passes on 8 KB and
     is killed on 6 KB on the reference machine, where the kernel alone
-    passes on `MINSIGSTKSZ`. A `clone(CLONE_VM)` child's own stack is
-    held to the same, since a thread has no alternate stack until it
-    arms one: a child trapping on 8 KB passes and on 4 KB is killed,
-    where the kernel needs no user stack for a syscall
+    passes on `MINSIGSTKSZ`. An overrun that lands in mapped memory
+    below the alternate stack, not a guard page, is no fault: a signal
+    delivered there is placed at the stack's top again, over the frame
+    in use, and the program can loop rather than die, as `sigstack.c`
+    did on musl, whose `raise` traps around its `tkill`, on a stack of
+    `MINSIGSTKSZ` at the top of a page. A `clone(CLONE_VM)` child's own
+    stack is held to the same, since a thread has no alternate stack
+    until it arms one: a child trapping on 8 KB passes and on 4 KB is
+    killed, where the kernel needs no user stack for a syscall
     (`test/progs/clones.c`). Before 5.16 that death takes the whole
     program: the kernel's core dump of a process killed every process
     sharing its memory (`fs/coredump.c`, `zap_threads`), each ending
     with the child's signal, so on the matrix's 5.15 and older rows a
     `clone(CLONE_VM)` child's overflow ends the program that made it.
+    musl's least thread stack, its `PTHREAD_STACK_MIN` of 2 KB, is such
+    a stack: a thread made with it that traps is killed, and its program
+    with it, where glibc's least, 16 KB, passes.
 
 31. **Some paths inside structures are not translated.** A datagram
     destination in `sendto`, `sendmsg` or `sendmmsg` reaches the kernel

@@ -507,14 +507,9 @@ SIGSTACK = (
         "plain alternate stack: inside flags SS_ONSTACK, stat ok, rearm Operation not permitted, "
         "stat ok; after flags 0"
     ),
-    # queried inside the handler and after it, the disarmed stack's flags are SS_DISABLE on x86-64
-    # and SS_AUTODISARM on aarch64, measured in both worlds on each
-    "SS_AUTODISARM: inside flags SS_DISABLE, stat ok, rearm ok, stat ok; after flags SS_DISABLE"
-    if platform.machine() == "x86_64"
-    else (
-        "SS_AUTODISARM: inside flags SS_AUTODISARM, stat ok, rearm ok, stat ok; "
-        "after flags SS_AUTODISARM"
-    ),
+    # inside the handler the stack is disarmed (__save_altstack), and its return restores it, flag
+    # and all (restore_altstack), over the stack armed inside
+    "SS_AUTODISARM: inside flags SS_DISABLE, stat ok, rearm ok, stat ok; after flags SS_AUTODISARM",
     "nested handlers on the alternate stack: both trapped",
     "handler on the main stack beside an armed alternate stack: both trapped",
     "sigaltstack outside any handler: flags 0",
