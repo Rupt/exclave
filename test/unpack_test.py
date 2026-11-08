@@ -577,6 +577,14 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
         [("usr/lib/python3.12/os.py", "file", b"pass\n", 0o644)],
         control_files=[("triggers", "interest-noawait /usr/lib/python3.12\n")],
     )
+    # fontconfig's interest in TeX's and Ghostscript's font directories is a font cache's
+    fc = package(
+        ctx,
+        "deb",
+        "fc",
+        [("etc/fonts/fonts.conf", "file", b"<fontconfig/>\n", 0o644)],
+        control_files=[("triggers", "interest-noawait /usr/share/texmf/fonts\n")],
+    )
     jdks = [
         package(
             ctx,
@@ -595,7 +603,7 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
         )
         for n in (1, 2)
     ]
-    root, out = accepted(ctx, "rules", [alt, loopy, varied, py, *jdks])
+    root, out = accepted(ctx, "rules", [alt, loopy, varied, py, fc, *jdks])
     expect(
         os.readlink(os.path.join(root, "usr", "bin", "java")) == "../../etc/alternatives/java"
         and os.readlink(os.path.join(root, "etc", "alternatives", "java"))
@@ -618,6 +626,10 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
     expect(
         "note: py triggers on /usr/lib/python3.12: Python bytecode" in out,
         "a trigger interest the tree lacks a cache for is not noted: " + out,
+    )
+    expect(
+        "note: fc triggers on /usr/share/texmf/fonts: font caches are not built" in out,
+        "fontconfig's interest in TeX's fonts is not noted as a font cache: " + out,
     )
     expect(
         not os.path.lexists(os.path.join(root, "usr", "bin", "j1")),

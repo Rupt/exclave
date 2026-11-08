@@ -1235,6 +1235,8 @@ var interests = [][2]string{
 	{"/usr/share/mime*", "the MIME database is not built (mime.cache and the index files); exclave caches builds it"},
 	{"/usr/share/fonts*", "font caches are not built (/var/cache/fontconfig); exclave caches builds them"},
 	{"/etc/fonts*", "font caches are not built (/var/cache/fontconfig); exclave caches builds them"},
+	{"/usr/share/texmf/fonts", "font caches are not built (/var/cache/fontconfig); exclave caches builds them"},
+	{"/usr/share/ghostscript/fonts", "font caches are not built (/var/cache/fontconfig); exclave caches builds them"},
 	{"/usr/share/icons*", "icon caches are not built (icon-theme.cache); exclave caches builds them"},
 	{"/usr/share/applications", "the desktop database is not built (mimeinfo.cache); exclave caches builds it"},
 	{"/usr/lib/*/gio/modules", "GIO's module cache is not generated (giomodule.cache); exclave caches makes it"},
