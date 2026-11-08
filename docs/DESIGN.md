@@ -2666,7 +2666,9 @@ refused. From `.deb` files, in five steps:
    `update-updmap`, `update-fmtutil`, `update-language`, `mktexlsr`
    over `/var/lib/texmf` and the distribution's trees, `updmap-sys
    --nohash`, `mktexlsr /var/lib/texmf` and `fmtutil --sys --all`,
-   then `mktexlsr /var/lib/texmf` once more, without which `pdflatex`
+   then `mktexlsr /var/lib/texmf` once more (ConTeXt's `mtxrun
+   --generate`, which the `postinst` runs when `context` is
+   configured, is not run), without which `pdflatex`
    finds no format and kpathsea, which searches the distribution's
    trees only through their `ls-R`, no file. A
    generator runs by its
@@ -2710,8 +2712,12 @@ refused. From `.deb` files, in five steps:
    tree's `ls-R`, which is why `mktexlsr` runs last, and a link a
    step made to the copy's path is refused. The steps run with
    `SOURCE_DATE_EPOCH=0` and `FORCE_SOURCE_DATE=1`, so that the
-   pdfTeX formats are the same on every run; LuaTeX's formats and
-   `updmap.log` are not, and a second run rewrites them. A
+   pdfTeX formats and their logs are the same on every run; LuaTeX's
+   formats, the logs of the LaTeX ones and `updmap.log` are not, and a
+   second run rewrites them; no file the steps make names the copy's
+   host path (Ubuntu 24.04's `texlive-latex-base`,
+   `texlive-latex-recommended` and `texlive-fonts-recommended`,
+   measured November 2026). A
    font cache is named by its directory's virtual path, which is why
    `fc-cache` runs inside, and records the directory's modification
    time; GTK takes an icon cache older than its theme's directory for
@@ -3915,7 +3921,11 @@ and stay fixed.
     directories aside, `check` and `wrap` refuse the exclave, and the
     next run of `exclave caches` puts them back before anything else. The steps are tex-common's,
     so only Debian's layout is made, where the tree holds tex-common's
-    scripts and both directories. After the run `pdflatex`,
+    scripts and both directories, the smallest set of them too
+    (`texlive-binaries`, `tex-common` and `texlive-plain-generic`,
+    whose formats `fmtutil --strict` builds as well); a step that fails
+    fails the command, the other caches with it, as any generator's
+    failure does. After the run `pdflatex`,
     `bibtex` and `kpsewhich` inside give the kernel's answers on the
     same tree, and Debian's `tlmgr` refuses in user mode as it does
     outside (Ubuntu 24.04's `texlive-latex-base`,

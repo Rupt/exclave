@@ -887,8 +887,10 @@ func (p *inPlace) made(what string) cache {
 // configuration and hyphenation files under /var/lib/texmf, which the packages' links name
 // (texmf-dist's web2c/fmtutil.cnf is /var/lib/texmf/fmtutil.cnf-TEXLIVEDIST); mktexlsr the ls-R
 // indexes, the distribution's trees' through their links into /var/lib/texmf; updmap-sys the font
-// maps; and fmtutil every format. Without them pdflatex finds no format and kpathsea, which
-// searches the distribution's trees only through their ls-R, no file. Both directories are
+// maps, and mktexlsr of /var/lib/texmf after it; and fmtutil every format. ConTeXt's mtxrun
+// --generate, which the postinst runs when context is configured, is not run. Without them
+// pdflatex finds no format and kpathsea, which searches the distribution's trees only through
+// their ls-R, no file. Both directories are
 // written in place (inPlace). fmtutil adds each format to the ls-R of the tree it names the
 // format in, and names it by the copy's real path, in no tree, so a last mktexlsr indexes
 // /var/lib/texmf with the formats. What the steps say is printed only when one fails, since
@@ -921,6 +923,7 @@ func texLive(c *cacheRun, root string) []cache {
 		{"/usr/sbin/update-language", "--quiet"},
 		{"/usr/bin/mktexlsr", "/var/lib/texmf", "/usr/share/texmf", "/usr/share/texlive/texmf-dist"},
 		{"/usr/bin/updmap-sys", "--nohash"},
+		{"/usr/bin/mktexlsr", "/var/lib/texmf"},
 		{"/usr/bin/fmtutil", "--sys", "--strict", "--no-error-if-no-engine=luajittex,mfluajit,luajithbtex", "--all"},
 		{"/usr/bin/mktexlsr", "/var/lib/texmf"},
 	} {
