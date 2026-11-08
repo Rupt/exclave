@@ -2410,7 +2410,7 @@ arguments a download needs, which its `--help` lists:
 ```
 exclave wrap EXCLAVE                wrap an exclave (idempotent; a bare directory holding tree/ becomes an exclave)
 exclave unwrap EXCLAVE              unwrap an exclave again
-exclave caches EXCLAVE              Python bytecode, GSettings schemas, the MIME database and GIO's, gdk-pixbuf's, icon, desktop and font caches, made by the tree's own generators inside the wrapped exclave (10.1)
+exclave caches EXCLAVE              Python bytecode, GSettings schemas, the MIME database and GIO's, gdk-pixbuf's, icon, desktop and font caches, graphviz's plugin configuration and TeX Live's indexes and formats, made by the tree's own generators inside the wrapped exclave (10.1)
 exclave check EXCLAVE [LOG...]      wrappers, the tree against the hashes file, the static check, and with EXCLAVE_LOG files the dynamic check
 exclave prune EXCLAVE LOG...        drop what no logged workload touched
 exclave format [--check] FILE...    canonical form of a manifest or hashes file; --check only reports
@@ -2647,7 +2647,16 @@ refused. From `.deb` files, in five steps:
    directory it takes its plugins from, which in place is read-only
    and is found from `/proc/self/maps`, which names the tree's host
    path (13 item 10); the file names each plugin relative to its
-   directory, so it is valid at the directory's virtual path. A
+   directory, so it is valid at the directory's virtual path; and
+   TeX Live's configuration, `ls-R` indexes, font maps and formats,
+   by the steps of tex-common's `postinst` in its order where the
+   tree holds them and the directories they write, `update-texmf`,
+   `update-updmap`, `update-fmtutil`, `update-language`, `mktexlsr`
+   over `/var/lib/texmf` and the distribution's trees, `updmap-sys
+   --nohash`, `mktexlsr /var/lib/texmf` and `fmtutil --sys --all`,
+   then `mktexlsr /var/lib/texmf` once more, without which `pdflatex`
+   finds no format and kpathsea, which searches the distribution's
+   trees only through their `ls-R`, no file. A
    generator runs by its
    virtual path from the exclave's shell, itself run by the name
    `sh`, since a multi-call shell such as Alpine's busybox chooses its
@@ -2660,12 +2669,30 @@ refused. From `.deb` files, in five steps:
    writes; GIO's, the icon, the desktop and graphviz's generators,
    which write beside what they read, on a mirror of the directory
    made of links to its entries' virtual paths, which the launcher's
-   walk follows into the tree, so that nothing of the tree is copied; and `fc-cache`
+   walk follows into the tree, so that nothing of the tree is copied; `fc-cache`
    through a configuration that includes the tree's and names the
    staging directory after the tree's cache directories, which are
    read-only inside, so that it is the first writable one, where
    `fc-cache` writes, and the last, whose cache answers its check of
-   what it wrote, which a stale cache of the tree's would fail. A
+   what it wrote, which a stale cache of the tree's would fail; and
+   TeX Live's steps in place, since they write at fixed paths,
+   `/var/lib/texmf` and `/etc/texmf/web2c`, which the packages' links
+   name (`texmf-dist/ls-R` is a link to
+   `/var/lib/texmf/ls-R-TEXLIVEDIST`): for the run each directory is
+   moved aside into the staging directory and its path in the tree
+   made a link to a copy of it there, so that inside the exclave the
+   path, and every link into it, leads to the copy, which is the
+   host's and writable, and the directories are put back as the run
+   ends, however it ends but by `SIGKILL`, whose leftovers the next
+   run puts back before anything else. What the steps made, the
+   links `updmap-sys` makes among it, then joins the tree as the other
+   caches do. A step that names a file by its real path sees the
+   copy's host path: `fmtutil` names each format so and adds it to no
+   tree's `ls-R`, which is why `mktexlsr` runs last, and a link a
+   step made to the copy's path is refused. The steps run with
+   `SOURCE_DATE_EPOCH=0` and `FORCE_SOURCE_DATE=1`, so that the
+   pdfTeX formats are the same on every run; LuaTeX's formats and
+   `updmap.log` are not, and a second run rewrites them. A
    font cache is named by its directory's virtual path, which is why
    `fc-cache` runs inside, and records the directory's modification
    time; GTK takes an icon cache older than its theme's directory for
@@ -2690,7 +2717,8 @@ refused. From `.deb` files, in five steps:
    a tree's files may be hard links shared with a copy (6.1), at the
    path its directory resolves to in the tree, so that a link in the
    tree leads inside it; and the tree hash is recorded again. A second
-   run changes nothing, and a run after the tree changed remakes the
+   run changes nothing but what a generator makes differently on every
+   run, and a run after the tree changed remakes the
    caches, though a file a generator no longer makes, the bytecode of
    a source since removed, stays. A tree that differs from its
    recorded hash is refused, so that the hash recorded vouches for no
@@ -2707,8 +2735,7 @@ refused. From `.deb` files, in five steps:
    notes name too, are made by hand the same way: run the generator
    inside the exclave writing to a host directory, copy its output into
    the tree, and record the tree hash with `exclave unwrap` and `wrap`
-   (13 item 48). TeX's index and formats, which they name as well, are
-   made in place by scripts that cannot run so (13 item 56).
+   (13 item 48).
 4. **Strip** the volatile directories (8.1). Their empty placeholders,
    the conventional host names' and the nine identity files (8.4) are
    added by `wrap` where the tree lacks them.
@@ -3735,19 +3762,21 @@ and stay fixed.
     `exclave caches`, which runs the tree's generators inside the
     exclave, makes Python bytecode, GSettings schemas, the MIME
     database, GIO's module cache, gdk-pixbuf's loader cache, icon
-    caches, the desktop database, fontconfig's caches and graphviz's
-    plugin configuration. Without it Python compiles each module on
+    caches, the desktop database, fontconfig's caches, graphviz's
+    plugin configuration and TeX Live's configuration, indexes and
+    formats. Without it Python compiles each module on
     import, nearly five times the import time of ten standard modules,
     a GLib program finds no schemas, gdk-pixbuf reads only its built-in
-    formats, fontconfig writes its caches under the user's home, and
-    `dot` knows no output format. The font and icon caches are
+    formats, fontconfig writes its caches under the user's home,
+    `dot` knows no output format and `pdflatex` finds no format. The font and icon caches are
     valid while the tree keeps its directories' modification times: a
     copy that loses them, `cp -r`, leaves fontconfig writing its own
     under the home until `exclave caches` runs on the copy. Locales
-    from `localedef` and TeX's index and formats are not among
-    them; `unpack` names each from the packages' trigger interests,
-    and the maker runs `localedef` inside the exclave the same way
-    (10.1), while TeX's are made in place (item 56). `exclave caches` runs only on a machine of the exclave's
+    from `localedef` are not among them; `unpack` names them from the
+    packages' trigger interests, and the maker runs `localedef` inside
+    the exclave the same way (10.1). TeX Live's indexes and formats are
+    made in place, by a run that changes the tree while it lasts
+    (item 56). `exclave caches` runs only on a machine of the exclave's
     architecture.
 
 49. **Shadow stacks are off, by glibc's choice.** The kernel offers
@@ -3857,14 +3886,21 @@ and stay fixed.
     hyphenation files and the `ls-R` indexes under `/var/lib/texmf`, at
     fixed paths the packages ship links to (`texmf-dist/ls-R` names
     `/var/lib/texmf/ls-R-TEXLIVEDIST`), and build the formats from
-    them. In an unpacked tree `pdflatex` finds no format and
-    `mktexfmt` no entry to build one from. Inside an exclave the scripts
-    cannot write there, the tree being read-only, and with `TEXMFSYSVAR`
-    on a host directory `fmtutil-sys` still finds no `pdflatex.ini`,
-    since Debian's kpathsea searches the distribution's tree only
-    through its `ls-R`, which dangles; `exclave caches` does not make
-    them (item 48). An exclave of TeX Live is made from a tree whose
-    scripts ran, from `debootstrap` or a container export (10.1).
+    them; in an unpacked tree `pdflatex` finds no format and
+    `mktexfmt` no entry to build one from. `exclave caches` runs them
+    (10.1) with `/var/lib/texmf` and `/etc/texmf/web2c` each moved
+    aside and its path in the tree a link to a copy in `.exclave/` for
+    the run. While the run lasts the tree is not what its hash records,
+    and a program the exclave runs meanwhile sees the copies; a run
+    killed by `SIGKILL` leaves the directories aside, and the next run
+    puts them back before anything else. The steps are tex-common's,
+    so only Debian's layout is made, where the tree holds tex-common's
+    scripts and both directories. After the run `pdflatex`,
+    `bibtex` and `kpsewhich` inside give the kernel's answers on the
+    same tree, and Debian's `tlmgr` refuses in user mode as it does
+    outside (Ubuntu 24.04's `texlive-latex-base`,
+    `texlive-latex-recommended` and `texlive-fonts-recommended`,
+    measured November 2026).
 
 ### 13.1 Debugging and profiling recipe
 
@@ -5593,7 +5629,7 @@ questions.
    refusal of a soname only a prior `dlopen` by path provides (10.3).
    Further real software decides which of the tool's synthesis gaps
    close next (10.1): `unpack` does not generate
-   locales, TeX's formats or the caches `exclave caches` does not
+   locales or the caches `exclave caches` does not
    make (10.1 lists those it makes), and a gap closes when a real exclave needs it, as a rule in the synthesis
    table rather than an option. `unpack`'s notes name the caches a tree
    lacks from the packages' trigger interests, and failed opens in an

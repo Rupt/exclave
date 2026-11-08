@@ -1224,6 +1224,9 @@ func synthesise(rootPath string, packages []*Package, log logger) error {
 
 // interests are the trigger interests, matched by the longest pattern: what a maintainer script
 // would have built there and the tree lacks; "" for what nothing needs, or what a rule makes.
+// texNote is the note for what TeX's triggers would have built.
+const texNote = "TeX's file index and formats are not generated (mktexlsr, fmtutil); exclave caches makes them"
+
 var interests = [][2]string{
 	{"/usr/lib/python3*", "Python bytecode: __pycache__ is not generated, so Python compiles each module on import; " +
 		"exclave caches makes it"},
@@ -1240,8 +1243,11 @@ var interests = [][2]string{
 		"exclave caches makes it"},
 	{"/usr/lib/gdk-pixbuf-2.0*", "gdk-pixbuf's loader cache is not generated (loaders.cache); " +
 		"exclave caches makes it"},
-	{"/usr/share/texmf*", "TeX's file index and formats are not generated (mktexlsr, fmtutil)"},
-	{"/usr/share/texlive*", "TeX's file index and formats are not generated (mktexlsr, fmtutil)"},
+	{"/usr/share/texmf*", texNote},
+	{"/usr/share/texlive*", texNote},
+	{"texmf-format", texNote},
+	{"texmf-hyphen", texNote},
+	{"texmf-map", "TeX's font maps are not generated (updmap-sys); exclave caches makes them"},
 	{"/usr/share/man*", ""},
 	{"/usr/man", ""},
 	{"/usr/local/man", ""},

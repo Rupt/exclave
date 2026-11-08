@@ -1,7 +1,8 @@
 // The caches only a tree's own programs can make, made by them inside the exclave (DESIGN.md
 // 10.1, 13 item 48): Python's bytecode, GLib's compiled GSettings schemas, the MIME database,
 // GIO's module cache, gdk-pixbuf's loader cache, icon caches, the desktop database,
-// fontconfig's caches and graphviz's plugin configuration.
+// fontconfig's caches, graphviz's plugin configuration and TeX Live's configuration, indexes and
+// formats, the last written in place (inPlace).
 // unpack and wrap run nothing of the tree, so that an exclave of either architecture is made on
 // either; this command runs the tree's generators under the exclave's launcher, on a machine of
 // the exclave's architecture, writing to a staging directory in the exclave's own directory,
@@ -76,10 +77,12 @@ func say(name, text string) {
 }
 
 // cache is what one generator made: each file in the staging directory and the virtual path in
-// the tree it becomes; with dirTimes, the directory it lands in is made no newer than it.
+// the tree it becomes; each link it made, by its text and the virtual path; with dirTimes, the
+// directory a file lands in is made no newer than it.
 type cache struct {
 	what     string
 	files    [][2]string
+	links    [][2]string
 	dirTimes bool
 }
 
@@ -119,6 +122,24 @@ func placeFile(real string, data []byte) bool {
 	unix.Unlink(tmp)
 	writeFile(tmp, data, 0o644)
 	if err := unix.Chmod(tmp, 0o644); err != nil {
+		failErrno(tmp, err)
+	}
+	if err := unix.Rename(tmp, real); err != nil {
+		unix.Unlink(tmp)
+		failErrno(real, err)
+	}
+	return true
+}
+
+// placeLink makes real a link with the text target, unless one stands there with it already,
+// through a new link renamed over the old. Reports whether the tree changed.
+func placeLink(real, target string) bool {
+	if t, err := os.Readlink(real); err == nil && t == target {
+		return false
+	}
+	tmp := real + ".exclave-caches"
+	unix.Unlink(tmp)
+	if err := unix.Symlink(target, tmp); err != nil {
 		failErrno(tmp, err)
 	}
 	if err := unix.Rename(tmp, real); err != nil {
@@ -576,6 +597,208 @@ func fontCaches(c *cacheRun, root string) []cache {
 	return []cache{m}
 }
 
+// inPlace is the run of generators that write their caches in place, at fixed paths of the tree
+// that its packages' links name, so that neither a staging directory nor a mirror stands in for
+// the path: each directory they write is, for the run, moved aside into keep and replaced in the
+// tree by a link to a copy of it in the staging directory, which is the host's (8.1 rule 6), so
+// that inside the exclave the path, and every link into it, leads to the copy, where the
+// generators write. The directories are put back as soon as the run ends, however it ends but by
+// SIGKILL, which the next run undoes first (restoreInPlace); what the generators made is then
+// placed in the tree with the other caches. A generator that names a file by its real path sees
+// the copy's host path, so a step that matches paths against the tree's is followed by one that
+// does not (texLive's last mktexlsr).
+type inPlace struct {
+	root, staging string
+	dirs          []string // the tree's directories, by virtual path
+	copies        []string // the copy each is linked to in the run
+}
+
+// keepDir is where a directory moved aside waits in the staging directory, beside a file naming
+// its virtual path, until it is put back.
+func keepDir(staging string) string { return pathJoin(staging, "keep") }
+
+// copyDir copies the directory src to dst, which it makes: directories, regular files by their
+// bytes and links by their text, never a hard link, since a generator that rewrites a file in
+// place would edit the tree's through it (6.1).
+func copyDir(src, dst string) {
+	st, err := lstat(src)
+	if err != nil {
+		failErrno(src, err)
+	}
+	if err := os.Mkdir(dst, os.FileMode(st.Mode&0o7777)); err != nil {
+		failErrno(dst, err)
+	}
+	names, err := dirNames(src)
+	if err != nil {
+		failErrno(src, err)
+	}
+	for _, n := range names {
+		s, d := pathJoin(src, n), pathJoin(dst, n)
+		st, err := lstat(s)
+		if err != nil {
+			failErrno(s, err)
+		}
+		switch {
+		case isDirM(&st):
+			copyDir(s, d)
+		case isReg(&st):
+			writeFile(d, readFile(s), st.Mode&0o7777)
+		case st.Mode&unix.S_IFMT == unix.S_IFLNK:
+			t, err := os.Readlink(s)
+			if err != nil {
+				failErrno(s, err)
+			}
+			if err := unix.Symlink(t, d); err != nil {
+				failErrno(d, err)
+			}
+		}
+	}
+}
+
+// open moves each directory aside and links its path to a copy, and registers putting them back.
+func (p *inPlace) open() {
+	keep := keepDir(p.staging)
+	makeDirs(keep)
+	atFail(p.close)
+	for i, v := range p.dirs {
+		real, n := treeReal(p.root, v), strconv.Itoa(i)
+		cp := pathJoin(p.staging, "inplace/"+n)
+		makeDirs(dirnameOf(cp))
+		copyDir(real, cp)
+		writeFile(pathJoin(keep, n+".path"), []byte(v), 0o644)
+		if err := unix.Rename(real, pathJoin(keep, n)); err != nil {
+			failErrno(real, err)
+		}
+		if err := unix.Symlink(cp, real); err != nil {
+			failErrno(real, err)
+		}
+		p.copies = append(p.copies, cp)
+	}
+}
+
+// close puts every directory moved aside back; a second call does nothing.
+func (p *inPlace) close() { restoreInPlace(p.root, p.staging) }
+
+// restoreInPlace puts back each directory a run moved aside into keep, removing the link that
+// stands at its path, as a run killed before it could leaves them, and reports how many.
+func restoreInPlace(root, staging string) int {
+	keep := keepDir(staging)
+	names, _ := dirNames(keep)
+	n := 0
+	for _, name := range names {
+		num, ok := strings.CutSuffix(name, ".path")
+		if !ok {
+			continue
+		}
+		v := string(readFile(pathJoin(keep, name)))
+		real, kept := treeReal(root, v), pathJoin(keep, num)
+		if _, err := lstat(kept); err != nil {
+			continue // put back already
+		}
+		if st, err := lstat(real); err == nil {
+			if st.Mode&unix.S_IFMT != unix.S_IFLNK {
+				fail("%s: both it and the copy %s kept aside exist; put one back by hand", real, kept)
+			}
+			if err := unix.Unlink(real); err != nil {
+				failErrno(real, err)
+			}
+		}
+		if err := unix.Rename(kept, real); err != nil {
+			failErrno(real, err)
+		}
+		n++
+	}
+	return n
+}
+
+// made is every regular file and link under the copies, as the files and links the tree's
+// directories get; a link keeps its text, which updmap-sys writes relative.
+func (p *inPlace) made(what string) cache {
+	m := cache{what: what}
+	for i, cp := range p.copies {
+		err := filepath.WalkDir(cp, func(f string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			v := p.dirs[i] + strings.TrimPrefix(f, cp)
+			switch {
+			case d.Type().IsRegular():
+				m.files = append(m.files, [2]string{f, v})
+			case d.Type()&os.ModeSymlink != 0:
+				t, err := os.Readlink(f)
+				if err != nil {
+					return err
+				}
+				if strings.HasPrefix(t, p.staging) {
+					fail("%s: the generators made %s a link to the copy, %s, which the tree cannot hold", what, v, t)
+				}
+				m.links = append(m.links, [2]string{t, v})
+			}
+			return nil
+		})
+		if err != nil {
+			fail("%s: %s", cp, errnoText(err))
+		}
+	}
+	return m
+}
+
+// texLive makes TeX Live's configuration, file indexes, font maps and formats as tex-common's
+// postinst makes them on Debian, by its own steps in its order: update-texmf writes
+// /etc/texmf/web2c/texmf.cnf; update-updmap, update-fmtutil and update-language the
+// configuration and hyphenation files under /var/lib/texmf, which the packages' links name
+// (texmf-dist's web2c/fmtutil.cnf is /var/lib/texmf/fmtutil.cnf-TEXLIVEDIST); mktexlsr the ls-R
+// indexes, the distribution's trees' through their links into /var/lib/texmf; updmap-sys the font
+// maps; and fmtutil every format. Without them pdflatex finds no format and kpathsea, which
+// searches the distribution's trees only through their ls-R, no file. Both directories are
+// written in place (inPlace). fmtutil adds each format to the ls-R of the tree it names the
+// format in, and names it by the copy's real path, in no tree, so a last mktexlsr indexes
+// /var/lib/texmf with the formats. What the steps say is printed only when one fails, since
+// fmtutil's runs are long.
+func texLive(c *cacheRun, root string) []cache {
+	for _, t := range []string{"/usr/sbin/update-texmf", "/usr/sbin/update-updmap", "/usr/sbin/update-fmtutil",
+		"/usr/sbin/update-language", "/usr/bin/mktexlsr", "/usr/bin/updmap-sys", "/usr/bin/fmtutil"} {
+		if findTool(root, t) == "" {
+			return nil
+		}
+	}
+	var dirs []string
+	for _, d := range []string{"/var/lib/texmf", "/etc/texmf/web2c"} {
+		v := treeDir(root, d)
+		if v == "" {
+			return nil
+		}
+		dirs = append(dirs, v)
+	}
+	p := &inPlace{root: root, staging: c.staging, dirs: dirs}
+	p.open()
+	// the postinst's locale; the date fixed, so that a pdfTeX format is the same on every run
+	env := []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C", "SOURCE_DATE_EPOCH=0",
+		"FORCE_SOURCE_DATE=1"}
+	for _, argv := range [][]string{
+		{"/usr/sbin/update-texmf"},
+		{"/usr/sbin/update-updmap", "--quiet"},
+		{"/usr/sbin/update-fmtutil", "--quiet"},
+		{"/usr/sbin/update-language", "--quiet"},
+		{"/usr/bin/mktexlsr", "/var/lib/texmf", "/usr/share/texmf", "/usr/share/texlive/texmf-dist"},
+		{"/usr/bin/updmap-sys", "--nohash"},
+		{"/usr/bin/fmtutil", "--sys", "--strict", "--no-error-if-no-engine=luajittex,mfluajit,luajithbtex", "--all"},
+		{"/usr/bin/mktexlsr", "/var/lib/texmf"},
+	} {
+		if rc, text := c.run(env, argv...); rc != 0 {
+			fail("%s exited %d: %s", strings.Join(argv, " "), rc, lastLines(text, 20))
+		}
+	}
+	p.close()
+	return []cache{p.made("TeX Live's configuration, indexes and formats")}
+}
+
+// lastLines is the last n lines of text.
+func lastLines(text string, n int) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	return strings.Join(lines[max(0, len(lines)-n):], "\n")
+}
+
 // notOlder gives the directory holding the file real the file's modification time where its own
 // is later.
 func notOlder(real string) {
@@ -626,6 +849,11 @@ func cmdCaches(args []string) int {
 			"machine", ex, launcherMachine.uname, ownMachine().uname, launcherMachine.uname)
 	}
 	root := pathJoin(ex, "tree")
+	staging := pathJoin(ex, ".exclave/caches")
+	// a run killed while generators wrote in place left their directories aside: put them back first
+	if n := restoreInPlace(root, staging); n > 0 {
+		fmt.Fprintf(out, "%s: %s a killed run left aside put back\n", ex, plural(n, "directory"))
+	}
 	if rec := find(loadHashes(pathJoin(ex, ".exclave/hashes")), "tree"); treeHash(root) != rec.f[0].v {
 		fail("refusing: %s's tree differs from the hash its hashes file records; exclave check reports it, and "+
 			"exclave wrap records the tree as it is", ex)
@@ -634,7 +862,6 @@ func cmdCaches(args []string) int {
 	if sh == "" {
 		fail("refusing: %s has no /bin/sh to run its generators by", ex)
 	}
-	staging := pathJoin(ex, ".exclave/caches")
 	if err := os.RemoveAll(staging); err != nil {
 		failErrno(staging, err)
 	}
@@ -643,7 +870,7 @@ func cmdCaches(args []string) int {
 	c := &cacheRun{sh: treeReal(root, sh), staging: staging}
 	var made []cache
 	for _, g := range []func(*cacheRun, string) []cache{pythonBytecode, gsettingsSchemas, mimeDatabase, gioModules,
-		pixbufLoaders, iconCaches, desktopDatabase, fontCaches, graphvizPlugins} {
+		pixbufLoaders, iconCaches, desktopDatabase, fontCaches, graphvizPlugins, texLive} {
 		made = append(made, g(c, root)...)
 	}
 	if len(made) == 0 {
@@ -671,7 +898,16 @@ func cmdCaches(args []string) int {
 				notOlder(dest)
 			}
 		}
-		fmt.Fprintf(out, "%s: %s, %d new or changed\n", m.what, plural(len(m.files), "file"), changed)
+		for _, l := range m.links {
+			if placeLink(treeDest(root, l[1]), l[0]) {
+				changed++
+			}
+		}
+		n := plural(len(m.files), "file")
+		if len(m.links) > 0 {
+			n += " and " + plural(len(m.links), "link")
+		}
+		fmt.Fprintf(out, "%s: %s, %d new or changed\n", m.what, n, changed)
 	}
 	if err := os.RemoveAll(staging); err != nil {
 		failErrno(staging, err)
