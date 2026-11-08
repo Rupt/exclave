@@ -6,8 +6,7 @@
 //	exclave caches EXCLAVE              Run the tree's generators of Python bytecode, GSettings schemas, the MIME
 //	                                    database, GIO's, gdk-pixbuf's, icon, desktop and font caches, graphviz's
 //	                                    plugin configuration and TeX Live's indexes and formats inside the wrapped
-//	                                    exclave, on its machine, and add
-//	                                    what they make.
+//	                                    exclave, on its machine, and add what they make.
 //	exclave check EXCLAVE [LOG...]      Wrappers, originals, the tree against its recorded hash and the static
 //	                                    check; with EXCLAVE_LOG files, the dynamic check of what a workload opened.
 //	exclave format [--check] FILE...    Parse with the strict grammar and rewrite in canonical form; --check

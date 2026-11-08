@@ -5622,7 +5622,8 @@ the gate cannot afford. Each runs when its input variable is set:
   make included: valgrind's memcheck over a faulty program, `pdftotext`,
   `pdffonts` and `pdftoppm` of a PDF with embedded fonts and a
   substituted one, a cargo build, zlib built by CMake and ninja with four
-  jobs, a Java program run as source and compiled by `javac`, a
+  jobs, a Java program run as source and compiled by `javac` and the
+  trusted entries of its keystore counted, a
   Python process with threads, subprocesses and sqlite, an article
   with a citation through `pdflatex` and `bibtex` in TeX Live's
   exclave once `exclave caches` made its formats, and a Hutter
@@ -5686,10 +5687,12 @@ questions.
 
 1. **Exclaves of real packaged software.** Beyond the compilers, the
    example runs make exclaves of valgrind, poppler, Rust, CMake, a Java
-   JDK, Python and a contest's judging image, which rebuilds an entry to
-   the byte, and run them against the kernel (17); the JDK closed
-   two gaps, its alternatives (`java-jinfo`) and the static check's
-   refusal of a soname only a prior `dlopen` by path provides (10.3).
+   JDK, Python, TeX Live and a contest's judging image, which rebuilds
+   an entry to the byte, and run them against the kernel (17); the JDK
+   closed three gaps, its alternatives (`java-jinfo`), its keystore
+   (`java-cacerts`) and the static check's refusal of a soname only a
+   prior `dlopen` by path provides (10.3), and TeX Live one, its
+   indexes and formats, which `exclave caches` makes in place (10.1).
    Further real software decides which of the tool's synthesis gaps
    close next (10.1): `unpack` does not generate
    locales or the caches `exclave caches` does not

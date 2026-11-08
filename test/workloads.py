@@ -15,7 +15,7 @@ both worlds. The workloads, each a program with its own syscall layer, caches or
   rust      cargo new, a build with two jobs, and the program run
   cmake     zlib configured by CMake for ninja, built with four jobs, its test programs run
   java      java -version, a single-file program, javac and the class run, through
-            /usr/bin/java's alternatives link
+            /usr/bin/java's alternatives link, and the trusted entries of the keystore counted
   python    a Python process's threads, subprocesses, sqlite and files, a fixed amount of each
   tex       pdflatex, bibtex and pdflatex twice on an article with a citation, the PDF dated by
             SOURCE_DATE_EPOCH and hashed, in TeX Live's exclave after exclave caches made its
@@ -148,7 +148,8 @@ WORKLOADS: dict[str, tuple[str, tuple[str, ...], str]] = {
         ("Hello.java",),
         (
             "java -version 2>&1; java Hello.java x y && javac -d out Hello.java && "
-            "java -cp out Hello && b2sum out/Hello.class; readlink -f /usr/bin/java"
+            "java -cp out Hello && b2sum out/Hello.class; readlink -f /usr/bin/java; "
+            "keytool -list -cacerts -storepass changeit | grep -c trustedCertEntry"
         ),
     ),
     "python": ("realsoft", ("work.py",), "python3 work.py"),

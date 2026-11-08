@@ -244,11 +244,12 @@ item both valgrind debs-valgrind-gcc debs --keyring "$ubuntu" --mirror $mirror v
 item both poppler debs-poppler debs --keyring "$ubuntu" --mirror $mirror poppler-utils poppler-data fonts-urw-base35
 item both rust debs-rust debs --keyring "$ubuntu" --mirror $mirror cargo rustc gcc libc6-dev
 item both cmake debs-cmake debs --keyring "$ubuntu" --mirror $mirror cmake ninja-build gcc g++ libc6-dev
-item both java debs-java debs --keyring "$ubuntu" --mirror $mirror openjdk-17-jdk-headless libfreetype6 libharfbuzz0b libasound2t64
+item both java debs-java debs --keyring "$ubuntu" --mirror $mirror openjdk-17-jdk-headless ca-certificates-java libfreetype6 libharfbuzz0b libasound2t64
 # TeX Live, whose indexes and formats exclave caches makes (13 item 56), once
 tex() {
     both tex debs-tex debs --keyring "$ubuntu" --mirror "$mirror" texlive-latex-base texlive-latex-recommended texlive-fonts-recommended &&
-        if [ ! -e "$dir/tex.exclave/tree/var/lib/texmf/ls-R" ]; then
+        # the real file, not through the link a killed run of exclave caches leaves at the directory
+        if [ -L "$dir/tex.exclave/tree/var/lib/texmf" ] || [ ! -f "$dir/tex.exclave/tree/var/lib/texmf/ls-R" ]; then
             if exclave caches "$dir/tex.exclave" >>"$dir/log/tex.exclave.log" 2>&1; then
                 echo "tex.exclave: $(grep "TeX Live" "$dir/log/tex.exclave.log" | tail -1)"
             else
