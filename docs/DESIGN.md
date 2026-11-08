@@ -5560,8 +5560,9 @@ questions.
 2. **Releases.** There is no public release yet. A release has its
    shape, `scripts/release` (10.5), its binaries built reproducibly
    inside a gcc exclave, and every build is named by the project's
-   version and its commit (7, 10); an aarch64 release is made on an
-   aarch64 machine, as its exclaves are (10.1). The commit gate (17)
+   version and its commit (7, 10). The first release is x86-64; an
+   aarch64 release comes later, made on an aarch64 machine, as its
+   exclaves are (10.1). The commit gate (17)
    and the kernel matrix (12.1) run on the reference machine, and on
    GitHub's hosted runners when a maintainer dispatches the workflow;
    nothing runs at a push. Before it nothing promises compatibility
