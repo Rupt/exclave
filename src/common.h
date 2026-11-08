@@ -58,7 +58,9 @@
 #define AT_STATX_SYNC_TYPE 0x6000
 
 /* ---------- signals ---------- */
+#define SIGKILL 9
 #define SIGSEGV 11
+#define SIGSTOP 19
 #define SIGSYS 31
 #define SIGSYS_BIT (1UL << (SIGSYS - 1))
 #define SA_SIGINFO 4
@@ -437,11 +439,25 @@ extern char exclave_sigsys_entry[], exclave_sigsys_set[], exclave_sigsys_tail[],
     exclave_sigsys_ret[];
 
 /* ---------- trampolines (tramp.c, 7.5.7) ---------- */
+#define TRAMP_SLOTS 256UL
 #if defined(__x86_64__)
+#define TRAMP_STUB 16UL /* a stub's bytes */
 #define TRAMP_PRESENTED 1040 /* the presented frame: the pretcode slot, then room for glibc's ucontext_t whole */
 #else
+#define TRAMP_STUB 8UL
 #define TRAMP_PRESENTED 4688 /* the kernel's rt_sigframe: siginfo, then the ucontext with 4096 bytes of records */
 #endif
+#define TRAMP_BLOCK 112 /* the trampoline's own block above the presented frame */
+struct tramp_slot {
+    void *h; /* the program's handler; 0 until published */
+    unsigned long mask; /* its sa_mask as the kernel stores it, without SIGKILL and SIGSTOP */
+};
+extern struct tramp_slot exclave_slots[TRAMP_SLOTS];
+extern char exclave_stubs[];
+/* the stub for the program's handler h and mask: an address to install, or h itself when no slot is left */
+unsigned long tramp_stub_for(unsigned long h, unsigned long mask);
+/* the slot a handler address names, or -1 when it is no stub's */
+long tramp_slot_of(unsigned long h);
 
 /* ---------- CPU level (isa.c) ---------- */
 /* 1 yes, 0 no, -1 unknown string; auxv for AT_HWCAP on aarch64 */

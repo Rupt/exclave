@@ -12,6 +12,11 @@ into it, six frames as binfmt_script allows five interpreters), if exclave_on_si
 is not in the graph (a rename must be loud), or if the deepest chain, with the 48 bytes the entry
 stub takes for the trap's record and its call (src/handler.c, 7.5.7), exceeds 3072 bytes. gcc
 writes no edge for a call through a pointer, and the launcher makes none.
+
+The trampoline's C (src/tramp.c, 7.5.7) is a second path, from exclave_tramp_present and
+exclave_tramp_after: it runs below the presented frame where the reserved register may hold a
+program's value, so it fails on any call out of src/tramp.c, a helper gcc emits included, and its
+deepest chain is held to 512 bytes.
 """
 
 import re
@@ -20,8 +25,12 @@ import sys
 LIMIT_FRAME = 512
 LIMIT_PATH = 3072  # 7.5.4: under 3 KB with a five-deep chain of host scripts
 ROOT, NESTED, NEST_MAX = "exclave_on_sigsys", "exec_target", 6
-ENTRY_STUB = (
-    48  # the entry stub's record and its call's return address, or its saved x30 (src/handler.c)
+# the entry stub's record and its call's return address, or its saved x30 (src/handler.c)
+ENTRY_STUB = 48
+TRAMP_ROOTS, TRAMP_FILE, LIMIT_TRAMP = (
+    ("exclave_tramp_present", "exclave_tramp_after"),
+    "src/tramp.c",
+    512,
 )
 
 
@@ -30,31 +39,69 @@ def base(title: str) -> str:
     return re.sub(r"(\.(isra|constprop|part|cold)(\.\d+)?)+$", "", title.rsplit(":", 1)[-1])
 
 
-type Graph = tuple[dict[str, int], dict[str, str], dict[str, set[str]]]
+type Graph = tuple[dict[str, int], dict[str, str], dict[str, set[str]], dict[str, str]]
 
 
 def read_graph(paths: list[str]) -> Graph:
-    """Read the .ci files: each node's frame size and kind, and each node's callees."""
+    """Read the .ci files: each node's frame size, kind and source file, and each node's callees."""
     frames: dict[str, int] = {}
     kinds: dict[str, str] = {}
     calls: dict[str, set[str]] = {}
+    files: dict[str, str] = {}
     for f in paths:
         with open(f) as ci:
             lines = list(ci)
+        source = ""
         for line in lines:
+            m = re.match(r'graph: \{ title: "([^"]*)"', line)
+            if m:
+                source = m.group(1)
+                continue
             m = re.match(r'node: \{ title: "([^"]*)" label: "[^"]*?(\d+) bytes \(([^)]*)\)"', line)
             if m:
                 frames[m.group(1)], kinds[m.group(1)] = int(m.group(2)), m.group(3)
+                files[m.group(1)] = source
                 continue
             m = re.match(r'edge: \{ sourcename: "([^"]*)" targetname: "([^"]*)"', line)
             if m:
                 calls.setdefault(m.group(1), set()).add(m.group(2))
-    return frames, kinds, calls
+    return frames, kinds, calls, files
+
+
+def tramp_path(
+    frames: dict[str, int], calls: dict[str, set[str]], files: dict[str, str]
+) -> list[str]:
+    """The trampoline's C: its deepest chain, and a failure for any call out of src/tramp.c."""
+    fails: list[str] = []
+
+    def walk(t: str, seen: tuple[str, ...]) -> int:
+        best = 0
+        for c in sorted(calls.get(t, ())):
+            if c in seen:
+                fails.append(f"recursion through {base(c)} in the trampoline")
+                continue
+            if files.get(c) != TRAMP_FILE:
+                fails.append(f"the trampoline calls {base(c)}, outside {TRAMP_FILE}")
+                continue
+            best = max(best, walk(c, (*seen, c)))
+        return frames.get(t, 0) + best
+
+    for name in TRAMP_ROOTS:
+        found = [t for t in frames if base(t) == name and files.get(t) == TRAMP_FILE]
+        if len(found) != 1:
+            fails.append(f"{name} is not in the call graph (renamed?)")
+            continue
+        root = found[0]
+        depth = walk(root, (root,))
+        print(f"trampoline path from {name}: {depth:d} bytes")
+        if depth > LIMIT_TRAMP:
+            fails.append(f"trampoline path from {name} {depth:d} > {LIMIT_TRAMP:d}")
+    return fails
 
 
 def main() -> int:
     paths = sys.argv[1:]
-    frames, kinds, calls = read_graph(paths)
+    frames, kinds, calls, files = read_graph(paths)
     roots = [t for t in frames if base(t) == ROOT]
     if len(roots) != 1 or not any(base(t) == NESTED for t in frames):
         sys.exit(
@@ -114,6 +161,7 @@ def main() -> int:
     )
     if worst > LIMIT_PATH:
         fails.append(f"handler path {worst:d} > {LIMIT_PATH:d}")
+    fails += tramp_path(frames, calls, files)
     for f in sorted(set(fails)):
         print("FAIL " + f)
     print("stack budget OK" if not fails else "stack budget FAILED")

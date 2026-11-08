@@ -995,14 +995,45 @@ static long do_sigaction(struct scratch *S, long *a)
     void *old = (void *)a[2];
     long size = a[3];
     if (size != 8) return RE5(NR_rt_sigaction, sig, act, old, size, 0);
+#ifdef EXCLAVE_TEST_OLD
+    /* build/launcher-old: handlers installed directly, as before the trampolines */
     if (!act) return RE5(NR_rt_sigaction, sig, 0, old, size, 0);
     unsigned long k[4];
     long r = copy_exact(S->pid, k, act, sizeof k);
     if (r) return r;
-    /* accepted, ignored (13 item 23), once act has been read as sys_rt_sigaction reads it; old reports the truth */
     if (sig == SIGSYS) return old ? RE5(NR_rt_sigaction, sig, 0, old, size, 0) : 0;
     k[3] &= ~SIGSYS_BIT;
     return RE5(NR_rt_sigaction, sig, k, old, size, 0);
+#else
+    /* sa_handler, sa_flags, sa_restorer, sa_mask, the kernel's order on both architectures */
+    unsigned long k[4], o[4] = {0, 0, 0, 0};
+    if (act) {
+        long r = copy_exact(S->pid, k, act, sizeof k);
+        if (r) return r;
+    }
+    /* the kernel's EINVAL, before a slot is taken */
+    if (sig < 1 || sig > 64 || (act && (sig == SIGKILL || sig == SIGSTOP)))
+        return RE5(NR_rt_sigaction, sig, act, old, size, 0);
+    /* accepted, ignored (13 item 23), once act has been read as sys_rt_sigaction reads it; old reports the truth */
+    if (act && sig == SIGSYS) return old ? RE5(NR_rt_sigaction, sig, 0, old, size, 0) : 0;
+    if (act) {
+        /* a handler, behind its slot's trampoline (7.5.7); a stub's own address is its slot's handler */
+        long i = tramp_slot_of(k[0]);
+        if (i >= 0) k[0] = (unsigned long)exclave_slots[i].h;
+        if (k[0] > 1) k[0] = tramp_stub_for(k[0], k[3] & ~(1UL << (SIGKILL - 1) | 1UL << (SIGSTOP - 1)));
+        k[3] &= ~SIGSYS_BIT;
+    }
+    long r = RE5(NR_rt_sigaction, sig, act ? k : 0, old ? o : 0, size, 0);
+    if (r || !old) return r;
+    /* the old action as the program wrote it: a stub's slot names the handler and the mask */
+    long i = tramp_slot_of(o[0]);
+    if (i >= 0) {
+        o[0] = (unsigned long)exclave_slots[i].h;
+        o[3] = exclave_slots[i].mask;
+    }
+    /* written last, as sys_rt_sigaction writes it: a bad pointer is EFAULT with the new action in force */
+    return copy_out(S->pid, old, o, sizeof o);
+#endif
 }
 static long do_sigprocmask(struct scratch *S, long *a, void *uc)
 {

@@ -295,6 +295,7 @@ long __sc6_judge_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define EPERM 1
 #define ENOENT 2
 #define ESRCH 3
+#define EINTR 4
 #define EIO 5
 #define E2BIG 7
 #define ENOEXEC 8
