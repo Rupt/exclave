@@ -3165,7 +3165,7 @@ Fedora's newest image, release 44 with kernel 6.19:
 | Fedora 42 | 6.14 | 99 of 99 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
 | Ubuntu 26.10 | 7.3 | 99 of 99 | all pass | glibc 2.44 |
 | Ubuntu 24.04 arm64 | 6.8 | 99 of 99 | all pass | aarch64: natively on GitHub's aarch64 runner, where the gate runs this kernel (17), and under TCG on the reference machine, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed, where the suite takes 17 minutes and the row 36; the exclave is made on the reference machine and only run here (10.1) |
-| Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | 84 of 84, October 2026 | all pass | aarch64 under TCG: the VM installs the 64 KB kernel and reboots into it; the row takes about two hours on a 2-core aarch64 machine (17), and runs when asked, from the reference machine; reproduced |
+| Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | 107 of 107, November 2026 | all pass | aarch64 under TCG: the VM installs the 64 KB kernel and reboots into it, about an hour on the reference machine, and runs when asked (17); reproduced |
 | reference machine | 7.0 | 99 of 99 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
@@ -3634,25 +3634,24 @@ and stay fixed.
     predecessor was deleted, so the probe (17 item 7) keeps that case
     off host files.
 
-43. **aarch64 kernels with 16 KB or 64 KB pages are untested.** The
-    loader rounds segments to the kernel's `AT_PAGESZ` and refuses by
-    name a segment whose address and offset differ within a page, as
-    the kernel does (7.3). Ubuntu's arm64 packages are linked for 64 KB
-    pages: all 379 ELF files of `coreutils`, `libc6` and `gcc-13` are
-    congruent modulo 64 KB. The launcher's own segments and the syscall
-    page are 64 KB-aligned (7.4.2). The arm64 test row runs a 4 KB
-    kernel; a second emulated row, `noble-arm64-64k`, installs
-    `linux-image-generic-64k` and reboots into it (17). On its first
-    run (October 2026, 6.8.0-147-generic-64k) every oracle passed: the
-    resolution oracle's 3 000 paths, the namespace oracle's 21 workloads,
-    the probe's 18 293 cases with no unexplained difference, and both
-    Docker profiles; the suite's two failures were the tests' own 4 KB
-    assumptions, since corrected, and the row then passed in full. Its
-    second run (November 2026, 6.8.0-149-generic-64k) found four more
-    in the suite's exercisers, guard pages, faulting paths and crafted
-    segments sized in 4 KB, since made the kernel's page, and one rule
-    of the loader, a bss segment's offset checked where the kernel
-    reads none (7.3); corrected, the row passes in full again (12.1).
+43. **aarch64 kernels with 16 KB pages are untested; 64 KB pages are
+    tested when asked.** The loader rounds segments to the kernel's
+    `AT_PAGESZ` and refuses by name a segment whose address and offset
+    differ within a page, as the kernel does (7.3). Ubuntu's arm64
+    packages are linked for 64 KB pages: all 379 ELF files of
+    `coreutils`, `libc6` and `gcc-13` are congruent modulo 64 KB, and
+    so modulo 16 KB. The launcher's own segments and the syscall page
+    are 64 KB-aligned (7.4.2). The arm64 test row runs a 4 KB kernel; a
+    second emulated row, `noble-arm64-64k`, installs
+    `linux-image-generic-64k`, reboots into it and runs when asked
+    (17). On it the suite, every oracle, the probe with no unexplained
+    difference and both Docker profiles pass (12.1; November 2026,
+    6.8.0-149-generic-64k). What the row has found was the tests' own
+    4 KB assumptions, guard pages, faulting paths and crafted segments
+    sized in 4 KB, since made the kernel's page, and one rule of the
+    loader, a bss segment's offset checked where the kernel reads none
+    (7.3). No 16 KB kernel has run it: Ubuntu ships none, and Asahi
+    Linux's kernels for Apple silicon are the ones that use that size.
 
 44. **Two handlers never share a scratch chunk**: a rule, not a
     limitation (7.5.4).
@@ -5561,7 +5560,7 @@ questions.
    aligned (13 item 43). The matrix's `noble-arm64-64k` row, on
    Ubuntu's `linux-image-generic-64k`, passes the suite and every
    oracle, and rebuilds the launcher and the command to the same
-   bytes (12.1).
+   bytes (12.1); no 16 KB kernel has run it (13 item 43).
 4. **The emulated arm64 rows' speed.** The arm64 rows run under QEMU's
    TCG emulation at about a tenth of native speed (12.1), so they run
    when asked rather than at every commit; the exclave they run is made
