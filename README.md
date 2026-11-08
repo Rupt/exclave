@@ -43,8 +43,8 @@ package files or from any filesystem tree.
   C. A CentOS 7 glibc as a data directory gives outputs that run on every
   glibc since 2.17.
 - **Where it runs.** x86-64 and aarch64 Linux, kernel 3.10 or later as
-  tested, glibc or musl software inside, 4 KB pages (larger pages are
-  untested). One source builds both launchers.
+  tested, glibc or musl software inside, 4 KB and 64 KB pages (16 KB
+  pages are untested). One source builds both launchers.
 - **gdb** debugs a program in an exclave; the launcher carries the script
   gdb needs.
 - **Tested against the kernel.** A suite of 107 named tests, oracles that
@@ -390,7 +390,7 @@ launcher, which the command built there carries:
 ```bash
 scripts/reproduce gcc.exclave build/reproduce               # build/reproduce/build/{launcher,exclave}, and their BLAKE3
 build/reproduce/build/exclave relink app.exclave           # app.exclave wrapped with the reproducible launcher
-scripts/release ~/.ssh/id_ed25519 release gcc.exclave app.exclave    # release/: app.exclave.tar.zst, exclave, NOTICES, SHA256SUMS, B3SUMS, SHA256SUMS.sig
+scripts/release ~/.ssh/id_ed25519 release gcc.exclave app.exclave    # release/: app.exclave.tar.zst, exclave, exclave-fetch, NOTICES, SHA256SUMS, B3SUMS, SHA256SUMS.sig
 ```
 
 Taking one, with the release's files in a directory and the releaser's

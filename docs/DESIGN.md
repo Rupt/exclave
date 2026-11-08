@@ -155,9 +155,9 @@ What is built and tested:
 - **A glibc sysroot as a data directory**: CentOS 7's glibc inside the
   gcc exclave, never executed, links outputs against glibc 2.17, which
   run natively on any later glibc (9).
-- **aarch64**: the launcher runs there, tested in an emulated row of the
-  kernel matrix on a kernel with 4 KB pages (12.1, 13 item 43); the
-  exclave it runs is made on x86-64 (10.1).
+- **aarch64**: the launcher runs there, tested in emulated rows of the
+  kernel matrix on kernels with 4 KB and with 64 KB pages (12.1, 13
+  item 43); the exclave it runs is made on x86-64 (10.1).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
 - **The command as one file**: `build/exclave`, static Go carrying its
@@ -780,7 +780,7 @@ the promise below; builds before it promise nothing (2).
 | The manifest (6.2) | `exclave 1` | people, `wrap` | the launcher the exclave carries, every command |
 | The hashes file and the tree hash (6.4) | `hashes 1` | `unpack`, `wrap`, `unwrap`, `relink`, `prune` | `check`, `hash`, anyone with `b3sum` |
 | `EXCLAVE_LOG` (6.2) | the number in each `launcher` line, 2 | every launcher of a run | `check`, `prune`, which read 1 as well |
-| One launcher running another's programs (7.4.2) | the filter version, 8, and the page generation, 2 | each launcher | each launcher |
+| One launcher running another's programs (7.4.2) | the filter version and the page generation, which the launcher's note carries (7) | each launcher | each launcher |
 | The `exclave` command's commands and their arguments (10) | the project's, `VERSION`'s | | people and scripts |
 | `exclave-fetch`'s commands, their arguments as `--help` lists them, its checks, and its cache's layout, `KIND/DIGEST` (10.1) | the project's, `VERSION`'s | `exclave-fetch` | people, scripts, a later `exclave-fetch` sharing the cache |
 
@@ -829,9 +829,9 @@ executable in an exclave's tree is a hard link to it, a *wrapper*, and
 the program a wrapper stands for, its *original*, sits beside it in
 `.real/` (6.1). Besides its code it carries:
 
-- **An ELF note** in a `.note.exclave` section, `exclave`, holding one
-  word, the *page generation* (7.4.2), by which one launcher recognises
-  another (7.4.5).
+- **An ELF note** in a `.note.exclave` section, `exclave`, holding two
+  words, the *page generation* and the filter version (7.4.2), by which
+  one launcher recognises another (7.4.5).
 - **The MIT licence text**, in a `.exclave.license` section that is not
   loaded, since the licence's text goes with every copy.
 - **Its version**, in `.exclave.version`: `exclave` and the build's
@@ -1203,7 +1203,7 @@ kernel has added has a libc fallback and a re-issue would be an
 untranslated host access.
 
 The version moves whenever the trap set grows or the syscall page
-moves, and is 10: 7 added the listings, `getdents64` and `getdents`,
+moves: 7 added the listings, `getdents64` and `getdents`,
 8 `fstat`, for a directory's `.real/` (8.3), 9
 `ptrace(PTRACE_TRACEME)`, for a `vfork` child's request (7.4.5), and 10
 the judge slot and the installs of a program's own filter, which
@@ -1214,8 +1214,8 @@ shipped with and fails when any changes under the same version.
 Filters before 6 allow a page at another address, so
 neither launcher can run under the other's filter: a launcher under a
 filter older than 6 refuses by name at startup, and a handler sends a
-launcher whose note carries a page generation older than the present
-2, or no word, to its own child, which refuses it by name (7.4.5, 13
+launcher whose note carries a page generation older than its own, or
+no word, to its own child, which refuses it by name (7.4.5, 13
 item 45). `scripts/build` also builds `build/launcher-old`, the same sources at
 version 3, without `bind` and `connect`, which version 4 added, and
 without the judge slot's rule and the installs, which it refuses; the
@@ -3099,8 +3099,8 @@ a tenth of its time, 0.19 s against 1.98 s, November 2026), an archive
 that keeps the hard links, sorted
 and without owners, made only after the exclave passes `check` and
 only if it is wrapped with that launcher; the command itself as
-`exclave`, with the licence texts of the Go modules it links as
-`NOTICES`, written at the build from the pinned module cache, since
+`exclave`, and `exclave-fetch` beside it, with the licence texts of the
+Go modules they link as `NOTICES`, written at the build from the pinned module cache, since
 their BSD licences ask a binary distribution to carry them; `SHA256SUMS`
 and `B3SUMS`, as `b3sum` writes it, over every file there; and `SHA256SUMS.sig`, the sums signed with the ssh key `KEY`
 (`ssh-keygen -Y`, namespace `exclave`). A consumer needs nothing of the
@@ -3141,7 +3141,7 @@ another, or copy a sysroot into a data directory (9). The cost is disk space.
 | Snap-confined terminals, gVisor-based CI, WSL1, SELinux `execmem` policies | Untested. snapd and gVisor install their own filters; WSL1 has no seccomp |
 | `no_new_privs` | The filter requires it, and it also disables file capabilities and AppArmor transitions on exec: `sudo`, `su`, `pkexec`, `ping` and setcap binaries fail inside an exclave, including when run from build scripts |
 | Media without symlinks or hard links (FAT) | `cp -rL` copies the launcher once per wrapper and replaces symlinks with copies; the copy works, since whether a file is a wrapper is read from the file (7.4.4) |
-| Architectures | x86-64 and aarch64, from one source as two launchers (7.1). An exclave runs programs of its launcher's machine only. aarch64 is tested in the emulated matrix row (12.1), on a kernel with 4 KB pages; kernels with 16 KB or 64 KB pages (Asahi, RHEL's and Ubuntu's 64k kernels) are untested (13 item 43). Another 64-bit little-endian machine would need the same list: the syscall table, `_start`, the signal frame offsets, a restorer, the relocation type and the CPU check |
+| Architectures | x86-64 and aarch64, from one source as two launchers (7.1). An exclave runs programs of its launcher's machine only. aarch64 is tested in the emulated matrix rows (12.1), on kernels with 4 KB and with 64 KB pages (Ubuntu's 64k kernel); kernels with 16 KB pages (Asahi's) are untested (13 item 43). Another 64-bit little-endian machine would need the same list: the syscall table, `_start`, the signal frame offsets, a restorer, the relocation type and the CPU check |
 | Overhead | Within noise on a compute-bound compile; about a third more on thirty small compiles; about twice native per `posix_spawn`; 6 to 11 times native on a tight `stat` loop (16) |
 
 What remains host-dependent is the same set that static linking leaves:
@@ -3156,26 +3156,27 @@ suite's 107 named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher
 inside its copy of the exclave (`scripts/reproduce`, 10.5) and
 compares its bytes with the reference machine's build; a row whose
-notes say "reproduced" built the same bytes. The suite's
-counts are from GitHub's hosted runners in November 2026, the rest
-from the reference machine in October 2026; the runner fetches
-Fedora's newest image, release 44 with kernel 6.19:
+notes say "reproduced" built the same bytes. The oracles' results are
+from the reference machine in October 2026, the 64 KB-page row's in
+November 2026; GitHub's hosted runner, where the suite passes on every
+x86-64 row too, fetches Fedora's newest image, release 44 with kernel
+6.19:
 
-| Distribution | Kernel | Suite | Oracles | Notes |
-|---|---|---|---|---|
-| CentOS 7 | 3.10 | 99 of 99 | none: no user namespaces | `seccomp(2)` absent, so the `prctl` form is used; `renameat`, not `renameat2` |
-| Ubuntu 18.04 | 4.15 | 99 of 99 | namespace, probe and Docker profile pass; no `openat2` | bwrap 0.2 |
-| Rocky Linux 8 | 4.18 | 99 of 99 | all pass | |
-| Ubuntu 20.04 | 5.4 | 99 of 99 | namespace, probe and Docker profile pass; no `openat2` | |
-| Debian 11 | 5.10 | 99 of 99 | all pass | the security suite lists a `bubblewrap` it does not serve; the matrix installs the release's |
-| Ubuntu 22.04 | 5.15 | 99 of 99 | all pass | |
-| Debian 12 | 6.1 | 99 of 99 | all pass | |
-| Alpine 3.20 | 6.6 | 99 of 99 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
-| Fedora 42 | 6.14 | 99 of 99 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
-| Ubuntu 26.10 | 7.3 | 99 of 99 | all pass | glibc 2.44 |
-| Ubuntu 24.04 arm64 | 6.8 | 99 of 99 | all pass | aarch64: natively on GitHub's aarch64 runner, where the gate runs this kernel (17), and under TCG on the reference machine, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed, where the suite takes 17 minutes and the row 36; the exclave is made on the reference machine and only run here (10.1) |
-| Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | 107 of 107, November 2026 | all pass | aarch64 under TCG: the VM installs the 64 KB kernel and reboots into it, about an hour on the reference machine, and runs when asked (17); reproduced |
-| reference machine | 7.0 | 99 of 99 | all pass | Ubuntu 24.04, AppArmor |
+| Distribution | Kernel | Oracles | Notes |
+|---|---|---|---|
+| CentOS 7 | 3.10 | none: no user namespaces | `seccomp(2)` absent, so the `prctl` form is used; `renameat`, not `renameat2` |
+| Ubuntu 18.04 | 4.15 | namespace, probe and Docker profile pass; no `openat2` | bwrap 0.2 |
+| Rocky Linux 8 | 4.18 | all pass | |
+| Ubuntu 20.04 | 5.4 | namespace, probe and Docker profile pass; no `openat2` | |
+| Debian 11 | 5.10 | all pass | the security suite lists a `bubblewrap` it does not serve; the matrix installs the release's |
+| Ubuntu 22.04 | 5.15 | all pass | |
+| Debian 12 | 6.1 | all pass | |
+| Alpine 3.20 | 6.6 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
+| Fedora 42 | 6.14 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
+| Ubuntu 26.10 | 7.3 | all pass | glibc 2.44 |
+| Ubuntu 24.04 arm64 | 6.8 | all pass | aarch64: natively on GitHub's aarch64 runner, where the gate runs this kernel (17), and under TCG on the reference machine, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed, where the suite takes 17 minutes and the row 36; the exclave is made on the reference machine and only run here (10.1) |
+| Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | all pass | aarch64 under TCG: the VM installs the 64 KB kernel and reboots into it, about an hour on the reference machine, and runs when asked (17); reproduced |
+| reference machine | 7.0 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
 run passes; the ten x86-64 rows pass the same way on GitHub's hosted
