@@ -1524,15 +1524,15 @@ def native_cases(
 
 
 def writable_in_bwrap(forms: Forms, root: str, host: str, bindir: str) -> set[str]:
-    """The names of the bound host directories (BOUND) the kernel's world can write to.
+    """The bound host paths (BOUND), directories and files, that the kernel's world can write to.
 
     Asked in that world rather than here: an unprivileged bwrap gives its user the capabilities of
-    its own user namespace, so a directory this user owns but cannot write to is writable there.
+    its own user namespace, so a path this user owns but cannot write to is writable there.
     """
     dirs = [
         (n, d)
         for n, p in forms.paths
-        if n in BOUND and (d := raw_of(p)) is not None and os.path.isdir(d)
+        if n in BOUND and (d := raw_of(p)) is not None and os.path.exists(d)
     ]
     script = os.path.join(bindir, "writable.sh")
     os.makedirs(host, exist_ok=True)  # bwrap starts in the host area, which the reset remakes
@@ -2184,7 +2184,12 @@ def main() -> int:
         )
     nr = kernel_table(roots=(root, "/"))
     writable = writable_in_bwrap(forms, root, host, bindir)
-    mutable = writable - {"tmp"}  # /tmp is sticky: the cases there are safe (generate)
+    # a bound host path this user can write, in the kernel's world or here (GitHub's runners keep a
+    # world-writable zone file behind /etc/localtime), is the host's to keep: the cases that change
+    # it are left out, since the three worlds would otherwise change one host file in turn and
+    # each see the last one's leftovers; /tmp is sticky, so the cases there are safe (generate)
+    here = {n for n, p in forms.paths if n in BOUND and (d := raw_of(p)) and os.access(d, os.W_OK)}
+    mutable = (writable | here) - {"tmp"}
     # the bound host paths as this host has them: a difference on one is often the host's doing
     for n, p in forms.paths:
         d = raw_of(p)

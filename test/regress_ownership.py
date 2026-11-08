@@ -44,11 +44,14 @@ def identity(ctx: Ctx) -> None:
         f"the zone inside is the host's and TZ is dropped: {out!r} {err!r}, host {host.stdout!r}",
     )
     if os.path.exists("/etc/localtime"):
+        # the host's own bytes, whatever they are, rather than a TZif header: a host may keep an
+        # odd file there, as GitHub's runners keep a world-writable one
         rc, out, err = run(
             [wrapper(ctx, "head"), "-c", "4", "/etc/localtime"], cwd=ctx.work, env=ctx.env
         )
         expect(
-            rc == 0 and out == "TZif", f"the host's /etc/localtime is read inside: {out!r} {err!r}"
+            rc == 0 and out.encode() == read_bytes("/etc/localtime", 4),
+            f"the host's /etc/localtime is read inside: {out!r} {err!r}",
         )
 
 
