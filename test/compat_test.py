@@ -1,14 +1,16 @@
 """This build against an earlier one, as docs/DESIGN.md 6.7 promises between builds of one version.
 
-    test/compat_test.py --old DIR --exclave EXCLAVE [--work DIR]
+    test/compat_test.py --old DIR [--work DIR]
 
-DIR holds an earlier build's files for this machine: `exclave`, its command, and `launcher`, its
-launcher; the first release's, once there is one, which scripts/inputs then pins. EXCLAVE is a gcc
-exclave. One copy of it is relinked by the earlier command to the earlier launcher, another by this
-command to this launcher, and each build reads the other's: this command checks, hashes, unwraps and
-wraps the earlier exclave and reads its launcher's log in check and prune; the earlier command
-checks and hashes this one's; and each launcher runs the other's programs, a listing among them,
-nested either way.
+DIR holds an earlier build's files for this machine: `exclave`, its command, and one exclave it
+wrapped, `NAME.exclave`, which carries its launcher. The baseline, the first release's command and
+an exclave it ships, is what scripts/inputs puts in its DIR/baseline (docs/DESIGN.md 6.7). A copy
+of that exclave stays as the earlier build wrote it, another is relinked by this command to this
+launcher, and each build reads the other's: this command checks, hashes, unwraps and wraps the
+earlier exclave and reads its launcher's log in check and prune; the earlier command checks and
+hashes this one's; and each launcher runs the other's programs, a listing among them, nested either
+way. A DIR that does not exist is the state before the first release, or on a machine the release
+is not for: the test says it cannot run and exits 0, which the step runner reports as SKIP.
 Prints one line per step; the exit status is the number of failures.
 """
 
@@ -52,26 +54,29 @@ def shell(ex: str) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--old", required=True)
-    ap.add_argument("--exclave", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "compat-work"))
     args = ap.parse_args()
-    old_cmd, old_launcher = (os.path.join(args.old, f) for f in ("exclave", "launcher"))
-    for f in (old_cmd, old_launcher):
-        if not os.access(f, os.X_OK):
-            sys.exit(f"compat: no earlier build's {os.path.basename(f)} at {f}")
+    old = os.path.abspath(args.old)
+    if not os.path.isdir(old):
+        print(f"compat: no baseline release yet at {old}; cannot run")
+        return 0
+    old_cmd = os.path.join(old, "exclave")
+    if not os.access(old_cmd, os.X_OK):
+        sys.exit(f"compat: no earlier build's command at {old_cmd}")
+    wrapped = sorted(n for n in os.listdir(old) if n.endswith(".exclave"))
+    if len(wrapped) != 1:
+        sys.exit(f"compat: {old} holds {len(wrapped)} exclaves, not the earlier build's one")
+    src = os.path.join(old, wrapped[0])
+    old_launcher = os.path.join(src, ".exclave", "launcher")
     new_cmd = tree.TOOL[0]
     work = os.path.abspath(args.work)
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
-    src = os.path.abspath(args.exclave)
     _, version = run([old_cmd, "version"])
     print(f"against {version.strip()}")
 
-    # the earlier build's exclave, read by this one
+    # the earlier build's exclave, as it wrote it, read by this one
     earlier = tree.copy_exclave(src, os.path.join(work, "earlier.exclave"))
-    rc, out = run([old_cmd, "relink", earlier, old_launcher])
-    if rc:
-        sys.exit(f"compat: the earlier command's relink: {out[-400:]}")
     rc, out = run([new_cmd, "check", earlier])
     step("this command checks the earlier build's exclave", rc == 0, out[-400:])
     rc, out = run([new_cmd, "hash", earlier])

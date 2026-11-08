@@ -24,7 +24,8 @@ sanitized() { # sanitized OUT ARGS...: a host program built under ASan and UBSan
     host_cc -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -o "$o" "$@" "$ROOT/test/sanitize.c"
 }
 
-# report WHAT START: one line per step, ok, SKIP (an oracle that could not run here) or FAIL with its last line; prints
+# report WHAT START: one line per step, ok, SKIP (an oracle that could not run here, or the
+# compatibility test before a baseline release) or FAIL with its last line; prints
 # the count and the time since START; returns the number of failed steps
 report() {
     fails=0 skips=0
@@ -35,9 +36,9 @@ report() {
         if [ "$r" != 0 ]; then
             printf '%-22s FAIL %4ss  %s\n' "$name" "$secs" "$last"
             fails=$((fails + 1))
-        elif case $name in resolve-* | ns-* | syscalls-* | docker-* | nss) grep -q 'cannot run' "$out/$name.log" ;; *) false ;; esac then
+        elif case $name in resolve-* | ns-* | syscalls-* | docker-* | nss | compat) grep -q 'cannot run' "$out/$name.log" ;; *) false ;; esac then
             printf '%-22s SKIP %4ss  %s\n' "$name" "$secs" "$last"
-            skips=$((skips + 1)) # an oracle without bwrap, namespaces or openat2
+            skips=$((skips + 1)) # an oracle without bwrap, namespaces or openat2; no baseline yet
         else printf '%-22s ok   %4ss  %s\n' "$name" "$secs" "$last"; fi
     done
     echo "$1: $fails failed, $skips skipped, $(($(date +%s) - $2)) s"

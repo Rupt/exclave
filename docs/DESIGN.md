@@ -815,9 +815,13 @@ The rules every version keeps:
   version` and the hashes file's `tool` record give it with the commit
   (6.4), and the versions above say what the build reads.
 
-`test/compat_test.py` holds a build to these rules against an earlier
-build's files (17); against a build from before the log carried its
-version it fails as it should, on the log.
+The baseline is the first release: `scripts/inputs` records its
+command and one exclave it ships by URL and BLAKE3-256 and puts them in
+its `DIR/baseline`, and `test/compat_test.py`, a step of `scripts/extra`
+and of the workflow's gate job, holds every later build to these rules
+against them (17). Given an earlier build of another kind, it fails as
+it should: against a build from before the log carried its version, on
+the log.
 
 ## 7. The launcher
 
@@ -5245,12 +5249,14 @@ steps:
   as a consumer takes it, the README's recipe step by step, with a
   tampered archive and a tampered sums file refused and `NOTICES`
   naming the modules the command links (10.5).
-- the compatibility test (`test/compat_test.py`), given an earlier
-  build's command and launcher (`EXCLAVE_TEST_OLD`), the first
-  release's once there is one: this command checks, hashes, unwraps,
-  wraps and reads the logs of an exclave the earlier build made, the
-  earlier command checks and hashes one this build made, and the two
-  launchers nest either way (6.7).
+- the compatibility test (`test/compat_test.py`) against the baseline,
+  the first release's command and an exclave it ships, which
+  `scripts/inputs` puts in `DIR/baseline` (6.7): this command checks,
+  hashes, unwraps, wraps and reads the logs of the exclave as the
+  release made it, the release's command checks and hashes a copy this
+  build relinked, and the two launchers nest either way. Before the
+  first release there is no baseline and the step is SKIP; the
+  workflow's gate job runs it too, beside the gate.
 
 On the reference machine, on the four exclaves, four steps at a time,
 it takes 96 s (measured October 2026).
@@ -5561,7 +5567,10 @@ questions.
    and the kernel matrix (12.1) run on the reference machine, and on
    GitHub's hosted runners when a maintainer dispatches the workflow;
    nothing runs at a push. Before it nothing promises compatibility
-   between commits (2); from it on, the versions of 6.7 do.
+   between commits (2); from it on, the versions of 6.7 do, and the
+   first release is the baseline every later commit is held to: its
+   URL and hashes go into `scripts/inputs`, which fetches it, and the
+   compatibility test runs against it (17).
 3. **aarch64 kernels with 16 KB or 64 KB pages.** The loader rounds to
    the kernel's page size and the launcher's own segments are 64 KB
    aligned (13 item 43). The matrix's `noble-arm64-64k` row, on

@@ -186,6 +186,49 @@ x86_64)
 *) echo "alpine-caches.exclave: Alpine's x86-64 key alone is pinned here; skipped" ;;
 esac
 item file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json b5b6b32d9b6c410d6e8c00639ead764745bd4eaf9cb662d2ec25b656e3f17f75
+# The compatibility baseline (DESIGN.md 6.7): the first release's command and one exclave it ships, from the
+# release on GitHub, each pinned by its line in the release's B3SUMS, into DIR/baseline, the archive unpacked;
+# test/compat_test.py holds every later build to them. Empty until the first release, filled once from it, as
+#   baseline_release=https://github.com/Rupt/exclave/releases/download/vX.Y.Z
+#   baseline_command=HASH                       # exclave's line in B3SUMS
+#   baseline_archive=NAME.exclave.tar.zst HASH  # the archive's line, reversed
+# and never changed after. The release is the reference machine's, x86-64's.
+baseline_release=''
+baseline_command=''
+baseline_archive=''
+baseline() {
+    if [ -z "$baseline_release" ]; then
+        echo "baseline: no release yet, so none is recorded here; skipped"
+        return 0
+    fi
+    [ "$(uname -m)" = x86_64 ] || {
+        echo "baseline: the release is x86-64's; skipped"
+        return 0
+    }
+    b=$dir/baseline
+    archive=${baseline_archive% *} archive_b3=${baseline_archive#* }
+    name=${archive%.tar.zst}
+    if [ "$(b3 "$b/exclave")" = "$baseline_command" ] && [ -f "$b/$name/.exclave/hashes" ]; then
+        echo "baseline: present"
+        return 0
+    fi
+    rm -rf "$b" "$b.new" && mkdir -p "$b.new" || return 1
+    # the archive unpacked beside it, and the directory renamed into place only when both are whole
+    if download "$baseline_release/exclave" "$b.new/exclave" >"$dir/log/baseline.log" 2>&1 &&
+        [ "$(b3 "$b.new/exclave")" = "$baseline_command" ] &&
+        download "$baseline_release/$archive" "$b.new/$archive" >>"$dir/log/baseline.log" 2>&1 &&
+        [ "$(b3 "$b.new/$archive")" = "$archive_b3" ] &&
+        zstd -dc "$b.new/$archive" | tar -C "$b.new" -xf - &&
+        rm "$b.new/$archive" && chmod +x "$b.new/exclave" && mv "$b.new" "$b"; then
+        echo "baseline: $("$b/exclave" version) and $name"
+    else
+        echo "baseline: FAIL (download, hash or unpack), see $dir/log/baseline.log"
+        rm -rf "$b.new"
+        failed baseline
+        return 1
+    fi
+}
+item baseline
 counted
 [ "${2-}" = examples ] || {
     echo "inputs: $fails failed (the gate's; scripts/inputs DIR examples fetches the examples' too)"

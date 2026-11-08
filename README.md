@@ -445,10 +445,10 @@ each test establishes, 19 the decisions a change is expected to respect.
 
 ```
 scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, clang-format, clang-tidy and gcc's strict warnings; --fix lets them correct
-scripts/inputs build/inputs   # the test inputs: the four exclaves, the arm64 gcc exclave, the lookup, caches and gdb tests' exclaves and Docker's seccomp profile, from the package archives and GitHub; skips what is present
+scripts/inputs build/inputs   # the test inputs: the four exclaves, the arm64 gcc exclave, the lookup, caches and gdb tests' exclaves, Docker's seccomp profile and the baseline release once one is recorded, from the package archives and GitHub; skips what is present
 scripts/inputs build/inputs examples   # the examples' inputs too, some from their authors' sites
 D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave   # the commit gate: of the code checks, unit tests, stack budget, the command's Go tests, unpack's and the fetchers' tests, the suite, the oracles, the syscall probe and the Docker profile run, the steps the change can affect, two at a time (--jobs N); --full runs all of them
-D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # beyond the gate, when asked: the suite, the debug launcher, the oracles and the probe on every exclave given; the plain-label suite, the fuzz budget, the release test and, with EXCLAVE_TEST_OLD=DIR, the compatibility test on the first
+D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # beyond the gate, when asked: the suite, the debug launcher, the oracles and the probe on every exclave given; the plain-label suite, the fuzz budget, the release test and, against the baseline release in $D/baseline, the compatibility test on the first
 scripts/test --exclave gcc.exclave       # the suite alone; -k NAME runs one test
 scripts/matrix --exclave gcc.exclave --docker-profile build/inputs/src/docker-seccomp.json   # the kernel matrix: cloud images under QEMU/KVM, one at a time (--jobs N); due when the gate says a change reaches the VMs
 gh workflow run ci.yml -f matrix=true    # the gate on GitHub's x86-64 and aarch64 runners, then the x86-64 rows under KVM, for the pushed main; -f matrix=false the gate alone. gh run list --workflow ci.yml, gh run watch ID --exit-status, gh run view ID --log-failed
@@ -533,7 +533,7 @@ test/affected.py     the gate's steps a change reaches, derived from what each s
 test/tables_test.py  the tables the launcher, the command, unpack and the tests each carry, read from every source and compared
 test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule
 test/readers_test.py the command's ELF, ld.so.cache and log readers on hostile files; tool/*_test.go the command's own tests and fuzz targets
-test/compat_test.py  this build against an earlier build's command and launcher, as docs/DESIGN.md 6.7 promises; a step of scripts/extra with EXCLAVE_TEST_OLD
+test/compat_test.py  this build against the baseline release's command and exclave, as docs/DESIGN.md 6.7 promises; a step of scripts/extra, SKIP before the first release
 test/scratch_test.c  the scratch pool's sweep under the interleaving that once shared a chunk; test/cache_test.c the cache's growth and its lock across fork
 test/isa_test.c      the CPU level check against made-up cpuid and XCR0 values and against gcc's own answer
 test/fuzz.c          mutation fuzzing of the launcher's parsers; test/launcher_fuzz.c its target, test/fuzz.py the step of scripts/extra
