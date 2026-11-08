@@ -102,9 +102,11 @@ def main() -> int:
 
     argv = [x.replace("HOSTDIR", hostdir) for x in args.args]
     fresh()
-    # the probe's world: the identity directories with their links' targets (identity_dir_binds)
+    # the trust exerciser's world is the probe's: the identity directories with their links' target
+    # directories (tree.identity_dir_binds), which would hide the tree's for any other program
+    targets = os.path.basename(args.prog) == "trustdir.c"
     rc_b, out_b, err_b = oracle_ns.run_bwrap(
-        root, work, " ".join([prog, *argv]), sp, identity_targets=True
+        root, work, " ".join([prog, *argv]), sp, identity_targets=targets
     )
     fresh()
     rc_o, out_o, err_o = oracle_ns.run_launcher(ex, work, argv, sp, prog=prog)

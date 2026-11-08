@@ -1684,6 +1684,8 @@ BOUND = {
     "resolv_slash": "/etc/resolv.conf",
     "resolv_dotdot": "/etc/resolv.conf",
     "ca_bundle": "/etc/pki/tls/certs/ca-bundle.crt",
+    # an identity directory on Red Hat's hosts (8.4)
+    "ca_bundle_dir": "/etc/pki/tls/certs",
     "tmp": "/tmp",
     "home": "/home",
     "opt": "/opt",
@@ -1892,18 +1894,32 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
         None,
         lambda label, b, o, c: (
             BOUND_PATHS & set(c.paths)
-            and errnos(b, o)[0] in (errno.EROFS, errno.EXDEV)
+            and errnos(b, o)[0] == errno.EROFS
             and o == c.native.get(label)
         ),
         (
             "a host entry bound into bwrap's read-only root: its parent directory, or the "
-            "identity symlink itself, is read-only there (EROFS), and a rename or a link between "
-            "it and another bound host path, the trust directory's link followed to its target "
-            "among them, crosses bwrap's mounts (EXDEV) where the host's one mount answers the "
-            "permission; the launcher answers with the host's permissions (8.1, 8.4), as the "
-            "probe does run natively"
+            "identity symlink itself, is read-only there (EROFS); the launcher answers with the "
+            "host's permissions (8.1, 8.4), as the probe does run natively"
         ),
     ),
+    *[
+        (
+            name,
+            lambda label, b, o, c: (
+                BOUND_PATHS & set(c.paths)
+                and errnos(b, o)[0] == errno.EXDEV
+                and o == c.native.get(label)
+            ),
+            (
+                "a rename or a link between a bound host entry and another bound host path, the "
+                "trust directory's link followed to its target among them, crosses bwrap's mounts "
+                "(EXDEV) where the host's one mount answers the permission; the launcher answers "
+                "as the probe does run natively (8.4)"
+            ),
+        )
+        for name in ("rename", "renameat", "renameat2", "link", "linkat")
+    ],
     (
         "chown",
         lambda label, b, o, c: (
@@ -2239,6 +2255,10 @@ def main() -> int:
     # it are left out, since the three worlds would otherwise change one host file in turn and
     # each see the last one's leftovers; /tmp is sticky, so the cases there are safe (generate)
     here = {n for n, p in forms.paths if n in BOUND and (d := raw_of(p)) and os.access(d, os.W_OK)}
+    # a name in the trust directory, a missing one among them, is the host's to keep where this user
+    # can write the directory, as root can
+    if forms.trust and os.access("/etc/ssl/certs", os.W_OK):
+        here |= {n for n, _ in forms.trust}
     mutable = (writable | here) - {"tmp"}
     # the bound host paths as this host has them: a difference on one is often the host's doing
     for n, p in forms.paths:

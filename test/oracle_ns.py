@@ -161,12 +161,12 @@ WORKLOADS: list[tuple[str, Callable[[str, str], bool] | None]] = [
     ("stat -f -c '%T' /usr; touch /usr/bin/true 2>&1; chmod 600 /usr/bin/true 2>&1; echo $?", None),
     ("date +%Z; TZ=Asia/Tokyo date +%Z; ls /etc/localtime 2>&1 | wc -l", None),
     # the host's trust directory (8.4): its listing, a link's text, a climb out of it into the tree
-    # and a create there; the links' targets are not bound here, so nothing follows them
+    # and whether it can be written; the links' targets are not bound here, so nothing follows them
     (
         (
             "ls /etc/ssl/certs | wc -l; for f in $(ls /etc/ssl/certs | head -3); "
             "do readlink /etc/ssl/certs/$f; done; cd /etc/ssl/certs && pwd && ls .. | wc -l; "
-            "touch /etc/ssl/certs/oracle-new 2>&1"
+            "test -w /etc/ssl/certs; echo $?"
         ),
         None,
     ),
