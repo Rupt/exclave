@@ -3178,8 +3178,25 @@ x86-64 row too, fetches Fedora's newest image, release 44 with kernel
 
 Every row passes the full suite, and every oracle that its kernel can
 run passes; the x86-64 rows pass the same way on GitHub's hosted
-x86-64 runner (17). Two checks outside the suite run natively on
+x86-64 runner (17). Three checks outside the suite run natively on
 each row:
+
+- **The release's recipe.** A release of the gcc exclave, made on the
+  reference machine by `scripts/release` (10.5), is taken in the VM
+  as the README gives it, with the host's own tools: the signature
+  verified by `ssh-keygen -Y verify`, the sums checked by `sha256sum
+  -c`, the archive unpacked by `tar --zstd` or, where the host's `tar`
+  lacks that option, by `zstd -dc` into `tar -xf -`, and then the
+  release's own `exclave check` and `exclave version`, and a program
+  of the unpacked exclave run. The sums, the check, the version and
+  the program pass on every row. A host without `ssh-keygen -Y`
+  records that as its answer, as the sysroot check records the musl
+  host's: measured November 2026, CentOS 7's OpenSSH 7.4, Ubuntu
+  18.04's 7.6 and Rocky Linux 8's 8.0 have none, and Ubuntu 20.04's
+  8.2 verifies; a host without zstd would record that too, and the
+  matrix would unpack the archive with its own Python so that the
+  suite still runs. The exclave the release unpacks is the one the
+  row's suite then runs.
 
 - **`noexec`.** A program built by the exclave's gcc, placed on a
   `noexec` tmpfs, is refused with status 126, permission denied, by the
@@ -5388,13 +5405,19 @@ kernels' answers as they were. Being the costliest check, it runs when
 the maintainer approves it, usually once before a series of commits is
 pushed, rather than before each commit. Each VM
 boots its distribution's cloud image under QEMU with KVM behind a
-copy-on-write overlay; cloud-init installs strace and, where the
-distribution has it, bubblewrap. The exclave, the test tree, the
+copy-on-write overlay; cloud-init installs strace, zstd and, where the
+distribution has it, bubblewrap, and on CentOS 7 zstd from Fedora's
+archive of EPEL 7. The exclave, the test tree, the
 checkout's launcher, command and `unpack`, built for the VM's machine
 by `scripts/build` first, which takes no time when they are up to
 date, and the pinned Python are copied in, and the exclave is relinked there
 by the command, which runs as it is on every kernel of
-the matrix, CentOS 7's 3.10 included. The
+the matrix, CentOS 7's 3.10 included. For the rows of the reference
+machine's architecture the exclave goes in as a release of it,
+made on the reference machine by `scripts/release` with a key made
+there, and the row takes the release as a consumer does before
+anything else runs (12.1); the exclave the release unpacks is the
+row's, so the payload carries it once. The
 Python is built for the VM's machine and libc and
 installed by the repository's uv: the glibc builds need only glibc 2.17,
 so CentOS 7 runs the same Python as Fedora 42, and Alpine takes the musl
@@ -5403,7 +5426,9 @@ Each row runs the suite on the full exclave with a budget scaled to the
 VM. Where `bwrap` works it then runs the two oracles, the probe and,
 given the profile, the Docker profile run, first lifting the AppArmor
 sysctl that denies unprivileged user namespaces on Ubuntu 24.04's
-image. Two checks run outside the suite: a program built by the
+image. Three checks run outside the suite: the release's recipe, the
+README's commands for taking a release run in the VM with the host's
+own `ssh-keygen`, `sha256sum`, `tar` and `zstd`; a program built by the
 exclave's gcc on a `noexec` tmpfs the VM mounts as root, run by the
 VM's shell, the positional entry and the exclave's shell; and the
 output of `test/sysroot.py` run natively. The results go to

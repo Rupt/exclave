@@ -397,13 +397,23 @@ public key from a channel you trust (not the release itself):
 echo "exclave-release $(cat releaser.pub)" > allowed_signers
 ssh-keygen -Y verify -f allowed_signers -I exclave-release -n exclave -s SHA256SUMS.sig < SHA256SUMS
 sha256sum -c SHA256SUMS                                   # or b3sum -c B3SUMS
-tar --zstd -xf gcc.exclave.tar.zst
+tar --zstd -xf gcc.exclave.tar.zst                        # or, where tar has no --zstd: zstd -dc gcc.exclave.tar.zst | tar -xf -
 chmod +x exclave && ./exclave check gcc.exclave           # the tree against the hashes file, the wrappers, the static check
 ./exclave version                                         # which build made it; the launcher inside says the same
 ```
 
-`test/release_test.py`, a step of `scripts/extra`, runs exactly this on
-a release of the gcc exclave.
+The signature check needs an `ssh-keygen` with `-Y`: Ubuntu 20.04's
+OpenSSH 8.2 has it, and CentOS 7's 7.4, Ubuntu 18.04's 7.6 and Rocky
+Linux 8's 8.0 have none (measured November 2026), so on those hosts
+verify the signature on another machine and carry `SHA256SUMS` across.
+The archive is zstd only, for the reason `docs/DESIGN.md` 10.5 gives,
+so unpacking it needs `zstd`, through `tar --zstd` where `tar` has that
+option or piped into any `tar` where it has not.
+
+The kernel matrix runs exactly this, with each host's own tools, on
+every distribution it boots (`docs/DESIGN.md` 12.1), and
+`test/release_test.py`, a step of `scripts/extra`, on the reference
+machine, where a tampered archive and a tampered sums file are refused.
 
 ## Development
 
