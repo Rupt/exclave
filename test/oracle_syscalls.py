@@ -1405,7 +1405,7 @@ def run_bwrap(root: str, host: str, _bindir: str, probe: str, cases: str) -> tup
     # the identity directories, and the directories their links lead to, which no form names (8.4)
     args += tree.identity_dir_binds(root, targets=True)
     for f in IDENTITY:
-        if os.path.exists(f) and os.path.lexists(os.path.join(root, f.lstrip("/"))):
+        if os.path.exists(f) and (p := tree.tree_place(root, f)) is not None and os.path.lexists(p):
             t = os.path.realpath(f) if os.path.islink(f) else f
             # a target under a volatile directory comes with that directory's bind
             if not any(t.startswith(b + "/") for b in ("/run", "/tmp", "/dev", "/proc")):
@@ -2204,13 +2204,13 @@ def main() -> int:
     ):
         make_maze(r, host, launcher)
     for f in IDENTITY:  # as oracle_ns: the host's link text in the copy, its target bound
-        p_ = os.path.join(root, f.lstrip("/"))
-        if os.path.islink(f) and os.path.lexists(p_):
+        # where the launcher maps each, through the tree's links (tree.tree_place, 8.4)
+        p_ = tree.tree_place(root, f)
+        if p_ is not None and os.path.islink(f) and os.path.lexists(p_):
             os.remove(p_)
             os.symlink(os.readlink(f), p_)
-            t = os.path.realpath(f)
-            tp = os.path.join(root, t.lstrip("/"))
-            if not os.path.lexists(tp) and not t.startswith(("/run/", "/tmp/", "/dev/", "/proc/")):
+            tp = tree.tree_place(root, os.path.realpath(f))
+            if tp is not None and not os.path.lexists(tp):
                 os.makedirs(os.path.dirname(tp), exist_ok=True)
                 with open(tp, "wb"):
                     pass

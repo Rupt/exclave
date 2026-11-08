@@ -50,6 +50,56 @@ IDENTITY_FILES = (
 IDENTITY_DIRS = ("/etc/ssl/certs", "/etc/pki/tls/certs", "/var/lib/sss")
 
 
+VOLATILE_TOPS = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
+
+
+def tree_real_dir(root: str, d: str) -> str | None:
+    """The directory d as the tree resolves it, as the launcher maps an identity file's copy (8.4).
+
+    A chroot's view: the tree's links followed in the tree, a component the tree lacks taken as a
+    directory to be made, as tool/paths.go's treeRealDir and src/vis.c's tree_real_of do. None
+    where the launcher gives the copy no place: a file on the way, a loop, a link that cannot be
+    read, or a directory under a volatile one, which is the host's.
+    """
+    cur, rest, hops = "", [p for p in d.split("/") if p], 0
+    while rest:
+        comp = rest.pop(0)
+        if comp == ".":
+            continue
+        if comp == "..":
+            cur = cur.rsplit("/", 1)[0] if "/" in cur else ""
+            continue
+        cand = cur + "/" + comp
+        real = os.path.join(root, cand.lstrip("/"))
+        if not os.path.lexists(real) or (os.path.isdir(real) and not os.path.islink(real)):
+            cur = cand
+            continue
+        if not os.path.islink(real):
+            return None
+        hops += 1
+        if hops > 40:
+            return None
+        try:
+            text = os.readlink(real)
+        except OSError:
+            return None
+        rest = [p for p in text.split("/") if p] + rest
+        if text.startswith("/"):
+            cur = ""
+    cur = cur or "/"
+    if any(cur == v or cur.startswith(v + "/") for v in VOLATILE_TOPS):
+        return None
+    return cur
+
+
+def tree_place(root: str, v: str) -> str | None:
+    """The real path in the tree where the launcher looks for v's copy, or None (tree_real_dir)."""
+    d = tree_real_dir(root, os.path.dirname(v))
+    if d is None:
+        return None
+    return os.path.join(root, d.lstrip("/"), os.path.basename(v))
+
+
 def identity_links(root: str) -> None:
     """Give a kernel's root for bwrap the identity files as the launcher has them.
 
@@ -62,7 +112,12 @@ def identity_links(root: str) -> None:
     where that path is not under a volatile directory. Done again on a kept root.
     """
     for f in IDENTITY_FILES:
-        p = os.path.join(root, f.lstrip("/"))
+        # where the launcher maps the copy: Fedora's tree has /etc/ssl/certs -> /etc/pki/tls/certs,
+        # which the tree resolves, never the host
+        p = tree_place(root, f)
+        if p is None:
+            print(f"identity file {f} not placed in the kernel's root: no place in the tree (8.4)")
+            continue
         if not os.path.lexists(p):
             os.makedirs(os.path.dirname(p), exist_ok=True)
             with open(p, "wb"):
@@ -74,7 +129,9 @@ def identity_links(root: str) -> None:
             if not os.path.islink(name):
                 break
             text = os.readlink(name)
-            at = os.path.join(root, name.lstrip("/"))
+            at = tree_place(root, name)
+            if at is None:
+                break
             if os.path.lexists(at):
                 os.remove(at)
             os.makedirs(os.path.dirname(at), exist_ok=True)
@@ -83,8 +140,8 @@ def identity_links(root: str) -> None:
                 name = text
             else:
                 name = os.path.normpath(os.path.join(os.path.dirname(name), text))
-        tp = os.path.join(root, name.lstrip("/"))
-        if not os.path.lexists(tp) and not name.startswith(("/run/", "/tmp/", "/dev/", "/proc/")):
+        tp = tree_place(root, name)
+        if tp is not None and not os.path.lexists(tp):
             os.makedirs(os.path.dirname(tp), exist_ok=True)
             with open(tp, "wb"):
                 pass

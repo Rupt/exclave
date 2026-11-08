@@ -267,7 +267,7 @@ def run_bwrap(
         args += ["--setenv", k, v]
     args += tree.identity_dir_binds(root, targets=identity_targets)
     for f in IDENTITY:
-        if os.path.exists(f) and os.path.lexists(os.path.join(root, f.lstrip("/"))):
+        if os.path.exists(f) and (p := tree.tree_place(root, f)) is not None and os.path.lexists(p):
             if os.path.islink(f):
                 # the copy carries the host's link text (8.4) and the target is bound at its own
                 # path: readlink and the content then agree with the launcher, which answers the
