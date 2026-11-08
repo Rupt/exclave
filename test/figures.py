@@ -3,11 +3,9 @@
     test/figures.py            print each figure
     test/figures.py --check    compare them with the documents; exit non-zero when one differs
 
-A figure in a document is measured, never guessed (CLAUDE.md), and the ones here come from the tree
-without running anything: the suite's count of named tests, the resolution oracle's default number
-of paths and the matrix's rows; sizes, which move with every change, are not quoted. The probe's
-case count needs an exclave and a run: the gate's syscalls step prints it on its last line, and the
-documents round it, so that a case added does not make them wrong. scripts/check runs --check.
+A figure in a document is measured, never guessed (CLAUDE.md), and the one here comes from the tree
+without running anything: the resolution oracle's default number of paths. Counts and sizes that
+move as the tree grows are not quoted at all. scripts/check runs --check.
 """
 
 import argparse
@@ -33,33 +31,20 @@ def resolve_paths() -> int:
     return int(m.group(1))
 
 
-def figures() -> dict[str, int | None]:
-    return {
-        "named tests": sum(
-            len(re.findall(r"^@test", read(os.path.join("test", f)), re.MULTILINE))
-            for f in sorted(os.listdir(os.path.join(REPO, "test")))
-            if f.startswith("regress_") and f.endswith(".py")
-        ),
-        "resolve paths": resolve_paths(),
-        "matrix rows": len(re.findall(r"^    VmRow\(", read("test/matrix.py"), re.MULTILINE)),
-    }
+def figures() -> dict[str, int]:
+    return {"resolve paths": resolve_paths()}
 
 
 # Where each figure is quoted: (figure, regex with one group holding the number, thousands spaced)
-QUOTED = (
-    ("named tests", r"(\d[\d ]*) named (?:tests|regressions)"),
-    ("resolve paths", r"(\d[\d ]*) paths over (?:a random maze|\w+ random mazes)"),
-)
+QUOTED = (("resolve paths", r"(\d[\d ]*) paths over (?:a random maze|\w+ random mazes)"),)
 
 
-def check(found: dict[str, int | None]) -> int:
+def check(found: dict[str, int]) -> int:
     wrong = 0
     for doc in DOCS:
         text = read(doc)
         for name, pattern in QUOTED:
             want = found[name]
-            if want is None:
-                continue  # not built; nothing to compare
             for m in re.finditer(pattern, text):
                 quoted = int(m.group(1).replace(" ", ""))
                 if quoted != want:
@@ -77,7 +62,7 @@ def main() -> int:
     if args.check:
         return check(found)
     for name, value in found.items():
-        print(f"{name}: {'not built' if value is None else value}")
+        print(f"{name}: {value}")
     return 0
 
 
