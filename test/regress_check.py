@@ -64,7 +64,8 @@ def prune_and_check_with_logs(ctx: Ctx) -> str:
     them, and what the tree ships in its trust directory with what its links there lead to, which a
     host without the directory reads (8.1 rule 5), and drops the rest, a shortcut with the file it
     names, and the pruned exclave still compiles. The static check names a file planted in the
-    trust directory, which the host's hides, and not the links there.
+    trust directory, which the host's hides, and not the links there, nor the file where an own
+    record keeps the directory.
     """
     log = os.path.join(ctx.work, "prune.log")
     if os.path.exists(log):
@@ -130,6 +131,18 @@ def prune_and_check_with_logs(ctx: Ctx) -> str:
         and "e0e0e0e0.0" not in out
         and "exclave-planted-ca" not in out,
         "check names the file planted in the trust directory, not its links: " + out[-800:] + err,
+    )
+    # an own record that keeps the directory keeps the file, and check says nothing of it
+    ex3 = os.path.join(ctx.work, "trust-own-check.exclave")
+    copy_exclave(ex2, ex3)
+    manifest = os.path.join(ex3, ".exclave", "manifest")
+    os.remove(manifest)
+    with open(manifest, "w") as f:
+        f.write('exclave 1\n\nown "/etc/ssl/certs"\n')
+    rc, out, err = run([*TOOL, "check", ex3])
+    expect(
+        "exclave-planted.pem" not in out,
+        "check names no file an own record keeps: " + out[-800:] + err,
     )
     licences = tree.licence_files(os.path.join(ex2, "tree"))
     before = sum(1 for _ in tree.walk_files(os.path.join(ex2, "tree")))

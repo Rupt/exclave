@@ -256,8 +256,9 @@ func (w *walkCtx) object(vpath string, e *elfFile, rpaths, chain []string) {
 
 // trustWarnings names each file the tree ships in a trust directory, as the tree resolves it,
 // other than the identity files there: the host's directory hides it wherever the host has one,
-// and an own record keeps it (10.3). The links a trust tool made there are the host's to replace.
-func trustWarnings(root string, rep *report) {
+// and an own record keeps it (10.3). The links a trust tool made there are the host's to replace,
+// and a name an own record already keeps draws nothing.
+func trustWarnings(root string, owns []string, rep *report) {
 	var seen []string
 	for _, d := range trustDirs {
 		r := treeResolve(root, d, true, nil)
@@ -275,6 +276,9 @@ func trustWarnings(root string, rep *report) {
 				continue
 			}
 			v := pathJoin(d, n)
+			if slices.ContainsFunc(owns, func(o string) bool { return v == o || strings.HasPrefix(v, o+"/") }) {
+				continue
+			}
 			if slices.ContainsFunc(identityFiles, func(f string) bool {
 				return f == v || strings.HasPrefix(f, v+"/") || f == pathJoin(r, n) ||
 					strings.HasPrefix(f, pathJoin(r, n)+"/")
@@ -327,7 +331,7 @@ func staticCheck(ex string, own *ownership, data []string, l *listing) *report {
 			}
 		}
 	}
-	trustWarnings(root, rep)
+	trustWarnings(root, valuesOf(manifestOf(ex), "own"), rep)
 	s := scan{root: root, data: data, own: own, rep: rep, l: l}
 	s.dir(root, "")
 	// one loader, and so one libc, per exclave (7.3): read from the ELF files, not declared anywhere
