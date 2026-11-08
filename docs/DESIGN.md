@@ -165,28 +165,27 @@ What is built and tested:
   with nothing beside it, and `build/exclave-fetch` beside it fetches
   the packages (10.5).
 - **Trace pruning**: in `scripts/example`, a hello-world compile against the
-  CentOS 7 sysroot keeps 226 of the gcc exclave's 9 566 files and
-  symlinks, counted as `exclave prune` reports them, the
-  originals in `.real/` included; the pruned copy compiles the program
-  again. 10.4 gives the figure for the test suite's gcc exclave.
+  CentOS 7 sysroot keeps a few hundred of the gcc exclave's files and
+  symlinks, the originals in `.real/` included; the pruned copy
+  compiles the program again (10.4).
 
 `scripts/example` walks from a clean checkout to a program built inside an
 exclave that runs on any glibc since 2.17, showing every command.
 
 How it is tested (17):
 
-- **The regression suite**: 107 named tests, most of them programs that
-  compute, run on the gcc, Alpine, Fedora and clang exclaves
-  (17 item 4).
+- **The regression suite**: named tests, most of them programs that
+  compute, run on the gcc, Alpine, Fedora and clang exclaves (17 item
+  4).
 - **Kernel oracles**, where user namespaces are available: the same
   workloads under `bwrap` with the tree bound read-only, and path
   resolution against `openat2` with `RESOLVE_IN_ROOT` (17 items 1
   and 2).
 - **The syscall probe**: every trapped path and descriptor syscall,
   with every flag and path form, run under `bwrap` and under the
-  launcher; about 40 000 cases per exclave, each difference from the kernel
-  fixed, accepted under a named reason or listed as an open defect
-  (17 item 7).
+  launcher and compared case by case, each difference from the kernel
+  fixed, accepted under a named reason or listed as an open defect (17
+  item 7).
 - **Docker's default seccomp profile**: a workload in each exclave runs
   under it, standing for a CI container where user namespaces are
   blocked (17 item 5).
@@ -197,7 +196,7 @@ How it is tested (17):
   machine, for want of `bwrap` or user namespaces, is reported as
   SKIP, not as passing (17).
 - **The kernel matrix**: the gcc exclave passes the suite in QEMU
-  virtual machines of ten distributions, from CentOS 7 at kernel 3.10
+  virtual machines of distributions from CentOS 7 at kernel 3.10
   to Ubuntu 26.10 at 7.3, Alpine 3.20's musl userland and Fedora's
   enforcing SELinux among them; an arm64 gcc exclave passes it in an
   emulated arm64 Ubuntu 24.04. Every oracle a row's kernel can run
@@ -822,9 +821,8 @@ version it fails as it should, on the log.
 
 ## 7. The launcher
 
-The launcher is one static, freestanding, `ET_DYN` binary, about
-100 KB stripped on either architecture, with no libc and no
-`PT_INTERP`; it relocates itself. Every
+The launcher is one static, freestanding, `ET_DYN` binary with no
+libc and no `PT_INTERP`; it relocates itself. Every
 executable in an exclave's tree is a hard link to it, a *wrapper*, and
 the program a wrapper stands for, its *original*, sits beside it in
 `.real/` (6.1). Besides its code it carries:
@@ -2336,18 +2334,17 @@ the host's modules nscd could stand in for.
   runtimes are in a package that set does not include. It is one of
   the four test exclaves (17).
 - **An Alpine exclave**: `gcc musl-dev binutils make linux-headers`
-  and the base, 20 packages from Alpine 3.21 fetched with
-  `scripts/fetch-apks`, unpacked and wrapped: 87 ELF files, no error
-  from the static check, and a tree hash that reproduces from the same
-  files. Its gcc 14.2 compiles and runs C inside, dynamically linked
+  and the base from Alpine 3.21, fetched with `scripts/fetch-apks`,
+  unpacked and wrapped: no error from the static check, and a tree
+  hash that reproduces from the same files. Its gcc 14.2 compiles and runs C inside, dynamically linked
   on musl 1.2.5 and statically linked. The static output runs on a
   glibc host; the dynamic one does not, since such a host has no musl
   loader. A compile touches no host path, and it is one of the four
   test exclaves (17).
-- **A Fedora exclave**: `gcc glibc-devel binutils make` and the base,
-  87 packages from Fedora 42 fetched with `scripts/fetch-rpms`, with
+- **A Fedora exclave**: `gcc glibc-devel binutils make` and the base
+  from Fedora 42, fetched with `scripts/fetch-rpms`, with
   `glibc-minimal-langpack` chosen for the langpack, unpacked and
-  wrapped: 351 ELF files, no error from the static check, and a tree
+  wrapped: no error from the static check, and a tree
   hash that reproduces from the same files. Its gcc 15 compiles and
   runs C inside on glibc 2.41; a static link needs `glibc-static`,
   which the set does not include. A compile touches no host path, and
@@ -2599,7 +2596,7 @@ refused. From `.deb` files, in five steps:
    by `exclave caches EXCLAVE`, which runs the tree's own generators
    inside the exclave, under its launcher, and copies what they make
    into the tree; the maintainer script is still never run. It makes
-   nine, each where the tree holds its generator and something for
+   these, each where the tree holds its generator and something for
    it to index: Python's bytecode, by each `python3.N` the tree holds,
    with `compileall` over its standard library and the distribution's
    package directory; GSettings schemas, by `glib-compile-schemas`
@@ -3023,12 +3020,9 @@ ran appears in the log as the gcc it resolved to.
 
 Afterwards the hashes file's tree hash is rewritten and the static
 check runs. On the gcc 13 exclave that `scripts/inputs` makes, a
-hello-world compile keeps 220 of 5 206 files and symlinks, counted as
-`prune` prints them, originals included; 87 of them are licence texts.
-The count moves by a file or two with where the work directory lies.
-The pruned exclave compiles the same program and passes the static
-check. (The README's example, an exclave with a CentOS 7 sysroot copied
-in, keeps 226 of 9 566 by the same count.)
+hello-world compile keeps a few hundred of its files and symlinks,
+originals and licence texts included, and the pruned exclave compiles
+the same program and passes the static check.
 
 Failed opens in a later `EXCLAVE_LOG` show what pruning removed, by
 name, including a missing intermediate directory. The cycle is: prune,
@@ -3068,8 +3062,8 @@ that listing in the walk's order, and then hashes the files' contents
 on as many, the largest first, so that no large file starts last; each
 goroutine writes only its own entry, so the hash is the walk's whatever
 they do, and a file or directory it cannot read is named as the walk
-meets it. `check`, and `wrap` before it wraps, read the tree five and
-three times over without changing it, so they list it once and run
+meets it. `check`, and `wrap` before it wraps, read the tree several
+times over without changing it, so they list it once and run
 every pass on that listing, which answers as the disk would; the tree
 hash notes which files begin with the ELF magic, so the static check
 opens only those, and a directory with no `.real/` needs no look for
@@ -3152,7 +3146,7 @@ the kernel ABI, the CPU level (7.7), and the nine host identity files
 
 `test/matrix.py` runs one gcc exclave, built on the reference machine,
 in a virtual machine of each distribution's own cloud image, with the
-suite's 107 named regressions and every oracle its kernel can run; 17
+suite's named regressions and every oracle its kernel can run; 17
 describes the procedure. Each x86-64 row also builds the launcher
 inside its copy of the exclave (`scripts/reproduce`, 10.5) and
 compares its bytes with the reference machine's build; a row whose
@@ -3179,7 +3173,7 @@ x86-64 row too, fetches Fedora's newest image, release 44 with kernel
 | reference machine | 7.0 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
-run passes; the ten x86-64 rows pass the same way on GitHub's hosted
+run passes; the x86-64 rows pass the same way on GitHub's hosted
 x86-64 runner, where the matrix job takes about 14 minutes (17,
 measured November 2026). Two checks outside the suite run natively on
 each row:
@@ -3192,7 +3186,7 @@ each row:
 - **A sysroot build.** The output of `test/sysroot.py`, a hello program
   linked inside the Ubuntu 24.04 gcc exclave against the CentOS 7
   sysroot (9), runs natively. Measured October 2026, it prints its line
-  with status 0 on the nine glibc VMs, from CentOS 7's glibc 2.17 to
+  with status 0 on every glibc VM, from CentOS 7's glibc 2.17 to
   Ubuntu 26.10's 2.44. On Alpine's musl it has no loader, which the step
   records as the musl host's answer rather than a failure.
 
@@ -3701,7 +3695,7 @@ and stay fixed.
 48. **Some caches only a tree's own binary can make are made by
     hand.** `unpack` and `wrap` run nothing of the tree (10.1), and
     `exclave caches`, which runs the tree's generators inside the
-    exclave, makes nine: Python bytecode, GSettings schemas, the MIME
+    exclave, makes Python bytecode, GSettings schemas, the MIME
     database, GIO's module cache, gdk-pixbuf's loader cache, icon
     caches, the desktop database, fontconfig's caches and graphviz's
     plugin configuration. Without it Python compiles each module on
@@ -3712,8 +3706,8 @@ and stay fixed.
     valid while the tree keeps its directories' modification times: a
     copy that loses them, `cp -r`, leaves fontconfig writing its own
     under the home until `exclave caches` runs on the copy. Locales
-    from `localedef` and TeX's index and formats are not among the
-    nine; `unpack` names each from the packages' trigger interests,
+    from `localedef` and TeX's index and formats are not among
+    them; `unpack` names each from the packages' trigger interests,
     and the maker runs `localedef` inside the exclave the same way
     (10.1), while TeX's are made in place (item 56). `exclave caches` runs only on a machine of the exclave's
     architecture.
@@ -4458,8 +4452,9 @@ and `read(-1)` 54 against 46; what is left is the kernel's seccomp
 entry, which any filter costs. The install takes 75 to 100 µs, most of
 it the kernel compiling and checking the program.
 `test/filter_test.c`, in the gate's unit step, runs the program in an
-interpreter against the rule written out separately, in 1 052 640 cases,
-and asks of every number what the action cache asks.
+interpreter against the rule written out separately, for every number
+and the arguments each check reads, and asks of every number what the
+action cache asks.
 
 Why a tree: a filter that tests the instruction pointer first makes no
 number constant for the action cache, so an untrapped `getppid` costs
@@ -4850,7 +4845,7 @@ meaning items 4 and 7.
    where a malformed byte meets freestanding C on every exec.
 4. **Named regressions.** Most are programs that compute, not just
    spawn; the rest exercise the tool. Each asserts the kernel's answer
-   or the rule's. They fall into eight groups, one file each,
+   or the rule's. They fall into groups, one file each,
    `test/regress_*.py`:
    - *signals and threads*: `SA_ONSTACK` handlers that trap, a FIFO
      `open` interrupted by `SIGINT` or left by `siglongjmp`, the
@@ -4972,10 +4967,10 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: 20 shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus twenty of the suite's programs under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones`, `memfd_exec`, and `seccomp_filter`, a program's own filter (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus programs of the suite under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones`, `memfd_exec`, and `seccomp_filter`, a program's own filter (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2, and a program's filter as the handler builds it from the program's, the page's and the judge slot's addresses; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
-| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: 107 named tests |
+| 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: the named tests |
 | 5 | `test/syscalls.py`, `test/docker_profile.py`, `test/matrix.py` |
 | 6 | the tests of item 4 |
 | 7 | `test/progs/probe.c` and `test/oracle_syscalls.py`; `test/exercise.py` for new cases |
@@ -5021,10 +5016,11 @@ AAVMF firmware for the emulated row). Where `bwrap` cannot create a user namespa
 the probe says it cannot run and exits 0, and the gate prints that step
 as SKIP rather than ok.
 
-**Running it.** From a clean checkout, four commands reach a passing
+**Running it.** From a clean checkout, these commands reach a passing
 gate:
 
 ```sh
+scripts/install-go
 scripts/install-uv
 scripts/build
 scripts/inputs build/inputs
@@ -5113,10 +5109,9 @@ its time, ok, SKIP or FAIL:
   since it cannot see what the kernel writes), and clang-tidy with its
   static analyser on the launcher for each architecture and on the unit
   tests (`.clang-tidy`); and the
-  figures the documents quote that the tree itself can produce, the
-  suite's count of named tests, the resolution oracle's paths and the
-  command's size, compared with the documents by `test/figures.py`,
-  which `scripts/figures` prints;
+  figures the documents quote that the tree itself can produce,
+  compared with the documents by `test/figures.py`, which
+  `scripts/figures` prints;
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py`, the scratch-pool test, the cache's
   growth and its lock across `fork` (`test/cache_test.c`), the `#!` line
@@ -5308,17 +5303,13 @@ any fixture though it did not when the fixture was made, since a test can
 skip for a file the prune left out. A recheck that passes says so in a
 line of its own, since the fixture lacked what the test needs or the
 test is flaky, and the summary line counts the rechecks; the fixture
-then goes for the next run to remake. On
-the reference machine the fixtures of the gcc, clang, Fedora and Alpine
-exclaves hold 1 070, 1 062, 1 269 and 548 files, a sixth to a quarter of
-each exclave's, counting every entry of `tree/` that is not a directory
-or a symlink to one, originals included. On the fixture one suite takes
+then goes for the next run to remake. On the fixture one suite takes
 17 s on the reference machine, on the whole exclave 30 s.
 
 **The probe** (`test/progs/probe.c`, `test/oracle_syscalls.py`) puts the
-whole trapped-syscall surface in front of the kernel. It crosses the 61
-trapped path syscalls and six descriptor-addressed ones with every flag
-that changes resolution, 107 path forms over a fixed maze and the `*at`
+whole trapped-syscall surface in front of the kernel. It crosses every
+trapped path syscall and descriptor-addressed one with every flag that
+changes resolution, the path forms over a fixed maze and the `*at`
 descriptors. The forms include the identity files, with a trailing
 slash, as a directory on the way and one the host lacks, and 40 links
 in one walk and 41, in the tree, across the border at every link and
@@ -5357,9 +5348,8 @@ difference that is a launcher defect, found and not yet fixed, is
 listed apart by its two exact answers, printed by every run, and fails
 once the answers agree until its entry goes, on a host whose files can
 show it (an entry says which hosts can, such as one whose
-`/etc/resolv.conf` is a symlink). On the reference machine
-about 40 000 cases run on each of the gate's four exclaves and none differ
-unexplained, and no defect is open.
+`/etc/resolv.conf` is a symlink). On the reference machine no case of
+the gate's four exclaves differs unexplained, and no defect is open.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.
 
@@ -5385,7 +5375,7 @@ natively from the harness, as `openat2_xdev` does.
 **The kernel matrix** (`scripts/matrix --exclave EXCLAVE
 [--docker-profile FILE]`) runs one gcc exclave, built on the reference
 machine, in virtual machines, one at a time with 1 GB each (`--jobs N`
-for more), all ten x86-64 rows in about sixteen minutes. It is due when
+for more), all the x86-64 rows in about sixteen minutes. It is due when
 the gate says a change reaches the VMs: a launcher source, the command,
 the pinned Python, or the matrix's own code; other changes leave the
 kernels' answers as they were. Being the costliest check, it runs when
@@ -5485,7 +5475,7 @@ the gate cannot afford. Each runs when its input variable is set:
   has, gcc and clang.
 - python3 in the exclave: `test/bytecode.py` makes Python's bytecode
   with `exclave caches` (10.1) and times the imports before and after.
-- `EXCLAVE_TEST_INPUTS`: `test/workloads.py` runs seven real workloads
+- `EXCLAVE_TEST_INPUTS`: `test/workloads.py` runs real workloads
   in exclaves of their own, each in the same work directory under
   `bwrap` with the tree read-only at `/` and under the launcher,
   and compares the outputs byte for byte, the hashes of what the builds
@@ -5498,8 +5488,8 @@ the gate cannot afford. Each runs when its input variable is set:
   lld-18 under `env -i`, `make -j` unbounded, a profile-guided second
   build) in an exclave of the packages its `install.sh` names at the
   Ubuntu snapshot it pins, the judging image a contest rebuilds it in.
-  All seven agree; six take under two seconds in either world, and the
-  entry builds in about two minutes, to the byte its author published
+  All agree; all but the entry take under two seconds in either world,
+  and the entry builds in about two minutes, to the byte its author published
   (its `comp9`'s SHA-256 is the one in the entry's `SHA256SUMS`).
 - `EXCLAVE_TEST_ARM64`: the emulated aarch64 row on the arm64 gcc
   exclave named, with `EXCLAVE_TEST_DOCKER` adding the Docker profile

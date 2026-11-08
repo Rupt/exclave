@@ -47,9 +47,9 @@ package files or from any filesystem tree.
   pages are untested). One source builds both launchers.
 - **gdb** debugs a program in an exclave; the launcher carries the script
   gdb needs.
-- **Tested against the kernel.** A suite of 107 named tests, oracles that
+- **Tested against the kernel.** A suite of named tests, oracles that
   compare the launcher's answers with the kernel's under a read-only bind
-  mount, and a differential probe of about 40 000 syscall cases pass on gcc,
+  mount, and a differential probe of every trapped syscall pass on gcc,
   clang, Alpine and Fedora exclaves. An exclave also runs under Docker's
   default seccomp profile, and the gcc exclave passes the suite in
   virtual machines from CentOS 7 at kernel 3.10 to Ubuntu 26.10 at 7.3,
@@ -67,7 +67,7 @@ and the network. `scripts/install-go` fetches a pinned, checksummed
 command, and `scripts/install-uv` a pinned, checksummed
 [uv](https://docs.astral.sh/uv/) into `.uv/`, which provides the pinned
 Python the tests and checks run on. The example then
-downloads Ubuntu's gcc packages and CentOS 7's glibc, 121 MB in all. No
+downloads Ubuntu's gcc packages and CentOS 7's glibc. No
 root, no container runtime, no user namespaces: nothing needs a
 privilege, and nothing is installed outside the checkout.
 
@@ -86,11 +86,10 @@ hand:
 
 1. `scripts/build` builds `build/launcher`, the freestanding binary every
    executable in an exclave is a hard link to.
-2. `scripts/fetch-debs` downloads Ubuntu 24.04's `gcc-13` closure, 94
-   packages, and `unpack` makes an unwrapped exclave from the files: the
-   tree under `gcc.exclave/tree/`, the maintainer scripts' effects
-   synthesised, every input recorded by hash in
-   `gcc.exclave/.exclave/hashes`.
+2. `scripts/fetch-debs` downloads Ubuntu 24.04's `gcc-13` closure, and
+   `unpack` makes an unwrapped exclave from the files: the tree under
+   `gcc.exclave/tree/`, the maintainer scripts' effects synthesised,
+   every input recorded by hash in `gcc.exclave/.exclave/hashes`.
 3. `scripts/fetch-rpms` downloads CentOS 7's glibc, headers and `libgcc`.
    Unpacked into a tree of their own, they are copied into the gcc
    exclave at `/opt/sysroot-el7`, and a two-line manifest says `data
@@ -106,9 +105,9 @@ hand:
    natively. The program runs on this host and, through
    `.exclave/launcher`, inside the exclave on the exclave's loader.
 5. `exclave prune` keeps, in a copy, the files the compile touched and
-   the packages' licence texts: 226 of the 9 566 files and links under
-   `tree/`. The copy compiles the program again, and `exclave check`
-   reads the new log. That copy is the exclave you would ship for that
+   the packages' licence texts: a few hundred of the files and links
+   under `tree/`. The copy compiles the program again, and `exclave
+   check` reads the new log. That copy is the exclave you would ship for that
    workload, and the check is the one you would run on it.
 
 What it prints on the reference machine, abridged (`exclave` here is
@@ -144,18 +143,16 @@ warning: this host's nsswitch.conf names sss; the exclave has no libnss_sss.so.2
 dynamic check: 1508 log lines, 0 errors
 ```
 
-The 46 warnings of `wrap` are dangling symlinks: 45 are `coreutils`'
-locale links, which point at translations Ubuntu moves into language
-packs the package does not ship, and one is a man-page link to a page no
-package in the set ships. The warning says the tree has a link to
+The warnings of `wrap` are dangling symlinks: `coreutils`' locale
+links, which point at translations Ubuntu moves into language packs the
+package does not ship, and a man-page link to a page no package in the
+set ships. The warning says the tree has a link to
 nothing, which is true and harmless; an error would have stopped `wrap`.
 
 Afterwards the directory holds `gcc.exclave`, a compiler that touches
-nothing on the host, 264 MB with the sysroot; `hello`; `hello.exclave`,
-the pruned copy, 50 MB; the fetched packages, which a second run reuses;
-and `log/`, one file per step. A second run reuses the packages; the
-first also fetches 121 MB: the 94 packages, 23 rpms and the indexes
-that resolve them.
+nothing on the host, its sysroot inside; `hello`; `hello.exclave`, the
+pruned copy; the fetched packages and the indexes that resolve them,
+which a second run reuses; and `log/`, one file per step.
 
 ## What bites first
 
@@ -515,7 +512,7 @@ fetch/debs.go        resolve a closure from a Debian archive and download it: In
 fetch/apks.go        the same for an Alpine repository: the index against the key its signature names, each package's checksums as apk checks them
 fetch/rpms.go        the same for a yum or dnf repository: every rpm's own signatures as rpm checks them, repomd.xml's where the repository signs it
 fetch/verify.go      the signature checks the fetchers share: OpenPGP through go-crypto, its version 3 signatures and Alpine's RSA through Go's crypto, armoured keys decoded
-test/run.py          the regression suite: test/regress_*.py its tests in eight groups, test/suite.py its fixtures,
+test/run.py          the regression suite: test/regress_*.py its tests in groups, test/suite.py its fixtures,
                      test/harness.py the runner it shares with the unpack tests; test/progs/ its C, Rust and Go programs
 test/unpack_test.py  unpack's rules on hostile .deb, .apk and .rpm files; test/packages.py builds them
 test/fetch_test.py   the fetchers' signature checks, on repositories made and signed there
