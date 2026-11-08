@@ -601,7 +601,8 @@ def clones_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
 
     by_the_kernel: the kernel itself answered. Otherwise the launcher did, and a clone(CLONE_VM)
     child trapping on a 4 KB or 2 KB stack is its stated limitation (13 item 30), 8 KB too where
-    the kernel's frame passes 3.5 KB.
+    the kernel's frame passes 3.5 KB; so is a thread on the least stack its libc allows where that
+    is as small, musl's 2 KB, a death reported with the stack's size.
     """
     got = out.splitlines()
     wrong = []
@@ -615,6 +616,13 @@ def clones_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
             and ("4 KB" in case or "2 KB" in case or minsigstksz() > 3500)
         ):
             continue
+        least = re.fullmatch(
+            r"thread with the least stack, 100 traps: killed by .* on (\d+) bytes", g
+        )
+        if not by_the_kernel and least:
+            size = int(least[1])
+            if size <= 4096 or (size <= 8192 and minsigstksz() > 3500):
+                continue
         wrong.append(f"got {g!r}, the kernel says {w!r}")
     if len(got) != len(CLONES):
         wrong.append(f"{len(got)} lines, the kernel gives {len(CLONES)}")

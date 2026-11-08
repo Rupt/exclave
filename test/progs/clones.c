@@ -1,6 +1,6 @@
 /* clones.c — threads and clones trapping (DESIGN.md 7.5.4, 7.5.5, 17 item 4): a vfork child and a clone(CLONE_VM)
  * child trapping before they exit, on stacks from 64 KB down to 2 KB above a guard page; a thread with a 16 KB stack
- * and one with the least glibc allows; 64 threads trapping while the main thread sends each of them signals whose
+ * and one with the least the libc allows; 64 threads trapping while the main thread sends each of them signals whose
  * handler traps; pthread_cancel of a thread blocked in a trapped open and of one looping over traps with asynchronous
  * cancellation; a sibling exiting while a trap blocks; exit_group and pthread_exit from a handler that interrupted a
  * blocking trap. usage: clones HOSTDIR. Prints one line per case, "<case>: <answer>", the same in every world where
@@ -202,11 +202,22 @@ int main(int argc, char **argv)
         int e = pthread_create(&t, &at, thread_traps, &n);
         if (e == 0) pthread_join(t, 0);
         printf("thread with a 16 KB stack, 100 traps: %s\n", e ? strerror(e) : n == 100 ? "ok" : "some failed");
-        n = 0;
-        pthread_attr_setstacksize(&at, (size_t)PTHREAD_STACK_MIN);
-        e = pthread_create(&t, &at, thread_traps, &n);
-        if (e == 0) pthread_join(t, 0);
-        printf("thread with the least stack, 100 traps: %s\n", e ? strerror(e) : n == 100 ? "ok" : "some failed");
+        /* the least a libc allows: glibc's 16 KB, musl's 2 KB, on which a trapping thread is killed under the
+         * launcher (13 item 30) and takes its process with it, so it runs from a forked process of its own, which
+         * reports the stack's size with a death */
+        size_t least = (size_t)PTHREAD_STACK_MIN;
+        pid_t f = fork();
+        if (f == 0) {
+            n = 0;
+            pthread_attr_setstacksize(&at, least);
+            e = pthread_create(&t, &at, thread_traps, &n);
+            if (e == 0) pthread_join(t, 0);
+            printf("thread with the least stack, 100 traps: %s\n", e ? strerror(e) : n == 100 ? "ok" : "some failed");
+            _exit(0);
+        }
+        st = 0;
+        waitpid(f, &st, 0);
+        if (!WIFEXITED(st)) printf("thread with the least stack, 100 traps: %s on %zu bytes\n", status(st), least);
         pthread_attr_destroy(&at);
     }
     /* 5. 64 threads trapping while the main thread sends each a SIGUSR1 in turn, whose handler traps, for 200 ms */
@@ -236,8 +247,18 @@ int main(int argc, char **argv)
         pthread_create(&t, 0, blocked_open, fifo);
         usleep(50000);
         pthread_cancel(t);
-        pthread_join(t, &r);
-        printf("pthread_cancel in a blocking trapped open: %s\n", r == PTHREAD_CANCELED ? "cancelled" : "returned");
+        /* a cancellation the open does not act on leaves it blocked: after two seconds a writer releases it, and the
+         * answer says so */
+        struct timespec until;
+        clock_gettime(CLOCK_REALTIME, &until);
+        until.tv_sec += 2;
+        int late = pthread_timedjoin_np(t, &r, &until) == ETIMEDOUT;
+        if (late) {
+            release();
+            pthread_join(t, &r);
+        }
+        printf("pthread_cancel in a blocking trapped open: %s%s\n", r == PTHREAD_CANCELED ? "cancelled" : "returned",
+               late ? " once a writer released the open" : "");
         pthread_create(&t, 0, async_loop, 0);
         usleep(20000);
         pthread_cancel(t);
