@@ -782,20 +782,21 @@ def trust_directory_host(ctx: Ctx) -> None:
 
 
 @test
-def trust_directory_rules(ctx: Ctx) -> None:
+def trust_directory_rules(ctx: Ctx) -> str | None:
     """8.1 rule 5, 8.4: the identity directory's rules, on a trust directory made in a namespace.
 
     In a user namespace with tmpfs on /etc/ssl/certs and /usr/local/share/ca-certificates, as
     directory_service_state makes SSSD's: a hash link to a .pem link to an authority under
     /usr/local, which the tree lacks, reads the host's; a link to a directory there is passed by
-    name; realpath resolves the link's text in the exclave, the limitation of 13 item 55; a create
-    there is the host's own; the bundle the host lacks is the exclave's copy, not listed; Java's
-    keystore the host lacks is the tree's; own on the directory gives it back, and own on a name in
-    it gives that name back; a walk under RESOLVE_NO_XDEV relative to a host record nested in an
-    exclave directory crosses nothing to its name and leaves its mount by ..; and where the host's
-    directory is a link into another directory, the names below it, the exclave's copy among them,
-    answer the same, readlink answers the host's text, the directory it reaches is the host's at
-    its own name, and a .. at the name climbs from there. Skipped without user namespaces.
+    name; realpath resolves the link's text in the exclave, the limitation of 13 item 55, where
+    realpath is coreutils'; a create there is the host's own; the bundle the host lacks is the
+    exclave's copy, not listed; Java's keystore the host lacks is the tree's; own on the directory
+    gives it back, and own on a name in it gives that name back; a walk under RESOLVE_NO_XDEV
+    relative to a host record nested in an exclave directory crosses nothing to its name and leaves
+    its mount by ..; and where the host's directory is a link into another directory, the names
+    below it, the exclave's copy among them, answer the same, readlink answers the host's text, the
+    directory it reaches is the host's at its own name, and a .. at the name climbs from there.
+    Skipped without user namespaces.
     """
     if subprocess.run(
         ["unshare", "-Urm", "true"],
@@ -848,15 +849,26 @@ def trust_directory_rules(ctx: Ctx) -> None:
 
     sh = sh_of(marks)
     c = "/etc/ssl/certs"
+    # the realpath case asserts coreutils' walk of the link's text, which fails at the authority's
+    # directory the tree lacks; busybox's realpath, given a link whose target is missing, joins
+    # the link's relative text to the working directory instead, natively as inside (Alpine's,
+    # measured under bwrap), so on such a tree the case says nothing of the exclave
+    busybox_realpath = os.path.basename(ctx.payload("realpath")) == "busybox"
     cases: list[tuple[str, str, str, str]] = [
         ("a hash link to the host's /usr/local", sh, f"cat {c}/abcd0000.0", f"local-{pid}"),
         ("the bundle", sh, f"cat {c}/ca-certificates.crt", f"bundle-{pid}"),
         ("a link to a directory, passed by name", sh, f"cat {c}/sub/local.crt", f"local-{pid}"),
-        (
-            "realpath, the link's text in the exclave",
-            sh,
-            f"realpath {c}/abcd0000.0 || echo none",
-            "none",
+        *(
+            []
+            if busybox_realpath
+            else [
+                (
+                    "realpath, the link's text in the exclave",
+                    sh,
+                    f"realpath {c}/abcd0000.0 || echo none",
+                    "none",
+                )
+            ]
         ),
         ("a create, the host's own", sh, f"touch {c}/new && echo made", "made"),
         ("Java's keystore the host lacks", sh, f"cat {c}/java/cacerts", f"tree-java-{pid}"),
@@ -971,6 +983,7 @@ def trust_directory_rules(ctx: Ctx) -> None:
         expect(
             want in got.get(i, []), f"the trust directory, {what.strip()}: {got.get(i)!r} {err!r}"
         )
+    return "realpath is busybox's: its case not run" if busybox_realpath else None
 
 
 @test
