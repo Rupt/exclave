@@ -1630,9 +1630,24 @@ def exec_elf_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     return lines_wrong(out, EXEC_ELF, EXEC_ELF_LAUNCHER, by_the_kernel=by_the_kernel)
 
 
-def exec_auxv_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
-    """The lines of exec_auxv's output that differ from the kernel's answers."""
-    return lines_wrong(out, EXEC_AUXV, EXEC_AUXV_LAUNCHER, by_the_kernel=by_the_kernel)
+# the descriptor cases, which exec a static program the exerciser builds with the tree's compiler
+EXEC_AUXV_FDS = ("fds ", "soft ", "hard ")
+# what the exerciser prints in their place where the tree has no static libc
+EXEC_AUXV_NO_STATIC = ("fds", "cannot build the static program")
+
+
+def exec_auxv_wrong(
+    out: str, *, by_the_kernel: bool = False, static_libc: bool = True
+) -> list[str]:
+    """The lines of exec_auxv's output that differ from the kernel's answers.
+
+    static_libc: the tree has a static libc; without one the descriptor cases cannot be built and
+    the exerciser says so in their place.
+    """
+    want = EXEC_AUXV
+    if not static_libc:
+        want = (*(c for c in EXEC_AUXV if not c[0].startswith(EXEC_AUXV_FDS)), EXEC_AUXV_NO_STATIC)
+    return lines_wrong(out, want, EXEC_AUXV_LAUNCHER, by_the_kernel=by_the_kernel)
 
 
 def exec_state_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
