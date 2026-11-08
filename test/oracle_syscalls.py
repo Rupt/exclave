@@ -1907,7 +1907,7 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
         (
             name,
             lambda label, b, o, c: (
-                BOUND_PATHS & set(c.paths)
+                len(BOUND_PATHS & set(c.paths)) >= 2
                 and errnos(b, o)[0] == errno.EXDEV
                 and o == c.native.get(label)
             ),
