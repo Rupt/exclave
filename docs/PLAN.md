@@ -97,11 +97,12 @@ documents, gate, one commit per item. Status is in brackets.
    fixed; the tests that assume glibc's error strings, thread stack
    minimum or `vfork` are made to assert what the tree says or to skip
    with their reason, and any launcher difference found there is fixed.
-10. **The positional entry's spellings** [in progress]: `.exclave/launcher
+10. **The positional entry's spellings** [done]: `.exclave/launcher
     ./PATH`, `../PATH` and a host symlink to a wrapper die with
-    "cannot exec the wrapper" where the absolute spelling runs; measured,
-    fixed in the launcher, a regression, and item 57's interim advice
-    revised.
+    "cannot exec the wrapper" where the absolute spelling ran: the walk of the spelling overwrote the
+    wrapper's real path, so the entry exec'd a directory; fixed, with a
+    regression over every spelling, and item 57 names the entry as a way
+    to run a venv from outside.
 
 ## After the first release
 
