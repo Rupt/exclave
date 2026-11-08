@@ -96,7 +96,8 @@ def environment(ctx: Ctx) -> None:
     )
     rc, out, _err = run([wrapper(ctx, "sh"), "-c", "LD_FOO=1 env"], cwd=ctx.work, env=ctx.env)
     expect("LD_FOO=1" in out, "inside an exclave the environment must pass untouched")
-    # 6.2: four values are the exclave's at the border, always the same; the user's are dropped
+    # 6.2: three values are the exclave's at the border, always the same, and TZ is dropped with
+    # the user's locale
     loud = dict(
         ctx.env,
         LANG="en_GB.UTF-8",
@@ -109,15 +110,15 @@ def environment(ctx: Ctx) -> None:
     rc, out, _err = run([wrapper(ctx, "env")], cwd=ctx.work, env=loud)
     lines = set(out.splitlines())
     expect(
-        {"LANG=C.UTF-8", "TZ=UTC0", "SHELL=/bin/sh", "PATH=/usr/local/bin:/usr/bin:/bin"} <= lines,
-        "the four constants: {!r}".format(
-            sorted(line for line in lines if line.split("=")[0] in ("LANG", "TZ", "SHELL", "PATH"))
+        {"LANG=C.UTF-8", "SHELL=/bin/sh", "PATH=/usr/local/bin:/usr/bin:/bin"} <= lines,
+        "the three constants: {!r}".format(
+            sorted(line for line in lines if line.split("=")[0] in ("LANG", "SHELL", "PATH"))
         ),
     )
     expect(
-        not any(line.startswith(("LC_", "LANGUAGE=")) for line in lines),
-        "LC_* and LANGUAGE must be dropped: {!r}".format(
-            sorted(line for line in lines if line.startswith(("LC_", "LANGUAGE")))
+        not any(line.startswith(("LC_", "LANGUAGE=", "TZ=")) for line in lines),
+        "LC_*, LANGUAGE and TZ must be dropped: {!r}".format(
+            sorted(line for line in lines if line.startswith(("LC_", "LANGUAGE", "TZ=")))
         ),
     )
     rc, out, _err = run(

@@ -7,14 +7,15 @@
 #include "common.h"
 
 static const char *volatile_dirs[] = {"/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run", 0};
-/* 8.1.5: the host's by default; an own record naming one exactly removes it. The time zone is not among them: inside
- * an exclave it is UTC, set at the border (6.2). */
+/* 8.1.5: the host's by default; an own record naming one exactly removes it. /etc/localtime is the host's zone, a
+ * TZif file any libc reads through the host's link into its zoneinfo, and TZ is dropped at the border (6.2). */
 static const char *identity_files[] = {"/etc/passwd",
                                        "/etc/group",
                                        "/etc/nsswitch.conf",
                                        "/etc/host.conf",
                                        "/etc/resolv.conf",
                                        "/etc/hosts",
+                                       "/etc/localtime",
                                        "/etc/ssl/certs/ca-certificates.crt",
                                        "/etc/pki/tls/certs/ca-bundle.crt",
                                        0};

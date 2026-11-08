@@ -43,9 +43,9 @@ exclave turns Linux software that depends on its environment,
 compilers included, into a directory that behaves like a single static
 executable. The directory can be copied anywhere and any program in it
 run by path. The software inside never touches a host library, header
-or loader, and reads no host configuration but eight identity files:
+or loader, and reads no host configuration but nine identity files:
 who the users are, how names resolve, which certificate authorities
-are trusted (8.4). There is no daemon, no image store, no package
+are trusted, what the time zone is (8.4). There is no daemon, no image store, no package
 manager, no installation step, no host binary and no privilege of any
 kind: no root, no setuid helper, no user or mount namespaces. There is
 one run-time knob, `EXCLAVE_LOG`, and it only logs.
@@ -215,7 +215,7 @@ Goals:
 
 1. **Isolation.** Programs see the exclave's files plus what the
    visibility rule allows. Host libraries and loaders are invisible,
-   and so is host configuration, except the eight identity files that
+   and so is host configuration, except the nine identity files that
    describe the host (8.1 rule 5).
 2. **Relocatability.** Any path, any filesystem, any machine of the same
    architecture and CPU level. An exclave moves with `cp -a`, `tar` or
@@ -336,7 +336,7 @@ the design. Where they are available they serve as the test oracle
 | **exclave path** | A path the tree answers for, read-only (8.1, 8.2). |
 | **host path** | A path the host answers for, as it would without the exclave (8.1). `host` and `own` records in the manifest move a path to either side. |
 | **placeholder** | An empty top-level directory of the tree, which the exclave does not own; the tool ships placeholders for `/home`, `/tmp`, `/proc` and the other conventional host names (8.1). |
-| **identity file** | One of eight files, such as `/etc/passwd` and `/etc/resolv.conf`, that describe the host and are the host's by default (8.1 rule 5, 8.4). |
+| **identity file** | One of nine files, such as `/etc/passwd` and `/etc/resolv.conf`, that describe the host and are the host's by default (8.1 rule 5, 8.4). |
 | **border** | Where a program passes from the host into the exclave, its launcher finding no inherited filter; the environment is set there (6.2). |
 | **data directory** | An exclave path that is never executed or loaded, named by a `data` record: a sysroot, headers, documentation (6.2). |
 | **`exclave`** (command) | The build tool: `wrap`, `unwrap`, `check`, `prune`, `hash`, `relink` and `format`. Takes a directory holding `tree/`, fetches nothing (10). |
@@ -578,22 +578,28 @@ inside the exclave too (7.4.5).
 It removes the variables which steer the loader or libc to host files:
 `LD_*`, `GLIBC_TUNABLES`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`,
 `RESOLV_HOST_CONF`, `HOSTALIASES`, `TZDIR`, `GCC_EXEC_PREFIX`,
-`COMPILER_PATH` and `LIBRARY_PATH`.
+`COMPILER_PATH` and `LIBRARY_PATH`. It removes `TZ` as well: a zone
+name in it selects data under `/usr/share/zoneinfo` that the exclave
+may lack, where glibc keeps the name with an offset of zero, so that
+`TZ=Europe/Paris date +%Z` prints `Europe` in a tree without `tzdata`,
+while `/etc/localtime`, an identity file (8.4), is the host's TZif
+file, which any libc reads with `TZ` unset. The time zone inside an
+exclave is therefore the host's, as its users are.
 
-And it replaces four variables that name what the exclave decides for
+And it replaces three variables that name what the exclave decides for
 itself, the same in every exclave on every host:
 
 | Variable | Value | Why |
 |---|---|---|
 | `PATH` | `/usr/local/bin:/usr/bin:/bin` | a host tool in the user's home directory is never found by name |
 | `LANG` | `C.UTF-8`, with `LANGUAGE` and every `LC_*` dropped | one UTF-8 locale with code-point collation and English messages, whatever the user's; locale data is in a format tied to the glibc that wrote it, so it must be the exclave's, and a variable that selects data the exclave may lack is a promise it cannot keep |
-| `TZ` | `UTC0` | glibc and musl honour it with no file, so the time inside an exclave is UTC and `/etc/localtime` is not consulted |
 | `SHELL` | `/bin/sh` | programs that spawn the user's shell find one |
 
 These are the values reproducible builds fix by hand. An exclave that
-wants another locale, zone or shell ships the data and a wrapper script
-that sets the variable before it execs the program, since inside the
-border nothing is touched (13 item 35). `C.UTF-8` needs no locale
+wants another locale or shell ships the data and a wrapper script that
+sets the variable before it execs the program, since inside the border
+nothing is touched (13 item 35); one that wants a fixed zone takes
+`/etc/localtime` back with `own` and ships the zone there. `C.UTF-8` needs no locale
 files on musl, nor on the reference machine's glibc 2.39, which accepts
 `setlocale(LC_ALL, "C.UTF-8")` with an empty `LOCPATH`. glibc's release
 notes date the built-in locale to 2.35, so for a glibc older than that
@@ -660,7 +666,7 @@ microseconds.
   loader reads anyway. A foreign original fails with a message naming
   the file, and an exclave built for another architecture does not
   start at all, since its launcher is of that architecture too.
-- **The host table** (8.4) is the eight identity files, compiled into
+- **The host table** (8.4) is the nine identity files, compiled into
   the launcher, minus any that the manifest's `own` records name, plus
   the manifest's `host` records.
 
@@ -2000,20 +2006,21 @@ it, and every part rules it as it rules that directory.
    working directory otherwise stays in the exclave (13 item 14).
    Whether the working directory is an exclave path is decided by the
    other rules, without this one.
-5. **Eight host identity files are the host's by default:**
+5. **Nine host identity files are the host's by default:**
    `/etc/passwd`, `/etc/group`, `/etc/nsswitch.conf`, `/etc/host.conf`,
-   `/etc/resolv.conf`, `/etc/hosts`,
+   `/etc/resolv.conf`, `/etc/hosts`, `/etc/localtime`,
    `/etc/ssl/certs/ca-certificates.crt` and
    `/etc/pki/tls/certs/ca-bundle.crt`. They describe who the user is,
-   how names are looked up, DNS, and which authorities the machine
-   trusts, all of which belong to the host, and they are data in a
-   format any libc reads, not code. Six of them are on PRoot's default
-   binding list; the seventh of that list, `/etc/localtime`, is not
-   here, because the time zone inside an exclave is UTC (6.2) and the
-   file is never consulted. `own` on one of them removes it. An identity
-   file absent on the host falls through to the exclave's copy. The
-   tool ships each of the eight as an empty placeholder when the tree
-   lacks it, and the path walk treats the directories on the way to an
+   how names are looked up, DNS, the time zone and which authorities
+   the machine trusts, all of which belong to the host, and they are
+   data in a format any libc reads, not code: `/etc/localtime` is a
+   TZif file, on most hosts a symlink into the host's
+   `/usr/share/zoneinfo`, which the kernel follows on the host (8.4),
+   so the zone needs no `tzdata` in the tree. Seven of them are on
+   PRoot's default binding list. `own` on one of them removes it. An
+   identity file absent on the host falls through to the exclave's
+   copy. The tool ships each of the nine as an empty placeholder when
+   the tree lacks it, and the path walk treats the directories on the way to an
    identity file as directories whether or not the exclave ships them
    (8.4). SSSD's state directory, `/var/lib/sss`, is the host's by
    default the same way, the directories on the way to it included:
@@ -2253,7 +2260,9 @@ host's is fixed for the process's life (13 item 18).
 
 The translator never follows an identity file's host link in virtual
 space, where `/usr` is the exclave's; the kernel follows it on the
-host. Nor do host symlinks in general keep their host meaning:
+host, so `/etc/localtime -> /usr/share/zoneinfo/Europe/London` reads
+the host's zone file whether or not the tree has a `zoneinfo`
+directory. Nor do host symlinks in general keep their host meaning:
 such a rule would let a host link into `/usr` reach the host's `/usr`.
 Every other symlink, on a host path or an exclave path, is resolved in
 virtual space (7.4.4).
@@ -2401,7 +2410,7 @@ exclave check EXCLAVE [LOG...]      wrappers, the tree against the hashes file, 
 exclave prune EXCLAVE LOG...        drop what no logged workload touched
 exclave format [--check] FILE...    canonical form of a manifest or hashes file; --check only reports
 exclave hash EXCLAVE|FILE           the tree hash of 6.4, or a file's hash as the hashes file writes it
-exclave relink EXCLAVE [LAUNCHER]   replace the launcher and relink every wrapper
+exclave relink EXCLAVE [LAUNCHER]   replace the launcher, relink every wrapper and ship the placeholders the tree lacks
 exclave version                     the build this command is from: the project's version and the commit
 exclave unpack OUT PKG...           an unwrapped exclave from package files (10.1); exclave unpack ldconfig TREE writes ld.so.cache for a tree made by hand
 exclave-fetch debs|apks|rpms ...    a package closure from a repository, verified and downloaded (10.1)
@@ -2682,7 +2691,7 @@ refused. From `.deb` files, in five steps:
    (13 item 48). TeX's index and formats, which they name as well, are
    made in place by scripts that cannot run so (13 item 56).
 4. **Strip** the volatile directories (8.1). Their empty placeholders,
-   the conventional host names' and the eight identity files (8.4) are
+   the conventional host names' and the nine identity files (8.4) are
    added by `wrap` where the tree lacks them.
 5. **Record** every input as a `pkg` record of `.exclave/hashes` (6.4),
    which is all that `unpack` writes outside `tree/`: the launcher, the
@@ -3136,7 +3145,7 @@ another, or copy a sysroot into a data directory (9). The cost is disk space.
 | Overhead | Within noise on a compute-bound compile; about a third more on thirty small compiles; about twice native per `posix_spawn`; 6 to 11 times native on a tight `stat` loop (16) |
 
 What remains host-dependent is the same set that static linking leaves:
-the kernel ABI, the CPU level (7.7), and the eight host identity files
+the kernel ABI, the CPU level (7.7), and the nine host identity files
 (8.4).
 
 ### 12.1 The kernel matrix
@@ -3566,17 +3575,24 @@ and stay fixed.
     manifest parser, since the visibility rule matches a path by its
     one spelling and would silently match nothing else.
 
-35. **The locale, the time zone and the shell are the exclave's**:
-    `C.UTF-8`, UTC and `/bin/sh`, not the user's (6.2). `date` prints
-    UTC, messages are in English, and collation is by code point. An
-    exclave that wants otherwise ships the data and a wrapper script.
+35. **The locale and the shell are the exclave's, and the time zone is
+    the host's whatever `TZ` says outside**: `C.UTF-8` and `/bin/sh`,
+    not the user's, and the zone of the host's `/etc/localtime` (6.2,
+    8.4). Messages are in English, collation is by code point, and a
+    `TZ` set outside is dropped, since the zone it names needs data
+    under `/usr/share/zoneinfo` that the exclave may lack; a program
+    inside may set it for its children, with the data in the tree. An
+    exclave that wants another locale or shell ships the data and a
+    wrapper script; one that wants a fixed zone takes `/etc/localtime`
+    back with `own` and ships the zone there.
 
 36. **What still varies under a reproducible build.** The launcher does
     not touch the hostname and kernel identity from `uname` and
     `/proc`; directory listing order, which the filesystem decides; the
     build path in debug info, which `-ffile-prefix-map` handles; user
-    and group ids and names, which `tar` records; or the CPU's features,
-    which `-march=native` embeds.
+    and group ids and names, which `tar` records; the CPU's features,
+    which `-march=native` embeds; or the time zone, which is the host's
+    until an `own` record takes `/etc/localtime` back (6.2).
 
 37. **A symlink in the tree with an absolute target resolves on the
     host when run from outside.** In a tree from `debootstrap` or a
@@ -3727,7 +3743,7 @@ and stay fixed.
     contiguous after its arguments and the launcher's variables
     after that (item 46), and `AT_EXECFN` names a string of the
     launcher's own rather than the top of the stack; at the border the
-    four fixed variables of 6.2 are the launcher's strings. Moving the
+    three fixed variables of 6.2 are the launcher's strings. Moving the
     kernel's fields takes `PR_SET_MM`, which needs `CAP_SYS_RESOURCE`.
     `exec_auxv` measures every other entry of the initial stack and the
     auxiliary vector against the kernel (17 item 4).
@@ -4002,7 +4018,8 @@ every file at its base, originals included.
 | Alternative | Why not |
 |---|---|
 | An environment allowlist | Users could not pass `CC`, `CPATH`, `MAKEFLAGS` or a CA bundle, and applied at every exec it would break `ldd`, libtool and `fakeroot`. Path-valued variables resolve inside the exclave, so passing them is safe (6.2). |
-| The user's locale and time zone | Locale data is bound to its glibc's version, so `LANG` would work only where the exclave ships the locale and fall silently to `C` elsewhere; the zone would need two host-resolution rules. Four fixed values at the border (6.2) need none, and are what reproducible builds set. |
+| The user's locale, and `TZ` | Locale data is bound to its glibc's version, so `LANG` would work only where the exclave ships the locale and fall silently to `C` elsewhere; a zone name in `TZ` needs the exclave's `tzdata`, which few package closures pull in, and glibc without it keeps the name with no offset. Three fixed values at the border (6.2) need no data, and the zone comes from the host's `/etc/localtime`, a TZif file any libc reads (8.4). |
+| UTC inside, `TZ=UTC0` at the border | Needs no data either, but every timestamp a program prints or embeds is then in a zone that is nobody's on a host elsewhere, the difference a user meets first; the host's zone is a host fact like its users, and a build that wants a fixed one takes `/etc/localtime` back with `own`. |
 | Recording the maker's locale in the exclave | A manifest record for what a rule says. An exclave that wants another locale sets it in a wrapper script. |
 
 ### 14.5 The format and the tool
@@ -4239,7 +4256,7 @@ The four bindings are those of 4.1.
 | bwrap, Guix userns, conty, junest | bind mounts | yes | yes | yes | user namespaces | no | yes |
 | Docker, Podman | image | yes | yes | yes | daemon or user namespaces | yes | image |
 | BPF `binfmt_misc` | kernel substitution | through the loader | no | no | a user namespace to register in | no | yes |
-| **exclave** | launcher at every executable's path, originals in `.real/` | translated | translated | passed through minus loader and libc variables; `PATH`, `LANG`, `TZ`, `SHELL` fixed | none | no | yes, `cp -a` |
+| **exclave** | launcher at every executable's path, originals in `.real/` | translated | translated | passed through minus loader and libc variables and `TZ`; `PATH`, `LANG`, `SHELL` fixed | none | no | yes, `cp -a` |
 
 exclave, burrow and chroot-ng are the rows that are unprivileged, have
 no supervisor, cover all four bindings and move with a copy; exclave is
@@ -4455,7 +4472,7 @@ per number.
 
 A `posix_spawn` of `/usr/bin/true` from inside an exclave costs 2.1
 times the native time (966 µs against 450, the medians of eleven
-alternated runs of 300 spawns, November 2026) and makes 282 syscalls
+alternated runs of 300 spawns, November 2026) and makes 285 syscalls
 against 37 (`strace -f -c`, the difference between 60 spawns and 20).
 Each process it starts takes 110 page faults against 55. `perf stat`
 puts about two thirds of a spawn's CPU time in the kernel: process
@@ -4477,7 +4494,9 @@ start's syscalls are most of its time. Of the launcher's start, the
 ownership set (8.1 rule 1) takes about 97 µs: the tree's top level is
 read and each of its directories opened and read, seven placeholders
 in the gcc exclave read twice each, since only an empty read proves a
-directory empty; the identity files' `lstat`s (8.4) 19 µs; the
+directory empty; the identity files' `lstat`s (8.4), twelve syscalls
+at the 2 to 3 µs each costs here, one per file and one more for the
+target of each of the two that are host symlinks on this machine; the
 search for the manifest and its read 40 µs; and the loading of the
 program and its loader, with the loader's name walked through the tree
 in a cache that is empty in a new process, about 150 µs.
@@ -4493,7 +4512,7 @@ wrapper check from its own `lstat` (7.4.4). The tables a start touches
 are sized to it (16.6 item 9). Together these took a spawn from 1 060
 µs to 956, 315 syscalls to 281 and 142 page faults to 110, measured
 alternately on the launchers before and after them; a wrapper of
-`true` run from outside makes 167 syscalls, where the native `true`
+`true` run from outside makes 169 syscalls, where the native `true`
 makes 29.
 
 In the parent, the exec handler reads the head of every environment
@@ -4668,7 +4687,8 @@ the pointer gives.
   (16.6 item 3), and a set filled in under the handler, from any
   thread or a `vfork` child, would be state written while it is read.
 - Deciding which identity files are the host's at each call rather
-  than at startup (13 item 18): 10 syscalls and 19 µs of a start. The
+  than at startup (13 item 18): 12 syscalls of a start on the reference
+  machine, at the 2 to 3 µs each costs in a new process. The
   directories on the way to one the host has are directories to the
   walk whether or not the tree ships them (8.4), so the walk would
   have to ask the host about the file at every such directory, or
@@ -4723,7 +4743,7 @@ seven `perf stat` runs of each.
 | a 61-file project, `-O1 -c` each then link | 1.13 s | 1.51 s |
 | CPU time of one `gcc -O0 hello.c`, `perf stat` | 38.3 ms | 47.2 ms |
 | `gcc -O2 -c sqlite3.c` | 12.96 s | 13.07 s, identical object |
-| syscalls for one `gcc -O0 hello.c`, all processes (`strace -f -c`) | 2 652 | 13 298 |
+| syscalls for one `gcc -O0 hello.c`, all processes (`strace -f -c`) | 2 652 | 11 798 |
 
 Thirty small compiles cost 37% more than natively, the 61-file project
 34% more, and a small compile's CPU time 23% more. The compute-bound
@@ -5652,9 +5672,11 @@ specified.
   `/usr` must never reach the host's `/usr` through the exclave's
   (8.4).
 - **The environment passes through, minus the loader and libc
-  variables that name host files, with four constants set at the
-  border**: locale data is bound to its libc, the time zone is not a
-  host fact, and an allowlist would stop a user passing `CC` (6.2).
+  variables that name host files and `TZ`, with three constants set at
+  the border**: locale data is bound to its libc, a zone name needs
+  data the exclave may lack while the host's `/etc/localtime` is data
+  any libc reads, and an allowlist would stop a user passing `CC` (6.2,
+  8.4).
 - **One run-time knob, `EXCLAVE_LOG`, an absolute host path outside the
   exclave**; `EXCLAVE_EXEC`,
   `EXCLAVE_EXECFN` and `EXCLAVE_COMM` are the launcher's own protocol,

@@ -206,6 +206,7 @@ func cmdRelink(args []string) int {
 	if err := unix.Rename(next, ld); err != nil {
 		failErrno(next, err)
 	}
+	placeholders(root) // the placeholders this build's wrap ships (8.1, 8.4), where an older build's tree lacks them
 	writeReadme(ex)
 	for _, p := range left {
 		fmt.Fprintf(out, "original without wrapper, left alone: %s\n", p)
@@ -231,6 +232,7 @@ var identityFiles = []string{
 	"/etc/host.conf",
 	"/etc/resolv.conf",
 	"/etc/hosts",
+	"/etc/localtime",
 	"/etc/ssl/certs/ca-certificates.crt",
 	"/etc/pki/tls/certs/ca-bundle.crt",
 }

@@ -30,7 +30,7 @@
 #define MAX_HOST_RECORDS 32
 #define MAX_DATA_RECORDS 32
 #define MAX_TOP_LEVEL 256
-#define N_IDENTITY 8
+#define N_IDENTITY 9
 /* the host's directories by default (8.1.5): SSSD's state, where its lookup module finds the daemon */
 #define N_HOST_DIRS 1
 /* a manifest record's most fields, and the most bytes a field holds, a string's decoded (6.2) */

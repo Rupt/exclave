@@ -44,18 +44,8 @@ def setup(ex0: str, work: str) -> None:
         tree.socket_file(os.path.join(r, "usr", "share", "exclave-test.sock"))
         with open(os.path.join(r, "usr", "share", "exclave-test-marker"), "w") as f:
             f.write("marker\n")
-    # as the namespace oracle: the host's link text, its target bound
-    for f in oracle_ns.IDENTITY:
-        p_ = os.path.join(root, f.lstrip("/"))
-        if os.path.islink(f) and os.path.lexists(p_):
-            os.remove(p_)
-            os.symlink(os.readlink(f), p_)
-            t = os.path.realpath(f)
-            tp = os.path.join(root, t.lstrip("/"))
-            if not os.path.lexists(tp) and not t.startswith(("/run/", "/tmp/", "/dev/", "/proc/")):
-                os.makedirs(os.path.dirname(tp), exist_ok=True)
-                with open(tp, "wb"):
-                    pass
+    # as the oracles: the placeholders, the host's link text, a mount point for its target
+    tree.identity_links(root)
 
 
 def main() -> int:

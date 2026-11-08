@@ -115,15 +115,16 @@ static const char *find_env(char **envp, const char *name)
 }
 
 /* 6.2: at the border the host's environment passes through minus the variables that would rebind the loader, the libc
- * or the compiler to the host, and minus four that name what the exclave decides for itself: the search path, the
- * locale, the time zone and the shell. Those four are set to the same values in every exclave on every host, what a
- * reproducible build fixes by hand; what an exclave wants on PATH lives in its own /usr/local/bin, and an exclave that
- * wants another locale or zone ships the data and a wrapper script. */
+ * or the compiler to the host; minus three that name what the exclave decides for itself, the search path, the locale
+ * and the shell, set to the same values in every exclave on every host, what a reproducible build fixes by hand; and
+ * minus TZ, since a zone name in it selects data under /usr/share/zoneinfo that the exclave may lack, where the host's
+ * /etc/localtime, an identity file (8.4), is read by any libc with TZ unset. What an exclave wants on PATH lives in its
+ * own /usr/local/bin, and an exclave that wants another locale ships the data and a wrapper script. */
 static const char *denied[] = {"GLIBC_TUNABLES",   "GCONV_PATH",   "LOCPATH", "NLSPATH",
                                "RESOLV_HOST_CONF", "HOSTALIASES",  "TZDIR",   "GCC_EXEC_PREFIX",
                                "COMPILER_PATH",    "LIBRARY_PATH", "PATH",    "LANG",
                                "LANGUAGE",         "TZ",           "SHELL",   0};
-static const char *fixed[] = {"PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "TZ=UTC0", "SHELL=/bin/sh", 0};
+static const char *fixed[] = {"PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "SHELL=/bin/sh", 0};
 /* the launcher's protocol with itself (7.4.5): EXCLAVE_EXEC names a loader-path target, EXCLAVE_EXECFN and
  * EXCLAVE_COMM the identity the kernel would give the program, EXCLAVE_TRACED a process newly traced (retrace); set
  * by a handler or the positional entry, read by the launcher they exec, removed from the environment a program is

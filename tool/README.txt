@@ -46,11 +46,12 @@ program run straight from .real/ is likely to fail.
 Inside, a program sees the top-level directories that tree/ fills,
 /usr, /etc, /lib and the rest, as its own, read-only: writing there
 fails as on a read-only disk. Everything else is this system's: /home,
-/tmp, /proc, /dev, the working directory, and eight files such as
-/etc/passwd and /etc/resolv.conf that say who you are and how network
-names are looked up. PATH is the exclave's, so this system's commands
-are not found by name. The locale is C.UTF-8 and the time zone UTC by
-default, and sudo, su and other setuid programs do not work inside.
+/tmp, /proc, /dev, the working directory, and nine files such as
+/etc/passwd, /etc/resolv.conf and /etc/localtime that say who you are,
+how network names are looked up and what the time zone is. PATH is the
+exclave's, so this system's commands are not found by name. The locale
+is C.UTF-8 by default, and sudo, su and other setuid programs do not
+work inside.
 
 EXCLAVE_LOG=/some/file makes every process append one line per call
 that names a file: the call, its result and the path. Messages that

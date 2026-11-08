@@ -6,6 +6,7 @@ Run by test/run.py, on the fixtures test/suite.py makes.
 import os
 import shutil
 import subprocess
+import sys
 
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
@@ -24,16 +25,30 @@ def identity(ctx: Ctx) -> None:
         )
     else:
         expect(rc != 0 and "No such file" in err, f"host /etc/hostname must be invisible: {err!r}")
-    # 6.2: the time zone is not the host's: UTC inside, whatever TZ and /etc/localtime say outside
-    rc, out, err = run(
-        [wrapper(ctx, "date"), "+%Z"], cwd=ctx.work, env=dict(ctx.env, TZ="Asia/Tokyo")
+    # 6.2, 8.4: the time zone is the host's, read from /etc/localtime, and a TZ set outside is
+    # dropped at the border; the host's own answer is the pinned Python's with TZ unset
+    host = subprocess.run(
+        [sys.executable, "-c", "import time; print(time.strftime('%Z %z'))"],
+        env={k: v for k, v in os.environ.items() if k != "TZ"},
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    expect(out.strip() == "UTC", f"the zone inside an exclave is UTC: {out!r} {err!r}")
-    if not os.path.lexists(os.path.join(ctx.root, "etc", "localtime")):
-        rc, out, err = run([wrapper(ctx, "cat"), "/etc/localtime"], cwd=ctx.work, env=ctx.env)
+    rc, out, err = run(
+        [wrapper(ctx, "sh"), "-c", 'date "+%Z %z"; echo "TZ=${TZ-unset}"'],
+        cwd=ctx.work,
+        env=dict(ctx.env, TZ="Asia/Tokyo"),
+    )
+    expect(
+        rc == 0 and out == host.stdout.strip() + "\nTZ=unset\n",
+        f"the zone inside is the host's and TZ is dropped: {out!r} {err!r}, host {host.stdout!r}",
+    )
+    if os.path.exists("/etc/localtime"):
+        rc, out, err = run(
+            [wrapper(ctx, "head"), "-c", "4", "/etc/localtime"], cwd=ctx.work, env=ctx.env
+        )
         expect(
-            rc != 0 and "No such file" in err,
-            f"the host's /etc/localtime must be invisible: {err!r}",
+            rc == 0 and out == "TZif", f"the host's /etc/localtime is read inside: {out!r} {err!r}"
         )
 
 
@@ -72,29 +87,28 @@ def exclave_directory_visible(ctx: Ctx) -> None:
 
 @test
 def identity_link_consistency(ctx: Ctx) -> str | None:
-    """lstat, readlink and the link's target agree for an identity file that is a host symlink."""
-    link = next(
-        (f for f in ("/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf") if os.path.islink(f)),
-        None,
-    )
-    if not link:
+    """lstat, readlink and the link's target agree for each identity file that is a host symlink."""
+    links = [f for f in tree.IDENTITY_FILES if os.path.islink(f)]
+    if not links:
         skip("no host identity file is a symlink")
-    target = os.readlink(link)
-    # the content is reached through the identity name; its host target is not an exclave path (8.4)
-    head = read_bytes(link, 8)
-    _rc, out, err = run(
-        [
-            wrapper(ctx, "sh"),
-            "-c",
-            f"test -L {link} && echo link; readlink {link}; head -c 8 {link}",
-        ],
-        cwd=ctx.work,
-        env=ctx.env,
-    )
-    expect(
-        out.encode() == b"link\n" + target.encode() + b"\n" + head,
-        f"identity link {link}: {out!r} {err!r}",
-    )
+    for link in links:
+        target = os.readlink(link)
+        # the content is reached through the identity name; its host target is not an exclave path
+        # (8.4): /etc/localtime's lies under the host's /usr, which inside is the exclave's
+        head = read_bytes(link, 8)
+        _rc, out, err = run(
+            [
+                wrapper(ctx, "sh"),
+                "-c",
+                f"test -L {link} && echo link; readlink {link}; head -c 8 {link}",
+            ],
+            cwd=ctx.work,
+            env=ctx.env,
+        )
+        expect(
+            out.encode() == b"link\n" + target.encode() + b"\n" + head,
+            f"identity link {link}: {out!r} {err!r}",
+        )
     return None
 
 

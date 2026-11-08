@@ -97,7 +97,7 @@ WORKLOADS: list[tuple[str, Callable[[str, str], bool] | None]] = [
     ),
     (
         (
-            "for f in /etc/resolv.conf /etc/hosts /etc/nsswitch.conf; "
+            "for f in /etc/resolv.conf /etc/hosts /etc/nsswitch.conf /etc/localtime; "
             "do test -L $f && readlink $f; done; "
             "head -c 40 /etc/resolv.conf | wc -c; readlink $SH"
         ),
@@ -246,10 +246,7 @@ def run_bwrap(
         "--setenv",
         "LANG",
         "C.UTF-8",
-        "--setenv",
-        "TZ",
-        "UTC0",
-        # the border constants of 6.2
+        # the border constants of 6.2; TZ is dropped there, so the zone is /etc/localtime's
         "--setenv",
         "SHELL",
         "/bin/sh",
@@ -288,7 +285,7 @@ def run_launcher(
         "HOME": work,
         "W": work,
         **spellings.env(),
-        # replaced at the border (6.2)
+        # replaced, and TZ dropped, at the border (6.2)
         "LANG": "en_GB.UTF-8",
         "TZ": "Asia/Tokyo",
     }
@@ -327,35 +324,15 @@ def worlds(given: str, work: str) -> tuple[str, str]:
 
     Returns the launcher's exclave, a copy relinked with the build (17), and the kernel's root, an
     unwrapped copy of its tree for run_bwrap: hard links, then the originals moved back over the
-    wrappers, and the host's identity links (identity_links). The oracle itself keeps its worlds
+    wrappers, and the host's identity links (tree.identity_links). The oracle keeps its worlds
     between runs (tree.kept_worlds); test/workloads.py makes them anew.
     """
     ex = tree.fresh_exclave(given, os.path.join(work, "exclave"))
     root = os.path.join(work, "bare", "tree")
     shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=tree.link_or_copy)
     tree.unwrap_tree(os.path.join(work, "bare"))
-    identity_links(root)
+    tree.identity_links(root)
     return ex, root
-
-
-def identity_links(root: str) -> None:
-    """Give the kernel's root the host's link text for each identity file that is a host symlink.
-
-    A bind of the host's file would hide the link text the launcher reports (8.4); run_bwrap binds
-    the target, which needs a mount point in the read-only root. Done again on a kept root.
-    """
-    for f in IDENTITY:
-        p_ = os.path.join(root, f.lstrip("/"))
-        if os.path.islink(f) and os.path.lexists(p_):
-            os.remove(p_)
-            os.symlink(os.readlink(f), p_)
-            # the bind of the target needs a mount point in the read-only root
-            t = os.path.realpath(f)
-            tp = os.path.join(root, t.lstrip("/"))
-            if not os.path.lexists(tp) and not t.startswith(("/run/", "/tmp/", "/dev/", "/proc/")):
-                os.makedirs(os.path.dirname(tp), exist_ok=True)
-                with open(tp, "wb"):
-                    pass
 
 
 # the suite's path programs whose expectations the kernel can check (17 item 4), each judged here as
@@ -554,7 +531,7 @@ def main() -> int:
     os.makedirs(work)
     # the two worlds, kept between runs (tree.kept_worlds)
     ex, root = tree.kept_worlds(os.path.abspath(args.exclave), "ns")
-    identity_links(root)
+    tree.identity_links(root)
     with open(os.path.join(root, "usr", "share", "exclave-test-marker"), "w") as f:
         f.write("marker\n")
     with open(os.path.join(work, "hello.c"), "w") as f:

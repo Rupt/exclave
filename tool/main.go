@@ -13,7 +13,7 @@
 //	                                    only reports.
 //	exclave hash EXCLAVE                The tree hash of 6.4.
 //	exclave prune EXCLAVE LOG...        Drop every file no logged workload touched (10.4).
-//	exclave relink EXCLAVE [LAUNCHER]   Replace the launcher and relink every wrapper.
+//	exclave relink EXCLAVE [LAUNCHER]   Replace the launcher, relink the wrappers and ship missing placeholders.
 //	exclave unwrap EXCLAVE              Move every original back over its wrapper.
 //	exclave wrap EXCLAVE [LAUNCHER]     Wrap an exclave: add the launcher, the one given or this command's own, and
 //	                                    the placeholders where missing, check the manifest, the wrappers and every

@@ -29,8 +29,9 @@ fsetxattr, fremovexattr, fstatfs, and ioctl with FS_IOC_SETFLAGS and FS_IOC_FSSE
 with every flag that changes resolution, with the invalid arguments the kernel checks before the
 lookup, and with the path forms of class Forms over the maze of make_maze, the same in every run:
   - inside the exclave: a file, a directory and a symlink of every kind (loop, chained, dangling,
-    absolute, relative), a wrapper, the shell's link, an identity file, also with a trailing
-    slash and as a directory on the way, one the host lacks and the directory on the way to it,
+    absolute, relative), a wrapper, the shell's link, identity files, one of them a host symlink
+    into /usr on most hosts, also with a trailing slash and as a directory on the way, one the
+    host lacks and the directory on the way to it,
     /proc/self/exe, and an exclave link to a host file and to a host directory, the latter also
     crossed in the middle of a path and followed by ..;
   - on the host: files, directories (an empty one among them, for an rmdir that succeeds) and
@@ -481,6 +482,9 @@ class Forms:
             ("sock", "/maze/sock"),
             ("passwd", "/etc/passwd"),
             ("resolv", "/etc/resolv.conf"),
+            # an identity file that on most hosts is a host symlink into the host's
+            # /usr/share/zoneinfo, which the kernel follows on the host (8.4)
+            ("localtime", "/etc/localtime"),
             # an identity file with a trailing slash, and a path through one: the kernel follows
             # the link and wants a directory (ENOTDIR)
             ("passwd_slash", "/etc/passwd/"),
@@ -1379,9 +1383,7 @@ def run_bwrap(root: str, host: str, _bindir: str, probe: str, cases: str) -> tup
         "--setenv",
         "LANG",
         "C.UTF-8",
-        "--setenv",
-        "TZ",
-        "UTC0",
+        # the border constants of 6.2; TZ is dropped there
         "--setenv",
         "SHELL",
         "/bin/sh",
@@ -1635,6 +1637,7 @@ def at_maxsymlinks(label: str, errs: tuple[int, int]) -> bool:
 BOUND = {
     "passwd": "/etc/passwd",
     "resolv": "/etc/resolv.conf",
+    "localtime": "/etc/localtime",
     "passwd_slash": "/etc/passwd",
     "resolv_slash": "/etc/resolv.conf",
     "resolv_dotdot": "/etc/resolv.conf",
@@ -2129,6 +2132,9 @@ def main() -> int:
     # the launcher's world, a copy of the exclave relinked with the build (17), and the kernel's,
     # an unwrapped copy of the tree, kept between runs; the same maze, made anew, in both
     ex, root = tree.kept_worlds(given, "syscalls")
+    tree.identity_links(
+        root
+    )  # the placeholders, the host's link texts and mount points for their targets
     # ".." from the host area is a directory the reset owns
     host = os.path.join(work, "area", "host")
     for r, launcher in (
