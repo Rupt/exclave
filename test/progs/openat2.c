@@ -4,7 +4,7 @@
  *
  * Mode "pathless HOSTDIR": a scoped openat2 (RESOLVE_BENEATH, RESOLVE_IN_ROOT) from a descriptor whose file has no
  * path, a directory made in HOSTDIR and removed after it was opened, a memfd and an O_TMPFILE file in HOSTDIR, which
- * the kernel walks from the descriptor itself. One line per case, the case and the errno text, or ok
+ * the kernel walks from the descriptor itself. One line per case, the case and the errno's name, or ok
  * (test/kernel_answers.py has the kernel's answers); exit 3 when the kernel has no openat2. */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -48,9 +48,30 @@ static long o2(int dfd, const char *path, unsigned long flags, unsigned long mod
 #define SYS_memfd_create 319
 #endif
 
+/* the errno's name, which every libc spells alike where strerror's text is its own */
+static const char *ename(int e)
+{
+    static char b[32];
+    switch (e) {
+    case ENOENT: return "ENOENT";
+    case ENOTDIR: return "ENOTDIR";
+    case EISDIR: return "EISDIR";
+    case EEXIST: return "EEXIST";
+    case EBUSY: return "EBUSY";
+    case EXDEV: return "EXDEV";
+    case EROFS: return "EROFS";
+    case EACCES: return "EACCES";
+    case EPERM: return "EPERM";
+    case EINVAL: return "EINVAL";
+    case ELOOP: return "ELOOP";
+    case ENOTEMPTY: return "ENOTEMPTY";
+    default: snprintf(b, sizeof b, "errno=%d", e); return b;
+    }
+}
+
 static void answer(const char *what, long r)
 {
-    printf("%s: %s\n", what, r >= 0 ? "ok" : strerror(errno));
+    printf("%s: %s\n", what, r >= 0 ? "ok" : ename(errno));
     if (r >= 0) close((int)r);
 }
 
@@ -63,13 +84,13 @@ static int pathless(const char *host)
     mkdir(gone, 0755);
     int gonefd = open(gone, O_PATH | O_DIRECTORY);
     if (gonefd < 0 || rmdir(gone) != 0) {
-        printf("a removed directory: %s\n", strerror(errno));
+        printf("a removed directory: %s\n", ename(errno));
         return 2;
     }
     int memfd = (int)syscall(SYS_memfd_create, "probe", 0);
     int tmpfilefd = open(host, O_TMPFILE | O_RDWR, 0644);
     if (memfd < 0 || tmpfilefd < 0) {
-        printf("a memfd and an O_TMPFILE file: %s\n", strerror(errno));
+        printf("a memfd and an O_TMPFILE file: %s\n", ename(errno));
         return 2;
     }
     answer("removed directory, . beneath", o2(gonefd, ".", O_RDONLY, 0, RESOLVE_BENEATH));

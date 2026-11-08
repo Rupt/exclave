@@ -2,7 +2,7 @@
  * are looked up, then the two mounts compared (EXDEV), then such a name refused (EBUSY, or EEXIST for the new name
  * under RENAME_NOREPLACE), then the mount wanted writable (EROFS). usage: rename_dots HOSTDIR OTHERDIR (two writable
  * host directories; whether they lie on different mounts is the caller's to know). Prints one line per case: the
- * case and the errno text, or ok (test/kernel_answers.py has the kernel's answers). */
+ * case and the errno's name, or ok (test/kernel_answers.py has the kernel's answers). */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -17,10 +17,31 @@
 #define RENAME_EXCHANGE 2
 #endif
 
+/* the errno's name, which every libc spells alike where strerror's text is its own */
+static const char *ename(int e)
+{
+    static char b[32];
+    switch (e) {
+    case ENOENT: return "ENOENT";
+    case ENOTDIR: return "ENOTDIR";
+    case EISDIR: return "EISDIR";
+    case EEXIST: return "EEXIST";
+    case EBUSY: return "EBUSY";
+    case EXDEV: return "EXDEV";
+    case EROFS: return "EROFS";
+    case EACCES: return "EACCES";
+    case EPERM: return "EPERM";
+    case EINVAL: return "EINVAL";
+    case ELOOP: return "ELOOP";
+    case ENOTEMPTY: return "ENOTEMPTY";
+    default: snprintf(b, sizeof b, "errno=%d", e); return b;
+    }
+}
+
 static void try(const char *what, const char *from, const char *to, unsigned flags)
 {
     long r = flags ? syscall(SYS_renameat2, AT_FDCWD, from, AT_FDCWD, to, flags) : rename(from, to);
-    printf("%s: %s\n", what, r == 0 ? "ok" : strerror(errno));
+    printf("%s: %s\n", what, r == 0 ? "ok" : ename(errno));
 }
 
 int main(int argc, char **argv)
@@ -46,7 +67,7 @@ int main(int argc, char **argv)
     unlink(hlink);
     close(open(hfile, O_WRONLY | O_CREAT, 0644));
     if (symlink("hdir", hlink) != 0 || access(hdir, F_OK) != 0) {
-        printf("setup: %s\n", strerror(errno));
+        printf("setup: %s\n", ename(errno));
         return 2;
     }
     unlink(hnew);
@@ -89,9 +110,9 @@ int main(int argc, char **argv)
     {
         int dfd = open(host, O_PATH | O_DIRECTORY);
         long r = syscall(SYS_renameat2, dfd, "hdir/..", AT_FDCWD, onew, 0);
-        printf("hdir/.. from a descriptor to other: %s\n", r == 0 ? "ok" : strerror(errno));
+        printf("hdir/.. from a descriptor to other: %s\n", r == 0 ? "ok" : ename(errno));
         r = syscall(SYS_renameat2, dfd, "hdir/.", dfd, "hnew", 0);
-        printf("hdir/. from a descriptor to hnew: %s\n", r == 0 ? "ok" : strerror(errno));
+        printf("hdir/. from a descriptor to hnew: %s\n", r == 0 ? "ok" : ename(errno));
         close(dfd);
     }
     if (chdir(host) == 0) {
@@ -100,8 +121,8 @@ int main(int argc, char **argv)
         try(".. from the working directory to other", "..", onew, 0);
         try("hdir/./ from the working directory to hnew", "hdir/./", "hnew", 0);
     }
-    printf("hnew afterwards: %s\n", access(hnew, F_OK) == 0 ? "exists" : strerror(errno));
-    printf("other afterwards: %s\n", access(onew, F_OK) == 0 ? "exists" : strerror(errno));
+    printf("hnew afterwards: %s\n", access(hnew, F_OK) == 0 ? "exists" : ename(errno));
+    printf("other afterwards: %s\n", access(onew, F_OK) == 0 ? "exists" : ename(errno));
     unlink(hlink);
     unlink(hfile);
     rmdir(hdir);
