@@ -103,7 +103,6 @@ static int is_path(int nr)
 /* the mask-carrying calls: the argument that carries the mask, or -1 */
 static int arg_trap(int nr)
 {
-    if (nr == NR_rt_sigaction) return 1;
     if (nr == NR_ppoll) return 3;
     if (nr == NR_pselect6 || nr == NR_io_pgetevents) return 5;
     if (nr == NR_epoll_pwait || nr == NR_epoll_pwait2) return 4;
@@ -119,6 +118,9 @@ static uint32_t rule(const struct data *d)
 #endif
     int nr = (int)d->nr;
     if (nr == NR_uname && d->args[0] == MAGIC) return SECCOMP_RET_ERRNO | 0x800 | FILTER_VERSION;
+    /* a program's handler returns into the trampoline from the handler-call slot (7.5.7) */
+    if (nr == NR_rt_sigreturn)
+        return d->ip == SC_HCALL_RET ? SECCOMP_RET_ERRNO | MARK_HANDLER_RETURN : SECCOMP_RET_ALLOW;
     uint32_t r = elsewhere(d);
     /* what a program is allowed by number or argument is allowed from anywhere; the rest from the page, but for its
      * judge slot, which is answered MARK_NONE */
@@ -132,6 +134,8 @@ static uint32_t elsewhere(const struct data *d)
 {
     int nr = (int)d->nr;
     if (is_path(nr) || in(nr, 0) || in(nr, 1)) return SECCOMP_RET_TRAP;
+    /* every rt_sigaction, a query as well as an install (7.5.7) */
+    if (nr == NR_rt_sigaction) return SECCOMP_RET_TRAP;
     int a = arg_trap(nr);
     if (a >= 0) return d->args[a] ? SECCOMP_RET_TRAP : SECCOMP_RET_ALLOW;
     /* PTRACE_TRACEME, request 0, by the whole word (7.4.2) */
@@ -153,8 +157,9 @@ static uint32_t elsewhere(const struct data *d)
 }
 static int singled_out(int nr)                                /* a number the rule answers by more than the number */
 {
-    return nr == NR_uname || is_path(nr) || in(nr, 0) || in(nr, 1) || arg_trap(nr) >= 0 || nr == NR_ptrace ||
-           nr == NR_ioctl || nr == NR_seccomp || nr == NR_prctl || in(nr, 2) || in(nr, 3) || nr > HIGHEST;
+    return nr == NR_uname || nr == NR_rt_sigreturn || nr == NR_rt_sigaction || is_path(nr) || in(nr, 0) || in(nr, 1) ||
+           arg_trap(nr) >= 0 || nr == NR_ptrace || nr == NR_ioctl || nr == NR_seccomp || nr == NR_prctl || in(nr, 2) ||
+           in(nr, 3) || nr > HIGHEST;
 }
 
 /* A program's own filter as the handler installs it (filter_wrap, 7.4.2), run from the program's, the page's and the
@@ -289,8 +294,9 @@ int main(void)
                                       1UL << 32,
                                       ~0UL};
     static const uint64_t ips[] = {
-        0x401000,       SC_PAGE,      SC_PAGE + 0xffe, SC_PAGE + 0x1000, SC_PAGE - 1,  SC_PAGE | 1UL << 32,
-        0x7f0000001000, SC_JUDGE + 2, SC_JUDGE + 0xf,  SC_JUDGE + 0x10,  SC_JUDGE - 1, SC_JUDGE | 1UL << 32};
+        0x401000,       SC_PAGE,          SC_PAGE + 0xffe,  SC_PAGE + 0x1000,        SC_PAGE - 1,  SC_PAGE | 1UL << 32,
+        0x7f0000001000, SC_JUDGE + 2,     SC_JUDGE + 0xf,   SC_JUDGE + 0x10,         SC_JUDGE - 1, SC_JUDGE | 1UL << 32,
+        SC_HCALL_RET,   SC_HCALL_RET - 1, SC_HCALL_RET + 1, SC_HCALL_RET | 1UL << 32};
     uint32_t nrs[HIGHEST + 64];
     int nn = 0;
     for (uint32_t nr = 0; nr <= HIGHEST + 40; nr++) nrs[nn++] = nr;

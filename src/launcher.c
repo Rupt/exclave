@@ -68,6 +68,34 @@ static void page_init(void)
     static const unsigned char call[3] = {0x0f, 0x05, 0xc3}, restorer[7] = {0xb8, 15, 0, 0, 0, 0x0f, 0x05};
     for (unsigned long i = 0; i < 3; i++) p[i] = p[SC_JUDGE - SC_PAGE + i] = call[i];
     for (unsigned long i = 0; i < 7; i++) p[SC_RESTORER - SC_PAGE + i] = restorer[i];
+    /* the handler-call slot (7.5.7): call *%r11; mov $15, %rax; syscall, the restorer's bytes an unwinder knows, whose
+     * rt_sigreturn the filter refuses from SC_HCALL_RET; jmp *TRAMP_PRESENTED(%rsp), the trampoline's re-entry, kept
+     * in its block above the presented frame */
+    static const unsigned char hcall[19] = {0x41,
+                                            0xff,
+                                            0xd3,
+                                            0x48,
+                                            0xc7,
+                                            0xc0,
+                                            0x0f,
+                                            0,
+                                            0,
+                                            0,
+                                            0x0f,
+                                            0x05,
+                                            0xff,
+                                            0xa4,
+                                            0x24,
+                                            TRAMP_PRESENTED & 0xff,
+                                            TRAMP_PRESENTED >> 8,
+                                            0,
+                                            0};
+    for (unsigned long i = 0; i < sizeof hcall; i++) p[SC_HCALL - SC_PAGE + i] = hcall[i];
+    /* the re-issue slot (7.5.7), the record in r15: cmpq $0, 24(%r15); jne 1f; syscall; 2: mov %rax, 16(%r15); ret;
+     * 1: mov $-EINTR, %rax; jmp 2b */
+    static const unsigned char reissue[23] = {0x49, 0x83, 0x7f, 0x18, 0x00, 0x75, 0x07, 0x0f, 0x05, 0x49, 0x89, 0x47,
+                                              0x10, 0xc3, 0x48, 0xc7, 0xc0, 0xfc, 0xff, 0xff, 0xff, 0xeb, 0xf2};
+    for (unsigned long i = 0; i < sizeof reissue; i++) p[SC_REISSUE - SC_PAGE + i] = reissue[i];
 #elif defined(__aarch64__)
     uint32_t *w = (uint32_t *)SC_PAGE;
     /* svc #0; ret at the start and in the judge slot; mov x8, #139; svc #0, the restorer (sys.h) */
@@ -75,8 +103,19 @@ static void page_init(void)
     w[1] = w[(SC_JUDGE - SC_PAGE) / 4 + 1] = 0xd65f03c0U;
     w[(SC_RESTORER - SC_PAGE) / 4] = 0xd2801168U;
     w[(SC_RESTORER - SC_PAGE) / 4 + 1] = 0xd4000001U;
+    /* the handler-call slot (7.5.7): blr x16; mov x8, #139; svc #0, the restorer's words an unwinder knows, whose
+     * rt_sigreturn the filter refuses from SC_HCALL_RET; ldr x16, [sp, #TRAMP_PRESENTED + 8]; br x16, the trampoline's
+     * re-entry, kept in its block above the presented frame */
+    static const uint32_t hcall[5] = {0xd63f0200U, 0xd2801168U, 0xd4000001U,
+                                      0xf94003f0U | (uint32_t)((TRAMP_PRESENTED + 8) / 8) << 10, 0xd61f0200U};
+    for (unsigned long i = 0; i < 5; i++) w[(SC_HCALL - SC_PAGE) / 4 + i] = hcall[i];
+    /* the re-issue slot (7.5.7), the record in x27: ldr x16, [x27, #24]; cbnz x16, 1f; svc #0; 2: str x0, [x27, #16];
+     * ret; 1: mov x0, #-EINTR; b 2b */
+    static const uint32_t reissue[7] = {0xf9400f70U, 0xb5000090U, 0xd4000001U, 0xf9000b60U,
+                                        0xd65f03c0U, 0x92800060U, 0x17fffffdU};
+    for (unsigned long i = 0; i < 7; i++) w[(SC_REISSUE - SC_PAGE) / 4 + i] = reissue[i];
     /* the written words reach the instruction fetch, a slot at a time, whatever the cache line's size */
-    for (unsigned long a = SC_PAGE; a < SC_RESTORER + 16; a += 16)
+    for (unsigned long a = SC_PAGE; a < SC_REISSUE + 32; a += 16)
         __asm__ volatile("dc cvau, %0\n dsb ish\n ic ivau, %0\n dsb ish\n" : : "r"(a) : "memory");
     __asm__ volatile("isb\n" : : : "memory");
 #endif

@@ -4,13 +4,14 @@ The check reads the gcc -fcallgraph-info=su output of the current build.
 
     test/stackcheck.py build/launcher.debug-*.ci
 
-The handler path is every function the call graph reaches from on_sigsys, each with the frame gcc
-wrote beside it, so a function is on the path because it is called there, not because a list names
-it. Fails if one of them has a frame above 512 bytes or an unbounded dynamic frame, if the graph has
-a cycle other than exec_target's own (a #! chain of host scripts, exec_script inlined into it, six
-frames as binfmt_script allows five interpreters), if on_sigsys or exec_target is not in the graph
-(a rename must be loud), or if the deepest chain exceeds 3072 bytes. gcc writes no edge for a call
-through a pointer, and the launcher makes none.
+The handler path is every function the call graph reaches from exclave_on_sigsys, each with the
+frame gcc wrote beside it, so a function is on the path because it is called there, not because a
+list names it. Fails if one of them has a frame above 512 bytes or an unbounded dynamic frame, if
+the graph has a cycle other than exec_target's own (a #! chain of host scripts, exec_script inlined
+into it, six frames as binfmt_script allows five interpreters), if exclave_on_sigsys or exec_target
+is not in the graph (a rename must be loud), or if the deepest chain, with the 48 bytes the entry
+stub takes for the trap's record and its call (src/handler.c, 7.5.7), exceeds 3072 bytes. gcc
+writes no edge for a call through a pointer, and the launcher makes none.
 """
 
 import re
@@ -18,7 +19,10 @@ import sys
 
 LIMIT_FRAME = 512
 LIMIT_PATH = 3072  # 7.5.4: under 3 KB with a five-deep chain of host scripts
-ROOT, NESTED, NEST_MAX = "on_sigsys", "exec_target", 6
+ROOT, NESTED, NEST_MAX = "exclave_on_sigsys", "exec_target", 6
+ENTRY_STUB = (
+    48  # the entry stub's record and its call's return address, or its saved x30 (src/handler.c)
+)
 
 
 def base(title: str) -> str:
@@ -96,6 +100,8 @@ def main() -> int:
         return memo[key]
 
     worst, chain = deepest(roots[0], 0)
+    worst += ENTRY_STUB
+    chain = [f"entry stub={ENTRY_STUB:d}", *chain]
     for t in sorted(reached):
         if frames[t] > LIMIT_FRAME:
             fails.append(f"{base(t)}: frame {frames[t]:d} over {LIMIT_FRAME:d}")

@@ -48,8 +48,11 @@ static int nsec_valid(long ns) { return ns == UTIME_OMIT || ns == UTIME_NOW || (
 
 static inline long *gregs(void *uc) { return (long *)((char *)uc + UC_GREGS_OFF); }
 static inline unsigned long *frame_mask(void *uc) { return (unsigned long *)((char *)uc + UC_SIGMASK_OFF); }
-#define RE5(nr, a, b, c, d, e) __sc6((nr), (long)(a), (long)(b), (long)(c), (long)(d), (long)(e), 0)
-#define RE6(nr, a, b, c, d, e, f) __sc6((nr), (long)(a), (long)(b), (long)(c), (long)(d), (long)(e), (long)(f))
+/* the program's call, through the re-issue slot, which a program's handler's redirect stops (7.5.7) */
+#define RE5(nr, a, b, c, d, e) __sc6_reissue((nr), (long)(a), (long)(b), (long)(c), (long)(d), (long)(e), 0)
+#define RE6(nr, a, b, c, d, e, f) __sc6_reissue((nr), (long)(a), (long)(b), (long)(c), (long)(d), (long)(e), (long)(f))
+/* a call of the launcher's on the way to the program's, through the page's first slot: it leaves the call not made */
+#define AUX5(nr, a, b, c, d, e) __sc6((nr), (long)(a), (long)(b), (long)(c), (long)(d), (long)(e), 0)
 
 /* ---------- copying from the program's memory with EFAULT fidelity (7.5.6) ---------- */
 /* process_vm_readv refused: copies go through a pipe (13 item 15) */
@@ -590,7 +593,7 @@ static long vec_read(struct scratch *S, void *region, size_t region_size, char *
  * the request is to be made. */
 static long exec_reissue(const char *path, char **argv, char **envp, int asked)
 {
-    if (asked) RE5(NR_ptrace, PTRACE_TRACEME, 0, 0, 0, 0);
+    if (asked) AUX5(NR_ptrace, PTRACE_TRACEME, 0, 0, 0, 0);
     return RE5(NR_execve, path, argv, envp, 0, 0);
 }
 
@@ -1858,7 +1861,7 @@ static __attribute__((noinline)) long do_seccomp(struct scratch *S, int nr, long
         flags = (unsigned)a[1];
         uargs = (const void *)a[2];
         /* the kernel's answer for the flags, which it checks before it reads the program: EFAULT for none */
-        long r = RE5(NR_seccomp, SECCOMP_SET_MODE_FILTER, a[1], 0, 0, 0);
+        long r = AUX5(NR_seccomp, SECCOMP_SET_MODE_FILTER, a[1], 0, 0, 0);
         if (r != -EFAULT) return r;
         if (flags & ~(unsigned long)SECCOMP_FLAGS_HONOURED) return -ENOSYS; /* a listener, or a flag newer than this */
     }
@@ -1878,7 +1881,7 @@ static __attribute__((noinline)) long do_seccomp(struct scratch *S, int nr, long
     for (long i = 0; r > 0 && i < fp.len; i++)
         if (body[i].code == 0x06 && (body[i].k & SECCOMP_RET_ACTION_FULL) == SECCOMP_RET_LOG) {
             unsigned action = SECCOMP_RET_LOG;
-            if (RE5(NR_seccomp, SECCOMP_GET_ACTION_AVAIL, 0, &action, 0, 0)) r = -ENOSYS;
+            if (AUX5(NR_seccomp, SECCOMP_GET_ACTION_AVAIL, 0, &action, 0, 0)) r = -ENOSYS;
             break;
         }
     if (r > 0) {
@@ -2155,12 +2158,84 @@ static long judge(int nr, const long *a)
 #endif
 }
 
-static void on_sigsys(int sig, void *info, void *uc)
+/* The handler's entry (7.5.7): the trap's record made on the stack before anything else, its address in the reserved
+ * register, then the handler; on its return the answer goes into the trap's frame unless a program's handler
+ * redirected the program, which a trampoline that lands between the test and the write sees by the labels. */
+#if defined(__x86_64__)
+__asm__(".text\n"
+        ".globl exclave_sigsys_entry, exclave_sigsys_set, exclave_sigsys_tail\n"
+        ".globl exclave_sigsys_done, exclave_sigsys_ret\n"
+        ".hidden exclave_sigsys_entry, exclave_sigsys_set, exclave_sigsys_tail\n"
+        ".hidden exclave_sigsys_done, exclave_sigsys_ret\n"
+        ".type exclave_sigsys_entry, @function\n"
+        "exclave_sigsys_entry:\n"
+        "  sub $40, %rsp\n"
+        "  movabs $0x7472617065786331, %rax\n"
+        "  mov %rax, (%rsp)\n"
+        "  mov %rdx, 8(%rsp)\n"
+        "  movabs $0x8000000000000000, %rax\n"
+        "  mov %rax, 16(%rsp)\n"
+        "  movq $0, 24(%rsp)\n"
+        "  mov %rsp, %r15\n"
+        "exclave_sigsys_set:\n"
+        "  mov %rsp, %rcx\n"
+        "  call exclave_on_sigsys\n"
+        "exclave_sigsys_tail:\n"
+        "  cmpq $0, 24(%r15)\n"
+        "  jne exclave_sigsys_done\n"
+        "  mov 16(%r15), %rax\n"
+        "  mov 8(%r15), %rdx\n"
+        "  mov %rax, 144(%rdx)\n" /* gregs[REG_RAX], 40 + 13 * 8 */
+        "exclave_sigsys_done:\n"
+        "  add $40, %rsp\n"
+        "exclave_sigsys_ret:\n"
+        "  ret\n"
+        ".size exclave_sigsys_entry, . - exclave_sigsys_entry\n");
+#elif defined(__aarch64__)
+__asm__(".text\n"
+        ".globl exclave_sigsys_entry, exclave_sigsys_set, exclave_sigsys_tail\n"
+        ".globl exclave_sigsys_done, exclave_sigsys_ret\n"
+        ".hidden exclave_sigsys_entry, exclave_sigsys_set, exclave_sigsys_tail\n"
+        ".hidden exclave_sigsys_done, exclave_sigsys_ret\n"
+        ".type exclave_sigsys_entry, %function\n"
+        "exclave_sigsys_entry:\n"
+        "  sub sp, sp, #48\n"
+        "  str x30, [sp, #32]\n"
+        "  movz x9, #0x6331\n"
+        "  movk x9, #0x6578, lsl #16\n"
+        "  movk x9, #0x7061, lsl #32\n"
+        "  movk x9, #0x7472, lsl #48\n"
+        "  str x9, [sp]\n"
+        "  str x2, [sp, #8]\n"
+        "  movz x9, #0x8000, lsl #48\n"
+        "  str x9, [sp, #16]\n"
+        "  str xzr, [sp, #24]\n"
+        "  mov x27, sp\n"
+        "exclave_sigsys_set:\n"
+        "  mov x3, sp\n"
+        "  bl exclave_on_sigsys\n"
+        "exclave_sigsys_tail:\n"
+        "  ldr x9, [x27, #24]\n"
+        "  cbnz x9, exclave_sigsys_done\n"
+        "  ldr x9, [x27, #16]\n"
+        "  ldr x10, [x27, #8]\n"
+        "  str x9, [x10, #184]\n" /* regs[0] */
+        "exclave_sigsys_done:\n"
+        "  ldr x30, [sp, #32]\n"
+        "  add sp, sp, #48\n"
+        "exclave_sigsys_ret:\n"
+        "  ret\n"
+        ".size exclave_sigsys_entry, . - exclave_sigsys_entry\n");
+#endif
+
+void exclave_on_sigsys(int sig, void *info, void *uc, struct trap *rec)
 {
     (void)sig; /* SIGSYS: the handler is installed for nothing else */
     long *g = gregs(uc);
     if (*(int *)((char *)info + SI_CODE_OFF) != SYS_SECCOMP) {
-        /* a real SIGSYS (kill -SYS): the program's default disposition applies, so re-raise it under SIG_DFL */
+        /* a real SIGSYS (kill -SYS): the program's default disposition applies, so re-raise it under SIG_DFL; the
+         * frame's result register stays as it was */
+        rec->answer = g[REG_RESULT];
         unsigned long dfl[4] = {0, 0, 0, 0};
         sys_rt_sigaction(SIGSYS, dfl, 0, 8);
         sys_tgkill((pid_t)sys_getpid(), (pid_t)sys_gettid(), SIGSYS);
@@ -2182,9 +2257,11 @@ static void on_sigsys(int sig, void *info, void *uc)
     }
     long r = judge(nr, a);
     if (r == -MARK_NONE) r = S ? dispatch(S, nr, a, uc) : -ENOMEM;
-    if (C.logfd >= 0 && S) log_line(sysname(nr), r, S->v[0] ? S->v : 0);
+    /* the answer in the record before anything else, so that a program's handler landing from here on finds the call
+     * made; the entry stub writes it into the frame (7.5.7) */
+    rec->answer = r;
+    if (C.logfd >= 0 && S && !(nr == NR_rt_sigaction && !a[1])) log_line(sysname(nr), r, S->v[0] ? S->v : 0);
     if (S) scratch_put(S);
-    g[REG_RESULT] = r;
 }
 
 void handler_install(void)
@@ -2202,7 +2279,7 @@ void handler_install(void)
         unsigned long flags;
         void *restorer;
         unsigned long mask;
-    } sa = {(void *)on_sigsys, SA_SIGINFO | SA_ONSTACK | SA_RESTORER | SA_NODEFER, (void *)SC_RESTORER, 0};
+    } sa = {(void *)exclave_sigsys_entry, SA_SIGINFO | SA_ONSTACK | SA_RESTORER | SA_NODEFER, (void *)SC_RESTORER, 0};
     if (sys_rt_sigaction(SIGSYS, &sa, 0, 8) < 0) die("cannot install the SIGSYS handler", 0, 0);
     unsigned long m = SIGSYS_BIT;
     sys_rt_sigprocmask(SIG_UNBLOCK, &m, 0, 8);

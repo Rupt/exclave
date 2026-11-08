@@ -151,11 +151,16 @@ launcher_cc() {
     compiler=${CC:-gcc}
     [ "$arch" = "$(uname -m)" ] || compiler=$arch-linux-gnu-gcc
     case $arch in
-    x86_64) set -- -fcf-protection=none -mno-red-zone "$@" ;;
+    # no vector or floating-point register, so that the state a program's
+    # handler finds is the program's (7.5.7); r15 holds the trap's record
+    # throughout the launcher's code (7.5.7)
+    x86_64) set -- -fcf-protection=none -mno-red-zone -mgeneral-regs-only -ffixed-r15 "$@" ;;
     # atomics inline, no libgcc to call; x28 never touched, since a Go program
     # without cgo keeps its g there and its signal handler reads it as it finds
-    # it, in the middle of the launcher's handler too (7.5.3)
-    aarch64) set -- -mgeneral-regs-only -mno-outline-atomics -ffixed-x28 "$@" ;;
+    # it, in the middle of the launcher's handler too (7.5.3); x18 never
+    # touched, where a shadow call stack keeps its pointer; x27 holds the
+    # trap's record (7.5.7)
+    aarch64) set -- -mgeneral-regs-only -mno-outline-atomics -ffixed-x28 -ffixed-x18 -ffixed-x27 "$@" ;;
     esac
     c_compile "$compiler" -O2 -g -nostdlib -nostartfiles -ffreestanding -fno-stack-protector -fno-builtin -fno-strict-aliasing \
         -fPIC -fvisibility=hidden -fno-plt -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns "$@"

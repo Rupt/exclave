@@ -458,6 +458,7 @@ SHIPPED = {
     8: "7e1d35ebfb23759e",
     9: "ad237bdd2e612cf5",
     10: "c95c98b9fe99231e",
+    11: "cbcb6db2f5fc9852",
 }
 
 
@@ -613,7 +614,7 @@ def trap_digest() -> tuple[int, str]:
 
     That is every syscall the filter singles out, by its table in src/filter.c and by name, with
     the argument an argument trap reads; the ioctl requests it traps; and the syscall page's
-    address in src/sys.h and its judge slot.
+    address in src/sys.h, its judge slot and the handler-call slot's return.
     """
     with open(os.path.join(REPO, "src", "filter.c")) as f:
         src = f.read()
@@ -630,6 +631,10 @@ def trap_digest() -> tuple[int, str]:
     judge = re.search(r"#define SC_JUDGE \((.*?)\)", sys_h)
     if judge:
         lines.append(f"judge {judge.group(1)}")
+    # the handler-call slot's return, from version 11: the filter answers its rt_sigreturn (7.5.7)
+    hcall = re.search(r"#define SC_HCALL_RET \((.*?)\)", sys_h)
+    if hcall:
+        lines.append(f"handler-call return {hcall.group(1)}")
     lines += [f"ioctl {r}" for r in set(re.findall(r"\(uint32_t\)(FS_IOC_\w+)", src))]
     for table in (
         "path_syscalls",

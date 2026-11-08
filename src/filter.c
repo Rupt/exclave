@@ -129,8 +129,13 @@ static const int fd_syscalls[] = {NR_fchmod,     NR_fchown,   NR_fsetxattr, NR_f
                                   NR_getdents64, NR_getdents, NR_fstat
 #endif
 };
-/* signal-mask syscalls the handler scrubs (7.5.2) */
-static const int mask_syscalls[] = {NR_rt_sigprocmask, NR_rt_sigsuspend};
+/* signal-mask syscalls the handler scrubs (7.5.2), and from version 11 every rt_sigaction, a query as well as an
+ * install, which the trampolines need answered (7.5.7) */
+static const int mask_syscalls[] = {NR_rt_sigprocmask, NR_rt_sigsuspend,
+#ifndef EXCLAVE_TEST_OLD
+                                    NR_rt_sigaction
+#endif
+};
 /* refused with ENOSYS rather than emulated (7.4.3): each would bypass or confuse translation */
 static const int enosys_syscalls[] = {NR_clone3,        NR_io_uring_setup,   NR_name_to_handle_at,
                                       NR_uselib,        428 /* open_tree */, 429 /* move_mount */,
@@ -150,9 +155,13 @@ static const int eperm_syscalls[] = {NR_chroot, NR_acct, NR_pivot_root, NR_mount
 #define JGE_K 0x35 /* BPF_JMP | BPF_JGE | BPF_K */
 #define JA 0x05 /* BPF_JMP | BPF_JA: a 32-bit offset, where a conditional jump's is 8 bits */
 
-/* installs trap for the mask scrub (7.5.2); queries report the truth */
-static const int arg_traps[][2] = {{NR_rt_sigaction, 1}, {NR_ppoll, 3},        {NR_pselect6, 5},
-                                   {NR_epoll_pwait, 4},  {NR_epoll_pwait2, 4}, {NR_io_pgetevents, 5}};
+/* the waits that carry a mask trap for its scrub (7.5.2); build/launcher-old, version 3, traps an rt_sigaction only
+ * when it installs */
+static const int arg_traps[][2] = {
+#ifdef EXCLAVE_TEST_OLD
+    {NR_rt_sigaction, 1},
+#endif
+    {NR_ppoll, 3},        {NR_pselect6, 5}, {NR_epoll_pwait, 4}, {NR_epoll_pwait2, 4}, {NR_io_pgetevents, 5}};
 /* ptrace(PTRACE_TRACEME), request 0, traps for a vfork child's deferral (7.4.5); every other request is allowed */
 static const int zero_traps[][2] = {
 #ifndef EXCLAVE_TEST_OLD
@@ -165,6 +174,9 @@ static const int zero_traps[][2] = {
 static int singled(int nr)
 {
     if (nr == NR_uname || nr == NR_ioctl || nr == NR_seccomp || nr == NR_prctl) return 1;
+#ifndef EXCLAVE_TEST_OLD
+    if (nr == NR_rt_sigreturn) return 1;
+#endif
     for (int i = 0; i < n_path_syscalls; i++)
         if (path_syscalls[i] == nr) return 1;
     for (unsigned i = 0; i < sizeof fd_syscalls / sizeof fd_syscalls[0]; i++)
@@ -242,6 +254,17 @@ static void build(void)
     /* the second stage, the number in A: the arguments that can only allow, and the probe */
     for (int i = 0; i < njumps; i++) prog[jumps[i]].k = (uint32_t)(np - jumps[i] - 1);
     int page[16], npage = 0;
+#ifndef EXCLAVE_TEST_OLD
+    /* a program's handler returns into the trampoline: its rt_sigreturn from the handler-call slot, the one instruction
+     * pointer, is answered with an error, and every other is allowed (7.5.7) */
+    emit(JEQ_K, 0, 6, NR_rt_sigreturn);
+    emit(LD_ABS, 0, 0, OFF_IP + 4);
+    emit(JEQ_K, 0, 3, (uint32_t)(SC_HCALL_RET >> 32));
+    emit(LD_ABS, 0, 0, OFF_IP);
+    emit(JEQ_K, 0, 1, (uint32_t)SC_HCALL_RET);
+    ret(SECCOMP_RET_ERRNO | MARK_HANDLER_RETURN);
+    ret(SECCOMP_RET_ALLOW);
+#endif
     /* only the two chattr requests are trapped (8.2) */
     emit(JEQ_K, 0, 5, NR_ioctl);
     emit(LD_ABS, 0, 0, OFF_ARG(1));

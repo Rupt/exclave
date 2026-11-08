@@ -25,13 +25,21 @@ typedef unsigned int mode_t;
  * x86-64; 64K-aligned for kernels with 64K pages. Filters before version 6 allow a page at 0x3f0000 instead, so
  * neither launcher runs under the other's filter (FILTER_PAGE_SINCE). */
 #define SC_PAGE 0x7fe00000UL
-/* The page's layout (7.4.2), three 16-byte slots: at 0 the launcher's syscall and a return; at 16 the judge slot, the
- * same two instructions, from which the handler re-issues a trapped call for the kernel to judge by the program's own
- * filters, and which every filter from version 10 answers rather than allows; at 32 the signal restorer, rt_sigreturn,
- * jumped to and never called, since the kernel reads the frame from the stack. A call's instruction pointer, the
- * address after its syscall instruction, lies in its slot on both architectures. */
+/* The page's layout (7.4.2): at 0 the launcher's syscall and a return; at 16 the judge slot, the same two
+ * instructions, from which the handler re-issues a trapped call for the kernel to judge by the program's own filters,
+ * and which every filter from version 10 answers rather than allows; at 32 the signal restorer, rt_sigreturn, jumped
+ * to and never called, since the kernel reads the frame from the stack; at 48 the handler-call slot, 32 bytes, from
+ * which a trampoline calls a program's handler with its return address at the restorer's own two instructions, whose
+ * rt_sigreturn the filter answers with an error from that one address, SC_HCALL_RET, before a jump back into the
+ * trampoline (7.5.7); at 80 the re-issue slot, 32 bytes, through which the handler makes the program's call: it makes
+ * none when the trap's record says a program's handler redirected the program, and stores the answer in the record
+ * (7.5.7). A call's instruction pointer, the address after its syscall instruction, lies in its slot on both
+ * architectures. The filter names SC_HCALL_RET, so the handler-call slot's layout is fixed for the page generation. */
 #define SC_JUDGE (SC_PAGE + 16)
 #define SC_RESTORER (SC_PAGE + 32)
+#define SC_HCALL (SC_PAGE + 48)
+#define SC_HCALL_RET (SC_PAGE + 60)
+#define SC_REISSUE (SC_PAGE + 80)
 /* A syscall the architecture lacks gets a sentinel below zero, unique so that the handler's switch compiles, and
  * the filter skips it (a legacy form the kernel of the other architecture has: open, stat, fork, ...). */
 #define ABSENT(k) (-1000 - (k))
@@ -41,6 +49,7 @@ typedef unsigned int mode_t;
 long __sc6(long n, long a, long b, long c, long d, long e, long f);
 long __sc6_raw(long n, long a, long b, long c, long d, long e, long f);
 long __sc6_judge(long n, long a, long b, long c, long d, long e, long f);
+long __sc6_reissue(long n, long a, long b, long c, long d, long e, long f);
 #endif
 #if defined(__x86_64__)
 #ifndef __ANALYZER__
@@ -81,6 +90,19 @@ static inline long __sc6_judge(long n, long a, long b, long c, long d, long e, l
                      : "rcx", "r11", "memory");
     return ret;
 }
+/* the program's call, from the re-issue slot, which reads the trap's record through r15 (7.5.7) */
+static inline long __sc6_reissue(long n, long a, long b, long c, long d, long e, long f)
+{
+    long ret;
+    register long r10 __asm__("r10") = d;
+    register long r8 __asm__("r8") = e;
+    register long r9 __asm__("r9") = f;
+    __asm__ volatile("call *%[pg]"
+                     : "=a"(ret)
+                     : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8), "r"(r9), [pg] "r"(SC_REISSUE)
+                     : "rcx", "r11", "memory");
+    return ret;
+}
 #endif
 /* the syscall numbers, laid out as a table, which test/syscalls.py checks against the kernel's */
 /* clang-format off */
@@ -94,7 +116,7 @@ enum {
     NR_exit_group = 231, NR_openat = 257, NR_mkdirat = 258, NR_newfstatat = 262,
     NR_unlinkat = 263, NR_symlinkat = 266, NR_readlinkat = 267,
     NR_faccessat = 269,
-    NR_mount_setattr = 442, NR_rt_sigaction = 13, NR_rt_sigprocmask = 14,
+    NR_mount_setattr = 442, NR_rt_sigaction = 13, NR_rt_sigprocmask = 14, NR_rt_sigreturn = 15,
     NR_uname = 63, NR_tgkill = 234, NR_gettid = 186, NR_process_vm_readv = 310, NR_fchmod = 91,
     NR_fchown = 93, NR_fsetxattr = 190, NR_fremovexattr = 199,
     NR_rt_sigsuspend = 130, NR_ppoll = 271, NR_pselect6 = 270, NR_epoll_pwait = 281,
@@ -173,6 +195,23 @@ static inline long __sc6_judge(long n, long a, long b, long c, long d, long e, l
                      : "x30", "memory");
     return x0;
 }
+/* the program's call, from the re-issue slot, which reads the trap's record through x27 and uses x16 (7.5.7) */
+static inline long __sc6_reissue(long n, long a, long b, long c, long d, long e, long f)
+{
+    register long x8 __asm__("x8") = n;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    register long x2 __asm__("x2") = c;
+    register long x3 __asm__("x3") = d;
+    register long x4 __asm__("x4") = e;
+    register long x5 __asm__("x5") = f;
+    register long x9 __asm__("x9") = (long)SC_REISSUE;
+    __asm__ volatile("blr x9"
+                     : "+r"(x0)
+                     : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x9)
+                     : "x16", "x30", "memory");
+    return x0;
+}
 #endif
 /* clang-format off */
 enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absent */
@@ -185,7 +224,7 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
     NR_exit_group = 94, NR_openat = 56, NR_mkdirat = 34, NR_newfstatat = 79,
     NR_unlinkat = 35, NR_symlinkat = 36, NR_readlinkat = 78,
     NR_faccessat = 48,
-    NR_mount_setattr = 442, NR_rt_sigaction = 134, NR_rt_sigprocmask = 135,
+    NR_mount_setattr = 442, NR_rt_sigaction = 134, NR_rt_sigprocmask = 135, NR_rt_sigreturn = 139,
     NR_uname = 160, NR_tgkill = 131, NR_gettid = 178, NR_process_vm_readv = 270, NR_fchmod = 52,
     NR_fchown = 55, NR_fsetxattr = 7, NR_fremovexattr = 16,
     NR_rt_sigsuspend = 133, NR_ppoll = 73, NR_pselect6 = 72, NR_epoll_pwait = 22,

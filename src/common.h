@@ -10,7 +10,7 @@
 #ifndef FILTER_VERSION
 /* 7.4.2: versioned reuse; the version moves whenever the trap set grows or the syscall page moves. build/launcher-old
  * is these sources at version 3, without bind and connect, which version 4 added (EXCLAVE_TEST_OLD). */
-#define FILTER_VERSION 10
+#define FILTER_VERSION 11
 #endif
 /* filters from this version answer a call from the syscall page's judge slot rather than allow it (7.4.2), so that a
  * program's own filter can be honoured: a launcher whose note names an older one is not exec'd while one exists */
@@ -93,6 +93,9 @@
  * filter's prologue's to the probe from it */
 #define MARK_NONE 4094
 #define MARK_PRESENT 4093
+/* the filter's answer to an rt_sigreturn from the handler-call slot, so that a program's handler returns into the
+ * trampoline (7.5.7) */
+#define MARK_HANDLER_RETURN 4092
 #define SECCOMP_RET_KILL_PROCESS 0x80000000U
 #define SECCOMP_RET_TRAP 0x00030000U
 #define SECCOMP_RET_ERRNO 0x00050000U
@@ -417,6 +420,28 @@ extern const int n_path_syscalls;
 
 /* ---------- handler (handler.c) ---------- */
 void handler_install(void);
+/* The trap's record (7.5.7), made by the handler's entry stub on its stack before anything else, its address in a
+ * register reserved for it throughout the launcher's code (r15, x27): what a trampoline reads of a trap it
+ * interrupts. The offsets are the re-issue slot's and the entry stub's (launcher.c, handler.c). */
+struct trap {
+    unsigned long magic; /* TRAP_MAGIC */
+    void *uc; /* the trap's frame */
+    long answer; /* the call's answer, ANSWER_NONE until there is one */
+    long redirected; /* a program's handler redirected the program */
+};
+#define TRAP_MAGIC 0x7472617065786331UL
+#define ANSWER_NONE (-0x7fffffffffffffffL - 1)
+void exclave_on_sigsys(int sig, void *info, void *uc, struct trap *rec);
+/* the entry stub and its labels (handler.c): before the record exists, its tail's test and write, its last return */
+extern char exclave_sigsys_entry[], exclave_sigsys_set[], exclave_sigsys_tail[], exclave_sigsys_done[],
+    exclave_sigsys_ret[];
+
+/* ---------- trampolines (tramp.c, 7.5.7) ---------- */
+#if defined(__x86_64__)
+#define TRAMP_PRESENTED 1040 /* the presented frame: the pretcode slot, then room for glibc's ucontext_t whole */
+#else
+#define TRAMP_PRESENTED 4688 /* the kernel's rt_sigframe: siginfo, then the ucontext with 4096 bytes of records */
+#endif
 
 /* ---------- CPU level (isa.c) ---------- */
 /* 1 yes, 0 no, -1 unknown string; auxv for AT_HWCAP on aarch64 */
