@@ -12,6 +12,10 @@
 package unpack
 
 import (
+	"bytes"
+	"crypto/sha1"
+	"encoding/binary"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -625,6 +629,123 @@ func caCertificates(r *root.Root, packages []*Package, log logger) (bool, error)
 	return true, nil
 }
 
+// enabledCertificates are the certificates update-ca-certificates links into /etc/ssl/certs, by
+// virtual path: those /etc/ca-certificates.conf enables, or, where there is none, every .crt
+// under /usr/share/ca-certificates, which the package's postinst enables on a first install
+// (debconf's default trusts every certificate it offers); then every .crt under
+// /usr/local/share/ca-certificates. In the order of their paths' bytes.
+func enabledCertificates(r *root.Root) ([]string, error) {
+	var certs []string
+	var walk func(dir string)
+	walk = func(dir string) {
+		for _, n := range r.Listdir(dir) {
+			switch p := dir + "/" + n; {
+			case r.IsDir(p):
+				walk(p)
+			case strings.HasSuffix(n, ".crt") && r.IsFile(p):
+				certs = append(certs, p)
+			}
+		}
+	}
+	if conf := "/etc/ca-certificates.conf"; r.Exists(conf) {
+		text, err := r.ReadText(conf)
+		if err != nil {
+			return nil, err
+		}
+		for raw := range strings.SplitSeq(text, "\n") {
+			line := strings.TrimSpace(raw)
+			if p := "/usr/share/ca-certificates/" + line; line != "" && !strings.HasPrefix(line, "#") &&
+				!strings.HasPrefix(line, "!") && r.IsFile(p) {
+				certs = append(certs, p)
+			}
+		}
+	} else {
+		walk("/usr/share/ca-certificates")
+	}
+	walk("/usr/local/share/ca-certificates")
+	sort.Strings(certs)
+	return certs, nil
+}
+
+// pemAlias is the name update-ca-certificates links a certificate under in /etc/ssl/certs, which
+// ca-certificates-java takes for its alias.
+var pemAlias = strings.NewReplacer(" ", "_", "(", "=", ")", "=", ",", "_")
+
+// javaCacerts makes the Java keystore ca-certificates-java's postinst makes on a first install,
+// /etc/ssl/certs/java/cacerts, which a Debian JDK's lib/security/cacerts links to and without
+// which Java trusts no authority: a JKS keystore of each enabled certificate (enabledCertificates)
+// as a trusted entry under the alias "debian:NAME.pem", NAME the certificate's file name as
+// update-ca-certificates spells it, the first certificate of each file, with the store password
+// the package's default, "changeit". An entry's date is the epoch, so the tree is the same on
+// every run, and the entries are in their aliases' order.
+func javaCacerts(r *root.Root, packages []*Package, log logger) (bool, error) {
+	store := "/etc/ssl/certs/java/cacerts"
+	if !names(packages)["ca-certificates-java"] || r.Lexists(store) {
+		return false, nil
+	}
+	certs, err := enabledCertificates(r)
+	if err != nil {
+		return false, err
+	}
+	type entry struct {
+		alias string
+		der   []byte
+	}
+	var entries []entry
+	for _, c := range certs {
+		data, err := r.ReadBytes(c)
+		if err != nil {
+			return false, err
+		}
+		for rest := data; ; {
+			var b *pem.Block
+			if b, rest = pem.Decode(rest); b == nil {
+				log("note: " + c + " holds no PEM certificate; java-cacerts passed over it")
+				break
+			}
+			if b.Type == "CERTIFICATE" {
+				name := strings.TrimSuffix(filepath.Base(c), ".crt")
+				entries = append(entries, entry{"debian:" + strings.ToLower(pemAlias.Replace(name)) + ".pem", b.Bytes})
+				break
+			}
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].alias < entries[j].alias })
+	var ks bytes.Buffer
+	u32 := func(v uint32) { ks.Write(binary.BigEndian.AppendUint32(nil, v)) }
+	utf := func(s string) { ks.Write(binary.BigEndian.AppendUint16(nil, uint16(len(s)))); ks.WriteString(s) }
+	u32(0xfeedfeed) // JKS, version 2
+	u32(2)
+	u32(uint32(len(entries)))
+	for i, e := range entries {
+		if i > 0 && e.alias == entries[i-1].alias {
+			return false, fmt.Errorf("%s: two certificates named %s", store, e.alias)
+		}
+		u32(2) // a trusted certificate
+		utf(e.alias)
+		ks.Write(make([]byte, 8)) // its date, the epoch in milliseconds
+		utf("X.509")
+		u32(uint32(len(e.der)))
+		ks.Write(e.der)
+	}
+	// the keyed digest: SHA-1 over the password in UTF-16, "Mighty Aphrodite" and the store
+	h := sha1.New()
+	for _, c := range "changeit" {
+		h.Write([]byte{0, byte(c)})
+	}
+	h.Write([]byte("Mighty Aphrodite"))
+	h.Write(ks.Bytes())
+	ks.Write(h.Sum(nil))
+	if err := r.Makedirs(filepath.Dir(store)); err != nil {
+		return false, err
+	}
+	if err := r.WriteBytes(store, ks.Bytes(), 0o644); err != nil {
+		return false, err
+	}
+	log(fmt.Sprintf("synthesised %s from %d certificates", store, len(entries)))
+	return true, nil
+}
+
 var pemRe = regexp.MustCompile(`(?s)-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----`)
 
 // caTrust makes Fedora's and RHEL's ca-certificates bundle, which update-ca-trust extracts in
@@ -1061,6 +1182,7 @@ var rules = []rule{
 	{"sbin-merge", sbinMerge},
 	{"dash-sh", dashSh},
 	{"ca-certificates", caCertificates},
+	{"java-cacerts", javaCacerts},
 	{"ca-trust", caTrust},
 	{"ssl-paths", sslPaths},
 	{"base-passwd", basePasswd},

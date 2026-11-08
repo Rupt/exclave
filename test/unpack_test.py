@@ -634,6 +634,70 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
     expect("note: loopy's" not in out, "an unrolled loop is noted: " + out)
 
 
+def jks_entries(path: str) -> list[tuple[str, int, bytes]] | None:
+    """A JKS keystore's trusted entries, alias, date and certificate, or None where it is not one.
+
+    The format Java's JKS keystore reads: a magic, version 2, the entries, then SHA-1 over the
+    password "changeit" in UTF-16, "Mighty Aphrodite" and the bytes before it.
+    """
+    with open(path, "rb") as f:
+        data = f.read()
+    body, digest = data[:-20], data[-20:]
+    key = "changeit".encode("utf-16-be") + b"Mighty Aphrodite"
+    mac = hashlib.sha1(key + body).digest()  # noqa: S324  JKS keys its digest with SHA-1
+    if mac != digest or body[:8] != b"\xfe\xed\xfe\xed\0\0\0\2":
+        return None
+    at, out = 12, []
+    for _ in range(int.from_bytes(body[8:12])):
+        assert body[at : at + 4] == b"\0\0\0\2"  # a trusted certificate
+        n = int.from_bytes(body[at + 4 : at + 6])
+        alias = body[at + 6 : at + 6 + n].decode()
+        at += 6 + n
+        date = int.from_bytes(body[at : at + 8])
+        at += 8
+        assert body[at : at + 7] == b"\0\x05X.509"
+        n = int.from_bytes(body[at + 7 : at + 11])
+        out.append((alias, date, body[at + 11 : at + 11 + n]))
+        at += 11 + n
+    return out if at == len(body) else None
+
+
+@test
+def java_cacerts(ctx: Ctx) -> None:
+    """10.1: ca-certificates-java's keystore, of the certificates update-ca-certificates enables.
+
+    Without /etc/ca-certificates.conf every certificate under /usr/share/ca-certificates is
+    enabled, as on a first install; with it, those it names. Each is a trusted entry under
+    "debian:" and the name update-ca-certificates links it under, lowercased, as the package's
+    own program writes them; a file without a PEM certificate is passed over with a note.
+    """
+
+    def pem(der: bytes) -> bytes:
+        b = base64.encodebytes(der).replace(b"\n", b"")
+        lines = b"\n".join(b[i : i + 64] for i in range(0, len(b), 64))
+        return b"-----BEGIN CERTIFICATE-----\n" + lines + b"\n-----END CERTIFICATE-----\n"
+
+    ders = {
+        "A_Root.crt": b"\x30\x03\x02\x01\x01",
+        "B (Root), Two.crt": b"\x30\x03\x02\x01\x02" * 40,
+    }
+    members: list[Member] = [
+        (f"usr/share/ca-certificates/mozilla/{n}", "file", pem(d), 0o644) for n, d in ders.items()
+    ]
+    members.append(("usr/share/ca-certificates/mozilla/Empty.crt", "file", b"no PEM\n", 0o644))
+    java = package(ctx, "deb", "ca-certificates-java", [("etc/ssl/certs/java", "dir", None, 0o755)])
+    for conf in (None, "# comment\nmozilla/B (Root), Two.crt\n!mozilla/A_Root.crt\n"):
+        extra = [("etc/ca-certificates.conf", "file", conf.encode(), 0o644)] if conf else []
+        cas = package(ctx, "deb", "ca-certificates", members + extra)
+        root, out = accepted(ctx, f"cacerts-{conf is not None}", [cas, java])
+        got = jks_entries(os.path.join(root, "etc", "ssl", "certs", "java", "cacerts"))
+        want = [("debian:b_=root=__two.pem", 0, ders["B (Root), Two.crt"])]
+        if conf is None:
+            want.insert(0, ("debian:a_root.pem", 0, ders["A_Root.crt"]))
+        expect(got == want, f"the keystore without the conf={conf is None} holds {got!r}")
+        expect("java-cacerts" in out and ("Empty.crt holds no PEM" in out) == (conf is None), out)
+
+
 @test
 def shells_from_debianutils(ctx: Ctx) -> None:
     """10.1: /etc/shells is written as update-shells writes it, from the template and shells.d.

@@ -2549,6 +2549,20 @@ refused. From `.deb` files, in five steps:
    `sbin-merge`, Fedora's `/usr/sbin` as a link
    to `bin`; `dash-sh`; `ca-certificates`, `ca-certificates.crt`
    concatenated from the certificates `ca-certificates.conf` enables;
+   `java-cacerts`, the Java keystore ca-certificates-java's `postinst`
+   makes, `/etc/ssl/certs/java/cacerts`, to which a Debian JDK's
+   `lib/security/cacerts` links and without which Java trusts no
+   authority: a JKS keystore with the package's store password,
+   `changeit`, of every certificate `update-ca-certificates` would
+   enable, those `ca-certificates.conf` enables or, where it is absent,
+   as on a first install, every `.crt` under `/usr/share/ca-certificates`,
+   each under the alias the package's own program gives it,
+   `debian:` and the name of its link in `/etc/ssl/certs`, lowercased,
+   and dated at the epoch, so that the tree is the same on every run.
+   The keystore holds the distribution's set, not the host's, since
+   no identity file stands for it (8.4); `host
+   "/etc/ssl/certs/java/cacerts"` gives an exclave the host's where
+   the host has one;
    `ca-trust`, Fedora's bundle from the p11-kit trust source;
    `ssl-paths`, OpenSSL's compiled-in trust paths when a libssl is
    present, so that the host's bundle at the identity path (8.4) is
