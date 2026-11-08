@@ -89,6 +89,16 @@ documents, gate, one commit per item. Status is in brackets.
    passing on one commit; `docs/DESIGN.md` and `README.md` consistent
    with it; then `scripts/release` on that commit, and the baseline
    record of item 3 filled from its assets.
+9. **The suite on the Alpine exclave** [in progress]: the suite had not
+   run on musl since an exerciser took glibc's stack-end symbol, now
+   fixed; the tests that assume glibc's error strings, thread stack
+   minimum or `vfork` are made to assert what the tree says or to skip
+   with their reason, and any launcher difference found there is fixed.
+10. **The positional entry's spellings** [in progress]: `.exclave/launcher
+    ./PATH`, `../PATH` and a host symlink to a wrapper die with
+    "cannot exec the wrapper" where the absolute spelling runs; measured,
+    fixed in the launcher, a regression, and item 57's interim advice
+    revised.
 
 ## After the first release
 
