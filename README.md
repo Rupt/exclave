@@ -537,7 +537,7 @@ test/bytecode.py     Python's bytecode made by exclave caches, a cache only the 
 test/caches_test.py  exclave caches on scripts/inputs's caches.exclave and alpine-caches.exclave: each cache it makes, used before and after
 test/nss_test.py     a user from SSSD looked up inside, through the exclave's own lookup module, in a user namespace
 test/realsoft.py     real projects built inside and outside an exclave; test/bench.py the performance table
-test/workloads.py    valgrind, poppler, cargo, CMake, Java and Python in their own exclaves, against the kernel
+test/workloads.py    valgrind, poppler, cargo, CMake, Java, Python and TeX in their own exclaves, against the kernel
 test/syscalls.py     every kernel syscall classified; test/stackcheck.py the stack budget
 test/affected.py     the gate's steps a change reaches, derived from what each step runs; test/figures.py the figures the documents quote, checked against the tree
 test/tables_test.py  the tables the launcher, the command, unpack and the tests each carry, read from every source and compared

@@ -5562,7 +5562,9 @@ the gate cannot afford. Each runs when its input variable is set:
   `pdffonts` and `pdftoppm` of a PDF with embedded fonts and a
   substituted one, a cargo build, zlib built by CMake and ninja with four
   jobs, a Java program run as source and compiled by `javac`, a
-  Python process with threads, subprocesses and sqlite, and a Hutter
+  Python process with threads, subprocesses and sqlite, an article
+  with a citation through `pdflatex` and `bibtex` in TeX Live's
+  exclave once `exclave caches` made its formats, and a Hutter
   Prize entry's unmodified `build.sh` (cmix-neif 1.0: clang-18 and
   lld-18 under `env -i`, `make -j` unbounded, a profile-guided second
   build) in an exclave of the packages its `install.sh` names at the

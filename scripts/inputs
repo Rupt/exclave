@@ -245,6 +245,19 @@ item both poppler debs-poppler debs --keyring "$ubuntu" --mirror $mirror poppler
 item both rust debs-rust debs --keyring "$ubuntu" --mirror $mirror cargo rustc gcc libc6-dev
 item both cmake debs-cmake debs --keyring "$ubuntu" --mirror $mirror cmake ninja-build gcc g++ libc6-dev
 item both java debs-java debs --keyring "$ubuntu" --mirror $mirror openjdk-17-jdk-headless libfreetype6 libharfbuzz0b libasound2t64
+# TeX Live, whose indexes and formats exclave caches makes (13 item 56), once
+tex() {
+    both tex debs-tex debs --keyring "$ubuntu" --mirror "$mirror" texlive-latex-base texlive-latex-recommended texlive-fonts-recommended &&
+        if [ ! -e "$dir/tex.exclave/tree/var/lib/texmf/ls-R" ]; then
+            if exclave caches "$dir/tex.exclave" >>"$dir/log/tex.exclave.log" 2>&1; then
+                echo "tex.exclave: $(grep "TeX Live" "$dir/log/tex.exclave.log" | tail -1)"
+            else
+                echo "tex.exclave: exclave caches FAILED, see $dir/log/tex.exclave.log"
+                failed tex.exclave
+            fi
+        fi
+}
+item tex
 # the packages cmix-neif 1.0's install.sh installs, at the snapshot it pins (test/workloads.py buildimage)
 item both buildimage debs-buildimage debs --keyring "$ubuntu" --snapshot 20260927T160000Z clang-18 lld-18 llvm-18 libclang-rt-18-dev build-essential gawk python3
 item file https://marwoelk.de/cmix-neif-1.0/cmix-neif-1.0.tar.gz cmix-neif-1.0.tar.gz 656180fdcf33b407502de2abba2098a29ef58aac947c49b8a88e89805a1d40b5

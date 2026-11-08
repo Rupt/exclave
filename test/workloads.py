@@ -17,6 +17,9 @@ both worlds. The workloads, each a program with its own syscall layer, caches or
   java      java -version, a single-file program, javac and the class run, through
             /usr/bin/java's alternatives link
   python    a Python process's threads, subprocesses, sqlite and files, a fixed amount of each
+  tex       pdflatex, bibtex and pdflatex twice on an article with a citation, the PDF dated by
+            SOURCE_DATE_EPOCH and hashed, in TeX Live's exclave after exclave caches made its
+            indexes and formats
   buildimage  a Hutter Prize entry's unmodified build.sh (cmix-neif 1.0: clang-18, lld-18, a
             PGO training run, make -j) in an exclave of the judging image's packages at the
             Ubuntu snapshot the entry pins; its comp9 is hashed, the published hash beside it
@@ -59,6 +62,19 @@ HELLO_JAVA = """public class Hello {
         System.out.println("hello " + System.getProperty("java.home") + " " + a.length);
     }
 }
+"""
+
+DOC_TEX = r"""\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+Hello, exclave: $\int_0^1 x\,dx = \tfrac12$ \cite{knuth}.
+\bibliographystyle{plain}
+\bibliography{refs}
+\end{document}
+"""
+
+REFS_BIB = """@book{knuth, author={Donald E. Knuth}, title={The {\\TeX}book},
+  publisher={Addison-Wesley}, year={1984}}
 """
 
 # a fixed amount of work, so that the output is the same in both worlds
@@ -136,6 +152,16 @@ WORKLOADS: dict[str, tuple[str, tuple[str, ...], str]] = {
         ),
     ),
     "python": ("realsoft", ("work.py",), "python3 work.py"),
+    "tex": (
+        "tex",
+        ("doc.tex", "refs.bib"),
+        (
+            "export SOURCE_DATE_EPOCH=0 FORCE_SOURCE_DATE=1; pdflatex -interaction=nonstopmode "
+            "doc.tex >/dev/null; bibtex doc; pdflatex -interaction=nonstopmode doc.tex >/dev/null; "
+            "pdflatex -interaction=nonstopmode doc.tex | tail -2; cat doc.bbl; b2sum doc.pdf; "
+            "kpsewhich article.cls pdftex.map"
+        ),
+    ),
     "buildimage": (
         "buildimage",
         ("src/cmix-neif-1.0.tar.gz",),
@@ -191,7 +217,13 @@ def fresh(work: str, inputs: str, files: tuple[str, ...]) -> None:
     """The work directory as each world starts it: its inputs and nothing else."""
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
-    texts = {"leak.c": LEAK_C, "Hello.java": HELLO_JAVA, "work.py": PYTHON}
+    texts = {
+        "leak.c": LEAK_C,
+        "Hello.java": HELLO_JAVA,
+        "work.py": PYTHON,
+        "doc.tex": DOC_TEX,
+        "refs.bib": REFS_BIB,
+    }
     for f in files:
         if f in texts:
             with open(os.path.join(work, f), "w") as out:
