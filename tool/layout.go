@@ -267,15 +267,12 @@ func placeholders(root string) {
 		}
 	}
 	for _, f := range identityFiles {
-		d := dirnameOf(f)
-		// the directory as the tree resolves it: Fedora's /etc/ssl/certs is a link into /etc/pki
-		rd := treeResolve(root, d, true, nil)
-		if st, err := lstat(treeReal(root, d)); rd == "" && err == nil && isLnk(&st) {
-			fmt.Fprintf(out, "identity file %s not placed: its directory is a dangling link in the tree\n", f)
+		// the directory as the tree resolves it, as the launcher maps the copy (8.4): Fedora's
+		// /etc/ssl/certs is a link into /etc/pki
+		rd, ok := treeRealDir(root, dirnameOf(f))
+		if !ok {
+			fmt.Fprintf(out, "identity file %s not placed: its directory has no place in the tree\n", f)
 			continue
-		}
-		if rd == "" {
-			rd = d
 		}
 		dir := treeReal(root, rd)
 		if p := pathJoin(dir, basenameOf(f)); !lexists(p) {

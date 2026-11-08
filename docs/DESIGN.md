@@ -1415,9 +1415,11 @@ canon(path, dfd, follow_last):
         else cur = cand
     return cur, with the original trailing slash if any
 
-to_real(v):   v host-owned (8.1) ? v : tree + v
+to_real(v):   v host-owned (8.1) ? v : tree + v, or for an exclave path in an identity
+              directory the tree's resolved directory + the rest (8.4)
               then wrapper -> original, except for execve and execveat
-from_real(r): r under tree ? r without the prefix and a final .real/ : r
+from_real(r): r under tree ? r without the prefix and a final .real/, or the virtual
+              path of a resolved directory it lies in : r
 ```
 
 An intermediate component must be a directory, so a textual `..`
@@ -2330,23 +2332,31 @@ host has it as a directory or as a link, so the kernel follows a host
 link at the name, or above it, at each call as it reaches the names
 below, and a `..` at a directory the host has as one climbs to its
 parent in virtual space, as `..` at a bind mount's root climbs to its
-mount point's parent. Where the host's name is a link, a `..` right
-after it climbs from the directory the link reaches, opened on the host
-and named as the kernel names it, as the kernel climbs after following
-the link: Fedora's `/etc/ssl/certs/..` is `/etc/pki/tls`. The rule is
-asked of every name below it before the host's entry is looked at, so
-the exclave's names there, an identity file the host lacks or a path an
-`own` record names, are the tree's, at the directory the tree resolves
-for them, its links followed in the tree as a chroot would follow them,
-where the tool places an identity file's copy: Fedora's tree has
+mount point's parent. Where the host's name is a link, a `..` at the
+name, however the path reaches it again (`certs/./..`,
+`certs/sub/../..`), climbs from the directory the link reaches, opened
+on the host and named as the kernel names it, as the kernel climbs after
+following the link: Fedora's `/etc/ssl/certs/..` is `/etc/pki/tls`. The
+rule is asked of every name below it before the host's entry is looked
+at, so the exclave's names there, an identity file the host lacks or a
+path an `own` record names, are the tree's, at the directory the tree
+resolves for them, its links followed in the tree as a chroot would
+follow them, a component the tree lacks taken as a directory, which is
+where `wrap` places an identity file's copy: Fedora's tree has
 `/etc/ssl/certs -> /etc/pki/tls/certs`, which the kernel would otherwise
-follow on the host. That costs an `lstat` at startup for each directory
-on the way to such a name. A name below it that the rule gives the host
-is `lstat`ed on the host. A link that is the last component is the
-kernel's to follow: the call is re-issued on the link's host name with
-the call's own following of it, so that the kernel follows the link and
-every link after it on the host, at the moment of the call. A link with
-components after it is opened on the host as a directory, following
+follow on the host. A component that is a file, a loop or a link that
+cannot be read gives such a name no place, `wrap` places no copy there,
+and the launcher's answer for it is an error, as a chroot's would be.
+Inside such a name's subtree a path resolves through the tree's links as
+a chroot would, while `..` and a relative link's text go by the virtual
+parent, as on a bind mount; a working directory or a descriptor there is
+named by its virtual path. That costs an `lstat` at startup for each
+directory on the way to such a name. A name below it that the rule gives
+the host is `lstat`ed on the host. A link that is the last component is
+the kernel's to follow: the call is re-issued on the link's host name
+with the call's own following of it, so that the kernel follows the link
+and every link after it on the host, at the moment of the call. A link
+with components after it is opened on the host as a directory, following
 links, and the walk goes on from the directory the kernel names for it,
 by that name, where the rule gives that name to the host or it is the
 tree's; otherwise it is passed by its name as the directory itself is,
@@ -4067,6 +4077,10 @@ and stay fixed.
     - After a final link in the directory the kernel follows the rest on
       the host and counts its links afresh, where the kernel on a bind
       mount would count the whole walk to 40.
+    - Under `RESOLVE_NO_XDEV` a host link at an identity directory's
+      name with components after it is judged at the name, where the
+      kernel judges the crossing at the directory the link reaches; the
+      two differ only where an `own` record names that directory.
     - The tree's own directory is hidden where the host has one: the
       links its trust tool made there and any file it ships there but
       the identity files the host lacks; `exclave check` names such a
@@ -4797,10 +4811,11 @@ identity files' and directories' `lstat`s (8.4), twenty syscalls at the
 2 to 3 µs each costs here, one per file and per directory, one more for
 the target of each of the two files that are host symlinks on this
 machine, and one for each directory on the way, in the tree, to the copy
-of Java's keystore, which this machine lacks; the search for the
-manifest and its read 40 µs; and the loading of the program and its
-loader, with the loader's name walked through the tree in a cache that
-is empty in a new process, about 150 µs.
+of Java's keystore, which this machine lacks, so sixteen on a host that
+has the keystore and no `own` record inside an identity directory; the
+search for the manifest and its read 40 µs; and the loading of the
+program and its loader, with the loader's name walked through the tree
+in a cache that is empty in a new process, about 150 µs.
 
 The start reads what it needs of the tree once: a volatile top-level
 directory is not read at all, since the host owns it whatever it holds

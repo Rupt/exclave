@@ -37,6 +37,7 @@ static int nabsent;
 /* the real path of each such copy, and of each path an own record makes the exclave's inside an identity directory, its
  * directory as the tree resolves it, where the tool places a copy */
 static const char *absent_real[N_IDENTITY + MAX_OWN_RECORDS];
+static const char *mapped_v[N_IDENTITY + MAX_OWN_RECORDS]; /* the virtual path each stands for, for from_real */
 static int nmapped;
 
 struct dirent64 {
@@ -279,9 +280,10 @@ enum {
 static struct rule {
     const char *s;
     unsigned len, flags;
-    int host;
+    int host;   /* R_HOSTFILE: the index of the file's record */
+    int mapped; /* R_EXREAL: the index of its real path in absent_real */
 } rules[RULE_SLOTS];
-static int nrules; /* entries placed, at most half the slots in use */
+static int nrules;                                             /* entries placed, at most half the slots in use */
 /* the slots in use, less one: the first of the table, enough for twice the entries rule_build can place, so that the
  * pages a start touches are the ones its entries need (16.6 item 9) */
 static unsigned rule_mask = RULE_SLOTS - 1;
@@ -300,11 +302,11 @@ static struct rule *rule_find(const char *v, unsigned len, unsigned long h)
     }
     return 0;
 }
-static void rule_add(const char *v, unsigned len, unsigned flags, int host)
+static struct rule *rule_add(const char *v, unsigned len, unsigned flags, int host)
 {
     if (len == 1 && v[0] == '/') {
         root_flags |= (int)flags;
-        return;
+        return 0;
     }
     unsigned long h = RULE_BASIS;
     for (unsigned i = 0; i < len; i++) h = rule_hash(h, v[i]);
@@ -318,14 +320,30 @@ static void rule_add(const char *v, unsigned len, unsigned flags, int host)
         r->s = v;
         r->len = len;
         r->host = -1;
+        r->mapped = -1;
     }
     /* a file named twice: the first record, as the scans found it */
-    if ((flags & (R_HOSTFILE | R_EXREAL)) && !(r->flags & (R_HOSTFILE | R_EXREAL))) r->host = host;
+    if ((flags & R_HOSTFILE) && !(r->flags & R_HOSTFILE)) r->host = host;
     r->flags |= flags;
+    return r;
 }
-/* the real path in the tree of v, an identity file's copy: its directory resolved through the tree's links as a chroot
- * would resolve it, then its name, which is where the tool places the copy (tool/layout.go), so that a Fedora tree's
- * link /etc/ssl/certs -> /etc/pki/tls/certs is followed in the tree and not by the kernel on the host. Startup only. */
+static const char *tree_real_of(const char *v);
+/* an exclave path in an identity directory the host has, at its directory as the tree resolves it (8.4) */
+static void rule_map(const char *v)
+{
+    if (nmapped >= (int)(sizeof absent_real / sizeof absent_real[0])) die("mapping table full", v, 0);
+    struct rule *r = rule_add(v, (unsigned)xstrlen(v), R_EXREAL, -1);
+    if (!r || r->mapped >= 0) return;
+    absent_real[nmapped] = tree_real_of(v);
+    mapped_v[nmapped] = v;
+    r->mapped = nmapped++;
+}
+/* the real path in the tree of v, an exclave path in an identity directory the host has: its directory resolved
+ * through the tree's links as a chroot would resolve it, a missing component taken as a directory, then its name,
+ * which is where the tool places an identity file's copy (tool/layout.go, treeRealDir), so that a Fedora tree's link
+ * /etc/ssl/certs -> /etc/pki/tls/certs is followed in the tree and not by the kernel on the host. A component that is
+ * a file, a loop, a link that cannot be read or a path too long has no place, as the tool places nothing there: the
+ * path then fails, as one under the launcher, a file, does (ENOTDIR). Startup only. */
 static const char *tree_real_of(const char *v)
 {
     static char cur[PATH_MAX], rest[2 * PATH_MAX], next[2 * PATH_MAX], text[PATH_MAX], real[PATH_MAX];
@@ -334,7 +352,7 @@ static const char *tree_real_of(const char *v)
     xmemcpy(rest, v, dl);
     rest[dl] = 0;
     cur[0] = 0;
-    int hops = 0;
+    int hops = 0, placed = 1;
     for (char *rp = rest;;) {
         while (*rp == '/') rp++;
         if (!*rp) break;
@@ -351,7 +369,10 @@ static const char *tree_real_of(const char *v)
             rp = e;
             continue;
         }
-        if (curl + 1 + cl + 1 >= PATH_MAX) break;
+        if (curl + 1 + cl + 1 >= PATH_MAX) {
+            placed = 0;
+            break;
+        }
         cur[curl] = '/';
         xmemcpy(cur + curl + 1, rp, cl);
         cur[curl + 1 + cl] = 0;
@@ -359,9 +380,16 @@ static const char *tree_real_of(const char *v)
         scpy(real, C.root, PATH_MAX);
         scat(real, cur, PATH_MAX);
         struct kstat st;
-        if (sys_lstat(real, &st) < 0 || (st.st_mode & S_IFMT) != S_IFLNK) continue;
+        if (sys_lstat(real, &st) < 0 || (st.st_mode & S_IFMT) == S_IFDIR) continue;
+        if ((st.st_mode & S_IFMT) != S_IFLNK) {
+            placed = 0;
+            break;
+        }
         long n = sys_readlink(real, text, PATH_MAX - 1);
-        if (n <= 0 || ++hops > 40 || (size_t)n + 1 + xstrlen(rp) + 1 >= sizeof next) break;
+        if (n <= 0 || ++hops > 40 || (size_t)n + 1 + xstrlen(rp) + 1 >= sizeof next) {
+            placed = 0;
+            break;
+        }
         text[n] = 0;
         cur[curl] = 0;
         if (text[0] == '/') cur[0] = 0;
@@ -373,7 +401,12 @@ static const char *tree_real_of(const char *v)
     }
     scpy(real, C.root, PATH_MAX);
     scat(real, cur, PATH_MAX);
-    scat(real, base, PATH_MAX);
+    if (placed && xstrlen(real) + xstrlen(base) < PATH_MAX) {
+        scat(real, base, PATH_MAX);
+        return arena_str(real, xstrlen(real));
+    }
+    scpy(real, C.launcher, PATH_MAX);
+    scat(real, "/unplaced", PATH_MAX);
     return arena_str(real, xstrlen(real));
 }
 
@@ -419,8 +452,8 @@ static void rule_build(void)
             const char *d = C.host[j].v;
             if (!C.host[j].is_identity_dir || !starts_dir(absent[i], d) || !xstrcmp(absent[i], d)) continue;
             unsigned len = (unsigned)xstrlen(absent[i]);
-            absent_real[nmapped] = tree_real_of(absent[i]);
-            rule_add(absent[i], len, R_OWN | R_EXREAL, nmapped++);
+            rule_add(absent[i], len, R_OWN, -1);
+            rule_map(absent[i]);
             for (unsigned k = (unsigned)xstrlen(d) + 1; k < len; k++)
                 if (absent[i][k] == '/') rule_add(absent[i], k, R_LEADS, -1);
             break;
@@ -431,8 +464,7 @@ static void rule_build(void)
         for (int j = 0; j < C.nhost; j++) {
             const char *d = C.host[j].v;
             if (!C.host[j].is_identity_dir || !starts_dir(C.own[i], d) || !xstrcmp(C.own[i], d)) continue;
-            absent_real[nmapped] = tree_real_of(C.own[i]);
-            rule_add(C.own[i], (unsigned)xstrlen(C.own[i]), R_EXREAL, nmapped++);
+            rule_map(C.own[i]);
             break;
         }
 }
@@ -451,7 +483,7 @@ static void rule_facts(const char *v, struct facts *f)
     f->exact = 0;
     f->best_host = f->best_own = f->iddir = -1;
     f->vol = 0;
-    if (v[0] == '/') { /* starts_dir(v, "/") */
+    if (v[0] == '/') {                                         /* starts_dir(v, "/") */
         if (root_flags & R_OWN) f->best_own = 1;
         if (root_flags & R_HOSTDIR) f->best_host = 1;
         if (root_flags & R_VOLATILE) f->vol = 1;
@@ -586,7 +618,7 @@ int vis_plain_host_chain(const char *p, unsigned from)
                 if (r->flags & R_HOSTDIR) f.best_host = i;
                 if (r->flags & R_VOLATILE) f.vol = 1;
             }
-            if (i >= from) { /* the candidate p[0..i), i >= 2: never the root */
+            if (i >= from) {                                   /* the candidate p[0..i), i >= 2: never the root */
                 if (r && (r->flags & (R_HOSTFILE | R_LEADS | R_IDDIR))) return 0;
                 if (C.rootlen == (long)i && xmemcmp(p, C.root, i) == 0) return 0;
                 struct facts g = f;
@@ -677,7 +709,7 @@ char *vis_exclave_real(const char *v, char *out)
             h = rule_hash(h, c);
         }
         if (best) {
-            scpy(out, absent_real[best->host], PATH_MAX);
+            scpy(out, absent_real[best->mapped], PATH_MAX);
             scat(out, v + at, PATH_MAX);
             return out;
         }
@@ -690,13 +722,31 @@ char *to_real(const char *v, char *out, char *tmp)
 {
     to_real_exec(v, out);
     if (!C.rootlen || !starts_dir(out, C.root)) return out;
-    int k = cache_classify(v, out, tmp); /* the wrapper check, remembered (7.4.4) */
+    int k = cache_classify(v, out, tmp);                       /* the wrapper check, remembered (7.4.4) */
     if ((k == CK_WRAPPER || (!k && is_wrapper_real(out, tmp))) && payload_of(out, tmp)) scpy(out, tmp, PATH_MAX);
     return out;
 }
 void from_real(char *r)
 {
     if (!C.rootlen || xstrncmp(r, C.root, (size_t)C.rootlen) != 0) return;
+    /* a mapped path, by the tree's name for it, is the virtual path it stands for (8.4) */
+    int best = -1;
+    size_t bl = 0;
+    for (int k = 0; k < nmapped; k++) {
+        size_t l = xstrlen(absent_real[k]);
+        if (l > bl && starts_dir(r, absent_real[k])) {
+            best = k;
+            bl = l;
+        }
+    }
+    if (best >= 0) {
+        size_t vl = xstrlen(mapped_v[best]), rl = xstrlen(r + bl);
+        if (vl + rl + 1 <= PATH_MAX) {
+            memmove(r + vl, r + bl, rl + 1);
+            xmemcpy(r, mapped_v[best], vl);
+            return;
+        }
+    }
     if (r[C.rootlen] == 0) {
         r[0] = '/';
         r[1] = 0;

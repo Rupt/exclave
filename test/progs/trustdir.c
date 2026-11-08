@@ -80,9 +80,9 @@ static void stat_case(const char *tag, const char *p)
     }
 }
 
-static void o2(const char *tag, int dfd, const char *p, uint64_t resolve)
+static void o2f(const char *tag, int dfd, const char *p, uint64_t flags, uint64_t resolve)
 {
-    struct how h = {O_RDONLY, 0, resolve};
+    struct how h = {flags, 0, resolve};
     long fd = syscall(SYS_openat2, dfd, p, &h, sizeof h);
     if (fd < 0) printf("openat2 %s: %s\n", tag, en(errno));
     else {
@@ -90,11 +90,24 @@ static void o2(const char *tag, int dfd, const char *p, uint64_t resolve)
         close((int)fd);
     }
 }
+static void o2(const char *tag, int dfd, const char *p, uint64_t resolve) { o2f(tag, dfd, p, O_RDONLY, resolve); }
 
 static int cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
 
 int main(int argc, char **argv)
 {
+    /* the walks openat2 scopes or refuses links in, through /etc/ssl/certs, a host link at its name to a directory
+     * holding plain.pem */
+    if (argc == 2 && !strcmp(argv[1], "--scoped")) {
+        int rfd = open("/", O_PATH | O_DIRECTORY), efd = open("/etc", O_PATH | O_DIRECTORY);
+        o2f("nosym name", AT_FDCWD, D, O_PATH, R_NO_SYMLINKS);
+        o2f("nosym below", AT_FDCWD, D "/plain.pem", O_RDONLY, R_NO_SYMLINKS);
+        o2f("beneath root", rfd, "etc/ssl/certs/plain.pem", O_RDONLY, R_BENEATH);
+        o2f("inroot etc", efd, "ssl/certs/plain.pem", O_RDONLY, R_IN_ROOT);
+        o2f("noxdev nofollow name", AT_FDCWD, D, O_PATH | O_NOFOLLOW, R_NO_XDEV);
+        o2f("noxdev through", AT_FDCWD, D "/plain.pem", O_RDONLY, R_NO_XDEV);
+        return 0;
+    }
     if (argc < 3) {
         fprintf(stderr, "usage: trustdir HASH PEM [DIR NAME]\n");
         return 0;

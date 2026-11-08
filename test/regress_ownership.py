@@ -887,50 +887,145 @@ def trust_directory_rules(ctx: Ctx) -> None:
         line = f"{shell} -c '{cmd}'" if shell else cmd
         script += f"echo '== {i}'; {line} 2>&1 || echo rc=$?; "
     # a host whose directory is a link at its name into another directory, as Red Hat's are: the
-    # same names below it, and a .. there climbs from the directory the link reaches
-    link_cases = [
-        ("a link at the name: readlink", f"readlink {c}", "/etc/pki/real"),
-        ("  a hash link below it", f"cat {c}/abcd0000.0", f"local-{pid}"),
+    # same names below it, a .. there climbs from the directory the link reaches, however it is
+    # spelt, and a scoped walk follows the link itself; first by an absolute text, as RHEL 9's is,
+    # into a directory of the host's /tmp, then by a relative one, as CentOS 7's is
+    t = f"/tmp/exclave-trust-{pid}"
+    scoped = os.path.join(marks, ".exclave", "launcher") + " " + os.path.join(ctx.progs, "trustdir")
+    scoped += " --scoped"
+    link_cases: list[tuple[str, str, str, str]] = [
+        ("a link at the name: readlink", sh, f"readlink {c}", f"{t}/real"),
+        ("  a hash link below it", sh, f"cat {c}/abcd0000.0", f"local-{pid}"),
         (
             "  the bundle the host lacks, the exclave's copy",
+            sh,
             f"test -e {c}/ca-certificates.crt && echo copy",
             "copy",
         ),
         (
             "  the directory it reaches, the host's at its name",
+            sh,
             f"cd {c} && pwd -P && ls | grep -c abcd",
             "1",
         ),
+        ("  a .. at the name, from where it leads", sh, f"cd -P {c}/.. && pwd -P", t),
+        ("  a .. after ., from where it leads", sh, f"cd -P {c}/./.. && pwd -P", t),
+        ("  a .. after a name below", sh, f"cd -P {c}/sub/../.. && pwd -P", t),
+        ("  RESOLVE_NO_SYMLINKS at the name", "", scoped, "openat2 nosym name: ELOOP"),
+        ("  RESOLVE_NO_SYMLINKS below it", "", scoped, "openat2 nosym below: ELOOP"),
+        ("  RESOLVE_BENEATH from /, the text absolute", "", scoped, "openat2 beneath root: EXDEV"),
         (
-            "  a .. at the name, from the directory it reaches",
-            f"cd -P {c}/.. && pwd -P",
-            "/etc/pki",
+            "  RESOLVE_IN_ROOT in /etc, the text in the scope",
+            "",
+            scoped,
+            "openat2 inroot etc: ENOENT",
         ),
+        (
+            "  RESOLVE_NO_XDEV on the name, not followed",
+            "",
+            scoped,
+            "openat2 noxdev nofollow name: ok",
+        ),
+        ("  RESOLVE_NO_XDEV through it", "", scoped, "openat2 noxdev through: EXDEV"),
     ]
     script += (
-        "mount -t tmpfs tmpfs /etc/ssl && mount -t tmpfs tmpfs /etc/pki && mkdir /etc/pki/real "
-        "&& ln -s /etc/pki/real /etc/ssl/certs "
-        f"&& ln -s {local}/local.crt /etc/pki/real/x.pem "
-        "&& ln -s x.pem /etc/pki/real/abcd0000.0 || exit 98; "
+        f"mkdir -p {t}/real/sub && echo plain >{t}/real/plain.pem "
+        f"&& ln -s {local}/local.crt {t}/real/x.pem && ln -s x.pem {t}/real/abcd0000.0 "
+        f"&& mount -t tmpfs tmpfs /etc/ssl && ln -s {t}/real /etc/ssl/certs || exit 98; "
     )
-    for i, (_what, cmd, _want) in enumerate(link_cases, len(cases)):
-        script += f"echo '== {i}'; {sh} -c '{cmd}' 2>&1 || echo rc=$?; "
+    for i, (_what, shell, cmd, _want) in enumerate(link_cases, len(cases)):
+        line = f"{shell} -c '{cmd}'" if shell else cmd
+        script += f"echo '== {i}'; {line} 2>&1 || echo rc=$?; "
+    rel_cases: list[tuple[str, str, str, str]] = [
+        (
+            "a relative link at the name: RESOLVE_BENEATH from /",
+            "",
+            scoped,
+            "openat2 beneath root: ok",
+        ),
+        ("  RESOLVE_IN_ROOT in /etc", "", scoped, "openat2 inroot etc: ok"),
+        ("  RESOLVE_NO_SYMLINKS at the name", "", scoped, "openat2 nosym name: ELOOP"),
+        ("  RESOLVE_NO_XDEV through it", "", scoped, "openat2 noxdev through: EXDEV"),
+    ]
+    script += (
+        "rm /etc/ssl/certs && mkdir /etc/ssl/real && echo plain >/etc/ssl/real/plain.pem "
+        "&& ln -s real /etc/ssl/certs || exit 98; "
+    )
+    for i, (_what, _shell, cmd, _want) in enumerate(rel_cases, len(cases) + len(link_cases)):
+        script += f"echo '== {i}'; {cmd} 2>&1 || echo rc=$?; "
+    script += f"rm -rf {t}; "
     rc, out, err = run(
         ["unshare", "-Urm", "sh", "-c", script],
         cwd=ctx.work,
         env=dict(ctx.env, PATH="/usr/bin:/bin"),
     )
-    if rc in (98, 99):
+    if rc == 99:
         skip(f"no tmpfs over the trust directory in a user namespace here: {err.strip()[-120:]}")
+    expect(rc != 98, f"the host's link at the trust directory's name could not be made: {err!r}")
     got = {}
     for block in out.split("== ")[1:]:
         n, _, rest = block.partition("\n")
         got[int(n)] = rest.strip().split("\n") if rest.strip() else [""]
-    wanted = [(w, want) for w, _, _, want in cases] + [(w, want) for w, _, want in link_cases]
+    wanted = [(w, want) for w, _, _, want in cases + link_cases + rel_cases]
     for i, (what, want) in enumerate(wanted):
         expect(
             want in got.get(i, []), f"the trust directory, {what.strip()}: {got.get(i)!r} {err!r}"
         )
+
+
+@test
+def trust_directory_tree_link(ctx: Ctx) -> None:
+    """8.1 rule 5, 8.4, 10.1: a tree whose trust directory is a link, as Fedora's is.
+
+    A copy of the exclave with tree/etc/ssl/certs an absolute link to /etc/pki/tls/certs, as Fedora
+    42 ships it, wrapped again: wrap places Java's keystore copy in the directory the link reaches,
+    as the tree resolves it, never through the link on the host; and inside, on a host that has the
+    trust directory and lacks the keystore, the keystore and the names own records keep there, a
+    file and a directory, are the tree's, followed through the tree's link and not the host's
+    /etc/pki, and a working directory in the kept directory is named by its virtual path. Skipped
+    where the host lacks /etc/ssl/certs or has the keystore.
+    """
+    if not os.path.isdir("/etc/ssl/certs") or os.path.exists("/etc/ssl/certs/java/cacerts"):
+        skip("the host lacks /etc/ssl/certs or has Java's keystore there")
+    pid = os.getpid()
+    ex = os.path.join(ctx.work, f"trust-link-{pid}.exclave")
+    copy_exclave(ctx.exclave, ex)
+    rc, out, err = run([*TOOL, "unwrap", ex])
+    expect(rc == 0, f"unwrap: {out!r} {err!r}")
+    root = os.path.join(ex, "tree")
+    certs = os.path.join(root, "etc", "ssl", "certs")
+    if os.path.islink(certs):
+        os.remove(certs)
+    else:
+        shutil.rmtree(certs)
+    os.symlink("/etc/pki/tls/certs", certs)
+    pki = os.path.join(root, "etc", "pki", "tls", "certs")
+    shutil.rmtree(os.path.join(root, "etc", "pki"), ignore_errors=True)
+    os.makedirs(os.path.join(pki, "kept"))
+    with open(os.path.join(pki, "kept.pem"), "w") as f:
+        f.write(f"tree-kept-{pid}\n")
+    with open(os.path.join(pki, "kept", "f"), "w") as f:
+        f.write(f"tree-dir-{pid}\n")
+    manifest = os.path.join(ex, ".exclave", "manifest")
+    os.remove(manifest)
+    with open(manifest, "w") as f:
+        f.write('exclave 1\n\nown "/etc/ssl/certs/kept"\nown "/etc/ssl/certs/kept.pem"\n')
+    rc, out, err = run([*TOOL, "wrap", ex])
+    expect(rc == 0, f"wrap of a tree whose trust directory is a link: {out[-400:]!r} {err!r}")
+    copy = os.path.join(pki, "java", "cacerts")
+    expect(os.path.isfile(copy), "wrap places the keystore's copy where the tree's link leads")
+    os.remove(copy)
+    with open(copy, "w") as f:
+        f.write(f"tree-java-{pid}\n")
+    sh = os.path.join(root, ctx.vbin("sh").lstrip("/"))
+    c = "/etc/ssl/certs"
+    for cmd, want in (
+        (f"cat {c}/java/cacerts", f"tree-java-{pid}"),
+        (f"cat {c}/kept.pem", f"tree-kept-{pid}"),
+        (f"cd {c}/kept && pwd -P && cat f", f"{c}/kept\ntree-dir-{pid}"),
+    ):
+        rc, out, err = run([sh, "-c", cmd], cwd=ctx.work, env=ctx.env)
+        expect(rc == 0 and out.strip() == want, f"{cmd}: rc={rc} {out!r} {err!r}")
 
 
 @test
