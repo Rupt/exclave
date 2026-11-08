@@ -94,11 +94,18 @@ documents, gate, one commit per item. Status is in brackets.
    passing on one commit; `docs/DESIGN.md` and `README.md` consistent
    with it; then `scripts/release` on that commit, and the baseline
    record of item 3 filled from its assets.
-9. **The suite on the Alpine exclave** [in progress]: the suite had not
-   run on musl since an exerciser took glibc's stack-end symbol, now
-   fixed; the tests that assume glibc's error strings, thread stack
-   minimum or `vfork` are made to assert what the tree says or to skip
-   with their reason, and any launcher difference found there is fixed.
+9. **The suite on the Alpine exclave** [done]: the suite had not run on
+   musl since an exerciser took glibc's stack-end symbol; that and four
+   tests asserting glibc's wording, stack minimum and `raise` are fixed,
+   and the suite passes on every kind. The fifth failure was a launcher
+   limitation, now 13 item 58.
+11. **A program handler's view of a trapped call** [decision pending]: the
+    signal frame a program's handler sees during a re-issued call carries
+    the launcher's program counter, so a libc that judges cancellation by
+    it leaves the thread blocked (13 item 58). The fix would present the
+    trap site's frame through the handler installs the launcher already
+    traps: a design item with its own reviews, before or after the
+    release as the user decides.
 10. **The positional entry's spellings** [done]: `.exclave/launcher
     ./PATH`, `../PATH` and a host symlink to a wrapper die with
     "cannot exec the wrapper" where the absolute spelling ran: the walk of the spelling overwrote the
