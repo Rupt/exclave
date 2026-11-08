@@ -354,6 +354,10 @@ static void rule_map(const char *v)
 static const char *tree_real_of(const char *v)
 {
     static char cur[PATH_MAX], rest[2 * PATH_MAX], next[2 * PATH_MAX], text[PATH_MAX], real[PATH_MAX];
+    /* the longest path whose every component this start found a directory, across calls: a component on it is not
+     * lstat'ed again when a link sends the resolution back over it, so the start lstats each real path once (16.6 item
+     * 6), and the tree is not changed while an exclave process runs (7.4.4) */
+    static char known[PATH_MAX];
     const char *base = xstrrchr(v, '/');
     size_t dl = (size_t)(base - v);
     xmemcpy(rest, v, dl);
@@ -380,14 +384,20 @@ static const char *tree_real_of(const char *v)
             placed = 0;
             break;
         }
+        int extends = xstrcmp(cur, known) == 0; /* the component would lengthen the known chain */
         cur[curl] = '/';
         xmemcpy(cur + curl + 1, rp, cl);
         cur[curl + 1 + cl] = 0;
         rp = e;
+        if (starts_dir(known, cur)) continue; /* a directory, found so already */
         scpy(real, C.root, PATH_MAX);
         scat(real, cur, PATH_MAX);
         struct kstat st;
-        if (sys_lstat(real, &st) < 0 || (st.st_mode & S_IFMT) == S_IFDIR) continue;
+        if (sys_lstat(real, &st) < 0) continue;
+        if ((st.st_mode & S_IFMT) == S_IFDIR) {
+            if (extends) scpy(known, cur, PATH_MAX);
+            continue;
+        }
         if ((st.st_mode & S_IFMT) != S_IFLNK) {
             placed = 0;
             break;
