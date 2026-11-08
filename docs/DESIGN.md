@@ -4997,7 +4997,9 @@ meaning items 4 and 7.
      the kernel's buffer cuts, a program, a loader or an interpreter
      under a data directory, `PATH` search,
      faulty argument vectors, unusual images, the identity a program
-     exec'd from inside gets, and another process's `exe` link;
+     exec'd from inside gets, and another process's `exe` link, one
+     running a wrapped script whose relative interpreter the reader
+     cannot resolve among them;
    - *the launcher and its filter*: a CET-marked program inside with the
      shadow-stack tunable set, reporting whether glibc enabled one (13
      item 49), a blocked or sent `SIGSYS`, older

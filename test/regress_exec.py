@@ -6,6 +6,7 @@ Run by test/run.py, on the fixtures test/suite.py makes.
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 lazy import ctypes
 
@@ -460,6 +461,61 @@ def another_process_exe_link(ctx: Ctx) -> None:
     """
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "exe_link"))
     expect(rc == 0 and not kernel_answers.exe_link_wrong(out), out + err)
+
+
+@test
+def another_process_exe_relative_interpreter(ctx: Ctx) -> None:
+    """7.6: another process's exe link, where it runs a wrapped script with a relative interpreter.
+
+    The reader resolves the script's #! interpreter to name what the process runs; from a working
+    directory where it resolves, the answer is the interpreter, the kernel's; from one where its
+    walk fails, the answer is the script's virtual path, never what the walk left behind.
+    """
+    ex2 = os.path.join(ctx.work, f"exe-relinterp-{os.getpid()}.exclave")
+    copy_exclave(ctx.exclave, ex2)
+    d = os.path.join(ex2, "tree", "opt", "relinterp")
+    os.makedirs(os.path.join(d, ".real"))
+    # named sh, as busybox picks its applet by the name
+    os.makedirs(os.path.join(d, "relinterp-bin"))
+    os.symlink(ctx.vbin("sh"), os.path.join(d, "relinterp-bin", "sh"))
+    with open(os.path.join(d, ".real", "s"), "w") as f:
+        f.write("#!relinterp-bin/sh\necho ready\nread x\n")
+    os.chmod(os.path.join(d, ".real", "s"), 0o755)
+    os.link(os.path.join(ex2, ".exclave", "launcher"), os.path.join(d, "s"))
+    # another working directory, where the walk meets a link, whose text it reads, and then fails
+    other = os.path.join(ex2, "tree", "opt", "relinterp-reader")
+    os.makedirs(other)
+    os.symlink("nowhere", os.path.join(other, "relinterp-bin"))
+    p = subprocess.Popen(
+        ["./s"],
+        cwd=d,
+        env=ctx.env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert p.stdout is not None
+        ready = p.stdout.readline()
+        expect(ready == "ready\n", f"the script did not start: {ready!r}")
+        sh = os.path.join(ex2, "tree", ctx.vbin("sh").lstrip("/"))
+        for cwd, want in (
+            ("/opt/relinterp", ctx.sh_exe),
+            ("/opt/relinterp-reader", "/opt/relinterp/s"),
+        ):
+            rc, out, err = run(
+                [sh, "-c", f"cd {cwd} && {ctx.vbin('readlink')} /proc/{p.pid}/exe"],
+                cwd=ctx.work,
+                env=ctx.env,
+            )
+            expect(
+                rc == 0 and out == want + "\n",
+                f"/proc/PID/exe read from {cwd}: {out!r}, want {want!r} {err!r}",
+            )
+    finally:
+        p.kill()
+        p.communicate()
 
 
 @test

@@ -957,6 +957,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         if (o >= 0 && xstrncmp(S->v, "/proc/", 6) == 0 && xstrlen(S->v) > 4 &&
             xstrcmp(S->v + xstrlen(S->v) - 4, "/exe") == 0 && is_exclave_path(ans)) {
             scpy(S->v2, ans, PATH_MAX);
+            ans = S->v2; /* canon below walks in S->tmp */
             to_real_exec(S->v2, S->real);
             if (is_wrapper_real(S->real, S->real2) && payload_of(S->real, S->real2)) {
                 long fd = sys_open(S->real2, O_RDONLY | O_CLOEXEC, 0);
@@ -966,10 +967,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
                 char *nargv[4]; /* the interpreter as exec reads it */
                 if (n > 0 && shebang_argv(line, n, S->real2, 0, 1, nargv, 4) > 0) {
                     scpy(S->arg, nargv[0], PATH_MAX);
-                    if (canon(S, S->arg, AT_FDCWD, 1, S->v) == 0) {
-                        scpy(S->tmp, S->v, PATH_MAX);
-                        ans = S->tmp;
-                    }
+                    if (canon(S, S->arg, AT_FDCWD, 1, S->v) == 0) ans = S->v;
                 }
             }
         }
@@ -1435,6 +1433,7 @@ static long parent_kept(struct scratch *S, const char *given, int dfd, int sp, c
     while (n > 1 && real[n - 1] == '/') n--;
     if (n == 0) scpy(real, ".", PATH_MAX); /* the directory the name is relative to */
     else real[n] = 0;
+    /* real may be S->real, canon's own buffer: walk_start copies the path into S->rest before the walk writes it */
     long r = canon(S, real, dfd, WALK_FOLLOW, v);
     if (r < 0) return r;
     to_real_exec(v, real);
