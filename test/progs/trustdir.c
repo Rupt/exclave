@@ -2,9 +2,10 @@
  * /etc/ssl/certs, a subject-hash link and the .pem link it names, each by stat, lstat, readlink and open, the bundle
  * and Java's keystore in it, the directory reached through Debian's /usr/lib/ssl/certs, a .. out of the directory,
  * openat2's resolve flags on the links from the directory and from the root, getcwd and a relative open from inside
- * it, and a create, a delete and a rename in it. usage: trustdir HASH PEM, a hash link and its .pem target as the
- * host's /etc/ssl/certs names them. Prints one line per case, "<case>: <answer>"; the kernel under bwrap with the
- * host's directory and its links' target directories bound at their names is the oracle (tree.identity_dir_binds).
+ * it, and a create, a delete and a rename in it. usage: trustdir HASH PEM [DIR NAME], a hash link and its .pem target
+ * as the host's /etc/ssl/certs names them. Prints one line per case, "<case>: <answer>"; the kernel under bwrap with
+ * the host's directory and its links' target directories bound at their names is the oracle
+ * (tree.identity_dir_binds). With DIR and NAME, only openat2 under RESOLVE_NO_XDEV of NAME and of .. relative to DIR.
  * Exit 0 always. */
 #define _GNU_SOURCE
 #include <dirent.h>
@@ -95,7 +96,15 @@ static int cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, 
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: trustdir HASH PEM\n");
+        fprintf(stderr, "usage: trustdir HASH PEM [DIR NAME]\n");
+        return 0;
+    }
+    /* a walk under RESOLVE_NO_XDEV relative to a directory, a host record nested in an exclave directory say: its
+     * name crosses nothing, and its .. leaves its mount */
+    if (argc > 4) {
+        int hfd = open(argv[3], O_PATH | O_DIRECTORY);
+        o2("noxdev dir name", hfd, argv[4], R_NO_XDEV);
+        o2("noxdev dir dotdot", hfd, "..", R_NO_XDEV);
         return 0;
     }
     const char *hash = argv[1], *pem = argv[2];
@@ -162,6 +171,8 @@ int main(int argc, char **argv)
     o2("inroot pem", dfd, pem, R_IN_ROOT);
     o2("inroot bundle", dfd, "ca-certificates.crt", R_IN_ROOT);
     o2("beneath dotdot", dfd, "../openssl.cnf", R_BENEATH);
+    o2("noxdev rel hash", dfd, hash, R_NO_XDEV);
+    o2("noxdev rel dotdot", dfd, "..", R_NO_XDEV);
     /* the root as the scope: an absolute target leaves it all the same (nd_jump_root) */
     int rfd = open("/", O_PATH | O_DIRECTORY);
     snprintf(p, sizeof p, "etc/ssl/certs/%s", pem);
@@ -190,7 +201,7 @@ int main(int argc, char **argv)
         close(fd);
         unlink(D "/exclave-trustdir-new");
     }
-    printf("unlink hash: %s\n", unlink(hp) ? en(errno) : "ok");
+    printf("unlink absent: %s\n", unlink(D "/no-such-cert.pem") ? en(errno) : "ok");
     printf("rename hash to tmp: %s\n", rename(hp, "/tmp/exclave-trustdir-x") ? en(errno) : "ok");
 
     /* from inside the directory */

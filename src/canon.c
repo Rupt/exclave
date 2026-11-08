@@ -184,7 +184,7 @@ int other_exe(const struct scratch *S, const char *v, char *text)
  * The last component is always the walk's, so that the walk finds its kind, its link and its error. */
 /* the tree's filesystem mounted once with its device: 0 not yet known, 1 yes, -1 no or unknowable */
 static int tree_once;
-static int no_openat2;                                       /* the kernel predates openat2 (5.6) */
+static int no_openat2; /* the kernel predates openat2 (5.6) */
 
 /* the decoded mount point at f (mountinfo escapes a space, a tab, a newline and a backslash as \ooo) as a '/'-boundary
  * prefix of the tree's real path: its length, or -1 */
@@ -200,7 +200,7 @@ static long mount_prefix(const char *f, const char *fe)
         if (C.root[k] != c) return -1;
         k++;
     }
-    if (k == 1 && C.root[0] == '/') return 1;                 /* the root mount */
+    if (k == 1 && C.root[0] == '/') return 1; /* the root mount */
     return C.root[k] == '/' || C.root[k] == 0 ? k : -1;
 }
 /* one pass over /proc/self/mountinfo in buf (PATH_MAX): pass 0 finds the mount holding the tree, the
@@ -273,7 +273,7 @@ static int tree_mounted_once(char *buf)
     if (r <= 0) return (int)r;
     r = mounts(buf, 1, &dev, &count);
     if (r <= 0) return (int)r;
-    unsigned long sd = C.root_dev;                            /* the stat encoding: glibc's major and minor */
+    unsigned long sd = C.root_dev; /* the stat encoding: glibc's major and minor */
     unsigned long ma = ((sd >> 8) & 0xfff) | ((sd >> 32) & ~0xfffUL), mi = (sd & 0xff) | ((sd >> 12) & ~0xffUL);
     /* a btrfs subvolume's device is not its mount's: the walk's */
     return count == 1 && dev == (ma << 32 | mi) ? 1 : -1;
@@ -297,9 +297,9 @@ static int host_chain(struct scratch *S, char *cur, char **rpp)
         while (*e && *e != '/') e++;
         char *after = e;
         while (*after == '/') after++;
-        if (!*after) break;                                    /* q is the final component */
+        if (!*after) break; /* q is the final component */
         size_t cl = (size_t)(e - q);
-        if (cl > NAME_MAX || n + 1 + cl + 1 >= PATH_MAX) return 0;   /* the walk's ENAMETOOLONG */
+        if (cl > NAME_MAX || n + 1 + cl + 1 >= PATH_MAX) return 0; /* the walk's ENAMETOOLONG */
         /* "." and "..": the walk's, by the rule */
         if (q[0] == '.' && (cl == 1 || (cl == 2 && q[1] == '.'))) return 0;
         p[n++] = '/';
@@ -309,7 +309,7 @@ static int host_chain(struct scratch *S, char *cur, char **rpp)
         q = after;
     }
     p[n] = 0;
-    if (dirs < 3) return 0;                                   /* an openat2 and a close for fewer lstats than that */
+    if (dirs < 3) return 0; /* an openat2 and a close for fewer lstats than that */
     if (!vis_plain_host_chain(p, (unsigned)xstrlen(cur))) return 0;
     if (!tree_once) tree_once = tree_mounted_once(S->tmp);
     if (tree_once <= 0) return 0;
@@ -362,13 +362,13 @@ int through_magic(struct scratch *S, const char *path, int dfd, char *out)
 
 /* a walk's state from one component to the next (canon) */
 struct walk {
-    char *rp;           /* the rest of the path, in S->rest */
-    const char *base;   /* a scoped walk's root, S->v2; "" otherwise */
-    unsigned rf;        /* openat2's resolve flags (7.4.3) */
-    int magic_err;      /* the answer at a magic link the flags refuse (nd_jump_link), or 0 */
-    int dom;            /* RESOLVE_NO_XDEV: the domain the walk is in, the exclave's (1) or the host's (0) */
-    int hops;           /* links followed, at most 40 */
-    int chain_failed;   /* a one-step host check that could not vouch: not tried again until a link */
+    char *rp; /* the rest of the path, in S->rest */
+    const char *base; /* a scoped walk's root, S->v2; "" otherwise */
+    unsigned rf; /* openat2's resolve flags (7.4.3) */
+    int magic_err; /* the answer at a magic link the flags refuse (nd_jump_link), or 0 */
+    int dom; /* RESOLVE_NO_XDEV: the domain the walk is in, the exclave's (1) or the host's (0) */
+    int hops; /* links followed, at most 40 */
+    int chain_failed; /* a one-step host check that could not vouch: not tried again until a link */
     /* the length of the starting directory a relative walk walks again from the root, whose own components cross
      * no mount for RESOLVE_NO_XDEV, since the kernel starts in that directory */
     size_t start_len;
@@ -381,7 +381,7 @@ static int walk_start(struct scratch *S, struct walk *w, const char *path, int d
     char *rest = S->rest, *cur = S->cur;
     if (path[0] == '/') {
         if (w->rf & RESOLVE_BENEATH) return -EXDEV; /* nd_jump_root: an absolute path leaves the scope */
-        S->touched_exclave = 1;                      /* the root is the tree's */
+        S->touched_exclave = 1; /* the root is the tree's */
         scpy(rest, path, sizeof S->rest);
         scpy(cur, w->base, PATH_MAX);
         if (w->base[0]) w->dom = is_exclave_path(w->base);
@@ -526,7 +526,10 @@ static int identity_component(struct scratch *S, struct walk *w, int last, int *
         return CK_FILE;
     }
     long fd = sys_open(real, O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
-    if (fd < 0) return (int)fd; /* the link's own answer as the kernel walks through it: ENOENT, ENOTDIR, ELOOP */
+    /* the link's own answer as the kernel walks through it; an error of the open's own, EMFILE say, is no lookup's,
+     * so the link is passed by its name and the re-issue answers */
+    if (fd == -ENOENT || fd == -ENOTDIR || fd == -ELOOP || fd == -EACCES) return (int)fd;
+    if (fd < 0) return CK_DIR;
     long n = fd_real_path((int)fd, tmp);
     sys_close((int)fd);
     if (++w->hops > 40) return -ELOOP;
@@ -559,14 +562,19 @@ static int walk_classify(struct scratch *S, struct walk *w, int last, int *err)
         if (last) S->follow_end = 2;
         return CK_FILE;
     }
-    if (leads) return CK_DIR; /* on the way to an identity file or directory: a directory (8.4) */
     /* 8.4: an identity directory and the names below it. A walk that openat2's flags scope or that refuses links or
      * mounts follows the links there itself, as the kernel would on a bind mount of the host's directory: BENEATH
      * whatever its scope, since nd_jump_root and follow_dotdot refuse at the root too, and IN_ROOT at a scope below
-     * the root. Otherwise the directory is passed by name, the kernel following a host link at its name at each call */
-    if (idd && !(w->rf & (RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV | RESOLVE_BENEATH)) &&
-        !((w->rf & RESOLVE_IN_ROOT) && w->base[0])) {
-        if (idd != 3 && !last) return CK_DIR;
+     * the root; a host link at the directory's name is then read and followed like any, not passed as a directory */
+    int scoped = (w->rf & (RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV | RESOLVE_BENEATH)) ||
+                 ((w->rf & RESOLVE_IN_ROOT) && w->base[0]);
+    /* a host link at the name followed by "..": the kernel climbs from the directory the link reaches, so the walk
+     * goes on from there, by the kernel's name for it */
+    int climb = idd == 2 && !last && w->rp[0] == '.' && w->rp[1] == '.' && (w->rp[2] == '/' || !w->rp[2]);
+    if (leads && !(idd == 2 && (scoped || climb))) return CK_DIR; /* on the way to an identity file or directory */
+    if (idd && !scoped) {
+        /* otherwise the directory is passed by name, the kernel following a host link there at each call */
+        if (idd != 3 && !last && !climb) return CK_DIR;
         scpy(real, hreal, PATH_MAX);
         return identity_component(S, w, last, err);
     }
@@ -576,8 +584,7 @@ static int walk_classify(struct scratch *S, struct walk *w, int last, int *err)
         int kind = cache_get(cur, tmp);
         if (kind) return kind;
         /* to_real_exec's answer for an exclave path; cur is never "/" here */
-        scpy(real, C.root, PATH_MAX);
-        scat(real, cur, PATH_MAX);
+        vis_exclave_real(cur, real);
         kind = cache_classify(cur, real, tmp);
         return kind ? kind : CK_NONE;
     }
@@ -633,6 +640,7 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
          * virtual space, with the same ownership and the same read-only rule */
         if (C.rootlen && xstrcmp(cur, C.root) == 0) {
             cur[0] = 0;
+            w.start_len = 0; /* the walk is at / now, past the starting directory */
             S->touched_exclave = 1;
             while (*w.rp == '/') w.rp++;
             continue;
@@ -651,8 +659,9 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
             /* the starting directory's own way, walked again: the kernel starts in it and crosses nothing there */
             if (w.start_len && xstrlen(cur) > w.start_len) w.start_len = 0;
             if (!w.start_len && d != w.dom && !(last && trailing && (follow_last & WALK_PARENT)) &&
-                !(last && !(follow_last & WALK_FOLLOW) && !trailing && vis_is_identity_file(cur) &&
-                  vis_readlink_identity(cur, tmp) == 1))
+                !(last && !(follow_last & WALK_FOLLOW) && !trailing &&
+                  ((vis_is_identity_file(cur) && vis_readlink_identity(cur, tmp) == 1) ||
+                   vis_identity_dir_kind(cur) == 2)))
                 return -EXDEV;
             w.dom = d;
         }
@@ -668,12 +677,16 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
             S->touched_exclave = 1;
             if ((r = walk_splice(S, &w, C.exe)) < 0) return r;
             cur[0] = 0;
+            w.start_len = 0;
             continue;
         }
         /* classify the component: a directory, a symlink (text in tmp), absent, or something else */
         int err = -ENOENT, kind = walk_classify(S, &w, last, &err);
         if (kind < 0) return kind;
-        if (kind == CK_ONWARD) continue;
+        if (kind == CK_ONWARD) {
+            w.start_len = 0; /* the walk went on from where the step left it, past the starting directory */
+            continue;
+        }
         if (kind != CK_LINK) {
             /* an intermediate component must be a directory: the kernel says so before it looks further, and
              * a textual ".." must not hide that (oracle 17.2); the final component is the kernel's business.

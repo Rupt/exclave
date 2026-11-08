@@ -34,6 +34,10 @@ _Static_assert(sizeof identity_dirs / sizeof identity_dirs[0] == N_IDENTITY_DIRS
  * the rule names it the exclave's (rule_build) */
 static const char *absent[N_IDENTITY];
 static int nabsent;
+/* the real path of each such copy, and of each path an own record makes the exclave's inside an identity directory, its
+ * directory as the tree resolves it, where the tool places a copy */
+static const char *absent_real[N_IDENTITY + MAX_OWN_RECORDS];
+static int nmapped;
 
 struct dirent64 {
     unsigned long d_ino;
@@ -237,6 +241,10 @@ void vis_init(void)
         n++;
     }
     for (int i = 0; i < nextra; i++) {
+        /* an own record naming the directory reached removes it, as it removes any default (8.1.5) */
+        int owned = 0;
+        for (int j = 0; j < C.nown && !owned; j++) owned = xstrcmp(C.own[j], extra[i]) == 0;
+        if (owned) continue;
         C.host[n].v = C.host[n].r = extra[i];
         C.host[n].is_file = 0;
         C.host[n].is_identity_dir = 1;
@@ -254,8 +262,18 @@ void vis_init(void)
  * or at its end, so the prefixes of v the rule can match are found by one pass over v, hashing as it goes and
  * looking each cut up: a path's answer costs one pass over its length. The table is written once before
  * anything traps and only read afterwards. */
-/* R_IDDIR: an identity directory the host has (8.4), and R_IDLINK where its host name is a link */
-enum { R_OWN = 1, R_HOSTDIR = 2, R_HOSTFILE = 4, R_VOLATILE = 8, R_LEADS = 16, R_IDDIR = 32, R_IDLINK = 64 };
+/* R_IDDIR: an identity directory the host has (8.4), and R_IDLINK where its host name is a link; R_EXREAL: an exclave
+ * path in an identity directory the host has, at absent_real[host], and its subtree (rule_build) */
+enum {
+    R_OWN = 1,
+    R_HOSTDIR = 2,
+    R_HOSTFILE = 4,
+    R_VOLATILE = 8,
+    R_LEADS = 16,
+    R_IDDIR = 32,
+    R_IDLINK = 64,
+    R_EXREAL = 128
+};
 #define RULE_SLOTS 2048
 /* host: the index of a file's record */
 static struct rule {
@@ -263,7 +281,7 @@ static struct rule {
     unsigned len, flags;
     int host;
 } rules[RULE_SLOTS];
-static int nrules;                                             /* entries placed, at most half the slots in use */
+static int nrules; /* entries placed, at most half the slots in use */
 /* the slots in use, less one: the first of the table, enough for twice the entries rule_build can place, so that the
  * pages a start touches are the ones its entries need (16.6 item 9) */
 static unsigned rule_mask = RULE_SLOTS - 1;
@@ -302,15 +320,72 @@ static void rule_add(const char *v, unsigned len, unsigned flags, int host)
         r->host = -1;
     }
     /* a file named twice: the first record, as the scans found it */
-    if ((flags & R_HOSTFILE) && !(r->flags & R_HOSTFILE)) r->host = host;
+    if ((flags & (R_HOSTFILE | R_EXREAL)) && !(r->flags & (R_HOSTFILE | R_EXREAL))) r->host = host;
     r->flags |= flags;
 }
+/* the real path in the tree of v, an identity file's copy: its directory resolved through the tree's links as a chroot
+ * would resolve it, then its name, which is where the tool places the copy (tool/layout.go), so that a Fedora tree's
+ * link /etc/ssl/certs -> /etc/pki/tls/certs is followed in the tree and not by the kernel on the host. Startup only. */
+static const char *tree_real_of(const char *v)
+{
+    static char cur[PATH_MAX], rest[2 * PATH_MAX], next[2 * PATH_MAX], text[PATH_MAX], real[PATH_MAX];
+    const char *base = xstrrchr(v, '/');
+    size_t dl = (size_t)(base - v);
+    xmemcpy(rest, v, dl);
+    rest[dl] = 0;
+    cur[0] = 0;
+    int hops = 0;
+    for (char *rp = rest;;) {
+        while (*rp == '/') rp++;
+        if (!*rp) break;
+        char *e = rp;
+        while (*e && *e != '/') e++;
+        size_t cl = (size_t)(e - rp), curl = xstrlen(cur);
+        if (cl == 1 && rp[0] == '.') {
+            rp = e;
+            continue;
+        }
+        if (cl == 2 && rp[0] == '.' && rp[1] == '.') {
+            char *s = xstrrchr(cur, '/');
+            if (s) *s = 0;
+            rp = e;
+            continue;
+        }
+        if (curl + 1 + cl + 1 >= PATH_MAX) break;
+        cur[curl] = '/';
+        xmemcpy(cur + curl + 1, rp, cl);
+        cur[curl + 1 + cl] = 0;
+        rp = e;
+        scpy(real, C.root, PATH_MAX);
+        scat(real, cur, PATH_MAX);
+        struct kstat st;
+        if (sys_lstat(real, &st) < 0 || (st.st_mode & S_IFMT) != S_IFLNK) continue;
+        long n = sys_readlink(real, text, PATH_MAX - 1);
+        if (n <= 0 || ++hops > 40 || (size_t)n + 1 + xstrlen(rp) + 1 >= sizeof next) break;
+        text[n] = 0;
+        cur[curl] = 0;
+        if (text[0] == '/') cur[0] = 0;
+        scpy(next, text, sizeof next);
+        scat(next, "/", sizeof next);
+        scat(next, rp, sizeof next);
+        scpy(rest, next, sizeof rest);
+        rp = rest;
+    }
+    scpy(real, C.root, PATH_MAX);
+    scat(real, cur, PATH_MAX);
+    scat(real, base, PATH_MAX);
+    return arena_str(real, xstrlen(real));
+}
+
 static void rule_build(void)
 {
     dir_len = (unsigned)xstrlen(C.dir);
     unsigned most = (unsigned)C.nown + (unsigned)nabsent + (unsigned)(sizeof volatile_dirs / sizeof volatile_dirs[0]);
     for (int i = 0; i < C.nhost; i++)
         for (const char *p = C.host[i].v; *p; p++) most += *p == '/';
+    /* the directories on the way to an absent identity file, which the walk takes as directories */
+    for (int i = 0; i < nabsent; i++)
+        for (const char *p = absent[i]; *p; p++) most += *p == '/';
     while (rule_mask + 1 > 64 && rule_mask / 2 + 1 >= 2 * most) rule_mask /= 2;
     for (int i = 0; i < C.nown; i++) rule_add(C.own[i], (unsigned)xstrlen(C.own[i]), R_OWN, -1);
     for (int i = 0; volatile_dirs[i]; i++)
@@ -344,9 +419,20 @@ static void rule_build(void)
             const char *d = C.host[j].v;
             if (!C.host[j].is_identity_dir || !starts_dir(absent[i], d) || !xstrcmp(absent[i], d)) continue;
             unsigned len = (unsigned)xstrlen(absent[i]);
-            rule_add(absent[i], len, R_OWN, -1);
+            absent_real[nmapped] = tree_real_of(absent[i]);
+            rule_add(absent[i], len, R_OWN | R_EXREAL, nmapped++);
             for (unsigned k = (unsigned)xstrlen(d) + 1; k < len; k++)
                 if (absent[i][k] == '/') rule_add(absent[i], k, R_LEADS, -1);
+            break;
+        }
+    /* an own record inside an identity directory the host has: the walk reached it through the host's directory, so
+     * the tree's links on the way to it are followed in the tree, as for an identity file's copy */
+    for (int i = 0; i < C.nown; i++)
+        for (int j = 0; j < C.nhost; j++) {
+            const char *d = C.host[j].v;
+            if (!C.host[j].is_identity_dir || !starts_dir(C.own[i], d) || !xstrcmp(C.own[i], d)) continue;
+            absent_real[nmapped] = tree_real_of(C.own[i]);
+            rule_add(C.own[i], (unsigned)xstrlen(C.own[i]), R_EXREAL, nmapped++);
             break;
         }
 }
@@ -365,7 +451,7 @@ static void rule_facts(const char *v, struct facts *f)
     f->exact = 0;
     f->best_host = f->best_own = f->iddir = -1;
     f->vol = 0;
-    if (v[0] == '/') {                                         /* starts_dir(v, "/") */
+    if (v[0] == '/') { /* starts_dir(v, "/") */
         if (root_flags & R_OWN) f->best_own = 1;
         if (root_flags & R_HOSTDIR) f->best_host = 1;
         if (root_flags & R_VOLATILE) f->vol = 1;
@@ -500,7 +586,7 @@ int vis_plain_host_chain(const char *p, unsigned from)
                 if (r->flags & R_HOSTDIR) f.best_host = i;
                 if (r->flags & R_VOLATILE) f.vol = 1;
             }
-            if (i >= from) {                                   /* the candidate p[0..i), i >= 2: never the root */
+            if (i >= from) { /* the candidate p[0..i), i >= 2: never the root */
                 if (r && (r->flags & (R_HOSTFILE | R_LEADS | R_IDDIR))) return 0;
                 if (C.rootlen == (long)i && xmemcmp(p, C.root, i) == 0) return 0;
                 struct facts g = f;
@@ -568,6 +654,34 @@ char *to_real_exec(const char *v, char *out)
         if (vl > 1 && v[vl - 1] == '/' && ol > 0 && out[ol - 1] != '/') scat(out, "/", PATH_MAX);
         return out;
     }
+    return vis_exclave_real(v, out);
+}
+/* an exclave path's real path: under the tree's root, or an identity file's copy where the tree places it (8.1.5) */
+char *vis_exclave_real(const char *v, char *out)
+{
+    if (nmapped) {
+        /* the longest mapped prefix, at v's '/' boundaries, as rule_facts finds prefixes */
+        struct rule *best = 0;
+        unsigned at = 0;
+        unsigned long h = RULE_BASIS;
+        for (unsigned i = 0;; i++) {
+            char c = v[i];
+            if (i > 0 && (c == '/' || c == 0)) {
+                struct rule *r = rule_find(v, i, h);
+                if (r && (r->flags & R_EXREAL)) {
+                    best = r;
+                    at = i;
+                }
+            }
+            if (!c) break;
+            h = rule_hash(h, c);
+        }
+        if (best) {
+            scpy(out, absent_real[best->host], PATH_MAX);
+            scat(out, v + at, PATH_MAX);
+            return out;
+        }
+    }
     scpy(out, C.root, PATH_MAX);
     if (!(v[0] == '/' && v[1] == 0)) scat(out, v, PATH_MAX);
     return out;
@@ -576,7 +690,7 @@ char *to_real(const char *v, char *out, char *tmp)
 {
     to_real_exec(v, out);
     if (!C.rootlen || !starts_dir(out, C.root)) return out;
-    int k = cache_classify(v, out, tmp);                       /* the wrapper check, remembered (7.4.4) */
+    int k = cache_classify(v, out, tmp); /* the wrapper check, remembered (7.4.4) */
     if ((k == CK_WRAPPER || (!k && is_wrapper_real(out, tmp))) && payload_of(out, tmp)) scpy(out, tmp, PATH_MAX);
     return out;
 }
@@ -593,6 +707,12 @@ void from_real(char *r)
     /* an original seen through /proc reports the wrapper's name: drop a final "/.real" directory */
     char *b = xstrrchr(r, '/');
     if (b && b - r >= 6 && xmemcmp(b - 6, "/.real", 6) == 0) memmove(b - 6, b, xstrlen(b) + 1);
+}
+int vis_identity_dir_kind(const char *v)
+{
+    struct rule *r = rule_exact(v);
+    if (!r || !(r->flags & R_IDDIR)) return 0;
+    return (r->flags & R_IDLINK) ? 2 : 1;
 }
 int vis_is_identity_file(const char *v)
 {

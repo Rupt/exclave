@@ -699,6 +699,26 @@ def directory_service_state(ctx: Ctx) -> None:
         )
 
 
+def tree_stat_case(root: str, tag: str, v: str) -> dict[str, str]:
+    """trustdir.c's four lines for v as the tree answers them: stat, lstat, readlink and open."""
+    d = os.path.join(root, tree.resolve(root, os.path.dirname(v)).lstrip("/"))
+    at = os.path.join(d, os.path.basename(v))
+    final = os.path.join(root, tree.resolve(root, v).lstrip("/"))
+    if not os.path.lexists(at):
+        return {f"{k} {tag}": "ENOENT" for k in ("stat", "lstat", "readlink", "open")}
+    out = {f"lstat {tag}": "link" if os.path.islink(at) else "file"}
+    out[f"readlink {tag}"] = os.readlink(at) if os.path.islink(at) else "EINVAL"
+    if not os.path.exists(final):
+        out[f"stat {tag}"] = out[f"open {tag}"] = "ENOENT"
+        return out
+    with open(final, "rb") as f:
+        data = f.read(11)
+    out[f"stat {tag}"] = f"file size>0={int(os.path.getsize(final) > 0)}"
+    text = "".join(chr(b) if 0x20 <= b <= 0x7E else "." for b in data)
+    out[f"open {tag}"] = text or "(empty)"
+    return out
+
+
 @test
 def trust_directory_host(ctx: Ctx) -> None:
     """8.4, 13 item 55: the host's trust directory inside, its links followed on the host.
@@ -709,12 +729,16 @@ def trust_directory_host(ctx: Ctx) -> None:
     writes there. Natively the kernel answers each case on the host; inside, every answer is the
     same but where a read-only bind of the directory at its name answers otherwise, as the kernel
     would under bwrap: a .. at the directory climbs into the exclave, so ../openssl.cnf is the
-    tree's /etc/ssl/openssl.cnf, and RESOLVE_NO_XDEV refuses the crossing into it. Skipped where the
-    host has no hash link there.
+    tree's /etc/ssl/openssl.cnf, and RESOLVE_NO_XDEV refuses the crossing into it; an identity file
+    there that the host lacks, the bundle or Java's keystore, is the tree's (8.1 rule 5); and the
+    path through Debian's /usr/lib/ssl/certs is compared only where the tree's leads there. Skipped
+    where the host has no hash link there, and as root, whom nothing refuses a write there.
     """
     found = tree.host_trust_link()
     if not found:
         skip("the host's /etc/ssl/certs has no subject-hash link to a .pem link")
+    if os.geteuid() == 0:
+        skip("as root the native run would write the host's trust directory")
     hash_, pem = found
     loader = ctx.payload(ctx.interp)
     libdir = os.path.dirname(ctx.payload(ctx.libc)) if ctx.libc else os.path.dirname(loader)
@@ -732,15 +756,26 @@ def trust_directory_host(ctx: Ctx) -> None:
     bind = {
         "openat2 noxdev hash": "EXDEV",
         "openat2 noxdev dir": "EXDEV",
+        "openat2 noxdev rel dotdot": "EXDEV",
         "relative dotdot cnf": "ok" if cnf.startswith("file") else cnf,
     }
+    root = os.path.join(ctx.exclave, "tree")
     for k in ("stat", "lstat", "readlink", "open"):
         bind[f"{k} dotdot_cnf"] = got.get(f"{k} cnf", "")
         bind[f"{k} cnf"] = got.get(f"{k} cnf", "")  # the tree's by rule, and the reference
+    for tag, v in (
+        ("bundle", "/etc/ssl/certs/ca-certificates.crt"),
+        ("java", "/etc/ssl/certs/java/cacerts"),
+    ):
+        if not os.path.exists(v):
+            bind.update(tree_stat_case(root, tag, v))
+    skipped = set()
+    if tree.resolve(root, "/usr/lib/ssl/certs") != "/etc/ssl/certs":
+        skipped = {f"{k} libssl_hash" for k in ("stat", "lstat", "readlink", "open")}
     bad = [
         f"{case}: {got.get(case)!r}, the kernel says {bind.get(case, n)!r}"
         for case, n in native.items()
-        if got.get(case) != bind.get(case, n)
+        if case not in skipped and got.get(case) != bind.get(case, n)
     ]
     expect(not bad, "the trust directory: " + "; ".join(bad))
     expect(got.get("open hash", "").startswith("-----BEGIN"), f"the hash link's certificate: {got}")
@@ -756,9 +791,11 @@ def trust_directory_rules(ctx: Ctx) -> None:
     name; realpath resolves the link's text in the exclave, the limitation of 13 item 55; a create
     there is the host's own; the bundle the host lacks is the exclave's copy, not listed; Java's
     keystore the host lacks is the tree's; own on the directory gives it back, and own on a name in
-    it gives that name back; and where the host's directory is a link, the names below it, the
-    exclave's copy among them, answer the same, readlink answers the host's text and the directory
-    it reaches is the host's at its own name. Skipped without user namespaces.
+    it gives that name back; a walk under RESOLVE_NO_XDEV relative to a host record nested in an
+    exclave directory crosses nothing to its name and leaves its mount by ..; and where the host's
+    directory is a link into another directory, the names below it, the exclave's copy among them,
+    answer the same, readlink answers the host's text, the directory it reaches is the host's at
+    its own name, and a .. at the name climbs from there. Skipped without user namespaces.
     """
     if subprocess.run(
         ["unshare", "-Urm", "true"],
@@ -787,6 +824,24 @@ def trust_directory_rules(ctx: Ctx) -> None:
     copy_exclave(marks, mine)
     with open(os.path.join(mine, ".exclave", "manifest"), "w") as f:
         f.write('exclave 1\n\nown "/etc/ssl/certs/mine.pem"\n')
+    local = "/usr/local/share/ca-certificates"
+    # a host record nested in the exclave's /usr/share, which every tree has
+    doc = "/usr/share/doc"
+    hrec = os.path.join(ctx.work, f"trust-host-{pid}.exclave")
+    copy_exclave(marks, hrec)
+    with open(os.path.join(hrec, ".exclave", "manifest"), "w") as f:
+        f.write(f'exclave 1\n\nhost "{doc}"\n')
+    # a walk under RESOLVE_NO_XDEV relative to it: its name crosses nothing, and its .. leaves its
+    # mount (7.4.4)
+    noxdev = " ".join(
+        [
+            os.path.join(hrec, ".exclave", "launcher"),
+            os.path.join(ctx.progs, "trustdir"),
+            "h p",
+            doc,
+            "local.crt",
+        ]
+    )
 
     def sh_of(ex: str) -> str:
         return os.path.join(ex, "tree", ctx.vbin("sh").lstrip("/"))
@@ -816,10 +871,12 @@ def trust_directory_rules(ctx: Ctx) -> None:
         ("the bundle the host lacks", sh, f"rm {c}/ca-certificates.crt", ""),
         ("  is the exclave's copy", sh, f"test -e {c}/ca-certificates.crt && echo copy", "copy"),
         ("  and is not listed", sh, f"ls {c} | grep -c ca-certificates", "0"),
+        ("RESOLVE_NO_XDEV from a host record, its name", "", noxdev, "openat2 noxdev dir name: ok"),
+        ("  and its ..", "", noxdev, "openat2 noxdev dir dotdot: EXDEV"),
     ]
-    local = "/usr/local/share/ca-certificates"
     script = (
         f"mount -t tmpfs tmpfs /etc/ssl/certs && mount -t tmpfs tmpfs {local} "
+        f"&& mount -t tmpfs tmpfs {doc} && echo doc >{doc}/local.crt "
         f"&& echo local-{pid} >/usr/local/share/ca-certificates/local.crt "
         f"&& ln -s {local}/local.crt /etc/ssl/certs/x.pem "
         "&& ln -s x.pem /etc/ssl/certs/abcd0000.0 "
@@ -827,10 +884,12 @@ def trust_directory_rules(ctx: Ctx) -> None:
         f"&& echo bundle-{pid} >/etc/ssl/certs/ca-certificates.crt || exit 99; "
     )
     for i, (_what, shell, cmd, _want) in enumerate(cases):
-        script += f"echo '== {i}'; {shell} -c '{cmd}' 2>&1 || echo rc=$?; "
-    # a host whose directory is a link at its name, as Red Hat's are: the same names below it
+        line = f"{shell} -c '{cmd}'" if shell else cmd
+        script += f"echo '== {i}'; {line} 2>&1 || echo rc=$?; "
+    # a host whose directory is a link at its name into another directory, as Red Hat's are: the
+    # same names below it, and a .. there climbs from the directory the link reaches
     link_cases = [
-        ("a link at the name: readlink", f"readlink {c}", "real"),
+        ("a link at the name: readlink", f"readlink {c}", "/etc/pki/real"),
         ("  a hash link below it", f"cat {c}/abcd0000.0", f"local-{pid}"),
         (
             "  the bundle the host lacks, the exclave's copy",
@@ -842,11 +901,17 @@ def trust_directory_rules(ctx: Ctx) -> None:
             f"cd {c} && pwd -P && ls | grep -c abcd",
             "1",
         ),
+        (
+            "  a .. at the name, from the directory it reaches",
+            f"cd -P {c}/.. && pwd -P",
+            "/etc/pki",
+        ),
     ]
     script += (
-        "mount -t tmpfs tmpfs /etc/ssl && mkdir /etc/ssl/real && ln -s real /etc/ssl/certs "
-        "&& ln -s /usr/local/share/ca-certificates/local.crt /etc/ssl/real/x.pem "
-        "&& ln -s x.pem /etc/ssl/real/abcd0000.0 || exit 98; "
+        "mount -t tmpfs tmpfs /etc/ssl && mount -t tmpfs tmpfs /etc/pki && mkdir /etc/pki/real "
+        "&& ln -s /etc/pki/real /etc/ssl/certs "
+        f"&& ln -s {local}/local.crt /etc/pki/real/x.pem "
+        "&& ln -s x.pem /etc/pki/real/abcd0000.0 || exit 98; "
     )
     for i, (_what, cmd, _want) in enumerate(link_cases, len(cases)):
         script += f"echo '== {i}'; {sh} -c '{cmd}' 2>&1 || echo rc=$?; "

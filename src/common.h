@@ -329,6 +329,7 @@ int vfork_child(pid_t pid, pid_t ppid);
 int vis_is_host(const char *v, const char **real); /* 1 if host-owned; *real = host path */
 char *to_real(const char *v, char *out, char *tmp); /* v -> real, with wrapper redirect; tmp PATH_MAX */
 char *to_real_exec(const char *v, char *out); /* v -> real, no wrapper redirect */
+char *vis_exclave_real(const char *v, char *out); /* an exclave path v -> its real path in the tree */
 void from_real(char *r); /* in place, no buffer */
 int is_exclave_path(const char *v);
 /* the walk's questions in one pass: 1 if the host's; *idd as vis.c says */
@@ -343,6 +344,8 @@ int payload_of(const char *wrapper, char *payload);
 /* 1 if v is an identity file that is a host symlink, out = its text; -EINVAL if not a symlink; 0 otherwise */
 int vis_readlink_identity(const char *v, char *out);
 int vis_is_identity_file(const char *v); /* 1 if v is exactly a host identity file */
+/* 1 if v is exactly an identity directory the host has as a directory, 2 if its host name is a link, else 0 */
+int vis_identity_dir_kind(const char *v);
 int vis_in_data(const char *v); /* 1 if v lies under a data directory (6.2) */
 
 /* ---------- the canonicalisation cache (cache.c, 7.4.4) ---------- */

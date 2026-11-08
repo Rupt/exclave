@@ -1400,7 +1400,8 @@ canon(path, dfd, follow_last):
         "." -> continue; ".." -> cur = parent(cur); continue
         cand = cur + "/" + p
         if no parts left and (trailing slash ? on the parent : not follow_last): cur = cand; break
-        if cand is an identity directory, the walk not scoped (below), and parts are left:
+        if cand is an identity directory, the walk not scoped (below), parts are left,
+                and the next is not ".." after a host link at the name:
             cur = cand; continue                   # passed by name; the kernel follows a host link (8.4)
         if cand is one, or the host's below one, the walk not scoped, and lstat(cand) is a symlink:
             if no parts left: cur = cand; break    # re-issued following it: the kernel's, on the host
@@ -2327,27 +2328,35 @@ one is the same line as an absent identity file.
 The walk (7.4.4) passes an identity directory by its name, whether the
 host has it as a directory or as a link, so the kernel follows a host
 link at the name, or above it, at each call as it reaches the names
-below, and a `..` at the directory climbs to its parent in virtual
-space, as `..` at a bind mount's root climbs to its mount point's
-parent. The rule is asked of every name below it before the host's entry
-is looked at, so the exclave's names there, an identity file the host
-lacks or a path an `own` record names, are the tree's. A name below it
-that the rule gives the host is `lstat`ed on the host. A link that is
-the last component is the kernel's to follow: the call is re-issued on
-the link's host name with the call's own following of it, so that the
-kernel follows the link and every link after it on the host, at the
-moment of the call. A link with components after it is opened on the
-host as a directory, following links, and the walk goes on from the
-directory the kernel names for it, by that name, where the rule gives
-that name to the host or it is the tree's; otherwise it is passed by its
-name as the directory itself is, the kernel following it at each call.
-So `/etc/ssl/certs/<hash>.0 -> <name>.pem ->
-/usr/share/ca-certificates/mozilla/<name>.crt` reads the host's
-certificate whether or not the tree has `/usr/share/ca-certificates`, an
-authority the host's administrator added under
-`/usr/local/share/ca-certificates` is trusted inside as outside, and a
-host whose trust tool links elsewhere, as Fedora's links into
-`/etc/pki/ca-trust/extracted`, is followed there.
+below, and a `..` at a directory the host has as one climbs to its
+parent in virtual space, as `..` at a bind mount's root climbs to its
+mount point's parent. Where the host's name is a link, a `..` right
+after it climbs from the directory the link reaches, opened on the host
+and named as the kernel names it, as the kernel climbs after following
+the link: Fedora's `/etc/ssl/certs/..` is `/etc/pki/tls`. The rule is
+asked of every name below it before the host's entry is looked at, so
+the exclave's names there, an identity file the host lacks or a path an
+`own` record names, are the tree's, at the directory the tree resolves
+for them, its links followed in the tree as a chroot would follow them,
+where the tool places an identity file's copy: Fedora's tree has
+`/etc/ssl/certs -> /etc/pki/tls/certs`, which the kernel would otherwise
+follow on the host. That costs an `lstat` at startup for each directory
+on the way to such a name. A name below it that the rule gives the host
+is `lstat`ed on the host. A link that is the last component is the
+kernel's to follow: the call is re-issued on the link's host name with
+the call's own following of it, so that the kernel follows the link and
+every link after it on the host, at the moment of the call. A link with
+components after it is opened on the host as a directory, following
+links, and the walk goes on from the directory the kernel names for it,
+by that name, where the rule gives that name to the host or it is the
+tree's; otherwise it is passed by its name as the directory itself is,
+the kernel following it at each call. So `/etc/ssl/certs/<hash>.0 ->
+<name>.pem -> /usr/share/ca-certificates/mozilla/<name>.crt` reads the
+host's certificate whether or not the tree has
+`/usr/share/ca-certificates`, an authority the host's administrator
+added under `/usr/local/share/ca-certificates` is trusted inside as
+outside, and a host whose trust tool links elsewhere, as Fedora's links
+into `/etc/pki/ca-trust/extracted`, is followed there.
 
 Every call on a path at or below an identity directory that the rule
 gives the host is the host's own, re-issued on the host path, as a call
@@ -2370,18 +2379,20 @@ Under `openat2`'s `RESOLVE_NO_SYMLINKS`, `RESOLVE_NO_XDEV`,
 `RESOLVE_BENEATH` whatever its scope, or `RESOLVE_IN_ROOT` with a scope
 other than the root, the walk hands no link at or below an identity
 directory to the kernel, which would apply the flags on the host's
-mounts or not at all: it follows the link itself, as the kernel would on
-a bind mount of the host's directory, so that a link is `ELOOP` under
-`RESOLVE_NO_SYMLINKS`, an absolute target is `EXDEV` beneath any scope,
-the root included (`nd_jump_root`), or across the mount at the directory
-(`RESOLVE_NO_XDEV`, which a `..` out of it crosses too), and under
-`RESOLVE_IN_ROOT` restarts at the scope (7.4.3). A walk with
-`RESOLVE_NO_MAGICLINKS` alone, or `RESOLVE_IN_ROOT` at the root, hands a
-final link to the kernel with `RESOLVE_NO_MAGICLINKS` kept on the
-re-issue, since what a host link reaches may be one. Identity
-directories add no trap, no log line and no manifest key, so neither the
-filter's version nor the page generation moves and launchers nest as
-before (6.7).
+mounts or not at all: it follows the link itself, a host link at the
+directory's name included, as the kernel would on a bind mount of the
+host's directory or at the host's link laid at its name, so that a link
+is `ELOOP` under `RESOLVE_NO_SYMLINKS`, an absolute target is `EXDEV`
+beneath any scope, the root included (`nd_jump_root`), or across the
+mount at the directory (`RESOLVE_NO_XDEV`, which a `..` out of it
+crosses too), and under `RESOLVE_IN_ROOT` restarts at the scope (7.4.3).
+A walk with `RESOLVE_NO_MAGICLINKS` alone, or `RESOLVE_IN_ROOT` at the
+root, hands a final link to the kernel with `RESOLVE_NO_MAGICLINKS` kept
+on its re-issue, since what a host link reaches may be one; a link with
+components after it the handler opens on the host itself, following
+magic links whatever the flag says. Identity directories add no trap, no
+log line and no manifest key, so neither the filter's version nor the
+page generation moves and launchers nest as before (6.7).
 
 The translator never follows an identity file's host link, or a link in
 an identity directory, in virtual space, where `/usr` is the exclave's;
@@ -4770,24 +4781,25 @@ filter install adds 75 to 100 µs (16.3).
 Where the time goes, by stamps of the cycle counter at each step of a
 scratch build, medians of 300 spawns: in the parent, about 70 µs from
 the call to the trapped `execve`, `clone3` refused (7.5.5) and glibc's
-fallback resetting each signal's disposition by hand, 64
-`rt_sigaction` calls, two of them trapped; the exec handler (7.4.5),
-50 µs; the kernel's exec of the launcher, about 120 µs; the launcher's
-start (7.2), about 360 µs; then the loader `ld.so` and the program's
-own start, where `ld.so`'s three path calls and two `fstat`s trap. A
-syscall in a process that has just started costs 2 to 3 µs on this
-machine rather than the fraction of that a warm loop measures, so the
-start's syscalls are most of its time. Of the launcher's start, the
-ownership set (8.1 rule 1) takes about 97 µs: the tree's top level is
-read and each of its directories opened and read, seven placeholders
-in the gcc exclave read twice each, since only an empty read proves a
-directory empty; the identity files' and directories' `lstat`s (8.4),
-sixteen syscalls at the 2 to 3 µs each costs here, one per file and per
-directory and one more for the target of each of the two files that are
-host symlinks on this machine; the
-search for the manifest and its read 40 µs; and the loading of the
-program and its loader, with the loader's name walked through the tree
-in a cache that is empty in a new process, about 150 µs.
+fallback resetting each signal's disposition by hand, 64 `rt_sigaction`
+calls, two of them trapped; the exec handler (7.4.5), 50 µs; the
+kernel's exec of the launcher, about 120 µs; the launcher's start (7.2),
+about 360 µs; then the loader `ld.so` and the program's own start, where
+`ld.so`'s three path calls and two `fstat`s trap. A syscall in a process
+that has just started costs 2 to 3 µs on this machine rather than the
+fraction of that a warm loop measures, so the start's syscalls are most
+of its time. Of the launcher's start, the ownership set (8.1 rule 1)
+takes about 97 µs: the tree's top level is read and each of its
+directories opened and read, seven placeholders in the gcc exclave read
+twice each, since only an empty read proves a directory empty; the
+identity files' and directories' `lstat`s (8.4), twenty syscalls at the
+2 to 3 µs each costs here, one per file and per directory, one more for
+the target of each of the two files that are host symlinks on this
+machine, and one for each directory on the way, in the tree, to the copy
+of Java's keystore, which this machine lacks; the search for the
+manifest and its read 40 µs; and the loading of the program and its
+loader, with the loader's name walked through the tree in a cache that
+is empty in a new process, about 150 µs.
 
 The start reads what it needs of the tree once: a volatile top-level
 directory is not read at all, since the host owns it whatever it holds
@@ -4975,7 +4987,7 @@ the pointer gives.
   (16.6 item 3), and a set filled in under the handler, from any
   thread or a `vfork` child, would be state written while it is read.
 - Deciding which identity files and directories are the host's at
-  each call rather than at startup (13 item 18): 16 syscalls of a start
+  each call rather than at startup (13 item 18): 20 syscalls of a start
   on the reference machine, at the 2 to 3 µs each costs in a new
   process. The directories on the way to one the host has are
   directories to the walk whether or not the tree ships them (8.4), so
