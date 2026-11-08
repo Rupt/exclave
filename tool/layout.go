@@ -224,7 +224,8 @@ func cmdRelink(args []string) int {
 var placeholderDirs = []string{"proc", "dev", "sys", "tmp", "run", "var/tmp", "home", "root", "boot", "mnt", "media",
 	"opt", "srv"}
 
-// The host identity files (8.4): shipped empty, the host's at run time.
+// The host identity files (8.4): shipped empty, the host's at run time. The trust bundles and Java's
+// keystores come in pairs, Debian's path and Red Hat's.
 var identityFiles = []string{
 	"/etc/passwd",
 	"/etc/group",
@@ -235,6 +236,8 @@ var identityFiles = []string{
 	"/etc/localtime",
 	"/etc/ssl/certs/ca-certificates.crt",
 	"/etc/pki/tls/certs/ca-bundle.crt",
+	"/etc/ssl/certs/java/cacerts",
+	"/etc/pki/java/cacerts",
 }
 
 // makeDirs makes path a directory, its missing parents with it; one that stands there already is

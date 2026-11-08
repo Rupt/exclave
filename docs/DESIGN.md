@@ -43,9 +43,10 @@ exclave turns Linux software that depends on its environment,
 compilers included, into a directory that behaves like a single static
 executable. The directory can be copied anywhere and any program in it
 run by path. The software inside never touches a host library, header
-or loader, and reads no host configuration but nine identity files:
-who the users are, how names resolve, which certificate authorities
-are trusted, what the time zone is (8.4). There is no daemon, no image store, no package
+or loader, and reads no host configuration but eleven identity files
+and three identity directories: who the users are, how names resolve,
+which certificate authorities are trusted, what the time zone is
+(8.4). There is no daemon, no image store, no package
 manager, no installation step, no host binary and no privilege of any
 kind: no root, no setuid helper, no user or mount namespaces. There is
 one run-time knob, `EXCLAVE_LOG`, and it only logs.
@@ -97,8 +98,8 @@ wherever its file lives, sees the exclave's tree and runs on the
 exclave's loader. The exclave owns the top-level entries its tree
 ships, such as `/usr` and `/etc`; the host owns everything else, such
 as `/home`, the kernel's volatile directories (`/proc`, `/tmp` and the
-rest), and the identity files such as `/etc/passwd` and
-`/etc/resolv.conf` (8.1). Paths the exclave owns are read-only: the
+rest), and the identity files and directories such as `/etc/passwd`,
+`/etc/resolv.conf` and `/etc/ssl/certs` (8.1). Paths the exclave owns are read-only: the
 handler refuses every write to them with the error the kernel gives on
 a read-only bind mount (8.2). The manifest can move a path to either
 side; anything the tree can say about itself the launcher reads from
@@ -214,8 +215,8 @@ Goals:
 
 1. **Isolation.** Programs see the exclave's files plus what the
    visibility rule allows. Host libraries and loaders are invisible,
-   and so is host configuration, except the nine identity files that
-   describe the host (8.1 rule 5).
+   and so is host configuration, except the eleven identity files and
+   three identity directories that describe the host (8.1 rule 5).
 2. **Relocatability.** Any path, any filesystem, any machine of the same
    architecture and CPU level. An exclave moves with `cp -a`, `tar` or
    `rsync -aH`, and nothing in it names its location.
@@ -335,7 +336,8 @@ the design. Where they are available they serve as the test oracle
 | **exclave path** | A path the tree answers for, read-only (8.1, 8.2). |
 | **host path** | A path the host answers for, as it would without the exclave (8.1). `host` and `own` records in the manifest move a path to either side. |
 | **placeholder** | An empty top-level directory of the tree, which the exclave does not own; the tool ships placeholders for `/home`, `/tmp`, `/proc` and the other conventional host names (8.1). |
-| **identity file** | One of nine files, such as `/etc/passwd` and `/etc/resolv.conf`, that describe the host and are the host's by default (8.1 rule 5, 8.4). |
+| **identity file** | One of eleven files, such as `/etc/passwd` and `/etc/resolv.conf`, that describe the host and are the host's by default (8.1 rule 5, 8.4). |
+| **identity directory** | One of three directories, `/etc/ssl/certs`, `/etc/pki/tls/certs` and `/var/lib/sss`, that are the host's by default: the host's directory at its name, its links followed on the host at each call, as an identity file's chain is, with `..` at its root climbing in the exclave (8.1 rule 5, 8.4). |
 | **border** | Where a program passes from the host into the exclave, its launcher finding no inherited filter; the environment is set there (6.2). |
 | **data directory** | An exclave path that is never executed or loaded, named by a `data` record: a sysroot, headers, documentation (6.2). |
 | **`exclave`** (command) | The build tool: `wrap`, `unwrap`, `check`, `prune`, `hash`, `relink` and `format`. Takes a directory holding `tree/`, fetches nothing (10). |
@@ -549,7 +551,7 @@ data "/opt/musl-sysroot"                       never executed or loaded: exec th
 
 host "/usr/local/share/fonts"                  a host path, at its own path
 
-own "/etc/hosts"                               a path the exclave owns (removes a default host file)
+own "/etc/hosts"                               a path the exclave owns (removes a default host file or directory)
 ```
 
 `exclave` and `cpu` may appear once; `data`, `host` and `own` may
@@ -665,9 +667,9 @@ microseconds.
   loader reads anyway. A foreign original fails with a message naming
   the file, and an exclave built for another architecture does not
   start at all, since its launcher is of that architecture too.
-- **The host table** (8.4) is the nine identity files, compiled into
-  the launcher, minus any that the manifest's `own` records name, plus
-  the manifest's `host` records.
+- **The host table** (8.4) is the eleven identity files and the three
+  identity directories, compiled into the launcher, minus any that the
+  manifest's `own` records name, plus the manifest's `host` records.
 
 The `data` records are read for enforcement: no file under a data
 directory is executed, and none is a loader (7.3, 7.4.5).
@@ -902,7 +904,8 @@ The kernel has executed the launcher at some path. The launcher:
    environment policy of 6.2 applies; inside, only the launcher's own
    variables are removed (7.4.5).
 8. Reads the top level of `tree/` for the ownership set (8.1), resolves
-   the identity files (8.4) and the working directory (8.1 rule 4), and
+   the identity files and directories (8.4) and the working directory
+   (8.1 rule 4), and
    compiles the visibility rule into one table.
 9. Installs the `SIGSYS` handler, then the filter, unless one of this
    version or newer is inherited, which is reused (7.4.2).
@@ -1333,7 +1336,8 @@ dropped from the re-issue:
   `RESOLVE_NO_SYMLINKS`), and the host's own mount boundaries are not
   seen (13 item 22).
 - `RESOLVE_NO_SYMLINKS` is `ELOOP` at any link the walk would follow,
-  the tree's own links and an identity file's host link included, after
+  the tree's own links, an identity file's host link and a link in an
+  identity directory included, after
   `O_CREAT`'s `EISDIR` for a trailing slash, which comes before the last
   name is looked up at all (`lookup_fast_for_open`). A
   magic link, one below `/proc/<pid>/`, is `ELOOP` under
@@ -1396,6 +1400,12 @@ canon(path, dfd, follow_last):
         "." -> continue; ".." -> cur = parent(cur); continue
         cand = cur + "/" + p
         if no parts left and (trailing slash ? on the parent : not follow_last): cur = cand; break
+        if cand is an identity directory, the walk not scoped (below), and parts are left:
+            cur = cand; continue                   # passed by name; the kernel follows a host link (8.4)
+        if cand is one, or the host's below one, the walk not scoped, and lstat(cand) is a symlink:
+            if no parts left: cur = cand; break    # re-issued following it: the kernel's, on the host
+            h = the kernel's name for cand, opened as a directory on the host
+            cur = (h is the host's or under tree) ? from_real(h) : cand; continue
         if lstat(to_real(cand)) is a symlink:
             t = readlink(to_real(cand))
             if cand under /proc: t = from_real(t)    # procfs reports real paths
@@ -1420,14 +1430,33 @@ link, followed, as the kernel follows it, so that `stat` of
 links an `O_TMPFILE` file. An `openat2` walk (7.4.3) carries a scope
 and its resolve flags: the scope replaces `/` for absolute paths and
 link targets and stops `..`, and each flag is checked at the component
-it concerns, in the order the kernel checks it.
+it concerns, in the order the kernel checks it. Such a walk counts as
+scoped at and below an identity directory, where it follows the host's
+links itself, when it carries `RESOLVE_NO_SYMLINKS`, `RESOLVE_NO_XDEV`,
+`RESOLVE_BENEATH` whatever its scope, or `RESOLVE_IN_ROOT` with a scope
+other than the root (8.4). A relative walk under `RESOLVE_NO_XDEV`
+walks its starting directory's own components again without counting
+a crossing there, since the kernel starts in that directory.
+
+An identity directory the host has is a directory to the walk, decided
+at startup, so a path through it costs no `lstat` of it; the names
+below it are host names, `lstat`ed as any host component is. A walk
+that ends at a link there is marked as one the re-issue follows, as for
+an identity file, so the call keeps its own following of the last
+component and the kernel follows the link on the host; the read-only
+rules see a host path and leave it to the kernel. A link to a directory
+with components after it costs an `open`, a `readlink` of its
+descriptor and a `close`. A walk at or below an identity directory, or
+one whose `..` lands on an exclave path, is not the kernel's own walk
+from the program's descriptor (7.4.3), even from a descriptor in the
+host's domain, so the path is re-issued as the walk resolved it.
 
 A symlink's target is a virtual path whoever created the link. A host
 link `/tmp/x -> /usr/bin/gcc` reaches the exclave's gcc, as it would
 under bwrap; an exclave link `/var/run -> /run` reaches the host's
-`/run` by 8.1 rule 3. The identity files of 8.4 are the one place a host
-symlink keeps its host meaning, and the kernel follows them on the
-host, not here.
+`/run` by 8.1 rule 3. The identity files and the links in the identity
+directories of 8.4 are the one place a host symlink keeps its host
+meaning, and the kernel follows them on the host, not here.
 
 The real path of `tree/` is an alias of `/` (8.1 rule 6), and so is
 any directory with the tree root's device and inode. A path that begins
@@ -1465,8 +1494,9 @@ exclave process runs.
 through them `lstat`s each, to follow a host symlink in virtual space
 and to see the tree's root under another name. Where at least three
 directories lie ahead of the final component and every one is plainly
-the host's by the rule (not an identity file, not on the way to one,
-not the tree's root by name, not under `/proc`, no `.` or `..`), one
+the host's by the rule (not an identity file or directory, not on the
+way to one, not the tree's root by name, not under `/proc`, no `.` or
+`..`), one
 `openat2` with `O_PATH`, `O_DIRECTORY` and `RESOLVE_NO_SYMLINKS` stands
 in for their `lstat`s: it succeeds only if each is a directory reached
 without a link.
@@ -2013,31 +2043,46 @@ it, and every part rules it as it rules that directory.
    working directory otherwise stays in the exclave (13 item 14).
    Whether the working directory is an exclave path is decided by the
    other rules, without this one.
-5. **Nine host identity files are the host's by default:**
-   `/etc/passwd`, `/etc/group`, `/etc/nsswitch.conf`, `/etc/host.conf`,
-   `/etc/resolv.conf`, `/etc/hosts`, `/etc/localtime`,
+5. **Eleven host identity files and three identity directories are the
+   host's by default.** The files: `/etc/passwd`, `/etc/group`,
+   `/etc/nsswitch.conf`, `/etc/host.conf`, `/etc/resolv.conf`,
+   `/etc/hosts`, `/etc/localtime`, the trust bundles
    `/etc/ssl/certs/ca-certificates.crt` and
-   `/etc/pki/tls/certs/ca-bundle.crt`. They describe who the user is,
-   how names are looked up, DNS, the time zone and which authorities
-   the machine trusts, all of which belong to the host, and they are
-   data in a format any libc reads, not code: `/etc/localtime` is a
-   TZif file, on most hosts a symlink into the host's
-   `/usr/share/zoneinfo`, which the kernel follows on the host (8.4),
-   so the zone needs no `tzdata` in the tree. Seven of them are on
-   PRoot's default binding list. `own` on one of them removes it. An
-   identity file absent on the host falls through to the exclave's
-   copy. The tool ships each of the nine as an empty placeholder when
-   the tree lacks it, and the path walk treats the directories on the way to an
-   identity file as directories whether or not the exclave ships them
-   (8.4). SSSD's state directory, `/var/lib/sss`, is the host's by
-   default the same way, the directories on the way to it included:
-   SSSD's lookup module finds the daemon there, by its socket and its
-   memory cache, where the host's other directory services keep theirs
-   under `/run` (8.4). Where the host's `/var/lib/sss` is a link to a
-   directory, the directory it resolves to on the host is the host's
-   too, since the walk follows the link's text in virtual space
-   (7.4.4). `own` on it removes it, and the exclave answers where the
-   host lacks it.
+   `/etc/pki/tls/certs/ca-bundle.crt`, and Java's trust stores
+   `/etc/ssl/certs/java/cacerts` and `/etc/pki/java/cacerts`, each pair
+   Debian's name and Red Hat's. The directories: `/etc/ssl/certs` and
+   `/etc/pki/tls/certs`, the directories of the two bundles, where a
+   host's trust tool keeps its authorities one to a name, by name and by
+   subject hash, for a library that verifies through a directory
+   (OpenSSL's `CApath`, which Debian's OpenSSL reaches through
+   `/usr/lib/ssl/certs`, and the two directories Go's `crypto/x509`
+   reads); and `/var/lib/sss`, SSSD's state, where SSSD's lookup module
+   finds the daemon by its socket and its memory cache, as the host's
+   other directory services keep theirs under `/run`. They describe who
+   the user is, how names are looked up, DNS, the time zone and which
+   authorities the machine trusts, all of which belong to the host, and
+   they are data, read by libc, by TLS libraries, by a JDK or by SSSD's
+   lookup module in formats those read whatever their version, not code:
+   `/etc/localtime` is a TZif file, on most hosts a symlink into the
+   host's `/usr/share/zoneinfo`, which the kernel follows on the host
+   (8.4), so the zone needs no `tzdata` in the tree, and a certificate
+   in the trust directory is a link into the host's
+   `/usr/share/ca-certificates` or `/usr/local/share/ca-certificates`,
+   followed there the same way. Seven of the files are on PRoot's
+   default binding list. `own` on an identity file or directory removes
+   it, and `own` on a path inside an identity directory makes that path
+   the exclave's. One the host lacks falls through to the exclave's, an
+   identity file inside an identity directory the host has included: Red
+   Hat's hosts have `/etc/ssl/certs` and no `ca-certificates.crt` in it,
+   so a Debian tree reads its own bundle there. Where the host's
+   identity directory is a link at its name, as Fedora's and Red Hat's
+   `/etc/ssl/certs` are, the directory the kernel resolves it to is an
+   identity directory too, at its own name, so that the names the kernel
+   gives a working directory or a descriptor there are the host's
+   inside. The tool ships each of the eleven files as an empty
+   placeholder when the tree lacks it, and the path walk treats the
+   directories on the way to an identity file or directory as
+   directories whether or not the exclave ships them (8.4).
 6. **The exclave's own directory** is the host's, with the directories
    on the way to it, whatever prefix it lives under: a program that
    locates its files relative to its real executable path, as gcc does
@@ -2064,8 +2109,9 @@ When several parts apply, the launcher decides in this order:
    are the host's.
 4. A volatile directory (rule 3) is the host's.
 5. Otherwise the longest matching prefix among the `host` records and
-   the owned paths, rule 1's entries and the `own` records, wins; at
-   equal length the `host` record wins.
+   the identity directories, and the owned paths, rule 1's entries, the
+   `own` records and the identity files inside an identity directory
+   that the host lacks, wins; at equal length the `host` record wins.
 6. A path no prefix matches is the host's (rule 2).
 
 ### 8.2 Read-only by refusal
@@ -2236,7 +2282,7 @@ gcc exclave, alternating the two launchers, best of seven, November
 stats corrected, against 14 ms and 69 ms with the listings alone: a
 stat of each directory a process has not stat'd before.
 
-### 8.4 Host identity files
+### 8.4 Host identity files and directories
 
 At startup the launcher records in the host table each identity file
 the host has: a file, or a symlink whose chain the host resolves, from
@@ -2261,18 +2307,92 @@ and `fanotify_mark` with `FAN_MARK_DONT_FOLLOW`, which watch the link,
 `link` with the link as its old name, `rename` of either name and
 `unlink`, which move or delete the link and leave its target, and
 `execveat` with `AT_SYMLINK_NOFOLLOW`, `ELOOP`. The directories on the
-way to an identity file are traversable in the path walk whether the
-exclave ships them or not (8.1 rule 5). Which identity files are the
-host's is fixed for the process's life (13 item 18).
+way to an identity file or directory are traversable in the path walk
+whether the exclave ships them or not (8.1 rule 5). Which identity
+files and directories are the host's is fixed for the process's life
+(13 item 18).
 
-The translator never follows an identity file's host link in virtual
-space, where `/usr` is the exclave's; the kernel follows it on the
-host, so `/etc/localtime -> /usr/share/zoneinfo/Europe/London` reads
-the host's zone file whether or not the tree has a `zoneinfo`
-directory. Nor do host symlinks in general keep their host meaning:
-such a rule would let a host link into `/usr` reach the host's `/usr`.
-Every other symlink, on a host path or an exclave path, is resolved in
-virtual space (7.4.4).
+An identity directory is the host's directory at its name, its links
+followed on the host at each call, as an identity file's chain is, with
+`..` at its root climbing in the exclave. At startup the launcher
+`lstat`s each one: a directory is the host's; a link at the name is the
+host's too, opened as a directory, following links, and the directory
+the kernel names for it, read back from `/proc/self/fd`, recorded as an
+identity directory at its own name; anything else, no entry, a file, a
+link that leads to no directory or to a name outside this root, is the
+exclave's for the process's life (13 item 18), its links resolved in
+virtual space like any of the tree's. Nothing new is logged: an absent
+one is the same line as an absent identity file.
+
+The walk (7.4.4) passes an identity directory by its name, whether the
+host has it as a directory or as a link, so the kernel follows a host
+link at the name, or above it, at each call as it reaches the names
+below, and a `..` at the directory climbs to its parent in virtual
+space, as `..` at a bind mount's root climbs to its mount point's
+parent. The rule is asked of every name below it before the host's entry
+is looked at, so the exclave's names there, an identity file the host
+lacks or a path an `own` record names, are the tree's. A name below it
+that the rule gives the host is `lstat`ed on the host. A link that is
+the last component is the kernel's to follow: the call is re-issued on
+the link's host name with the call's own following of it, so that the
+kernel follows the link and every link after it on the host, at the
+moment of the call. A link with components after it is opened on the
+host as a directory, following links, and the walk goes on from the
+directory the kernel names for it, by that name, where the rule gives
+that name to the host or it is the tree's; otherwise it is passed by its
+name as the directory itself is, the kernel following it at each call.
+So `/etc/ssl/certs/<hash>.0 -> <name>.pem ->
+/usr/share/ca-certificates/mozilla/<name>.crt` reads the host's
+certificate whether or not the tree has `/usr/share/ca-certificates`, an
+authority the host's administrator added under
+`/usr/local/share/ca-certificates` is trusted inside as outside, and a
+host whose trust tool links elsewhere, as Fedora's links into
+`/etc/pki/ca-trust/extracted`, is followed there.
+
+Every call on a path at or below an identity directory that the rule
+gives the host is the host's own, re-issued on the host path, as a call
+on an identity file is: a create, a write, a delete or a rename there
+answers as the host answers the user, `EACCES` where root owns the
+directory, not `EROFS`, and `rename` and `link` between it and an
+exclave path are `EXDEV` first (8.2). Run as root inside,
+`update-ca-certificates` therefore rewrites the host's directory, from
+the tree's `/usr/share/ca-certificates`, as a root `passwd` inside
+rewrites the host's `/etc/passwd`. `readlink` answers the host's link
+text, and `lstat` and the no-follow calls see the host's link itself,
+the directory's own name included where the host's is a link. A listing
+of the directory is the host's, unaltered (8.3), so an exclave name
+inside it that the host lacks opens and is not listed, the converse of a
+host file in an exclave directory (13 item 6). `getcwd` there answers
+the directory as the kernel names it, an identity directory at that
+name, and a relative path from it is walked as from any directory.
+
+Under `openat2`'s `RESOLVE_NO_SYMLINKS`, `RESOLVE_NO_XDEV`,
+`RESOLVE_BENEATH` whatever its scope, or `RESOLVE_IN_ROOT` with a scope
+other than the root, the walk hands no link at or below an identity
+directory to the kernel, which would apply the flags on the host's
+mounts or not at all: it follows the link itself, as the kernel would on
+a bind mount of the host's directory, so that a link is `ELOOP` under
+`RESOLVE_NO_SYMLINKS`, an absolute target is `EXDEV` beneath any scope,
+the root included (`nd_jump_root`), or across the mount at the directory
+(`RESOLVE_NO_XDEV`, which a `..` out of it crosses too), and under
+`RESOLVE_IN_ROOT` restarts at the scope (7.4.3). A walk with
+`RESOLVE_NO_MAGICLINKS` alone, or `RESOLVE_IN_ROOT` at the root, hands a
+final link to the kernel with `RESOLVE_NO_MAGICLINKS` kept on the
+re-issue, since what a host link reaches may be one. Identity
+directories add no trap, no log line and no manifest key, so neither the
+filter's version nor the page generation moves and launchers nest as
+before (6.7).
+
+The translator never follows an identity file's host link, or a link in
+an identity directory, in virtual space, where `/usr` is the exclave's;
+the kernel follows it on the host, so `/etc/localtime ->
+/usr/share/zoneinfo/Europe/London` reads the host's zone file whether or
+not the tree has a `zoneinfo` directory. Nor do host symlinks in general
+keep their host meaning: such a rule would let a host link into `/usr`
+reach the host's `/usr`. The identity files and directories describe the
+host and hold data, so what their links reach is the host's to say; no
+other name is. Every other symlink, on a host path or an exclave path,
+is resolved in virtual space (7.4.4).
 
 The host's `nsswitch.conf` names NSS modules, `systemd`, `sss`,
 `ldap`, `mdns4_minimal`, which a glibc exclave loads from its own tree,
@@ -2763,7 +2883,7 @@ refused. From `.deb` files, in five steps:
    the tree, and record the tree hash with `exclave unwrap` and `wrap`
    (13 item 48).
 4. **Strip** the volatile directories (8.1). Their empty placeholders,
-   the conventional host names' and the nine identity files (8.4) are
+   the conventional host names' and the eleven identity files (8.4) are
    added by `wrap` where the tree lacks them.
 5. **Record** every input as a `pkg` record of `.exclave/hashes` (6.4),
    which is all that `unpack` writes outside `tree/`: the launcher, the
@@ -3007,6 +3127,13 @@ outside data directories, reading originals in place of wrappers.
 - A glibc older than 2.35 without `/usr/lib/locale/C.utf8` draws a
   warning: the locale inside an exclave is `C.UTF-8` (6.2), which older
   glibc does not build in, so programs would run in the plain C locale.
+- A file the tree ships in a trust directory, `/etc/ssl/certs` or
+  `/etc/pki/tls/certs` as the tree resolves them, other than the
+  identity files there, draws a warning naming the `own` record that
+  keeps it: the host's directory hides it wherever the host has one (8.1
+  rule 5). The links a trust tool made there draw none, since the
+  host's links replace them, and SSSD's directory draws none, since a
+  tree that ships SSSD ships its empty state there.
 - A dangling symlink is a warning; a missing `ld.so.cache` on a glibc
   tree is a warning; a file with an ELF magic that is not a well-formed
   ELF file is an error, by name.
@@ -3067,7 +3194,10 @@ workloads used. It reads `EXCLAVE_LOG` files and keeps:
   reaches a directory;
 - the loader and every library a kept ELF file needs, by the loader's
   own search (10.3);
-- the identity files (8.4) and `ld.so.cache`;
+- the identity files, and what the tree ships in the identity
+  directories with what its links there lead to in the tree, which
+  answer on a host that lacks them however the checking host traced
+  them (8.4), and `ld.so.cache`;
 - the packages' licence texts.
 
 The licence texts are the files under every `usr/share/` of the tree,
@@ -3214,8 +3344,8 @@ another, or copy a sysroot into a data directory (9). The cost is disk space.
 | Overhead | Within noise on a compute-bound compile; about a third more on thirty small compiles; about twice native per `posix_spawn`; 6 to 11 times native on a tight `stat` loop (16) |
 
 What remains host-dependent is the same set that static linking leaves:
-the kernel ABI, the CPU level (7.7), and the nine host identity files
-(8.4).
+the kernel ABI, the CPU level (7.7), and the host's identity files
+and directories (8.4).
 
 ### 12.1 The kernel matrix
 
@@ -3507,11 +3637,11 @@ and stay fixed.
     only libc. A musl exclave loads no modules and finds the users only
     where the host runs `nscd`.
 
-18. **Which identity files are the host's is decided at startup.** One
-    the host lacks then is the exclave's for the process's life, even
-    once the host makes it, and one the host removes later is absent
-    inside rather than the exclave's again. Its contents and its link
-    are the host's at each call (8.4).
+18. **Which identity files and directories are the host's is decided
+    at startup.** One the host lacks then is the exclave's for the
+    process's life, even once the host makes it, and one the host
+    removes later is absent inside rather than the exclave's again. Its
+    contents and its links are the host's at each call (8.4).
 
 19. **Per-user state under an exclave path has no target.** The tree is
     read-only and the visibility rule has no per-user directory, so
@@ -3897,21 +4027,48 @@ and stay fixed.
     kernel gives one; a tracer that detaches at the first is not met by a
     second.
 
-55. **OpenSSL's certificate directory is the exclave's.** Of the trust
-    paths only the bundle at the identity path is the host's (8.4);
-    `/etc/ssl/certs` is the tree's directory, which holds that bundle
-    and none of the links to single certificates and their subject
-    hashes that `update-ca-certificates` makes. A program that verifies
-    through the directory alone, `openssl s_client -CApath
-    /etc/ssl/certs -no-CAfile` or a `capath` given to Python's `ssl` or
-    to curl, therefore trusts nothing inside where the host trusts its
-    set: against a public server, verify code 20 inside and 0 natively
-    (Ubuntu 24.04, measured November 2026). A program that loads
-    OpenSSL's defaults reads the bundle as well and verifies. The host's
-    directory holds absolute links into `/usr/share/ca-certificates`,
-    which inside lead into the tree, so `host "/etc/ssl/certs"` gives it
-    to the exclave only with `host "/usr/share/ca-certificates"` beside
-    it, with which the same check verifies inside.
+55. **The trust directory is the host's, but a link's text read inside,
+    and a name past a link, are the exclave's.** `/etc/ssl/certs` and
+    `/etc/pki/tls/certs` are identity directories (8.1 rule 5, 8.4), so
+    a program that verifies through the directory alone, `openssl
+    s_client -CApath /etc/ssl/certs -no-CAfile` or a `capath` given to
+    Python's `ssl` or to curl, trusts the host's set inside as outside
+    (against a public server, verify code 0 inside as natively, and 20
+    with `own "/etc/ssl/certs"`, Ubuntu 24.04's `openssl` and
+    `ca-certificates`, measured November 2026), an authority the host's
+    administrator added under `/usr/local/share/ca-certificates` with
+    it, and a JDK reads the host's keystore. What remains:
+    - A program that reads a link's text there and resolves it itself
+      reaches the tree's names: `realpath(3)` and `readlink -f` of
+      `/etc/ssl/certs/<hash>.0` walk
+      `/usr/share/ca-certificates/mozilla/<name>.crt` in virtual space,
+      which the tree has only if it ships the certificates.
+    - A descriptor or a working directory reached through a link there
+      is named by the kernel's name for its target, `/proc/self/fd/N` of
+      a certificate opened through the directory the host's file by its
+      host path, which inside is the tree's, as for an identity file
+      (8.4). A link to a directory there whose target is the exclave's
+      by the rule is passed by its name, so a `..` after it climbs back
+      into the trust directory, where the kernel would climb from the
+      target, and a descriptor on it lists the host's names where a path
+      relative to it walks the same names on the host.
+    - After a final link in the directory the kernel follows the rest on
+      the host and counts its links afresh, where the kernel on a bind
+      mount would count the whole walk to 40.
+    - The tree's own directory is hidden where the host has one: the
+      links its trust tool made there and any file it ships there but
+      the identity files the host lacks; `exclave check` names such a
+      file, which an `own` record keeps.
+    - Where the host reaches an identity directory through a link above
+      it rather than at its name, `getcwd` there answers the kernel's
+      name for it, which the rule may give the tree, where a bind mount
+      would answer the name it was entered by; none of the hosts
+      surveyed has that shape.
+    - A name outside the two directories and the four trust files is the
+      tree's unless its link leads into one, as Debian's
+      `/usr/lib/ssl/certs` and `/usr/lib/ssl/cert.pem` do: Fedora's and
+      Red Hat's `/etc/pki/tls/cert.pem` leads into the tree's
+      `/etc/pki/ca-trust/extracted`.
 
 56. **TeX Live's configuration, indexes and formats are made in place.**
     Debian's TeX scripts write `fmtutil.cnf`, `updmap.cfg`, the
@@ -4131,7 +4288,9 @@ every file at its base, originals included.
 | Alternative | Why not |
 |---|---|
 | `chmod -R a-w` for read-only | The tree resists `rm -r`, loses its modes to version control and careless copies, and its owner can restore the bits. Refusal in the handler depends on nothing; its price is 8.2's error precedence. |
-| Resolving host symlinks in the host's domain | A host link into `/usr` would reach the host's `/usr`. Links resolve in the exclave's view; the identity files' host links are followed by the kernel on the host (8.4). |
+| Resolving host symlinks in the host's domain | A host link into `/usr` would reach the host's `/usr`. Links resolve in the exclave's view; the identity files' host links and the links in the identity directories are followed by the kernel on the host (8.4). |
+| A union of the host's trust directory and the tree's | Answers no one's directory: the tree's hash links would stand beside the host's, so an authority the host removed would still verify inside, and a listing would merge two sets in an order neither has. The host's directory at its name, with the identity files the host lacks in it the exclave's, answers as the host's own directory does (8.4). |
+| Binding the host's trust directory with its links resolved in virtual space, a `host` record | Its links are absolute paths into `/usr/share/ca-certificates`, which inside are the tree's, so the directory would trust nothing the tree does not ship, and a `host` record for each target directory still misses `/usr/local/share/ca-certificates` and whatever another host's trust tool links to (8.4). |
 | Honouring `clone3` by copying the signal frame onto the child's stack | The FPU save area must be copied with the frame and the frame's pointer to it moved, or every new thread starts with a corrupt `MXCSR`. That can be done, but it ties the handler to the kernel's signal-frame layout on both architectures, a layout that grows with each new register set, where `ENOSYS` costs a few traps per `posix_spawn` (7.5.5). |
 | Reclaiming scratch by comparing stack pointers across threads | Meaningless across alternate stacks and coroutines; scratch is reclaimed by liveness sweeps (7.5.4). |
 | Synthesising host entries into `getdents64` | Invents results: a listing would name what no directory holds, merged in an order no choice gets right for every program. Empty placeholders in the tree give `ls /` the same answer for free (8.3). |
@@ -4622,9 +4781,10 @@ start's syscalls are most of its time. Of the launcher's start, the
 ownership set (8.1 rule 1) takes about 97 µs: the tree's top level is
 read and each of its directories opened and read, seven placeholders
 in the gcc exclave read twice each, since only an empty read proves a
-directory empty; the identity files' `lstat`s (8.4), twelve syscalls
-at the 2 to 3 µs each costs here, one per file and one more for the
-target of each of the two that are host symlinks on this machine; the
+directory empty; the identity files' and directories' `lstat`s (8.4),
+sixteen syscalls at the 2 to 3 µs each costs here, one per file and per
+directory and one more for the target of each of the two files that are
+host symlinks on this machine; the
 search for the manifest and its read 40 µs; and the loading of the
 program and its loader, with the loader's name walked through the tree
 in a cache that is empty in a new process, about 150 µs.
@@ -4714,8 +4874,8 @@ as a whole.
    alone, and an untrapped syscall costs about 10 ns over native.
    Check: `test/filter_test.c`.
 3. **The visibility rule compiled once.** Everything the rule matches
-   a path against, the `own` and `host` records, identity files,
-   volatile directories, the exclave's own directory and the working
+   a path against, the `own` and `host` records, identity files and
+   directories, volatile directories, the exclave's own directory and the working
    directory given to the host, is an entry of one table built at
    startup. A path's owner is its longest matching prefix, looked up at
    its `/` boundaries in one pass; the walk asks once per candidate and
@@ -4814,14 +4974,14 @@ the pointer gives.
   about one; but the rule table is written once before anything traps
   (16.6 item 3), and a set filled in under the handler, from any
   thread or a `vfork` child, would be state written while it is read.
-- Deciding which identity files are the host's at each call rather
-  than at startup (13 item 18): 12 syscalls of a start on the reference
-  machine, at the 2 to 3 µs each costs in a new process. The
-  directories on the way to one the host has are directories to the
-  walk whether or not the tree ships them (8.4), so the walk would
-  have to ask the host about the file at every such directory, or
-  treat them as directories for an absent file too, which changes
-  answers in a tree made by hand.
+- Deciding which identity files and directories are the host's at
+  each call rather than at startup (13 item 18): 16 syscalls of a start
+  on the reference machine, at the 2 to 3 µs each costs in a new
+  process. The directories on the way to one the host has are
+  directories to the walk whether or not the tree ships them (8.4), so
+  the walk would have to ask the host about the name at every such
+  directory, or treat them as directories for an absent one too, which
+  changes answers in a tree made by hand.
 - The handler's `.real/` question after a trapped `fstat` (8.3), one
   `newfstatat` per `fstat` of a file, two per start of a dynamic
   program: telling a directory from a file first needs the program's
@@ -5036,7 +5196,14 @@ meaning items 4 and 7.
      identity link against the native run of the same program, an
      identity link retargeted and replaced by a file under a running
      shell, SSSD's directory the host's, through a host link to a directory and from a
-     tree without `/var/lib`, and `own` giving it back, the
+     tree without `/var/lib`, and `own` giving it back, the trust
+     directory against the native run, its links followed on the host,
+     `..` out of it into the tree and `RESOLVE_BENEATH` from the root,
+     and in a user namespace a hash link to an authority under
+     `/usr/local`, a link to a directory, a create there, the bundle
+     and Java's keystore the exclave's where the host lacks them, `own`
+     on the directory and on a name in it, and a host link at its name,
+     the
      log's names and escapes, and the log's path refused when relative
      or inside the exclave;
    - *the tool's unpack and wrap*: the three package readers, a tree
@@ -5258,7 +5425,7 @@ its time, ok, SKIP or FAIL:
   through `build/exclave` (`test/readers_test.py`,
   `test/grammar_test.py`); and `test/tables_test.py`, which
   reads the tables more than one part carries, the identity files
-  (8.4), the volatile directories (8.1), the default host directories
+  (8.4), the volatile directories (8.1), the identity directories
   (8.1 rule 5) and the names the launcher
   logs for the syscalls the filter traps, from each source and fails
   when they differ;
@@ -5458,13 +5625,22 @@ whole trapped-syscall surface in front of the kernel. It crosses every
 trapped path syscall and descriptor-addressed one with every flag that
 changes resolution, the path forms over a fixed maze and the `*at`
 descriptors. The forms include the identity files, with a trailing
-slash, as a directory on the way and one the host lacks, and 40 links
+slash, as a directory on the way and one the host lacks, the trust
+directory, a subject-hash link and its `.pem` link in it, a `..` out of
+it, a name the host lacks there and a descriptor on it, the hash and
+`.pem` names chosen from the host's directory and left out where it
+has none, and 40 links
 in one walk and 41, in the tree, across the border at every link and
 through links walked as directories, since the kernel counts links
 over the whole walk. One
 program issues each case through `syscall(2)` under `bwrap`, with
 8.1's visibility rule spelt in `bwrap`'s terms, and under the
-launcher, and the answers are compared line by line. An answer says
+launcher, and the answers are compared line by line. In `bwrap`'s
+terms an identity directory is the host's directory bound writable at
+its name, or, where the host's name is a link, the link laid in the
+kernel's root as an identity file's is and the directory it reaches
+bound at its own name; the directories its links lead into are bound
+at their names too, which no form names (`tree.identity_dir_binds`). An answer says
 which object a path reached, not only that it reached one: a
 successful open answers the path its descriptor names, every file of
 the maze and the host area has a size and a `user.probe` value of its
@@ -5477,8 +5653,10 @@ be the same in both worlds, the maze as the kernel's read-only root
 keeps it, so a call that answers 0 and does nothing, a symlink that
 stores the translated text or a write that escaped the read-only
 refusal fails even when its answer is right. Where the host is the
-truth, on a host entry bound into `bwrap`'s read-only root and for a
-`chown` to root, a third run, the probe on the host itself through the
+truth, on a host entry bound into `bwrap`'s read-only root, on a
+rename or a link from the trust directory to another host path, which
+the binds make a crossing of mounts (`EXDEV`) where the host's one
+mount answers the permission, and for a `chown` to root, a third run, the probe on the host itself through the
 tree's own loader, answers the cases that name such a path, and the
 launcher must answer as it does. Each group's run must also exit 0
 with nothing on stderr in every world, as must the resolution oracle's
@@ -5818,10 +5996,19 @@ specified.
 - **Read-only by refusal, in the kernel's order of checks, not by
   `chmod`**: careless copies lose modes; refusal depends on nothing
   (8.2).
-- **Symlinks resolve in virtual space; identity files' host links are
-  followed by the kernel on the host, at each call**: a host link into
-  `/usr` must never reach the host's `/usr` through the exclave's
-  (8.4).
+- **Symlinks resolve in virtual space; identity files' host links, and
+  the links in identity directories, are followed by the kernel on the
+  host, at each call**: a host link into `/usr` must never reach the
+  host's `/usr` through the exclave's, and the names that describe the
+  host, the trust directory's certificates among them, reach what the
+  host's links say (8.4).
+- **An identity directory is the host's directory at its name, its
+  links followed on the host at each call, as an identity file's chain
+  is, with `..` at its root climbing in the exclave; the identity files
+  the host lacks in it are the exclave's**: the trust set is the host's
+  through the bundle and the directory alike, and a union of the host's
+  entries and the tree's would answer no one's directory (8.1 rule 5,
+  8.4).
 - **The environment passes through, minus the loader and libc
   variables that name host files and `TZ`, with three constants set at
   the border**: locale data is bound to its libc, a zone name needs

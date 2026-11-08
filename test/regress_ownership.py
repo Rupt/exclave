@@ -700,6 +700,175 @@ def directory_service_state(ctx: Ctx) -> None:
 
 
 @test
+def trust_directory_host(ctx: Ctx) -> None:
+    """8.4, 13 item 55: the host's trust directory inside, its links followed on the host.
+
+    test/progs/trustdir.c lists /etc/ssl/certs, follows a subject-hash link and the .pem link it
+    names to the host's certificate, opens it through Debian's /usr/lib/ssl/certs, climbs out by ..,
+    tries openat2's resolve flags from the directory and from the root, works from inside it and
+    writes there. Natively the kernel answers each case on the host; inside, every answer is the
+    same but where a read-only bind of the directory at its name answers otherwise, as the kernel
+    would under bwrap: a .. at the directory climbs into the exclave, so ../openssl.cnf is the
+    tree's /etc/ssl/openssl.cnf, and RESOLVE_NO_XDEV refuses the crossing into it. Skipped where the
+    host has no hash link there.
+    """
+    found = tree.host_trust_link()
+    if not found:
+        skip("the host's /etc/ssl/certs has no subject-hash link to a .pem link")
+    hash_, pem = found
+    loader = ctx.payload(ctx.interp)
+    libdir = os.path.dirname(ctx.payload(ctx.libc)) if ctx.libc else os.path.dirname(loader)
+    prog = os.path.join(ctx.progs, "trustdir")
+    rc, out, err = run([loader, "--library-path", libdir, prog, hash_, pem], cwd=ctx.work)
+    expect(rc == 0, f"trustdir natively: rc={rc} {err!r}")
+    native = dict(line.split(": ", 1) for line in out.splitlines())
+    rc, out, err = inside(ctx, prog, [hash_, pem])
+    expect(rc == 0, f"trustdir inside: rc={rc} {err!r}")
+    got = dict(line.split(": ", 1) for line in out.splitlines())
+    expect(list(native) == list(got), f"the cases differ: {list(native)} {list(got)}")
+    # the bind's answers: the climb lands where /etc/ssl/openssl.cnf is inside, and the crossing
+    # into the directory is a mount's
+    cnf = got.get("stat cnf", "")
+    bind = {
+        "openat2 noxdev hash": "EXDEV",
+        "openat2 noxdev dir": "EXDEV",
+        "relative dotdot cnf": "ok" if cnf.startswith("file") else cnf,
+    }
+    for k in ("stat", "lstat", "readlink", "open"):
+        bind[f"{k} dotdot_cnf"] = got.get(f"{k} cnf", "")
+        bind[f"{k} cnf"] = got.get(f"{k} cnf", "")  # the tree's by rule, and the reference
+    bad = [
+        f"{case}: {got.get(case)!r}, the kernel says {bind.get(case, n)!r}"
+        for case, n in native.items()
+        if got.get(case) != bind.get(case, n)
+    ]
+    expect(not bad, "the trust directory: " + "; ".join(bad))
+    expect(got.get("open hash", "").startswith("-----BEGIN"), f"the hash link's certificate: {got}")
+
+
+@test
+def trust_directory_rules(ctx: Ctx) -> None:
+    """8.1 rule 5, 8.4: the identity directory's rules, on a trust directory made in a namespace.
+
+    In a user namespace with tmpfs on /etc/ssl/certs and /usr/local/share/ca-certificates, as
+    directory_service_state makes SSSD's: a hash link to a .pem link to an authority under
+    /usr/local, which the tree lacks, reads the host's; a link to a directory there is passed by
+    name; realpath resolves the link's text in the exclave, the limitation of 13 item 55; a create
+    there is the host's own; the bundle the host lacks is the exclave's copy, not listed; Java's
+    keystore the host lacks is the tree's; own on the directory gives it back, and own on a name in
+    it gives that name back; and where the host's directory is a link, the names below it, the
+    exclave's copy among them, answer the same, readlink answers the host's text and the directory
+    it reaches is the host's at its own name. Skipped without user namespaces.
+    """
+    if subprocess.run(
+        ["unshare", "-Urm", "true"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode:
+        skip("no user namespaces")
+    pid = os.getpid()
+    marks = os.path.join(ctx.work, f"trust-{pid}.exclave")
+    copy_exclave(ctx.exclave, marks)
+    root = os.path.join(marks, "tree")
+    certs = os.path.join(root, tree.resolve(root, "/etc/ssl/certs").lstrip("/"))
+    os.makedirs(os.path.join(certs, "java"), exist_ok=True)
+    for name, text in (("java/cacerts", f"tree-java-{pid}"), ("mine.pem", f"tree-mine-{pid}")):
+        q = os.path.join(certs, name)
+        if os.path.lexists(q):
+            os.remove(q)
+        with open(q, "w") as f:
+            f.write(text + "\n")
+    owned = os.path.join(ctx.work, f"trust-own-{pid}.exclave")
+    copy_exclave(marks, owned)
+    with open(os.path.join(owned, ".exclave", "manifest"), "w") as f:
+        f.write('exclave 1\n\nown "/etc/ssl/certs"\n')
+    mine = os.path.join(ctx.work, f"trust-mine-{pid}.exclave")
+    copy_exclave(marks, mine)
+    with open(os.path.join(mine, ".exclave", "manifest"), "w") as f:
+        f.write('exclave 1\n\nown "/etc/ssl/certs/mine.pem"\n')
+
+    def sh_of(ex: str) -> str:
+        return os.path.join(ex, "tree", ctx.vbin("sh").lstrip("/"))
+
+    sh = sh_of(marks)
+    c = "/etc/ssl/certs"
+    cases: list[tuple[str, str, str, str]] = [
+        ("a hash link to the host's /usr/local", sh, f"cat {c}/abcd0000.0", f"local-{pid}"),
+        ("the bundle", sh, f"cat {c}/ca-certificates.crt", f"bundle-{pid}"),
+        ("a link to a directory, passed by name", sh, f"cat {c}/sub/local.crt", f"local-{pid}"),
+        (
+            "realpath, the link's text in the exclave",
+            sh,
+            f"realpath {c}/abcd0000.0 || echo none",
+            "none",
+        ),
+        ("a create, the host's own", sh, f"touch {c}/new && echo made", "made"),
+        ("Java's keystore the host lacks", sh, f"cat {c}/java/cacerts", f"tree-java-{pid}"),
+        (
+            "a name of the tree the host's directory hides",
+            sh,
+            f"cat {c}/mine.pem || echo hidden",
+            "hidden",
+        ),
+        ("own on a name in it", sh_of(mine), f"cat {c}/mine.pem", f"tree-mine-{pid}"),
+        ("own on the directory", sh_of(owned), f"cat {c}/java/cacerts; ls {c} | grep -c abcd", "0"),
+        ("the bundle the host lacks", sh, f"rm {c}/ca-certificates.crt", ""),
+        ("  is the exclave's copy", sh, f"test -e {c}/ca-certificates.crt && echo copy", "copy"),
+        ("  and is not listed", sh, f"ls {c} | grep -c ca-certificates", "0"),
+    ]
+    local = "/usr/local/share/ca-certificates"
+    script = (
+        f"mount -t tmpfs tmpfs /etc/ssl/certs && mount -t tmpfs tmpfs {local} "
+        f"&& echo local-{pid} >/usr/local/share/ca-certificates/local.crt "
+        f"&& ln -s {local}/local.crt /etc/ssl/certs/x.pem "
+        "&& ln -s x.pem /etc/ssl/certs/abcd0000.0 "
+        f"&& ln -s {local} /etc/ssl/certs/sub "
+        f"&& echo bundle-{pid} >/etc/ssl/certs/ca-certificates.crt || exit 99; "
+    )
+    for i, (_what, shell, cmd, _want) in enumerate(cases):
+        script += f"echo '== {i}'; {shell} -c '{cmd}' 2>&1 || echo rc=$?; "
+    # a host whose directory is a link at its name, as Red Hat's are: the same names below it
+    link_cases = [
+        ("a link at the name: readlink", f"readlink {c}", "real"),
+        ("  a hash link below it", f"cat {c}/abcd0000.0", f"local-{pid}"),
+        (
+            "  the bundle the host lacks, the exclave's copy",
+            f"test -e {c}/ca-certificates.crt && echo copy",
+            "copy",
+        ),
+        (
+            "  the directory it reaches, the host's at its name",
+            f"cd {c} && pwd -P && ls | grep -c abcd",
+            "1",
+        ),
+    ]
+    script += (
+        "mount -t tmpfs tmpfs /etc/ssl && mkdir /etc/ssl/real && ln -s real /etc/ssl/certs "
+        "&& ln -s /usr/local/share/ca-certificates/local.crt /etc/ssl/real/x.pem "
+        "&& ln -s x.pem /etc/ssl/real/abcd0000.0 || exit 98; "
+    )
+    for i, (_what, cmd, _want) in enumerate(link_cases, len(cases)):
+        script += f"echo '== {i}'; {sh} -c '{cmd}' 2>&1 || echo rc=$?; "
+    rc, out, err = run(
+        ["unshare", "-Urm", "sh", "-c", script],
+        cwd=ctx.work,
+        env=dict(ctx.env, PATH="/usr/bin:/bin"),
+    )
+    if rc in (98, 99):
+        skip(f"no tmpfs over the trust directory in a user namespace here: {err.strip()[-120:]}")
+    got = {}
+    for block in out.split("== ")[1:]:
+        n, _, rest = block.partition("\n")
+        got[int(n)] = rest.strip().split("\n") if rest.strip() else [""]
+    wanted = [(w, want) for w, _, _, want in cases] + [(w, want) for w, _, want in link_cases]
+    for i, (what, want) in enumerate(wanted):
+        expect(
+            want in got.get(i, []), f"the trust directory, {what.strip()}: {got.get(i)!r} {err!r}"
+        )
+
+
+@test
 def nested_and_log(ctx: Ctx) -> None:
     log = os.path.join(ctx.work, "exclave.log")
     if os.path.exists(log):

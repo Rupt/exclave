@@ -4,8 +4,9 @@
 first, into a directory that behaves like one static executable. Copy the
 directory anywhere and run any program in it by path. The program never
 touches a host library, header or loader, and reads no host configuration
-except nine identity files: who the users are, how names resolve, which
-certificate authorities are trusted, what the time zone is. No daemon,
+except eleven identity files and three directories: who the users are, how
+names resolve, which certificate authorities are trusted, what the time
+zone is. No daemon,
 no image store, no
 privileges, no host binaries. One run-time knob, `EXCLAVE_LOG`, which only
 logs.
@@ -175,12 +176,19 @@ ones a first user meets, with the rule behind each and what to do:
   that would load a host library, and names the file. A second libc's
   world can ride along as a `data` directory that is never executed;
   that is what a sysroot is.
-- **Nine host files are the host's:** `/etc/passwd`, `/etc/group`,
-  `/etc/nsswitch.conf`, `/etc/host.conf`, `/etc/resolv.conf`,
-  `/etc/hosts`, `/etc/localtime`, `/etc/ssl/certs/ca-certificates.crt`
-  and `/etc/pki/tls/certs/ca-bundle.crt`. Each is read from the host where
-  it exists and from the exclave's copy where not; `own` in the manifest
-  takes one back. Everything else under `/etc` is the exclave's.
+- **Eleven host files and three directories are the host's:**
+  `/etc/passwd`, `/etc/group`, `/etc/nsswitch.conf`, `/etc/host.conf`,
+  `/etc/resolv.conf`, `/etc/hosts`, `/etc/localtime`, the trust bundles
+  `/etc/ssl/certs/ca-certificates.crt` and
+  `/etc/pki/tls/certs/ca-bundle.crt`, Java's trust stores
+  `/etc/ssl/certs/java/cacerts` and `/etc/pki/java/cacerts`, and the
+  directories `/etc/ssl/certs` and `/etc/pki/tls/certs`, where the host
+  keeps its trusted authorities one to a file, and `/var/lib/sss`,
+  SSSD's. Each is read from the host where it exists, its links followed
+  on the host, so a program that verifies through the certificate
+  directory trusts what the host trusts; where the host lacks one, the
+  exclave's copy answers. `own` in the manifest takes one back.
+  Everything else under `/etc` is the exclave's.
 - **The locale and the shell are the exclave's; the time zone is the
   host's.** At the border `LANG=C.UTF-8` and `SHELL=/bin/sh` replace the
   user's; `TZ`, `LANGUAGE`, every `LC_*` and the variables that steer a
@@ -188,7 +196,7 @@ ones a first user meets, with the rule behind each and what to do:
   like) are dropped. Every other variable passes through, and inside the
   exclave nothing is touched but the launcher's own variables. Messages
   are English, and `date` prints the host's local time, read from
-  `/etc/localtime`, one of the nine files above; a `TZ` zone name would
+  `/etc/localtime`, one of the eleven files above; a `TZ` zone name would
   need `tzdata` in the exclave. An exclave that wants another locale or
   shell ships the data and a wrapper script that sets the variable; one
   that wants a fixed zone takes `/etc/localtime` back with `own`.
@@ -308,8 +316,9 @@ nothing is overridden, and four other keys, each a string:
   wrapped, not checked: a sysroot, or a second libc's world;
 - `host` puts a host path at its own name inside the exclave: `host
   "/usr/local/share/fonts"`;
-- `own` makes a path the exclave's: one of the nine identity files
-  above, or any other path the rule would give the host.
+- `own` makes a path the exclave's: one of the identity files or
+  directories above, a path inside one, or any other path the rule
+  would give the host.
 
 That is the whole manifest. There is no way to make the tree writable,
 remap a path, set a variable or put a directory on `PATH`. A wrapper
@@ -342,8 +351,8 @@ descriptor 3; `access -2 /etc/ld.so.preload` is `ENOENT`, which is what
 a search looks like and not a fault. Lines that begin `launcher` are the
 launcher's own decisions: the working directory it started in and, when
 that lies under an exclave path, the subtree it gave the host; the
-border program; an identity file the host lacks, answered from the
-exclave's copy. Every process a workload spawns appends to the same
+border program; an identity file or directory the host lacks, answered
+from the exclave's copy. Every process a workload spawns appends to the same
 file, so a `make` writes one log. A newline in a path is written `\n`
 and a backslash `\\`; nothing else is escaped.
 

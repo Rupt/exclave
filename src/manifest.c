@@ -274,7 +274,8 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
             c->host[c->nhost].v = f[0].s;
             c->host[c->nhost].r = f[0].s;
             c->host[c->nhost].is_file = 0;
-            c->host[c->nhost].is_default_dir = 0;
+            c->host[c->nhost].is_identity_dir = 0;
+            c->host[c->nhost].is_link = 0;
             c->nhost++;
         } else if (xstrcmp(key, "data") == 0) {
             WANT(1, F_STR);

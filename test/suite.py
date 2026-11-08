@@ -491,6 +491,7 @@ PROGS = (
     "pkeys",
     "dirstat",
     "identity_nofollow",
+    "trustdir",
     "rename_dots",
     "program_perm",
     "exec_script",

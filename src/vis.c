@@ -8,7 +8,8 @@
 
 static const char *volatile_dirs[] = {"/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run", 0};
 /* 8.1.5: the host's by default; an own record naming one exactly removes it. /etc/localtime is the host's zone, a
- * TZif file any libc reads through the host's link into its zoneinfo, and TZ is dropped at the border (6.2). */
+ * TZif file any libc reads through the host's link into its zoneinfo, and TZ is dropped at the border (6.2). The trust
+ * bundles and Java's keystores come in pairs, Debian's path and Red Hat's. */
 static const char *identity_files[] = {"/etc/passwd",
                                        "/etc/group",
                                        "/etc/nsswitch.conf",
@@ -18,13 +19,21 @@ static const char *identity_files[] = {"/etc/passwd",
                                        "/etc/localtime",
                                        "/etc/ssl/certs/ca-certificates.crt",
                                        "/etc/pki/tls/certs/ca-bundle.crt",
+                                       "/etc/ssl/certs/java/cacerts",
+                                       "/etc/pki/java/cacerts",
                                        0};
 _Static_assert(sizeof identity_files / sizeof identity_files[0] == N_IDENTITY + 1,
                "N_IDENTITY counts the identity files");
-/* 8.1.5: directories the host's by default, as the identity files are: SSSD's state, whose socket and memory cache
- * its lookup module reads (13 item 17); an own record naming one exactly removes it */
-static const char *host_dirs[] = {"/var/lib/sss", 0};
-_Static_assert(sizeof host_dirs / sizeof host_dirs[0] == N_HOST_DIRS + 1, "N_HOST_DIRS counts the host directories");
+/* 8.1.5, 8.4: the identity directories, the host's by default with the links at and below them followed on the host:
+ * the two trust directories, where a host keeps its authorities one to a name, and SSSD's state, whose socket and
+ * memory cache its lookup module reads (13 item 17); an own record naming one exactly removes it */
+static const char *identity_dirs[] = {"/etc/ssl/certs", "/etc/pki/tls/certs", "/var/lib/sss", 0};
+_Static_assert(sizeof identity_dirs / sizeof identity_dirs[0] == N_IDENTITY_DIRS + 1,
+               "N_IDENTITY_DIRS counts the identity directories");
+/* identity files the host lacks, the exclave's copies (8.1.5): where one lies in an identity directory the host has,
+ * the rule names it the exclave's (rule_build) */
+static const char *absent[N_IDENTITY];
+static int nabsent;
 
 struct dirent64 {
     unsigned long d_ino;
@@ -115,8 +124,8 @@ static void own_from_tree(void)
     sys_close((int)fd);
 }
 
-/* 8.1.5: the identity files and the default host directories join the host table unless an own record names one;
- * the table has room for them after the manifest's records by construction */
+/* 8.1.5: the identity files and directories join the host table unless an own record names one; the table has room
+ * for them after the manifest's records by construction */
 static void host_default(const char *v, int is_dir)
 {
     for (int j = 0; j < C.nown; j++)
@@ -125,13 +134,14 @@ static void host_default(const char *v, int is_dir)
     C.host[C.nhost].v = v;
     C.host[C.nhost].r = v;
     C.host[C.nhost].is_file = 0;
-    C.host[C.nhost].is_default_dir = is_dir;
+    C.host[C.nhost].is_identity_dir = is_dir;
+    C.host[C.nhost].is_link = 0;
     C.nhost++;
 }
 static void identity_defaults(void)
 {
     for (int i = 0; i < N_IDENTITY; i++) host_default(identity_files[i], 0);
-    for (int i = 0; i < N_HOST_DIRS; i++) host_default(host_dirs[i], 1);
+    for (int i = 0; i < N_IDENTITY_DIRS; i++) host_default(identity_dirs[i], 1);
 }
 
 /* 6.2: a data directory is never executed and never a loader */
@@ -169,15 +179,20 @@ static void claim_cwd(void)
 
 void vis_init(void)
 {
+    int nrec = C.nhost; /* the manifest's host records come first */
     identity_defaults();
     own_from_tree();
-    /* identity files and host records: resolve each on the host; drop the ones the host lacks */
+    /* identity files and directories and host records: resolve each on the host; drop the ones the host lacks */
     int n = 0, nextra = 0;
-    const char *extra[N_HOST_DIRS] = {0};
+    const char *extra[N_IDENTITY_DIRS] = {0};
+    nabsent = 0;
     for (int i = 0; i < C.nhost; i++) {
         struct kstat st;
-        if (sys_lstat(C.host[i].v, &st) < 0) {
-            log_msg("host path absent, using the exclave's", C.host[i].v);
+        const char *v = C.host[i].v;
+        int idir = C.host[i].is_identity_dir, ifile = !idir && i >= nrec;
+        if (sys_lstat(v, &st) < 0) {
+            log_msg("host path absent, using the exclave's", v);
+            if (ifile) absent[nabsent++] = v;
             continue;
         }
         if ((st.st_mode & S_IFMT) == S_IFDIR) {
@@ -186,39 +201,46 @@ void vis_init(void)
             n++;
             continue;
         }
-        /* a default directory that is a host link to a directory: the name stays a directory record, and the directory
-         * the host resolves it to, as the kernel names it, is the host's as well, so that the walk, which follows the
-         * link's text in virtual space (7.4.4), reaches it */
-        if (C.host[i].is_default_dir && (st.st_mode & S_IFMT) == S_IFLNK) {
+        /* an identity directory that is a host link: the name stays an identity directory, passed by name and
+         * followed by the kernel at each call, and the directory the host resolves it to, as the kernel names it, is
+         * one too at its own name, where a working directory or a descriptor there is named (8.4). One that leads to
+         * no directory, or that the kernel names outside this root, is the exclave's. */
+        if (idir) {
             static char dir[PATH_MAX];
-            long fd = sys_open(C.host[i].v, O_PATH | O_CLOEXEC | O_DIRECTORY, 0);
+            long fd = (st.st_mode & S_IFMT) == S_IFLNK ? sys_open(v, O_PATH | O_CLOEXEC | O_DIRECTORY, 0) : -ENOTDIR;
             long len = fd >= 0 ? fd_real_path((int)fd, dir) : -1;
             if (fd >= 0) sys_close((int)fd);
-            if (len > 0 && dir[0] == '/') {
-                C.host[n] = C.host[i];
-                C.host[n].is_file = 0;
-                n++;
-                /* one at most for each default directory, by construction */
-                if (nextra >= N_HOST_DIRS) die("host table full", dir, 0);
-                extra[nextra++] = arena_str(dir, (size_t)len);
+            if (len <= 0 || dir[0] != '/') {
+                log_msg("host path unresolvable, using the exclave's", v);
                 continue;
             }
+            C.host[n] = C.host[i];
+            C.host[n].is_file = 0;
+            C.host[n].is_link = 1;
+            n++;
+            /* one at most for each identity directory, by construction */
+            if (nextra >= N_IDENTITY_DIRS) die("host table full", dir, 0);
+            extra[nextra++] = arena_str(dir, (size_t)len);
+            continue;
         }
         /* a file, or a link the host resolves: the host's name is its real path, so that a call follows the host's
          * link as the host has it at that moment, in the host's space (8.4) */
-        if ((st.st_mode & S_IFMT) == S_IFLNK && sys_stat(C.host[i].v, &st) < 0) {
-            log_msg("host path unresolvable, using the exclave's", C.host[i].v);
+        if ((st.st_mode & S_IFMT) == S_IFLNK && sys_stat(v, &st) < 0) {
+            log_msg("host path unresolvable, using the exclave's", v);
+            if (ifile) absent[nabsent++] = v;
             continue;
         }
-        C.host[n].v = C.host[n].r = C.host[i].v;
+        C.host[n].v = C.host[n].r = v;
         C.host[n].is_file = 1;
-        C.host[n].is_default_dir = 0;
+        C.host[n].is_identity_dir = 0;
+        C.host[n].is_link = 0;
         n++;
     }
     for (int i = 0; i < nextra; i++) {
         C.host[n].v = C.host[n].r = extra[i];
         C.host[n].is_file = 0;
-        C.host[n].is_default_dir = 1;
+        C.host[n].is_identity_dir = 1;
+        C.host[n].is_link = 0;
         n++;
     }
     C.nhost = n;
@@ -232,7 +254,8 @@ void vis_init(void)
  * or at its end, so the prefixes of v the rule can match are found by one pass over v, hashing as it goes and
  * looking each cut up: a path's answer costs one pass over its length. The table is written once before
  * anything traps and only read afterwards. */
-enum { R_OWN = 1, R_HOSTDIR = 2, R_HOSTFILE = 4, R_VOLATILE = 8, R_LEADS = 16 };
+/* R_IDDIR: an identity directory the host has (8.4), and R_IDLINK where its host name is a link */
+enum { R_OWN = 1, R_HOSTDIR = 2, R_HOSTFILE = 4, R_VOLATILE = 8, R_LEADS = 16, R_IDDIR = 32, R_IDLINK = 64 };
 #define RULE_SLOTS 2048
 /* host: the index of a file's record */
 static struct rule {
@@ -285,7 +308,7 @@ static void rule_add(const char *v, unsigned len, unsigned flags, int host)
 static void rule_build(void)
 {
     dir_len = (unsigned)xstrlen(C.dir);
-    unsigned most = (unsigned)C.nown + (unsigned)(sizeof volatile_dirs / sizeof volatile_dirs[0]);
+    unsigned most = (unsigned)C.nown + (unsigned)nabsent + (unsigned)(sizeof volatile_dirs / sizeof volatile_dirs[0]);
     for (int i = 0; i < C.nhost; i++)
         for (const char *p = C.host[i].v; *p; p++) most += *p == '/';
     while (rule_mask + 1 > 64 && rule_mask / 2 + 1 >= 2 * most) rule_mask /= 2;
@@ -297,8 +320,9 @@ static void rule_build(void)
         unsigned len = (unsigned)xstrlen(v);
         if (!C.host[i].is_file) {
             rule_add(v, len, R_HOSTDIR, -1);
-            /* a default directory's way is made of directories, as an identity file's is (8.1.5) */
-            if (C.host[i].is_default_dir) {
+            /* an identity directory's way is made of directories, as an identity file's is (8.1.5) */
+            if (C.host[i].is_identity_dir) {
+                rule_add(v, len, R_IDDIR | (C.host[i].is_link ? R_IDLINK : 0), -1);
                 for (unsigned k = 1; k < len; k++)
                     if (v[k] == '/') rule_add(v, k, R_LEADS, -1);
                 if (v[0] == '/') root_flags |= R_LEADS;
@@ -312,6 +336,19 @@ static void rule_build(void)
         /* and the root, which starts_dir lets lead to every absolute path */
         if (v[0] == '/') root_flags |= R_LEADS;
     }
+    /* 8.1.5: an identity file the host lacks, in an identity directory the host has, is the exclave's copy; the walk
+     * asks the rule of every name below the directory before the host's entry (8.4), and the directories between are
+     * directories to it, as the way to any identity file is, so that it reaches the copy where the host lacks them */
+    for (int i = 0; i < nabsent; i++)
+        for (int j = 0; j < C.nhost; j++) {
+            const char *d = C.host[j].v;
+            if (!C.host[j].is_identity_dir || !starts_dir(absent[i], d) || !xstrcmp(absent[i], d)) continue;
+            unsigned len = (unsigned)xstrlen(absent[i]);
+            rule_add(absent[i], len, R_OWN, -1);
+            for (unsigned k = (unsigned)xstrlen(d) + 1; k < len; k++)
+                if (absent[i][k] == '/') rule_add(absent[i], k, R_LEADS, -1);
+            break;
+        }
 }
 
 /* what the rule's strings say of v: the identity file it is, the longest host record and owned path that are prefixes
@@ -319,13 +356,14 @@ static void rule_build(void)
 struct facts {
     struct rule *exact;
     long best_host, best_own;
+    long iddir; /* the longest identity directory that is a prefix, or -1 */
     int vol;
     unsigned len;
 };
 static void rule_facts(const char *v, struct facts *f)
 {
     f->exact = 0;
-    f->best_host = f->best_own = -1;
+    f->best_host = f->best_own = f->iddir = -1;
     f->vol = 0;
     if (v[0] == '/') {                                         /* starts_dir(v, "/") */
         if (root_flags & R_OWN) f->best_own = 1;
@@ -342,6 +380,7 @@ static void rule_facts(const char *v, struct facts *f)
             if (r) {
                 if (r->flags & R_OWN) f->best_own = i;
                 if (r->flags & R_HOSTDIR) f->best_host = i;
+                if (r->flags & R_IDDIR) f->iddir = i;
                 if (r->flags & R_VOLATILE) f->vol = 1;
                 if (end) f->exact = r;
             }
@@ -444,7 +483,7 @@ int vis_plain_host_chain(const char *p, unsigned from)
 {
     struct facts f;
     f.exact = 0;
-    f.best_host = f.best_own = -1;
+    f.best_host = f.best_own = f.iddir = -1;
     f.vol = 0;
     f.len = 0;
     if (p[0] != '/' || from < 2) return 0;
@@ -462,7 +501,7 @@ int vis_plain_host_chain(const char *p, unsigned from)
                 if (r->flags & R_VOLATILE) f.vol = 1;
             }
             if (i >= from) {                                   /* the candidate p[0..i), i >= 2: never the root */
-                if (r && (r->flags & (R_HOSTFILE | R_LEADS))) return 0;
+                if (r && (r->flags & (R_HOSTFILE | R_LEADS | R_IDDIR))) return 0;
                 if (C.rootlen == (long)i && xmemcmp(p, C.root, i) == 0) return 0;
                 struct facts g = f;
                 g.exact = r;
@@ -475,15 +514,21 @@ int vis_plain_host_chain(const char *p, unsigned from)
         h = rule_hash(h, c);
     }
 }
-/* the walk's three questions of a candidate in one pass (7.4.4): whether it is an identity file, whether it is a
- * directory on the way to one, and whose it is; 1 if the host's, *real its real path */
-int vis_walk_facts(const char *v, int *identity, int *leads, const char **real)
+/* the walk's questions of a candidate in one pass (7.4.4): whether it is an identity file, whether it is a directory on
+ * the way to one, whether it is an identity directory or the host's below one, and whose it is; 1 if the host's, *real
+ * its real path. *idd is 1 at an identity directory the host has as a directory, 2 at one whose host name is a link, 3
+ * below either where the rule gives the name to the host, and 0 otherwise (8.4) */
+int vis_walk_facts(const char *v, int *identity, int *leads, int *idd, const char **real)
 {
     struct facts f;
     rule_facts(v, &f);
     *identity = f.exact && (f.exact->flags & R_HOSTFILE);
     *leads = leads_facts(v, &f);
-    return is_host_facts(v, &f, real);
+    int host = is_host_facts(v, &f, real);
+    *idd = 0;
+    if (host && f.exact && (f.exact->flags & R_IDDIR)) *idd = (f.exact->flags & R_IDLINK) ? 2 : 1;
+    else if (host && f.iddir > 0 && f.iddir < (long)f.len && f.iddir >= f.best_own) *idd = 3;
+    return host;
 }
 
 int is_wrapper_st(const char *real, const struct kstat *st, char *tmp)

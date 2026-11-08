@@ -30,9 +30,9 @@
 #define MAX_HOST_RECORDS 32
 #define MAX_DATA_RECORDS 32
 #define MAX_TOP_LEVEL 256
-#define N_IDENTITY 9
-/* the host's directories by default (8.1.5): SSSD's state, where its lookup module finds the daemon */
-#define N_HOST_DIRS 1
+#define N_IDENTITY 11
+/* the identity directories (8.1.5, 8.4): the two trust directories and SSSD's state */
+#define N_IDENTITY_DIRS 3
 /* a manifest record's most fields, and the most bytes a field holds, a string's decoded (6.2) */
 #define MANIFEST_FIELDS 8
 #define MANIFEST_FIELD_MAX (PATH_MAX - 1)
@@ -191,9 +191,11 @@ struct hostmap {
     const char *v;
     const char *r;
     int is_file;
-    /* a default host directory (8.1.5): the directories on the way to it are directories, as an identity file's are,
-     * and a host link there is followed to a directory that is the host's too */
-    int is_default_dir;
+    /* an identity directory (8.1.5, 8.4): the directories on the way to it are directories, as an identity file's are,
+     * and the links at and below it are followed on the host */
+    int is_identity_dir;
+    /* an identity directory whose host name is a link: the directory it resolves to is one too, at its own name */
+    int is_link;
 };
 
 struct exclave {
@@ -223,9 +225,9 @@ struct exclave {
     /* the manifest's own records (at most 256), then every non-empty top-level entry of the tree (at most 256) */
     const char *own[MAX_OWN_RECORDS + MAX_TOP_LEVEL];
     int nown;
-    struct hostmap host[MAX_HOST_RECORDS + N_IDENTITY + 2 * N_HOST_DIRS];
-    /* the manifest's host records (at most 32), then the identity files (8.4) and the default host directories, each
-     * with the directory a host link there resolves to */
+    struct hostmap host[MAX_HOST_RECORDS + N_IDENTITY + 2 * N_IDENTITY_DIRS];
+    /* the manifest's host records (at most 32), then the identity files (8.4) and the identity directories, each with
+     * the directory a host link at its name resolves to */
     int nhost;
     const char *data[MAX_DATA_RECORDS];
     int ndata; /* data directories: never executed, never a loader (6.2) */
@@ -304,8 +306,8 @@ struct scratch {
     unsigned resolve; /* openat2's resolve flags for the walk (7.4.3); 0 for every other syscall */
     /* set by canon: the walk started at, passed through or ended in the exclave's domain, or rewrote a magic link */
     int touched_exclave;
-    /* the walk ended on a link the re-issue must follow: a magic link to an object with no path, or an identity
-     * file's host link, followed on the host (8.4) */
+    /* the walk ended on a link the re-issue must follow: 1 for a magic link to an object with no path, 2 for an
+     * identity file's host link or a link at or below an identity directory, followed on the host (8.4) */
     int follow_end;
     /* openat2's struct open_how as given, for a walk that never touched the exclave (7.4.3) */
     unsigned long how0[3];
@@ -329,8 +331,8 @@ char *to_real(const char *v, char *out, char *tmp); /* v -> real, with wrapper r
 char *to_real_exec(const char *v, char *out); /* v -> real, no wrapper redirect */
 void from_real(char *r); /* in place, no buffer */
 int is_exclave_path(const char *v);
-/* the three in one pass: 1 if the host's */
-int vis_walk_facts(const char *v, int *identity, int *leads, const char **real);
+/* the walk's questions in one pass: 1 if the host's; *idd as vis.c says */
+int vis_walk_facts(const char *v, int *identity, int *leads, int *idd, const char **real);
 /* every prefix from that long the host's plainly: the one-step check may stand in */
 int vis_plain_host_chain(const char *p, unsigned from);
 int is_wrapper_real(const char *real, char *tmp); /* tmp PATH_MAX */

@@ -43,9 +43,11 @@ IDENTITY_FILES = (
     "/etc/localtime",
     "/etc/ssl/certs/ca-certificates.crt",
     "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/certs/java/cacerts",
+    "/etc/pki/java/cacerts",
 )
-# The host's directories by default (8.1 rule 5): SSSD's state, where its lookup module finds it.
-HOST_DIRS = ("/var/lib/sss",)
+# The identity directories (8.1 rule 5, 8.4): the two trust directories and SSSD's state.
+IDENTITY_DIRS = ("/etc/ssl/certs", "/etc/pki/tls/certs", "/var/lib/sss")
 
 
 def identity_links(root: str) -> None:
@@ -565,6 +567,75 @@ def relink_if_stale(ex: str, launcher: str = BUILD_LAUNCHER) -> bool:
 
 # the locks kept_worlds holds until the process exits
 _KEPT_LOCKS: list[int] = []
+
+
+def host_trust_link() -> tuple[str, str] | None:
+    """A subject-hash link in the host's /etc/ssl/certs and the name it points at, or None."""
+    d = "/etc/ssl/certs"
+    if not os.path.isdir(d):
+        return None
+    for n in sorted(os.listdir(d)):
+        p = os.path.join(d, n)
+        if n.endswith(".0") and os.path.islink(p) and os.path.exists(p):
+            t = os.readlink(p)
+            if "/" not in t and os.path.islink(os.path.join(d, t)):
+                return n, t
+    return None
+
+
+def identity_dir_binds(root: str, *, targets: bool = False) -> list[str]:
+    """The bwrap arguments giving a kernel's root the identity directories as the launcher has them.
+
+    Each identity directory the host has is bound, writable, so that a write answers with the host's
+    permissions as the launcher's does (8.4), at its own name, or, where the host's name is a link,
+    the host's link is laid at the name in the kernel's root, as identity_links lays a file's, and
+    the directory it reaches is bound at its own name, which the launcher makes an identity
+    directory too (8.1 rule 5). The mount points are made in root, replacing a link the tree has
+    there. With targets, the directory of each link's target that lies outside the identity
+    directory is bound at its own name as well, so that the kernel reaches the host's certificate
+    as the launcher's hand-off does; that changes every path that names those directories, so only
+    the syscall probe, whose forms never name them, asks for it. Done again on a kept root.
+    """
+    args: list[str] = []
+    seen: list[str] = []
+
+    def mount_point(p: str) -> None:
+        at = os.path.join(root, p.lstrip("/"))
+        if os.path.islink(at):
+            os.remove(at)
+        os.makedirs(at, exist_ok=True)
+
+    for d in IDENTITY_DIRS:
+        if not os.path.isdir(d):
+            continue
+        reached = os.path.realpath(d)
+        if os.path.islink(d):
+            at = os.path.join(root, d.lstrip("/"))
+            if os.path.lexists(at) and not os.path.islink(at) and os.path.isdir(at):
+                shutil.rmtree(at)
+            elif os.path.lexists(at):
+                os.remove(at)
+            os.makedirs(os.path.dirname(at), exist_ok=True)
+            os.symlink(os.readlink(d), at)
+            mount = reached
+        else:
+            mount = d
+        mount_point(mount)
+        args += ["--bind", reached, mount]
+        seen.append(reached)
+        if not targets:
+            continue
+        for name in sorted(os.listdir(reached)):
+            p = os.path.join(reached, name)
+            if not os.path.islink(p) or not os.path.exists(p):
+                continue
+            t = os.path.dirname(os.path.realpath(p))
+            if any(t == s or t.startswith(s + "/") for s in seen):
+                continue
+            mount_point(t)
+            args += ["--bind", t, t]
+            seen.append(t)
+    return args
 
 
 def kept_worlds(src: str, driver: str) -> tuple[str, str]:

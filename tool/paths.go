@@ -179,18 +179,34 @@ func ownedTop(ex string) []string {
 	return out
 }
 
-// The host's directories by default (8.1.5), as the identity files are: SSSD's state, where its
-// lookup module finds the daemon (13 item 17). An own record naming one exactly removes it, and
-// the launcher drops one this host lacks, as the model of it here does, so that prune keeps what
-// a tree ships there when the exclave answers for it.
-var hostDirs = []string{"/var/lib/sss"}
+// The identity directories (8.1.5, 8.4), the host's by default as the identity files are: the two
+// trust directories and SSSD's state, where its lookup module finds the daemon (13 item 17). An own
+// record naming one exactly removes it, and the launcher drops one this host lacks, as the model
+// of it here does; an identity file this host lacks inside one it has is the exclave's.
+var identityDirs = []string{"/etc/ssl/certs", "/etc/pki/tls/certs", "/var/lib/sss"}
+
+// The trust directories among them, where check names what a tree ships that the host's hides.
+var trustDirs = identityDirs[:2]
 
 func ownershipOf(ex string) *ownership {
 	m := manifestOf(ex)
 	o := &ownership{own: valuesOf(m, "own"), host: valuesOf(m, "host")}
-	for _, d := range hostDirs {
-		if !slices.Contains(o.own, d) && lexists(d) {
+	var dirs []string
+	for _, d := range identityDirs {
+		if !slices.Contains(o.own, d) && isDir(d) {
 			o.host = append(o.host, d)
+			dirs = append(dirs, d)
+		}
+	}
+	for _, f := range identityFiles {
+		if _, err := os.Stat(f); slices.Contains(o.own, f) || err == nil {
+			continue
+		}
+		for _, d := range dirs {
+			if strings.HasPrefix(f, d+"/") {
+				o.own = append(o.own, f)
+				break
+			}
 		}
 	}
 	o.own = append(o.own, ownedTop(ex)...)

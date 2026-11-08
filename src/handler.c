@@ -447,7 +447,8 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     if (nr == NR_openat2) {
         unsigned long *how = S->how;
         how[0] = (unsigned long)flags;
-        how[2] = 0;
+        /* the walk ended on a host link the kernel follows on the host (8.4): what it reaches may be a magic link */
+        how[2] = S->follow_end == 2 ? S->how0[2] & (unsigned long)RESOLVE_NO_MAGICLINKS : 0;
         /* build_open_flags: a mode only with a create */
         how[1] = (flags & O_CREAT) || (flags & O_TMPFILE) == O_TMPFILE ? (unsigned long)mode : 0;
         return RE5(NR_openat2, RE_DFD(S), RE_PATH(S), how, 24, 0);

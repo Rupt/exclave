@@ -369,6 +369,9 @@ struct walk {
     int dom;            /* RESOLVE_NO_XDEV: the domain the walk is in, the exclave's (1) or the host's (0) */
     int hops;           /* links followed, at most 40 */
     int chain_failed;   /* a one-step host check that could not vouch: not tried again until a link */
+    /* the length of the starting directory a relative walk walks again from the root, whose own components cross
+     * no mount for RESOLVE_NO_XDEV, since the kernel starts in that directory */
+    size_t start_len;
 };
 
 /* where the walk starts: S->cur the directory, S->rest the path from there, 0; 1 when out holds the answer already, a
@@ -413,6 +416,7 @@ static int walk_start(struct scratch *S, struct walk *w, const char *path, int d
         scpy(rest, path, sizeof S->rest);
     } else {
         /* a directory and a path, each under PATH_MAX, fit rest together */
+        w->start_len = xstrlen(rest);
         scat(rest, "/", sizeof S->rest);
         scat(rest, path, sizeof S->rest);
         cur[0] = 0;
@@ -432,10 +436,12 @@ static int walk_dotdot(struct scratch *S, struct walk *w)
     char *s = xstrrchr(cur, '/');
     if (s) *s = 0;
     else cur[0] = 0;
-    /* the tree's root, reached from below: the walk is the handler's, not the kernel's own */
-    if (!cur[0]) S->touched_exclave = 1;
+    w->start_len = 0; /* past the starting directory, which the kernel names without a .. */
+    /* the tree's root or an exclave directory, reached from below, from an identity directory say (8.4): the walk is
+     * the handler's, not the kernel's own */
+    int d = cur[0] ? is_exclave_path(cur) : 1;
+    if (d) S->touched_exclave = 1;
     if (w->rf & RESOLVE_NO_XDEV) { /* follow_dotdot: leaving a mount upward is a crossing */
-        int d = cur[0] ? is_exclave_path(cur) : 1;
         if (d != w->dom) return -EXDEV;
         w->dom = d;
     }
@@ -498,26 +504,72 @@ static int host_component(struct scratch *S, struct walk *w, int last, int *err)
     return CK_LINK;
 }
 
+/* a name at or below an identity directory, its host name in S->real, in a walk the kernel's links may be handed to
+ * (8.4): its kind by its lstat, its error in *err for CK_NONE. A link that is the last component is the kernel's to
+ * follow on the host, at the call; one with components after it is opened on the host, and the walk goes on from the
+ * directory it reaches, by the kernel's name for it, where the rule gives that name to the host or it is the tree's,
+ * and otherwise passes the link by name, the kernel following it at each call. CK_ONWARD where the walk goes on from
+ * S->cur as it stands, or -errno */
+static int identity_component(struct scratch *S, struct walk *w, int last, int *err)
+{
+    char *cur = S->cur, *real = S->real, *tmp = S->tmp;
+    struct kstat st;
+    long r = sys_lstat(real, &st);
+    if (r < 0) {
+        *err = (int)r;
+        return CK_NONE;
+    }
+    if ((st.st_mode & S_IFMT) == S_IFDIR) return CK_DIR;
+    if ((st.st_mode & S_IFMT) != S_IFLNK) return CK_FILE;
+    if (last) {
+        S->follow_end = 2;
+        return CK_FILE;
+    }
+    long fd = sys_open(real, O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
+    if (fd < 0) return (int)fd; /* the link's own answer as the kernel walks through it: ENOENT, ENOTDIR, ELOOP */
+    long n = fd_real_path((int)fd, tmp);
+    sys_close((int)fd);
+    if (++w->hops > 40) return -ELOOP;
+    const char *hreal;
+    if (n > 0 && tmp[0] == '/' && (starts_dir(tmp, C.root) || vis_is_host(tmp, &hreal))) {
+        from_real(tmp); /* the tree's directory, reached by its real name, is its virtual path */
+        scpy(cur, tmp[1] ? tmp : "", PATH_MAX);
+        w->chain_failed = 0;
+        return CK_ONWARD;
+    }
+    return CK_DIR;
+}
+
 /* the component at the end of S->cur, by the rule and then by the cache or an lstat: its kind as host_component
  * answers, CK_ONWARD where the walk goes on from S->cur as it stands, or -errno */
 static int walk_classify(struct scratch *S, struct walk *w, int last, int *err)
 {
     char *cur = S->cur, *real = S->real, *tmp = S->tmp;
-    int idf, leads, chain = 0;
+    int idf, leads, idd, chain = 0;
     const char *hreal;
     /* the rule asked once for the candidate (DESIGN.md 16.6 item 3) */
-    int host = vis_walk_facts(cur, &idf, &leads, &hreal);
+    int host = vis_walk_facts(cur, &idf, &leads, &idd, &hreal);
     leads = leads && !last;
-    if (idf || leads || !host) S->touched_exclave = 1; /* anything but a plain host component */
+    if (idf || leads || idd || !host) S->touched_exclave = 1; /* anything but a plain host component */
     /* 8.4: followed on the host, by its host name, at each call; its host symlinks are not ours to follow */
     if (idf) {
         /* it is a symlink where the walk sees it */
         if ((w->rf & RESOLVE_NO_SYMLINKS) && vis_readlink_identity(cur, tmp) == 1) return -ELOOP;
         /* followed as the last component: the re-issue on the host name follows the host's link */
-        if (last) S->follow_end = 1;
+        if (last) S->follow_end = 2;
         return CK_FILE;
     }
-    if (leads) return CK_DIR; /* on the way to an identity file: a directory (8.4) */
+    if (leads) return CK_DIR; /* on the way to an identity file or directory: a directory (8.4) */
+    /* 8.4: an identity directory and the names below it. A walk that openat2's flags scope or that refuses links or
+     * mounts follows the links there itself, as the kernel would on a bind mount of the host's directory: BENEATH
+     * whatever its scope, since nd_jump_root and follow_dotdot refuse at the root too, and IN_ROOT at a scope below
+     * the root. Otherwise the directory is passed by name, the kernel following a host link at its name at each call */
+    if (idd && !(w->rf & (RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV | RESOLVE_BENEATH)) &&
+        !((w->rf & RESOLVE_IN_ROOT) && w->base[0])) {
+        if (idd != 3 && !last) return CK_DIR;
+        scpy(real, hreal, PATH_MAX);
+        return identity_component(S, w, last, err);
+    }
     if (!host) {
         /* 7.4.4: the exclave's components are remembered for the process's life, and the real path is made only for a
          * component not yet remembered */
@@ -532,7 +584,7 @@ static int walk_classify(struct scratch *S, struct walk *w, int last, int *err)
     /* the one-step host check, standing in for the directories before the final component */
     if (!last && !w->rf && !w->chain_failed && (chain = host_chain(S, cur, &w->rp)) > 0) return CK_ONWARD;
     if (chain < 0) w->chain_failed = 1; /* the walk's, from here to the next link */
-    scpy(real, hreal, PATH_MAX);        /* to_real_exec's answer for a host path */
+    scpy(real, hreal, PATH_MAX); /* to_real_exec's answer for a host path */
     return host_component(S, w, last, err);
 }
 
@@ -596,7 +648,9 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
          * lookup (open_last_lookups, EISDIR) is never stepped into, so its mount is not met */
         if (w.rf & RESOLVE_NO_XDEV) {
             int d = is_exclave_path(cur);
-            if (d != w.dom && !(last && trailing && (follow_last & WALK_PARENT)) &&
+            /* the starting directory's own way, walked again: the kernel starts in it and crosses nothing there */
+            if (w.start_len && xstrlen(cur) > w.start_len) w.start_len = 0;
+            if (!w.start_len && d != w.dom && !(last && trailing && (follow_last & WALK_PARENT)) &&
                 !(last && !(follow_last & WALK_FOLLOW) && !trailing && vis_is_identity_file(cur) &&
                   vis_readlink_identity(cur, tmp) == 1))
                 return -EXDEV;
@@ -638,11 +692,12 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
          * the path's trailing slash: a directory is meant, and O_CREAT answers EISDIR (open_last_lookups) */
         if (last && tmp[0] && tmp[xstrlen(tmp) - 1] == '/') trailing = 1;
         w.chain_failed = 0; /* the walk restarts at the link's text */
+        w.start_len = 0;
         if ((r = walk_splice(S, &w, tmp)) < 0) return r;
         if (tmp[0] == '/') {
             if (w.rf & RESOLVE_BENEATH) return -EXDEV; /* an absolute link target leaves the scope */
             scpy(cur, w.base, PATH_MAX); /* the scope's root is / for a scoped walk in root */
-            S->touched_exclave = 1;      /* the walk restarts at the tree's root */
+            S->touched_exclave = 1; /* the walk restarts at the tree's root */
         } else {
             char *s = xstrrchr(cur, '/');
             if (s) *s = 0;
