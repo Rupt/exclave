@@ -5281,9 +5281,6 @@ steps:
   tampered archive and a tampered sums file refused and `NOTICES`
   naming the modules the command links (10.5).
 
-On the reference machine, on the four exclaves, four steps at a time,
-it takes 96 s (measured October 2026).
-
 **The suite** (`scripts/test --exclave EXCLAVE`, or `--tree DIR` for an
 unwrapped tree) makes an exclave under its work directory, compiles
 `test/progs/` with the tree's own C compiler, four programs at a time
