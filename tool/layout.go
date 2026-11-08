@@ -331,6 +331,7 @@ func cmdWrap(args []string) int {
 	}
 	ex, given := args[0], len(args) == 2
 	requireExclave(ex, "wrap")
+	refuseSetAside(ex, "wrap")
 	ld, root, mp := pathJoin(ex, ".exclave/launcher"), pathJoin(ex, "tree"), pathJoin(ex, ".exclave/manifest")
 	gdata := launcherBlob
 	if given {

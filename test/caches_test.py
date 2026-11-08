@@ -26,21 +26,22 @@ it was; font directories given new times, as a copy that loses them gives them, 
 font caches stale until a run remakes them; a tree changed since its hash was recorded is refused;
 and the given exclave, whose files the copy shares by hard links, is left as it was. On a second
 copy, a generator that fails, the MIME generator on a package that is a directory, leaves the
-tree, its hash and the exclave's directory as they were. On a third, generators that write in
-place, as TeX Live's on Debian, stand-ins at their names: what they write under the directories
-they write, through a link into one among it, is in the tree after the run, the directories the
-tree's again; a second run changes nothing; a run killed with the directories aside is undone by
-the next; and one that fails leaves the tree as it was.
+tree, its hash and the exclave's directory as they were. On a third copy of the first exclave,
+without the other generators, stand-ins for TeX Live's at their names, which write in place: the
+cases of in_place.
 """
 
 import argparse
+import fcntl
 import glob
 import os
 import platform
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from typing import Any
 
 import tree
@@ -534,18 +535,52 @@ def one(given: str, work: str) -> None:
 
 
 # generators that write in place, as TeX Live's on Debian: each a script of the shell's, writing
-# under /var/lib/texmf and /etc/texmf/web2c, mktexlsr through a link the package ships
+# under /var/lib/texmf and /etc/texmf/web2c, mktexlsr through a link the package ships; a file
+# under /etc/texmf makes one fail, write into the read-only tree, link to the copy or wait
 IN_PLACE = {
     "usr/sbin/update-texmf": "echo cnf > /etc/texmf/web2c/texmf.cnf",
     "usr/sbin/update-updmap": "cat /var/lib/texmf/seed > /var/lib/texmf/updmap.cfg-DEBIAN",
-    "usr/sbin/update-fmtutil": "echo fmtutil > /var/lib/texmf/fmtutil.cnf-DEBIAN",
+    "usr/sbin/update-fmtutil": (
+        "[ -e /etc/texmf/erofs ] && { echo x > /usr/share/texmf/x || exit 4; }\n"
+        "echo fmtutil > /var/lib/texmf/fmtutil.cnf-DEBIAN"
+    ),
     "usr/sbin/update-language": "cd /var/lib/texmf && mkdir -p tex && echo dat > tex/language.dat",
     "usr/bin/mktexlsr": 'for d; do [ -d "$d" ] || continue; echo "% ls-R of $d" > "$d/ls-R"; done',
-    "usr/bin/updmap-sys": "cd /var/lib/texmf && mkdir -p fonts/map && echo map > fonts/map/x.map",
+    "usr/bin/updmap-sys": (
+        '[ -e /etc/texmf/tocopy ] && cd /var/lib/texmf && ln -s "$(readlink -f .)/seed" tocopy\n'
+        "cd /var/lib/texmf && mkdir -p fonts/map && echo map > fonts/map/x.map"
+    ),
     "usr/bin/fmtutil": (
-        "[ -e /etc/texmf/web2c/fail ] && exit 3\n"
+        "[ -e /etc/texmf/fail ] && exit 3\n"
+        "[ -e /etc/texmf/slow ] && sleep 60\n"
         "mkdir -p /var/lib/texmf/web2c && echo fmt > /var/lib/texmf/web2c/x.fmt"
     ),
+}
+# the programs of the other generators exclave caches runs
+OTHER_GENERATORS = {
+    "glib-compile-schemas",
+    "update-mime-database",
+    "gio-querymodules",
+    "gio-querymodules-64",
+    "gdk-pixbuf-query-loaders",
+    "gdk-pixbuf-query-loaders-64",
+    "gtk-update-icon-cache",
+    "gtk4-update-icon-cache",
+    "update-desktop-database",
+    "fc-cache",
+    "dot",
+}
+# what the stand-ins make, by the tree's path
+IN_PLACE_MADE = {
+    "etc/texmf/web2c/texmf.cnf": "cnf\n",
+    "var/lib/texmf/updmap.cfg-DEBIAN": "seed\n",
+    "var/lib/texmf/fmtutil.cnf-DEBIAN": "fmtutil\n",
+    "var/lib/texmf/tex/language.dat": "dat\n",
+    "var/lib/texmf/ls-R": "% ls-R of /var/lib/texmf\n",
+    "var/lib/texmf/ls-R-TEXMFMAIN": "% ls-R of /usr/share/texmf\n",
+    "var/lib/texmf/fonts/map/x.map": "map\n",
+    "var/lib/texmf/web2c/x.fmt": "fmt\n",
+    "var/lib/texmf/seed": "seed\n",
 }
 
 
@@ -553,47 +588,60 @@ def in_place(given: str, work: str) -> None:
     """Generators that write at fixed paths of the tree, run in place, and what is left after.
 
     The directories they write are the tree's again after the run, holding what they made, a file
-    written through a link into one among it; a second run changes nothing; a generator that
-    fails leaves the tree, its hash and .exclave as they were; and a run killed with the
-    directories moved aside is undone by the next run before anything else.
+    written through a link into one among it; a second run changes nothing. A generator that
+    fails, one that writes into the read-only tree, one that makes a link to the copy, and a run
+    ended by SIGTERM each leave the tree, its hash and .exclave as they were. A second run on the
+    exclave at once is refused. A run killed at each point with directories aside is undone by the
+    next before anything else, while check and wrap refuse the exclave; and a keep/ the next run
+    did not make, a directory both aside and in the tree, an unknown entry or a path that is not
+    the generator's, is refused by name with nothing moved.
     """
     name = os.path.basename(given)
     ex = tree.fresh_exclave(given, os.path.join(work, "in-place-" + name))
     root = os.path.join(ex, "tree")
+    staging = os.path.join(ex, ".exclave", "caches")
+    keep = os.path.join(staging, "keep")
+    texmf = os.path.join(root, "var/lib/texmf")
+    # the other generators go, each wrapper with its original, so that each run is the in-place one
+    for d, _dirs, files in os.walk(root):
+        for n in files:
+            if n in OTHER_GENERATORS or re.fullmatch(r"python3\.\d+", n):
+                os.remove(os.path.join(d, n))
     for d in ("var/lib/texmf", "etc/texmf/web2c", "usr/share/texmf", "usr/sbin"):
         os.makedirs(os.path.join(root, d), exist_ok=True)
-    with open(os.path.join(root, "var/lib/texmf/seed"), "w") as f:
+    with open(os.path.join(texmf, "seed"), "w") as f:
         f.write("seed\n")
     os.symlink("/var/lib/texmf/ls-R-TEXMFMAIN", os.path.join(root, "usr/share/texmf/ls-R"))
     for path, body in IN_PLACE.items():
         with open(os.path.join(root, path), "w") as f:
-            f.write("#!/bin/sh\n" + body + "\n")
+            f.write("#!/bin/sh\n" + body + "\ntrue\n")
         os.chmod(os.path.join(root, path), 0o755)
     rc, out = tool("wrap", ex)
     expect(rc == 0, f"{name}: the copy with in-place generators wraps", out[-300:])
     rc, out = tool("caches", ex)
-    want = {
-        "etc/texmf/web2c/texmf.cnf": "cnf\n",
-        "var/lib/texmf/updmap.cfg-DEBIAN": "seed\n",
-        "var/lib/texmf/fmtutil.cnf-DEBIAN": "fmtutil\n",
-        "var/lib/texmf/tex/language.dat": "dat\n",
-        "var/lib/texmf/ls-R": "% ls-R of /var/lib/texmf\n",
-        "var/lib/texmf/ls-R-TEXMFMAIN": "% ls-R of /usr/share/texmf\n",
-        "var/lib/texmf/fonts/map/x.map": "map\n",
-        "var/lib/texmf/web2c/x.fmt": "fmt\n",
-        "var/lib/texmf/seed": "seed\n",
-    }
-    got = {p: read_text(os.path.join(root, p)) for p in want}
+    got = {p: read_text(os.path.join(root, p)) for p in IN_PLACE_MADE}
     expect(
-        rc == 0 and got == want and "TeX Live's configuration, indexes and formats:" in out,
+        rc == 0
+        and got == IN_PLACE_MADE
+        and "TeX Live's configuration, indexes and formats:" in out,
         f"{name}: the in-place generators' files are in the tree",
         (out[-400:], got),
     )
+
+    def as_it_was() -> bool:
+        """The directories the tree's, not links, and no staging left."""
+        return (
+            not any(
+                os.path.islink(os.path.join(root, d)) for d in ("var/lib/texmf", "etc/texmf/web2c")
+            )
+            and os.path.isdir(texmf)
+            and not os.path.exists(staging)
+        )
+
     expect(
-        not any(os.path.islink(os.path.join(root, d)) for d in ("var/lib/texmf", "etc/texmf/web2c"))
+        as_it_was()
         and os.readlink(os.path.join(root, "usr/share/texmf/ls-R"))
-        == "/var/lib/texmf/ls-R-TEXMFMAIN"
-        and not os.path.exists(os.path.join(ex, ".exclave", "caches")),
+        == "/var/lib/texmf/ls-R-TEXMFMAIN",
         f"{name}: the directories written in place are the tree's again and no staging is left",
         os.listdir(os.path.join(ex, ".exclave")),
     )
@@ -609,40 +657,128 @@ def in_place(given: str, work: str) -> None:
         again[-400:],
     )
 
-    # a killed run: the directory aside in keep, a link at its path; the next run puts it back
-    keep = os.path.join(ex, ".exclave", "caches", "keep")
-    os.makedirs(keep)
-    os.rename(os.path.join(root, "var/lib/texmf"), os.path.join(keep, "0"))
-    with open(os.path.join(keep, "0.path"), "w") as f:
-        f.write("/var/lib/texmf")
-    os.symlink(os.path.join(ex, ".exclave", "caches"), os.path.join(root, "var/lib/texmf"))
+    # a second run at once: the first holds .exclave/ locked
+    fd = os.open(os.path.join(ex, ".exclave"), os.O_RDONLY | os.O_DIRECTORY)
+    fcntl.flock(fd, fcntl.LOCK_EX)
     rc, out = tool("caches", ex)
+    os.close(fd)
     expect(
-        rc == 0
-        and "1 directory a killed run left aside put back" in out
-        and recorded(ex) == hashed,
-        f"{name}: a run killed in place is undone by the next",
-        out[-400:],
+        rc == 1 and "another exclave caches runs" in out, f"{name}: a run at once is refused", out
     )
 
-    # a generator that fails: the directories are put back and nothing reaches the tree
-    with open(os.path.join(root, "etc/texmf/web2c/fail"), "w") as f:
+    def kill_at(state: str) -> None:
+        """Leave the directory /var/lib/texmf as a run killed at state leaves it."""
+        os.makedirs(keep, exist_ok=True)
+        with open(os.path.join(keep, "0.path"), "w") as f:
+            f.write("/var/lib/texmf")
+        if state == "before the move":
+            return
+        os.rename(texmf, os.path.join(keep, "0"))
+        if state == "linked":
+            os.symlink(os.path.join(staging, "inplace", "0"), texmf)
+
+    for state in ("before the move", "moved", "linked"):
+        kill_at(state)
+        rc, out = tool("check", ex)
+        rc2, out2 = tool("wrap", ex)
+        expect(
+            state == "before the move"
+            or (rc == 1 and rc2 == 1 and "exclave caches" in out and "exclave caches" in out2),
+            f"{name}: check and wrap refuse an exclave a run killed {state} left",
+            (out[-200:], out2[-200:]),
+        )
+        rc, out = tool("caches", ex)
+        expect(
+            rc == 0
+            and ("a killed run left aside put back" in out) == (state != "before the move")
+            and as_it_was()
+            and recorded(ex) == hashed,
+            f"{name}: a run killed {state} is undone by the next",
+            out[-400:],
+        )
+
+    # what open never leaves is refused, by name, with nothing moved
+    outside = os.path.join(work, f"outside-{name}")
+    for what, entries, why in (
+        ("both aside and in the tree", {"0": None, "0.path": "/var/lib/texmf"}, "both"),
+        ("an unknown entry", {"7": None, "7.path": "/var/lib/texmf"}, "7, which no run"),
+        ("an escaping path", {"0": None, "0.path": f"/../../{outside}"}, "not /var/lib/texmf"),
+        (
+            "a path without its directory",
+            {"0.path": "/var/lib/texmf", "0": "file"},
+            "not a directory",
+        ),
+    ):
+        os.makedirs(keep)
+        for e, kind in entries.items():
+            if kind is None:
+                os.makedirs(os.path.join(keep, e))
+            else:
+                with open(os.path.join(keep, e), "w") as f:
+                    f.write(kind)
+        before = sorted(os.listdir(keep))
+        rc, out = tool("caches", ex)
+        expect(
+            rc == 1
+            and why in out
+            and sorted(os.listdir(keep)) == before
+            and os.path.isdir(texmf)
+            and not os.path.lexists(outside),
+            f"{name}: a keep/ with {what} is refused with nothing moved",
+            out[-400:],
+        )
+        shutil.rmtree(staging)
+
+    # a generator that fails, one that writes into the tree, one that links to the copy: the
+    # directories are put back and nothing reaches the tree
+    os.remove(os.path.join(texmf, "web2c/x.fmt"))
+    for trigger, why in (
+        ("fail", "fmtutil"),
+        ("erofs", "update-fmtutil"),
+        ("tocopy", "a link to the copy"),
+    ):
+        with open(os.path.join(root, "etc/texmf", trigger), "w") as f:
+            f.write("")
+        rc, out = tool("wrap", ex)
+        failed_hash = recorded(ex)
+        rc, out = tool("caches", ex)
+        expect(
+            rc == 1
+            and why in out
+            and recorded(ex) == failed_hash
+            and tool("hash", ex)[1].strip() == failed_hash
+            and as_it_was()
+            and not os.path.lexists(os.path.join(texmf, "web2c/x.fmt")),
+            f"{name}: a run with {trigger} fails, the tree, its hash and .exclave as they were",
+            out[-400:],
+        )
+        os.remove(os.path.join(root, "etc/texmf", trigger))
+
+    # SIGTERM while a generator runs: the directories are put back
+    with open(os.path.join(root, "etc/texmf/slow"), "w") as f:
         f.write("")
-    os.remove(os.path.join(root, "var/lib/texmf/web2c/x.fmt"))
     rc, out = tool("wrap", ex)
-    failed_hash = recorded(ex)
-    rc, out = tool("caches", ex)
+    slow_hash = recorded(ex)
+    p = subprocess.Popen(
+        [*tree.TOOL, "caches", ex], stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    )
+    linked = False
+    for _ in range(600):
+        if os.path.islink(texmf) and os.path.lexists(os.path.join(staging, "inplace/0/web2c")):
+            linked = True
+            break
+        time.sleep(0.05)
+    p.send_signal(signal.SIGTERM)
+    out = p.communicate(timeout=60)[0].decode(errors="replace")
     expect(
-        rc == 1
-        and "fmtutil" in out
-        and recorded(ex) == failed_hash
-        and tool("hash", ex)[1].strip() == failed_hash
-        and os.path.isdir(os.path.join(root, "var/lib/texmf"))
-        and not os.path.islink(os.path.join(root, "var/lib/texmf"))
-        and not os.path.lexists(os.path.join(root, "var/lib/texmf/web2c/x.fmt"))
-        and not os.path.exists(os.path.join(ex, ".exclave", "caches")),
-        f"{name}: a failing in-place generator leaves the tree, its hash and .exclave as they were",
-        out[-400:],
+        linked
+        and p.returncode == 1
+        and "interrupted" in out
+        and as_it_was()
+        and recorded(ex) == slow_hash
+        and tool("hash", ex)[1].strip() == slow_hash,
+        f"{name}: SIGTERM during a generator puts the directories back",
+        (linked, p.returncode, out[-400:]),
     )
 
 
@@ -663,7 +799,8 @@ def main() -> int:
         f.write("<html><body>an exclave</body></html>\n")
     for ex in args.exclave:
         one(os.path.abspath(ex), work)
-        in_place(os.path.abspath(ex), work)
+        if ex == args.exclave[0]:
+            in_place(os.path.abspath(ex), work)
     print(f"caches: {fails} failures")
     return 1 if fails else 0
 

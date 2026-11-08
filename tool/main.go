@@ -36,7 +36,6 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"slices"
 	"strings"
 	"syscall"
 
@@ -72,9 +71,13 @@ var failing []func()
 // atFail registers f to run when the command refuses.
 func atFail(f func()) { failing = append(failing, f) }
 
-// exit1 runs what atFail registered, flushes the output and exits 1.
+// exit1 runs what atFail registered, last first, each taken off the list before it runs, so that
+// one that refuses in turn reaches the rest and not itself again; then flushes the output and
+// exits 1.
 func exit1() {
-	for _, f := range slices.Backward(failing) {
+	for len(failing) > 0 {
+		f := failing[len(failing)-1]
+		failing = failing[:len(failing)-1]
 		f()
 	}
 	out.Flush()

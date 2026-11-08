@@ -778,6 +778,7 @@ func cmdCheck(args []string) int {
 	}
 	ex := args[0]
 	requireExclave(ex, "check")
+	refuseSetAside(ex, "check")
 	data := dataPrefixes(ex)
 	l := launcherOf(ex)
 	root, hashes := pathJoin(ex, "tree"), pathJoin(ex, ".exclave/hashes")

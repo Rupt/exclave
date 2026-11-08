@@ -2694,9 +2694,16 @@ refused. From `.deb` files, in five steps:
    moved aside into the staging directory and its path in the tree
    made a link to a copy of it there, so that inside the exclave the
    path, and every link into it, leads to the copy, which is the
-   host's and writable, and the directories are put back as the run
-   ends, however it ends but by `SIGKILL`, whose leftovers the next
-   run puts back before anything else. What the steps made, the
+   host's and writable. The directories are put back as the run ends:
+   when it succeeds, when it fails, on `SIGINT`, `SIGTERM` or `SIGHUP`,
+   which end the step running, and on an internal error; a run killed
+   otherwise, by `SIGKILL` or a crash of the machine, leaves them aside,
+   `check` and `wrap` refuse the exclave meanwhile, and the next run
+   puts them back before anything else, accepting only what a run
+   leaves, the generator's own paths, and refusing anything else in its
+   place by name. Two runs on one exclave never share the staging
+   directory: a run holds `.exclave/` locked, and a second is refused.
+   What the steps made, the
    links `updmap-sys` makes among it, then joins the tree as the other
    caches do. A step that names a file by its real path sees the
    copy's host path: `fmtutil` names each format so and adds it to no
@@ -3904,8 +3911,9 @@ and stay fixed.
     aside and its path in the tree a link to a copy in `.exclave/` for
     the run. While the run lasts the tree is not what its hash records,
     and a program the exclave runs meanwhile sees the copies; a run
-    killed by `SIGKILL` leaves the directories aside, and the next run
-    puts them back before anything else. The steps are tex-common's,
+    killed by `SIGKILL`, or by the machine's crash, leaves the
+    directories aside, `check` and `wrap` refuse the exclave, and the
+    next run of `exclave caches` puts them back before anything else. The steps are tex-common's,
     so only Debian's layout is made, where the tree holds tex-common's
     scripts and both directories. After the run `pdflatex`,
     `bibtex` and `kpsewhich` inside give the kernel's answers on the
@@ -5295,6 +5303,18 @@ its time, ok, SKIP or FAIL:
   refused, and the given exclave, whose files the copy shares by hard
   links, is left as it was; a generator that fails, on a MIME package
   that is a directory, leaves the tree, its hash and `.exclave/` as
+  they were; and on a copy of the first exclave without the other
+  generators, stand-ins for TeX Live's at their names, which write in
+  place (10.1): what they write, through a link into a directory among
+  it, is in the tree and the directories are the tree's again; a
+  second run changes nothing; a run at once is refused; a run killed
+  before a directory moved, after it moved and after its link was made
+  is undone by the next while `check` and `wrap` refuse the exclave; a
+  `keep/` with a directory both aside and in the tree, an unknown
+  entry, a path that is not the generator's or a file for a directory
+  is refused with nothing moved; and a generator that fails, one that
+  writes into the read-only tree, one that makes a link to the copy and
+  a run ended by `SIGTERM` leave the tree, its hash and `.exclave/` as
   they were;
 - when `EXCLAVE_TEST_INPUTS` names that directory, the compatibility
   test (`test/compat_test.py`) against the baseline it holds in

@@ -19,12 +19,16 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -52,12 +56,46 @@ func (c *cacheRun) output(env []string, argv ...string) (int, []byte, string) {
 	return rc, o.Bytes(), e.String()
 }
 
+// The signal that interrupted the command, once one has (inPlaceBegun), and the process group of
+// the generator running then, which the signal ends.
+var (
+	interruptMu sync.Mutex
+	interrupted os.Signal
+	runningPgid int
+)
+
+// checkInterrupted fails the command, as a refusal, once a signal has interrupted it.
+func checkInterrupted() {
+	interruptMu.Lock()
+	sig := interrupted
+	interruptMu.Unlock()
+	if sig != nil {
+		fail("interrupted by %s; the tree is as it was", sig)
+	}
+}
+
 func (c *cacheRun) exec(env []string, stdout, stderr io.Writer, argv []string) int {
+	checkInterrupted()
 	cmd := &exec.Cmd{Path: c.sh, Args: append([]string{"sh", "-c", `exec "$0" "$@"`}, argv...)}
 	cmd.Env = append([]string{"PATH=/usr/bin:/bin", "HOME=" + c.staging, "TMPDIR=" + c.staging}, env...)
 	cmd.Dir = c.staging
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	if err := cmd.Run(); err != nil {
+	// a process group of its own, which a signal to the command ends (inPlaceBegun)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	interruptMu.Lock()
+	err := cmd.Start()
+	if err == nil {
+		runningPgid = cmd.Process.Pid
+	}
+	interruptMu.Unlock()
+	if err == nil {
+		err = cmd.Wait()
+	}
+	interruptMu.Lock()
+	runningPgid = 0
+	interruptMu.Unlock()
+	checkInterrupted()
+	if err != nil {
 		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 			return ee.ExitCode()
 		}
@@ -597,25 +635,35 @@ func fontCaches(c *cacheRun, root string) []cache {
 	return []cache{m}
 }
 
-// inPlace is the run of generators that write their caches in place, at fixed paths of the tree
-// that its packages' links name, so that neither a staging directory nor a mirror stands in for
-// the path: each directory they write is, for the run, moved aside into keep and replaced in the
-// tree by a link to a copy of it in the staging directory, which is the host's (8.1 rule 6), so
-// that inside the exclave the path, and every link into it, leads to the copy, where the
-// generators write. The directories are put back as soon as the run ends, however it ends but by
-// SIGKILL, which the next run undoes first (restoreInPlace); what the generators made is then
-// placed in the tree with the other caches. A generator that names a file by its real path sees
-// the copy's host path, so a step that matches paths against the tree's is followed by one that
-// does not (texLive's last mktexlsr).
+// inPlaceDirs are the tree's directories generators write in place, at fixed paths its packages'
+// links name, by virtual path; a directory moved aside waits as keep/N, N its index here, and
+// nothing else is ever moved, so that a keep/ an exclave arrives with can move nothing elsewhere.
+// No one of them lies inside another.
+var inPlaceDirs = []string{"/var/lib/texmf", "/etc/texmf/web2c"}
+
+// inPlace is the run of generators that write their caches in place, so that neither a staging
+// directory nor a mirror stands in for the path: each directory they write is, for the run, moved
+// aside into keep and replaced in the tree by a link to a copy of it in the staging directory,
+// staging/inplace/N, which is the host's (8.1 rule 6), so that inside the exclave the path, and
+// every link into it, leads to the copy, where the generators write. The directories are put back
+// as the run ends: when it succeeds, on a refusal, on SIGINT, SIGTERM or SIGHUP, and on a panic
+// (exit1); a run killed otherwise leaves them aside, and the next run puts them back before
+// anything else (restoreInPlace), while check and wrap refuse the exclave meanwhile
+// (refuseSetAside). What the generators made is then placed in the tree with the other caches. A
+// generator that names a file by its real path sees the copy's host path, so a step that matches
+// paths against the tree's is followed by one that does not (texLive's last mktexlsr).
 type inPlace struct {
 	root, staging string
-	dirs          []string // the tree's directories, by virtual path
+	dirs          []int    // indices into inPlaceDirs
 	copies        []string // the copy each is linked to in the run
 }
 
 // keepDir is where a directory moved aside waits in the staging directory, beside a file naming
 // its virtual path, until it is put back.
 func keepDir(staging string) string { return pathJoin(staging, "keep") }
+
+// copyOf is the copy the tree's path of inPlaceDirs[n] is linked to during a run.
+func copyOf(staging string, n int) string { return pathJoin(staging, "inplace/"+strconv.Itoa(n)) }
 
 // copyDir copies the directory src to dst, which it makes: directories, regular files by their
 // bytes and links by their text, never a hard link, since a generator that rewrites a file in
@@ -625,7 +673,7 @@ func copyDir(src, dst string) {
 	if err != nil {
 		failErrno(src, err)
 	}
-	if err := os.Mkdir(dst, os.FileMode(st.Mode&0o7777)); err != nil {
+	if err := os.Mkdir(dst, os.FileMode(st.Mode&0o777)); err != nil {
 		failErrno(dst, err)
 	}
 	names, err := dirNames(src)
@@ -642,7 +690,7 @@ func copyDir(src, dst string) {
 		case isDirM(&st):
 			copyDir(s, d)
 		case isReg(&st):
-			writeFile(d, readFile(s), st.Mode&0o7777)
+			writeFile(d, readFile(s), st.Mode&0o777)
 		case st.Mode&unix.S_IFMT == unix.S_IFLNK:
 			t, err := os.Readlink(s)
 			if err != nil {
@@ -655,18 +703,28 @@ func copyDir(src, dst string) {
 	}
 }
 
-// open moves each directory aside and links its path to a copy, and registers putting them back.
+// open moves each directory aside and links its path to a copy, once putting them back is
+// registered: N.path is written before the directory moves, so that every point a run can be
+// killed at leaves what restoreInPlace undoes.
 func (p *inPlace) open() {
+	for i, a := range inPlaceDirs {
+		for _, b := range inPlaceDirs[:i] {
+			if a == b || strings.HasPrefix(a+"/", b+"/") || strings.HasPrefix(b+"/", a+"/") {
+				panic("inPlaceDirs overlap: " + a + ", " + b)
+			}
+		}
+	}
 	keep := keepDir(p.staging)
 	makeDirs(keep)
+	makeDirs(pathJoin(p.staging, "inplace"))
 	atFail(p.close)
-	for i, v := range p.dirs {
-		real, n := treeReal(p.root, v), strconv.Itoa(i)
-		cp := pathJoin(p.staging, "inplace/"+n)
-		makeDirs(dirnameOf(cp))
+	inPlaceBegun()
+	for _, n := range p.dirs {
+		v, num := inPlaceDirs[n], strconv.Itoa(n)
+		real, cp := treeReal(p.root, v), copyOf(p.staging, n)
 		copyDir(real, cp)
-		writeFile(pathJoin(keep, n+".path"), []byte(v), 0o644)
-		if err := unix.Rename(real, pathJoin(keep, n)); err != nil {
+		writeFile(pathJoin(keep, num+".path"), []byte(v), 0o644)
+		if err := unix.Rename(real, pathJoin(keep, num)); err != nil {
 			failErrno(real, err)
 		}
 		if err := unix.Symlink(cp, real); err != nil {
@@ -679,25 +737,65 @@ func (p *inPlace) open() {
 // close puts every directory moved aside back; a second call does nothing.
 func (p *inPlace) close() { restoreInPlace(p.root, p.staging) }
 
-// restoreInPlace puts back each directory a run moved aside into keep, removing the link that
-// stands at its path, as a run killed before it could leaves them, and reports how many.
+// keepEntries are the names in keep/, none when there is no keep/.
+func keepEntries(staging string) []string {
+	names, _ := dirNames(keepDir(staging))
+	return names
+}
+
+// restoreInPlace puts back each directory a run moved aside into keep/, as a run killed before
+// it could leaves them, and reports how many. Only what open makes is accepted, since keep/
+// arrives with the exclave: N and N.path, N an index of inPlaceDirs and N.path its path exactly,
+// whose directories in the tree are no links, keep/N a directory by lstat, and the tree's path
+// absent or the link open made, to staging/inplace/N exactly. Anything else is refused by name,
+// and nothing is moved.
 func restoreInPlace(root, staging string) int {
 	keep := keepDir(staging)
-	names, _ := dirNames(keep)
-	n := 0
+	names := keepEntries(staging)
 	for _, name := range names {
-		num, ok := strings.CutSuffix(name, ".path")
-		if !ok {
+		num := strings.TrimSuffix(name, ".path")
+		n, err := strconv.Atoi(num)
+		if err != nil || n < 0 || n >= len(inPlaceDirs) || strconv.Itoa(n) != num {
+			fail("refusing: %s holds %s, which no run of exclave caches makes; remove it by hand", keep, name)
+		}
+	}
+	restored := 0
+	for n, v := range inPlaceDirs {
+		num := strconv.Itoa(n)
+		pathFile, kept := pathJoin(keep, num+".path"), pathJoin(keep, num)
+		_, hasPath := lstat(pathFile)
+		kst, hasKept := lstat(kept)
+		if hasPath != nil && hasKept != nil {
 			continue
 		}
-		v := string(readFile(pathJoin(keep, name)))
-		real, kept := treeReal(root, v), pathJoin(keep, num)
-		if _, err := lstat(kept); err != nil {
-			continue // put back already
+		if hasPath != nil {
+			fail("refusing: %s has no %s naming where it belongs; remove it by hand", kept, pathFile)
 		}
-		if st, err := lstat(real); err == nil {
-			if st.Mode&unix.S_IFMT != unix.S_IFLNK {
-				fail("%s: both it and the copy %s kept aside exist; put one back by hand", real, kept)
+		if string(readFile(pathFile)) != v {
+			fail("refusing: %s names %q, not %s; remove %s by hand", pathFile, string(readFile(pathFile)), v, keep)
+		}
+		if treeResolve(root, dirnameOf(v), true, nil) != dirnameOf(v) {
+			fail("refusing: %s's directory is a link in the tree, so %s cannot be put back there", v, kept)
+		}
+		real := treeReal(root, v)
+		st, errReal := lstat(real)
+		if hasKept != nil {
+			// killed before the directory moved: it is still in the tree
+			if errReal != nil || !isDirM(&st) {
+				fail("refusing: %s names %s, which is neither in the tree nor aside in %s", pathFile, v, keep)
+			}
+			if err := unix.Unlink(pathFile); err != nil {
+				failErrno(pathFile, err)
+			}
+			continue
+		}
+		if !isDirM(&kst) {
+			fail("refusing: %s is not a directory; remove %s by hand", kept, keep)
+		}
+		if errReal == nil {
+			t, err := os.Readlink(real)
+			if err != nil || t != copyOf(staging, n) {
+				fail("refusing: both %s and the copy kept aside, %s, exist; put one back by hand", real, kept)
 			}
 			if err := unix.Unlink(real); err != nil {
 				failErrno(real, err)
@@ -706,21 +804,58 @@ func restoreInPlace(root, staging string) int {
 		if err := unix.Rename(kept, real); err != nil {
 			failErrno(real, err)
 		}
-		n++
+		if err := unix.Unlink(pathFile); err != nil {
+			failErrno(pathFile, err)
+		}
+		restored++
 	}
-	return n
+	unix.Rmdir(keep)
+	return restored
+}
+
+// removeStaging removes the staging directory, but never a keep/ that holds an entry, whose
+// directory belongs in the tree: the rest goes, and where it waits is said.
+func removeStaging(staging string) {
+	if len(keepEntries(staging)) == 0 {
+		if err := os.RemoveAll(staging); err != nil {
+			failErrno(staging, err)
+		}
+		return
+	}
+	names, _ := dirNames(staging)
+	for _, n := range names {
+		if n != "keep" {
+			os.RemoveAll(pathJoin(staging, n))
+		}
+	}
+	fmt.Fprintf(os.Stderr, "exclave: the tree's directories set aside wait in %s; exclave caches puts them back\n",
+		keepDir(staging))
+}
+
+// refuseSetAside refuses a command on an exclave whose tree has directories set aside by a run of
+// exclave caches that did not end, so that nothing records the tree as it stands then.
+func refuseSetAside(ex, cmd string) {
+	if keep := keepDir(pathJoin(ex, ".exclave/caches")); len(keepEntries(pathJoin(ex, ".exclave/caches"))) > 0 {
+		fail("refusing to %s: a run of exclave caches that did not end set directories of the tree aside in %s; "+
+			"exclave caches %s puts them back", cmd, keep, ex)
+	}
 }
 
 // made is every regular file and link under the copies, as the files and links the tree's
-// directories get; a link keeps its text, which updmap-sys writes relative.
+// directories get; a link keeps its text, which updmap-sys writes relative. A link to the copy,
+// by either spelling of the staging directory, is refused: the tree cannot hold it.
 func (p *inPlace) made(what string) cache {
 	m := cache{what: what}
+	spellings := []string{p.staging + "/"}
+	if r, err := filepath.EvalSymlinks(p.staging); err == nil && r != p.staging {
+		spellings = append(spellings, r+"/")
+	}
 	for i, cp := range p.copies {
 		err := filepath.WalkDir(cp, func(f string, d os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			v := p.dirs[i] + strings.TrimPrefix(f, cp)
+			v := inPlaceDirs[p.dirs[i]] + strings.TrimPrefix(f, cp)
 			switch {
 			case d.Type().IsRegular():
 				m.files = append(m.files, [2]string{f, v})
@@ -729,8 +864,11 @@ func (p *inPlace) made(what string) cache {
 				if err != nil {
 					return err
 				}
-				if strings.HasPrefix(t, p.staging) {
-					fail("%s: the generators made %s a link to the copy, %s, which the tree cannot hold", what, v, t)
+				for _, s := range spellings {
+					if strings.HasPrefix(t+"/", s) {
+						fail("%s: the generators made %s a link to the copy, %s, which the tree cannot hold",
+							what, v, t)
+					}
 				}
 				m.links = append(m.links, [2]string{t, v})
 			}
@@ -762,15 +900,16 @@ func texLive(c *cacheRun, root string) []cache {
 			return nil
 		}
 	}
-	var dirs []string
-	for _, d := range []string{"/var/lib/texmf", "/etc/texmf/web2c"} {
-		v := treeDir(root, d)
-		if v == "" {
+	for _, d := range inPlaceDirs {
+		if v := treeDir(root, d); v == "" {
+			return nil
+		} else if v != d {
+			fmt.Fprintf(out, "TeX Live: %s is a link in the tree, to %s, which is not written in place; "+
+				"none made\n", d, v)
 			return nil
 		}
-		dirs = append(dirs, v)
 	}
-	p := &inPlace{root: root, staging: c.staging, dirs: dirs}
+	p := &inPlace{root: root, staging: c.staging, dirs: []int{0, 1}}
 	p.open()
 	// the postinst's locale; the date fixed, so that a pdfTeX format is the same on every run
 	env := []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C", "SOURCE_DATE_EPOCH=0",
@@ -791,6 +930,37 @@ func texLive(c *cacheRun, root string) []cache {
 	}
 	p.close()
 	return []cache{p.made("TeX Live's configuration, indexes and formats")}
+}
+
+// lockExclave holds an exclusive lock on the exclave's .exclave/ for the rest of the process, so
+// that two runs of exclave caches never share a staging directory; a second is refused.
+func lockExclave(ex string) {
+	d := pathJoin(ex, ".exclave")
+	fd, err := unix.Open(d, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		failErrno(d, err)
+	}
+	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		fail("refusing: another exclave caches runs on %s (%s is locked)", ex, d)
+	}
+}
+
+// inPlaceBegun makes SIGINT, SIGTERM and SIGHUP end the command as a refusal does, from the
+// moment a generator first sets a directory of the tree aside, so that it is put back (exit1):
+// the signal ends the generator running, whose process group is its own, and the command fails
+// as its run returns, or at the next one, on its own goroutine, which alone runs exit1.
+func inPlaceBegun() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, unix.SIGINT, unix.SIGTERM, unix.SIGHUP)
+	go func() {
+		sig := <-ch
+		interruptMu.Lock()
+		interrupted = sig
+		if runningPgid > 0 {
+			unix.Kill(-runningPgid, unix.SIGKILL)
+		}
+		interruptMu.Unlock()
+	}()
 }
 
 // lastLines is the last n lines of text.
@@ -850,6 +1020,7 @@ func cmdCaches(args []string) int {
 	}
 	root := pathJoin(ex, "tree")
 	staging := pathJoin(ex, ".exclave/caches")
+	lockExclave(ex)
 	// a run killed while generators wrote in place left their directories aside: put them back first
 	if n := restoreInPlace(root, staging); n > 0 {
 		fmt.Fprintf(out, "%s: %s a killed run left aside put back\n", ex, plural(n, "directory"))
@@ -862,11 +1033,16 @@ func cmdCaches(args []string) int {
 	if sh == "" {
 		fail("refusing: %s has no /bin/sh to run its generators by", ex)
 	}
-	if err := os.RemoveAll(staging); err != nil {
-		failErrno(staging, err)
-	}
-	atFail(func() { os.RemoveAll(staging) })
+	removeStaging(staging)
+	atFail(func() { removeStaging(staging) })
 	makeDirs(staging)
+	// a panic in a generator's run still puts the tree's directories back (exit1)
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "exclave: panic: %v\n%s", r, debug.Stack())
+			exit1()
+		}
+	}()
 	c := &cacheRun{sh: treeReal(root, sh), staging: staging}
 	var made []cache
 	for _, g := range []func(*cacheRun, string) []cache{pythonBytecode, gsettingsSchemas, mimeDatabase, gioModules,
@@ -874,7 +1050,7 @@ func cmdCaches(args []string) int {
 		made = append(made, g(c, root)...)
 	}
 	if len(made) == 0 {
-		os.RemoveAll(staging)
+		removeStaging(staging)
 		fmt.Fprintf(out, "%s: no generator applies: the tree holds none of the programs exclave caches runs\n", ex)
 		return 0
 	}
@@ -886,6 +1062,7 @@ func cmdCaches(args []string) int {
 			}
 		}
 	}
+	checkInterrupted()
 	// every generator has succeeded: now the tree changes
 	for _, m := range made {
 		changed := 0
@@ -909,9 +1086,7 @@ func cmdCaches(args []string) int {
 		}
 		fmt.Fprintf(out, "%s: %s, %d new or changed\n", m.what, n, changed)
 	}
-	if err := os.RemoveAll(staging); err != nil {
-		failErrno(staging, err)
-	}
+	removeStaging(staging)
 	writeHashes(ex, "", false, true)
 	fmt.Fprintf(out, "%s: the tree hash recorded\n", ex)
 	return 0
