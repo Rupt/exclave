@@ -2548,14 +2548,19 @@ refused. From `.deb` files, in five steps:
    `update-language`), and a scanner reads the packages;
    `sbin-merge`, Fedora's `/usr/sbin` as a link
    to `bin`; `dash-sh`; `ca-certificates`, `ca-certificates.crt`
-   concatenated from the certificates `ca-certificates.conf` enables;
+   concatenated as `update-ca-certificates` concatenates them from the
+   certificates it enables: those `ca-certificates.conf` enables, in
+   its order, or, where it is absent, as on a first install, whose
+   `postinst` writes it from debconf's default of trusting them all,
+   every `.crt` under `/usr/share/ca-certificates`, in the order of
+   the paths' bytes, and then those under
+   `/usr/local/share/ca-certificates`, a newline added to a file that
+   lacks its last;
    `java-cacerts`, the Java keystore ca-certificates-java's `postinst`
    makes, `/etc/ssl/certs/java/cacerts`, to which a Debian JDK's
    `lib/security/cacerts` links and without which Java trusts no
    authority: a JKS keystore with the package's store password,
-   `changeit`, of every certificate `update-ca-certificates` would
-   enable, those `ca-certificates.conf` enables or, where it is absent,
-   as on a first install, every `.crt` under `/usr/share/ca-certificates`,
+   `changeit`, of the same certificates as the bundle,
    each under the alias the package's own program gives it,
    `debian:` and the name of its link in `/etc/ssl/certs`, lowercased,
    and dated at the epoch, so that the tree is the same on every run.

@@ -590,62 +590,62 @@ func dashSh(r *root.Root, packages []*Package, log logger) (bool, error) {
 	return false, nil
 }
 
-// caCertificates makes Debian's ca-certificates bundle, which update-ca-certificates makes from
-// the enabled ones.
+// caCertificates makes Debian's ca-certificates bundle, /etc/ssl/certs/ca-certificates.crt, as
+// update-ca-certificates concatenates it: each enabled certificate (enabledCertificates) in their
+// order, a newline added to one that lacks its last.
 func caCertificates(r *root.Root, packages []*Package, log logger) (bool, error) {
-	conf := "/etc/ca-certificates.conf"
-	if !names(packages)["ca-certificates"] || !r.Exists(conf) {
+	if !names(packages)["ca-certificates"] {
 		return false, nil
 	}
-	text, err := r.ReadText(conf)
+	certs, err := enabledCertificates(r)
 	if err != nil {
 		return false, err
 	}
-	var pems [][]byte
-	for raw := range strings.SplitSeq(text, "\n") {
-		line := strings.TrimSpace(raw)
-		if line != "" && !strings.HasPrefix(line, "#") && !strings.HasPrefix(line, "!") {
-			cert := "/usr/share/ca-certificates/" + line
-			if r.Exists(cert) {
-				data, err := r.ReadBytes(cert)
-				if err != nil {
-					return false, err
-				}
-				pems = append(pems, append([]byte(strings.TrimRight(string(data), "\n")), '\n'))
-			}
+	var bundle []byte
+	for _, c := range certs {
+		data, err := r.ReadBytes(c)
+		if err != nil {
+			return false, err
+		}
+		bundle = append(bundle, data...)
+		if len(data) > 0 && data[len(data)-1] != '\n' {
+			bundle = append(bundle, '\n')
 		}
 	}
 	if err := r.Makedirs("/etc/ssl/certs"); err != nil {
 		return false, err
 	}
-	var bundle []byte
-	for _, p := range pems {
-		bundle = append(bundle, p...)
-	}
-	if err := r.WriteBytes("/etc/ssl/certs/ca-certificates.crt", bundle, 0o666); err != nil {
+	if err := r.WriteBytes("/etc/ssl/certs/ca-certificates.crt", bundle, 0o644); err != nil {
 		return false, err
 	}
-	log(fmt.Sprintf("synthesised /etc/ssl/certs/ca-certificates.crt from %d certificates", len(pems)))
+	log(fmt.Sprintf("synthesised /etc/ssl/certs/ca-certificates.crt from %d certificates", len(certs)))
 	return true, nil
 }
 
-// enabledCertificates are the certificates update-ca-certificates links into /etc/ssl/certs, by
-// virtual path: those /etc/ca-certificates.conf enables, or, where there is none, every .crt
-// under /usr/share/ca-certificates, which the package's postinst enables on a first install
-// (debconf's default trusts every certificate it offers); then every .crt under
-// /usr/local/share/ca-certificates. In the order of their paths' bytes.
+// enabledCertificates are the certificates update-ca-certificates links into /etc/ssl/certs and
+// concatenates into the bundle, by virtual path and in its order: those /etc/ca-certificates.conf
+// enables, in the order it lists them, or, where there is none, every .crt under
+// /usr/share/ca-certificates, which the package's postinst enables on a first install (debconf's
+// default trusts every certificate it offers), in the order of their paths' bytes; then every .crt
+// under /usr/local/share/ca-certificates, in that order too.
 func enabledCertificates(r *root.Root) ([]string, error) {
 	var certs []string
-	var walk func(dir string)
-	walk = func(dir string) {
-		for _, n := range r.Listdir(dir) {
-			switch p := dir + "/" + n; {
-			case r.IsDir(p):
-				walk(p)
-			case strings.HasSuffix(n, ".crt") && r.IsFile(p):
-				certs = append(certs, p)
+	find := func(top string) {
+		var found []string
+		var walk func(dir string)
+		walk = func(dir string) {
+			for _, n := range r.Listdir(dir) {
+				switch p := dir + "/" + n; {
+				case r.IsDir(p):
+					walk(p)
+				case strings.HasSuffix(n, ".crt") && r.IsFile(p):
+					found = append(found, p)
+				}
 			}
 		}
+		walk(top)
+		sort.Strings(found)
+		certs = append(certs, found...)
 	}
 	if conf := "/etc/ca-certificates.conf"; r.Exists(conf) {
 		text, err := r.ReadText(conf)
@@ -660,10 +660,9 @@ func enabledCertificates(r *root.Root) ([]string, error) {
 			}
 		}
 	} else {
-		walk("/usr/share/ca-certificates")
+		find("/usr/share/ca-certificates")
 	}
-	walk("/usr/local/share/ca-certificates")
-	sort.Strings(certs)
+	find("/usr/local/share/ca-certificates")
 	return certs, nil
 }
 

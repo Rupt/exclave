@@ -675,13 +675,16 @@ def jks_entries(path: str) -> list[tuple[str, int, bytes]] | None:
 
 
 @test
-def java_cacerts(ctx: Ctx) -> None:
-    """10.1: ca-certificates-java's keystore, of the certificates update-ca-certificates enables.
+def ca_certificates_and_java(ctx: Ctx) -> None:
+    """10.1: the CA bundle and ca-certificates-java's keystore, of one set of certificates.
 
     Without /etc/ca-certificates.conf every certificate under /usr/share/ca-certificates is
-    enabled, as on a first install; with it, those it names. Each is a trusted entry under
-    "debian:" and the name update-ca-certificates links it under, lowercased, as the package's
-    own program writes them; a file without a PEM certificate is passed over with a note.
+    enabled, as on a first install, in the order of the paths' bytes; with it, those it enables,
+    in its order. The bundle is their files concatenated as update-ca-certificates concatenates
+    them, a newline added to one that lacks its last, a file without a certificate among them.
+    Each is a trusted entry of the keystore under "debian:" and the name update-ca-certificates
+    links it under, lowercased, as the package's own program writes them; a file without a PEM
+    certificate is passed over with a note.
     """
 
     def pem(der: bytes) -> bytes:
@@ -692,22 +695,39 @@ def java_cacerts(ctx: Ctx) -> None:
     ders = {
         "A_Root.crt": b"\x30\x03\x02\x01\x01",
         "B (Root), Two.crt": b"\x30\x03\x02\x01\x02" * 40,
+        "C.crt": b"\x30\x03\x02\x01\x03",
     }
+    # A's file lacks its last newline, which the bundle adds
+    files = {n: pem(d).rstrip(b"\n") if n == "A_Root.crt" else pem(d) for n, d in ders.items()}
+    files["Empty.crt"] = b"no PEM\n"
     members: list[Member] = [
-        (f"usr/share/ca-certificates/mozilla/{n}", "file", pem(d), 0o644) for n, d in ders.items()
+        (f"usr/share/ca-certificates/mozilla/{n}", "file", b, 0o644) for n, b in files.items()
     ]
-    members.append(("usr/share/ca-certificates/mozilla/Empty.crt", "file", b"no PEM\n", 0o644))
     java = package(ctx, "deb", "ca-certificates-java", [("etc/ssl/certs/java", "dir", None, 0o755)])
-    for conf in (None, "# comment\nmozilla/B (Root), Two.crt\n!mozilla/A_Root.crt\n"):
-        extra = [("etc/ca-certificates.conf", "file", conf.encode(), 0o644)] if conf else []
+    conf = "# comment\nmozilla/B (Root), Two.crt\n !mozilla/C.crt\nmozilla/A_Root.crt\n"
+    for enabled, extra in (
+        (["A_Root.crt", "B (Root), Two.crt", "C.crt", "Empty.crt"], []),
+        (
+            ["B (Root), Two.crt", "A_Root.crt"],
+            [("etc/ca-certificates.conf", "file", conf.encode(), 0o644)],
+        ),
+    ):
         cas = package(ctx, "deb", "ca-certificates", members + extra)
-        root, out = accepted(ctx, f"cacerts-{conf is not None}", [cas, java])
+        root, out = accepted(ctx, f"cacerts-{bool(extra)}", [cas, java])
+        bundle = read_text(os.path.join(root, "etc", "ssl", "certs", "ca-certificates.crt"))
+        want_bundle = "".join(
+            files[n].decode() + ("" if files[n].endswith(b"\n") else "\n") for n in enabled
+        )
+        expect(bundle == want_bundle, f"the bundle with the conf={bool(extra)} is {bundle!r}")
         got = jks_entries(os.path.join(root, "etc", "ssl", "certs", "java", "cacerts"))
-        want = [("debian:b_=root=__two.pem", 0, ders["B (Root), Two.crt"])]
-        if conf is None:
-            want.insert(0, ("debian:a_root.pem", 0, ders["A_Root.crt"]))
-        expect(got == want, f"the keystore without the conf={conf is None} holds {got!r}")
-        expect("java-cacerts" in out and ("Empty.crt holds no PEM" in out) == (conf is None), out)
+        names = {"A_Root.crt": "a_root", "B (Root), Two.crt": "b_=root=__two", "C.crt": "c"}
+        want = sorted((f"debian:{names[n]}.pem", 0, ders[n]) for n in enabled if n in ders)
+        expect(got == want, f"the keystore with the conf={bool(extra)} holds {got!r}")
+        expect(
+            "ca-certificates, java-cacerts" in out
+            and ("Empty.crt holds no PEM" in out) == (not extra),
+            out,
+        )
 
 
 @test
