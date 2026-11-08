@@ -102,7 +102,10 @@ def main() -> int:
 
     argv = [x.replace("HOSTDIR", hostdir) for x in args.args]
     fresh()
-    rc_b, out_b, err_b = oracle_ns.run_bwrap(root, work, " ".join([prog, *argv]), sp)
+    # the probe's world: the identity directories with their links' targets (identity_dir_binds)
+    rc_b, out_b, err_b = oracle_ns.run_bwrap(
+        root, work, " ".join([prog, *argv]), sp, identity_targets=True
+    )
     fresh()
     rc_o, out_o, err_o = oracle_ns.run_launcher(ex, work, argv, sp, prog=prog)
     lb, lo = out_b.splitlines(), out_o.splitlines()

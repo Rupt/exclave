@@ -160,6 +160,16 @@ WORKLOADS: list[tuple[str, Callable[[str, str], bool] | None]] = [
     ),
     ("stat -f -c '%T' /usr; touch /usr/bin/true 2>&1; chmod 600 /usr/bin/true 2>&1; echo $?", None),
     ("date +%Z; TZ=Asia/Tokyo date +%Z; ls /etc/localtime 2>&1 | wc -l", None),
+    # the host's trust directory (8.4): its listing, a link's text, a climb out of it into the tree
+    # and a create there; the links' targets are not bound here, so nothing follows them
+    (
+        (
+            "ls /etc/ssl/certs | wc -l; for f in $(ls /etc/ssl/certs | head -3); "
+            "do readlink /etc/ssl/certs/$f; done; cd /etc/ssl/certs && pwd && ls .. | wc -l; "
+            "touch /etc/ssl/certs/oracle-new 2>&1"
+        ),
+        None,
+    ),
     ("test -w $SHX; echo $?; test -x $SHX; echo $?; test -w $W; echo $?", None),
     (
         (
@@ -203,13 +213,15 @@ def run_bwrap(
     extra: Iterable[str] = (),
     *,
     timeout: float | None = None,
+    identity_targets: bool = False,
 ) -> tuple[int, str, str]:
     """Run a shell command under bwrap with root read-only at /, where the kernel answers.
 
     The work directory is bound at its own path. Its top-level directory becomes a tmpfs, so that
     bwrap can make the mount point inside the read-only root, where the tree ships that directory as
-    an empty placeholder. After timeout seconds the run is killed with its process group and
-    TimeoutExpired raised.
+    an empty placeholder. The identity directories are bound as tree.identity_dir_binds says, with
+    their links' target directories where identity_targets asks for them. After timeout seconds
+    the run is killed with its process group and TimeoutExpired raised.
     """
     top = "/" + work.split("/")[1]
     args = [
@@ -253,6 +265,7 @@ def run_bwrap(
     ]
     for k, v in spellings.env().items():
         args += ["--setenv", k, v]
+    args += tree.identity_dir_binds(root, targets=identity_targets)
     for f in IDENTITY:
         if os.path.exists(f) and os.path.lexists(os.path.join(root, f.lstrip("/"))):
             if os.path.islink(f):

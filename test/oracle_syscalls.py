@@ -30,10 +30,12 @@ with every flag that changes resolution, with the invalid arguments the kernel c
 lookup, and with the path forms of class Forms over the maze of make_maze, the same in every run:
   - inside the exclave: a file, a directory and a symlink of every kind (loop, chained, dangling,
     absolute, relative), a wrapper, the shell's link, identity files, one of them a host symlink
-    into /usr on most hosts, also with a trailing slash and as a directory on the way, one the
-    host lacks and the directory on the way to it,
-    /proc/self/exe, and an exclave link to a host file and to a host directory, the latter also
-    crossed in the middle of a path and followed by ..;
+    into /usr on most hosts, also with a trailing slash and as a directory on the way, one the host
+    lacks and the directory on the way to it, the host's trust directory with a subject-hash link
+    and the .pem link it names, each followed by a slash and by .., a .. out of the directory, a
+    name the host lacks there and the bundle, the names chosen from this host's /etc/ssl/certs and
+    the forms left out where it has no hash link, /proc/self/exe, and an exclave link to a host file
+    and to a host directory, the latter also crossed in the middle of a path and followed by ..;
   - on the host: files, directories (an empty one among them, for an rmdir that succeeds) and
     links of every kind, links into the exclave's file, its directory and its wrapper, the
     directory link also crossed in the middle of a path and followed by .., and relative paths
@@ -63,8 +65,13 @@ read-only refusal fail there even when the answer is right.
 
 The two worlds. The same binary, compiled by the exclave's compiler, runs under bwrap, with the
 unwrapped tree read-only at / and the visibility rule of 8.1 spelt in bwrap's terms (the identity
-files and the host's top-level directories bound from the host), and under the launcher, with a copy
-of the exclave relinked with the build.
+files and the host's top-level directories bound from the host, and each identity directory bound
+writable at its name, or its host link laid there and the directory it reaches bound at its own
+name, with the directories its links lead into bound at theirs, which no form names:
+tree.identity_dir_binds), and under the launcher, with a copy of the exclave relinked with the
+build. The trust directory's names are bound host paths (BOUND): a rename or a link from one to
+another host path crosses bwrap's mounts (EXDEV) where the host answers on one mount, and the native
+run answers it.
 
 openat2 and EAGAIN. A scoped walk (RESOLVE_BENEATH, RESOLVE_IN_ROOT) answers EAGAIN when a rename or
 a mount anywhere on the system raced it (handle_dots in fs/namei.c), and openat2(2) tells the caller
@@ -88,7 +95,8 @@ rule that makes a difference right, and a difference no entry names fails. The e
 kinds, and each names the syscalls, the cases by their flag and form, and the answers its reason
 covers:
   - the oracle's own construction: a host entry bound into bwrap's read-only root answers EROFS
-    there, where the launcher answers as the native run; uid 0 is unmapped in bwrap's user
+    there, and a rename or a link between two bound host paths EXDEV, where the launcher answers as
+    the native run; uid 0 is unmapped in bwrap's user
     namespace; a new top-level name is the host's (8.1),
     whose / answers EACCES where bwrap's root says EROFS; RESOLVE_CACHED answers EAGAIN under
     bwrap's cold cache where the handler answers the retry's answer itself;
@@ -582,6 +590,26 @@ class Forms:
             ("rel_root_by_dotdot", "../" * h.count("/") + "."),
             ("rel_etc_by_dotdot", "../" * h.count("/") + "etc/passwd"),
         ]
+        # the host's trust directory (8.4): a subject-hash link in it, the .pem link it names, which
+        # leads out of it to the host's certificate, the two followed by a slash and by .., a .. out
+        # of the directory, a name the host lacks and the bundle; chosen from this host's directory,
+        # and left out where it has no hash link
+        self.trust: list[tuple[str, str]] = []
+        found = tree.host_trust_link()
+        if found:
+            c = "/etc/ssl/certs"
+            hsh, pem = found
+            self.trust = [
+                ("ca_dir", c),
+                ("ca_hash", f"{c}/{hsh}"),
+                ("ca_pem", f"{c}/{pem}"),
+                ("ca_hash_slash", f"{c}/{hsh}/"),
+                ("ca_hash_dotdot", f"{c}/{hsh}/.."),
+                ("ca_dotdot", c + "/../openssl.cnf"),
+                ("ca_absent", c + "/exclave-probe-absent"),
+                ("ca_bundle_in", c + "/ca-certificates.crt"),
+            ]
+            ex += self.trust
         self.paths = [(n, S(p)) for n, p in ex + hostf]
         self.paths += [
             ("fault_end", "e:" + hx(self.file)),
@@ -612,6 +640,8 @@ class Forms:
                 ("rel_file", "hfile"),
             ]
         ] + [("fault_null", "n:")]
+        # a name in the host's trust directory, renamed or linked to and from the others
+        self.few += [(n, S(p)) for n, p in self.trust if n in ("ca_hash", "ca_absent")]
         # descriptor-relative forms: (label, dirfd token, path token)
         rel_ex = [
             "",
@@ -659,6 +689,15 @@ class Forms:
             ("dfd_root/" + r, F(O_PATH | O_DIRECTORY, "/"), S(r))
             for r in ("maze/d0/d1/f0", "..", "etc/passwd", NEW_TOP[1:])
         ]
+        if found:
+            self.at += [
+                ("dfd_trust/" + r, F(O_PATH | O_DIRECTORY, "/etc/ssl/certs"), S(r))
+                for r in ("", found[0], found[1], "..", "../openssl.cnf", "nonexistent")
+            ]
+            self.at += [
+                ("dfd_root/" + r, F(O_PATH | O_DIRECTORY, "/"), S(r))
+                for r in ("etc/ssl/certs/" + found[0], "etc/ssl/certs/" + found[1])
+            ]
         self.at += [
             ("dfd_proc/" + r, F(O_PATH, "/proc/self"), S(r))
             for r in ("cwd", "cwd/hfile", "cwd/missing", "root/maze/f2")
@@ -1345,7 +1384,8 @@ def run_bwrap(root: str, host: str, _bindir: str, probe: str, cases: str) -> tup
 
     The unwrapped tree read-only at /, and the visibility rule of 8.1 spelt in bwrap's terms: every
     placeholder of the tree is the host's directory, the kernel's volatile directories are the
-    host's, and the identity files are the host's files with the host's permissions.
+    host's, the identity files are the host's files with the host's permissions, and the identity
+    directories the host's directories, with the directories their links lead to (8.4).
     """
     args = ["bwrap", "--ro-bind", root, "/", "--proc", "/proc", "--dev-bind", "/dev", "/dev"]
     for top in sorted(os.listdir(root)):
@@ -1362,6 +1402,8 @@ def run_bwrap(root: str, host: str, _bindir: str, probe: str, cases: str) -> tup
     for p in ("/var/tmp",):
         if os.path.isdir(os.path.join(root, p.lstrip("/"))) and os.path.isdir(p):
             args += ["--bind", p, p]
+    # the identity directories, and the directories their links lead to, which no form names (8.4)
+    args += tree.identity_dir_binds(root, targets=True)
     for f in IDENTITY:
         if os.path.exists(f) and os.path.lexists(os.path.join(root, f.lstrip("/"))):
             t = os.path.realpath(f) if os.path.islink(f) else f
@@ -1850,13 +1892,16 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
         None,
         lambda label, b, o, c: (
             BOUND_PATHS & set(c.paths)
-            and errnos(b, o)[0] == errno.EROFS
+            and errnos(b, o)[0] in (errno.EROFS, errno.EXDEV)
             and o == c.native.get(label)
         ),
         (
             "a host entry bound into bwrap's read-only root: its parent directory, or the "
-            "identity symlink itself, is read-only there (EROFS); the launcher answers with the "
-            "host's permissions (8.1, 8.4), as the probe does run natively"
+            "identity symlink itself, is read-only there (EROFS), and a rename or a link between "
+            "it and another bound host path, the trust directory's link followed to its target "
+            "among them, crosses bwrap's mounts (EXDEV) where the host's one mount answers the "
+            "permission; the launcher answers with the host's permissions (8.1, 8.4), as the "
+            "probe does run natively"
         ),
     ),
     (
@@ -2154,6 +2199,11 @@ def main() -> int:
                 with open(tp, "wb"):
                     pass
     forms = Forms(root, host)
+    # the trust directory's forms name host paths bound into the kernel's world (8.4), all but the
+    # climb out of it, which lands in the tree
+    global BOUND_PATHS  # noqa: PLW0603 -- the host's names, known only once Forms has chosen them
+    BOUND.update({n: lexical(p) for n, p in forms.trust if n != "ca_dotdot"})
+    BOUND_PATHS = frozenset(BOUND.values())
     # a tree file the probe names has a copy of its own in the kernel's world, not a hard link to
     # the given exclave's: another gate step may be running that program, and a write-open of it
     # would be ETXTBSY there, an answer about the gate rather than the rule
