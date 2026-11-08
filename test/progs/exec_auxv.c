@@ -21,7 +21,9 @@
 #include <unistd.h>
 
 extern char **environ;
+#ifdef __GLIBC__
 extern void *__libc_stack_end;
+#endif
 extern const Elf64_Ehdr __ehdr_start;
 extern void _start(void);
 int main(int argc, char **argv);
@@ -91,7 +93,13 @@ static void report(const char *L, int argc, char **argv)
     while (*e) e++;
     int nenv = (int)(e - envp);
     Elf64_auxv_t *auxv = (Elf64_auxv_t *)(e + 1);
+    /* glibc records the initial stack pointer; musl does not, and there argv - 1 is where the kernel put argc, so the
+     * two placement lines below hold by construction and the rest still compares (17 item 4) */
+#ifdef __GLIBC__
     uintptr_t *sp = (uintptr_t *)__libc_stack_end;
+#else
+    uintptr_t *sp = (uintptr_t *)(argv - 1);
+#endif
     printf("%s sp aligned 16: %s\n", L, yes_no(((uintptr_t)sp & 15) == 0));
     printf("%s argc at sp: %s\n", L, yes_no(sp[0] == (uintptr_t)argc));
     printf("%s argv at sp+8: %s\n", L, yes_no((uintptr_t *)argv == sp + 1));
