@@ -53,9 +53,11 @@ def identity_links(root: str) -> None:
 
     Each identity file the tree lacks gets the empty placeholder `exclave wrap` ships (8.1 rule 5),
     so a tree wrapped by an earlier build has every one. One that is a host symlink gets the host's
-    link text, since a bind of the host's file would hide the text the launcher reports (8.4); the
-    oracles bind the target at its own path, which needs a mount point in the read-only root, made
-    here where the target is not under a volatile directory. Done again on a kept root.
+    chain of links, each at its own name, since a bind of the host's file would hide the text the
+    launcher reports and the kernel follows the whole chain on the host for it (8.4): Ubuntu
+    18.04's /etc/localtime -> /usr/share/zoneinfo/Etc/UTC -> ../UCT. The oracles bind the file the
+    chain ends at, at its own path, which needs a mount point in the read-only root, made here
+    where that path is not under a volatile directory. Done again on a kept root.
     """
     for f in IDENTITY_FILES:
         p = os.path.join(root, f.lstrip("/"))
@@ -63,15 +65,27 @@ def identity_links(root: str) -> None:
             os.makedirs(os.path.dirname(p), exist_ok=True)
             with open(p, "wb"):
                 pass
-        if os.path.islink(f):
-            os.remove(p)
-            os.symlink(os.readlink(f), p)
-            t = os.path.realpath(f)
-            tp = os.path.join(root, t.lstrip("/"))
-            if not os.path.lexists(tp) and not t.startswith(("/run/", "/tmp/", "/dev/", "/proc/")):
-                os.makedirs(os.path.dirname(tp), exist_ok=True)
-                with open(tp, "wb"):
-                    pass
+        if not os.path.islink(f):
+            continue
+        name = f
+        for _ in range(40):  # the kernel's own limit on a chain
+            if not os.path.islink(name):
+                break
+            text = os.readlink(name)
+            at = os.path.join(root, name.lstrip("/"))
+            if os.path.lexists(at):
+                os.remove(at)
+            os.makedirs(os.path.dirname(at), exist_ok=True)
+            os.symlink(text, at)
+            if text.startswith("/"):
+                name = text
+            else:
+                name = os.path.normpath(os.path.join(os.path.dirname(name), text))
+        tp = os.path.join(root, name.lstrip("/"))
+        if not os.path.lexists(tp) and not name.startswith(("/run/", "/tmp/", "/dev/", "/proc/")):
+            os.makedirs(os.path.dirname(tp), exist_ok=True)
+            with open(tp, "wb"):
+                pass
 
 
 def vbin(root: str, name: str) -> str:
