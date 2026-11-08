@@ -75,11 +75,14 @@ documents, gate, one commit per item. Status is in brackets.
 5. **The trust directory** [design in progress]: identity directories,
    their walk on the host, the oracles' model of them, the probe's path
    forms, the tool's part; item 55 rewritten as what remains.
-6. **The sweep over Python, a JDK and TeX Live** [in progress]: real
+6. **The sweep over Python, a JDK and TeX Live** [done]: real
    exclaves of the three run against the kernel's answers; each gap a
    rule in `unpack` or a generator of `exclave caches` with a test, or a
    new limitation. TeX's in-place configuration and formats (item 56)
-   and Java's certificate keystore are the known gaps going in.
+   and Java's certificate keystore were the gaps going in; both are
+   closed, TeX's through `exclave caches` writing in place and the
+   keystore as an `unpack` rule, and the CA bundle rule now fires on
+   Ubuntu 24.04 (10.1, 13 items 48, 56 and 57).
 7. **Investigations, after the items above** [pending]: the spawn's
    kernel side profiled with kernel symbols in a matrix VM (DESIGN
    16.7), and a defect hunt in the areas the last audit named next,
