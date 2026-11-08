@@ -96,7 +96,7 @@ def isolation(ctx: Ctx) -> str | None:
         paths = re.findall(r'"((?:[^"\\]|\\.)*)"', args)
         if name in ("execve", "execveat", "readlink", "readlinkat") and paths:
             # the rest are argv strings, or the link's text (Fedora's /usr/bin/ld ->
-            # /etc/alternatives/ld)
+            # ../../etc/alternatives/ld)
             paths = paths[:1]
         elif name in ("symlink", "symlinkat") and paths:
             # the link's text is stored as written; only the link's own name is looked up

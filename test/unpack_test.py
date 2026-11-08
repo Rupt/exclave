@@ -149,7 +149,8 @@ def rpm_unpack(ctx: Ctx) -> None:
 
     Lead, headers, cpio payload; Requires and Provides with rpm's flags, so-called provides, file
     dependencies asked of the tree, rpmlib features and rich dependencies skipped; the merged-usr
-    links; alternatives --install lines in %post synthesised; one format per exclave.
+    links; alternatives --install lines in %post synthesised, their links relative (13 item 37);
+    one format per exclave.
     """
     d = os.path.join(ctx.work, "rpms")
     os.makedirs(d, exist_ok=True)
@@ -233,8 +234,9 @@ def rpm_unpack(ctx: Ctx) -> None:
     )
     expect(
         os.path.islink(os.path.join(root, "usr", "bin", "tool"))
-        and os.readlink(os.path.join(root, "usr", "bin", "tool")) == "/etc/alternatives/tool"
-        and os.readlink(os.path.join(root, "etc", "alternatives", "tool")) == "/usr/bin/tool-2",
+        and os.readlink(os.path.join(root, "usr", "bin", "tool")) == "../../etc/alternatives/tool"
+        and os.readlink(os.path.join(root, "etc", "alternatives", "tool"))
+        == "../../usr/bin/tool-2",
         "alternatives from %post replace the shipped file at the link path: {!r}".format(
             os.listdir(os.path.join(root, "usr", "bin"))
         ),
@@ -245,10 +247,13 @@ def rpm_unpack(ctx: Ctx) -> None:
         [tuple(p[:3]) for p in pkgs] == [("libfoo", "1.0-1", MACHINE), ("tool", "1.0-1", MACHINE)],
         f"pkg records: {pkgs!r}",
     )
+    # a shortcut to the alternatives link: the host resolves it through the tree's relative links
+    # to the wrapper, so wrap, which refuses a shortcut leaving the tree (6.1), accepts it
+    os.symlink("tree/usr/bin/tool", os.path.join(out, "tool"))
     rc, o, e = run([*TOOL, "wrap", out])
     expect(
         rc == 0 and tree.records(os.path.join(out, ".exclave", "hashes")).get("tree"),
-        "wrap: " + o + e,
+        "wrap, with a shortcut to the alternatives link: " + o + e,
     )
     make_apk(os.path.join(d, "x-1.0-r0.apk"), "x", [("usr", "dir", None, 0o755)])
     rc, o, e = run(
@@ -508,6 +513,7 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
     since its alternatives are not made, and a trigger interest the tree lacks a cache for is
     noted by name.
     A JDK's tools are linked from its .jinfo file, the highest priority's winning.
+    Every link is relative, so that a name run from outside reaches the tree (13 item 37).
     """
     alt = package(
         ctx,
@@ -591,13 +597,13 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
     ]
     root, out = accepted(ctx, "rules", [alt, loopy, varied, py, *jdks])
     expect(
-        os.readlink(os.path.join(root, "usr", "bin", "java")) == "/etc/alternatives/java"
+        os.readlink(os.path.join(root, "usr", "bin", "java")) == "../../etc/alternatives/java"
         and os.readlink(os.path.join(root, "etc", "alternatives", "java"))
-        == "/usr/lib/jvm/jdk2/bin/java",
+        == "../../usr/lib/jvm/jdk2/bin/java",
         "the JDK of the higher priority is not linked: " + out[-400:],
     )
     expect(
-        os.readlink(os.path.join(root, "etc", "alternatives", "x")) == "/usr/bin/x-1",
+        os.readlink(os.path.join(root, "etc", "alternatives", "x")) == "../../usr/bin/x-1",
         "--set did not choose the alternative: " + out[-400:],
     )
     expect(
@@ -622,7 +628,7 @@ def synthesis_rules_and_notes(ctx: Ctx) -> None:
             alt_link = os.path.join(root, "etc", "alternatives", name)
             expect(
                 os.path.lexists(os.path.join(root, "usr", "bin", link))
-                and os.readlink(alt_link) == f"/usr/lib/{target}",
+                and os.readlink(alt_link) == f"../../usr/lib/{target}",
                 f"the loop over literal words did not make {link}: " + out[-400:],
             )
     expect("note: loopy's" not in out, "an unrolled loop is noted: " + out)

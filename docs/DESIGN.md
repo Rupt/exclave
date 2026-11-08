@@ -396,8 +396,9 @@ by hand; it is a convention, recorded nowhere.
   (`../x.exclave/tree/...` breaks when the exclave is renamed),
   dangling or leaves the tree, whatever the exclave's path is spelled. The
   kernel follows a shortcut by the host's resolution, so a shortcut to
-  a link in the tree with an absolute target, `/etc/alternatives/cc`,
-  would run the host's program, and nothing hashes the shortcuts.
+  a link in the tree with an absolute target, dpkg's `/usr/bin/cc ->
+  /etc/alternatives/cc` in a tree from `debootstrap`, would run the
+  host's program (13 item 37), and nothing hashes the shortcuts.
 - `.real/` is a hidden sibling: from the host, `find`, `du`, `tar` and
   directory scanners see it, and inside the exclave no listing of the
   tree shows it, so a program sees upstream's tree (8.3), though it
@@ -2509,12 +2510,15 @@ refused. From `.deb` files, in five steps:
    per-package list, a `for` loop over literal words unrolled first,
    as ImageMagick installs `convert` and its other programs (a script
    whose loops would unroll past a megabyte or a thousand loops is
-   refused, as nested loops multiply);
+   refused, as nested loops multiply), each link written relative,
+   `/usr/bin/awk -> ../../etc/alternatives/awk -> ../../usr/bin/mawk`,
+   so that a name run from outside the exclave reaches the wrapper in
+   the tree (13 item 37);
    `java-jinfo`, a Debian JDK's tool links from the
    `/usr/lib/jvm/.*.jinfo` file it ships for `update-java-alternatives`,
    since its `postinst` makes them in a loop, the highest priority
-   winning; `busybox-applets`, Alpine's applet links from
-   `/etc/busybox-paths.d`; `apk-database`, apk's database of installed
+   winning, its links relative the same way; `busybox-applets`, Alpine's
+   applet links from `/etc/busybox-paths.d`, relative as well; `apk-database`, apk's database of installed
    packages, `/lib/apk/db/installed`, as apk writes it, a record of
    each package's `.PKGINFO` keyed by its control section's checksum,
    its licence by name and its origin among the fields and the files
@@ -3575,12 +3579,16 @@ and stay fixed.
     which `-march=native` embeds.
 
 37. **A symlink in the tree with an absolute target resolves on the
-    host when run from outside.** `/usr/bin/awk ->
-    /etc/alternatives/awk` resolves on the host when run from outside
-    the exclave, and in the tree when run from inside, because only
-    inside does the translator see the path. From outside, run the
-    wrapper it points at, or use a relative link; this is why the
-    busybox applet links are made relative (10.1).
+    host when run from outside.** In a tree from `debootstrap` or a
+    container export, `/usr/bin/awk -> /etc/alternatives/awk`, as dpkg
+    writes it, resolves on the host when run from outside the exclave,
+    to the host's awk or to nothing, and in the tree when run from
+    inside, because only inside does the translator see the path; a
+    shortcut to such a link is refused as leaving the tree (6.1). From
+    outside, run the wrapper it points at, or make the link relative,
+    which resolves the same inside: the links `unpack` makes, the
+    alternatives, a JDK's tool links, `/usr/bin/sh` and busybox's
+    applets, are relative for this reason (10.1).
 
 38. **A static link against a Red Hat tree needs `glibc-static`**,
     which no closure of `gcc` pulls in; add it to the package list.

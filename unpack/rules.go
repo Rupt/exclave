@@ -57,6 +57,17 @@ func link(r *root.Root, at, target string, log logger, replace bool) (bool, erro
 	return true, nil
 }
 
+// linkRelative makes the link at `at` to `target`, both absolute tree paths, with a relative text, so that a
+// link run from outside the exclave stays in the tree and reaches the wrapper there rather than a host file
+// of the same name (13 item 37); inside, a relative link resolves in virtual space the same way.
+func linkRelative(r *root.Root, at, target string, log logger, replace bool) (bool, error) {
+	text, err := filepath.Rel(filepath.Dir(at), target)
+	if err != nil {
+		return false, err
+	}
+	return link(r, at, text, log, replace)
+}
+
 // ---------------------------------------------------------------- update-alternatives
 // Debian's and rpm's spellings
 var (
@@ -180,7 +191,7 @@ func (a alternative) less(b alternative) bool {
 // alternatives makes every `update-alternatives --install` line in a postinst, with its slaves.
 // The highest priority wins, unless a `--set` names a candidate. A loop over literal words is
 // unrolled first; a line the rule still cannot read, one built from other shell variables, is
-// noted, since its alternatives are not made.
+// noted, since its alternatives are not made. The links are relative (linkRelative).
 func alternatives(r *root.Root, packages []*Package, log logger) (bool, error) {
 	groups := map[string][]alternative{}
 	var order []string
@@ -198,12 +209,15 @@ func alternatives(r *root.Root, packages []*Package, log logger) (bool, error) {
 				matched--
 				continue
 			}
-			if !r.Lexists(target) {
-				continue
-			}
 			var slaves [][3]string
+			absolute := strings.HasPrefix(at, "/") && strings.HasPrefix(target, "/")
 			for _, s := range slaveRe.FindAllStringSubmatch(m[5], -1) {
+				absolute = absolute && strings.HasPrefix(s[1], "/") && strings.HasPrefix(s[3], "/")
 				slaves = append(slaves, [3]string{s[1], s[2], s[3]})
+			}
+			// update-alternatives refuses a link or a path that is not absolute, so such a line made nothing
+			if !absolute || !r.Lexists(target) {
+				continue
 			}
 			if _, ok := groups[gname]; !ok {
 				order = append(order, gname)
@@ -239,7 +253,7 @@ func alternatives(r *root.Root, packages []*Package, log logger) (bool, error) {
 		for _, l := range [][2]string{
 			{"/etc/alternatives/" + gname, best.target}, {best.link, "/etc/alternatives/" + gname},
 		} {
-			ok, err := link(r, l[0], l[1], log, true)
+			ok, err := linkRelative(r, l[0], l[1], log, true)
 			if err != nil {
 				return false, err
 			}
@@ -251,7 +265,7 @@ func alternatives(r *root.Root, packages []*Package, log logger) (bool, error) {
 				for _, l := range [][2]string{
 					{"/etc/alternatives/" + sname, starget}, {slink, "/etc/alternatives/" + sname},
 				} {
-					ok, err := link(r, l[0], l[1], log, true)
+					ok, err := linkRelative(r, l[0], l[1], log, true)
 					if err != nil {
 						return false, err
 					}
@@ -273,7 +287,7 @@ var (
 // The JDK's postinst makes them in a loop the alternatives rule cannot read; the file it ships
 // for update-java-alternatives names the JDK's priority and, a line each, every tool and its
 // path. Each tool's /usr/bin link goes through /etc/alternatives to the highest priority's path,
-// where nothing stands there already.
+// where nothing stands there already, relative (linkRelative).
 func javaJinfo(r *root.Root, _ []*Package, log logger) (bool, error) {
 	type best struct{ prio, target string }
 	bests := map[string]best{}
@@ -309,7 +323,7 @@ func javaJinfo(r *root.Root, _ []*Package, log logger) (bool, error) {
 		for _, l := range [][2]string{
 			{"/etc/alternatives/" + tool, bests[tool].target}, {"/usr/bin/" + tool, "/etc/alternatives/" + tool},
 		} {
-			ok, err := link(r, l[0], l[1], log, false)
+			ok, err := linkRelative(r, l[0], l[1], log, false)
 			if err != nil {
 				return false, err
 			}
