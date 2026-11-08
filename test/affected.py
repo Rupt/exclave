@@ -48,6 +48,9 @@ STEPS: dict[str, tuple[str, ...]] = {
     "nss": ("test/nss_test.py",),
     "caches": ("test/caches_test.py",),
     "gdb": ("test/run.py",),
+    # this build against the baseline release (6.7): the launcher, the command and the identity
+    # table it reads from tool/layout.go
+    "compat": ("test/compat_test.py", "src/*", "tool/*", "unpack/*"),
 }
 # What everything runs on: the launcher and its build, the licence it carries, the Python every
 # driver runs on, the Go the commands are built by, the gate and this derivation.

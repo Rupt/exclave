@@ -15,8 +15,9 @@
 # fetchers' signature checks (test/fetch_test.py), and on the exclave given the suite, the resolution oracle, the
 # namespace oracle, the syscall probe and, when EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled, the
 # Docker profile run on its src/docker-seccomp.json, a user from SSSD looked up in its sss.exclave
-# (test/nss_test.py), exclave caches on its caches.exclave and alpine-caches.exclave (test/caches_test.py) and the
-# suite's gdb tests on its gdb.exclave.
+# (test/nss_test.py), exclave caches on its caches.exclave and alpine-caches.exclave (test/caches_test.py), the
+# suite's gdb tests on its gdb.exclave and this build against the baseline release in its baseline/
+# (test/compat_test.py, 6.7), SKIP before the first release.
 # No step touches the network. Everything slower or broader is scripts/extra's and scripts/matrix's, run when the
 # user asks. The steps run two at a time, or N with --jobs, so that the machine
 # stays usable meanwhile; every driver runs build/launcher on a copy of its own (the suite wraps one from the
@@ -97,7 +98,7 @@ has() {
     return 1
 } # has STEP: whether the change reaches it
 if $full || has every; then
-    steps="unit stack go unpack fetch suite oracles nss caches gdb $steps"
+    steps="unit stack go unpack fetch suite oracles nss caches gdb compat $steps"
     # the resolution oracle's mazes from a seed of the moment rather than the commit's, printed on a failure
     $full && seed=$(($(date +%s) % 100000))
     echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
@@ -149,6 +150,11 @@ if has gdb; then # gdb inside an exclave (13 item 1), on the inputs' gdb.exclave
     if [ -n "${EXCLAVE_TEST_INPUTS:-}" ] && [ -d "$EXCLAVE_TEST_INPUTS/gdb.exclave" ]; then
         step gdb py "$here/run.py" --exclave "$EXCLAVE_TEST_INPUTS/gdb.exclave" --work "$out/w-gdb" -k gdb
     else echo "gdb: EXCLAVE_TEST_INPUTS not set or without gdb.exclave; skipped"; fi
+fi
+if has compat; then # this build held to the baseline release's files (6.7), SKIP before there is one
+    if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
+        step compat py "$here/compat_test.py" --old "$EXCLAVE_TEST_INPUTS/baseline" --work "$out/compat"
+    else echo "compat: EXCLAVE_TEST_INPUTS not set; skipped"; fi
 fi
 wait
 report gate "$start"

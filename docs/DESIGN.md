@@ -822,9 +822,8 @@ The rules every version keeps:
 
 The baseline is the first release: `scripts/inputs` records its
 command and one exclave it ships by URL and BLAKE3-256 and puts them in
-its `DIR/baseline`, and `test/compat_test.py`, a step of `scripts/extra`
-and of the workflow's gate job, holds every later build to these rules
-against them (17). Given an earlier build of another kind, it fails as
+its `DIR/baseline`, and `test/compat_test.py`, a step of the commit
+gate, holds every later build to these rules against them (17). Given an earlier build of another kind, it fails as
 it should: against a build from before the log carried its version, on
 the log.
 
@@ -5215,7 +5214,17 @@ its time, ok, SKIP or FAIL:
   refused, and the given exclave, whose files the copy shares by hard
   links, is left as it was; a generator that fails, on a MIME package
   that is a directory, leaves the tree, its hash and `.exclave/` as
-  they were.
+  they were;
+- when `EXCLAVE_TEST_INPUTS` names that directory, the compatibility
+  test (`test/compat_test.py`) against the baseline it holds in
+  `baseline/`, the first release's command and an exclave it ships
+  (6.7): this command checks, hashes and reads the logs of the
+  exclave as the release made it, and unwraps and wraps it again with
+  every earlier path unchanged and only its identity placeholders
+  added; the release's command checks and hashes a copy this build
+  relinked; and the two launchers nest either way. Before the first
+  release, and on a machine the release is not for, there is no
+  baseline and the step is SKIP.
 
 Every driver runs `build/launcher` on a copy of its own, so the exclave
 given to the gate is never run as it is nor written. The suite wraps a
@@ -5271,14 +5280,6 @@ steps:
   as a consumer takes it, the README's recipe step by step, with a
   tampered archive and a tampered sums file refused and `NOTICES`
   naming the modules the command links (10.5).
-- the compatibility test (`test/compat_test.py`) against the baseline,
-  the first release's command and an exclave it ships, which
-  `scripts/inputs` puts in `DIR/baseline` (6.7): this command checks,
-  hashes, unwraps, wraps and reads the logs of the exclave as the
-  release made it, the release's command checks and hashes a copy this
-  build relinked, and the two launchers nest either way. Before the
-  first release there is no baseline and the step is SKIP; the
-  workflow's gate job runs it too, beside the gate.
 
 On the reference machine, on the four exclaves, four steps at a time,
 it takes 96 s (measured October 2026).
@@ -5600,7 +5601,7 @@ questions.
    between commits (2); from it on, the versions of 6.7 do, and the
    first release is the baseline every later commit is held to: its
    URL and hashes go into `scripts/inputs`, which fetches it, and the
-   compatibility test runs against it (17).
+   gate's compatibility step runs against it (17).
 3. **aarch64 kernels with 16 KB or 64 KB pages.** The loader rounds to
    the kernel's page size and the launcher's own segments are 64 KB
    aligned (13 item 43). The matrix's `noble-arm64-64k` row, on

@@ -5,9 +5,8 @@
 # EXCLAVE_TEST_INPUTS names the directory scripts/inputs filled, the Docker profile run; and on the first exclave, the
 # suite under the plain terminal's AppArmor label (aa-exec -p unconfined, where there is one), the parsers fuzzed from
 # its files under the sanitisers for ten seconds (test/fuzz.py, the launcher's parsers) and the command's parsers
-# under Go's fuzzer for ten seconds a target (gofuzz), a release of it made and taken as a consumer takes it
-# (test/release_test.py), and, when EXCLAVE_TEST_INPUTS names that directory, this build held to what 6.7 promises
-# against the baseline release it holds (test/compat_test.py), SKIP before there is one. These are broader than the gate or slower, or are budgets and
+# under Go's fuzzer for ten seconds a target (gofuzz), and a release of it made and taken as a consumer takes it
+# (test/release_test.py). These are broader than the gate or slower, or are budgets and
 # integration runs rather than tests: a bug one of them finds gets a fast reproduction as a test in the gate; the
 # run that found it stays here. The resolution oracle takes a seed of the moment, printed with a difference. The
 # steps run two at a time, or N with --jobs; one line per step with its time; logs under build/extra/. Exit status:
@@ -61,11 +60,6 @@ gofuzz() {
 step fuzz fuzz "$1"
 step gofuzz gofuzz
 step release py "$here/release_test.py" --exclave "$1" --work "$out/release"
-# this build held to the baseline release's files (6.7), which scripts/inputs puts in DIR/baseline once a release is
-# recorded there; SKIP until then
-if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
-    step compat py "$here/compat_test.py" --old "$EXCLAVE_TEST_INPUTS/baseline" --work "$out/compat"
-else echo "compat: EXCLAVE_TEST_INPUTS not set; skipped"; fi
 if command -v aa-exec >/dev/null 2>&1 && aa-exec -p unconfined true 2>/dev/null; then # the plain terminal's label (12)
     n=$(basename "$1" .exclave)
     step "suite-$n-plain" aa-exec -p unconfined "$UV" run --quiet --project "$ROOT" python "$here/run.py" --exclave "$1" --work "$out/w-$n-plain"
