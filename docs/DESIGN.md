@@ -3168,14 +3168,13 @@ x86-64 row too, fetches Fedora's newest image, release 44 with kernel
 | Alpine 3.20 | 6.6 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
 | Fedora 42 | 6.14 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
 | Ubuntu 26.10 | 7.3 | all pass | glibc 2.44 |
-| Ubuntu 24.04 arm64 | 6.8 | all pass | aarch64: natively on GitHub's aarch64 runner, where the gate runs this kernel (17), and under TCG on the reference machine, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed, where the suite takes 17 minutes and the row 36; the exclave is made on the reference machine and only run here (10.1) |
-| Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | all pass | aarch64 under TCG: the VM installs the 64 KB kernel and reboots into it, about an hour on the reference machine, and runs when asked (17); reproduced |
+| Ubuntu 24.04 arm64 | 6.8 | all pass | aarch64: natively on GitHub's aarch64 runner, where the gate runs this kernel (17), and under TCG on the reference machine, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed; the exclave is made on the reference machine and only run here (10.1) |
+| Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | all pass | aarch64 under TCG: the VM installs the 64 KB kernel and reboots into it, and runs when asked (17); reproduced |
 | reference machine | 7.0 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
 run passes; the x86-64 rows pass the same way on GitHub's hosted
-x86-64 runner, where the matrix job takes about 14 minutes (17,
-measured November 2026). Two checks outside the suite run natively on
+x86-64 runner (17). Two checks outside the suite run natively on
 each row:
 
 - **`noexec`.** A program built by the exclave's gcc, placed on a
@@ -5303,8 +5302,8 @@ any fixture though it did not when the fixture was made, since a test can
 skip for a file the prune left out. A recheck that passes says so in a
 line of its own, since the fixture lacked what the test needs or the
 test is flaky, and the summary line counts the rechecks; the fixture
-then goes for the next run to remake. On the fixture one suite takes
-17 s on the reference machine, on the whole exclave 30 s.
+then goes for the next run to remake. The suite runs faster on the
+fixture than on the whole exclave.
 
 **The probe** (`test/progs/probe.c`, `test/oracle_syscalls.py`) puts the
 whole trapped-syscall surface in front of the kernel. It crosses every
@@ -5349,7 +5348,8 @@ listed apart by its two exact answers, printed by every run, and fails
 once the answers agree until its entry goes, on a host whose files can
 show it (an entry says which hosts can, such as one whose
 `/etc/resolv.conf` is a symlink). On the reference machine no case of
-the gate's four exclaves differs unexplained, and no defect is open.
+the four exclaves `scripts/extra` runs differs unexplained, and no
+defect is open.
 `test/oracle_syscalls.py`'s module docstring holds the argument kinds,
 the path forms, `openat2`'s `EAGAIN` retry and the accepted differences.
 
@@ -5375,7 +5375,7 @@ natively from the harness, as `openat2_xdev` does.
 **The kernel matrix** (`scripts/matrix --exclave EXCLAVE
 [--docker-profile FILE]`) runs one gcc exclave, built on the reference
 machine, in virtual machines, one at a time with 1 GB each (`--jobs N`
-for more), all the x86-64 rows in about sixteen minutes. It is due when
+for more). It is due when
 the gate says a change reaches the VMs: a launcher source, the command,
 the pinned Python, or the matrix's own code; other changes leave the
 kernels' answers as they were. Being the costliest check, it runs when
@@ -5401,9 +5401,7 @@ image. Two checks run outside the suite: a program built by the
 exclave's gcc on a `noexec` tmpfs the VM mounts as root, run by the
 VM's shell, the positional entry and the exclave's shell; and the
 output of `test/sysroot.py` run natively. The results go to
-`build/matrix-results.md` and are tabulated in 12.1. The x86-64 rows
-take about ten minutes and are run before a launcher change is
-committed.
+`build/matrix-results.md` and are tabulated in 12.1.
 
 **The emulated arm64 rows** (`scripts/matrix --exclave EXCLAVE
 --exclave ARM64_EXCLAVE --only noble-arm64 [--docker-profile FILE]`;
@@ -5447,10 +5445,9 @@ aarch64 build gets the unit tests and the stack budget,
 which the emulated row never ran (its code checks go without
 shellcheck and taplo, which have no aarch64 wheel; the shell and the
 TOML are text, checked on x86-64). The x86-64 rows run under KVM, two
-VMs at a time, in about twenty minutes. The 64 KB-page row has no job:
-no hosted runner boots such a kernel or offers KVM on aarch64, and
-under TCG there the row took two hours (measured October 2026), so it
-runs from the reference machine when asked, like the other emulated
+VMs at a time. The 64 KB-page row has no job: no hosted runner boots
+such a kernel or offers KVM on aarch64, and it would be emulated there
+too, so it runs from the reference machine when asked, like the other emulated
 row. The results are the jobs' logs and the matrix job's results
 table, kept as the run's artifacts; the figures the documents quote stay
 those measured on the reference machine.
@@ -5550,10 +5547,8 @@ questions.
    refusal of a soname only a prior `dlopen` by path provides (10.3).
    Further real software decides which of the tool's synthesis gaps
    close next (10.1): `unpack` does not generate
-   locales, TeX's formats or the other caches `exclave caches` does
-   not make (it makes Python bytecode, GLib schemas, the MIME
-   database and the GIO, gdk-pixbuf, icon, desktop and font caches),
-   and a gap closes when a real exclave needs it, as a rule in the synthesis
+   locales, TeX's formats or the caches `exclave caches` does not
+   make (10.1 lists those it makes), and a gap closes when a real exclave needs it, as a rule in the synthesis
    table rather than an option. `unpack`'s notes name the caches a tree
    lacks from the packages' trigger interests, and failed opens in an
    `EXCLAVE_LOG` show where an exclave misses one (10.1).
