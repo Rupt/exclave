@@ -62,11 +62,12 @@ static void put(const char *s)
     }
 }
 
-/* exec in a child; the case line is the exec's error, or the status and the first line the child printed */
+/* exec in a child; the case line is the exec's error, read from a close-on-exec pipe, so that no status the program
+ * exits with, a shell's 126 among them, is taken for one, or the status and the first line the child printed */
 static void ex(const char *tag, int dfd, const char *path, char *const *av, int flags)
 {
-    int p[2];
-    if (pipe(p)) {
+    int p[2], e[2];
+    if (pipe(p) || pipe2(e, O_CLOEXEC)) {
         perror("pipe");
         return;
     }
@@ -76,23 +77,29 @@ static void ex(const char *tag, int dfd, const char *path, char *const *av, int 
         dup2(p[1], 1);
         close(p[0]);
         close(p[1]);
+        close(e[0]);
         int dn = open("/dev/null", O_RDWR);
         dup2(dn, 0);
         dup2(dn, 2);
         syscall(SYS_execveat, dfd, path, av, environ, flags);
-        _exit(100 + (errno & 0xff));
+        int err = errno;
+        if (write(e[1], &err, sizeof err) != (ssize_t)sizeof err) _exit(99);
+        _exit(100);
     }
     close(p[1]);
+    close(e[1]);
     char buf[4096];
     int n = 0, r;
     while ((r = (int)read(p[0], buf + n, sizeof buf - 1 - (size_t)n)) > 0) n += r;
     buf[n] = 0;
     close(p[0]);
-    int st = 0;
+    int st = 0, err = 0;
+    ssize_t failed = read(e[0], &err, sizeof err);
+    close(e[0]);
     waitpid(c, &st, 0);
     buf[strcspn(buf, "\n")] = 0;
-    if (WIFEXITED(st) && WEXITSTATUS(st) >= 100 && !buf[0]) {
-        printf("%s: %s\n", tag, en(WEXITSTATUS(st) - 100));
+    if (failed == (ssize_t)sizeof err) {
+        printf("%s: %s\n", tag, en(err));
         return;
     }
     if (WIFSIGNALED(st)) printf("%s: signal=%d out=", tag, WTERMSIG(st));
