@@ -55,7 +55,7 @@ Taken in November 2026 with the user, each with its reason:
 Each item follows the method of `CLAUDE.md`: measure, fix, regression,
 documents, gate, one commit per item. Status is in brackets.
 
-1. **The documents brought in line with the code** [in progress]. The
+1. **The documents brought in line with the code** [done]. The
    versions table of 6.7, the portability table of 12, the matrix table
    of 12.1, the README's page-size and release-contents statements; then
    the figures rule applied throughout `docs/DESIGN.md`, `README.md` and
