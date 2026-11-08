@@ -366,6 +366,8 @@ static void loader_mode_check(char **argv, char **env2)
             (elf_probe(S->real, S->rest, &gen, &version, S->extra) < 0 || version < FILTER_JUDGE_SINCE))
             die("a launcher before filter version 10 is not run under a program's own seccomp filter", C.program, 0);
         if (canon(S, S->arg, AT_FDCWD, 0, S->v2) < 0) scpy(S->v2, C.program, PATH_MAX);
+        /* canon walks in S->real, so the wrapper's real path is taken again, as exec_checks took it */
+        to_real_exec(C.program, S->real);
         to_real_exec(S->v2, S->real2);
         long fd = sys_open(S->real2, O_PATH | O_CLOEXEC, 0);
         long n = fd < 0 ? fd : fd_real_path((int)fd, S->cur);

@@ -927,7 +927,8 @@ checked the same way before it is loaded, as the kernel opens it to
 run. The exit status is a shell's, 126 for a file that exists and
 cannot run, 127 for one that does not. A target
 that is a wrapper is exec'd as itself, by the name the caller spelt,
-so that the kernel gives the program its identity, when the kernel
+relative or absolute, through `./`, `../` or host symlinks, so that
+the kernel gives the program its identity, when the kernel
 would reach that wrapper by that name. An absolute link of the tree on
 the way would lead the kernel to the host's file instead, so then the
 wrapper is exec'd by its resolved path, and `comm` is the name the
@@ -3945,7 +3946,9 @@ and stay fixed.
     where it has none (Ubuntu 24.04's `python3-venv`, measured
     November 2026). A link's text is data the launcher does not
     rewrite, since which world a link is meant for is the program's
-    to know. Run the venv from inside, by the exclave's shell, or point
+    to know. Run the venv from inside, by the exclave's shell or the
+    positional entry, `EXCLAVE/.exclave/launcher DIR/bin/python3`,
+    which follows the link in the exclave's world (7.2), or point
     the link at the wrapper's host path, `ln -sfn
     EXCLAVE/tree/usr/bin/python3 DIR/bin/python3`, with which it runs
     the exclave's interpreter from outside too, `sys.prefix` the
@@ -5006,7 +5009,9 @@ meaning items 4 and 7.
      mid-trap finds it on aarch64 (7.5.3), and an adversarial program
      (`adversarial`), which runs the handler's deepest paths on Rust's
      alternate stack too, and a start that reads what it needs of the
-     tree once (16.4);
+     tree once (16.4), and the positional entry given a wrapper by every
+     spelling the kernel would exec, relative, absolute and through
+     host links (7.2);
    - *paths and the border*: working directories on either side, host
      symlinks, the read-only matrix of 8.2, the open flags the kernel
      judges before the walk, unix sockets, `PATH_MAX`,

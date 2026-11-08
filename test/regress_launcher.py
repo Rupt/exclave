@@ -296,6 +296,72 @@ def positional_entry(ctx: Ctx) -> None:
 
 
 @test
+def entry_wrapper_spellings(ctx: Ctx) -> None:
+    """7.4.5: the positional entry runs a wrapper by any spelling the kernel would exec.
+
+    The spelling as given is exec'd when it reaches the wrapper, so a relative one with ./ or ../,
+    a bare one, an absolute one and a host symlink to the wrapper, relative or absolute, a chain of
+    them and a venv's bin/ link, from a working directory in the exclave or outside it, all run
+    the program with the identity the kernel gives it there: comm the spelt name, exe the
+    program's. A spelling the kernel would follow elsewhere, an absolute link of the tree, runs
+    the tree's program by the wrapper's own path (13 item 39).
+    """
+    ex = os.path.realpath(ctx.exclave)
+    tree_dir = os.path.realpath(ctx.root)
+    sh = ctx.vbin("sh").lstrip("/")
+    d = os.path.join(ctx.work, f"entry-spellings-{os.getpid()}")
+    for sub in ("rel", "abs", "venv/bin", "chain"):
+        os.makedirs(os.path.join(d, sub))
+    # every link is named sh, as busybox picks its applet by the name
+    os.symlink(os.path.relpath(os.path.join(tree_dir, sh), os.path.join(d, "rel")), d + "/rel/sh")
+    os.symlink(os.path.join(tree_dir, sh), d + "/abs/sh")
+    os.symlink(os.path.join(tree_dir, sh), d + "/venv/bin/sh")
+    os.symlink("../venv/bin/sh", d + "/chain/sh")
+    shdir = os.path.dirname(os.path.join(tree_dir, sh))
+    for how, cwd, spelling in (
+        ("./ from the exclave", ex, "./" + os.path.relpath(os.path.join(tree_dir, sh), ex)),
+        ("bare from the exclave", ex, os.path.relpath(os.path.join(tree_dir, sh), ex)),
+        ("../ from outside", d, os.path.relpath(os.path.join(tree_dir, sh), d)),
+        ("./ from the program's directory", shdir, "./sh"),
+        ("../ from the tree", shdir, "../" + os.path.basename(shdir) + "/sh"),
+        ("absolute", d, os.path.join(tree_dir, sh)),
+        ("a relative host symlink", d, "./rel/sh"),
+        ("an absolute host symlink", d, d + "/abs/sh"),
+        ("a venv's link", d, "venv/bin/sh"),
+        ("a chain of host symlinks", d, "chain/sh"),
+    ):
+        rc, out, err = run(
+            [ctx.launcher, spelling, "-c", "cat /proc/$$/comm; readlink /proc/$$/exe; true"],
+            cwd=cwd,
+            env=ctx.env,
+        )
+        expect(
+            rc == 0 and out == f"sh\n{ctx.sh_exe}\n",
+            f"a wrapper through the entry, {how} ({spelling}): rc={rc} {out!r} {err!r}",
+        )
+    # an absolute link of the tree, spelt as a host path: the kernel would follow it on the host,
+    # so the entry runs the tree's program by the wrapper's own path
+    ex2 = os.path.join(ctx.work, f"entry-spellings-{os.getpid()}.exclave")
+    copy_exclave(ctx.mini, ex2)
+    os.makedirs(os.path.join(ex2, "tree", "opt", "entry-spellings"))
+    os.symlink(ctx.vbin("cat"), os.path.join(ex2, "tree", "opt", "entry-spellings", "cat"))
+    tree2 = os.path.realpath(os.path.join(ex2, "tree"))
+    rc, out, err = run(
+        [
+            os.path.join(ex2, ".exclave", "launcher"),
+            "./tree/opt/entry-spellings/cat",
+            "/proc/self/maps",
+        ],
+        cwd=ex2,
+        env=ctx.env,
+    )
+    expect(
+        rc == 0 and tree2 + "/" in out,
+        f"an absolute link of the tree spelt as a host path: rc={rc} {out[:300]!r} {err!r}",
+    )
+
+
+@test
 def cross_exclave_distinct_launchers(ctx: Ctx) -> None:
     """7.4.5: a program in another exclave is exec'd as that exclave's launcher.
 
