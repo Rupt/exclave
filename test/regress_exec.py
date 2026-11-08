@@ -3,7 +3,6 @@
 Run by test/run.py, on the fixtures test/suite.py makes.
 """
 
-import glob
 import os
 import shlex
 import shutil
@@ -657,15 +656,6 @@ def exec_elf(ctx: Ctx) -> None:
     expect(not bad, "; ".join(bad))
 
 
-def has_static_libc(root: str) -> bool:
-    """The tree holds a libc.a, in /usr/lib or a directory of it, as glibc and musl install one."""
-    lib = os.path.join(root, "usr", "lib")
-    return any(
-        os.path.exists(os.path.join(d, "libc.a"))
-        for d in [lib, lib + "64", *glob.glob(os.path.join(lib, "*-linux-*"))]
-    )
-
-
 @test
 def exec_auxv(ctx: Ctx) -> str | None:
     """7.3: the initial stack and the auxiliary vector are the kernel's, from the entry and an exec.
@@ -679,7 +669,7 @@ def exec_auxv(ctx: Ctx) -> str | None:
     kernel's stat fields and item 12 for a hard limit of 3. The kernel under bwrap measured these
     answers.
     """
-    static_libc = has_static_libc(ctx.tree)
+    static_libc = tree.has_static_libc(ctx.tree)
     bad = kernel_answers.exec_auxv_wrong(
         exerciser(ctx, "exec_auxv", ["HOSTDIR"]), static_libc=static_libc
     )

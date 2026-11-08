@@ -374,10 +374,10 @@ PROGRAMS = (
 )
 
 
-def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
+def judge(name: str, rc: int, out: str, hostdir: str, root: str) -> list[str]:
     """What the kernel answered that the suite's expectation for program name does not say.
 
-    hostdir is the writable host directory the program was given.
+    hostdir is the writable host directory the program was given, root the kernel's root.
     """
     if name == "ro_matrix":
         # under bwrap there is no wrapper, so the program's redirect line is not meaningful there;
@@ -414,11 +414,14 @@ def judge(name: str, rc: int, out: str, hostdir: str) -> list[str]:
             wrong += [x for x in out.splitlines() if x.startswith("facts:")]
     elif name == "creat_slash":
         wrong = kernel_answers.creat_slash_wrong(out, by_the_kernel=True)
+    elif name == "exec_auxv":
+        wrong = kernel_answers.exec_auxv_wrong(
+            out, by_the_kernel=True, static_libc=tree.has_static_libc(root)
+        )
     elif name.startswith("exec_"):
         wrong = {
             "exec_script": kernel_answers.exec_script_wrong,
             "exec_elf": kernel_answers.exec_elf_wrong,
-            "exec_auxv": kernel_answers.exec_auxv_wrong,
             "exec_state": kernel_answers.exec_state_wrong,
         }[name](out, by_the_kernel=True)
     elif name == "sigcalls":
@@ -513,7 +516,7 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
             rc, out, err = run_bwrap(root, work, cmds[name], sp, timeout=TIMEOUT)
         except subprocess.TimeoutExpired:
             rc, out, err = -9, "", f"killed after {TIMEOUT} s"
-        bad = judge(name, rc, out, hostdir) + ([err.strip()] if err else [])
+        bad = judge(name, rc, out, hostdir, root) + ([err.strip()] if err else [])
         if bad:
             fails += 1
             print(

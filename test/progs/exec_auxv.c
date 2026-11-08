@@ -331,7 +331,8 @@ int main(int argc, char **argv)
     }
     char cmd[16384], fdsprog[4096];
     snprintf(fdsprog, sizeof fdsprog, "%s/fds", hd);
-    snprintf(cmd, sizeof cmd, "%s -static -o %s/fds %s/fds.c", getenv("CC") ? getenv("CC") : "cc", hd, hd);
+    /* the compiler's complaint is not the program's: a tree without a static libc gets the line below in its place */
+    snprintf(cmd, sizeof cmd, "%s -static -o %s/fds %s/fds.c 2>/dev/null", getenv("CC") ? getenv("CC") : "cc", hd, hd);
     fflush(stdout);
     if (system(cmd)) {
         printf("fds: cannot build the static program\n");

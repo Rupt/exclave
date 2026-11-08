@@ -13,6 +13,7 @@ Go regression's programs, which the matrix builds on the host for VMs that have 
 import fcntl
 import filecmp
 import functools
+import glob
 import hashlib
 import os
 import re
@@ -257,6 +258,15 @@ def glibc_version(root: str, machine: str) -> tuple[int, int] | None:
     with open(p, "rb") as f:
         m = re.search(rb"release version (\d+)\.(\d+)", f.read())
     return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def has_static_libc(root: str) -> bool:
+    """The tree holds a libc.a, in /usr/lib or a directory of it, as glibc and musl install one."""
+    lib = os.path.join(root, "usr", "lib")
+    return any(
+        os.path.exists(os.path.join(d, "libc.a"))
+        for d in [lib, lib + "64", *glob.glob(os.path.join(lib, "*-linux-*"))]
+    )
 
 
 def mount_of(path: str) -> str:
