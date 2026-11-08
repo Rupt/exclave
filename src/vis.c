@@ -37,6 +37,9 @@ static int nabsent;
 /* the real path of each such copy, and of each path an own record makes the exclave's inside an identity directory, its
  * directory as the tree resolves it, where the tool places a copy */
 static const char *absent_real[N_IDENTITY + MAX_OWN_RECORDS];
+static size_t absent_real_len[N_IDENTITY + MAX_OWN_RECORDS];
+/* the directory the kernel named at startup for each identity directory whose host name is a link (vis_init) */
+static const char *link_reached[N_IDENTITY_DIRS];
 static const char *mapped_v[N_IDENTITY + MAX_OWN_RECORDS]; /* the virtual path each stands for, for from_real */
 static int nmapped;
 
@@ -219,13 +222,14 @@ void vis_init(void)
                 log_msg("host path unresolvable, using the exclave's", v);
                 continue;
             }
-            C.host[n] = C.host[i];
-            C.host[n].is_file = 0;
-            C.host[n].is_link = 1;
-            n++;
             /* one at most for each identity directory, by construction */
             if (nextra >= N_IDENTITY_DIRS) die("host table full", dir, 0);
-            extra[nextra++] = arena_str(dir, (size_t)len);
+            C.host[n] = C.host[i];
+            C.host[n].is_file = 0;
+            C.host[n].is_link = nextra + 1;
+            n++;
+            extra[nextra] = link_reached[nextra] = arena_str(dir, (size_t)len);
+            nextra++;
             continue;
         }
         /* a file, or a link the host resolves: the host's name is its real path, so that a call follows the host's
@@ -264,7 +268,7 @@ void vis_init(void)
  * looking each cut up: a path's answer costs one pass over its length. The table is written once before
  * anything traps and only read afterwards. */
 /* R_IDDIR: an identity directory the host has (8.4), and R_IDLINK where its host name is a link; R_EXREAL: an exclave
- * path in an identity directory the host has, at absent_real[host], and its subtree (rule_build) */
+ * path in an identity directory the host has, at absent_real[mapped], and its subtree (rule_build) */
 enum {
     R_OWN = 1,
     R_HOSTDIR = 2,
@@ -281,7 +285,7 @@ static struct rule {
     const char *s;
     unsigned len, flags;
     int host;   /* R_HOSTFILE: the index of the file's record */
-    int mapped; /* R_EXREAL: the index of its real path in absent_real */
+    int mapped; /* R_EXREAL: the index of its real path in absent_real; R_IDLINK: of its target in link_reached */
 } rules[RULE_SLOTS];
 static int nrules;                                             /* entries placed, at most half the slots in use */
 /* the slots in use, less one: the first of the table, enough for twice the entries rule_build can place, so that the
@@ -331,10 +335,12 @@ static const char *tree_real_of(const char *v);
 /* an exclave path in an identity directory the host has, at its directory as the tree resolves it (8.4) */
 static void rule_map(const char *v)
 {
+    /* the identity files and the own records bound the table, by construction */
     if (nmapped >= (int)(sizeof absent_real / sizeof absent_real[0])) die("mapping table full", v, 0);
     struct rule *r = rule_add(v, (unsigned)xstrlen(v), R_EXREAL, -1);
     if (!r || r->mapped >= 0) return;
     absent_real[nmapped] = tree_real_of(v);
+    absent_real_len[nmapped] = xstrlen(absent_real[nmapped]);
     mapped_v[nmapped] = v;
     r->mapped = nmapped++;
 }
@@ -342,8 +348,9 @@ static void rule_map(const char *v)
  * through the tree's links as a chroot would resolve it, a missing component taken as a directory, then its name,
  * which is where the tool places an identity file's copy (tool/layout.go, treeRealDir), so that a Fedora tree's link
  * /etc/ssl/certs -> /etc/pki/tls/certs is followed in the tree and not by the kernel on the host. A component that is
- * a file, a loop, a link that cannot be read or a path too long has no place, as the tool places nothing there: the
- * path then fails, as one under the launcher, a file, does (ENOTDIR). Startup only. */
+ * a file, a loop, a link that cannot be read, a path too long or a directory under a volatile one has no place, as
+ * the tool places nothing there: the path then fails, as one under the launcher, a file, does (ENOTDIR). Startup
+ * only. */
 static const char *tree_real_of(const char *v)
 {
     static char cur[PATH_MAX], rest[2 * PATH_MAX], next[2 * PATH_MAX], text[PATH_MAX], real[PATH_MAX];
@@ -369,7 +376,7 @@ static const char *tree_real_of(const char *v)
             rp = e;
             continue;
         }
-        if (curl + 1 + cl + 1 >= PATH_MAX) {
+        if ((size_t)C.rootlen + curl + 1 + cl + 1 >= PATH_MAX) {
             placed = 0;
             break;
         }
@@ -399,6 +406,9 @@ static const char *tree_real_of(const char *v)
         scpy(rest, next, sizeof rest);
         rp = rest;
     }
+    /* a directory under a volatile one is the host's whatever the tree holds there (8.1.3): no place in the tree */
+    for (int i = 0; placed && volatile_dirs[i]; i++)
+        if (starts_dir(cur, volatile_dirs[i])) placed = 0;
     scpy(real, C.root, PATH_MAX);
     scat(real, cur, PATH_MAX);
     if (placed && xstrlen(real) + xstrlen(base) < PATH_MAX) {
@@ -430,7 +440,8 @@ static void rule_build(void)
             rule_add(v, len, R_HOSTDIR, -1);
             /* an identity directory's way is made of directories, as an identity file's is (8.1.5) */
             if (C.host[i].is_identity_dir) {
-                rule_add(v, len, R_IDDIR | (C.host[i].is_link ? R_IDLINK : 0), -1);
+                struct rule *r = rule_add(v, len, R_IDDIR | (C.host[i].is_link ? R_IDLINK : 0), -1);
+                if (C.host[i].is_link && r) r->mapped = C.host[i].is_link - 1; /* its index in link_reached */
                 for (unsigned k = 1; k < len; k++)
                     if (v[k] == '/') rule_add(v, k, R_LEADS, -1);
                 if (v[0] == '/') root_flags |= R_LEADS;
@@ -689,30 +700,15 @@ char *to_real_exec(const char *v, char *out)
     return vis_exclave_real(v, out);
 }
 /* an exclave path's real path: under the tree's root, or an identity file's copy where the tree places it (8.1.5) */
+static struct rule *mapped_prefix(const char *v, unsigned *at);
 char *vis_exclave_real(const char *v, char *out)
 {
-    if (nmapped) {
-        /* the longest mapped prefix, at v's '/' boundaries, as rule_facts finds prefixes */
-        struct rule *best = 0;
-        unsigned at = 0;
-        unsigned long h = RULE_BASIS;
-        for (unsigned i = 0;; i++) {
-            char c = v[i];
-            if (i > 0 && (c == '/' || c == 0)) {
-                struct rule *r = rule_find(v, i, h);
-                if (r && (r->flags & R_EXREAL)) {
-                    best = r;
-                    at = i;
-                }
-            }
-            if (!c) break;
-            h = rule_hash(h, c);
-        }
-        if (best) {
-            scpy(out, absent_real[best->mapped], PATH_MAX);
-            scat(out, v + at, PATH_MAX);
-            return out;
-        }
+    unsigned at;
+    struct rule *best = nmapped ? mapped_prefix(v, &at) : 0;
+    if (best) {
+        scpy(out, absent_real[best->mapped], PATH_MAX);
+        scat(out, v + at, PATH_MAX);
+        return out;
     }
     scpy(out, C.root, PATH_MAX);
     if (!(v[0] == '/' && v[1] == 0)) scat(out, v, PATH_MAX);
@@ -726,37 +722,60 @@ char *to_real(const char *v, char *out, char *tmp)
     if ((k == CK_WRAPPER || (!k && is_wrapper_real(out, tmp))) && payload_of(out, tmp)) scpy(out, tmp, PATH_MAX);
     return out;
 }
-void from_real(char *r)
+/* the longest prefix of v that the rule maps (R_EXREAL), *at its length, or 0; at v's '/' boundaries, as rule_facts */
+static struct rule *mapped_prefix(const char *v, unsigned *at)
 {
-    if (!C.rootlen || xstrncmp(r, C.root, (size_t)C.rootlen) != 0) return;
-    /* a mapped path, by the tree's name for it, is the virtual path it stands for (8.4) */
-    int best = -1;
-    size_t bl = 0;
-    for (int k = 0; k < nmapped; k++) {
-        size_t l = xstrlen(absent_real[k]);
-        if (l > bl && starts_dir(r, absent_real[k])) {
-            best = k;
-            bl = l;
+    struct rule *best = 0;
+    unsigned long h = RULE_BASIS;
+    for (unsigned i = 0;; i++) {
+        char c = v[i];
+        if (i > 0 && (c == '/' || c == 0)) {
+            struct rule *r = rule_find(v, i, h);
+            if (r && (r->flags & R_EXREAL)) {
+                best = r;
+                *at = i;
+            }
         }
+        if (!c) return best;
+        h = rule_hash(h, c);
     }
-    if (best >= 0) {
-        size_t vl = xstrlen(mapped_v[best]), rl = xstrlen(r + bl);
-        if (vl + rl + 1 <= PATH_MAX) {
-            memmove(r + vl, r + bl, rl + 1);
-            xmemcpy(r, mapped_v[best], vl);
-            return;
-        }
-    }
+}
+int from_real(char *r)
+{
+    if (!C.rootlen || xstrncmp(r, C.root, (size_t)C.rootlen) != 0) return 0;
     if (r[C.rootlen] == 0) {
         r[0] = '/';
         r[1] = 0;
-        return;
+        return 0;
     }
-    if (r[C.rootlen] != '/') return;
-    memmove(r, r + C.rootlen, xstrlen(r + C.rootlen) + 1);
+    if (r[C.rootlen] != '/') return 0;
+    /* a mapped path, by the tree's name for it, is the virtual path it stands for (8.4), where the tree's plain name
+     * would name something else: the host's, or another mapped path */
+    const char *plain = r + C.rootlen, *hreal;
+    int best = -1;
+    size_t bl = 0;
+    for (int k = 0; k < nmapped; k++)
+        if (absent_real_len[k] > bl && starts_dir(r, absent_real[k])) {
+            best = k;
+            bl = absent_real_len[k];
+        }
+    unsigned at;
+    if (best >= 0 && (vis_is_host(plain, &hreal) || mapped_prefix(plain, &at))) {
+        size_t vl = xstrlen(mapped_v[best]), rl = xstrlen(r + bl);
+        if (vl + rl + 1 > PATH_MAX) return -ENAMETOOLONG;
+        memmove(r + vl, r + bl, rl + 1);
+        xmemcpy(r, mapped_v[best], vl);
+    } else memmove(r, plain, xstrlen(plain) + 1);
     /* an original seen through /proc reports the wrapper's name: drop a final "/.real" directory */
     char *b = xstrrchr(r, '/');
     if (b && b - r >= 6 && xmemcmp(b - 6, "/.real", 6) == 0) memmove(b - 6, b, xstrlen(b) + 1);
+    return 0;
+}
+/* the directory the kernel named at startup for an identity directory whose host name is a link, or 0 */
+const char *vis_identity_link_reached(const char *v)
+{
+    struct rule *r = rule_exact(v);
+    return r && (r->flags & R_IDLINK) && r->mapped >= 0 ? link_reached[r->mapped] : 0;
 }
 int vis_identity_dir_kind(const char *v)
 {

@@ -1397,11 +1397,13 @@ canon(path, dfd, follow_last):
     cur = "/"
     while parts:
         p = pop_front(parts)
-        "." -> continue; ".." -> cur = parent(cur); continue
+        "." -> continue
+        ".." -> if cur is an identity directory whose host name is a link and the walk is not
+                    scoped, cur = from_real(the kernel's name for it, opened on the host) (8.4)
+                cur = parent(cur); continue
         cand = cur + "/" + p
         if no parts left and (trailing slash ? on the parent : not follow_last): cur = cand; break
-        if cand is an identity directory, the walk not scoped (below), parts are left,
-                and the next is not ".." after a host link at the name:
+        if cand is an identity directory, the walk not scoped (below), and parts are left:
             cur = cand; continue                   # passed by name; the kernel follows a host link (8.4)
         if cand is one, or the host's below one, the walk not scoped, and lstat(cand) is a symlink:
             if no parts left: cur = cand; break    # re-issued following it: the kernel's, on the host
@@ -2344,29 +2346,34 @@ resolves for them, its links followed in the tree as a chroot would
 follow them, a component the tree lacks taken as a directory, which is
 where `wrap` places an identity file's copy: Fedora's tree has
 `/etc/ssl/certs -> /etc/pki/tls/certs`, which the kernel would otherwise
-follow on the host. A component that is a file, a loop or a link that
-cannot be read gives such a name no place, `wrap` places no copy there,
-and the launcher's answer for it is an error, as a chroot's would be.
-Inside such a name's subtree a path resolves through the tree's links as
-a chroot would, while `..` and a relative link's text go by the virtual
-parent, as on a bind mount; a working directory or a descriptor there is
-named by its virtual path. That costs an `lstat` at startup for each
-directory on the way to such a name. A name below it that the rule gives
-the host is `lstat`ed on the host. A link that is the last component is
-the kernel's to follow: the call is re-issued on the link's host name
-with the call's own following of it, so that the kernel follows the link
-and every link after it on the host, at the moment of the call. A link
-with components after it is opened on the host as a directory, following
-links, and the walk goes on from the directory the kernel names for it,
-by that name, where the rule gives that name to the host or it is the
-tree's; otherwise it is passed by its name as the directory itself is,
-the kernel following it at each call. So `/etc/ssl/certs/<hash>.0 ->
-<name>.pem -> /usr/share/ca-certificates/mozilla/<name>.crt` reads the
-host's certificate whether or not the tree has
-`/usr/share/ca-certificates`, an authority the host's administrator
-added under `/usr/local/share/ca-certificates` is trusted inside as
-outside, and a host whose trust tool links elsewhere, as Fedora's links
-into `/etc/pki/ca-trust/extracted`, is followed there.
+follow on the host. A component that is a file, a loop, a link that
+cannot be read, or a directory that resolves under a volatile one, which
+is the host's, gives such a name no place: `wrap` places no copy there
+and says so, and the launcher's answer for it is an error, as a chroot's
+would be under a file. The directory holding such a name resolves
+through the tree's links as a chroot would; below it the tree's links
+are followed in virtual space, `..` and relative text by the virtual
+parent; a working directory or a descriptor there is named by the tree's
+plain name for it where that name is the tree's, and by the name the
+rule maps where the plain name would be the host's, a name that would
+outgrow `PATH_MAX` refused with `ENAMETOOLONG`. That costs an `lstat` at
+startup for each directory on the way to such a name. A name below it
+that the rule gives the host is `lstat`ed on the host. A link that is
+the last component is the kernel's to follow: the call is re-issued on
+the link's host name with the call's own following of it, so that the
+kernel follows the link and every link after it on the host, at the
+moment of the call. A link with components after it is opened on the
+host as a directory, following links, and the walk goes on from the
+directory the kernel names for it, by that name, where the rule gives
+that name to the host or it is the tree's; otherwise it is passed by its
+name as the directory itself is, the kernel following it at each call.
+So `/etc/ssl/certs/<hash>.0 -> <name>.pem ->
+/usr/share/ca-certificates/mozilla/<name>.crt` reads the host's
+certificate whether or not the tree has `/usr/share/ca-certificates`, an
+authority the host's administrator added under
+`/usr/local/share/ca-certificates` is trusted inside as outside, and a
+host whose trust tool links elsewhere, as Fedora's links into
+`/etc/pki/ca-trust/extracted`, is followed there.
 
 Every call on a path at or below an identity directory that the rule
 gives the host is the host's own, re-issued on the host path, as a call
@@ -2717,7 +2724,7 @@ refused. From `.deb` files, in five steps:
    keystore holds the distribution's set, which answers where the host
    has none: `/etc/ssl/certs/java/cacerts` and `/etc/pki/java/cacerts`
    are identity files (8.1 rule 5), so a JDK inside reads the host's
-   keystore where the host has one;
+   keystore where the host has one at the path the JDK reads;
    `ca-trust`, Fedora's bundle from the p11-kit trust source;
    `ssl-paths`, OpenSSL's compiled-in trust paths when a libssl is
    present, so that the host's bundle at the identity path (8.4) is
@@ -4798,24 +4805,23 @@ scratch build, medians of 300 spawns: in the parent, about 70 µs from
 the call to the trapped `execve`, `clone3` refused (7.5.5) and glibc's
 fallback resetting each signal's disposition by hand, 64 `rt_sigaction`
 calls, two of them trapped; the exec handler (7.4.5), 50 µs; the
-kernel's exec of the launcher, about 120 µs; the launcher's start (7.2),
-about 360 µs; then the loader `ld.so` and the program's own start, where
-`ld.so`'s three path calls and two `fstat`s trap. A syscall in a process
-that has just started costs 2 to 3 µs on this machine rather than the
-fraction of that a warm loop measures, so the start's syscalls are most
-of its time. Of the launcher's start, the ownership set (8.1 rule 1)
-takes about 97 µs: the tree's top level is read and each of its
-directories opened and read, seven placeholders in the gcc exclave read
-twice each, since only an empty read proves a directory empty; the
-identity files' and directories' `lstat`s (8.4), twenty syscalls at the
-2 to 3 µs each costs here, one per file and per directory, one more for
-the target of each of the two files that are host symlinks on this
-machine, and one for each directory on the way, in the tree, to the copy
-of Java's keystore, which this machine lacks, so sixteen on a host that
-has the keystore and no `own` record inside an identity directory; the
-search for the manifest and its read 40 µs; and the loading of the
-program and its loader, with the loader's name walked through the tree
-in a cache that is empty in a new process, about 150 µs.
+kernel's exec of the launcher, about 120 µs; the launcher's start (7.2);
+then the loader `ld.so` and the program's own start, where `ld.so`'s
+three path calls and two `fstat`s trap. A syscall in a process that has
+just started costs 2 to 3 µs on this machine rather than the fraction of
+that a warm loop measures, so the start's syscalls are most of its time.
+Of the launcher's start, the ownership set (8.1 rule 1) reads the tree's
+top level is read and each of its directories opened and read, seven
+placeholders in the gcc exclave read twice each, since only an empty
+read proves a directory empty; the identity files' and directories'
+`lstat`s (8.4), twenty syscalls at the 2 to 3 µs each costs here, one
+per file and per directory, one more for the target of each of the two
+files that are host symlinks on this machine, and one for each directory
+on the way, in the tree, to the copy of Java's keystore, which this
+machine lacks, so sixteen on this machine with the keystore; the search
+for the manifest and its read 40 µs; and the loading of the program and
+its loader, with the loader's name walked through the tree in a cache
+that is empty in a new process, about 150 µs.
 
 The start reads what it needs of the tree once: a volatile top-level
 directory is not read at all, since the host owns it whatever it holds

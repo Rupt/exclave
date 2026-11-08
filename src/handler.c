@@ -928,7 +928,8 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         if (r < 0) return r;
         S->tmp[r] = 0;
         /* a descriptor on a /proc link reports a real path */
-        if (fd_real_path((int)a[di], S->real2) >= 0 && xstrncmp(S->real2, "/proc/", 6) == 0) from_real(S->tmp);
+        if (fd_real_path((int)a[di], S->real2) >= 0 && xstrncmp(S->real2, "/proc/", 6) == 0 && from_real(S->tmp) < 0)
+            return -ENAMETOOLONG;
         ans = S->tmp;
     }
     if ((C.loader_mode || xstrcmp(C.exe, C.program) != 0) && is_self_exe(S->v, S->pid)) ans = C.exe;
@@ -950,7 +951,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
         }
         /* another process's exe that is the launcher names the program that process runs (7.6) */
         int o = other_exe(S, S->v, S->tmp);
-        if (!o && xstrncmp(S->v, "/proc/", 6) == 0) from_real(S->tmp); /* real paths */
+        if (!o && xstrncmp(S->v, "/proc/", 6) == 0 && from_real(S->tmp) < 0) return -ENAMETOOLONG; /* real paths */
         ans = S->tmp;
         /* another process's exe link that names a wrapped script: that process runs the script's interpreter,
          * which is what the kernel would report natively; a tracer reads its tracee's link as the kernel gives it
@@ -1364,7 +1365,7 @@ static long do_getcwd(struct scratch *S, long *a)
     long r;
     r = RE5(NR_getcwd, S->tmp, PATH_MAX, 0, 0, 0);
     if (r <= 0) return r;
-    if (starts_dir(S->tmp, C.root)) from_real(S->tmp);
+    if (starts_dir(S->tmp, C.root) && from_real(S->tmp) < 0) return -ENAMETOOLONG;
     r = (long)xstrlen(S->tmp) + 1;
     /* size is unsigned: all ones is a large buffer, not a negative one */
     if ((unsigned long)r > (unsigned long)a[1]) return -ERANGE;

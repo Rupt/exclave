@@ -129,16 +129,20 @@ func treeResolve(root, vpath string, followLast bool, links *[]string) string {
 // treeRealDir is the directory d as the tree resolves it, as a chroot would, a component the tree
 // lacks taken as a directory to be made: where an identity file's copy goes, and where the
 // launcher looks for it (src/vis.c tree_real_of). A component that is a file, a loop, a link that
-// cannot be read or a path too long has no place.
-func treeRealDir(root, d string) (string, bool) {
+// cannot be read, a path too long or a directory under a volatile one, which is the host's
+// whatever the tree holds there (8.1), has no place, and the second result says why.
+func treeRealDir(root, d string) (string, string) {
 	cur, rest, hops := "", d, 0
 	for {
 		rest = strings.TrimLeft(rest, "/")
 		if rest == "" {
 			if cur == "" {
-				return "/", true
+				cur = "/"
 			}
-			return cur, true
+			if volatilePath(cur) {
+				return "", "its directory resolves under a volatile directory, which is the host's"
+			}
+			return cur, ""
 		}
 		comp, after, _ := strings.Cut(rest, "/")
 		rest = after
@@ -151,20 +155,23 @@ func treeRealDir(root, d string) (string, bool) {
 		}
 		keep := cur
 		cur += "/" + comp
-		if len(root)+len(cur) >= 4096 {
-			return "", false
+		if len(root)+len(cur)+1 >= 4096 { // the launcher's PATH_MAX
+			return "", "the path is too long"
 		}
 		st, err := lstat(treeReal(root, cur))
 		switch {
 		case err != nil || isDirM(&st):
 			continue
 		case !isLnk(&st):
-			return "", false
+			return "", "a file is on the way to its directory"
 		}
 		target, err := os.Readlink(treeReal(root, cur))
 		hops++
 		if err != nil || hops > 40 {
-			return "", false
+			return "", "the links on the way to its directory loop or cannot be read"
+		}
+		if len(target)+1+len(rest)+1 >= 8192 { // the launcher's two PATH_MAX buffers
+			return "", "the path is too long"
 		}
 		rest = target + "/" + rest
 		if strings.HasPrefix(target, "/") {

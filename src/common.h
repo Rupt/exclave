@@ -194,7 +194,8 @@ struct hostmap {
     /* an identity directory (8.1.5, 8.4): the directories on the way to it are directories, as an identity file's are,
      * and the links at and below it are followed on the host */
     int is_identity_dir;
-    /* an identity directory whose host name is a link: the directory it resolves to is one too, at its own name */
+    /* an identity directory whose host name is a link, 1 + the index of the directory it resolves to, which is one
+     * too at its own name; 0 otherwise */
     int is_link;
 };
 
@@ -330,7 +331,9 @@ int vis_is_host(const char *v, const char **real); /* 1 if host-owned; *real = h
 char *to_real(const char *v, char *out, char *tmp); /* v -> real, with wrapper redirect; tmp PATH_MAX */
 char *to_real_exec(const char *v, char *out); /* v -> real, no wrapper redirect */
 char *vis_exclave_real(const char *v, char *out); /* an exclave path v -> its real path in the tree */
-void from_real(char *r); /* in place, no buffer */
+int from_real(char *r); /* in place, no buffer; -ENAMETOOLONG where the virtual name would not fit */
+/* the directory the kernel named at startup for an identity directory whose host name is a link, or 0 */
+const char *vis_identity_link_reached(const char *v);
 int is_exclave_path(const char *v);
 /* the walk's questions in one pass: 1 if the host's; *idd as vis.c says */
 int vis_walk_facts(const char *v, int *identity, int *leads, int *idd, const char **real);

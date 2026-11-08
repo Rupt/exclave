@@ -889,7 +889,8 @@ def trust_directory_rules(ctx: Ctx) -> None:
     # a host whose directory is a link at its name into another directory, as Red Hat's are: the
     # same names below it, a .. there climbs from the directory the link reaches, however it is
     # spelt, and a scoped walk follows the link itself; first by an absolute text, as RHEL 9's is,
-    # into a directory of the host's /tmp, then by a relative one, as CentOS 7's is
+    # into a directory of /tmp, a tmpfs of the namespace's own, then by a relative one, as CentOS
+    # 7's is
     t = f"/tmp/exclave-trust-{pid}"
     scoped = os.path.join(marks, ".exclave", "launcher") + " " + os.path.join(ctx.progs, "trustdir")
     scoped += " --scoped"
@@ -929,7 +930,7 @@ def trust_directory_rules(ctx: Ctx) -> None:
         ("  RESOLVE_NO_XDEV through it", "", scoped, "openat2 noxdev through: EXDEV"),
     ]
     script += (
-        f"mkdir -p {t}/real/sub && echo plain >{t}/real/plain.pem "
+        f"mount -t tmpfs tmpfs /tmp && mkdir -p {t}/real/sub && echo plain >{t}/real/plain.pem "
         f"&& ln -s {local}/local.crt {t}/real/x.pem && ln -s x.pem {t}/real/abcd0000.0 "
         f"&& mount -t tmpfs tmpfs /etc/ssl && ln -s {t}/real /etc/ssl/certs || exit 98; "
     )
@@ -953,7 +954,6 @@ def trust_directory_rules(ctx: Ctx) -> None:
     )
     for i, (_what, _shell, cmd, _want) in enumerate(rel_cases, len(cases) + len(link_cases)):
         script += f"echo '== {i}'; {cmd} 2>&1 || echo rc=$?; "
-    script += f"rm -rf {t}; "
     rc, out, err = run(
         ["unshare", "-Urm", "sh", "-c", script],
         cwd=ctx.work,
@@ -982,50 +982,93 @@ def trust_directory_tree_link(ctx: Ctx) -> None:
     as the tree resolves it, never through the link on the host; and inside, on a host that has the
     trust directory and lacks the keystore, the keystore and the names own records keep there, a
     file and a directory, are the tree's, followed through the tree's link and not the host's
-    /etc/pki, and a working directory in the kept directory is named by its virtual path. Skipped
-    where the host lacks /etc/ssl/certs or has the keystore.
+    /etc/pki, and a working directory in the kept directory is named by the tree's plain name where
+    that name is the tree's, by the own record's where the host has it, and .. from it climbs in
+    the tree. Skipped
+    where the host lacks /etc/ssl/certs or has the keystore. A chain of relative links places and
+    finds the copy at its end; a link into a volatile directory gives it no place, which wrap says
+    and the launcher answers with ENOTDIR.
     """
     if not os.path.isdir("/etc/ssl/certs") or os.path.exists("/etc/ssl/certs/java/cacerts"):
         skip("the host lacks /etc/ssl/certs or has Java's keystore there")
     pid = os.getpid()
-    ex = os.path.join(ctx.work, f"trust-link-{pid}.exclave")
-    copy_exclave(ctx.exclave, ex)
-    rc, out, err = run([*TOOL, "unwrap", ex])
-    expect(rc == 0, f"unwrap: {out!r} {err!r}")
-    root = os.path.join(ex, "tree")
-    certs = os.path.join(root, "etc", "ssl", "certs")
-    if os.path.islink(certs):
-        os.remove(certs)
-    else:
-        shutil.rmtree(certs)
-    os.symlink("/etc/pki/tls/certs", certs)
+
+    def shaped(name: str, links: dict[str, str], manifest: str = "exclave 1\n") -> tuple[str, str]:
+        """A copy with links (tree/etc/ssl/certs among them), rewrapped: its tree, wrap's output."""
+        ex = os.path.join(ctx.work, f"trust-{name}-{pid}.exclave")
+        copy_exclave(ctx.exclave, ex)
+        rc, out, err = run([*TOOL, "unwrap", ex])
+        expect(rc == 0, f"unwrap: {out!r} {err!r}")
+        root = os.path.join(ex, "tree")
+        certs = os.path.join(root, "etc", "ssl", "certs")
+        if os.path.islink(certs):
+            os.remove(certs)
+        elif os.path.isdir(certs):
+            shutil.rmtree(certs)
+        shutil.rmtree(os.path.join(root, "etc", "pki"), ignore_errors=True)
+        for v, text in links.items():
+            at = os.path.join(root, v.lstrip("/"))
+            os.makedirs(os.path.dirname(at), exist_ok=True)
+            os.symlink(text, at)
+        path = os.path.join(ex, ".exclave", "manifest")
+        os.remove(path)
+        with open(path, "w") as f:
+            f.write(manifest)
+        rc, out, err = run([*TOOL, "wrap", ex])
+        expect(rc == 0, f"wrap of a tree whose trust directory is a link: {out[-400:]!r} {err!r}")
+        return root, out
+
+    def inside_sh(root: str, cmd: str) -> tuple[int, str, str]:
+        sh = os.path.join(root, ctx.vbin("sh").lstrip("/"))
+        return run([sh, "-c", cmd], cwd=ctx.work, env=ctx.env)
+
+    c = "/etc/ssl/certs"
+    # Fedora's shape: an absolute link, and own records for a file and a directory there
+    root, _ = shaped(
+        "abs",
+        {c: "/etc/pki/tls/certs"},
+        'exclave 1\n\nown "/etc/ssl/certs/kept"\nown "/etc/ssl/certs/kept.pem"\n',
+    )
     pki = os.path.join(root, "etc", "pki", "tls", "certs")
-    shutil.rmtree(os.path.join(root, "etc", "pki"), ignore_errors=True)
-    os.makedirs(os.path.join(pki, "kept"))
-    with open(os.path.join(pki, "kept.pem"), "w") as f:
-        f.write(f"tree-kept-{pid}\n")
-    with open(os.path.join(pki, "kept", "f"), "w") as f:
-        f.write(f"tree-dir-{pid}\n")
-    manifest = os.path.join(ex, ".exclave", "manifest")
-    os.remove(manifest)
-    with open(manifest, "w") as f:
-        f.write('exclave 1\n\nown "/etc/ssl/certs/kept"\nown "/etc/ssl/certs/kept.pem"\n')
-    rc, out, err = run([*TOOL, "wrap", ex])
-    expect(rc == 0, f"wrap of a tree whose trust directory is a link: {out[-400:]!r} {err!r}")
     copy = os.path.join(pki, "java", "cacerts")
     expect(os.path.isfile(copy), "wrap places the keystore's copy where the tree's link leads")
     os.remove(copy)
-    with open(copy, "w") as f:
-        f.write(f"tree-java-{pid}\n")
-    sh = os.path.join(root, ctx.vbin("sh").lstrip("/"))
-    c = "/etc/ssl/certs"
+    os.makedirs(os.path.join(pki, "kept"))
+    for name, text in (("java/cacerts", "java"), ("kept.pem", "kept"), ("kept/f", "dir")):
+        with open(os.path.join(pki, name), "w") as f:
+            f.write(f"tree-{text}-{pid}\n")
+    # the working directory, as getcwd names it (env pwd, not a shell's own), is the tree's plain
+    # name where that name is the tree's, and the own record's where the host has the plain name
+    kept = f"{c}/kept" if os.path.isdir("/etc/pki/tls/certs") else "/etc/pki/tls/certs/kept"
     for cmd, want in (
         (f"cat {c}/java/cacerts", f"tree-java-{pid}"),
         (f"cat {c}/kept.pem", f"tree-kept-{pid}"),
-        (f"cd {c}/kept && pwd -P && cat f", f"{c}/kept\ntree-dir-{pid}"),
+        (f"cd {c}/kept && env pwd -P && cat f", f"{kept}\ntree-dir-{pid}"),
+        ("cd /etc/pki/tls/certs/kept && cd .. && env pwd -P", "/etc/pki/tls/certs"),
     ):
-        rc, out, err = run([sh, "-c", cmd], cwd=ctx.work, env=ctx.env)
+        if cmd.startswith("cd /etc/pki") and os.path.isdir("/etc/pki/tls/certs"):
+            continue  # the host's identity directory there
+        rc, out, err = inside_sh(root, cmd)
         expect(rc == 0 and out.strip() == want, f"{cmd}: rc={rc} {out!r} {err!r}")
+    # a chain of relative links, the last directory made by wrap
+    root, _ = shaped("rel", {c: "../hop1", "/etc/hop1": "hop2/certs"})
+    copy = os.path.join(root, "etc", "hop2", "certs", "java", "cacerts")
+    expect(os.path.isfile(copy), "wrap places the keystore's copy at the end of a relative chain")
+    os.remove(copy)
+    with open(copy, "w") as f:
+        f.write(f"tree-rel-{pid}\n")
+    rc, out, err = inside_sh(root, f"cat {c}/java/cacerts")
+    expect(rc == 0 and out.strip() == f"tree-rel-{pid}", f"a relative chain: {out!r} {err!r}")
+    # a link into a volatile directory, the host's whatever the tree holds: no place for the copy,
+    # which wrap says and the launcher answers with an error
+    root, out = shaped("run", {c: "/run/exclave-trust"})
+    expect(
+        f"identity file {c}/java/cacerts not placed: its directory resolves under a volatile"
+        in out,
+        f"wrap says the keystore has no place: {out[-600:]!r}",
+    )
+    rc, out, err = inside_sh(root, f"cat {c}/java/cacerts")
+    expect(rc != 0 and "Not a directory" in err, f"no place, an error: rc={rc} {out!r} {err!r}")
 
 
 @test

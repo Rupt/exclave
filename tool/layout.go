@@ -269,13 +269,17 @@ func placeholders(root string) {
 	for _, f := range identityFiles {
 		// the directory as the tree resolves it, as the launcher maps the copy (8.4): Fedora's
 		// /etc/ssl/certs is a link into /etc/pki
-		rd, ok := treeRealDir(root, dirnameOf(f))
-		if !ok {
-			fmt.Fprintf(out, "identity file %s not placed: its directory has no place in the tree\n", f)
+		rd, why := treeRealDir(root, dirnameOf(f))
+		dir := treeReal(root, rd)
+		p := pathJoin(dir, basenameOf(f))
+		if why == "" && len(p) >= 4096 { // the launcher's PATH_MAX for the copy's real path
+			why = "the path is too long"
+		}
+		if why != "" {
+			fmt.Fprintf(out, "identity file %s not placed: %s\n", f, why)
 			continue
 		}
-		dir := treeReal(root, rd)
-		if p := pathJoin(dir, basenameOf(f)); !lexists(p) {
+		if !lexists(p) {
 			makeDirs(dir)
 			writeFile(p, nil, 0o666)
 		}

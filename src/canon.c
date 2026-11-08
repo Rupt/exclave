@@ -39,16 +39,14 @@ static int fd_virtual_in(int fd, char *out, int *tree)
         if (SC2(NR_fstat, fd, &obj) < 0 || !names_object(out, &obj)) return -ENOENT;
     }
     if (tree) *tree = in_tree(out);
-    from_real(out);
-    return 0;
+    return from_real(out);
 }
 static int cwd_virtual_in(char *out, int *tree)
 {
     long r = sys_getcwd(out, PATH_MAX);
     if (r < 0) return (int)r;
     if (tree) *tree = in_tree(out);
-    from_real(out);
-    return 0;
+    return from_real(out);
 }
 int fd_virtual(int fd, char *out) { return fd_virtual_in(fd, out, 0); }
 int cwd_virtual(char *out) { return cwd_virtual_in(out, 0); }
@@ -438,17 +436,22 @@ static int walk_dotdot(struct scratch *S, struct walk *w)
 {
     char *cur = S->cur;
     /* at an identity directory whose host name is a link, which the walk passed by name: the kernel climbs from the
-     * directory the link reaches, so the walk does, by the kernel's name for it (8.4); the open's or the read-back's
-     * own error is the answer, as the kernel's walk through the link would give one */
+     * directory the link reaches, so the walk does, by the kernel's name for it (8.4). The link's own answers as the
+     * kernel walks through it, ENOENT, ENOTDIR, ELOOP and EACCES, are the walk's; an error of the open's or the
+     * read-back's own is no lookup's, and the walk climbs from the directory the kernel named at startup */
     if (!scoped_walk(w) && vis_identity_dir_kind(cur) == 2) {
         long fd = sys_open(cur, O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
-        if (fd < 0) return (int)fd;
-        long n = fd_real_path((int)fd, S->tmp);
-        sys_close((int)fd);
-        if (n < 0) return (int)n;
-        if (n == 0 || S->tmp[0] != '/') return -ENOENT;
+        if (fd == -ENOENT || fd == -ENOTDIR || fd == -ELOOP || fd == -EACCES) return (int)fd;
+        long n = fd >= 0 ? fd_real_path((int)fd, S->tmp) : -1;
+        if (fd >= 0) sys_close((int)fd);
+        if (n <= 0 || S->tmp[0] != '/') {
+            const char *at = vis_identity_link_reached(cur);
+            if (!at) return -ENOENT; /* recorded for every such directory, by construction */
+            scpy(S->tmp, at, PATH_MAX);
+        }
         if (++w->hops > 40) return -ELOOP;
-        from_real(S->tmp); /* the tree's directory, reached by its real name, is its virtual path */
+        /* the tree's directory, reached by its real name, is its virtual path */
+        if (from_real(S->tmp) < 0) return -ENAMETOOLONG;
         scpy(cur, S->tmp[1] ? S->tmp : "", PATH_MAX);
         S->touched_exclave = 1;
     }
@@ -524,7 +527,8 @@ static int host_component(struct scratch *S, struct walk *w, int last, int *err)
         S->follow_end = 1;
         return CK_FILE;
     }
-    if (xstrncmp(cur, "/proc/", 6) == 0) from_real(tmp); /* procfs links report real paths */
+    /* procfs links report real paths */
+    if (xstrncmp(cur, "/proc/", 6) == 0 && from_real(tmp) < 0) return -ENAMETOOLONG;
     return CK_LINK;
 }
 
@@ -559,7 +563,8 @@ static int identity_component(struct scratch *S, struct walk *w, int last, int *
     if (++w->hops > 40) return -ELOOP;
     const char *hreal;
     if (n > 0 && tmp[0] == '/' && (starts_dir(tmp, C.root) || vis_is_host(tmp, &hreal))) {
-        from_real(tmp); /* the tree's directory, reached by its real name, is its virtual path */
+        /* the tree's directory, reached by its real name, is its virtual path */
+        if (from_real(tmp) < 0) return -ENAMETOOLONG;
         scpy(cur, tmp[1] ? tmp : "", PATH_MAX);
         w->chain_failed = 0;
         return CK_ONWARD;
@@ -605,6 +610,13 @@ static int walk_classify(struct scratch *S, struct walk *w, int last, int *err)
         /* to_real_exec's answer for an exclave path; cur is never "/" here */
         vis_exclave_real(cur, real);
         kind = cache_classify(cur, real, tmp);
+        /* a name mapped outside the tree that has no place answers its lstat's own error, ENOTDIR, as a chroot would
+         * answer one under a file (vis.c tree_real_of) */
+        if ((!kind || kind == CK_NONE) && !starts_dir(real, C.root)) {
+            struct kstat st;
+            long e = sys_lstat(real, &st);
+            if (e < 0) *err = (int)e;
+        }
         return kind ? kind : CK_NONE;
     }
     /* the one-step host check, standing in for the directories before the final component */
