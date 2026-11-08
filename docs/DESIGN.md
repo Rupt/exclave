@@ -684,7 +684,7 @@ error, is fatal with a message, never a silent answer of "the host's".
 ```
 hashes 1
 
-tool "0.1.0+1a2b3c4"
+tool "0.0.1+1a2b3c4"
 
 launcher "b3:<blake3-256 of .exclave/launcher>"
 

@@ -46,7 +46,7 @@ import (
 )
 
 // toolVersion is the project's version, the file VERSION's, which scripts/check holds it to.
-const toolVersion = "0.1.0"
+const toolVersion = "0.0.1"
 
 // version is the build's (7, 10): the project's version and the commit, which scripts/build
 // sets; what `version` prints and the hashes file's tool record says (6.4).
