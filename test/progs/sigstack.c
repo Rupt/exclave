@@ -136,6 +136,10 @@ static void h_wide(int s)
 static void child_altstack(size_t size, int trap)
 {
     void *sp = guarded(size);
+    /* syscall bound before the handler calls it: a lazy binding's first call runs the loader's resolver, which saves
+     * the vector registers on the small stack, so the answer would be the toolchain's default (Ubuntu's gcc links
+     * with -z now, Fedora's does not) rather than the handler's */
+    syscall(SYS_getpid);
     /* the kernel refuses a stack under its MINSIGSTKSZ (5 KB on aarch64, 2 KB on x86-64): exit 3 says so */
     if (arm(sp, size, 0)) _exit(3);
     handler_with(SIGUSR1, trap ? h_trap : h_nothing, SA_ONSTACK);
