@@ -15,12 +15,14 @@ Prints one line per step; the exit status is the number of failures.
 """
 
 import argparse
+import hashlib
 import os
 import re
 import shutil
 import subprocess
 import sys
 
+import tables_test
 import tree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -44,6 +46,65 @@ def recorded_tree(ex: str) -> str:
     with open(os.path.join(ex, ".exclave", "hashes"), encoding="utf-8") as f:
         m = re.search(r'^tree "(b3:[0-9a-f]+)"$', f.read(), re.MULTILINE)
     return m.group(1) if m else ""
+
+
+def snapshot(root: str) -> dict[str, tuple[int, int, str]]:
+    """Every path under root, by its path from root.
+
+    Each is its type and mode, and its bytes' digest or its link's text.
+    """
+    paths: dict[str, tuple[int, int, str]] = {}
+    for d, dirs, files in os.walk(root):
+        for n in dirs + files:
+            p = os.path.join(d, n)
+            st = os.lstat(p)
+            if os.path.islink(p):
+                what = os.readlink(p)
+            elif os.path.isfile(p):
+                with open(p, "rb") as f:
+                    what = hashlib.file_digest(f, "sha256").hexdigest()
+            else:
+                what = ""
+            paths["/" + os.path.relpath(p, root)] = (
+                st.st_mode & 0o170000,
+                st.st_mode & 0o7777,
+                what,
+            )
+    return paths
+
+
+def rewrap_changes(before: dict[str, tuple[int, int, str]], root: str) -> list[str]:
+    """What a re-wrap changed in a tree beyond what 6.7 allows.
+
+    It may add the placeholders this build ships, empty regular files at its identity paths
+    (tool/layout.go's table, as the tree resolves their directories), and the directories that
+    hold them; every path of the earlier tree stays as it was.
+    """
+    after = snapshot(root)
+    empty = hashlib.sha256(b"").hexdigest()
+    placeholders = set()
+    for f in tables_test.go_strings("tool/layout.go", "identityFiles"):
+        d, base = os.path.split(f)
+        placeholders.add(os.path.join(tree.resolve(root, d), base))
+    holders = {os.path.dirname(p) for p in placeholders}
+    holders |= {a for h in holders for a in parents(h)}
+    bad = [f"{p} changed or gone" for p, v in before.items() if after.get(p) != v]
+    for p, (kind, _mode, what) in after.items():
+        if p in before:
+            continue
+        placeholder = p in placeholders and kind == 0o100000 and what == empty
+        holder = p in holders and kind == 0o040000
+        if not placeholder and not holder:
+            bad.append(f"{p} added")
+    return bad
+
+
+def parents(p: str) -> list[str]:
+    out = []
+    while p not in ("/", ""):
+        out.append(p)
+        p = os.path.dirname(p)
+    return out
 
 
 def shell(ex: str) -> str:
@@ -94,14 +155,18 @@ def main() -> int:
     pruned = tree.copy_exclave(earlier, os.path.join(work, "earlier-pruned.exclave"))
     rc, out = run([new_cmd, "prune", pruned, log])
     step("and in prune", rc == 0, out[-400:])
-    before = recorded_tree(earlier)
+    # 6.7: a later wrap adds at most the placeholders it ships, and changes nothing else
+    before = snapshot(os.path.join(earlier, "tree"))
     rc1, out1 = run([new_cmd, "unwrap", earlier])
     rc2, out2 = run([new_cmd, "wrap", earlier, old_launcher])
+    changes = rewrap_changes(before, os.path.join(earlier, "tree"))
     step(
-        "this command unwraps and wraps it again, to the same tree hash",
-        rc1 == 0 and rc2 == 0 and recorded_tree(earlier) == before,
-        (out1 + out2)[-400:],
+        "this command unwraps and wraps it again, adding at most its identity placeholders",
+        rc1 == 0 and rc2 == 0 and not changes,
+        (out1 + out2)[-400:] + "; ".join(changes[:5]),
     )
+    rc, out = run([new_cmd, "hash", earlier])
+    step("and records the tree hash it has", out.strip() == recorded_tree(earlier), out)
 
     # this build's exclave, read by the earlier one
     later = tree.fresh_exclave(src, os.path.join(work, "later.exclave"))

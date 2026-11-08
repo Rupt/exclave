@@ -808,6 +808,11 @@ The rules every version keeps:
   version: a new manifest key is `exclave 2`, since the strict
   grammar refuses an unknown key, and a new hashes key, hash function
   or serialisation of the tree is `hashes 2`.
+- **A later `wrap` or `relink` adds only its placeholders**: an
+  earlier exclave wrapped again by a later build may gain the empty
+  files a later build ships at its identity paths (8.4), and the
+  directories that hold them, and every other path stays as the
+  earlier build wrote it; adding an identity file moves no version.
 - **The launcher reads only its own exclave's manifest**, wrapped with
   it, so a newer key reaches an older launcher only through `relink`
   with that launcher, which refuses the manifest by its version.
