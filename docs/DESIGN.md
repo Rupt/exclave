@@ -4176,14 +4176,12 @@ and stay fixed.
     1.2.5 and glibc 2.41, both cancelled under bwrap). The thread is
     freed when the call completes, a writer opening the FIFO in the
     exerciser, and the cancellation is acted on at its next
-    cancellation point. Any trapped call that blocks meets the same,
+    cancellation point. Any trapped call that waits would meet the same,
     `connect` among them. A program that must cancel such a thread
     sets asynchronous cancellation around the call
     (`PTHREAD_CANCEL_ASYNCHRONOUS`, which passes under the launcher),
     or interrupts it with a signal whose handler of its own ends the
-    thread, `pthread_exit` from the handler as the exerciser does, or
-    waits in a cancellation point that is no trapped call, `poll` on
-    a descriptor opened beforehand.
+    thread, `pthread_exit` from the handler as the exerciser does.
 
 ### 13.1 Debugging and profiling recipe
 
