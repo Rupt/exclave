@@ -3575,7 +3575,13 @@ and stay fixed.
     are the only known shape, and none has been seen.
 
 28. **`/proc/<pid>/exe` of a wrapped script names its interpreter**, as
-    natively; the original's path in `.real/` never appears.
+    natively; the original's path in `.real/` never appears. Another
+    process reading the link resolves a relative `#!` interpreter from
+    its own working directory, where the kernel's answer is the
+    interpreter as the script's exec resolved it and does not depend on
+    the reader: a reader elsewhere may get a path that does not exist,
+    or the script itself where the name does not resolve. A relative
+    `#!` line is rare.
 
 29. **A write-open without `O_TRUNC` of an exclave file another
     process is executing answers `EROFS`.** The kernel would answer
