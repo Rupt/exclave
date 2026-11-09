@@ -104,8 +104,11 @@ documents, gate, one commit per item. Status is in brackets.
     present the trap site's frame, a frame of the kernel's layout from the
     page's handler-call slot so that unwinders walk into the program's
     frames, and carry what the handler decides back into the trapped call;
-    every `rt_sigaction` traps, queries answering as written (13 item 20);
-    filter version 11, the page generation unchanged (7.5.7). A deferred
+    an `rt_sigaction` install traps and a query passes to the kernel,
+    returning the stub, which, called directly as Go's forwarding and a
+    chain of handlers call it, runs the program's handler (13 item 20
+    states what a query reports); filter version 11, the page generation
+    unchanged (7.5.7). A deferred
     `pthread_cancel` of a thread blocked in a trapped open now acts on musl
     and glibc 2.41. The aarch64 path awaits the arm64 row.
 10. **The positional entry's spellings** [done]: `.exclave/launcher
