@@ -60,6 +60,23 @@ struct tramp_block {
     unsigned long sig;       /* 104 */
 };
 _Static_assert(sizeof(struct tramp_block) == TRAMP_BLOCK, "the block's size is the assembly's");
+/* each field the assembly below names by its offset, and the record's, which the re-issue slot and the entry stubs
+ * name */
+#define AT(f, n) _Static_assert(__builtin_offsetof(struct tramp_block, f) == (n), "the assembly's offset of " #f)
+AT(magic, 0);
+AT(reentry, 8);
+AT(kframe, 16);
+AT(saved, 32);
+AT(handler, 40);
+AT(entry_x30, 48);
+AT(fr, 56);
+AT(slot, 96);
+AT(sig, 104);
+#undef AT
+_Static_assert(__builtin_offsetof(struct trap, uc) == 8, "the record's frame, as the entry stubs name it");
+_Static_assert(__builtin_offsetof(struct trap, answer) == 16, "the record's answer, as the re-issue slot names it");
+_Static_assert(__builtin_offsetof(struct trap, redirected) == 24, "the record's flag, as the re-issue slot names it");
+#define TRAMP_MAGIC 0x7472616d706f6c31UL
 _Static_assert(TRAMP_PRESENTED % 16 == 0 && TRAMP_BLOCK % 16 == 0, "the presented frame keeps the stack's alignment");
 
 /* gcc keeps the name the assembly calls, never a clone's; clang, which only checks this file, has no noclone */
@@ -119,6 +136,15 @@ INL void copy_words(void *dst, const void *src, unsigned long bytes)
     for (unsigned long i = 0; i < bytes / 8; i++) d[i] = s[i];
 }
 INL int seccomp_frame(const char *uc) { return *(const int *)(INFO_OF(uc) + SI_CODE_OFF) == SYS_SECCOMP; }
+/* An invariant of the launcher's own broken: said, and the process ends through the page, where no handler of the
+ * program's can catch it, as one for SIGILL or SIGTRAP could catch a trap instruction here, the trampoline's own
+ * frames counted as outside the launcher, and loop. */
+INL __attribute__((noreturn)) void broken(void)
+{
+    static const char msg[] = "launcher: a signal delivery found the trampoline's state broken\n";
+    __sc6(NR_write, 2, (long)msg, sizeof msg - 1, 0, 0, 0);
+    for (;;) __sc6(NR_exit_group, 127, 0, 0, 0, 0, 0);
+}
 
 /* Where the delivery landed, what the program resumes from, and how its call stands (7.5.7): the redirect flag, then
  * the re-issue slot's counter, then the record's answer. Called twice per delivery on the same inputs. */
@@ -148,7 +174,7 @@ TRAMP static int resolve(struct tramp_block *b, long *answer)
     }
     struct trap *rec = (struct trap *)b->saved;
     /* an invariant of the launcher's own: in its text, the register names a live record */
-    if (!rec || rec->magic != TRAP_MAGIC) __builtin_trap();
+    if (!rec || rec->magic != TRAP_MAGIC) broken();
     b->kind = KIND_TRAP;
     b->resume = rec->uc;
     if (!seccomp_frame(b->resume) || rec->redirected) return AS_IS;
@@ -232,6 +258,8 @@ TRAMP static void exclave_tramp_after(struct tramp_block *b)
 {
     char *f2 = UC_OF(b->kframe), *P = (char *)b - TRAMP_PRESENTED, *puc = UC_OF(P);
     unsigned long *g2 = regs(f2), *pr = regs(puc), e[NREGS];
+    /* a handler that returned with a stack pointer not its own finds no block here */
+    if (b->magic != TRAMP_MAGIC) broken();
     long answer = 0;
     int state = resolve(b, &answer);
     presented(b, state, answer, e);
