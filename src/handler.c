@@ -2218,6 +2218,8 @@ static long judge(int nr, const long *a)
 /* The handler's entry (7.5.7): the trap's record made on the stack before anything else, its address in the reserved
  * register, then the handler; on its return the answer goes into the trap's frame unless a program's handler
  * redirected the program, which a trampoline that lands between the test and the write sees by the labels. */
+/* the record's magic as the assembler's symbol, from its one definition */
+__asm__(".set exclave_trap_magic, " ASM_STR(TRAP_MAGIC));
 #if defined(__x86_64__)
 __asm__(".text\n"
         ".globl exclave_sigsys_entry, exclave_sigsys_set, exclave_sigsys_tail\n"
@@ -2227,7 +2229,7 @@ __asm__(".text\n"
         ".type exclave_sigsys_entry, @function\n"
         "exclave_sigsys_entry:\n"
         "  sub $40, %rsp\n"
-        "  movabs $0x7472617065786331, %rax\n"
+        "  movabs $exclave_trap_magic, %rax\n"
         "  mov %rax, (%rsp)\n"
         "  mov %rdx, 8(%rsp)\n"
         "  movabs $0x8000000000000000, %rax\n"
@@ -2258,10 +2260,10 @@ __asm__(".text\n"
         "exclave_sigsys_entry:\n"
         "  sub sp, sp, #48\n"
         "  str x30, [sp, #32]\n"
-        "  movz x9, #0x6331\n"
-        "  movk x9, #0x6578, lsl #16\n"
-        "  movk x9, #0x7061, lsl #32\n"
-        "  movk x9, #0x7472, lsl #48\n"
+        "  movz x9, #(exclave_trap_magic & 0xffff)\n"
+        "  movk x9, #((exclave_trap_magic >> 16) & 0xffff), lsl #16\n"
+        "  movk x9, #((exclave_trap_magic >> 32) & 0xffff), lsl #32\n"
+        "  movk x9, #((exclave_trap_magic >> 48) & 0xffff), lsl #48\n"
         "  str x9, [sp]\n"
         "  str x2, [sp, #8]\n"
         "  movz x9, #0x8000, lsl #48\n"

@@ -79,7 +79,9 @@ AT(sig, 104);
 _Static_assert(__builtin_offsetof(struct trap, uc) == 8, "the record's frame, as the entry stubs name it");
 _Static_assert(__builtin_offsetof(struct trap, answer) == 16, "the record's answer, as the re-issue slot names it");
 _Static_assert(__builtin_offsetof(struct trap, redirected) == 24, "the record's flag, as the re-issue slot names it");
-#define TRAMP_MAGIC 0x7472616d706f6c31UL
+/* without a suffix: the assembly below takes the same token, as the assembler's symbol */
+#define TRAMP_MAGIC 0x7472616d706f6c31
+__asm__(".set exclave_tramp_magic, " ASM_STR(TRAMP_MAGIC));
 _Static_assert(sizeof(struct tramp_slot) == 32, "a slot's size, the assembly's index shift of 5");
 _Static_assert(__builtin_offsetof(struct tramp_slot, restorer) == 16, "the restorer, as the stubs' compare reads it");
 _Static_assert(TRAMP_PRESENTED % 16 == 0 && TRAMP_BLOCK % 16 == 0, "the presented frame keeps the stack's alignment");
@@ -384,7 +386,7 @@ __asm__(".section exclave_tramp,\"ax\",@progbits\n"
         "  mov %rax, 1056(%rsp)\n" /* kframe */
         "  mov %r11, 1136(%rsp)\n" /* slot */
         "  mov %rdi, 1144(%rsp)\n" /* sig */
-        "  movabs $0x7472616d706f6c31, %rax\n"
+        "  movabs $exclave_tramp_magic, %rax\n"
         "  mov %rax, 1040(%rsp)\n"
         "  lea exclave_tramp_reentry(%rip), %rax\n"
         "  mov %rax, 1048(%rsp)\n"
@@ -506,10 +508,10 @@ __asm__(".section exclave_tramp,\"ax\",%progbits\n"
         "  str x16, [x15, #96]\n"
         "  str x0, [x15, #104]\n"
         "  str x30, [x15, #48]\n"
-        "  movz x9, #0x6c31\n"
-        "  movk x9, #0x706f, lsl #16\n"
-        "  movk x9, #0x616d, lsl #32\n"
-        "  movk x9, #0x7472, lsl #48\n"
+        "  movz x9, #(exclave_tramp_magic & 0xffff)\n"
+        "  movk x9, #((exclave_tramp_magic >> 16) & 0xffff), lsl #16\n"
+        "  movk x9, #((exclave_tramp_magic >> 32) & 0xffff), lsl #32\n"
+        "  movk x9, #((exclave_tramp_magic >> 48) & 0xffff), lsl #48\n"
         "  str x9, [x15]\n"
         "  adr x9, exclave_tramp_reentry\n"
         "  str x9, [x15, #8]\n"

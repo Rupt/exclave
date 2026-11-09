@@ -431,7 +431,10 @@ struct trap {
     long answer; /* the call's answer, ANSWER_NONE until there is one */
     long redirected; /* a program's handler redirected the program */
 };
-#define TRAP_MAGIC 0x7472617065786331UL
+/* spelt once and without a suffix: the entry stub's assembly takes the same token through ASM_STR (handler.c) */
+#define TRAP_MAGIC 0x7472617065786331
+#define ASM_STR_(x) #x
+#define ASM_STR(x) ASM_STR_(x)
 #define ANSWER_NONE (-0x7fffffffffffffffL - 1)
 void exclave_on_sigsys(int sig, void *info, void *uc, struct trap *rec);
 /* the entry stub and its labels (handler.c): before the record exists, its tail's test and write, its last return */
