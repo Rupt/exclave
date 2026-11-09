@@ -16,6 +16,7 @@ import functools
 import glob
 import hashlib
 import os
+import platform
 import re
 import shutil
 import socket
@@ -794,3 +795,50 @@ def go_build(go: str, out_dir: str, machine: str, work: str) -> list[tuple[str, 
             raise RuntimeError(msg)
         out.append((name, path))
     return out
+
+
+def go_build_cgo(go: str, out_dir: str, machine: str, work: str) -> str | None:
+    """Build test/progs/go_fwd.go into out_dir as go_fwd, static with cgo, for machine.
+
+    The C compiler is gcc for the host's own machine and aarch64-linux-gnu-gcc for aarch64 on
+    another; returns None where that compiler is not installed, the one reason cgo cannot build
+    here, and raises RuntimeError with go's message on any other failure.
+    """
+    cc = "gcc" if machine == platform.machine() else f"{machine}-linux-gnu-gcc"
+    if not shutil.which(cc):
+        return None
+    env = dict(
+        os.environ,
+        GOCACHE=os.path.join(REPO, "build", "gocache"),
+        GOPATH=os.path.join(work, "gopath"),
+        HOME=work,
+        GO111MODULE="off",
+        CGO_ENABLED="1",
+        CC=cc,
+        GOFLAGS="",
+        GOTOOLCHAIN="local",
+        GOOS="linux",
+        GOARCH=GOARCH[machine],
+    )
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, "go_fwd")
+    p = subprocess.run(
+        [
+            go,
+            "build",
+            "-ldflags",
+            "-linkmode external -extldflags -static",
+            "-o",
+            path,
+            os.path.join(REPO, "test", "progs", "go_fwd.go"),
+        ],
+        cwd=work,
+        env=env,
+        capture_output=True,
+        timeout=600,
+        check=False,
+    )
+    if p.returncode:
+        msg = f"go build go_fwd for {machine}: {p.stderr.decode(errors='replace')[-600:]}"
+        raise RuntimeError(msg)
+    return path

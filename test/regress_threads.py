@@ -297,41 +297,29 @@ def go_forwarding(ctx: Ctx) -> str | None:
     Go's runtime queries each action at its start and keeps a handler it finds there, which the
     query, passing to the kernel, answers with the launcher's stub; on a fault in C code Go calls
     the kept handler as a function, and the stub, called rather than delivered to, runs the C
-    handler with the signal and siginfo given. Built static with cgo by the host's go and gcc, run
-    inside as a host program; skips where they cannot build it.
+    handler with the signal and siginfo given. Built static with cgo by the toolchain
+    tree.go_toolchain finds, the pinned one in .go/ before the host's, or taken from
+    build/go/<machine>, where the matrix puts the one it cross-built for a VM without go; skips
+    where no C compiler can serve cgo, or with neither.
     """
-    go = tree.go_toolchain()
-    if not go:
-        skip("no go toolchain")
-    exe = os.path.join(ctx.progs, f"go_fwd-{os.getpid()}")
-    env = dict(
-        os.environ,
-        GOCACHE=os.path.join(REPO, "build", "gocache"),
-        GOPATH=os.path.join(ctx.work, "gopath"),
-        HOME=ctx.work,
-        GO111MODULE="off",
-        CGO_ENABLED="1",
-        GOFLAGS="",
-        GOTOOLCHAIN="local",
-    )
-    p = subprocess.run(
-        [
-            go,
-            "build",
-            "-ldflags",
-            "-linkmode external -extldflags -static",
-            "-o",
-            exe,
-            os.path.join(REPO, "test", "progs", "go_fwd.go"),
-        ],
-        cwd=ctx.work,
-        env=env,
-        capture_output=True,
-        timeout=600,
-        check=False,
-    )
-    if p.returncode:
-        skip("go with cgo cannot build a static program here: " + p.stderr.decode()[-200:])
+    go, prebuilt = tree.go_toolchain(), os.path.join(REPO, "build", "go", platform.machine())
+    exe = None
+    if go:
+        try:
+            exe = tree.go_build_cgo(
+                go, os.path.join(ctx.work, f"go_fwd-{os.getpid()}"), platform.machine(), ctx.work
+            )
+        except RuntimeError as e:
+            msg = str(e)
+            raise AssertionError(msg) from e
+        if exe is None:
+            skip("no C compiler for cgo")
+    elif os.path.exists(os.path.join(prebuilt, "go_fwd")):
+        exe = shutil.copy2(
+            os.path.join(prebuilt, "go_fwd"), os.path.join(ctx.progs, f"go_fwd-{os.getpid()}")
+        )
+    else:
+        skip("no go toolchain and no go_fwd in build/go/" + platform.machine())
     rc, out, err = inside(ctx, exe)
     want = "the C handler Go forwards to: ran with its signal and siginfo\n"
     expect(rc == 0 and out == want, f"rc {rc}, {out!r} {err!r}")

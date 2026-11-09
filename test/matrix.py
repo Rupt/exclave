@@ -801,6 +801,9 @@ def main() -> int:
             if go:
                 for n, p in tree.go_build(go, os.path.join(work, "go-" + arch), arch, work):
                     t.add(p, arcname=f"repo/build/go/{arch}/{n}")
+                fwd = tree.go_build_cgo(go, os.path.join(work, "go-" + arch), arch, work)
+                if fwd:
+                    t.add(fwd, arcname=f"repo/build/go/{arch}/go_fwd")
             if arch == MACHINE and release:
                 out = os.path.join(release, "out")
                 for f in sorted(os.listdir(out)):
