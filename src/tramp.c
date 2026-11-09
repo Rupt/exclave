@@ -249,6 +249,8 @@ TRAMP static void exclave_tramp_after(struct tramp_block *b)
 #endif
     if (!changed) return;
     copy_words(regs(b->resume), pr, NREGS * 8UL);
+    /* a stub landing whose handler left the counter as presented: the stub runs next, its own handler presented */
+    if (b->kind == KIND_STUB && pr[R_PC] == e[R_PC]) g2[R_PC] = b->f2pc;
     if (b->kind == KIND_ENTRY) {
         /* no record yet: the trap ends at once, through a return in the page to the launcher's restorer */
 #if defined(__x86_64__)
