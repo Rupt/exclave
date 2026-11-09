@@ -299,8 +299,8 @@ def go_forwarding(ctx: Ctx) -> str | None:
     the kept handler as a function, and the stub, called rather than delivered to, runs the C
     handler with the signal and siginfo given. Built static with cgo by the toolchain
     tree.go_toolchain finds, the pinned one in .go/ before the host's, or taken from
-    build/go/<machine>, where the matrix puts the one it cross-built for a VM without go; skips
-    where no C compiler can serve cgo, or with neither.
+    build/go/<machine>, where the matrix puts the one it cross-built for a VM without go, where
+    there is no toolchain or no C compiler for cgo; skips with neither a build nor that.
     """
     go, prebuilt = tree.go_toolchain(), os.path.join(REPO, "build", "go", platform.machine())
     exe = None
@@ -312,14 +312,17 @@ def go_forwarding(ctx: Ctx) -> str | None:
         except RuntimeError as e:
             msg = str(e)
             raise AssertionError(msg) from e
-        if exe is None:
-            skip("no C compiler for cgo")
-    elif os.path.exists(os.path.join(prebuilt, "go_fwd")):
+    if exe is None and os.path.exists(os.path.join(prebuilt, "go_fwd")):
+        # copied under the work directory, which the exclave lets through
         exe = shutil.copy2(
             os.path.join(prebuilt, "go_fwd"), os.path.join(ctx.progs, f"go_fwd-{os.getpid()}")
         )
-    else:
-        skip("no go toolchain and no go_fwd in build/go/" + platform.machine())
+    if exe is None:
+        skip(
+            ("no C compiler for cgo" if go else "no go toolchain")
+            + " and no go_fwd in build/go/"
+            + platform.machine()
+        )
     rc, out, err = inside(ctx, exe)
     want = "the C handler Go forwards to: ran with its signal and siginfo\n"
     expect(rc == 0 and out == want, f"rc {rc}, {out!r} {err!r}")
