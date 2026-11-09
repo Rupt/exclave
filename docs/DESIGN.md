@@ -5321,7 +5321,7 @@ per number.
 ### 16.4 Process start
 
 A `posix_spawn` of `/usr/bin/true` from inside an exclave costs 2.2
-times the native time, 993 to 1 053 µs against 451 to 463, and each
+times the native time, 993 to 1 050 µs against 451 to 463, and each
 process it starts takes 118 page faults against 57 (`getrusage` of the
 children): five rounds of 2 000 spawns, November 2026, alternating
 native, the launcher of the commit before the trampolines and this one,
@@ -5584,7 +5584,7 @@ pace.
 | `stat()`, relative name, working directory nine deep on the host | 277 ns | 3.18 µs |
 | `realpath()` of that working directory | 1.65 µs | 23.7 µs |
 | `getppid()`, untrapped | 44 ns | 52 ns |
-| `posix_spawn` of `/usr/bin/true`, alternated runs (16.4) | 451 to 463 µs | 993 to 1 053 µs |
+| `posix_spawn` of `/usr/bin/true`, alternated runs (16.4) | 451 to 463 µs | 993 to 1 050 µs |
 | page faults of each process `posix_spawn` starts (16.4) | 57 | 118 |
 | 100 000 `posix_spawn`s from one process, RSS | +248 to +252 kB | +160 to +176 kB |
 | thirty `gcc -O0 hello.c` | 1.14 s | 1.60 s |
