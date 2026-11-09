@@ -2223,7 +2223,11 @@ natively it continues it: the trampoline reads the frame from the stack
 pointer, as the kernel lays it out, the restorer's address and then the
 `ucontext` on x86-64 and the `siginfo` and then the `ucontext` on
 aarch64, never from the argument registers, which the handler may have
-used.
+used. On x86-64 the handler so reached receives the delivery's
+`ucontext` as its third argument whatever the caller passed, the same
+value in the usual chain, which hands on what it was given, and another
+only where a caller passes a context it copied or edited; on aarch64
+`x2` is left as given.
 
 **What it costs.** Outside a trapped call, a few instructions per
 signal, and no stack but, on aarch64, one 16-byte slot for a register
