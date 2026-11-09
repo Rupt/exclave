@@ -3750,7 +3750,7 @@ another, or copy a sysroot into a data directory (9). The cost is disk space.
 | `no_new_privs` | The filter requires it, and it also disables file capabilities and AppArmor transitions on exec: `sudo`, `su`, `pkexec`, `ping` and setcap binaries fail inside an exclave, including when run from build scripts |
 | Media without symlinks or hard links (FAT) | `cp -rL` copies the launcher once per wrapper and replaces symlinks with copies; the copy works, since whether a file is a wrapper is read from the file (7.4.4) |
 | Architectures | x86-64 and aarch64, from one source as two launchers (7.1). An exclave runs programs of its launcher's machine only. aarch64 is tested in the emulated matrix rows (12.1), on kernels with 4 KB and with 64 KB pages (Ubuntu's 64k kernel); kernels with 16 KB pages (Asahi's) are untested (13 item 43). Another 64-bit little-endian machine would need the same list: the syscall table, `_start`, the signal frame offsets, a restorer, the relocation type and the CPU check |
-| Overhead | Within noise on a compute-bound compile; about two fifths more on thirty small compiles; about two and a half times native per `posix_spawn`; 6 to 11 times native on a tight `stat` loop (16) |
+| Overhead | Within noise on a compute-bound compile; about two fifths more on thirty small compiles; about 2.2 times native per `posix_spawn`; 6 to 11 times native on a tight `stat` loop (16) |
 
 What remains host-dependent is the same set that static linking leaves:
 the kernel ABI, the CPU level (7.7), and the host's identity files
@@ -5210,8 +5210,8 @@ An exclave costs a program in four places:
 
 In summary (16.8): a trapped `stat` costs 2.0 to 4.1 µs where the
 host's costs 0.3 to 0.4; an untrapped syscall about 10 ns more than
-natively; a `posix_spawn` about twice the native time; small compiles
-about a third more; a compute-bound compile the same as natively.
+natively; a `posix_spawn` about 2.2 times the native time; small
+compiles about two fifths more; a compute-bound compile the same as natively.
 
 ### 16.2 What a trap costs
 
@@ -5315,14 +5315,13 @@ per number.
 
 ### 16.4 Process start
 
-A `posix_spawn` of `/usr/bin/true` from inside an exclave costs 2.1
-times the native time (966 µs against 450, the medians of eleven
-alternated runs of 300 spawns, November 2026) and makes 285 syscalls
-against 37 (`strace -f -c`, the difference between 60 spawns and 20).
-Each process it starts takes 110 page faults against 55. `perf stat`
-puts about two thirds of a spawn's CPU time in the kernel: process
-creation, `execve`, page faults and the syscalls of the launcher's
-start. At the border the
+A `posix_spawn` of `/usr/bin/true` from inside an exclave costs 2.2
+times the native time, 993 to 1 053 µs against 451 to 463, and each
+process it starts takes 118 page faults against 57 (`getrusage` of the
+children): five rounds of 2 000 spawns, November 2026, alternating
+native, the launcher of the commit before the trampolines and this one,
+the two launchers within noise of each other (1 007 to 1 053 µs and the
+same faults before). At the border the
 filter install adds 75 to 100 µs (16.3).
 
 Where the time goes, by stamps of the cycle counter at each step of a
@@ -5356,9 +5355,7 @@ whole when it fits a page; the program's original is opened once and
 its header, program headers, notes and `PT_INTERP` taken from one read
 of its first page, as are the loader's; and a classification makes its
 wrapper check from its own `lstat` (7.4.4). The tables a start touches
-are sized to it (16.6 item 9). Together these took a spawn from 1 060
-µs to 956, 315 syscalls to 281 and 142 page faults to 110, measured
-alternately on the launchers before and after them; a wrapper of
+are sized to it (16.6 item 9). A wrapper of
 `true` run from outside makes 169 syscalls, where the native `true`
 makes 29.
 
@@ -5502,8 +5499,8 @@ as a whole.
    of 16 384 slots and publishes that, so a compile, about a thousand
    entries, pays for the copy once. A reader uses the table it loaded,
    and a table replaced is never written again. With the start's reads
-   (16.4), a process `posix_spawn` starts takes 110 page faults rather
-   than 140, against 55 natively. Checks: the copy in
+   (16.4), a process `posix_spawn` starts takes 118 page faults,
+   against 57 natively. Checks: the copy in
    `test/cache_test.c`, every entry answering after it, and the
    page-fault row of 16.8.
 
@@ -5582,8 +5579,8 @@ pace.
 | `stat()`, relative name, working directory nine deep on the host | 277 ns | 3.18 µs |
 | `realpath()` of that working directory | 1.65 µs | 23.7 µs |
 | `getppid()`, untrapped | 44 ns | 52 ns |
-| `posix_spawn` of `/usr/bin/true`, alternated runs | 435 to 460 µs | 1.02 to 1.06 ms |
-| page faults of each process `posix_spawn` starts | 55 | 116 |
+| `posix_spawn` of `/usr/bin/true`, alternated runs (16.4) | 451 to 463 µs | 993 to 1 053 µs |
+| page faults of each process `posix_spawn` starts (16.4) | 57 | 118 |
 | 100 000 `posix_spawn`s from one process, RSS | +248 to +252 kB | +160 to +176 kB |
 | thirty `gcc -O0 hello.c` | 1.14 s | 1.60 s |
 | a 61-file project, `-O1 -c` each then link | 1.11 s | 1.53 s |
@@ -5594,10 +5591,10 @@ Thirty small compiles cost 40% more than natively and the 61-file
 project 38% more. The compute-bound compile runs within noise of
 native, 1% more, and produces an identical object, also on the kernels
 that would force the speculation mitigation (16.5). A `posix_spawn`
-costs 2.4 times native: 1.02 to 1.06 ms against 435 to 460 µs in five
-rounds alternating native, the launcher before the trampolines and
-this one, the two launchers within noise of each other (1.03 to 1.06
-ms before), as the table's row gives. The syscall count moves with `TMPDIR`'s depth, since the
+costs 2.2 times native, from five rounds of 2 000 spawns alternating
+native, the launcher before the trampolines and this one, its page
+faults from the same rounds (16.4); those two rows are not
+`test/bench.py`'s. The syscall count moves with `TMPDIR`'s depth, since the
 compiler's temporary files are walked on the host, not with the working
 directory's.
 What is left of a small compile's overhead, by `strace` and
