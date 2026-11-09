@@ -6244,7 +6244,17 @@ rename or a link from the trust directory to another host path, which
 the binds make a crossing of mounts (`EXDEV`) where the host's one
 mount answers the permission, and for a `chown` to root, a third run, the probe on the host itself through the
 tree's own loader, answers the cases that name such a path, and the
-launcher must answer as it does. Each group's run must also exit 0
+launcher must answer as it does. The trust directory's renames and
+links run first in their groups, while the host area is as it was
+made, since the third run answers them and none of the area's own
+renames. The host is only looked at: a bound host entry or a name in
+an identity directory that this user could change, a file or a
+directory it owns or can write, or a name in a directory it can
+write, is named only by the calls that look, by every form that
+reaches it, and the run fails if one is not as it was at the end. A
+host whose `/usr/share` anyone can write, as GitHub's runners are,
+would otherwise have the certificates behind its trust directory's
+links emptied by the first `truncate`. Each group's run must also exit 0
 with nothing on stderr in every world, as must the resolution oracle's
 run and the read-only matrix under `bwrap`, so a diagnostic or a crash
 after the last answer fails too; a run of the oracles that passes

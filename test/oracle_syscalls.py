@@ -70,8 +70,19 @@ writable at its name, or its host link laid there and the directory it reaches b
 name, with the directories its links lead into bound at theirs, which no form names:
 tree.identity_dir_binds), and under the launcher, with a copy of the exclave relinked with the
 build. The trust directory's names are bound host paths (BOUND): a rename or a link from one to
-another host path crosses bwrap's mounts (EXDEV) where the host answers on one mount, and the native
-run answers it.
+another host path, bound too or in the probe's own area, crosses bwrap's mounts (EXDEV) where the
+host answers on one mount, and the native run answers it. Those cases run before the rest of their
+group, while the area is as the reset made it, since the native run answers them and none of the
+area's own renames, and must start where the launcher's did.
+
+The host is only looked at. A bound host entry, or a name in an identity directory, that this user
+could change, a file or a directory it owns or can write or a name in a directory it can write, is
+named only by the calls that look (LOOKS, and an open that neither creates nor truncates), by
+every form that reaches it, a descriptor's among them; where hard links are unprotected no link is
+made from a host entry either. The host is not the probe's to change, whatever its modes are: a
+runner whose /usr/share anyone can write would otherwise have its certificates and zone file
+emptied in each world in turn. /tmp is the exception, sticky, the probe's names there its own. The
+run fails if such an entry is not as it was at the end (host_marks).
 
 openat2 and EAGAIN. A scoped walk (RESOLVE_BENEATH, RESOLVE_IN_ROOT) answers EAGAIN when a rename or
 a mount anywhere on the system raced it (handle_dots in fs/namei.c), and openat2(2) tells the caller
@@ -95,8 +106,8 @@ rule that makes a difference right, and a difference no entry names fails. The e
 kinds, and each names the syscalls, the cases by their flag and form, and the answers its reason
 covers:
   - the oracle's own construction: a host entry bound into bwrap's read-only root answers EROFS
-    there, and a rename or a link between two bound host paths EXDEV, where the launcher answers as
-    the native run; uid 0 is unmapped in bwrap's user
+    there, and a rename or a link between a bound host path and another host path EXDEV, where the
+    launcher answers as the native run; uid 0 is unmapped in bwrap's user
     namespace; a new top-level name is the host's (8.1),
     whose / answers EACCES where bwrap's root says EROFS; RESOLVE_CACHED answers EAGAIN under
     bwrap's cold cache where the handler answers the retry's answer itself;
@@ -1322,7 +1333,22 @@ def generate(
         add("open", n + "/dir_creat", p, I(O_DIRECTORY | O_CREAT), I(0o644))
     for n, d, p in forms.at:
         add("openat", n + "/dir_creat", d, p, I(O_DIRECTORY | O_CREAT), I(0o644))
-    return out
+    # A rename or a link that names the host's trust directory runs before the rest of its group,
+    # while the host area is as the reset made it. None of them can change it, a name this user
+    # could change being only looked at, and the native run, which answers these and none of the
+    # area's own renames, then starts where the launcher's did
+    trust = {lexical(p) for _n, p in forms.trust}
+    first = {
+        i
+        for i, (_label, n, toks, _group) in enumerate(out)
+        if n in PAIRS and trust & {lexical(r) for r in named_paths(n, toks, forms.host)}
+    }
+    groups: dict[str, int] = {}
+    for c in out:
+        groups.setdefault(c[3], len(groups))
+    return [
+        out[i] for i in sorted(range(len(out)), key=lambda i: (groups[out[i][3]], i not in first))
+    ]
 
 
 def rmtree(d: str) -> None:
@@ -1705,6 +1731,8 @@ class Ctx(NamedTuple):
     kernel: dict[str, str]  # the kernel's answers in its group, by label
     native: dict[str, str]  # the native run's answers in its group, by label (run_native)
     launcher: dict[str, str]  # the launcher's answers in its group, by label
+    area: str  # the probe's own area on the host, a bind of its own under bwrap
+    empty: tuple[str, ...]  # the directory each empty path names (empty_names)
 
 
 def named_paths(name: str, toks: list[str], host: str) -> tuple[str, ...]:
@@ -1729,6 +1757,24 @@ def named_paths(name: str, toks: list[str], host: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def empty_names(toks: list[str], host: str) -> tuple[str, ...]:
+    """The directory each empty path of a case names under AT_EMPTY_PATH.
+
+    Its descriptor's path, or the host area, the working directory; named_paths leaves an empty
+    path out.
+    """
+    base: str | None = host
+    out = []
+    for t in toks:
+        if t.startswith("i:"):
+            base = host if t == I(AT_FDCWD) else None
+        elif t.startswith("f:"):
+            base = bytes.fromhex(t[2:].partition(":")[2]).decode("utf-8", "surrogateescape")
+        elif t == S("") and base is not None:
+            out.append(base)
+    return tuple(out)
+
+
 def lexical(path: str) -> str:
     """A path made absolute and normal by its text alone.
 
@@ -1740,6 +1786,130 @@ def lexical(path: str) -> str:
 
 def failed(answer: str) -> bool:
     return answer.startswith("ret=-1 ")
+
+
+# The calls that take two names: a rename or a link
+PAIRS = ("rename", "renameat", "renameat2", "link", "linkat")
+# The calls that only look at what they name. An open is one of them unless its flags could make
+# or empty a file, which only_looks decides
+LOOKS = frozenset(
+    {
+        "access",
+        "chdir",
+        "connect",
+        "execve",
+        "execveat",
+        "faccessat",
+        "faccessat2",
+        "fanotify_mark",
+        "file_getattr",
+        "fstat",
+        "fstatfs",
+        "getcwd",
+        "getdents",
+        "getdents64",
+        "getxattr",
+        "getxattrat",
+        "inotify_add_watch",
+        "lgetxattr",
+        "listxattr",
+        "listxattrat",
+        "llistxattr",
+        "lstat",
+        "newfstatat",
+        "readlink",
+        "readlinkat",
+        "stat",
+        "statfs",
+        "statx",
+    }
+)
+
+
+def under(path: str, top: str) -> bool:
+    """Whether path, lexically, is top or a name beneath it."""
+    return path == top or path.startswith(top.rstrip("/") + "/")
+
+
+def only_looks(name: str, toks: list[str]) -> bool:
+    """Whether a case leaves what its paths name as it found it, whatever its answer."""
+    if name not in ("open", "openat", "openat2"):
+        return name in LOOKS
+    if name == "openat2":
+        how = [t for t in toks if t.startswith("h:")]
+        flags = int(how[0].split(":")[1]) if how else -1
+    else:
+        tok = toks[1 if name == "open" else 2]
+        flags = int(tok[2:]) if tok.startswith("i:") else -1
+    return flags >= 0 and not flags & (O_CREAT | O_TRUNC | (O_TMPFILE & ~O_DIRECTORY))
+
+
+def host_names(name: str, toks: list[str], host: str) -> set[str]:
+    """The host's own entries a case names, lexically.
+
+    A bound host path or a name in an identity directory. /tmp is the probe's to use: sticky, and
+    its names there carry its pid.
+    """
+    paths = {lexical(r) for r in named_paths(name, toks, host)}
+    return {
+        p
+        for p in paths
+        if p != "/tmp" and (p in BOUND_PATHS or any(under(p, d) for d in tree.IDENTITY_DIRS))
+    }
+
+
+def changeable(path: str) -> bool:
+    """Whether a call of this user's could change what a host path names, or the name itself.
+
+    A regular file or a directory this user owns or can write, or a name in a directory it can
+    write. A device takes a write and keeps nothing.
+    """
+    try:
+        st = os.stat(path)
+        keeps = stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)
+        mine = st.st_uid == os.geteuid() or os.access(path, os.W_OK)
+    except OSError:
+        keeps = mine = False
+    return (keeps and mine) or os.access(os.path.dirname(path) or "/", os.W_OK)
+
+
+def host_marks(paths: frozenset[str]) -> dict[str, tuple[int, ...]]:
+    """What a change would move on each path.
+
+    The type, mode, owner, link count, size and times of change of what it names and of the name
+    itself.
+    """
+    out: dict[str, tuple[int, ...]] = {}
+    for p in sorted(paths):
+        marks: tuple[int, ...] = ()
+        for look in (os.stat, os.lstat):
+            try:
+                st = look(p)
+            except OSError:
+                marks += (0,)
+                continue
+            marks += (
+                st.st_mode,
+                st.st_uid,
+                st.st_gid,
+                st.st_nlink,
+                st.st_size,
+                st.st_mtime_ns,
+                st.st_ctime_ns,
+            )
+        out[p] = marks
+    return out
+
+
+def apart(c: Ctx) -> bool:
+    """Whether a case names two host paths that bwrap binds apart.
+
+    Two bound host entries, or one and a name in the probe's own area, its working directory by an
+    empty path among them.
+    """
+    bound = BOUND_PATHS & set(c.paths)
+    named = (*c.paths, *c.empty)
+    return len(bound) >= 2 or (len(bound) == 1 and any(under(p, c.area) for p in named))
 
 
 # differences with a reason: (syscall name or None, predicate on (label, bwrap answer, launcher
@@ -1907,19 +2077,37 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
         (
             name,
             lambda label, b, o, c: (
-                len(BOUND_PATHS & set(c.paths)) >= 2
-                and errnos(b, o)[0] == errno.EXDEV
+                apart(c)
+                and failed(b)
+                and errnos(b, b)[0] == errno.EXDEV
                 and o == c.native.get(label)
             ),
             (
-                "a rename or a link between a bound host entry and another bound host path, the "
-                "trust directory's link followed to its target among them, crosses bwrap's mounts "
-                "(EXDEV) where the host's one mount answers the permission; the launcher answers "
-                "as the probe does run natively (8.4)"
+                "a rename or a link between a bound host entry and another host path, bound too or "
+                "in the probe's area, the trust directory's link followed to its target among "
+                "them, crosses bwrap's mounts (EXDEV) where the host's one mount answers the "
+                "permission; the launcher answers as the probe does run natively (8.4)"
             ),
         )
-        for name in ("rename", "renameat", "renameat2", "link", "linkat")
+        for name in PAIRS
     ],
+    (
+        "linkat",
+        lambda label, b, o, c: (
+            label.startswith("exclave_to_host->")
+            and label.endswith("/follow")
+            and bool(BOUND_PATHS & set(c.paths))
+            and failed(b)
+            and errnos(b, b)[0] == errno.EXDEV
+            and o == c.native.get(label.replace("exclave_to_host->", "host_file->", 1))
+        ),
+        (
+            "linkat with AT_SYMLINK_FOLLOW from the exclave's link to the host area's file to a "
+            "bound host entry: the link is followed into the area, which bwrap binds apart from "
+            "the entry (EXDEV); the launcher answers as the native run answers the same link from "
+            "the file itself (8.4)"
+        ),
+    ),
     (
         "chown",
         lambda label, b, o, c: (
@@ -2272,6 +2460,32 @@ def main() -> int:
                 + ("; the cases that change it are left out" if n in mutable else "")
             )
     cases = generate(forms, nr, os.getuid(), os.getgid(), mutable)
+    # A host entry this user could change is only looked at, by any form that names it: the host is
+    # not the probe's to change, whatever its modes are (GitHub's runners keep /usr/share writable
+    # to all, the certificates behind the trust directory's links among it). Without protected
+    # hard links a link from any host file would give it a name in the area, so none is made
+    named = {p for _label, n, toks, _group in cases for p in host_names(n, toks, host)}
+    keep = frozenset(p for p in named if changeable(p))
+    with open("/proc/sys/fs/protected_hardlinks") as f:
+        loose_links = f.read().strip() == "0"
+    whole = len(cases)
+    cases = [
+        (label, n, toks, group)
+        for label, n, toks, group in cases
+        if only_looks(n, toks)
+        or not (
+            host_names(n, toks, host) & keep
+            or (loose_links and n in ("link", "linkat") and host_names(n, toks, host))
+        )
+    ]
+    if whole != len(cases):
+        print(
+            "host entries this user could change, only looked at: "
+            + (", ".join(sorted(keep)) or "none")
+            + ("; no link from a host entry, hard links being unprotected" if loose_links else "")
+            + f" ({whole - len(cases)} cases left out)"
+        )
+    marks = host_marks(keep)
     if args.only:
         cases = [c for c in cases if args.only in (c[1], c[3])]
     names = []
@@ -2367,7 +2581,15 @@ def main() -> int:
             if b == o:
                 continue
             raw = named_paths(n, toks, host)
-            ctx = Ctx(raw, tuple(lexical(r) for r in raw), kernel, native, launcher)
+            ctx = Ctx(
+                raw,
+                tuple(lexical(r) for r in raw),
+                kernel,
+                native,
+                launcher,
+                os.path.dirname(host),
+                tuple(lexical(r) for r in empty_names(toks, host)),
+            )
             which = [i for i, (_why, pred, _s) in enumerate(DEFECTS) if pred(n, label, b, o, ctx)]
             if which:
                 known[which[0]] += 1
@@ -2403,6 +2625,11 @@ def main() -> int:
                 differ += 1
             else:
                 print("(this host cannot show it)")
+    # an invariant of the probe's own: what this user could change on the host is as it was
+    for p, was in marks.items():
+        if host_marks(frozenset({p}))[p] != was:
+            print(f"FAIL the host's {p} changed during the run: the probe must only look at it")
+            differ += 1
     print(
         f"{total} cases over {len(names)} groups and {len(forms.paths)} path forms: "
         f"{differ} differ, {accepted} differences expected"
