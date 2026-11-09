@@ -500,6 +500,7 @@ PROGS = (
     "exec_auxv",
     "exec_state",
     "mem_layout",
+    "fd_procs",
     "traceme",
     "tracer_exe",
     "seccomp_filter",

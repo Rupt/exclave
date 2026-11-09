@@ -709,6 +709,24 @@ def mem_layout(ctx: Ctx) -> None:
 
 
 @test
+def fd_procs(ctx: Ctx) -> None:
+    """7.4.3, 7.4.5, 7.5.4: descriptors and processes are the kernel's around trapped calls.
+
+    A program starts with the kernel's descriptors and a trapped open returns the lowest free
+    number, in a hole, at a soft limit's edge (the last number, then EMFILE, with the limit kept),
+    after close_range with and without CLOSE_RANGE_UNSHARE and CLOEXEC and after dup2 onto every
+    low number; another process's fd, cwd and task links read virtual; a clone(CLONE_VM) child's
+    chdir leaves its parent's directory alone and a CLONE_FS child's and a thread's move it;
+    posix_spawn's chdir and open actions act in the child alone; a tree descriptor passed by
+    SCM_RIGHTS or taken by pidfd_getfd is the tree's; wait statuses and sessions of children that
+    exec'd wrappers, and the first open of a program exec'd with 0, 1 and 2 closed, are the
+    kernel's. The kernel under bwrap measured these answers.
+    """
+    bad = kernel_answers.fd_procs_wrong(exerciser(ctx, "fd_procs", ["HOSTDIR"]))
+    expect(not bad, "; ".join(bad))
+
+
+@test
 def low_image(ctx: Ctx) -> None:
     """13 item 24: a program whose image starts at 0x10000 runs in an exclave.
 

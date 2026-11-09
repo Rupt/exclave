@@ -1836,6 +1836,97 @@ def mem_layout_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     return lines_wrong(out, want, MEM_LAYOUT_LAUNCHER, by_the_kernel=by_the_kernel)
 
 
+# fd_procs HOSTDIR (test/progs/fd_procs.c), measured under bwrap on 7.0: the descriptors a program
+# starts with and gets, at the soft limit's edge and after close_range, other processes' links,
+# working directories changed by clones, threads and posix_spawn, a descriptor passed or taken,
+# and wait statuses. close_range is 5.9's, its CLOEXEC 5.11's and the pidfd calls 5.6's: an
+# older kernel's refusal drops those cases (FD_PROCS_SINCE).
+FD_PROCS: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
+    ("start fds", "0,1,2"),
+    ("start F_GETFD 0", "0"),
+    ("start F_GETFD 1", "0"),
+    ("start F_GETFD 2", "0"),
+    ("first open", "3"),
+    ("open fills a hole", "yes"),
+    ("F_DUPFD_CLOEXEC 0 lowest", "3 cloexec 1"),
+    ("limit edge open", "the last number"),
+    ("limit edge second open", "EMFILE"),
+    ("limit edge stat", "ok"),
+    ("limit edge relative stat", "ok"),
+    ("limit edge opendir", "EMFILE"),
+    ("limit edge soft limit kept", "yes"),
+    ("hard 3 stat", "ok"),
+    ("hard 3 open", "EMFILE"),
+    ("close_range all", "ok fds 0,1,2"),
+    ("close_range then stat", "ok"),
+    ("close_range then open", "3"),
+    ("close_range unshare 3..", "ok"),
+    ("close_range unshare then stat", "ok"),
+    ("close_range unshare then open", "3"),
+    ("close_range cloexec", "ok F_GETFD 1 1"),
+    ("close_range cloexec then open", "3 cloexec 0"),
+    ("dup2 3..23 hole at 10 open", "10"),
+    ("dup2 3..23 next open", "24"),
+    ("child fd link", "/usr/share/exclave-test-marker"),
+    ("child fd stat", "the file"),
+    ("child cwd link", "/usr/share"),
+    ("child task fd link", "/usr/share/exclave-test-marker"),
+    ("child root link", "/"),
+    ("own task fd link", "/usr/share/exclave-test-marker"),
+    ("thread-self fd link", "/usr/share/exclave-test-marker"),
+    ("dev fd link", "/usr/share/exclave-test-marker"),
+    ("own pid fd link", "/usr/share/exclave-test-marker"),
+    ("readlinkat proc fd dir", "/usr/share/exclave-test-marker"),
+    ("CLONE_VM child chdir", "status 0"),
+    ("CLONE_VM parent cwd", "/"),
+    ("CLONE_VM parent relative stat", "ok"),
+    ("CLONE_FS parent cwd", "/usr/share"),
+    ("CLONE_FS parent relative stat", "ok"),
+    ("thread chdir cwd", "/usr"),
+    ("thread chdir relative stat", "ok"),
+    ("spawn chdir+open", "ok"),
+    ("spawned cwd", "/usr/share"),
+    ("spawned fd 5", "/usr/share/exclave-test-marker"),
+    ("spawn parent cwd is hostdir", "yes"),
+    ("spawn parent relative create", "ok"),
+    ("spawn failing open action", "ENOENT"),
+    ("spawn write-open action", "EROFS"),
+    ("SCM_RIGHTS received link", "/usr/share"),
+    ("SCM_RIGHTS openat from it", "ok"),
+    ("pidfd_getfd link", "/usr/share/exclave-test-marker"),
+    ("pidfd_getfd cloexec", "1"),
+    ("pidfd_send_signal 0", "ok"),
+    ("wrapper false", "code 1 status 1"),
+    ("wrapper true", "code 1 status 0"),
+    ("missing interpreter", "exit 42"),
+    ("wrapper killed", "signal 15"),
+    ("child session is its pid", "yes"),
+    ("child pgid is its pid", "yes"),
+    ("group killed", "signal 9"),
+    ("closed 0 0 1 2 open", "1 1 1"),
+    ("closed 0 first open", "0"),
+    ("closed 0 2 0 1 2 open", "1 1 0"),
+    ("closed 0 2 first open", "0"),
+    ("closed 0 1 2 0 1 2 open", "1 0 0"),
+    ("closed 0 1 2 first open", "0"),
+)
+# the cases a kernel without the call answers otherwise, by the case whose answer says so
+FD_PROCS_SINCE: tuple[tuple[str, str, str], ...] = (
+    ("close_range all", "ENOSYS", "close_range"),
+    ("close_range cloexec", "EINVAL", "close_range cloexec"),
+    ("pidfd_getfd link", "ENOSYS", "pidfd"),
+)
+
+
+def fd_procs_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
+    """The lines of fd_procs's output that differ from the kernel's answers."""
+    got = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
+    drop = tuple(p for c, refusal, p in FD_PROCS_SINCE if got.get(c, "").startswith(refusal))
+    want = tuple(c for c in FD_PROCS if not c[0].startswith(drop)) if drop else FD_PROCS
+    out = "\n".join(x for x in out.splitlines() if not drop or not x.startswith(drop))
+    return lines_wrong(out, want, {}, by_the_kernel=by_the_kernel)
+
+
 # seccomp_filter HOSTDIR (test/progs/seccomp_filter.c), measured under bwrap on 7.0: a program's own
 # filter as the kernel applies it, every install in a child of its own. An older kernel lacks some
 # of what the cases use, and those answer as it decides (SECCOMP_FILTER_SINCE).
