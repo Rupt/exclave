@@ -329,6 +329,9 @@ the design. Where they are available they serve as the test oracle
 | **translator** | The launcher's resident part: the seccomp filter and the **handler**, its `SIGSYS` handler, together (7.4). |
 | **syscall page** | The page at the fixed address `0x7fe00000` through which the launcher makes every syscall of its own; the filter allows a call from it untranslated (7.4.2). |
 | **page generation** | The word in a launcher's ELF note that says which syscall page it uses, so that one launcher can refuse an incompatible other by name (7.4.2, 7.4.5). |
+| **handler-call slot** | The slot of the syscall page from which a trampoline calls a program's handler, its return address at the restorer's instructions that the filter answers from there with an error (7.4.2, 7.5.7). |
+| **re-issue slot** | The slot of the syscall page through which the handler makes every call on the program's behalf; it makes none once a program's handler has redirected the program (7.4.2, 7.5.7). |
+| **trampoline** | The launcher's code that the kernel runs in place of a program's signal handler: outside a trapped call it jumps to the handler as the kernel would; inside one it gives the handler the trap site's frame and ends the call as the handler decides (7.5.7). |
 | **version probe** | The `uname` with a magic argument that a launcher issues at startup: an inherited filter answers with its version, and `EFAULT` means none (7.2, 7.4.2). |
 | **positional entry** | `name.exclave/.exclave/launcher PROGRAM ARGS...`, which runs a program that has no wrapper, a host tool or a built output, inside the exclave (7.2). |
 | **loader path** | How a program without a wrapper runs inside an exclave: the handler, or the positional entry, re-execs the launcher with the target in `EXCLAVE_EXEC`, and that launcher loads it with the exclave's loader (7.4.5, 7.6). |
@@ -801,8 +804,12 @@ The rules every version keeps:
 - **Within a version, only what an earlier reader passes over is
   added**: a log line of a new kind; a syscall the filter newly traps,
   which an older handler under a newer filter answers `ENOSYS`, so only
-  one whose `ENOSYS` a library falls back from (7.4.2). A trap without
-  that fallback moves the page generation instead, so that the two
+  one whose `ENOSYS` a library falls back from (7.4.2), or one an older
+  handler already answers rightly, as every handler re-issues the
+  `rt_sigaction` query version 11 traps (7.4.2). A trap without
+  either moves the page generation instead, as does any change to the
+  layout of the page's handler-call slot, whose return's address the
+  filter names (7.4.2), so that the two
   launchers refuse each other's nesting by name rather than an older
   one failing the call: the listings version 7 traps and the `fstat`
   version 8 traps have none, and came before any release.
@@ -1009,14 +1016,24 @@ process: loud, never a silent host access.
 **The syscall page.** A call whose instruction pointer lies in the page
 at `0x7fe00000` is allowed, but for its judge slot (below). Before
 anything else runs, every launcher maps that page with
-`MAP_FIXED_NOREPLACE`, writes three 16-byte slots into it and makes it
+`MAP_FIXED_NOREPLACE`, writes five slots into it and makes it
 read-only and executable (on aarch64 after flushing the instruction
 cache): at offset 0 `syscall; ret` (`svc #0; ret`), through which every
 later syscall of the launcher is made by a `call` into the page, a
 `blr` on aarch64; at 16 the same two instructions, the *judge slot*;
-and at 32 the signal restorer, `rt_sigreturn` by a bare instruction,
+at 32 the signal restorer, `rt_sigreturn` by a bare instruction,
 which the kernel jumps to after the handler and which a call would
-break, since the kernel reads the frame from the stack. A call's
+break, since the kernel reads the frame from the stack; at 48 the
+*handler-call slot*, 32 bytes, from which a trampoline calls a program's
+handler: the call, then the restorer's own two instructions, which the
+handler's return runs and the filter answers with an error for the one
+instruction pointer after them, 60 bytes into the page on both
+architectures, then a jump back into the trampoline (7.5.7); and at 80
+the *re-issue slot*, 32 bytes, through which the handler makes every
+call on the program's behalf: it reads the trap's record first and,
+when a program's handler has redirected the program, makes no call and
+answers `EINTR`, and after the call it stores the answer in the record
+(7.5.7). A call's
 instruction pointer, the address after its syscall instruction, lies in
 its own slot on both architectures. Only the bootstrap that maps the
 page and the version probe below use a bare syscall instruction in the
@@ -1162,8 +1179,8 @@ kernel judge each trapped call by it:
   instructions, the epilogue, 10, and two per distinct action left
   leave of 4 096 (13 item 5).
 
-**Argument checks.** `rt_sigaction` traps only when a new action is
-installed. `rt_sigprocmask` and `rt_sigsuspend` always trap; `ppoll`,
+**Argument checks.** `rt_sigaction` always traps, a query as well as
+an install (7.5.7). `rt_sigprocmask` and `rt_sigsuspend` always trap; `ppoll`,
 `pselect6`, `epoll_pwait`, `epoll_pwait2` and `io_pgetevents` trap when
 they carry a mask. `ioctl` traps for `FS_IOC_SETFLAGS` and
 `FS_IOC_FSSETXATTR`, the `chattr` requests, and nothing else. `ptrace`
@@ -1178,12 +1195,16 @@ the kernel's action cache (5.11) proves those syscalls allowed and
 skips the filter, and a kernel without the cache runs about a dozen
 instructions. The other numbers go to the second stage, the rule in
 order: the argument checks that can only allow (an `ioctl` other than
-`chattr`'s, a query of a signal action, a wait without a mask, a
+`chattr`'s, a wait without a mask, a
 `ptrace` request other than `PTRACE_TRACEME`, a `prctl` other than
 seccomp's, the two `seccomp` queries) and the version
-probe; the judge slot and the syscall page; the refusals; then the trap. On x86-64 the
-program is 295 instructions and 373 of the 472 numbers up to the
-ceiling are allowed by number alone. 16.3 gives why a tree and what
+probe; an `rt_sigreturn` from the handler-call slot, answered with an
+error, and every other `rt_sigreturn`, allowed; the judge slot and the
+syscall page; the refusals; then the trap. On x86-64 the program is
+291 instructions and 372 of the 472 numbers up to the ceiling are
+allowed by number alone; `rt_sigreturn`, which the cache proves allowed
+no longer, runs the second stage at every signal's return, the trap's
+own included (16.2). 16.3 gives why a tree and what
 an untrapped syscall costs. `test/filter_test.c` runs the program in an
 interpreter against the rule written out on its own, for every number
 and the arguments each check reads, and `test/syscalls.py` matches the
@@ -1215,10 +1236,19 @@ untranslated host access.
 The version moves whenever the trap set grows or the syscall page
 moves: 7 added the listings, `getdents64` and `getdents`,
 8 `fstat`, for a directory's `.real/` (8.3), 9
-`ptrace(PTRACE_TRACEME)`, for a `vfork` child's request (7.4.5), and 10
+`ptrace(PTRACE_TRACEME)`, for a `vfork` child's request (7.4.5), 10
 the judge slot and the installs of a program's own filter, which
-earlier versions refused in the filter; a launcher's note carries its
-filter version as a second word from 10 on. `test/syscalls.py`
+earlier versions refused in the filter, and 11 every `rt_sigaction`,
+the queries as well as the installs, which the trampolines need answered,
+and the error for an `rt_sigreturn` from the handler-call slot (7.5.7); a launcher's note carries its
+filter version as a second word from 10 on. The queries leave the page
+generation where it was: every handler of an earlier version already
+re-issues a query unchanged, the kernel's answer the right one in a
+process whose handlers it installed directly, so an earlier launcher
+under a version-11 filter answers them as before rather than `ENOSYS`
+(6.7). The filter names the handler-call slot's instruction pointer, so
+the slot's layout is fixed for the page generation, as the page's
+address is. `test/syscalls.py`
 records a digest of the set, the page and its judge slot each version
 shipped with and fails when any changes under the same version.
 Filters before 6 allow a page at another address, so
@@ -1231,7 +1261,8 @@ version 3, without `bind` and `connect`, which version 4 added, and
 without the judge slot's rule and the installs, which it refuses; the
 regression of 17 item 4 nests it inside the current launcher, where it
 answers `ENOSYS` for every trap a later version added, which version 3
-shows as well as any later one would.
+shows as well as any later one would, but for the query of an action,
+which it re-issues and the kernel answers.
 
 #### 7.4.3 Intercepted syscalls
 
@@ -1670,13 +1701,17 @@ Seccomp delivers `SIGSYS` with `force_sig`: if the signal is blocked or
 ignored at that moment, the kernel resets the handler to the default
 and kills the process. The handler therefore scrubs `SIGSYS` from every
 mask a program tries to set: `rt_sigprocmask`, the `sa_mask` of every
-`rt_sigaction` that installs an action, and the mask of every wait
-that carries one (7.4.2). `rt_sigtimedwait` and `signalfd` name signals to
+`rt_sigaction` that installs an action, the mask of every wait
+that carries one (7.4.2), and the mask a program's handler leaves in a
+frame the trampoline presented, before it reaches the trap's frame or
+the launcher's (7.5.7). `rt_sigtimedwait` and `signalfd` name signals to
 receive, not to block, and are left alone. The case is common: a
 program installs a handler with `sigfillset` on `sa_mask`, a textbook
-idiom, and touches a path inside it. A consequence is that
-`sigaction(sig, NULL, &old)` reports an `sa_mask` with `SIGSYS`
-cleared, not the mask the program wrote (13 item 20).
+idiom, and touches a path inside it. A query of an action,
+`sigaction(sig, NULL, &old)`, still reports the mask the program wrote,
+which the launcher keeps (7.5.7); the mask in force while a handler
+runs, and a query of the thread's, lack `SIGSYS` whatever was written
+(13 item 20).
 
 The handler checks `si_code == SYS_SECCOMP`. A `SIGSYS` sent by `kill`
 or `raise` restores the default disposition and re-raises, so the
@@ -1702,10 +1737,12 @@ ignored, so a bad pointer is `EFAULT`. `test/progs/sigcalls.c` holds the
 cases and the kernel's answers (`test/kernel_answers.py`), which the
 namespace oracle confirms under `bwrap`.
 `rt_sigaction` on `SIGSYS` itself is accepted and ignored (13 item 23);
-its `oldact` and every query report the truth, the launcher's handler,
-since only installs trap. The frame is read at the offsets of the
-architecture, `uc_sigmask` at 296 and the registers at 40 on x86-64,
-at 40 and 184 on aarch64, where `x0` is both the first argument and the
+its `oldact` and every query of it report the truth, the launcher's
+handler. Every other install puts a trampoline in the handler's place,
+and every query answers the action as the program wrote it (7.5.7). The frame is read at the offsets of the
+architecture, `uc_sigmask` at 296, the registers at 40 and the pointer
+to the floating-point save area at 224 on x86-64, `uc_sigmask` at 40
+and the registers at 184 on aarch64, where `x0` is both the first argument and the
 result and the handler copies the arguments before it writes. A
 restorer of the launcher's own, in the syscall page (7.4.2), returns
 through `rt_sigreturn` on both.
@@ -1716,13 +1753,15 @@ The handler is installed with `SA_SIGINFO`, `SA_ONSTACK`, `SA_NODEFER`
 and an empty `sa_mask`. The program's own mask is in force during the
 re-issued syscall, so a blocking `open` on a FIFO inside an exclave is
 interrupted by Ctrl-C exactly as outside, and a program's own signal
-handler may run inside the launcher's. It then finds the registers as
-the launcher left them. A signal already pending when the trap is
+handler may run inside the launcher's. It finds in its frame not the
+launcher's registers but the trap site's, the call as it stands, and
+what it decides there is what the program does (7.5.7). A signal already pending when the trap is
 taken, a thread-directed one sent in the microsecond of the syscall's
 entry, is delivered on top of the launcher's frame, since the kernel
 dequeues `SIGSYS` first with the synchronous signals
 (`SYNCHRONOUS_MASK` in `kernel/signal.c`): the program's handler runs
-first, at the trapped instruction, and returns into the launcher's,
+first, before the launcher's has run an instruction, finds the call
+about to be made, and returns into the launcher's,
 which finds the trap's registers intact. `test/progs/sigrain.c` rains
 signals from a timer, a child process and a sibling thread on loops of
 trapped calls, with every disposition and the restart rules, and every
@@ -1744,16 +1783,16 @@ message. `SA_ONSTACK` runs the handler on the program's alternate stack
 where one exists, which keeps Go's small goroutine stacks and Rust's
 guard pages safe; where none exists it is a no-op. A program's own
 handler whose signal lands during a trap runs where the launcher's
-handler is running, so on the alternate stack whether or not it asked
-for it (13 item 51).
+handler is running, below its frames and the presented frame (7.5.7),
+so on the alternate stack whether or not it asked for it (13 item 51).
 
 #### 7.5.4 Scratch memory and the stack budget
 
 The handler uses at most 3 KB of the program's stack beyond the
-kernel's signal frame: 2 776 bytes on x86-64
-and 2 672 on aarch64 (measured November 2026) for a five-deep chain of
+kernel's signal frame: 2 816 bytes on x86-64
+and 2 736 on aarch64 for a five-deep chain of
 host `#!` scripts, whose six nested exec frames keep their buffers in
-scratch. The kernel's frame is
+scratch, the trap's record of 7.5.7 included. The kernel's frame is
 `AT_MINSIGSTKSZ` bytes, about 3 KB on AVX-512 hardware and up to 11 KB
 with AMX; a trap costs the two together, multiplied under nesting (13
 item 30), and glibc's `posix_spawn` child runs on a 36 KB stack with
@@ -1761,7 +1800,14 @@ no guard page. `test/stackcheck.py` asserts the budget on the call
 graph gcc writes with `-fcallgraph-info=su`: the deepest chain from
 `on_sigsys`, `exec_target`'s recursion counted six deep and any other
 recursion a failure. The launcher makes no call through a pointer,
-which would have no edge.
+which would have no edge, but the trampoline's call of a program's
+handler, made in assembly, past which the stack is the program's
+(7.5.7). The trampoline's C part is a second root with a budget of its
+own, 512 bytes, of which its deepest chain takes 184 on x86-64 and 304
+on aarch64, and which fails on any call out of the
+trampoline's section, and the assembly of the handler's entry stub and
+of the trampoline count as constants the check reads from beside their
+source.
 
 Path buffers, argument vectors and per-thread state live in scratch
 chunks mapped on demand, since a fixed pool failed 40% of `stat` calls
@@ -1819,11 +1865,12 @@ leaving chunks with dead owners, make likely on two CPUs (13 item 44);
 `clone3` is refused with `ENOSYS` (7.4.2), so glibc, musl and Rust
 create threads and spawn children with `clone`, which is not trapped.
 glibc's `posix_spawn` fallback then resets the signal dispositions by
-hand in the child: it queries every signal, which does not trap, and
-installs only where the parent has a handler and for its own two
-internal signals, which traps for the mask scrub. That is the cost of
-refusing `clone3`: a handful of traps per `posix_spawn`, two
-`rt_sigaction`s and one `rt_sigprocmask` for a parent with no handlers.
+hand in the child: it queries every signal, 59 queries, and installs
+only where the parent has a handler and for its own two internal
+signals. Every `rt_sigaction` traps (7.5.7), so that is the cost of
+refusing `clone3`: some sixty traps per `posix_spawn` on glibc, the
+queries, two installs and one `rt_sigprocmask` for a parent with no
+handlers; musl's child queries only the signals it has handlers for.
 What a spawn costs in all is the child launcher's start and the kernel's
 work behind it (16.4). Honouring `clone3` would mean copying the
 handler's signal frame onto the child's stack, and with it the FPU save
@@ -1831,8 +1878,8 @@ area, whose pointer in the frame names the parent's stack: a copy that
 leaves the pointer there starts every new thread with a corrupt
 `MXCSR`. The copy can be made, since the frame records the save area's
 size, but it ties the handler to the kernel's frame layout on both
-architectures, which grows with each new register set, to save a
-handful of traps per spawn (14.3).
+architectures, which grows with each new register set, to save
+some sixty traps per spawn (14.3).
 
 #### 7.5.6 `EFAULT`
 
@@ -1860,6 +1907,316 @@ pipe's cost of 13 item 15 on that program alone. A buffer under
 a key the program may write is written, and one under a key it denied
 is `EFAULT`, as natively (`protection_keys`). aarch64's keys are 13
 item 52.
+
+#### 7.5.7 A program's handlers and the trap site's frame
+
+A trapped call runs in two places: the program's syscall instruction
+raises `SIGSYS`, and the launcher's handler walks the path and makes
+the call again from the syscall page, with the program's mask in force
+(7.5.3). A signal that lands meanwhile is delivered on top of the
+launcher's frame, and the kernel's frame for it describes the launcher:
+a counter in the page or the launcher's text, the launcher's registers.
+A handler that reads its frame would be misled: musl's and glibc's
+cancellation act only when the counter lies in their cancellable
+syscall, Go's preemption asks whether it is a safe point, a sampling
+profiler attributes the sample by it, and an unwinder walks from the
+handler through the frame into the interrupted code. The launcher
+therefore stands between the kernel and every handler a program
+installs, and builds the frame the kernel would have built at the trap
+site, as it already edits the mask in the trap's frame (7.5.2): one
+more of the kernel's jobs, done by the same handler.
+
+**Trampolines.** At every `rt_sigaction` that installs a handler, the
+launcher's handler first checks the signal as the kernel does, so that
+an install answered `EINVAL` takes nothing, then finds or takes a
+*slot* for the program's handler and its `sa_mask` as the kernel stores
+it, without `SIGKILL` and `SIGSTOP`, and installs that slot's *stub* in the handler's place,
+with the program's flags, restorer and mask, less `SIGSYS` (7.5.1), as
+given. The slots are 256 in the launcher's data, each filled once and
+never rewritten: an install whose handler and mask a slot already holds
+reuses it; any other claims the next by a compare-and-swap on the
+count, bounded at 256, writes the mask, and publishes
+the handler last with release order, and a reader acquires the handler
+and takes a slot without one as empty. When none is left the handler is
+installed directly and its frames are the launcher's (13 item 58). An
+install of a stub's own address, an old action a program saved and puts
+back, maps back to its slot. A stub is two instructions in a section of
+the launcher's text of its own, which put the slot's number in a
+scratch register, `r11` (`x16`), and jump to the *trampoline*. Since
+the kernel's action names the slot and a slot never changes, a delivery
+runs the handler the kernel delivered for, whatever another thread
+installs meanwhile, and a `vfork` child's installs claim slots of their
+own in the memory it shares with its parent, whose actions the kernel
+keeps apart and whose slots stay as they were. `fork` copies the slots
+with the memory, and `execve` starts a launcher with none, as the kernel
+resets every caught signal to the default and keeps the ignored ones.
+
+The kernel's action differs from the program's only in the handler's
+address and `SIGSYS` in its mask, so the kernel applies the program's
+flags itself: `SA_RESTART` to the restart of an interrupted re-issue,
+`SA_NODEFER` and the mask to delivery, `SA_ONSTACK` to the stack,
+`SA_RESETHAND` by resetting the action at delivery, which a later query
+reports, and `SA_SIGINFO` to whether it writes the `siginfo` and, on
+aarch64, passes the frame's address. The trampoline finds the frame
+without it, at the stack pointer plus 8 on x86-64, past the restorer's
+address, and plus 128 on aarch64, past the `siginfo`: the layout of
+`rt_sigframe`, which unwinders rely on. The launcher carries no BTI
+property, so its stubs need no landing instruction, and a branch
+through `x16` to a program's handler is one its `bti c` admits.
+
+**Where the signal landed.** The trampoline reads the interrupted
+counter from the frame:
+
+- *Outside the launcher's text and the syscall page*, in the program's
+  code, a library's or the vDSO: the trampoline restores the registers
+  it used, `r11` and `rcx` from the frame and `rax` to the 0 the kernel
+  leaves in it (`x15` from its own stack and `x17` from the frame on
+  aarch64), and jumps to the program's
+  handler, through `x16` on aarch64, the register the procedure call
+  standard leaves to such veneers; only the arithmetic flags are not as
+  the kernel left them. The handler starts with the stack, the frame
+  and the return address into the program's restorer that the kernel
+  gave, and no frame of the launcher's lies between.
+- *At a stub's first instruction*: a second signal delivered before the
+  first one's handler ran. The trampoline presents the frame with that
+  handler's address as the counter, as natively, as it presents a trap
+  site below, the frame the program resumes from being this one; if the
+  handler leaves the counter as presented, the stub's address goes back.
+- *In the trampoline itself*, its stubs past their first instruction
+  and its code in the page included: as outside, the counter the
+  trampoline's (13 item 58).
+- *Anywhere else in the launcher's text or the page*: the signal landed
+  during a trapped call, and the trampoline presents the trap site.
+
+**The trap's record.** Every trap has a record of four words on the
+launcher's stack, made by the handler's entry stub before anything
+else: a magic word, the address of the trap's frame, the call's answer,
+a sentinel until there is one, and a flag that a program's handler
+redirected the program. A register holds the record's address
+throughout the launcher's code (`r15`, `x27`, reserved by `-ffixed-`;
+no C reads it, the entry stub passing the record to the handler as an
+argument and the trampoline reading it from the frame, so clang, which
+`scripts/check` runs without the flag, needs none), so a frame that
+interrupts the launcher names its trap in that register, and the
+trampoline asserts the magic word before it trusts it. The program's
+value of the register is in the trap's frame. Where the record does not
+exist, the trap's frame is found otherwise: in the entry stub's first
+instructions it is the third argument the kernel passed the handler,
+still in its register; in the stub's last instructions, after the
+record is gone, and at the launcher's restorer, returning through the
+trap's frame, it is found from the interrupted stack pointer, and the
+call is made, its answer in the frame: on x86-64 the `ucontext` lies 8
+bytes above the stack pointer before the stub's last `ret` and at it
+after, at the restorer; on aarch64 128 bytes above it at each.
+
+**The re-issue slot.** The call the handler makes on the program's
+behalf, the re-issued syscall in whatever form, the exec, goes through
+the page's re-issue slot (7.4.2), which reads the record's redirect
+flag first and, when it is set, makes no call and answers `EINTR`, and
+after the call stores the answer in the record. The launcher's own
+calls do not wait but where a network or user-space filesystem makes a
+lookup wait, and the log's writes, which follow the answer. The handler
+stores its answer in the record before it does anything else with it,
+an answer it made without a re-issue, `EROFS`, `ENOENT` or a judge's
+refusal, included, and the entry stub writes it into the trap's frame
+on the way out unless the flag is set; a redirect that lands between
+the stub's test and its write moves the counter past the write.
+
+**Where the call stands** is read in this order: the redirect flag; then
+the counter of the re-issue slot, before its syscall instruction not
+made, which is also where the kernel leaves a re-issue it will restart,
+and after it made, the answer in the result register; then the
+record's answer, made; else not made. Only the call itself goes through
+the re-issue slot: the launcher's auxiliary calls on the way, a
+deferred `PTRACE_TRACEME` before its `execve`, the availability query
+before a filter's install, go through the page's first slot and leave
+the call not made.
+
+**What the trampoline presents.** It builds a frame of its own, laid out
+as the kernel's `rt_sigframe`, below the kernel's frame, which stays as
+the kernel made it and holds the launcher's state. The presented frame
+has a fixed size on each architecture, so that the handler-call slot
+finds the block above it at a fixed offset from the stack pointer: at
+least the kernel's `rt_sigframe`, and room above the `ucontext` for a
+whole `ucontext_t` of the program's libc, which a handler may write back
+whole (glibc's is 936 bytes on x86-64, more than the kernel's
+`ucontext` and `siginfo` together), so that no such write reaches the
+block, which holds the address the trampoline is re-entered by:
+1 040 bytes on x86-64 and 4 688 on aarch64, whose records' 4 096 bytes
+it holds whole, with a block of 112 above it. Above it lies that block of the
+trampoline's own: a magic word, the kernel's frame's address, the
+record's, the slot, the re-entry address, on aarch64 the `x30` the
+kernel set and a frame record. The handler's stack grows below the
+presented frame. On x86-64 the presented `ucontext` is 16-byte aligned,
+and the stack pointer at the handler's entry 8 modulo 16, as the
+kernel's. The presented frame holds:
+
+- the `siginfo` of this delivery;
+- the general registers of the frame the program resumes from, on
+  x86-64 the eighteen, `r8` to `r15`, `rdi`, `rsi`, `rbp`, `rbx`,
+  `rdx`, `rax`, `rcx`, `rsp`, `rip` and `eflags`, on aarch64 the
+  thirty-one, `sp`, `pc` and `pstate`, with the counter and the result
+  register as the call stands. *Not made*: the counter at the program's
+  syscall instruction, two bytes before the trap's on x86-64 and four on
+  aarch64, and the result register as the kernel leaves it there, the
+  syscall's number in `rax`, the first argument in `x0`: the kernel's
+  frame for a signal that arrives just before a syscall instruction, and
+  for one that interrupts a call the kernel will restart. *Made*: the
+  counter after the syscall instruction and the answer in the result
+  register, `-EINTR` where the kernel ended an interrupted re-issue
+  with it. *Redirected* by an earlier handler in the same trap: the
+  trap's frame as that handler left it. This delivery's own fields stay
+  as the kernel made them: `csgsfs`, `err`, `trapno`, `oldmask` and
+  `cr2` on x86-64, `fault_address` on aarch64;
+- the floating-point state, the program's: on x86-64 the frame's
+  pointer to its save area names the trap's frame's, so nothing is
+  copied; on aarch64 the trap's frame's records, copied up to their
+  terminator by one parser with one checked bound, the 4 096 bytes of
+  `__reserved`, each record at least 16 bytes and 16-aligned, an
+  `extra_context` record still naming the trap's frame's extra space,
+  and this delivery's own syndrome written into the trap's `esr_context`
+  where both frames carry one. The launcher depends on no save area's
+  layout either way;
+- `uc_stack` as the trap's frame's, the alternate stack as it stood at
+  the trap site;
+- the mask of this delivery's frame, the mask in force at the re-issue,
+  which is the program's (7.5.3), or for a wait that carries a mask the
+  mask from before it, as natively.
+
+The trampoline then loads the trap site's callee-saved registers, and
+`x18` on aarch64, from the trap's frame, the signal's number and the
+addresses of the presented `siginfo` and `ucontext` into the argument
+registers, `rax` 0 on x86-64, `x29` naming a frame record of the trap
+site's `x29` and `x30` on aarch64, and calls the handler from the
+page's *handler-call slot*, whose call is followed by the restorer's
+own two instructions: `mov $15, %rax; syscall`, the bytes
+`48 c7 c0 0f 00 00 00 0f 05`, on x86-64, `mov x8, #139; svc #0` on
+aarch64. On x86-64 the call is made with the stack pointer at the
+presented `ucontext`, so that the return address lands where the
+kernel's frame keeps the restorer's address; on aarch64 with the stack
+pointer at the presented frame and the return address in `x30`. The
+handler thus starts as the kernel would start it, the stack pointer at
+a frame of the kernel's layout and the return address at a restorer's
+code, and an unwinder takes that return for the kernel's restorer:
+libgcc's fallback (`config/i386/linux-unwind.h`,
+`config/aarch64/linux-unwind.h`) reads the frame at the handler's
+caller's frame address, which is the presented `ucontext` on x86-64
+and the presented frame on aarch64, and gdb's signal-trampoline
+recognition does the same, so a backtrace and an unwind walk from the
+handler into the program's frames at the trap site. Measured with
+libgcc 13 and gdb 15 on x86-64: a forced unwind from a handler called
+so runs the trap site's caller's cleanup, as from a handler the kernel
+called, and gdb's backtrace shows `<signal handler called>` above the
+trap site; on aarch64 libgcc's fallback compares the same two words and
+reads the frame at the frame address. When the handler returns, its
+return runs the restorer's instructions in the page, and the filter
+answers an `rt_sigreturn` from that one address with an error (7.4.2),
+so that nothing is restored: the call returns, and the page's next
+instructions jump back into the trampoline, whose address the block
+above the presented frame holds.
+
+**What the handler decides.** Back in the trampoline, the record is
+reloaded from the block, not from the register, which holds what the
+handler left, before any of its C runs. The trampoline compares the
+presented general registers with the frame the program resumes from,
+its counter and result register as the call stands, and copies into that
+frame the mask the handler left, `SIGSYS` cleared (7.5.1), and its
+`uc_stack`; on aarch64 the floating-point records go back, exactly the
+bytes copied out and never a length read again from headers the
+handler may have edited, so that a handler's edit reaches the program,
+as on x86-64 it does through the pointer. The same mask, `SIGSYS` cleared, goes into the
+kernel's frame for this delivery, so that the rest of the launcher's
+handler runs with it, as the program would after the handler's return:
+musl's handler, finding a call that is not its cancellable one, blocks
+its cancel signal in the frame and sends it again, which must stay
+blocked until the call is done.
+
+Unchanged, the launcher's call goes on: the kernel restarts the
+re-issue, or has ended it, as it decided before the handler ran, or the
+walk continues to the call. Changed, the handler has redirected the
+program, as musl's cancellation moves the counter to its cancel path, or
+a single-stepping handler sets the trap flag: the trampoline writes the
+registers into the trap's frame and sets the redirect flag, and if the
+counter lies in the re-issue slot before its syscall instruction, moves
+it past and puts `-EINTR` in the result register, so that no restart
+follows. That edit is safe at any point: with a handler run, the kernel
+leaves no `ERESTARTNOHAND` or `ERESTART_RESTARTBLOCK` in the frame,
+having made them `EINTR`, and `rt_sigreturn` marks the thread as in no
+syscall (`orig_ax` -1 on x86-64, `forget_syscall` on aarch64), so no
+restart rule applies to the frame again. The flag stops any later call
+through the re-issue slot, and the launcher's handler ends the trap
+without writing its answer, so the program continues where its handler
+sent it. A call that was made goes on to its end all the same: the
+launcher finishes what it writes to program memory, the `.real/`
+entries hidden from a listing, `ST_RDONLY`, a link's text, while the
+result register stays as the handler left it. A handler that left the
+counter at the syscall instruction and changed other registers makes
+the program issue its call again with them, a fresh trap, as the kernel
+would make the call with the registers the handler left.
+
+The trampoline then returns through the kernel's frame for this
+delivery as the kernel expects: on x86-64 by a `ret` with the stack
+pointer at that frame's restorer address, into the program's restorer,
+on aarch64 by a `ret` to the `x30` the kernel set, so that the entry the
+kernel pushed at delivery on a shadow stack, x86-64's or aarch64's GCS,
+is the one the return pops. A redirect in the entry stub, before the
+record exists, ends the trap at once: the counter of this delivery's
+frame goes to a `ret` in the page, two bytes into it on x86-64 and four
+on aarch64, with the stack pointer at the trap's frame's restorer
+address on x86-64, and on aarch64 the stack pointer at the trap's frame
+and `x30` the launcher's restorer, which is what the shadow stack holds
+there, so the trap's frame returns to the redirected program and no
+call is made.
+
+**Leaving otherwise.** A handler that `siglongjmp`s out, or an unwind
+from it that lands in the program's frames, as glibc's cancellation
+unwinds from its handler, leaves the presented frame, the kernel's
+frame for its signal and the launcher's, with the trap's chunk, as a
+`longjmp` out of a nested handler does, and the thread's next trap
+releases the chunk (7.5.4), or a sweep does once the thread is gone.
+What the launcher held at that point stays held: the descriptor of a
+directory through which a long path is re-issued (`connect`, `bind`)
+leaks, one per such leave, since no check can prove a number is still
+the launcher's once a program may have closed and reopened it; and the
+cache's lock, taken during an insert, stays taken, so that the process
+makes no insert again, though a `fork` child starts with it free
+(7.4.4); a release could not tell a lock left so from one a live insert
+holds.
+A handler that
+issues an `rt_sigreturn` of its own on the presented frame resumes the
+program at the presented state with its floating-point state, leaving
+the launcher's frames as a `longjmp` does, but under a shadow stack,
+whose token the presented frame lacks, or on aarch64 with an
+`extra_context`, whose space the kernel requires right after the frame,
+where the kernel refuses it with `SIGSEGV`.
+
+**Queries.** Every `rt_sigaction` traps (7.4.2). The handler re-issues
+a query, or an install, with the launcher's own buffer for the old
+action: where the kernel's handler is a stub, the old action is the
+slot's handler and mask with the kernel's flags and restorer, which are
+the program's; otherwise it is the kernel's answer as it stands, the
+default, ignored, or the launcher's own handler for `SIGSYS` (13 item
+23). It is written to the program's buffer last, so a bad `oldact` is
+`EFAULT` with the new action in force, as `sys_rt_sigaction` leaves it.
+A signal never installed, or ignored across an `execve`, reports what
+the kernel says. A query names no path, and `EXCLAVE_LOG` logs none.
+A fast path for queries, ahead of the scratch claim, saved too little
+of a query's trap to be taken (16.2).
+
+**What it costs.** Outside a trapped call, a few instructions per
+signal and no stack. Inside one, the presented frame and the block
+above it, the copies and the comparison. On every trap, the record's
+four words, the re-issue slot's check, the entry stub's write and the
+filter's second stage for the `rt_sigreturn` of the trap's own return,
+which the action cache no longer proves allowed, and a trap for every
+query (16.2). `test/progs/sigframe.c` reads the frame a handler
+finds for a signal that lands during a blocking trapped open, with and
+without `SA_RESTART`, outside any trap, and in a rain on stats of a
+long path, and what a query reports; the kernel's answers are its
+expectation. `test/stackcheck.py` walks the trampoline's C as a root of
+its own, with a budget of its own, and fails on any call it makes out
+of the trampoline's section, since that code runs where the reserved
+register may hold the program's value (7.5.4).
 
 ### 7.6 Identity
 
@@ -3677,10 +4034,18 @@ and stay fixed.
     software that must write there needs a fixed host directory named
     by a symlink in the tree.
 
-20. **`sigaction` queries report scrubbed masks.** The handler removes
-    `SIGSYS` from every mask a program sets, since a blocked `SIGSYS`
-    would kill the process at its next trap, so `sigaction(sig, NULL,
-    &old)` reports an `sa_mask` without it (7.5.1).
+20. **`SIGSYS` is never blocked, whatever a mask says.** The handler
+    removes `SIGSYS` from every mask a program sets, since a blocked
+    `SIGSYS` would kill the process at its next trap (7.5.1), so a
+    handler runs with it unblocked whatever its `sa_mask`, and a query
+    of the thread's mask, `sigprocmask(SIG_BLOCK, NULL, &old)`, reports
+    it unblocked. A query of an action, `sigaction(sig, NULL, &old)`,
+    reports its `sa_mask` as the program wrote it (7.5.7). A handler
+    whose signal lands outside any trap and that blocks `SIGSYS` in its
+    own frame, as a `sigfillset` on `uc_sigmask` does, returns through
+    the program's restorer unseen, and the process is killed at its next
+    trap; one that lands during a trap has `SIGSYS` cleared from what it
+    leaves.
 
 21. **Kernels without seccomp filter support cannot run exclaves.**
     The translator is a seccomp filter; there is no fallback.
@@ -3762,7 +4127,11 @@ and stay fixed.
     Rust's layout, a guard page below, on every row of the matrix: on
     the reference machine they pass on 5 KB and fail on 4.4 KB. A
     handler on the alternate stack that traps adds the kernel's frame
-    a second time, its own: `test/progs/sigstack.c` passes on 8 KB and
+    a second time, its own, and a program's handler whose signal lands
+    during a trap adds the kernel's frame, the presented frame and its
+    block, 1 152 bytes on x86-64 and 4 800 on aarch64, whose presented
+    frame holds the 4 KB of floating-point records whole, and the
+    trampoline's C below them, 184 and 304 bytes (7.5.7): `test/progs/sigstack.c` passes on 8 KB and
     is killed on 6 KB on the reference machine, where the kernel alone
     passes on `MINSIGSTKSZ`. An overrun that lands in mapped memory
     below the alternate stack, not a guard page, is no fault: a signal
@@ -3990,8 +4359,10 @@ and stay fixed.
     (6.2), but a program inside sets it for the programs it runs, so
     the suite runs a CET-marked program inside with the tunable set,
     through a signal, a thread making trapped calls, a `longjmp` across
-    one and a `fork` and `exec`, and reports whether a shadow stack was
-    on (17); the day a glibc turns them on, the handler's paths run on
+    one, a handler whose signal lands during a trapped call, so that the
+    trampoline's return through the kernel's frame and the handler's
+    return from the handler-call slot run (7.5.7), and a `fork` and
+    `exec`, and reports whether a shadow stack was on (17); the day a glibc turns them on, the handler's paths run on
     one there. Until then the handler has not run on a shadow stack.
 
 50. **On the loader path the kernel's image is the launcher's.** The
@@ -4011,18 +4382,23 @@ and stay fixed.
 
 51. **A handler that did not ask for the alternate stack runs on it
     when its signal lands during a trap.** The launcher's handler runs
-    on the alternate stack where one is armed (7.5.3), and a signal
-    that lands while it runs is delivered where the stack pointer is,
-    so a program's handler installed without `SA_ONSTACK` runs on the
-    alternate stack, its frame counted against it, where natively it
-    would run on the main stack; `sigaltstack(NULL, &old)` in it
-    reports `SS_ONSTACK`. A 5 KB handler beside an 8 KB alternate stack
-    armed for `SIGSEGV`, Rust's shape, reaches the guard page under the
-    launcher and runs natively (`test/progs/sigstack.c`); on aarch64,
-    whose signal frame is larger, the `SIGSEGV` handler has no room
-    either and the program is killed. A handler
-    that uses more than a few hundred bytes beside a small alternate
-    stack is the shape to avoid.
+    on the alternate stack where one is armed (7.5.3), and a program's
+    handler whose signal lands while it runs is called below the
+    launcher's frames and the presented frame (7.5.7), so one installed
+    without `SA_ONSTACK` runs on the alternate stack, where natively it
+    would run on the main stack, and `sigaltstack(NULL, &old)` in it
+    reports `SS_ONSTACK`; one installed with it has the part of the
+    stack below the launcher's frames, where natively it would have the
+    whole. The presented frame and its block add 1 152 bytes on x86-64
+    and 4 800 on aarch64 to the kernel's own. A 5 KB handler beside
+    an 8 KB alternate stack armed for `SIGSEGV`, Rust's shape, reaches
+    the guard page under the launcher and runs natively
+    (`test/progs/sigstack.c`); on aarch64, whose signal frame is larger,
+    the `SIGSEGV` handler has no room either and the program is killed.
+    A handler that uses more than a few hundred bytes beside a small
+    alternate stack is the shape to avoid; running such handlers on the
+    trap site's stack was considered and refused (14.3).
+
 52. **aarch64's protection keys are not the program's in the handler.**
     The permission overlay of Arm's FEAT_S1POE, `POR_EL0`, is to aarch64
     what PKRU is to x86-64 (7.5.6), and the handler does not load the
@@ -4158,30 +4534,72 @@ and stay fixed.
     the exclave's interpreter from outside too, `sys.prefix` the
     venv's; `--copies` copies the original instead (item 16).
 
-58. **A deferred `pthread_cancel` does not end a blocked trapped call
-    on musl or a later glibc.** A thread blocked in a trapped call
-    that waits, an `open` of a FIFO with no writer, is cancelled by a
-    deferred `pthread_cancel` natively, and under the launcher stays
-    blocked. The libc's cancellation handler judges the interrupted
-    place by the signal frame's program counter, which must lie in
-    its own cancellable wrapper; during the re-issued call it lies in
-    the launcher's syscall page. musl then blocks its cancel signal in
-    that frame and sends it again, and the kernel restarts the call
-    (`SA_RESTART`) with the signal blocked, so the call waits on.
-    glibc 2.39 (Ubuntu 24.04) switches to asynchronous cancellation
-    around the call and unwinds through the launcher's frames; a later
-    glibc, as Fedora 42's 2.41 with its
-    `__syscall_cancel_arch_start` and `_end` markers, judges by the
-    counter as musl does (`test/progs/clones.c`, measured on musl
-    1.2.5 and glibc 2.41, both cancelled under bwrap). The thread is
-    freed when the call completes, a writer opening the FIFO in the
-    exerciser, and the cancellation is acted on at its next
-    cancellation point. Any trapped call that waits would meet the same,
-    `connect` among them. A program that must cancel such a thread
-    sets asynchronous cancellation around the call
-    (`PTHREAD_CANCEL_ASYNCHRONOUS`, which passes under the launcher),
-    or interrupts it with a signal whose handler of its own ends the
-    thread, `pthread_exit` from the handler as the exerciser does.
+58. **A handler that runs during a trapped call meets the launcher at
+    the edges.** A handler whose signal lands during a trapped call
+    finds the trap site's frame, decides what the program does, and is
+    unwound through into the program's frames (7.5.7), so a deferred
+    `pthread_cancel` of a thread blocked in a trapped call ends it on
+    musl and on every glibc, its cleanup handlers and destructors run,
+    as natively (`test/progs/clones.c`). What is not the kernel's:
+    - A signal that lands while the launcher walks the call's path,
+      before the re-issue, finds the call about to be made: the counter
+      at the program's syscall instruction and the number (x86-64) or
+      the first argument (aarch64) in the result register, the kernel's
+      frame for a signal that arrives just before a syscall instruction.
+      Natively a signal that arrives while a call that does not wait is
+      under way is delivered after it, with its answer; here the handler
+      runs first and the call is made when it returns. On x86-64 `rcx`
+      and `r11` in that frame hold what the syscall instruction left in
+      them at the trap, not what they held before it, which nothing
+      recovers.
+    - A signal that lands after the re-issue, while the launcher
+      finishes the call, finds it made, with the re-issue's answer in
+      the result register, before the launcher's adjustment of a
+      listing's or a link's length.
+    - A signal that lands in the trampoline itself, before or after the
+      handler it is running, finds the trampoline's counter and
+      registers; one that lands at the program's restorer, as the
+      trampoline returns through the kernel's frame, counts as outside
+      and finds the launcher's registers about to be restored. One
+      delivered onto a handler that has not yet run finds that handler's
+      address, as natively.
+    - A handler that ends with an `rt_sigreturn` of its own on the frame
+      it was given is refused with `SIGSEGV` under a shadow stack, and
+      on aarch64 when the frame carries an `extra_context`; elsewhere it
+      resumes the program at the presented state, leaving the launcher's
+      frames as a `longjmp` does (7.5.7).
+    - An unwind through the presented frame under an x86-64 shadow
+      stack would leave the shadow stack pointer short: libgcc
+      (`config/i386/shadow-stack-unwind.h`) counts one shadow-stack entry
+      per frame it unwinds, the kernel's restore token for a signal
+      frame, where the presented frame has the launcher's entries and
+      two tokens of the kernel's beneath it, so the first return after
+      the landing would fault. It cannot be run while glibc enables no
+      shadow stack (item 49).
+    - LLVM's libunwind recognises the restorer's instructions on aarch64,
+      as libgcc does, but on x86-64 has no such recognition
+      (`_LIBUNWIND_CHECK_LINUX_SIGRETURN` is defined for aarch64,
+      LoongArch, RISC-V and s390x) and steps through a signal frame only
+      by the unwind information of glibc's `__restore_rt`: under the
+      launcher its unwind ends at the handler-call slot, as natively it
+      ends at musl's restorer, which carries none.
+    - Stepping over a handler's return in gdb sets the resume breakpoint
+      at the presented counter: where the call was not made, that is
+      the program's syscall instruction, which the launcher's handler
+      passes over without executing it, and `next` runs on to the next
+      stop.
+    - What the launcher held when a handler leaves by `siglongjmp` or an
+      unwind stays held: the descriptor of a long path's `connect` or
+      `bind` leaks, and the cache's lock, if an insert held it, stays
+      taken, so the process caches nothing more (7.5.7).
+    - On aarch64 a delivery that carries an `esr_context`, a fault's
+      syndrome, presents it only where the trap's frame carries one too,
+      whose record it fills; ASan reads it to tell a write fault, which a
+      signal landing during a trapped call is not.
+    - Past 256 distinct pairs of handler and mask installed in one
+      process, an install is made directly, and its handler finds the
+      launcher's frame.
+    - The handler runs on less of the alternate stack (item 51).
 
 ### 13.1 Debugging and profiling recipe
 
@@ -4357,7 +4775,14 @@ every file at its base, originals included.
 | Resolving host symlinks in the host's domain | A host link into `/usr` would reach the host's `/usr`. Links resolve in the exclave's view; the identity files' host links and the links in the identity directories are followed by the kernel on the host (8.4). |
 | A union of the host's trust directory and the tree's | Answers no one's directory: the tree's hash links would stand beside the host's, so an authority the host removed would still verify inside, and a listing would merge two sets in an order neither has. The host's directory at its name, with the identity files the host lacks in it the exclave's, answers as the host's own directory does (8.4). |
 | Binding the host's trust directory with its links resolved in virtual space, a `host` record | Its links are absolute paths into `/usr/share/ca-certificates`, which inside are the tree's, so the directory would trust nothing the tree does not ship, and a `host` record for each target directory still misses `/usr/local/share/ca-certificates` and whatever another host's trust tool links to (8.4). |
-| Honouring `clone3` by copying the signal frame onto the child's stack | The FPU save area must be copied with the frame and the frame's pointer to it moved, or every new thread starts with a corrupt `MXCSR`. That can be done, but it ties the handler to the kernel's signal-frame layout on both architectures, a layout that grows with each new register set, where `ENOSYS` costs a few traps per `posix_spawn` (7.5.5). |
+| Honouring `clone3` by copying the signal frame onto the child's stack | The FPU save area must be copied with the frame and the frame's pointer to it moved, or every new thread starts with a corrupt `MXCSR`. That can be done, but it ties the handler to the kernel's signal-frame layout on both architectures, a layout that grows with each new register set, where `ENOSYS` costs some sixty traps per `posix_spawn` on glibc, its child's queries most of them (7.5.5). |
+| Returning a program's handler straight to the trap site, the launcher's frames abandoned | The launcher may be holding descriptors of its walk or the cache's lock where the signal lands, and the frame the handler would return through carries the launcher's shadow-stack token (x86-64's, aarch64's GCS) where the program's is needed. The handler returns through the restorer's instructions in the handler-call slot, which the filter answers with an error, into the trampoline, and the launcher ends its call as the handler decided (7.5.7). |
+| Calling a program's handler with a return into the trampoline's own code | Simpler, and no filter rule, but an unwinder finds no unwind information at the return address and stops there: glibc's cancellation would jump to its innermost cleanup buffer and pass over the cleanup handlers that C built with `-fexceptions`, Fedora's default, and C++ destructors keep in the frames between, an unlock among them, and a C++ exception thrown from the handler would end in `std::terminate`. A return address at the restorer's instructions is one libgcc's fallback and gdb take for the kernel's (7.5.7). |
+| Editing the kernel's frame for the delivery in place | Needs the launcher's registers kept elsewhere while the handler runs, on every trap's stack. A frame of the trampoline's own, of the kernel's layout, leaves the kernel's frame holding the launcher's state (7.5.7). |
+| Running a handler that did not ask for the alternate stack on the trap site's stack | As natively, but the launcher's frames stay live on the alternate stack meanwhile, where a signal for an `SA_ONSTACK` handler, as Go installs every one, would be delivered at its top, over them. Narrowing the alternate stack for the handler's run leaves windows on either side of the switch, a narrowed stack for good after a `siglongjmp` out of the handler, the handler's own `sigaltstack` calls overwritten, and under `SS_AUTODISARM` a nested trap's frame on another stack than its parent's, where the comparison of 7.5.4 could release a live chunk (13 item 51). |
+| One table of actions, an entry per signal | A `vfork` child's install would rewrite its parent's entry in the memory they share, and two threads installing at once could leave the kernel's action and the entry disagreeing. A slot per distinct handler and mask, never rewritten and named by the kernel's action through its stub, keeps each delivery's handler the one the kernel delivered for (7.5.7). |
+| Deferring a signal that lands in the walk to the trap's end, blocked and queued again | The handler would then see the call made, as natively for a call that does not wait, but the signal would stay blocked through a call that waits, so a Ctrl-C landing in a FIFO open's walk would not interrupt the open, and `SA_RESETHAND` has already reset the action the queued signal would meet. The call is presented about to be made (13 item 58). |
+| Copying the trap's floating-point state by a layout of the launcher's own | Ties the launcher to the save area's layout, as honouring `clone3` would. On x86-64 the presented frame's pointer names the trap's frame's save area; on aarch64 the trap's records are copied as they lie, by the length their own headers give, and copied back (7.5.7). |
 | Reclaiming scratch by comparing stack pointers across threads | Meaningless across alternate stacks and coroutines; scratch is reclaimed by liveness sweeps (7.5.4). |
 | Synthesising host entries into `getdents64` | Invents results: a listing would name what no directory holds, merged in an order no choice gets right for every program. Empty placeholders in the tree give `ls /` the same answer for free (8.3). |
 | A canonicalisation cache shared across processes | Would save a few hundred `lstat`s per compile, but an inherited descriptor is visible to the program (descriptor counts, `close_range`, leak checks), and a file outside the exclave is state an edited tree makes wrong (14.5). |
@@ -4792,6 +5217,34 @@ component of a path as a link, so a path *n* deep costs *n* traps, and
 each trap walks the path again. This is why `realpath` is the most
 expensive row of 16.8.
 
+**Queries of an action** trap, so that they report a program's handler
+rather than its trampoline (7.5.7), each 1.1 µs against 45 ns natively
+(a query of `SIGUSR1` in a loop, the best of five runs of 100 000). A
+fast path for them ahead of the scratch claim saved 70 ns of the 1.1 µs,
+short of the fifth that would pay for it, and is not taken. Counted with
+`strace` on the exclaves' own programs: `dash -c true` makes 3,
+`bash -c true` none, `python3 -c pass` 62, one for each signal it may
+handle; a `gcc -O0` compile of an empty `main` none on Ubuntu 24.04,
+whose driver does not use `posix_spawn`, 20 on Alpine and 236 on
+Fedora 42; a `posix_spawn` from a parent with two handlers makes 59 in
+its child on glibc 2.39 and 2.41, and 2 on musl (7.5.5).
+
+**A signal during a trap** costs, beside its own delivery, the
+trampoline's presented frame, its copies and comparison, and the
+handler's return through the handler-call slot's refused
+`rt_sigreturn`, 160 ns: a signal delivered inside a trapped
+`rt_sigsuspend`, pending and unblocked by the call, costs 1.93 to 1.96
+µs a round against 1.77 to 1.82 before the trampolines and 0.70
+natively. Outside a trap, the trampoline's few instructions and the
+second stage for its `rt_sigreturn`, 15 to 20 ns: a `tgkill` to itself
+with a handler, 0.70 to 0.71 µs against 0.68 to 0.70 before and 0.67
+natively. Every trap pays the record's four words, the re-issue slot's
+check, the entry stub's write and the second stage of the filter for
+the `rt_sigreturn` of its own return, which the action cache no longer
+proves allowed (7.4.2): 50 ns, a warm four-component exclave-path
+`stat` costing 2.42 to 2.46 µs against 2.37 to 2.40 before (best of
+five runs of 100 000, three times each).
+
 ### 16.3 Untrapped syscalls and the filter
 
 Every syscall runs the filter unless the kernel's action cache (5.11)
@@ -4802,7 +5255,7 @@ syscall number whose leaf for every number the rule does not single
 out is `ALLOW` (7.4.2 gives the program's size and how many numbers
 that is). The action cache proves those numbers allowed and skips the
 filter for them; where the cache is absent an allowed syscall runs
-11.8 instructions on average and 28 at most.
+11.9 instructions on average and 27 at most.
 
 An untrapped `getppid` costs 53 to 55 ns against 43 to 45 natively,
 and `read(-1)` 54 against 46; what is left is the kernel's seccomp
@@ -4876,9 +5329,11 @@ variable to drop the launcher's own. It reads the heads with one
 about a hundred calls in a desktop session, and reads a variable on
 its own when the batch cannot read it whole, at the end of a mapping.
 
-A spawn traps little: glibc 2.39's `posix_spawn` makes two trapping
-`rt_sigaction` calls and one trapping `rt_sigprocmask`, since queries
-of a signal action do not trap (7.5.5). 100 000 spawns from one process
+A spawn's traps are its child's dispositions: glibc's `posix_spawn`
+makes 59 trapping queries of a signal action, two trapping
+`rt_sigaction` installs and one trapping `rt_sigprocmask`; the queries
+add about 65 µs, 59 traps of 1.1 µs, to a spawn of `true` that costs
+0.86 to 0.98 ms (7.5.5, 7.5.7). 100 000 spawns from one process
 leave its RSS flat, +152 to +220 kB against +144 to +236 kB natively
 in two runs of `test/bench.py`, and the regression of 17 item 4 fails when 300 in a row grow the
 address space by more than 256 kB, where it measures no growth at all.
@@ -5216,8 +5671,19 @@ meaning items 4 and 7.
      trapping on stacks down to 2 KB and a thread on the least stack
      its libc allows (13 item 30), `pthread_cancel` and `pthread_exit`
      unwinding through a blocking trap, a deferred `pthread_cancel`
-     left blocked where the libc judges it by the program counter (13
-     item 58), Go's goroutines beside a collector, 64 threads trapping
+     of a thread blocked in a trapped open, which musl and glibc judge
+     by the counter in the frame, the frame a handler finds for a
+     signal that lands in a blocking trapped open with and without
+     `SA_RESTART`, outside any trap and in a rain on stats of a long
+     path, a handler that redirects a blocked call, one that changes
+     its mask in the frame, one that `siglongjmp`s out and one that
+     unwinds, installs from a `vfork` child and from two threads at
+     once, queries that report the mask and flags as written, an
+     ignored signal across `execve` and `SA_RESETHAND`, an unwind from
+     such a handler that runs the trap site's cleanup handlers and
+     destructors, the regression built from the measurement of that
+     layout (`test/progs/unwind_frame.c`), and a handler that blocks
+     `SIGSYS` in its frame (7.5.7, 13 items 20 and 58), Go's goroutines beside a collector, 64 threads trapping
      at once and threads trapping while
      another spawns, a descriptor-relative path looked up while its
      directory's parent is renamed, in both forms of the walk (16.6
@@ -5311,7 +5777,7 @@ meaning items 4 and 7.
    | races | threads trapping while another spawns; the scratch pool's sweep |
    | symbolic links | item 2's mazes; the probe's link forms |
    | relative paths and the working directory | the working-directory launches; `PATH_MAX` past the working directory |
-   | signals | the `SA_ONSTACK`, FIFO, `SIGINT` and `siglongjmp` cases |
+   | signals | the `SA_ONSTACK`, FIFO, `SIGINT` and `siglongjmp` cases; the frame a handler finds during a trap (`sigframe`) |
    | threads | 64 threads; Go's goroutines |
    | descriptor manipulation | `fexecve`, `memfd`, `openat2` from descriptors |
    | argument copying | unbounded and faulty vectors; bad pointers |
@@ -6106,7 +6572,7 @@ specified.
   boundary (7.4.2).
 - **`clone3` is refused with `ENOSYS`**: honouring it means copying the
   signal frame and its FPU save area for the child, a dependence on the
-  kernel's frame layout on both architectures, to save a few traps per
+  kernel's frame layout on both architectures, to save some sixty traps per
   spawn (7.5.5). A flag only `clone3` offers, which a library came to
   need and so dropped its fallback to `clone`, would reopen it.
 - **A program's own seccomp filter is honoured by the kernel, through a
@@ -6121,8 +6587,22 @@ specified.
   weaker than natively for the program's own calls, and what cannot be
   honoured fails visibly at install; it does not contain code that
   jumps through the page (7.4.2, 13 item 5).
-- **A program's `rt_sigaction` install traps; its queries do not**
-  (7.5.2).
+- **A program's handlers are installed behind the launcher's
+  trampolines, and every `rt_sigaction` traps**: a handler whose signal
+  lands during a trapped call finds the trap site's frame, and what it
+  decides there, a redirect, a mask, is what the program does; a query
+  reports the action as written. It is the handler doing one more of
+  the kernel's jobs, building the frame a handler sees, not a second
+  mechanism. The handler is called from the syscall page with its
+  return address at the restorer's own instructions and a frame of the
+  kernel's layout above it, so that unwinders and gdb walk from it into
+  the program's frames, and the filter answers that one `rt_sigreturn`
+  with an error so that the return comes back to the trampoline, which
+  ends the launcher's call as the kernel and the handler decided and
+  returns through the kernel's frame as the shadow stack expects. The
+  floating-point state is the program's, by pointer on x86-64 and by
+  the records' own lengths on aarch64, so nothing ties the launcher to
+  a save area's layout (7.5.7, 14.3, 13 item 58).
 - **Handler memory comes from scratch chunks reclaimed by liveness,
   with no lock and a stack budget**: the handler runs on whatever
   alternate stack a program set up (7.5.4).

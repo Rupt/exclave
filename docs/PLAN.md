@@ -99,16 +99,15 @@ documents, gate, one commit per item. Status is in brackets.
    tests asserting glibc's wording, stack minimum and `raise` are fixed,
    and the suite passes on every kind. The fifth failure was a launcher
    limitation, now 13 item 58.
-11. **A program handler's view of a trapped call** [design in progress]:
-    the signal frame a program's handler sees during a re-issued call
-    carries the launcher's program counter, so a libc that judges
-    cancellation by it leaves the thread blocked (13 item 58). Before the
-    release, by the user's decision, since the change traps `rt_sigaction`
-    queries and so moves the page generation: a trampoline the launcher
-    installs in each handler's place presents the trap site's frame and
-    carries a redirect back, queries answer from the launcher's table
-    (resolving item 20), the FPU state stays the launcher's in that frame.
-    Design, fresh review, implementation, reviews, as item 5 went.
+11. **A program handler's view of a trapped call** [implemented, under
+    review]: a program's handlers are installed behind trampolines that
+    present the trap site's frame, a frame of the kernel's layout from the
+    page's handler-call slot so that unwinders walk into the program's
+    frames, and carry what the handler decides back into the trapped call;
+    every `rt_sigaction` traps, queries answering as written (13 item 20);
+    filter version 11, the page generation unchanged (7.5.7). A deferred
+    `pthread_cancel` of a thread blocked in a trapped open now acts on musl
+    and glibc 2.41. The aarch64 path awaits the arm64 row.
 10. **The positional entry's spellings** [done]: `.exclave/launcher
     ./PATH`, `../PATH` and a host symlink to a wrapper die with
     "cannot exec the wrapper" where the absolute spelling ran: the walk of the spelling overwrote the
