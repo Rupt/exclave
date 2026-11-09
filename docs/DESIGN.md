@@ -4073,7 +4073,10 @@ and stay fixed.
     another. The old action an install replaces reports the handler and
     the mask as the program wrote them, but for the default or ignored
     installed with a mask that held `SIGSYS`, and a handler past the 256
-    slots, which no slot keeps. A handler
+    slots, which no slot keeps. An install of an address among the stubs
+    that is no published slot's is refused with `EINVAL`, where the
+    kernel would install it: a program reaches such an address only by
+    computing it, a query handing out published stubs alone. A handler
     whose signal lands outside any trap and that blocks `SIGSYS` in its
     own frame, as a `sigfillset` on `uc_sigmask` does, returns through
     the program's restorer unseen, and the process is killed at its next

@@ -1020,6 +1020,8 @@ static long do_sigaction(struct scratch *S, long *a)
         /* a handler, behind its slot's trampoline (7.5.7); a stub's own address is its slot's handler */
         long i = tramp_slot_of(k[0]);
         if (i >= 0) k[0] = (unsigned long)exclave_slots[i].h;
+        /* an address among the stubs that is no published slot's: a delivery there would find no handler */
+        else if (k[0] - (unsigned long)exclave_stubs < TRAMP_SLOTS * TRAMP_STUB) return -EINVAL;
         if (k[0] > 1) {
             /* the stub tells a delivery from a call by the restorer installed with it, so one is always installed:
              * the program's, or on aarch64 where it gives none the launcher's, where the kernel would use the vDSO's */
