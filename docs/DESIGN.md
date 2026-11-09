@@ -5225,7 +5225,9 @@ proves it allowed; natively that filter takes it from 46 to 50 ns to 54
 to 57, the seccomp entry any first filter costs.
 
 **What a small compile traps.** `gcc -O0 hello.c` through an exclave
-makes about 1 250 traps. 746 of them are `readlink`, almost all
+makes about 900 traps from a working directory nine deep, with
+`TMPDIR` the checkout's `build/tmp` (16.8), counted by `EXCLAVE_LOG`.
+335 of them are `readlink`, almost all
 answered `EINVAL` on a directory: glibc's `realpath` reads every
 component of a path as a link, so a path *n* deep costs *n* traps, and
 each trap walks the path again. This is why `realpath` is the most
