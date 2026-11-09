@@ -369,6 +369,7 @@ PROGRAMS = (
     "sigrain",
     "sigstack",
     "clones",
+    "sigframe",
     "memfd_exec",
     "seccomp_filter",
 )
@@ -432,6 +433,8 @@ def judge(name: str, rc: int, out: str, hostdir: str, root: str) -> list[str]:
         wrong = kernel_answers.sigstack_wrong(out, by_the_kernel=True)
     elif name == "clones":
         wrong = kernel_answers.clones_wrong(out, by_the_kernel=True)
+    elif name == "sigframe":
+        wrong = kernel_answers.sigframe_wrong(out)
     elif name == "seccomp_filter":
         wrong = kernel_answers.seccomp_filter_wrong(out, by_the_kernel=True)
     else:
@@ -510,6 +513,7 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
         "sigrain": f"mkdir -p {hostdir}/sigrain && {work}/sigrain {hostdir}/sigrain",
         "sigstack": f"{work}/sigstack",
         "clones": f"mkdir -p {hostdir}/clones && {work}/clones {hostdir}/clones",
+        "sigframe": f"mkdir -p {hostdir}/sigframe && {work}/sigframe {hostdir}/sigframe",
         "seccomp_filter": f"mkdir -p {hostdir}/seccomp && {work}/seccomp_filter {hostdir}/seccomp",
     }
     fails = 0

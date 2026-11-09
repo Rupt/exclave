@@ -462,6 +462,7 @@ PROGS = (
     "sigrain",
     "sigstack",
     "clones",
+    "sigframe",
     "threads",
     "spawn",
     "exec",

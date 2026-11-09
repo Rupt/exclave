@@ -6,7 +6,7 @@ two outputs side by side, marking the lines that differ. This is how a limitatio
 before it is fixed: the program prints one line per case, "<case>: <answer>", and the kernel's
 column is the expectation.
 
-    scripts/exercise --exclave EXCLAVE PROG.c [ARGS...]
+    scripts/exercise --exclave EXCLAVE [--cflag FLAG...] PROG.c [ARGS...]
 
 HOSTDIR in ARGS is replaced by a fresh writable host directory.
 
@@ -53,6 +53,12 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--exclave", required=True)
+    ap.add_argument(
+        "--cflag",
+        action="append",
+        default=[],
+        help="a flag for the compile, as -fexceptions for unwind_frame.c; repeatable",
+    )
     ap.add_argument("prog", help="a C source, compiled with the exclave's compiler")
     ap.add_argument(
         "args", nargs="*", help="arguments; HOSTDIR is replaced by a fresh writable host directory"
@@ -85,7 +91,7 @@ def main() -> int:
     gcc = os.path.join(r, tree.vbin(r, sp.gcc).lstrip("/"))
     prog = os.path.join(work, os.path.basename(args.prog).rsplit(".", 1)[0])
     p = subprocess.run(
-        [gcc, "-O1", "-o", prog, os.path.abspath(args.prog)],
+        [gcc, "-O1", *args.cflag, "-o", prog, os.path.abspath(args.prog)],
         cwd=work,
         env={"PATH": "/usr/bin:/bin"},
         stdout=subprocess.PIPE,

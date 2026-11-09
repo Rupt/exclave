@@ -414,7 +414,9 @@ def nested_older_launcher(ctx: Ctx) -> str | None:
     launcher built at filter version 3, without version 4's bind and connect in its filter or
     handler (scripts/build builds it beside build/launcher). Across the syscall page's move (filter
     version 6) neither direction can run, and each is refused by name: this launcher under a filter
-    older than 6, and a launcher whose note has the old page generation exec'd from inside.
+    older than 6, and a launcher whose note has the old page generation exec'd from inside. A
+    query of a signal action, which version 11 traps, the older handler re-issues, and the
+    kernel's answer names the handler the program installed (6.7).
     """
     old = os.path.join(os.path.dirname(ctx.launcher_src), "launcher-old")
     if not os.path.exists(old):
@@ -424,18 +426,22 @@ def nested_older_launcher(ctx: Ctx) -> str | None:
     with open(src, "w") as f:  # a bind at a fresh host path: 0 from the kernel
         f.write(
             "#include <stdio.h>\n#include <errno.h>\n#include <string.h>\n#include <unistd.h>\n"
-            "#include <sys/socket.h>\n#include <sys/un.h>\n"
+            "#include <signal.h>\n#include <sys/socket.h>\n#include <sys/un.h>\n"
+            "static void h(int s) { (void)s; }\n"
             "int main(void) { struct sockaddr_un a; memset(&a, 0, sizeof a); "
             'a.sun_family = AF_UNIX; strncpy(a.sun_path, "@PATH@", sizeof a.sun_path - 1);\n'
             ' int s = socket(AF_UNIX, SOCK_STREAM, 0); unlink("@PATH@"); '
             "long r = bind(s, (struct sockaddr *)&a, sizeof a);\n"
-            ' printf("%d %d\\n", r < 0 ? -1 : 0, r < 0 ? errno : 0); unlink("@PATH@"); '
+            " int e = errno; struct sigaction n, o; memset(&n, 0, sizeof n); n.sa_handler = h; "
+            "sigaction(SIGUSR1, &n, 0); sigaction(SIGUSR1, 0, &o);\n"
+            ' printf("%d %d %d\\n", r < 0 ? -1 : 0, r < 0 ? e : 0, o.sa_handler == h); '
+            'unlink("@PATH@"); '
             "return 0; }\n".replace("@PATH@", sock)
         )
     prog = os.path.join(ctx.work, "nb")
     rc, out, err = run([wrapper(ctx, ctx.gcc), "-O0", "-o", prog, src], cwd=ctx.work, env=ctx.env)
     expect(rc == 0, "compile: " + err)
-    kernel = "0 0\n"
+    kernel = "0 0 1\n"
     rc, outer, err = run([wrapper(ctx, "sh"), "-c", prog], cwd=ctx.work, env=ctx.env)
     expect(
         rc == 0 and outer == kernel,
@@ -452,9 +458,9 @@ def nested_older_launcher(ctx: Ctx) -> str | None:
         env=dict(ctx.env, EXCLAVE_LOG=log),
     )
     expect(
-        rc == 0 and inner == "-1 38\n",
+        rc == 0 and inner == "-1 38 1\n",
         "the older launcher nested in the newer one answers ENOSYS (38) for the trap it does not "
-        f"know: {inner!r} {err!r}",
+        f"know, and the query of an action rightly: {inner!r} {err!r}",
     )
     text = read_text(log)
     expect(

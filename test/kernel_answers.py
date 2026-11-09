@@ -596,24 +596,15 @@ CLONES = (
 )
 
 
-# a deferred cancellation that the blocked open does not act on, ended by the exerciser's writer
-CLONES_CANCEL_LATE = (
-    "pthread_cancel in a blocking trapped open: cancelled once a writer released the open"
-)
-
-
-def clones_wrong(
-    out: str, *, by_the_kernel: bool = False, cancel_by_counter: bool = False
-) -> list[str]:
+def clones_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     """The lines of clones's output that differ from the kernel's answers.
 
     by_the_kernel: the kernel itself answered. Otherwise the launcher did, and a clone(CLONE_VM)
     child trapping on a 4 KB or 2 KB stack is its stated limitation (13 item 30), 8 KB too where
     the kernel's frame passes 3.5 KB; so is a thread on the least stack its libc allows where that
-    is as small, musl's 2 KB, a death reported with the stack's size. cancel_by_counter: the
-    tree's libc judges a cancellation by the interrupted program counter, as musl and a glibc
-    with __syscall_cancel_arch_start do, and a deferred cancellation leaves a blocked trapped open
-    blocked until a writer releases it (13 item 58).
+    is as small, musl's 2 KB, a death reported with the stack's size. A deferred cancellation of a
+    thread blocked in a trapped open is acted on, the trampoline presenting the trap site's frame
+    to the libc's cancellation handler (7.5.7).
     """
     got = out.splitlines()
     wrong = []
@@ -627,8 +618,6 @@ def clones_wrong(
             and ("4 KB" in case or "2 KB" in case or minsigstksz() > 3500)
         ):
             continue
-        if not by_the_kernel and cancel_by_counter and g == CLONES_CANCEL_LATE:
-            continue
         least = re.fullmatch(
             r"thread with the least stack, 100 traps: killed by .* on (\d+) bytes", g
         )
@@ -639,6 +628,89 @@ def clones_wrong(
         wrong.append(f"got {g!r}, the kernel says {w!r}")
     if len(got) != len(CLONES):
         wrong.append(f"{len(got)} lines, the kernel gives {len(CLONES)}")
+    return wrong
+
+
+# sigframe HOSTDIR: what a program's handler finds in its frame and decides there (7.5.7); a line
+# that differs by architecture gives its answers by machine
+SIGFRAME: tuple[str | dict[str, str] | None, ...] = (
+    "blocking open, SA_RESTART: counter at the syscall instruction",
+    {
+        "x86_64": "blocking open, SA_RESTART: result register the syscall number",
+        "aarch64": "blocking open, SA_RESTART: result register the first argument",
+    },
+    "blocking open, SA_RESTART: stack pointer the program's",
+    "blocking open, SA_RESTART: marked register the value set",
+    "blocking open, SA_RESTART: signal mask the program's",
+    "blocking open, SA_RESTART: floating-point state present, the vector register as set",
+    "blocking open, SA_RESTART: the open returned a descriptor",
+    "blocking open, no SA_RESTART: counter after the syscall instruction",
+    "blocking open, no SA_RESTART: result register -EINTR",
+    "blocking open, no SA_RESTART: stack pointer the program's",
+    "blocking open, no SA_RESTART: marked register the value set",
+    "blocking open, no SA_RESTART: signal mask the program's",
+    "blocking open, no SA_RESTART: floating-point state present, the vector register as set",
+    "blocking open, no SA_RESTART: the open failed with EINTR",
+    "outside a trap: counter in the loop",
+    None,  # the result register in the loop: whatever the compiler left there
+    "outside a trap: stack pointer the program's",
+    "outside a trap: marked register the value set",
+    "outside a trap: signal mask the program's",
+    "outside a trap: floating-point state present, the vector register as set",
+    "stats of a long path under a rain: every stat answered",
+    "stats of a long path under a rain: landings outside the program and its libraries none",
+    (
+        "stats of a long path under a rain: at the syscall instruction or after it, the program's "
+        "registers and the stat's result"
+    ),
+    "stats of a long path under a rain: signal mask the program's at every landing",
+    "query of an installed action: handler the program's, mask as written, flags as written",
+    "query of an ignored signal: ignored",
+    "query of a signal never installed: default",
+    "a handler that moves the counter: the thread went where it was sent",
+    "a handler that blocks SIGUSR2 in its frame: open EINTR, SIGUSR2 blocked",
+    "a handler that blocks every signal in its frame, then a trap: open EINTR, stat ok",
+    "a handler that siglongjmps out: back, stat ok",
+    "installs from two threads at once: the last installed",
+    "an install in a vfork child: the parent's action unchanged",
+    "SA_RESETHAND: the handler ran, then default",
+    "a bad oldact: EFAULT, the new action in force",
+    "an ignored signal queried after execve: ignored",
+)
+
+
+def sigframe_wrong(out: str) -> list[str]:
+    """The lines of sigframe's output that differ from the kernel's answers."""
+    got = out.splitlines()
+    wrong = []
+    for g, w in zip(got, SIGFRAME, strict=False):
+        if w is None:
+            continue
+        want = w[platform.machine()] if isinstance(w, dict) else w
+        if g != want:
+            wrong.append(f"got {g!r}, the kernel says {want!r}")
+    if len(got) != len(SIGFRAME):
+        wrong.append(f"{len(got)} lines, the kernel gives {len(SIGFRAME)}")
+    return wrong
+
+
+# unwind_frame HOSTDIR, built with -fexceptions: an unwind from a handler during a trapped call
+# walks into the program's frames (7.5.7)
+UNWIND_FRAME = (
+    "pthread_cancel in a blocking trapped open: cancelled, the cleanup handler ran",
+    "a forced unwind from a handler during a trapped open: cleanup end",
+)
+# on musl, whose restorer libgcc's unwind does not step through to the caller, natively too
+UNWIND_FRAME_MUSL = "a forced unwind from a handler during a trapped open: end"
+
+
+def unwind_frame_wrong(out: str, *, musl: bool = False) -> list[str]:
+    """The lines of unwind_frame's output that differ from the kernel's answers."""
+    got = out.splitlines()
+    want = (UNWIND_FRAME[0], UNWIND_FRAME_MUSL) if musl else UNWIND_FRAME
+    wrong = [f"got {g!r}, the kernel says {w!r}" for g, w in zip(got, want, strict=False) if g != w]
+    if len(got) != len(UNWIND_FRAME):
+        wrong.append(f"{len(got)} lines, the kernel gives {len(UNWIND_FRAME)}")
     return wrong
 
 

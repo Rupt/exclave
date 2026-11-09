@@ -11,7 +11,7 @@ import subprocess
 import kernel_answers
 import tree
 from harness import expect, run, skip, test
-from suite import REPO, Ctx, inside
+from suite import REPO, Ctx, inside, wrapper
 
 
 @test
@@ -83,21 +83,6 @@ def alternate_stacks(ctx: Ctx) -> str:
     return "a handler trapping on 6 KB: " + (small[0] if small else "?")
 
 
-def cancel_by_counter(root: str) -> bool:
-    """The tree's libc judges a cancellation by the interrupted program counter (13 item 58).
-
-    musl always has; glibc where its libc.so.6 carries the __syscall_cancel_arch_start marker.
-    """
-    v = tree.libc(root, platform.machine())
-    if not v.endswith("libc.so.6"):
-        return True
-    p = tree.payload(root, tree.resolve(root, v))
-    if not os.path.isfile(p):
-        return False
-    with open(p, "rb") as f:
-        return b"__syscall_cancel_arch_start" in f.read()
-
-
 @test
 def clones_trapping(ctx: Ctx) -> None:
     """7.5.4, 7.5.5: threads and clones trapping.
@@ -108,9 +93,9 @@ def clones_trapping(ctx: Ctx) -> None:
     core-dumping death takes every process sharing its memory; a thread with a 16 KB stack and
     one with the least its libc allows, killed on musl's 2 KB (13 item 30); 64 threads trapping
     while the main thread sends each a SIGUSR1 whose handler traps; pthread_cancel of a thread
-    blocked in a trapped open, left blocked where the libc judges a cancellation by the program
-    counter (13 item 58), and of one looping over traps with asynchronous cancellation, which
-    unwind through the launcher's frames; a sibling exiting while a trap blocks; exit_group and
+    blocked in a trapped open, which the libc judges by the counter the trampoline presents
+    (7.5.7), and of one looping over traps with asynchronous cancellation; a sibling exiting while
+    a trap blocks; exit_group and
     pthread_exit from a handler that interrupted a blocking trap. The kernel's answers
     (test/kernel_answers.py), confirmed under bwrap by the namespace oracle.
     """
@@ -118,7 +103,61 @@ def clones_trapping(ctx: Ctx) -> None:
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "clones"), [d], timeout=60)
-    wrong = kernel_answers.clones_wrong(out, cancel_by_counter=cancel_by_counter(ctx.tree))
+    wrong = kernel_answers.clones_wrong(out)
+    if wrong:
+        wrong.append(f"rc {rc}, output {out!r}, stderr {err!r}")
+    expect(rc == 0 and not wrong, "\n".join(wrong) + err)
+
+
+@test
+def signal_frames(ctx: Ctx) -> None:
+    """7.5.7: what a program's handler finds in its frame when its signal lands during a trap.
+
+    A sibling's signal to a thread blocked in a trapped open of a FIFO, with SA_RESTART and
+    without: the counter at the syscall instruction or after it as the kernel left the call, the
+    stack pointer, a callee-saved and a vector register the program set, the mask; the same
+    outside any trap; a rain of signals on stats of a long path, none landing in the launcher;
+    queries that report the mask and flags as written (13 item 20); handlers that move the
+    counter, block a signal or every signal in their frame, or siglongjmp out; installs from two
+    threads at once and from a vfork child, SA_RESETHAND, a bad oldact and an ignored signal
+    across execve. The kernel's answers (test/kernel_answers.py), confirmed under bwrap by the
+    namespace oracle.
+    """
+    d = os.path.join(ctx.work, f"hostdir-sigframe-{os.getpid()}")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(ctx, os.path.join(ctx.progs, "sigframe"), [d], timeout=60)
+    wrong = kernel_answers.sigframe_wrong(out)
+    if wrong:
+        wrong.append(f"rc {rc}, output {out!r}, stderr {err!r}")
+    expect(rc == 0 and not wrong, "\n".join(wrong) + err)
+
+
+@test
+def unwind_through_frames(ctx: Ctx) -> None:
+    """7.5.7, 13 item 58: an unwind from a handler during a trapped call reaches the trap site.
+
+    Built with -fexceptions, as Fedora builds C: a deferred pthread_cancel of a thread blocked in
+    a trapped open runs the cleanup handler it pushed, which glibc's cancellation reaches by
+    unwinding from its handler through the frame the trampoline presents; and a forced unwind of
+    libgcc's from a handler for a signal landing in such an open runs a caller's cleanup on its
+    way to the end of the stack, the measurement of 7.5.7 as a test.
+    """
+    exe = os.path.join(ctx.work, f"unwind_frame-{os.getpid()}")
+    src = os.path.join(ctx.work, "src", "unwind_frame.c")
+    rc, out, err = run(
+        [wrapper(ctx, ctx.gcc), "-O1", "-g", "-fexceptions", "-pthread", "-o", exe, src],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    if rc:
+        skip(f"unwind_frame.c does not build here: {err.strip()[-200:]}")
+    d = os.path.join(ctx.work, f"hostdir-unwind-{os.getpid()}")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    rc, out, err = inside(ctx, exe, [d], timeout=60)
+    musl = not tree.libc(ctx.tree, platform.machine()).endswith("libc.so.6")
+    wrong = kernel_answers.unwind_frame_wrong(out, musl=musl)
     if wrong:
         wrong.append(f"rc {rc}, output {out!r}, stderr {err!r}")
     expect(rc == 0 and not wrong, "\n".join(wrong) + err)
