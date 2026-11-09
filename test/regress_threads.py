@@ -150,8 +150,9 @@ def unwind_through_frames(ctx: Ctx) -> None:
         cwd=ctx.work,
         env=ctx.env,
     )
-    if rc:
-        skip(f"unwind_frame.c does not build here: {err.strip()[-200:]}")
+    if rc and "-fexceptions" in err:
+        skip(f"the exclave's compiler takes no -fexceptions: {err.strip()[-200:]}")
+    expect(rc == 0, f"unwind_frame.c does not build: {err.strip()[-400:]}")
     d = os.path.join(ctx.work, f"hostdir-unwind-{os.getpid()}")
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)

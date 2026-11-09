@@ -370,6 +370,7 @@ PROGRAMS = (
     "sigstack",
     "clones",
     "sigframe",
+    "unwind_frame",
     "memfd_exec",
     "seccomp_filter",
 )
@@ -435,6 +436,9 @@ def judge(name: str, rc: int, out: str, hostdir: str, root: str) -> list[str]:
         wrong = kernel_answers.clones_wrong(out, by_the_kernel=True)
     elif name == "sigframe":
         wrong = kernel_answers.sigframe_wrong(out)
+    elif name == "unwind_frame":
+        musl = not tree.libc(root, platform.machine()).endswith("libc.so.6")
+        wrong = kernel_answers.unwind_frame_wrong(out, musl=musl)
     elif name == "seccomp_filter":
         wrong = kernel_answers.seccomp_filter_wrong(out, by_the_kernel=True)
     else:
@@ -448,15 +452,22 @@ def judge(name: str, rc: int, out: str, hostdir: str, root: str) -> list[str]:
 def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> int:
     """Run PROGRAMS under bwrap, where the kernel answers, and judge them; the number that fail.
 
-    Each is compiled with the exclave's compiler and run with the arguments the suite gives it; a
-    program says nothing on stderr.
+    Each is compiled with the exclave's compiler and run with the arguments the suite gives it,
+    unwind_frame with -fexceptions as its test builds it; a program says nothing on stderr.
     """
     tr = os.path.join(ex, "tree")
     gcc = os.path.join(tr, tree.vbin(tr, sp.gcc).lstrip("/"))
 
     def build(name: str) -> str | None:
         r = subprocess.run(
-            [gcc, "-O1", "-o", os.path.join(work, name), os.path.join(HERE, "progs", name + ".c")],
+            [
+                gcc,
+                "-O1",
+                *(["-fexceptions"] if name == "unwind_frame" else []),
+                "-o",
+                os.path.join(work, name),
+                os.path.join(HERE, "progs", name + ".c"),
+            ],
             cwd=work,
             env={"PATH": "/usr/bin:/bin"},
             capture_output=True,
@@ -514,6 +525,7 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
         "sigstack": f"{work}/sigstack",
         "clones": f"mkdir -p {hostdir}/clones && {work}/clones {hostdir}/clones",
         "sigframe": f"mkdir -p {hostdir}/sigframe && {work}/sigframe {hostdir}/sigframe",
+        "unwind_frame": f"mkdir -p {hostdir}/unwind && {work}/unwind_frame {hostdir}/unwind",
         "seccomp_filter": f"mkdir -p {hostdir}/seccomp && {work}/seccomp_filter {hostdir}/seccomp",
     }
     fails = 0

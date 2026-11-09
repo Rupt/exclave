@@ -700,7 +700,8 @@ UNWIND_FRAME = (
     "pthread_cancel in a blocking trapped open: cancelled, the cleanup handler ran",
     "a forced unwind from a handler during a trapped open: cleanup end",
 )
-# on musl, whose restorer libgcc's unwind does not step through to the caller, natively too
+# on musl natively too: libgcc steps through its restorer, whose bytes it knows, but stops at
+# __syscall_cp_asm, which carries no unwind information
 UNWIND_FRAME_MUSL = "a forced unwind from a handler during a trapped open: end"
 
 
