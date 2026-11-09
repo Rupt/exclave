@@ -667,6 +667,7 @@ SIGFRAME: tuple[str | dict[str, str] | None, ...] = (
     "query of an installed action: handler the program's, mask as written, flags as written",
     "the action an install replaces: handler the program's, mask as written",
     "a handler called by another through the action a query returned: ran with the arguments given",
+    "a handler whose sibling call reaches the action a query returned: ran",
     "query of an ignored signal: ignored",
     "query of a signal never installed: default",
     "a handler that moves the counter: the thread went where it was sent",

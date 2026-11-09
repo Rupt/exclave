@@ -2216,7 +2216,14 @@ tells a delivery from a call by its return address, the word at the
 stack pointer on x86-64 and `x30` on aarch64, which a delivery sets to
 that restorer: equal, the trampoline runs as above; different, it jumps
 to the program's handler with the arguments and the return address as
-given, so the handler runs as if called directly.
+given, so the handler runs as if called directly. A handler the kernel
+delivered to that ends in a sibling call to a stub, a jump with its
+return address still the restorer, is taken for that same delivery, as
+natively it continues it: the trampoline reads the frame from the stack
+pointer, as the kernel lays it out, the restorer's address and then the
+`ucontext` on x86-64 and the `siginfo` and then the `ucontext` on
+aarch64, never from the argument registers, which the handler may have
+used.
 
 **What it costs.** Outside a trapped call, a few instructions per
 signal, and no stack but, on aarch64, one 16-byte slot for a register

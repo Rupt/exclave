@@ -334,6 +334,9 @@ __asm__(".section exclave_tramp,\"ax\",@progbits\n"
         "  je 0f\n"
         "  jmp *(%rax)\n"
         "0:\n"
+        /* a delivery: the frame from the stack pointer, as the kernel lays rt_sigframe out, its restorer's address
+         * then the ucontext, not from rdx, which a handler ending in a sibling call to this stub leaves as it likes */
+        "  lea 8(%rsp), %rdx\n"
         "  mov 168(%rdx), %rax\n" /* the interrupted rip */
         "  lea exclave_stubs(%rip), %rcx\n"
         "  sub %rcx, %rax\n"

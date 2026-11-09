@@ -394,6 +394,23 @@ static void on_second(int sig, siginfo_t *si, void *uc)
     chain_si = si;
     first(sig, si, uc);
 }
+/* a handler that ends in a sibling call to the one a query returned, its third argument register left clobbered, as
+ * a compiler's tail call may leave it: written in assembly, since the suite builds at -O1 */
+void (*sf_sibling_to)(int, siginfo_t *, void *);
+void sf_sibling(int, siginfo_t *, void *);
+static volatile int sibling_sig;
+static void on_sibling_target(int sig, siginfo_t *si, void *uc)
+{
+    (void)si;
+    (void)uc;
+    sibling_sig = sig;
+}
+#if defined(__x86_64__)
+__asm__(".text\n.globl sf_sibling\nsf_sibling:\n  mov sf_sibling_to(%rip), %rax\n  mov $12345, %edx\n  jmp *%rax\n");
+#elif defined(__aarch64__)
+__asm__(".text\n.globl sf_sibling\nsf_sibling:\n  adrp x16, sf_sibling_to\n  ldr x16, [x16, :lo12:sf_sibling_to]\n"
+        "  mov x2, #12345\n  br x16\n");
+#endif
 static void *installs(void *arg)
 {
     struct sigaction a;
@@ -555,6 +572,13 @@ int main(int argc, char **argv)
         raise(SIGUSR2);
         printf("a handler called by another through the action a query returned: %s\n",
                chain_sig == SIGUSR2 && chain_same ? "ran with the arguments given" : "did not");
+        install(SIGUSR2, on_sibling_target, 0);
+        sigaction(SIGUSR2, 0, &q);
+        sf_sibling_to = q.sa_sigaction;
+        install(SIGUSR2, sf_sibling, 0);
+        raise(SIGUSR2);
+        printf("a handler whose sibling call reaches the action a query returned: %s\n",
+               sibling_sig == SIGUSR2 ? "ran" : "did not run");
         signal(SIGUSR2, SIG_IGN);
         memset(&old, 0, sizeof old);
         sigaction(SIGUSR2, 0, &old);
