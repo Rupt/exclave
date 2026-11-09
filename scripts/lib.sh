@@ -159,8 +159,9 @@ launcher_cc() {
     # without cgo keeps its g there and its signal handler reads it as it finds
     # it, in the middle of the launcher's handler too (7.5.3); x18 never
     # touched, where a shadow call stack keeps its pointer; x27 holds the
-    # trap's record (7.5.7)
-    aarch64) set -- -mgeneral-regs-only -mno-outline-atomics -ffixed-x28 -ffixed-x18 -ffixed-x27 "$@" ;;
+    # trap's record (7.5.7); no BTI property, whatever the compiler's
+    # default, since the trampolines' stubs carry no landing instruction
+    aarch64) set -- -mgeneral-regs-only -mno-outline-atomics -ffixed-x28 -ffixed-x18 -ffixed-x27 -mbranch-protection=none "$@" ;;
     esac
     c_compile "$compiler" -O2 -g -nostdlib -nostartfiles -ffreestanding -fno-stack-protector -fno-builtin -fno-strict-aliasing \
         -fPIC -fvisibility=hidden -fno-plt -fno-asynchronous-unwind-tables -fno-tree-loop-distribute-patterns "$@"
