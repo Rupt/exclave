@@ -18,19 +18,22 @@
 struct tramp_slot exclave_slots[TRAMP_SLOTS];
 static unsigned nslots;
 
-/* The stub for the program's handler h with mask: a slot holding both is reused; another is claimed by a
- * compare-and-swap bounded at TRAMP_SLOTS, its mask written first and the handler published last, with release order,
- * so that a reader acquiring a handler finds its mask. With none left, h itself. */
-unsigned long tramp_stub_for(unsigned long h, unsigned long mask)
+/* The stub for the program's handler h with its mask and installed restorer: a slot holding all three is reused;
+ * another is claimed by a compare-and-swap bounded at TRAMP_SLOTS, its fields written first and the handler published
+ * last, with release order, so that a reader acquiring a handler finds the rest. With none left, h itself. */
+unsigned long tramp_stub_for(unsigned long h, unsigned long mask, unsigned long restorer, unsigned long forced)
 {
     unsigned n = __atomic_load_n(&nslots, __ATOMIC_ACQUIRE);
     for (unsigned i = 0; i < n; i++)
-        if ((unsigned long)__atomic_load_n(&exclave_slots[i].h, __ATOMIC_ACQUIRE) == h && exclave_slots[i].mask == mask)
+        if ((unsigned long)__atomic_load_n(&exclave_slots[i].h, __ATOMIC_ACQUIRE) == h &&
+            exclave_slots[i].mask == mask && exclave_slots[i].restorer == restorer && exclave_slots[i].forced == forced)
             return (unsigned long)exclave_stubs + i * TRAMP_STUB;
     do
         if (n >= TRAMP_SLOTS) return h;
     while (!__atomic_compare_exchange_n(&nslots, &n, n + 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
     exclave_slots[n].mask = mask;
+    exclave_slots[n].restorer = restorer;
+    exclave_slots[n].forced = forced;
     __atomic_store_n(&exclave_slots[n].h, (void *)h, __ATOMIC_RELEASE);
     return (unsigned long)exclave_stubs + n * TRAMP_STUB;
 }
@@ -77,6 +80,8 @@ _Static_assert(__builtin_offsetof(struct trap, uc) == 8, "the record's frame, as
 _Static_assert(__builtin_offsetof(struct trap, answer) == 16, "the record's answer, as the re-issue slot names it");
 _Static_assert(__builtin_offsetof(struct trap, redirected) == 24, "the record's flag, as the re-issue slot names it");
 #define TRAMP_MAGIC 0x7472616d706f6c31UL
+_Static_assert(sizeof(struct tramp_slot) == 32, "a slot's size, the assembly's index shift of 5");
+_Static_assert(__builtin_offsetof(struct tramp_slot, restorer) == 16, "the restorer, as the stubs' compare reads it");
 _Static_assert(TRAMP_PRESENTED % 16 == 0 && TRAMP_BLOCK % 16 == 0, "the presented frame keeps the stack's alignment");
 
 /* gcc keeps the name the assembly calls, never a clone's; clang, which only checks this file, has no noclone */
@@ -318,6 +323,17 @@ __asm__(".section exclave_tramp,\"ax\",@progbits\n"
         "  .set exclave_stub_i, exclave_stub_i + 1\n"
         ".endr\n"
         "exclave_tramp_entry:\n"
+        /* a call, not a delivery: the return address is not the restorer installed with the stub, so the program's
+         * handler is called with the arguments and the return address as given */
+        "  mov %r11, %rax\n"
+        "  shl $5, %rax\n"
+        "  lea exclave_slots(%rip), %rcx\n"
+        "  add %rcx, %rax\n"
+        "  mov 16(%rax), %rcx\n"
+        "  cmp (%rsp), %rcx\n"
+        "  je 0f\n"
+        "  jmp *(%rax)\n"
+        "0:\n"
         "  mov 168(%rdx), %rax\n" /* the interrupted rip */
         "  lea exclave_stubs(%rip), %rcx\n"
         "  sub %rcx, %rax\n"
@@ -351,7 +367,7 @@ __asm__(".section exclave_tramp,\"ax\",@progbits\n"
         "2:\n"
         "  jmp exclave_tramp_slow\n"
         "3:\n"
-        "  shl $4, %r11\n"
+        "  shl $5, %r11\n"
         "  lea exclave_slots(%rip), %rax\n"
         "  mov (%rax,%r11), %rax\n"
         "  mov %rax, -8(%rsp)\n" /* below the stack pointer, where a nested frame starts 128 bytes lower */
@@ -413,6 +429,20 @@ __asm__(".section exclave_tramp,\"ax\",%progbits\n"
         "  .set exclave_stub_i, exclave_stub_i + 1\n"
         ".endr\n"
         "exclave_tramp_entry:\n"
+        /* a call, not a delivery: x30 is not the restorer installed with the stub, so the program's handler is called
+         * with the arguments and the return address as given */
+        "  adrp x17, exclave_slots\n"
+        "  add x17, x17, :lo12:exclave_slots\n"
+        "  add x17, x17, x16, lsl #5\n"
+        "  ldr x17, [x17, #16]\n"
+        "  cmp x17, x30\n"
+        "  b.eq 0f\n"
+        "  adrp x17, exclave_slots\n"
+        "  add x17, x17, :lo12:exclave_slots\n"
+        "  add x17, x17, x16, lsl #5\n"
+        "  ldr x16, [x17]\n"
+        "  br x16\n"
+        "0:\n"
         "  sub sp, sp, #16\n"
         "  str x15, [sp]\n"
         "  ldr x17, [sp, #584]\n" /* the interrupted pc: 16 + 128 + 440 */
@@ -457,7 +487,7 @@ __asm__(".section exclave_tramp,\"ax\",%progbits\n"
         "3:\n"
         "  adrp x15, exclave_slots\n"
         "  add x15, x15, :lo12:exclave_slots\n"
-        "  add x15, x15, x16, lsl #4\n"
+        "  add x15, x15, x16, lsl #5\n"
         "  ldr x16, [x15]\n"
         "  ldr x15, [sp]\n"
         "  add sp, sp, #16\n"

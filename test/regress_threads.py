@@ -117,7 +117,9 @@ def signal_frames(ctx: Ctx) -> None:
     without: the counter at the syscall instruction or after it as the kernel left the call, the
     stack pointer, a callee-saved and a vector register the program set, the mask; the same
     outside any trap; a rain of signals on stats of a long path, none landing in the launcher;
-    queries that report the mask and flags as written (13 item 20); handlers that move the
+    a query, which reports the launcher's installation, the stub as the handler (13 item 20),
+    the action an install replaces as the program wrote it, and a handler called by another
+    through the stub a query returned, which runs with the arguments given; handlers that move the
     counter, block a signal or every signal in their frame, or siglongjmp out; installs from two
     threads at once and from a vfork child, SA_RESETHAND, a bad oldact and an ignored signal
     across execve. The kernel's answers (test/kernel_answers.py), confirmed under bwrap by the
@@ -285,6 +287,54 @@ def go_paths(ctx: Ctx) -> str | None:
     for name, exe in exes:
         rc, out, err = inside(ctx, exe)
         expect(rc == 0 and "FAIL" not in out, f"{name}: {out}{err}")
+    return None
+
+
+@test
+def go_forwarding(ctx: Ctx) -> str | None:
+    """7.5.7, 13 item 20: Go forwards a fault in C code to the handler C installed first.
+
+    Go's runtime queries each action at its start and keeps a handler it finds there, which the
+    query, passing to the kernel, answers with the launcher's stub; on a fault in C code Go calls
+    the kept handler as a function, and the stub, called rather than delivered to, runs the C
+    handler with the signal and siginfo given. Built static with cgo by the host's go and gcc, run
+    inside as a host program; skips where they cannot build it.
+    """
+    go = tree.go_toolchain()
+    if not go:
+        skip("no go toolchain")
+    exe = os.path.join(ctx.progs, f"go_fwd-{os.getpid()}")
+    env = dict(
+        os.environ,
+        GOCACHE=os.path.join(REPO, "build", "gocache"),
+        GOPATH=os.path.join(ctx.work, "gopath"),
+        HOME=ctx.work,
+        GO111MODULE="off",
+        CGO_ENABLED="1",
+        GOFLAGS="",
+        GOTOOLCHAIN="local",
+    )
+    p = subprocess.run(
+        [
+            go,
+            "build",
+            "-ldflags",
+            "-linkmode external -extldflags -static",
+            "-o",
+            exe,
+            os.path.join(REPO, "test", "progs", "go_fwd.go"),
+        ],
+        cwd=ctx.work,
+        env=env,
+        capture_output=True,
+        timeout=600,
+        check=False,
+    )
+    if p.returncode:
+        skip("go with cgo cannot build a static program here: " + p.stderr.decode()[-200:])
+    rc, out, err = inside(ctx, exe)
+    want = "the C handler Go forwards to: ran with its signal and siginfo\n"
+    expect(rc == 0 and out == want, f"rc {rc}, {out!r} {err!r}")
     return None
 
 

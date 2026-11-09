@@ -804,10 +804,8 @@ The rules every version keeps:
 - **Within a version, only what an earlier reader passes over is
   added**: a log line of a new kind; a syscall the filter newly traps,
   which an older handler under a newer filter answers `ENOSYS`, so only
-  one whose `ENOSYS` a library falls back from (7.4.2), or one an older
-  handler already answers rightly, as every handler re-issues the
-  `rt_sigaction` query version 11 traps (7.4.2). A trap without
-  either moves the page generation instead, as does any change to the
+  one whose `ENOSYS` a library falls back from (7.4.2). A trap without
+  that fallback moves the page generation instead, as does any change to the
   layout of the page's handler-call slot, whose return's address the
   filter names (7.4.2), so that the two
   launchers refuse each other's nesting by name rather than an older
@@ -1179,8 +1177,8 @@ kernel judge each trapped call by it:
   instructions, the epilogue, 10, and two per distinct action left
   leave of 4 096 (13 item 5).
 
-**Argument checks.** `rt_sigaction` always traps, a query as well as
-an install (7.5.7). `rt_sigprocmask` and `rt_sigsuspend` always trap; `ppoll`,
+**Argument checks.** `rt_sigaction` traps only when it installs an
+action; a query passes to the kernel (7.5.7). `rt_sigprocmask` and `rt_sigsuspend` always trap; `ppoll`,
 `pselect6`, `epoll_pwait`, `epoll_pwait2` and `io_pgetevents` trap when
 they carry a mask. `ioctl` traps for `FS_IOC_SETFLAGS` and
 `FS_IOC_FSSETXATTR`, the `chattr` requests, and nothing else. `ptrace`
@@ -1238,15 +1236,10 @@ moves: 7 added the listings, `getdents64` and `getdents`,
 8 `fstat`, for a directory's `.real/` (8.3), 9
 `ptrace(PTRACE_TRACEME)`, for a `vfork` child's request (7.4.5), 10
 the judge slot and the installs of a program's own filter, which
-earlier versions refused in the filter, and 11 every `rt_sigaction`,
-the queries as well as the installs, which the trampolines need answered,
-and the error for an `rt_sigreturn` from the handler-call slot (7.5.7); a launcher's note carries its
-filter version as a second word from 10 on. The queries leave the page
-generation where it was: every handler of an earlier version already
-re-issues a query unchanged, the kernel's answer the right one in a
-process whose handlers it installed directly, so an earlier launcher
-under a version-11 filter answers them as before rather than `ENOSYS`
-(6.7). The filter names the handler-call slot's instruction pointer, so
+earlier versions refused in the filter, and 11 the page's handler-call
+and re-issue slots and the error for an `rt_sigreturn` from the
+handler-call slot (7.5.7); a launcher's note carries its
+filter version as a second word from 10 on. The filter names the handler-call slot's instruction pointer, so
 the slot's layout is fixed for the page generation, as the page's
 address is. `test/syscalls.py`
 records a digest of the set, the page and its judge slot each version
@@ -1261,8 +1254,7 @@ version 3, without `bind` and `connect`, which version 4 added, and
 without the judge slot's rule and the installs, which it refuses; the
 regression of 17 item 4 nests it inside the current launcher, where it
 answers `ENOSYS` for every trap a later version added, which version 3
-shows as well as any later one would, but for the query of an action,
-which it re-issues and the kernel answers.
+shows as well as any later one would.
 
 #### 7.4.3 Intercepted syscalls
 
@@ -1707,13 +1699,12 @@ frame the trampoline presented, before it reaches the trap's frame or
 the launcher's (7.5.7). `rt_sigtimedwait` and `signalfd` name signals to
 receive, not to block, and are left alone. The case is common: a
 program installs a handler with `sigfillset` on `sa_mask`, a textbook
-idiom, and touches a path inside it. A query of an action for a
-handler, `sigaction(sig, NULL, &old)`, still reports the mask the
-program wrote, which the launcher keeps in the handler's slot (7.5.7);
-the default or ignored, and a handler past the slots, keep none, and
-report the mask without `SIGSYS`; the mask in force while a handler
-runs, and a query of the thread's, lack `SIGSYS` whatever was written
-(13 item 20).
+idiom, and touches a path inside it. The old action an install
+replaces reports, for a handler, the mask the program wrote, which the
+launcher keeps in the handler's slot (7.5.7); a query of an action,
+which passes to the kernel, reports the mask without `SIGSYS`, as do
+the mask in force while a handler runs and a query of the thread's (13
+item 20).
 
 The handler checks `si_code == SYS_SECCOMP`. A `SIGSYS` sent by `kill`
 or `raise` restores the default disposition and re-raises, so the
@@ -1744,7 +1735,9 @@ namespace oracle confirms under `bwrap`.
 `rt_sigaction` on `SIGSYS` itself is accepted and ignored (13 item 23);
 its `oldact` and every query of it report the truth, the launcher's
 handler. Every other install puts a trampoline in the handler's place,
-and every query answers the action as the program wrote it (7.5.7). The frame is read at the offsets of the
+and its `oldact` reports the action it replaces as the program wrote it;
+a query, which does not trap, reports what the launcher installed
+(7.5.7). The frame is read at the offsets of the
 architecture, `uc_sigmask` at 296, the registers at 40 and the pointer
 to the floating-point save area at 224 on x86-64, `uc_sigmask` at 40
 and the registers at 184 on aarch64, where `x0` is both the first argument and the
@@ -1870,12 +1863,11 @@ leaving chunks with dead owners, make likely on two CPUs (13 item 44);
 `clone3` is refused with `ENOSYS` (7.4.2), so glibc, musl and Rust
 create threads and spawn children with `clone`, which is not trapped.
 glibc's `posix_spawn` fallback then resets the signal dispositions by
-hand in the child: it queries every signal, 59 queries, and installs
-only where the parent has a handler and for its own two internal
-signals. Every `rt_sigaction` traps (7.5.7), so that is the cost of
-refusing `clone3`: some sixty traps per `posix_spawn` on glibc, the
-queries, two installs and one `rt_sigprocmask` for a parent with no
-handlers; musl's child queries only the signals it has handlers for.
+hand in the child: it queries every signal, which does not trap, and
+installs only where the parent has a handler and for its own two
+internal signals, which traps (7.5.7). That is the cost of refusing
+`clone3`: a handful of traps per `posix_spawn`, two `rt_sigaction`s
+and one `rt_sigprocmask` for a parent with no handlers.
 What a spawn costs in all is the child launcher's start and the kernel's
 work behind it (16.4). Honouring `clone3` would mean copying the
 handler's signal frame onto the child's stack, and with it the FPU save
@@ -2198,18 +2190,33 @@ whose token the presented frame lacks, or on aarch64 with an
 `extra_context`, whose space the kernel requires right after the frame,
 where the kernel refuses it with `SIGSEGV`.
 
-**Queries.** Every `rt_sigaction` traps (7.4.2). The handler re-issues
-a query, or an install, with the launcher's own buffer for the old
-action: where the kernel's handler is a stub, the old action is the
-slot's handler and mask with the kernel's flags and restorer, which are
-the program's; otherwise it is the kernel's answer as it stands, the
-default, ignored, or the launcher's own handler for `SIGSYS` (13 item
-23). It is written to the program's buffer last, so a bad `oldact` is
-`EFAULT` with the new action in force, as `sys_rt_sigaction` leaves it.
-A signal never installed, or ignored across an `execve`, reports what
-the kernel says. A query names no path, and `EXCLAVE_LOG` logs none.
-A fast path for queries, ahead of the scratch claim, saved too little
-of a query's trap to be taken (16.2).
+**Queries and callable stubs.** An install traps; a query, an
+`rt_sigaction` with no new action, passes to the kernel (7.4.2), which
+answers with what the launcher installed: the stub as the handler, the
+program's flags, the restorer installed with the stub, and the mask
+without `SIGSYS` (13 item 20). An install's `oldact` is answered by the
+handler, re-issued with the launcher's own buffer: where the kernel's
+handler is a stub, the old action is the slot's handler and mask with
+the kernel's flags and restorer; otherwise the kernel's answer as it
+stands, the default, ignored, or the launcher's own handler for `SIGSYS`
+(13 item 23). It is written to the program's buffer last, so a bad
+`oldact` is `EFAULT` with the new action in force, as `sys_rt_sigaction`
+leaves it. An install of a stub, which a program can only have from a
+query, installs that stub's handler.
+
+So a stub can be called as a function: Go's runtime queries each action
+at its start, keeps a handler it finds, and on a fault in C code calls
+the kept handler with the signal, its `siginfo` and its context; a
+handler that queries an action before replacing it calls the old one
+the same way. The slot keeps the restorer installed with the stub, the
+program's, or on aarch64, where a program gives none and the kernel
+would use the vDSO's, the launcher's own, the page's restorer, with
+`SA_RESTORER` set for it and taken out again of an `oldact`. The stub
+tells a delivery from a call by its return address, the word at the
+stack pointer on x86-64 and `x30` on aarch64, which a delivery sets to
+that restorer: equal, the trampoline runs as above; different, it jumps
+to the program's handler with the arguments and the return address as
+given, so the handler runs as if called directly.
 
 **What it costs.** Outside a trapped call, a few instructions per
 signal, and no stack but, on aarch64, one 16-byte slot for a register
@@ -2217,12 +2224,12 @@ it saves. Inside one, the presented frame and the block
 above it, the copies and the comparison. On every trap, the record's
 four words, the re-issue slot's check, the entry stub's write and the
 filter's second stage for the `rt_sigreturn` of the trap's own return,
-which the action cache no longer proves allowed, and a trap for every
-query (16.2). `test/progs/sigframe.c` reads the frame a handler
+which the action cache no longer proves allowed (16.2). `test/progs/sigframe.c` reads the frame a handler
 finds for a signal that lands during a blocking trapped open, with and
 without `SA_RESTART`, outside any trap, and in a rain on stats of a
-long path, and what a query reports; the kernel's answers are its
-expectation. `test/stackcheck.py` walks the trampoline's C as a root of
+long path, and what a query and an install's `oldact` report, and a
+handler called by another through a stub a query returned; the
+kernel's answers are its expectation, but for the query. `test/stackcheck.py` walks the trampoline's C as a root of
 its own, with a budget of its own, and fails on any call it makes out
 of the trampoline's section, since that code runs where the reserved
 register may hold the program's value (7.5.4).
@@ -3736,7 +3743,7 @@ another, or copy a sysroot into a data directory (9). The cost is disk space.
 | `no_new_privs` | The filter requires it, and it also disables file capabilities and AppArmor transitions on exec: `sudo`, `su`, `pkexec`, `ping` and setcap binaries fail inside an exclave, including when run from build scripts |
 | Media without symlinks or hard links (FAT) | `cp -rL` copies the launcher once per wrapper and replaces symlinks with copies; the copy works, since whether a file is a wrapper is read from the file (7.4.4) |
 | Architectures | x86-64 and aarch64, from one source as two launchers (7.1). An exclave runs programs of its launcher's machine only. aarch64 is tested in the emulated matrix rows (12.1), on kernels with 4 KB and with 64 KB pages (Ubuntu's 64k kernel); kernels with 16 KB pages (Asahi's) are untested (13 item 43). Another 64-bit little-endian machine would need the same list: the syscall table, `_start`, the signal frame offsets, a restorer, the relocation type and the CPU check |
-| Overhead | Within noise on a compute-bound compile; about two fifths more on thirty small compiles; about three and a half times native per `posix_spawn`; 6 to 11 times native on a tight `stat` loop (16) |
+| Overhead | Within noise on a compute-bound compile; about two fifths more on thirty small compiles; about two and a half times native per `posix_spawn`; 6 to 11 times native on a tight `stat` loop (16) |
 
 What remains host-dependent is the same set that static linking leaves:
 the kernel ABI, the CPU level (7.7), and the host's identity files
@@ -4048,11 +4055,18 @@ and stay fixed.
     `SIGSYS` would kill the process at its next trap (7.5.1), so a
     handler runs with it unblocked whatever its `sa_mask`, and a query
     of the thread's mask, `sigprocmask(SIG_BLOCK, NULL, &old)`, reports
-    it unblocked. A query of an action for a handler, `sigaction(sig,
-    NULL, &old)`, reports its `sa_mask` as the program wrote it (7.5.7);
-    one for the default or ignored, installed with a mask that held
-    `SIGSYS`, and one for a handler past the 256 slots, report the mask
-    without it, since no slot keeps it. A handler
+    it unblocked. A query of an action, `sigaction(sig, NULL, &old)`,
+    which passes to the kernel, reports the launcher's installation: the
+    stub as the handler, the restorer installed with it (on aarch64,
+    where the program gave none, the launcher's, with `SA_RESTORER`
+    set), and the mask without `SIGSYS` (7.5.7). The stub, called
+    directly, runs the program's handler, so Go's forwarding and a
+    chain of handlers that call the one a query returned work, but a
+    program that compares the handler a query returns with its own sees
+    another. The old action an install replaces reports the handler and
+    the mask as the program wrote them, but for the default or ignored
+    installed with a mask that held `SIGSYS`, and a handler past the 256
+    slots, which no slot keeps. A handler
     whose signal lands outside any trap and that blocks `SIGSYS` in its
     own frame, as a `sigfillset` on `uc_sigmask` does, returns through
     the program's restorer unseen, and the process is killed at its next
@@ -4133,7 +4147,10 @@ and stay fixed.
 
 30. **Small alternate signal stacks overflow.** The handler runs on
     whatever stack the trap lands on, and needs the kernel's frame
-    (`AT_MINSIGSTKSZ`, 3.4 KB on the reference machine) plus its own
+    (`AT_MINSIGSTKSZ`, 3 376 bytes on the reference machine, whose
+    glibc 2.39 reports 13 504 for `sysconf(_SC_MINSIGSTKSZ)`, the CPU's
+    largest XSAVE area whether or not the kernel enables every part of
+    it) plus its own
     3 KB budget (7.5.4). Rust's 8 KB stack is enough; a stack of exactly
     `MINSIGSTKSZ` is not. `adversarial` runs the deepest paths on
     Rust's layout, a guard page below, on every row of the matrix: on
@@ -4789,7 +4806,7 @@ every file at its base, originals included.
 | Resolving host symlinks in the host's domain | A host link into `/usr` would reach the host's `/usr`. Links resolve in the exclave's view; the identity files' host links and the links in the identity directories are followed by the kernel on the host (8.4). |
 | A union of the host's trust directory and the tree's | Answers no one's directory: the tree's hash links would stand beside the host's, so an authority the host removed would still verify inside, and a listing would merge two sets in an order neither has. The host's directory at its name, with the identity files the host lacks in it the exclave's, answers as the host's own directory does (8.4). |
 | Binding the host's trust directory with its links resolved in virtual space, a `host` record | Its links are absolute paths into `/usr/share/ca-certificates`, which inside are the tree's, so the directory would trust nothing the tree does not ship, and a `host` record for each target directory still misses `/usr/local/share/ca-certificates` and whatever another host's trust tool links to (8.4). |
-| Honouring `clone3` by copying the signal frame onto the child's stack | The FPU save area must be copied with the frame and the frame's pointer to it moved, or every new thread starts with a corrupt `MXCSR`. That can be done, but it ties the handler to the kernel's signal-frame layout on both architectures, a layout that grows with each new register set, where `ENOSYS` costs some sixty traps per `posix_spawn` on glibc, its child's queries most of them (7.5.5). |
+| Honouring `clone3` by copying the signal frame onto the child's stack | The FPU save area must be copied with the frame and the frame's pointer to it moved, or every new thread starts with a corrupt `MXCSR`. That can be done, but it ties the handler to the kernel's signal-frame layout on both architectures, a layout that grows with each new register set, where `ENOSYS` costs a few traps per `posix_spawn` (7.5.5). |
 | Returning a program's handler straight to the trap site, the launcher's frames abandoned | The launcher may be holding descriptors of its walk or the cache's lock where the signal lands, and the frame the handler would return through carries the launcher's shadow-stack token (x86-64's, aarch64's GCS) where the program's is needed. The handler returns through the restorer's instructions in the handler-call slot, which the filter answers with an error, into the trampoline, and the launcher ends its call as the handler decided (7.5.7). |
 | Calling a program's handler with a return into the trampoline's own code | Simpler, and no filter rule, but an unwinder finds no unwind information at the return address and stops there: glibc's cancellation would jump to its innermost cleanup buffer and pass over the cleanup handlers that C built with `-fexceptions`, Fedora's default, and C++ destructors keep in the frames between, an unlock among them, and a C++ exception thrown from the handler would end in `std::terminate`. A return address at the restorer's instructions is one libgcc's fallback and gdb take for the kernel's (7.5.7). |
 | Editing the kernel's frame for the delivery in place | Needs the launcher's registers kept elsewhere while the handler runs, on every trap's stack. A frame of the trampoline's own, of the kernel's layout, leaves the kernel's frame holding the launcher's state (7.5.7). |
@@ -5233,21 +5250,11 @@ component of a path as a link, so a path *n* deep costs *n* traps, and
 each trap walks the path again. This is why `realpath` is the most
 expensive row of 16.8.
 
-**Queries of an action** trap, so that they report a program's handler
-rather than its trampoline (7.5.7), each 10.1 k instructions and 5.6 k
-cycles (`perf stat` over 100 000), nine tenths of them the kernel's
-delivery of `SIGSYS`, its return and the handler's four syscalls: 1.1
-µs against 45 ns natively at the machine's faster pace, in runs
-alternated with native (16.9). A fast path for them ahead of the scratch
-claim saved 70 ns of the 1.1 µs, in runs alternated with the launcher
-without it, short of the fifth that would pay for it, and is not
-taken. Counted with
-`strace` on the exclaves' own programs: `dash -c true` makes 3,
-`bash -c true` none, `python3 -c pass` 62, one for each signal it may
-handle; a `gcc -O0` compile of an empty `main` none on Ubuntu 24.04,
-whose driver does not use `posix_spawn`, 20 on Alpine and 236 on
-Fedora 42; a `posix_spawn` from a parent with two handlers makes 59 in
-its child on glibc 2.39 and 2.41, and 2 on musl (7.5.5).
+**Queries of an action** do not trap, and cost what they cost natively;
+a query returns the launcher's stub (7.5.7, 13 item 20). The stub's
+test of its return address adds 32 instructions to a delivery outside a
+trap, 66.6 against 34.6 in user space per signal over 100 000, within
+the kernel's own variation in cycles.
 
 **A signal during a trap** costs, beside its own delivery, the
 trampoline's presented frame, its copies and comparison, and the
@@ -5351,13 +5358,11 @@ variable to drop the launcher's own. It reads the heads with one
 about a hundred calls in a desktop session, and reads a variable on
 its own when the batch cannot read it whole, at the end of a mapping.
 
-A spawn's traps are its child's dispositions: glibc's `posix_spawn`
-makes 59 trapping queries of a signal action, two trapping
-`rt_sigaction` installs and one trapping `rt_sigprocmask`; the queries
-add about 190 µs to a spawn of `true`, 1.21 to 1.25 ms against 1.03
-before them in a loop of 2 000 alternated between the two launchers,
-5.4 k cycles a query, as a query in a warm loop costs (7.5.5, 7.5.7,
-16.8). 100 000 spawns
+A spawn traps little: glibc's `posix_spawn` makes two trapping
+`rt_sigaction` installs and one trapping `rt_sigprocmask`, its child's
+queries of the actions passing to the kernel (7.5.5, 7.5.7); 1 000
+spawns take 2.645 to 2.654 G instructions with the trampolines and
+without them alike (`perf stat`). 100 000 spawns
 from one process leave its RSS flat, +160 to +176 kB against +248 to
 +252 kB natively in two runs of `test/bench.py`, and the regression of 17 item 4 fails when 300 in a row grow the
 address space by more than 256 kB, where it measures no growth at all.
@@ -5567,7 +5572,7 @@ pace.
 | `stat()`, relative name, working directory nine deep on the host | 277 ns | 3.18 µs |
 | `realpath()` of that working directory | 1.65 µs | 23.7 µs |
 | `getppid()`, untrapped | 44 ns | 52 ns |
-| `posix_spawn` of `/usr/bin/true` | 240 µs | 873 µs |
+| `posix_spawn` of `/usr/bin/true`, alternated runs | 435 to 460 µs | 1.02 to 1.06 ms |
 | page faults of each process `posix_spawn` starts | 55 | 116 |
 | 100 000 `posix_spawn`s from one process, RSS | +248 to +252 kB | +160 to +176 kB |
 | thirty `gcc -O0 hello.c` | 1.14 s | 1.60 s |
@@ -5579,12 +5584,10 @@ Thirty small compiles cost 40% more than natively and the 61-file
 project 38% more. The compute-bound compile runs within noise of
 native, 1% more, and produces an identical object, also on the kernels
 that would force the speculation mitigation (16.5). A `posix_spawn`
-costs 3.6 times native. A loop of 2 000 spawns alternated between the
-launcher before the trampolines and this one gives 1.03 ms before and
-1.21 to 1.25 ms after, and `perf stat` over 1 000 spawns 225 µs more CPU
-time, 541 k instructions and 320 k cycles: the 59 queries of glibc's
-spawn child (7.5.5), 5.4 k cycles each, as many as a query in a warm
-loop (16.2), the spawn running at a slower pace. The syscall count moves with `TMPDIR`'s depth, since the
+costs 2.4 times native: 1.02 to 1.06 ms against 435 to 460 µs in five
+rounds alternating native, the launcher before the trampolines and
+this one, the two launchers within noise of each other (1.03 to 1.06
+ms before), as the table's row gives. The syscall count moves with `TMPDIR`'s depth, since the
 compiler's temporary files are walked on the host, not with the working
 directory's.
 What is left of a small compile's overhead, by `strace` and
@@ -5703,7 +5706,10 @@ meaning items 4 and 7.
      path, a handler that redirects a blocked call, one that changes
      its mask in the frame, one that `siglongjmp`s out and one that
      unwinds, installs from a `vfork` child and from two threads at
-     once, queries that report the mask and flags as written, an
+     once, an install's old action as written and a query's the
+     launcher's, a handler called by another through the stub a query
+     returned, Go forwarding a fault in C code to the handler C installed
+     (`test/progs/go_fwd.go`), an
      ignored signal across `execve` and `SA_RESETHAND`, an unwind from
      such a handler that runs the trap site's cleanup handlers and
      destructors, the regression built from the measurement of that
@@ -6616,10 +6622,12 @@ specified.
   honoured fails visibly at install; it does not contain code that
   jumps through the page (7.4.2, 13 item 5).
 - **A program's handlers are installed behind the launcher's
-  trampolines, and every `rt_sigaction` traps**: a handler whose signal
-  lands during a trapped call finds the trap site's frame, and what it
-  decides there, a redirect, a mask, is what the program does; a query
-  reports the action as written. It is the handler doing one more of
+  trampolines, and only installs trap**: a handler whose signal lands
+  during a trapped call finds the trap site's frame, and what it decides
+  there, a redirect, a mask, is what the program does; a query passes to
+  the kernel and returns the stub, which called directly runs the
+  program's handler, so that a query costs nothing and a spawn's child,
+  which queries every signal, traps no more than before (13 item 20). It is the handler doing one more of
   the kernel's jobs, building the frame a handler sees, not a second
   mechanism. The handler is called from the syscall page with its
   return address at the restorer's own instructions and a frame of the

@@ -369,6 +369,31 @@ static void decide(const char *what, void (*h)(int, siginfo_t *, void *), long m
 }
 
 static void on_count(int sig) { (void)sig; }
+/* the action an install replaces, which the kernel reports from what was installed: the action queried is put back
+ * as it was, and the replaced one is the answer */
+static void replaced(int sig, struct sigaction *old)
+{
+    struct sigaction q;
+    memset(&q, 0, sizeof q);
+    sigaction(sig, 0, &q);
+    memset(old, 0, sizeof *old);
+    sigaction(sig, &q, old);
+}
+/* a chain: a handler called by another through the action a query returned, with the arguments it was given */
+static void (*first)(int, siginfo_t *, void *);
+static volatile int chain_sig, chain_same;
+static siginfo_t *chain_si;
+static void on_first(int sig, siginfo_t *si, void *uc)
+{
+    (void)uc;
+    chain_sig = sig;
+    chain_same = si == chain_si;
+}
+static void on_second(int sig, siginfo_t *si, void *uc)
+{
+    chain_si = si;
+    first(sig, si, uc);
+}
 static void *installs(void *arg)
 {
     struct sigaction a;
@@ -518,6 +543,18 @@ int main(int argc, char **argv)
                        (int)(SA_SIGINFO | SA_RESTART)
                    ? "as written"
                    : "others");
+        replaced(SIGUSR1, &old);
+        printf("the action an install replaces: handler %s, mask %s\n",
+               old.sa_sigaction == on_one ? "the program's" : "another",
+               sigismember(&old.sa_mask, SIGSYS) && sigismember(&old.sa_mask, SIGUSR2) ? "as written" : "another");
+        install(SIGUSR2, on_first, 0);
+        struct sigaction q;
+        sigaction(SIGUSR2, 0, &q);
+        first = q.sa_sigaction;
+        install(SIGUSR2, on_second, 0);
+        raise(SIGUSR2);
+        printf("a handler called by another through the action a query returned: %s\n",
+               chain_sig == SIGUSR2 && chain_same ? "ran with the arguments given" : "did not");
         signal(SIGUSR2, SIG_IGN);
         memset(&old, 0, sizeof old);
         sigaction(SIGUSR2, 0, &old);
@@ -541,7 +578,7 @@ int main(int argc, char **argv)
         pthread_join(a, 0);
         pthread_join(b, 0);
         struct sigaction old;
-        sigaction(SIGUSR2, 0, &old);
+        replaced(SIGUSR2, &old);
         printf("installs from two threads at once: the last %s\n",
                old.sa_handler == on_count && (sigismember(&old.sa_mask, SIGHUP) || sigismember(&old.sa_mask, SIGINT))
                    ? "installed"
@@ -553,7 +590,7 @@ int main(int argc, char **argv)
             _exit(0);
         }
         waitpid(c, 0, 0);
-        sigaction(SIGUSR1, 0, &old);
+        replaced(SIGUSR1, &old);
         printf("an install in a vfork child: the parent's action %s\n",
                old.sa_sigaction == on_one ? "unchanged" : "changed");
         install(SIGUSR1, on_one, (int)SA_RESETHAND);
@@ -566,7 +603,7 @@ int main(int argc, char **argv)
         unsigned long k[4] = {(unsigned long)on_count, 0, 0, 0};
         long e = syscall(SYS_rt_sigaction, SIGUSR1, k, (void *)8, 8);
         int err = errno;
-        sigaction(SIGUSR1, 0, &old);
+        replaced(SIGUSR1, &old);
         printf("a bad oldact: %s, the new action %s\n", e < 0 && err == EFAULT ? "EFAULT" : "another answer",
                old.sa_handler == on_count ? "in force" : "not in force");
         signal(SIGUSR2, SIG_IGN);

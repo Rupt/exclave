@@ -119,7 +119,9 @@ static void sigaction_cases(void)
     /* oact bad: the install is done before the old action is written */
     signal(SIGUSR1, SIG_DFL);
     P("rt_sigaction act ok, oact bad", RAW_SIGACTION(SIGUSR1, &a, bad, (long)SETSZ));
-    RAW_SIGACTION(SIGUSR1, 0, &o, SETSZ);
+    /* read back as the action a second install replaces, which reports the handler the program installed where a
+     * query, passing to the kernel, reports the launcher's stub (13 item 20) */
+    RAW_SIGACTION(SIGUSR1, &a, &o, SETSZ);
     printf("after oact bad, the handler: %s\n", o.handler == (void *)h_count ? "installed" : "not installed");
     P("rt_sigaction act NULL, oact bad", RAW_SIGACTION(SIGUSR1, 0, bad, (long)SETSZ));
     /* the restorer the program supplied is used and reported */

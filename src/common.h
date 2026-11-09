@@ -451,11 +451,14 @@ extern char exclave_sigsys_entry[], exclave_sigsys_set[], exclave_sigsys_tail[],
 struct tramp_slot {
     void *h; /* the program's handler; 0 until published */
     unsigned long mask; /* its sa_mask as the kernel stores it, without SIGKILL and SIGSTOP */
+    unsigned long restorer; /* the restorer installed with the stub, by which a delivery is told from a call */
+    unsigned long forced; /* the launcher set SA_RESTORER and the restorer, the program having given none */
 };
 extern struct tramp_slot exclave_slots[TRAMP_SLOTS];
 extern char exclave_stubs[];
-/* the stub for the program's handler h and mask: an address to install, or h itself when no slot is left */
-unsigned long tramp_stub_for(unsigned long h, unsigned long mask);
+/* the stub for the program's handler h, its mask and the restorer installed with it: an address to install, or h itself
+ * when no slot is left */
+unsigned long tramp_stub_for(unsigned long h, unsigned long mask, unsigned long restorer, unsigned long forced);
 /* the slot a handler address names, or -1 when it is no stub's */
 long tramp_slot_of(unsigned long h);
 

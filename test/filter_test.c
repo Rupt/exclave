@@ -103,6 +103,7 @@ static int is_path(int nr)
 /* the mask-carrying calls: the argument that carries the mask, or -1 */
 static int arg_trap(int nr)
 {
+    if (nr == NR_rt_sigaction) return 1;
     if (nr == NR_ppoll) return 3;
     if (nr == NR_pselect6 || nr == NR_io_pgetevents) return 5;
     if (nr == NR_epoll_pwait || nr == NR_epoll_pwait2) return 4;
@@ -134,8 +135,6 @@ static uint32_t elsewhere(const struct data *d)
 {
     int nr = (int)d->nr;
     if (is_path(nr) || in(nr, 0) || in(nr, 1)) return SECCOMP_RET_TRAP;
-    /* every rt_sigaction, a query as well as an install (7.5.7) */
-    if (nr == NR_rt_sigaction) return SECCOMP_RET_TRAP;
     int a = arg_trap(nr);
     if (a >= 0) return d->args[a] ? SECCOMP_RET_TRAP : SECCOMP_RET_ALLOW;
     /* PTRACE_TRACEME, request 0, by the whole word (7.4.2) */
@@ -157,9 +156,9 @@ static uint32_t elsewhere(const struct data *d)
 }
 static int singled_out(int nr)                                /* a number the rule answers by more than the number */
 {
-    return nr == NR_uname || nr == NR_rt_sigreturn || nr == NR_rt_sigaction || is_path(nr) || in(nr, 0) || in(nr, 1) ||
-           arg_trap(nr) >= 0 || nr == NR_ptrace || nr == NR_ioctl || nr == NR_seccomp || nr == NR_prctl || in(nr, 2) ||
-           in(nr, 3) || nr > HIGHEST;
+    return nr == NR_uname || nr == NR_rt_sigreturn || is_path(nr) || in(nr, 0) || in(nr, 1) || arg_trap(nr) >= 0 ||
+           nr == NR_ptrace || nr == NR_ioctl || nr == NR_seccomp || nr == NR_prctl || in(nr, 2) || in(nr, 3) ||
+           nr > HIGHEST;
 }
 
 /* A program's own filter as the handler installs it (filter_wrap, 7.4.2), run from the program's, the page's and the

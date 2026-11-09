@@ -435,7 +435,7 @@ def judge(name: str, rc: int, out: str, hostdir: str, root: str) -> list[str]:
     elif name == "clones":
         wrong = kernel_answers.clones_wrong(out, by_the_kernel=True)
     elif name == "sigframe":
-        wrong = kernel_answers.sigframe_wrong(out)
+        wrong = kernel_answers.sigframe_wrong(out, by_the_kernel=True)
     elif name == "unwind_frame":
         musl = not tree.libc(root, platform.machine()).endswith("libc.so.6")
         wrong = kernel_answers.unwind_frame_wrong(out, musl=musl)

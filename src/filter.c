@@ -129,13 +129,8 @@ static const int fd_syscalls[] = {NR_fchmod,     NR_fchown,   NR_fsetxattr, NR_f
                                   NR_getdents64, NR_getdents, NR_fstat
 #endif
 };
-/* signal-mask syscalls the handler scrubs (7.5.2), and from version 11 every rt_sigaction, a query as well as an
- * install, which the trampolines need answered (7.5.7) */
-static const int mask_syscalls[] = {NR_rt_sigprocmask, NR_rt_sigsuspend,
-#ifndef EXCLAVE_TEST_OLD
-                                    NR_rt_sigaction
-#endif
-};
+/* signal-mask syscalls the handler scrubs (7.5.2) */
+static const int mask_syscalls[] = {NR_rt_sigprocmask, NR_rt_sigsuspend};
 /* refused with ENOSYS rather than emulated (7.4.3): each would bypass or confuse translation */
 static const int enosys_syscalls[] = {NR_clone3,        NR_io_uring_setup,   NR_name_to_handle_at,
                                       NR_uselib,        428 /* open_tree */, 429 /* move_mount */,
@@ -155,13 +150,10 @@ static const int eperm_syscalls[] = {NR_chroot, NR_acct, NR_pivot_root, NR_mount
 #define JGE_K 0x35 /* BPF_JMP | BPF_JGE | BPF_K */
 #define JA 0x05 /* BPF_JMP | BPF_JA: a 32-bit offset, where a conditional jump's is 8 bits */
 
-/* the waits that carry a mask trap for its scrub (7.5.2); build/launcher-old, version 3, traps an rt_sigaction only
- * when it installs */
-static const int arg_traps[][2] = {
-#ifdef EXCLAVE_TEST_OLD
-    {NR_rt_sigaction, 1},
-#endif
-    {NR_ppoll, 3},        {NR_pselect6, 5}, {NR_epoll_pwait, 4}, {NR_epoll_pwait2, 4}, {NR_io_pgetevents, 5}};
+/* an install traps for its trampoline and its mask's scrub, and a query passes to the kernel (7.5.2, 7.5.7); the waits
+ * that carry a mask trap for its scrub */
+static const int arg_traps[][2] = {{NR_rt_sigaction, 1}, {NR_ppoll, 3},        {NR_pselect6, 5},
+                                   {NR_epoll_pwait, 4},  {NR_epoll_pwait2, 4}, {NR_io_pgetevents, 5}};
 /* ptrace(PTRACE_TRACEME), request 0, traps for a vfork child's deferral (7.4.5); every other request is allowed */
 static const int zero_traps[][2] = {
 #ifndef EXCLAVE_TEST_OLD

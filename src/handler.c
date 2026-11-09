@@ -1020,7 +1020,24 @@ static long do_sigaction(struct scratch *S, long *a)
         /* a handler, behind its slot's trampoline (7.5.7); a stub's own address is its slot's handler */
         long i = tramp_slot_of(k[0]);
         if (i >= 0) k[0] = (unsigned long)exclave_slots[i].h;
-        if (k[0] > 1) k[0] = tramp_stub_for(k[0], k[3] & ~(1UL << (SIGKILL - 1) | 1UL << (SIGSTOP - 1)));
+        if (k[0] > 1) {
+            /* the stub tells a delivery from a call by the restorer installed with it, so one is always installed:
+             * the program's, or on aarch64 where it gives none the launcher's, where the kernel would use the vDSO's */
+            unsigned long forced = 0;
+#if defined(__aarch64__)
+            forced = !(k[1] & SA_RESTORER);
+            if (forced) {
+                k[1] |= SA_RESTORER;
+                k[2] = SC_RESTORER;
+            }
+#endif
+            unsigned long s = tramp_stub_for(k[0], k[3] & ~(1UL << (SIGKILL - 1) | 1UL << (SIGSTOP - 1)), k[2], forced);
+            if (s == k[0] && forced) { /* no slot left: installed directly, as given */
+                k[1] &= ~(unsigned long)SA_RESTORER;
+                k[2] = 0;
+            }
+            k[0] = s;
+        }
         k[3] &= ~SIGSYS_BIT;
     }
     long r = RE5(NR_rt_sigaction, sig, act ? k : 0, old ? o : 0, size, 0);
@@ -1030,6 +1047,10 @@ static long do_sigaction(struct scratch *S, long *a)
     if (i >= 0) {
         o[0] = (unsigned long)exclave_slots[i].h;
         o[3] = exclave_slots[i].mask;
+        if (exclave_slots[i].forced) {
+            o[1] &= ~(unsigned long)SA_RESTORER;
+            o[2] = 0;
+        }
     }
     /* written last, as sys_rt_sigaction writes it: a bad pointer is EFAULT with the new action in force */
     return copy_out(S->pid, old, o, sizeof o);
