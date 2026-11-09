@@ -976,6 +976,13 @@ own auxiliary vector with `AT_PHDR`, `AT_PHENT`, `AT_PHNUM`, `AT_ENTRY`,
 `comm` (7.6), and jumps to the loader's entry, or the original's for a
 static binary. `AT_EXECFN` is the name the program was exec'd by, as the
 kernel spells it (7.4.5). It takes only 64-bit ELF of its own machine.
+The break the program finds is the launcher's, which the kernel placed
+(13 item 59). The launcher keeps its large tables out of its own image,
+whose writable memory the kernel charges to `RLIMIT_DATA` at the exec:
+the arena of startup's strings and buffers has a first block of 32 KB
+in the image, which an ordinary start does not outgrow, and its rest,
+the cache's strings and its full table are one reserve mapped without
+access at the first need and opened as each fills (7.4.4, 13 item 60).
 
 The loader is whatever the original's `PT_INTERP` names, resolved in
 the exclave as the kernel would resolve it in a chroot and opened
@@ -4646,6 +4653,73 @@ and stay fixed.
       launcher's frame.
     - The handler runs on less of the alternate stack (item 51).
 
+59. **A program's break is the launcher's.** On the reference kernel,
+    7.0, the kernel sets the break at exec after the image it loads, at
+    a random distance of up to 1 GB above it on x86-64 and aarch64
+    (`arch_randomize_brk`), and for a static PIE, the launcher, at
+    `ELF_ET_DYN_BASE` with that distance added (`load_elf_binary`);
+    older kernels place both otherwise. The loader maps an `ET_DYN`
+    program and its loader by reserving their spans where the kernel's
+    `mmap` places them, top-down below the stack in the default layout
+    and bottom-up under an unlimited stack limit (7.3), so a program's
+    `sbrk(0)` lies away from its image, below it in the default layout,
+    rather than above its `end`, and the image lies above its loader
+    rather than below it. The break grows as natively and `[heap]` names
+    it; what reads the break against the image, a memory report of
+    `sbrk(0) - &end`, gets another number. Under
+    `personality(ADDR_NO_RANDOMIZE)`, gdb's default, the program's
+    addresses are fixed run after run, as natively, but not the
+    kernel's: x86-64's kernel puts a PIE at `0x555555554000`, the
+    loader at the top of the address space. Placing the image just
+    below the launcher's break would give the break its place, at the
+    cost of the image's randomisation, which would come from the
+    break's 1 GB rather than `mmap`'s 28 bits; `PR_SET_MM`, which
+    moves the break, needs `CAP_SYS_RESOURCE`. `mem_layout` measures
+    the rest of the layout against the kernel (17 item 4).
+
+60. **The launcher's memory counts against `RLIMIT_DATA` and
+    `RLIMIT_AS`.** The kernel charges a process's private writable
+    memory to `RLIMIT_DATA` from its exec on, the launcher's image
+    included, and kills the exec with `SIGSEGV` when the image does not
+    fit (`load_elf_binary`). The launcher keeps its large tables out of
+    its image, the arena's rest, the cache's strings and its full table
+    in a reserve opened as each fills (7.3, 7.4.4, 16.6 item 9), so what
+    it charges is its image and what it uses. Glibc's `true` as a
+    wrapper of the gcc exclave needs about two and a half times the
+    limit it needs natively (612 KB against 240 KB, November 2026, the
+    reference machine). Below the image's own charge the exec dies
+    with `SIGSEGV`; above it the failure is whichever charge comes
+    next: the launcher's own message and status 127 where its reserve
+    or a scratch chunk cannot be had, the loader's "cannot map" message
+    and `SIGSEGV` for a segment, the dynamic loader's own error, or,
+    later, a cache that merely stops inserting. The reserve counts
+    against `RLIMIT_AS` as reservations do; a program runs inside under
+    16 MB.
+
+61. **The launcher's variables take room from the argument area.** The
+    kernel refuses an exec with `E2BIG` when the arguments, the
+    environment and their pointers pass a quarter of the stack limit
+    (`bprm_stack_limits`). Every exec the handler makes adds
+    `EXCLAVE_EXECFN` and `EXCLAVE_COMM`, an exec of a program without a
+    wrapper `EXCLAVE_EXEC` too, and the exec that leaves a process newly
+    traced `EXCLAVE_TRACED` (7.4.5): the name the program was exec'd
+    by, twice for a program without a wrapper, its `comm`, and their
+    pointers, so an exec within that many bytes of the limit is `E2BIG`
+    inside where it runs natively.
+
+62. **The kernel's copy of the auxiliary vector is the launcher's.**
+    The kernel keeps the vector it built at exec and answers it in
+    `/proc/<pid>/auxv` and `prctl(PR_GET_AUXV)` (6.4). It built it for
+    the launcher, so `AT_PHDR`, `AT_PHNUM`, `AT_ENTRY`, `AT_BASE` and
+    `AT_EXECFN` there describe the launcher, where the vector on the
+    program's stack, which `getauxval` reads, describes the program
+    (7.3). Changing the kernel's copy takes `PR_SET_MM_AUXV`, which
+    needs `CAP_SYS_RESOURCE`; answering the file from the launcher's
+    copy would make it a file of another kind, a `memfd`, to `fstat`
+    and to its link. A program that reads its own headers through the
+    file finds the launcher's; gdb, which reads the file of the process
+    it attaches to, sees the launcher, as item 1 says.
+
 ### 13.1 Debugging and profiling recipe
 
 Yama's `ptrace_scope` forbids attaching to a non-descendant on most
@@ -5364,9 +5438,12 @@ whole when it fits a page; the program's original is opened once and
 its header, program headers, notes and `PT_INTERP` taken from one read
 of its first page, as are the loader's; and a classification makes its
 wrapper check from its own `lstat` (7.4.4). The tables a start touches
-are sized to it (16.6 item 9). A wrapper of
-`true` run from outside makes 169 syscalls, where the native `true`
-makes 29.
+are sized to it (16.6 item 9), and its large ones are opened as they
+fill: one reserve mapped without access and the cache's first strings
+opened in it, two syscalls, the arena's first block being the image's
+(13 item 60). A wrapper of `true` run from outside, from a host
+working directory, makes 179 syscalls, where the native `true` makes
+29 (`strace -f -c`, November 2026, the reference machine).
 
 In the parent, the exec handler reads the head of every environment
 variable to drop the launcher's own. It reads the heads with one
@@ -5506,7 +5583,11 @@ as a whole.
    page, where `true` puts a few dozen entries; the insert that would
    fill it past seven eighths copies its entries into the full table
    of 16 384 slots and publishes that, so a compile, about a thousand
-   entries, pays for the copy once. A reader uses the table it loaded,
+   entries, pays for the copy once. The cache's strings and its full
+   table are parts of one reserve mapped without access, the strings
+   opened 64 KB at a time as they fill and the full table when the
+   first fills, so that a start charges `RLIMIT_DATA` with what it uses
+   (13 item 60). A reader uses the table it loaded,
    and a table replaced is never written again. With the start's reads
    (16.4), a process `posix_spawn` starts takes 118 page faults,
    against 57 natively. Checks: the copy in
@@ -5751,7 +5832,9 @@ meaning items 4 and 7.
      faulty argument vectors, unusual images, the identity a program
      exec'd from inside gets, and another process's `exe` link, one
      running a wrapped script whose relative interpreter the reader
-     cannot resolve among them;
+     cannot resolve among them, a program's memory against the
+     kernel's layout and under lowered `RLIMIT_AS` and `RLIMIT_DATA`
+     (`mem_layout`, 13 items 59 to 62);
    - *the launcher and its filter*: a CET-marked program inside with the
      shadow-stack tunable set, reporting whether glibc enabled one (13
      item 49), a blocked or sent `SIGSYS`, older
@@ -5856,7 +5939,7 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus programs of the suite under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv` and `exec_state`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones`, `memfd_exec`, and `seccomp_filter`, a program's own filter (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus programs of the suite under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv`, `exec_state` and `mem_layout`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones`, `memfd_exec`, and `seccomp_filter`, a program's own filter (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2, and a program's filter as the handler builds it from the program's, the page's and the judge slot's addresses; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
 | 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: the named tests |

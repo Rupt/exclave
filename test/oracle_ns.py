@@ -365,6 +365,7 @@ PROGRAMS = (
     "exec_elf",
     "exec_auxv",
     "exec_state",
+    "mem_layout",
     "sigcalls",
     "sigrain",
     "sigstack",
@@ -426,6 +427,8 @@ def judge(name: str, rc: int, out: str, hostdir: str, root: str) -> list[str]:
             "exec_elf": kernel_answers.exec_elf_wrong,
             "exec_state": kernel_answers.exec_state_wrong,
         }[name](out, by_the_kernel=True)
+    elif name == "mem_layout":
+        wrong = kernel_answers.mem_layout_wrong(out, by_the_kernel=True)
     elif name == "sigcalls":
         wrong = kernel_answers.sigcalls_wrong(out)
     elif name == "sigrain":
@@ -520,6 +523,7 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
         "exec_elf": f"mkdir -p {hostdir}/e && {work}/exec_elf {hostdir}/e",
         "exec_auxv": f"mkdir -p {hostdir}/a && {work}/exec_auxv {hostdir}/a",
         "exec_state": f"mkdir -p {hostdir}/t && {work}/exec_state {hostdir}/t",
+        "mem_layout": f"{work}/mem_layout",
         "sigcalls": f"{work}/sigcalls",
         "sigrain": f"mkdir -p {hostdir}/sigrain && {work}/sigrain {hostdir}/sigrain",
         "sigstack": f"{work}/sigstack",

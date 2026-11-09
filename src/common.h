@@ -105,12 +105,14 @@
 #define X32_SYSCALL_BIT 0x40000000U
 
 /* ---------- mmap ---------- */
+#define PROT_NONE 0
 #define PROT_READ 1
 #define PROT_WRITE 2
 #define PROT_EXEC 4
 #define MAP_PRIVATE 2
 #define MAP_FIXED 0x10
 #define MAP_ANONYMOUS 0x20
+#define MAP_NORESERVE 0x4000
 #define MADV_WIPEONFORK 18 /* 4.14+: the range reads as zero in a fork child; a vfork child shares it */
 #define MAP_FIXED_NOREPLACE 0x100000
 
@@ -268,6 +270,27 @@ int starts_dir(const char *s, const char *pfx); /* s == pfx or s starts with pfx
 /* bump allocator for the manifest's strings, the tables, the environment; never freed */
 void *arena_alloc(size_t n);
 char *arena_str(const char *s, size_t n);
+/* the arena's whole capacity, which str.c's comment counts */
+#define ARENA_SIZE                                                                                                     \
+    ((2 + MAX_OWN_RECORDS + MAX_HOST_RECORDS + MAX_DATA_RECORDS + MANIFEST_FIELDS) * (MANIFEST_FIELD_MAX + 17) +       \
+     MAX_TOP_LEVEL * (NAME_MAX + 18) + (N_IDENTITY_DIRS + N_IDENTITY + MAX_OWN_RECORDS) * (PATH_MAX + 16) + 4 * 64 +   \
+     3 * (PATH_MAX + 32) + 6 * (BINPRM_BUF_SIZE + 17 + 2 * (PATH_MAX + 16)))
+/* the reserve (str.c): the cache's strings, its full table of CACHE_SLOTS 16-byte slots, the arena's rest */
+#define RESERVE_STEP 65536UL
+#define CACHE_STRINGS (1024UL * 1024)
+#define CACHE_SLOTS 16384
+#define RESERVE_STRINGS_AT 0UL
+#define RESERVE_TABLE_AT CACHE_STRINGS
+#define RESERVE_ARENA_AT (RESERVE_TABLE_AT + CACHE_SLOTS * 16UL)
+#define RESERVE_SIZE (RESERVE_ARENA_AT + ((ARENA_SIZE + RESERVE_STEP - 1) & ~(RESERVE_STEP - 1)))
+char *reserve_base(long *err); /* the reserve, mapped without access at the first call; 0 and *err where not */
+long reserve_open(char *at, size_t n); /* opened for reading and writing; 0, or the negative errno */
+_Static_assert(CACHE_STRINGS % RESERVE_STEP == 0, "the strings' size a multiple of the step");
+_Static_assert(RESERVE_TABLE_AT % RESERVE_STEP == 0 && RESERVE_TABLE_AT >= RESERVE_STRINGS_AT + CACHE_STRINGS,
+               "the table's part after the strings', at a step");
+_Static_assert(RESERVE_ARENA_AT % RESERVE_STEP == 0 && RESERVE_ARENA_AT >= RESERVE_TABLE_AT + CACHE_SLOTS * 16UL,
+               "the arena's part after the table's, at a step");
+_Static_assert(RESERVE_SIZE >= RESERVE_ARENA_AT + ARENA_SIZE, "the arena's part holds the whole arena");
 long shebang_argv(char *line, long n, char *script, char **argv, long argc, char **nargv, long cap);
 
 /* ---------- logging (log.c) ---------- */

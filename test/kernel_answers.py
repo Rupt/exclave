@@ -1752,6 +1752,90 @@ def exec_state_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     return lines_wrong(out, EXEC_STATE, EXEC_STATE_LAUNCHER, by_the_kernel=by_the_kernel)
 
 
+# mem_layout (test/progs/mem_layout.c), measured under bwrap on 7.0: the break, the image's place
+# and a lowered RLIMIT_AS and RLIMIT_DATA, from the program's own run, an exec and an exec without
+# randomization. Where a libc moves the break before main, the break's first value is the libc's.
+MEM_LAYOUT_RUN = (
+    ("brk above image end", "yes"),
+    ("brk within 1 GB above image end", "yes"),
+    ("brk above end symbol", "yes"),
+    ("brk page aligned", None),
+    ("sbrk 1 MB", "ok"),
+    ("[heap] holds it", "yes"),
+    ("[heap] starts at the first break", None),
+    ("image below loader", "yes"),
+    ("image below stack", "yes"),
+    ("[vdso]", "yes"),
+    ("[vvar]", "yes"),
+    ("[stack] holds sp", "yes"),
+    ("/proc/self/exe header is ours", "yes"),
+    ("AT_EXECFN opens", "ok"),
+)
+MEM_LAYOUT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
+    *((f"own {c}", a) for c, a in MEM_LAYOUT_RUN),
+    *(
+        (f"own {src} {t}", "the program's")
+        for src in ("/proc/self/auxv", "PR_GET_AUXV")
+        for t in ("AT_PHDR", "AT_ENTRY", "AT_BASE")
+    ),
+    *((f"plain {c}", a) for c, a in MEM_LAYOUT_RUN),
+    ("norand personality", "yes"),
+    ("norand brk above image end", "yes"),
+    ("norand brk within 1 MB above image end", "yes"),
+    ("norand image below loader", "yes"),
+    ("aslr two runs differ", "yes"),
+    ("AS 64MB", "ran"),
+    ("AS 16MB", "ran"),
+    ("DATA 4096KB", "ran"),
+    ("DATA 1024KB", "ran"),
+    # the libc's and the page size's: 240 KB is enough for glibc's true on x86-64
+    ("DATA 256KB", ("ran", "signal 11")),
+    ("arg limit slack under 64 bytes", "yes"),
+    ("arg limit E2BIG past it", "yes"),
+)
+# The launcher's: the kernel's copy of the auxiliary vector is the launcher's (13 item 62);
+# the program's break is the launcher's, below a PIE image the loader maps
+# top-down (13 item 59); the launcher's own memory counts against RLIMIT_DATA, 256 KB too little
+# for it and the program together (13 item 60); the launcher's variables take room from the
+# argument area (13 item 61).
+MEM_LAYOUT_LAUNCHER: dict[str, str] = {
+    **{
+        f"{run} {c}": "no"
+        for run in ("own", "plain")
+        for c in (
+            "brk above image end",
+            "brk within 1 GB above image end",
+            "brk above end symbol",
+            "image below loader",
+        )
+    },
+    **{
+        f"own {src} {t}": "another"
+        for src in ("/proc/self/auxv", "PR_GET_AUXV")
+        for t in ("AT_PHDR", "AT_ENTRY", "AT_BASE")
+    },
+    "norand brk above image end": "no",
+    "norand brk within 1 MB above image end": "no",
+    "norand image below loader": "no",
+    # the launcher's image alone, its .bss with the arena's first block, charges RLIMIT_DATA more
+    # than 256 KB, so the kernel kills its exec: a .bss shrunk below that makes this "ran"
+    "DATA 256KB": "signal 11",
+    "arg limit slack under 64 bytes": "no",
+}
+
+
+def mem_layout_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
+    """The lines of mem_layout's output that differ from the kernel's answers.
+
+    PR_GET_AUXV is 6.4's: an older kernel's refusal drops its cases.
+    """
+    want = MEM_LAYOUT
+    if "own PR_GET_AUXV AT_PHDR: refused" in out.splitlines():
+        want = tuple(c for c in MEM_LAYOUT if "PR_GET_AUXV" not in c[0])
+        out = "\n".join(x for x in out.splitlines() if "PR_GET_AUXV" not in x)
+    return lines_wrong(out, want, MEM_LAYOUT_LAUNCHER, by_the_kernel=by_the_kernel)
+
+
 # seccomp_filter HOSTDIR (test/progs/seccomp_filter.c), measured under bwrap on 7.0: a program's own
 # filter as the kernel applies it, every install in a child of its own. An older kernel lacks some
 # of what the cases use, and those answer as it decides (SECCOMP_FILTER_SINCE).

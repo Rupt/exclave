@@ -1,4 +1,4 @@
-/* str.c — string, number and arena helpers. No syscalls. */
+/* str.c — string, number and arena helpers. No syscalls but the reserve's mapping. */
 #include "common.h"
 
 void *memcpy(void *d, const void *s, size_t n) { return xmemcpy(d, s, n); }
@@ -60,6 +60,47 @@ int starts_dir(const char *s, const char *pfx)
     return xstrncmp(s, pfx, l) == 0 && (s[l] == '/' || s[l] == 0);
 }
 
+/* The reserve: one span mapped without access at the first need, the cache's strings, its full table and the arena's
+ * rest, each opened for writing as it fills (13 item 60), since the kernel charges writable memory to RLIMIT_DATA
+ * from the exec on and an image that carried the most a manifest could ask would be killed by its exec under a limit
+ * a program runs within. It is made at startup, which is one thread, or under the cache's lock, and never freed. Each
+ * part's offset and the step a part is opened by are multiples of every page size the kernel uses. */
+#ifdef HOST_TEST
+/* the unit tests and the fuzzer have no syscall page; test/cache_test.c sets reserve_test_fail to make every opening
+ * fail as an mprotect under RLIMIT_DATA does */
+int reserve_test_fail;
+static char reserve_bytes[RESERVE_SIZE] __attribute__((aligned(RESERVE_STEP)));
+char *reserve_base(long *err)
+{
+    (void)err;
+    return reserve_bytes;
+}
+long reserve_open(char *at, size_t n)
+{
+    (void)at, (void)n;
+    return reserve_test_fail ? -ENOMEM : 0;
+}
+#else
+static char *reserve;
+char *reserve_base(long *err)
+{
+    if (!reserve) {
+        long m = sys_mmap(0, RESERVE_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+        if (m < 0 && m > -4096) {
+            *err = -m;
+            return 0;
+        }
+        reserve = (char *)m;
+    }
+    return reserve;
+}
+long reserve_open(char *at, size_t n)
+{
+    long r = sys_mprotect(at, n, PROT_READ | PROT_WRITE);
+    return r < 0 ? r : 0;
+}
+#endif
+
 /* arena: the manifest's strings, the ownership and host tables, the entry's buffers; never freed. It holds the most
  * the limits allow (common.h), so that "arena full" is a broken invariant and never an input's doing: every field of
  * the records a manifest keeps, the exclave and cpu records with them, and of the record that fails (6.2); a name for
@@ -67,20 +108,33 @@ int starts_dir(const char *s, const char *pfx)
  * identity file's copy and own'd path the rule maps (vis.c); the border's four fixed variables, the positional entry's
  * three buffers, and the #! line, script and interpreter of each of the six levels of an interpreter chain
  * (launcher.c). Each block is rounded up to 16 bytes. An array as long as the environment or the arguments is mapped
- * instead, since nothing bounds it here. */
-#define ARENA_SIZE                                                                                                     \
-    ((2 + MAX_OWN_RECORDS + MAX_HOST_RECORDS + MAX_DATA_RECORDS + MANIFEST_FIELDS) * (MANIFEST_FIELD_MAX + 17) +       \
-     MAX_TOP_LEVEL * (NAME_MAX + 18) + (N_IDENTITY_DIRS + N_IDENTITY + MAX_OWN_RECORDS) * (PATH_MAX + 16) + 4 * 64 +   \
-     3 * (PATH_MAX + 32) + 6 * (BINPRM_BUF_SIZE + 17 + 2 * (PATH_MAX + 16)))
-static char arena[ARENA_SIZE];
-static size_t arena_used;
+ * instead, since nothing bounds it here. The first ARENA_FIRST bytes are the image's, which an ordinary start does not
+ * outgrow, so that it opens nothing; a block that does not fit there comes from the reserve's arena, which holds the
+ * whole of ARENA_SIZE by itself, so that the one bound, on both parts together, is the whole arena's. Only startup
+ * allocates. */
+#define ARENA_FIRST 32768
+static char arena_first[ARENA_FIRST] __attribute__((aligned(16)));
+static size_t first_used, rest_used, rest_open;
 void *arena_alloc(size_t n)
 {
     n = (n + 15) & ~(size_t)15;
-    if (arena_used + n > sizeof arena) die("arena full", 0, ENOMEM);
-    void *p = arena + arena_used;
-    arena_used += n;
-    return p;
+    if (first_used + rest_used + n > ARENA_SIZE) die("arena full", 0, ENOMEM);
+    if (first_used + n <= ARENA_FIRST) {
+        first_used += n;
+        return arena_first + first_used - n;
+    }
+    long err = 0;
+    char *base = reserve_base(&err);
+    if (!base) die("cannot reserve the arena", 0, err);
+    base += RESERVE_ARENA_AT;
+    if (rest_used + n > rest_open) {
+        size_t want = (rest_used + n + RESERVE_STEP - 1) & ~(size_t)(RESERVE_STEP - 1);
+        long r = reserve_open(base + rest_open, want - rest_open);
+        if (r) die("cannot map the arena", 0, -r);
+        rest_open = want;
+    }
+    rest_used += n;
+    return base + rest_used - n;
 }
 char *arena_str(const char *s, size_t n)
 {
@@ -92,7 +146,7 @@ char *arena_str(const char *s, size_t n)
 #ifdef HOST_TEST
 /* test/launcher_fuzz.c parses one manifest after another in a process */
 void arena_reset(void);
-void arena_reset(void) { arena_used = 0; }
+void arena_reset(void) { first_used = rest_used = 0; }
 #endif
 
 static int blank(char c) { return c == ' ' || c == '\t'; }

@@ -13,28 +13,35 @@
  */
 #include "common.h"
 
-#define SLOTS 16384
+#define SLOTS CACHE_SLOTS
 #define FIRST_SLOTS 256
-#define STRINGS (1024UL * 1024)
+#define STRINGS CACHE_STRINGS
 
 struct slot {
     volatile unsigned long hash;
     unsigned int off;
     unsigned char kind;
 };
+_Static_assert(sizeof(struct slot) == 16, "the reserve's table part holds CACHE_SLOTS slots of 16 bytes");
+_Static_assert(RESERVE_ARENA_AT - RESERVE_TABLE_AT == CACHE_SLOTS * sizeof(struct slot),
+               "the table's part is the table");
 /* A process starts with the first table, 4 KB, one page for a short-lived program's few dozen entries,
  * where the full table's 256 KB would fault in a page for nearly every entry. The insert that would fill the first
  * past its share copies its entries into the full table and then publishes that (16.6 item 9). A reader uses the
  * table it loaded: the live one, or one replaced while it looked, which is never written again, so a lookup racing
- * the copy at worst misses and asks the kernel. */
+ * the copy at worst misses and asks the kernel. The strings and the full table are parts of the reserve (str.c),
+ * the strings opened for writing as they fill and the full table when the first fills, since the kernel charges
+ * writable memory to RLIMIT_DATA (13 item 60); an opening that fails stops the inserts, which is never wrong. */
 struct table {
     struct slot *slot;
     unsigned mask;
 };
-static struct slot first_slots[FIRST_SLOTS], full_slots[SLOTS];
-static const struct table first_table = {first_slots, FIRST_SLOTS - 1}, full_table = {full_slots, SLOTS - 1};
+static struct slot first_slots[FIRST_SLOTS];
+static const struct table first_table = {first_slots, FIRST_SLOTS - 1};
+static struct table full_table = {0, SLOTS - 1};
 static const struct table *volatile live = &first_table;
-static char strings[STRINGS];
+static char *volatile strings; /* set once, before the first entry it holds is published */
+static unsigned int strings_open;
 static volatile unsigned int used;
 static unsigned int filled; /* the entries of the live table */
 static volatile int lock_inherited; /* the lock before cache_init, or on a kernel without MADV_WIPEONFORK */
@@ -119,9 +126,14 @@ static unsigned slot_for(const struct table *t, unsigned long h, const char *v)
     return i;
 }
 
-/* under the lock: the first table's entries copied into the full one, which then becomes the live table */
-static void grow(void)
+/* under the lock: the first table's entries copied into the full one, opened now, which then becomes the live table;
+ * 0 where the opening fails */
+static int grow(void)
 {
+    long err = 0;
+    char *r = reserve_base(&err);
+    if (!r || reserve_open(r + RESERVE_TABLE_AT, SLOTS * sizeof(struct slot))) return 0;
+    struct slot *full_slots = full_table.slot = (struct slot *)(r + RESERVE_TABLE_AT);
     for (unsigned j = 0; j < FIRST_SLOTS; j++) {
         if (!first_slots[j].hash) continue;
         unsigned i = slot_for(&full_table, first_slots[j].hash, 0);
@@ -132,6 +144,20 @@ static void grow(void)
     /* every entry before the table that holds them */
     __sync_synchronize();
     live = &full_table;
+    return 1;
+}
+
+/* under the lock: the strings opened for writing up to n bytes; 0 where the opening fails */
+static int strings_reach(size_t n)
+{
+    long err = 0;
+    char *r = reserve_base(&err);
+    if (!r) return 0;
+    size_t want = (n + RESERVE_STEP - 1) & ~(size_t)(RESERVE_STEP - 1);
+    if (reserve_open(r + RESERVE_STRINGS_AT + strings_open, want - strings_open)) return 0;
+    strings = r + RESERVE_STRINGS_AT;
+    strings_open = (unsigned)want;
+    return 1;
 }
 
 void cache_put(const char *v, int kind, const char *link)
@@ -147,12 +173,14 @@ void cache_put(const char *v, int kind, const char *link)
         return;
     }
     /* stop with slack left: a probe must always meet an empty slot, or a miss would scan the whole table */
+    int grown = 1;
     if (filled + 1 > t->mask + 1 - (t->mask + 1) / 8 && t == &first_table) {
-        grow();
+        grown = grow();
         t = live;
         i = slot_for(t, h, v);
     }
-    if (++filled > t->mask + 1 - (t->mask + 1) / 8 || used + vl + ll > STRINGS) {
+    if (!grown || ++filled > t->mask + 1 - (t->mask + 1) / 8 || used + vl + ll > STRINGS ||
+        (used + vl + ll > strings_open && !strings_reach(used + vl + ll))) {
         full = 1;
         __sync_lock_release(lock);
         return;

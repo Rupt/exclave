@@ -692,6 +692,23 @@ def exec_state(ctx: Ctx) -> None:
 
 
 @test
+def mem_layout(ctx: Ctx) -> None:
+    """7.3: a program's memory grows as the kernel lets it, from an image the kernel's shape.
+
+    sbrk grows a [heap] the program's, the image lies below the stack with [vdso] and [vvar]
+    beside it, /proc/self/exe and AT_EXECFN open the program's own file, two runs place it apart,
+    and an exec under RLIMIT_AS of 16 MB and RLIMIT_DATA of 1 MB runs, since the launcher maps its
+    tables as they fill rather than in its image (7.3); the break lies away from the image (13 item
+    59), 256 KB of RLIMIT_DATA is too little for the launcher and the program together (13 item
+    60), the launcher's variables take room from the argument area (13 item 61), and the
+    kernel's copy of the auxiliary vector, /proc/self/auxv and PR_GET_AUXV, is the launcher's
+    (13 item 62). The kernel under bwrap measured these answers.
+    """
+    bad = kernel_answers.mem_layout_wrong(exerciser(ctx, "mem_layout", []))
+    expect(not bad, "; ".join(bad))
+
+
+@test
 def low_image(ctx: Ctx) -> None:
     """13 item 24: a program whose image starts at 0x10000 runs in an exclave.
 

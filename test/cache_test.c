@@ -4,7 +4,8 @@
  * would be held for the child's life and every insert there skipped. Built on the host with src/cache.c and src/str.c
  * under -DHOST_TEST, which adds cache_test_hold and cache_test_release, the lock as a thread mid-insert holds it. The
  * launcher's syscalls go through its page, which this program maps as the launcher's startup does. Prints a line
- * for each; exit 0 when both hold, and SKIP, exit 0, on a kernel without MADV_WIPEONFORK (before 4.14). */
+ * for each, and one for each opening of the reserve that fails (13 item 60); exit 0 when all hold, and SKIP, exit 0,
+ * on a kernel without MADV_WIPEONFORK (before 4.14). */
 #define _GNU_SOURCE
 #include <stdint.h>
 #include <stdio.h>
@@ -67,6 +68,40 @@ static int grows(void)
     return !bad;
 }
 
+/* An opening of the reserve that fails, as an mprotect under RLIMIT_DATA does (13 item 60), stops the inserts and
+ * leaves every entry made before it answering: the strings' second step in one child, the full table's opening when
+ * the first table fills in another, each with the cache as a new process has it. */
+extern int reserve_test_fail; /* src/str.c under HOST_TEST */
+static int fails_closed(const char *what, int before, int after, size_t len)
+{
+    pid_t child = fork();
+    if (child == 0) {
+        char v[8192];
+        int bad = 0;
+        for (int i = 0; i < before + after; i++) {
+            if (i == before) reserve_test_fail = 1;
+            size_t k = (size_t)snprintf(v, sizeof v, "/%s/%d/", what, i);
+            memset(v + k, 'x', len);
+            v[k + len] = 0;
+            cache_put(v, CK_DIR, 0);
+        }
+        for (int i = 0; i < before + after; i++) {
+            size_t k = (size_t)snprintf(v, sizeof v, "/%s/%d/", what, i);
+            memset(v + k, 'x', len);
+            v[k + len] = 0;
+            /* every entry before the failure kept; the last, the one that failed, and every later one never put */
+            if (cache_get(v, 0) != (i < before ? CK_DIR : 0)) bad++;
+        }
+        _exit(bad ? 1 : 0);
+    }
+    int status = -1;
+    waitpid(child, &status, 0);
+    int ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    printf("%s cache %s: a failed opening %s\n", ok ? "PASS" : "FAIL", what,
+           ok ? "stops the inserts and keeps every entry before it" : "loses an entry or keeps inserting");
+    return ok;
+}
+
 int main(void)
 {
     void *m =
@@ -93,6 +128,8 @@ int main(void)
         return 0;
     }
     cache_init();
+    /* names of 2 KB: the strings' first 64 KB step holds 31; 224 short names fill the first table to its share */
+    if (!fails_closed("strings", 31, 10, 2048) || !fails_closed("table", 224, 10, 0)) return 1;
     if (!grows()) return 1;
     cache_put("/usr", CK_DIR, 0);
     if (cache_get("/usr", 0) != CK_DIR) {

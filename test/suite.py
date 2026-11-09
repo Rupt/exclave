@@ -499,6 +499,7 @@ PROGS = (
     "exec_elf",
     "exec_auxv",
     "exec_state",
+    "mem_layout",
     "traceme",
     "tracer_exe",
     "seccomp_filter",
