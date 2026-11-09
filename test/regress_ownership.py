@@ -732,13 +732,14 @@ def trust_directory_host(ctx: Ctx) -> None:
     tree's /etc/ssl/openssl.cnf, and RESOLVE_NO_XDEV refuses the crossing into it; an identity file
     there that the host lacks, the bundle or Java's keystore, is the tree's (8.1 rule 5); and the
     path through Debian's /usr/lib/ssl/certs is compared only where the tree's leads there. Skipped
-    where the host has no hash link there, and as root, whom nothing refuses a write there.
+    where the host has no hash link there, and for a user who can write the directory, root among
+    them, since the cases that write would change the host.
     """
     found = tree.host_trust_link()
     if not found:
         skip("the host's /etc/ssl/certs has no subject-hash link to a .pem link")
-    if os.geteuid() == 0:
-        skip("as root the native run would write the host's trust directory")
+    if os.geteuid() == 0 or os.access("/etc/ssl/certs", os.W_OK):
+        skip("this user can write the host's trust directory, which is not the test's to change")
     hash_, pem = found
     loader = ctx.payload(ctx.interp)
     libdir = os.path.dirname(ctx.payload(ctx.libc)) if ctx.libc else os.path.dirname(loader)
@@ -778,7 +779,13 @@ def trust_directory_host(ctx: Ctx) -> None:
         if case not in skipped and got.get(case) != bind.get(case, n)
     ]
     expect(not bad, "the trust directory: " + "; ".join(bad))
-    expect(got.get("open hash", "").startswith("-----BEGIN"), f"the hash link's certificate: {got}")
+    # and not vacuously: what was read through the hash link inside is what the host's file holds
+    with open(os.path.join("/etc/ssl/certs", hash_), "rb") as f:
+        head = "".join(chr(b) if 0x20 <= b <= 0x7E else "." for b in f.read(11))
+    expect(
+        got.get("open hash") == (head or "(empty)"),
+        f"the hash link's file: {got.get('open hash')!r}, the host's holds {head!r}",
+    )
 
 
 @test
