@@ -5234,10 +5234,14 @@ each trap walks the path again. This is why `realpath` is the most
 expensive row of 16.8.
 
 **Queries of an action** trap, so that they report a program's handler
-rather than its trampoline (7.5.7), each 1.1 µs against 45 ns natively
-(a query of `SIGUSR1` in a loop, the best of five runs of 100 000). A
-fast path for them ahead of the scratch claim saved 70 ns of the 1.1 µs,
-short of the fifth that would pay for it, and is not taken. Counted with
+rather than its trampoline (7.5.7), each 10.1 k instructions and 5.6 k
+cycles (`perf stat` over 100 000), nine tenths of them the kernel's
+delivery of `SIGSYS`, its return and the handler's four syscalls: 1.1
+µs against 45 ns natively at the machine's faster pace, in runs
+alternated with native (16.9). A fast path for them ahead of the scratch
+claim saved 70 ns of the 1.1 µs, in runs alternated with the launcher
+without it, short of the fifth that would pay for it, and is not
+taken. Counted with
 `strace` on the exclaves' own programs: `dash -c true` makes 3,
 `bash -c true` none, `python3 -c pass` 62, one for each signal it may
 handle; a `gcc -O0` compile of an empty `main` none on Ubuntu 24.04,
@@ -5258,8 +5262,10 @@ natively. Every trap pays the record's four words, the re-issue slot's
 check, the entry stub's write and the second stage of the filter for
 the `rt_sigreturn` of its own return, which the action cache no longer
 proves allowed (7.4.2): 50 ns, a warm four-component exclave-path
-`stat` costing 2.42 to 2.46 µs against 2.37 to 2.40 before (best of
-five runs of 100 000, three times each).
+`stat` costing 2.42 to 2.46 µs against 2.37 to 2.40 before, 9.4 k cycles
+after. The figures in microseconds here are the best of five runs of
+100 000, in three rounds alternating native, the launcher before the
+trampolines and this one, all at the machine's faster pace (16.9).
 
 ### 16.3 Untrapped syscalls and the filter
 
@@ -5350,7 +5356,8 @@ makes 59 trapping queries of a signal action, two trapping
 `rt_sigaction` installs and one trapping `rt_sigprocmask`; the queries
 add about 190 µs to a spawn of `true`, 1.21 to 1.25 ms against 1.03
 before them in a loop of 2 000 alternated between the two launchers,
-some 3 µs a query in a fresh child (7.5.5, 7.5.7, 16.8). 100 000 spawns
+5.4 k cycles a query, as a query in a warm loop costs (7.5.5, 7.5.7,
+16.8). 100 000 spawns
 from one process leave its RSS flat, +160 to +176 kB against +248 to
 +252 kB natively in two runs of `test/bench.py`, and the regression of 17 item 4 fails when 300 in a row grow the
 address space by more than 256 kB, where it measures no growth at all.
@@ -5547,8 +5554,10 @@ November 2026, on this launcher, the machine otherwise idle. The rows
 are from two runs of `test/bench.py --launcher`, each the best of
 three, the better of the two taken (the `sqlite3.c` row from the second,
 with `--sqlite`), from its working directory nine components deep and
-with `TMPDIR` the checkout's `build/tmp`; the compile rows alternate
-native and exclave runs, so both see the same pace.
+with `TMPDIR` the checkout's `build/tmp`; each per-call row runs native
+and then the exclave in the same run, and the compile rows alternate
+native and exclave runs, so that both columns of a row see the same
+pace.
 
 | Workload | native | exclave |
 |---|---|---|
@@ -5570,12 +5579,12 @@ Thirty small compiles cost 40% more than natively and the 61-file
 project 38% more. The compute-bound compile runs within noise of
 native, 1% more, and produces an identical object, also on the kernels
 that would force the speculation mitigation (16.5). A `posix_spawn`
-costs 3.6 times native; the same run with the launcher before the
-trampolines gave 683 µs against 251, and a loop of 2 000 spawns
-alternated between the two launchers gives 1.03 ms before and 1.21 to
-1.25 ms after: the 59 queries of glibc's spawn child (7.5.5), about 3
-µs each there, cold in a fresh child, where a query in a warm loop takes
-1.1 µs (16.2). The syscall count moves with `TMPDIR`'s depth, since the
+costs 3.6 times native. A loop of 2 000 spawns alternated between the
+launcher before the trampolines and this one gives 1.03 ms before and
+1.21 to 1.25 ms after, and `perf stat` over 1 000 spawns 225 µs more CPU
+time, 541 k instructions and 320 k cycles: the 59 queries of glibc's
+spawn child (7.5.5), 5.4 k cycles each, as many as a query in a warm
+loop (16.2), the spawn running at a slower pace. The syscall count moves with `TMPDIR`'s depth, since the
 compiler's temporary files are walked on the host, not with the working
 directory's.
 What is left of a small compile's overhead, by `strace` and
@@ -5616,6 +5625,11 @@ of the hash too.
 
 ### 16.9 Reproducing
 
+- The reference machine's CPU, under the `powersave` governor, swings
+  about threefold in pace between runs, so a figure is taken in cycles
+  or instructions (`perf stat`), or from runs alternated so that both
+  sides see the same pace, never from one run's wall clock against
+  another's.
 - `test/bench.py --exclave EXCLAVE [--sqlite PATH] [--launcher
   LAUNCHER]` prints the per-call and compile rows of 16.8, best of
   three, native against a copy of the exclave relinked with the given
