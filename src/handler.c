@@ -1049,8 +1049,11 @@ static long do_sigprocmask(struct scratch *S, long *a, void *uc)
     unsigned long was;
     r = RE5(NR_rt_sigprocmask, how, &m, &was, size, 0);
     if (r) return r;
-    unsigned long cur;
-    if (sys_rt_sigprocmask(SIG_BLOCK, 0, &cur, 8) == 0) *frame_mask(uc) = cur;
+    /* the mask now in force into the frame, read by blocking every signal but SIGSYS, so that none lands between the
+     * read and the store, where a program's handler's mask would be overwritten (7.5.7): a signal arriving now waits
+     * for the trap's return, as natively one arriving during the call is delivered after it */
+    unsigned long cur, all = ~SIGSYS_BIT;
+    if (AUX5(NR_rt_sigprocmask, SIG_SETMASK, &all, &cur, 8, 0) == 0) *frame_mask(uc) = cur;
     /* the old mask is written last, as sys_rt_sigprocmask writes it: a bad pointer is EFAULT with the mask changed */
     return old ? copy_out(S->pid, old, &was, 8) : 0;
 }
