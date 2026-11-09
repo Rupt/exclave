@@ -3736,7 +3736,7 @@ another, or copy a sysroot into a data directory (9). The cost is disk space.
 | `no_new_privs` | The filter requires it, and it also disables file capabilities and AppArmor transitions on exec: `sudo`, `su`, `pkexec`, `ping` and setcap binaries fail inside an exclave, including when run from build scripts |
 | Media without symlinks or hard links (FAT) | `cp -rL` copies the launcher once per wrapper and replaces symlinks with copies; the copy works, since whether a file is a wrapper is read from the file (7.4.4) |
 | Architectures | x86-64 and aarch64, from one source as two launchers (7.1). An exclave runs programs of its launcher's machine only. aarch64 is tested in the emulated matrix rows (12.1), on kernels with 4 KB and with 64 KB pages (Ubuntu's 64k kernel); kernels with 16 KB pages (Asahi's) are untested (13 item 43). Another 64-bit little-endian machine would need the same list: the syscall table, `_start`, the signal frame offsets, a restorer, the relocation type and the CPU check |
-| Overhead | Within noise on a compute-bound compile; about a third more on thirty small compiles; about twice native per `posix_spawn`; 6 to 11 times native on a tight `stat` loop (16) |
+| Overhead | Within noise on a compute-bound compile; about two fifths more on thirty small compiles; about three and a half times native per `posix_spawn`; 6 to 11 times native on a tight `stat` loop (16) |
 
 What remains host-dependent is the same set that static linking leaves:
 the kernel ABI, the CPU level (7.7), and the host's identity files
@@ -5346,10 +5346,11 @@ its own when the batch cannot read it whole, at the end of a mapping.
 A spawn's traps are its child's dispositions: glibc's `posix_spawn`
 makes 59 trapping queries of a signal action, two trapping
 `rt_sigaction` installs and one trapping `rt_sigprocmask`; the queries
-add about 65 µs, 59 traps of 1.1 µs, to a spawn of `true` that costs
-0.86 to 0.98 ms (7.5.5, 7.5.7). 100 000 spawns from one process
-leave its RSS flat, +152 to +220 kB against +144 to +236 kB natively
-in two runs of `test/bench.py`, and the regression of 17 item 4 fails when 300 in a row grow the
+add about 190 µs to a spawn of `true`, 1.21 to 1.25 ms against 1.03
+before them in a loop of 2 000 alternated between the two launchers,
+some 3 µs a query in a fresh child (7.5.5, 7.5.7, 16.8). 100 000 spawns
+from one process leave its RSS flat, +160 to +176 kB against +248 to
++252 kB natively in two runs of `test/bench.py`, and the regression of 17 item 4 fails when 300 in a row grow the
 address space by more than 256 kB, where it measures no growth at all.
 
 ### 16.5 Speculative Store Bypass
@@ -5540,52 +5541,46 @@ glibc's `realpath`, which costs *n* traps for a path *n* deep.
 
 ### 16.8 Measured results
 
-November 2026, on this launcher, on a machine running other work,
-whose pace moved between whole runs (the native `posix_spawn` took 252
-to 312 µs) and which ran compiles at about half the speed of October's
-measurements. The rows are from two runs of `test/bench.py
---launcher`, each the best of three, the better of the two taken (the
-`sqlite3.c` row from a third, with `--sqlite`), from
-its working directory nine components deep and with `TMPDIR` the
-checkout's `build/tmp`; the compile rows alternate native and exclave
-runs, so both see the same pace. The `posix_spawn` ratio is the
-median of eleven alternated runs (16.4), and the CPU time the best of
-seven `perf stat` runs of each.
+November 2026, on this launcher, the machine otherwise idle. The rows
+are from two runs of `test/bench.py --launcher`, each the best of
+three, the better of the two taken (the `sqlite3.c` row from the second,
+with `--sqlite`), from its working directory nine components deep and
+with `TMPDIR` the checkout's `build/tmp`; the compile rows alternate
+native and exclave runs, so both see the same pace.
 
 | Workload | native | exclave |
 |---|---|---|
-| `stat()`, three-component exclave path | 315 ns | 2.04 µs |
-| `stat()`, seven-component exclave path | 360 ns | 2.64 µs |
-| `stat()`, ten-component host path | 409 ns | 4.09 µs |
-| `stat()`, relative name, working directory nine deep on the host | 283 ns | 3.18 µs |
-| `realpath()` of that working directory | 1.69 µs | 24.0 µs |
-| `getppid()`, untrapped | 45 ns | 53 ns |
-| `posix_spawn` of `/usr/bin/true`, against native | 1 | 2.1 times |
-| page faults of each process `posix_spawn` starts | 55 | 110 |
-| 100 000 `posix_spawn`s from one process, RSS | +144 to +236 kB | +152 to +220 kB |
-| thirty `gcc -O0 hello.c` | 1.15 s | 1.58 s |
-| a 61-file project, `-O1 -c` each then link | 1.13 s | 1.51 s |
-| CPU time of one `gcc -O0 hello.c`, `perf stat` | 38.3 ms | 47.2 ms |
-| `gcc -O2 -c sqlite3.c` | 12.96 s | 13.07 s, identical object |
-| syscalls for one `gcc -O0 hello.c`, all processes (`strace -f -c`) | 2 652 | 11 798 |
+| `stat()`, three-component exclave path | 301 ns | 2.05 µs |
+| `stat()`, seven-component exclave path | 354 ns | 2.66 µs |
+| `stat()`, ten-component host path | 404 ns | 4.06 µs |
+| `stat()`, relative name, working directory nine deep on the host | 277 ns | 3.18 µs |
+| `realpath()` of that working directory | 1.65 µs | 23.7 µs |
+| `getppid()`, untrapped | 44 ns | 52 ns |
+| `posix_spawn` of `/usr/bin/true` | 240 µs | 873 µs |
+| page faults of each process `posix_spawn` starts | 55 | 116 |
+| 100 000 `posix_spawn`s from one process, RSS | +248 to +252 kB | +160 to +176 kB |
+| thirty `gcc -O0 hello.c` | 1.14 s | 1.60 s |
+| a 61-file project, `-O1 -c` each then link | 1.11 s | 1.53 s |
+| `gcc -O2 -c sqlite3.c` | 12.87 s | 13.03 s, identical object |
+| syscalls for one `gcc -O0 hello.c`, all processes (`strace -f -c`) | 2 651 | 13 388 |
 
-Thirty small compiles cost 37% more than natively, the 61-file project
-34% more, and a small compile's CPU time 23% more. The compute-bound
-compile runs within noise of native, 1% more, and produces an
-identical object, also on the kernels that would force the speculation
-mitigation (16.5). The syscall count
-does not move with the working directory's depth (the same at eight,
-nine and fifteen components); it moves with `TMPDIR`'s, since the
-compiler's temporary files are walked on the host, by about 200 from
-`/tmp` to the checkout's `build/tmp` and 130 more six components
-deeper. Trapping `fstat` for a directory's link count (8.3) added
-about 850 to it, and the launcher's later changes took about 250
-away.
-What is left of a small compile's overhead, by `perf` and `strace`:
-about 1 570 traps at the 1.3 µs floor from a working directory eight
-deep, 900 of them glibc's `readlink`s of `realpath` (16.6 item 8);
-five process starts, each more the kernel's exec, page faults and
-process creation than the launcher's code (16.4); and the launcher's
+Thirty small compiles cost 40% more than natively and the 61-file
+project 38% more. The compute-bound compile runs within noise of
+native, 1% more, and produces an identical object, also on the kernels
+that would force the speculation mitigation (16.5). A `posix_spawn`
+costs 3.6 times native; the same run with the launcher before the
+trampolines gave 683 µs against 251, and a loop of 2 000 spawns
+alternated between the two launchers gives 1.03 ms before and 1.21 to
+1.25 ms after: the 59 queries of glibc's spawn child (7.5.5), about 3
+µs each there, cold in a fresh child, where a query in a warm loop takes
+1.1 µs (16.2). The syscall count moves with `TMPDIR`'s depth, since the
+compiler's temporary files are walked on the host, not with the working
+directory's.
+What is left of a small compile's overhead, by `strace` and
+`EXCLAVE_LOG`: about 900 traps at the 1.3 µs floor from a working
+directory nine deep, 335 of them glibc's `readlink`s of `realpath` (16.6
+item 8); five process starts, each more the kernel's exec, page faults
+and process creation than the launcher's code (16.4); and the launcher's
 own walk (16.7).
 
 **Real software.** An exclave of `gcc g++ make libc6-dev python3`
