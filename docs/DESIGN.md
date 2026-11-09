@@ -5261,10 +5261,15 @@ each trap walks the path again. This is why `realpath` is the most
 expensive row of 16.8.
 
 **Queries of an action** do not trap, and cost what they cost natively;
-a query returns the launcher's stub (7.5.7, 13 item 20). The stub's
-test of its return address adds 32 instructions to a delivery outside a
-trap, 66.6 against 34.6 in user space per signal over 100 000, within
-the kernel's own variation in cycles.
+a query returns the launcher's stub (7.5.7, 13 item 20). The
+trampoline's path outside a trap, the stub, the test of its return
+address, the classification of the counter and the jump, adds 33 user
+instructions to a delivery over a handler installed directly, as the
+launcher before the trampolines installed it: 67.6 against 34.6 per
+signal in user space, `perf stat` over 100 000 `tgkill`s of a process to
+itself with a handler, x86-64. The test of the return address is seven
+of those instructions on x86-64 and six on aarch64; in cycles the whole
+is within the kernel's own variation from run to run.
 
 **A signal during a trap** costs, beside its own delivery, the
 trampoline's presented frame, its copies and comparison, and the
