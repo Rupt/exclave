@@ -99,8 +99,8 @@ documents, gate, one commit per item. Status is in brackets.
    tests asserting glibc's wording, stack minimum and `raise` are fixed,
    and the suite passes on every kind. The fifth failure was a launcher
    limitation, now 13 item 58.
-11. **A program handler's view of a trapped call** [implemented, under
-    review]: a program's handlers are installed behind trampolines that
+11. **A program handler's view of a trapped call** [done, the arm64 row on
+    it due]: a program's handlers are installed behind trampolines that
     present the trap site's frame, a frame of the kernel's layout from the
     page's handler-call slot so that unwinders walk into the program's
     frames, and carry what the handler decides back into the trapped call;
@@ -110,7 +110,7 @@ documents, gate, one commit per item. Status is in brackets.
     states what a query reports); filter version 11, the page generation
     unchanged (7.5.7). A deferred
     `pthread_cancel` of a thread blocked in a trapped open now acts on musl
-    and glibc 2.41. The aarch64 path awaits the arm64 row.
+    and glibc 2.41.
 10. **The positional entry's spellings** [done]: `.exclave/launcher
     ./PATH`, `../PATH` and a host symlink to a wrapper die with
     "cannot exec the wrapper" where the absolute spelling ran: the walk of the spelling overwrote the
