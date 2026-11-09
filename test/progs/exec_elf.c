@@ -3,7 +3,7 @@
  * unordered PT_LOADs, p_memsz below p_filesz, a PT_INTERP naming a text file, a script, the program itself and an
  * absent path, a PT_INTERP without a NUL, two PT_INTERPs, an entry outside every segment and one of zero, a p_vaddr
  * and p_offset that differ within a page, a bss segment whose offset is unaligned, a segment at address zero and
- * one past the end of the file, a terabyte of bss, PT_GNU_STACK absent, with PF_X and without, the 32-bit class,
+ * one past the end of the file, PT_GNU_STACK absent, with PF_X and without, the 32-bit class,
  * another machine, the other byte order, ET_REL, e_phnum 0 and PN_XNUM, a wrong e_phentsize, an e_phoff past the
  * file, and an ET_DYN at a fixed address. On x86-64
  * the entry copies the exit onto the stack and jumps there, so that the stack's executability shows in the answer; on
@@ -222,9 +222,6 @@ int main(int argc, char **argv)
     base(&m);
     ph(&m, 0)->p_memsz = CODE_OFF;
     run("p_memsz below p_filesz", &m);
-    base(&m);
-    ph(&m, 0)->p_memsz = 1ULL << 40;
-    run("a terabyte of bss", &m);
     base(&m);
     ph(&m, 0)->p_vaddr = BASE + 0x10;
     eh(&m)->e_entry = BASE + 0x10 + CODE_OFF;

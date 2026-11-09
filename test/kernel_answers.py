@@ -1229,7 +1229,7 @@ EXEC_SCRIPT_LAUNCHER: dict[str, str] = {
 # exec_elf HOSTDIR (test/progs/exec_elf.c), measured under bwrap on 7.0: the image's entry runs on
 # the stack on x86-64, so the two stack cases die there, and exits in place on aarch64 (STACK),
 # as do the two images whose second PT_LOAD covers the first, measured alike in both worlds on
-# each machine; the terabyte of bss depends on the host's overcommit rule
+# each machine
 STACK = "signal=11" if platform.machine() == "x86_64" else "status=42"
 # until 5.8 a 64-bit image without PT_GNU_STACK got READ_IMPLIES_EXEC, every mapping executable
 # (x86/elf: Disable automatic READ_IMPLIES_EXEC for 64-bit address spaces), so the kernel ran the
@@ -1264,7 +1264,6 @@ EXEC_ELF: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("PT_LOADs out of address order", "status=42"),
     ("bss segment whose offset is unaligned", "status=42"),
     ("p_memsz below p_filesz", "signal=11"),
-    ("a terabyte of bss", None),
     ("p_vaddr off p_offset within the page", "signal=11"),
     ("segment at address zero", "signal=11"),
     ("segment at 0x10000", "status=42"),

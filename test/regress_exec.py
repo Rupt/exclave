@@ -645,7 +645,7 @@ def exec_elf(ctx: Ctx) -> None:
     error, ENOENT or EACCES, EIO for a header it does not hold whole and ELIBBAD for one that is not
     this machine's ELF. Past it the kernel kills the new image with SIGSEGV, and so does the
     loader, naming what it could not map: no PT_LOAD, overlapping segments, more file than memory
-    in a segment, a terabyte of bss, an address and an offset that differ within a page, a segment
+    in a segment, an address and an offset that differ within a page, a segment
     at address zero; a bss segment is given memory at its page whatever its offset, as the kernel
     gives it (elf_load, 6.7). An ET_EXEC interpreter the kernel loads; one that is not the
     exclave's own file the child launcher refuses by name (7.3). Static, static-pie and
