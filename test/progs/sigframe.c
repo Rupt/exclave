@@ -379,6 +379,9 @@ static void replaced(int sig, struct sigaction *old)
     memset(old, 0, sizeof *old);
     sigaction(sig, &q, old);
 }
+/* a signal sent by a call no libc traps, so that it is delivered outside any trap and the stub's entry takes the
+ * delivery path: musl's raise blocks signals around its kill, which traps, and the signal would land in that */
+static void untrapped_signal(int sig) { syscall(SYS_tgkill, getpid(), (pid_t)syscall(SYS_gettid), sig); }
 /* a chain: a handler called by another through the action a query returned, with the arguments it was given */
 static void (*first)(int, siginfo_t *, void *);
 static volatile int chain_sig, chain_same;
@@ -569,14 +572,14 @@ int main(int argc, char **argv)
         sigaction(SIGUSR2, 0, &q);
         first = q.sa_sigaction;
         install(SIGUSR2, on_second, 0);
-        raise(SIGUSR2);
+        untrapped_signal(SIGUSR2);
         printf("a handler called by another through the action a query returned: %s\n",
                chain_sig == SIGUSR2 && chain_same ? "ran with the arguments given" : "did not");
         install(SIGUSR2, on_sibling_target, 0);
         sigaction(SIGUSR2, 0, &q);
         sf_sibling_to = q.sa_sigaction;
         install(SIGUSR2, sf_sibling, 0);
-        raise(SIGUSR2);
+        untrapped_signal(SIGUSR2);
         printf("a handler whose sibling call reaches the action a query returned: %s\n",
                sibling_sig == SIGUSR2 ? "ran" : "did not run");
         signal(SIGUSR2, SIG_IGN);
