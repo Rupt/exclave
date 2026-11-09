@@ -1707,9 +1707,11 @@ frame the trampoline presented, before it reaches the trap's frame or
 the launcher's (7.5.7). `rt_sigtimedwait` and `signalfd` name signals to
 receive, not to block, and are left alone. The case is common: a
 program installs a handler with `sigfillset` on `sa_mask`, a textbook
-idiom, and touches a path inside it. A query of an action,
-`sigaction(sig, NULL, &old)`, still reports the mask the program wrote,
-which the launcher keeps (7.5.7); the mask in force while a handler
+idiom, and touches a path inside it. A query of an action for a
+handler, `sigaction(sig, NULL, &old)`, still reports the mask the
+program wrote, which the launcher keeps in the handler's slot (7.5.7);
+the default or ignored, and a handler past the slots, keep none, and
+report the mask without `SIGSYS`; the mask in force while a handler
 runs, and a query of the thread's, lack `SIGSYS` whatever was written
 (13 item 20).
 
@@ -1724,7 +1726,10 @@ restores the mask from the frame at `sigreturn`. The handler re-issues
 it with `SIGSYS` scrubbed from the set, which makes the kernel apply
 block, unblock or set semantics and fill `oldset` with the pre-trap
 mask, then copies the resulting mask into the frame's `uc_sigmask` so
-that it survives the return. The mask-carrying waits are re-issued
+that it survives the return, reading it by blocking every signal but
+`SIGSYS` until the trap's return installs the frame's, so that no
+program handler's mask (7.5.7) lands between the read and the copy; a
+signal arriving then is delivered after the call, as natively. The mask-carrying waits are re-issued
 through the page with a scrubbed copy of their mask, six arguments and
 all. Each of these calls answers in the kernel's order: the timeout of
 `ppoll`, `pselect6` and `epoll_pwait2` is read and checked before the
@@ -1803,7 +1808,7 @@ recursion a failure. The launcher makes no call through a pointer,
 which would have no edge, but the trampoline's call of a program's
 handler, made in assembly, past which the stack is the program's
 (7.5.7). The trampoline's C part is a second root with a budget of its
-own, 512 bytes, of which its deepest chain takes 184 on x86-64 and 304
+own, 512 bytes, of which its deepest chain takes 208 on x86-64 and 320
 on aarch64, and which fails on any call out of the
 trampoline's section, and the assembly of the handler's entry stub and
 of the trampoline count as constants the check reads from beside their
@@ -1961,8 +1966,10 @@ aarch64, passes the frame's address. The trampoline finds the frame
 without it, at the stack pointer plus 8 on x86-64, past the restorer's
 address, and plus 128 on aarch64, past the `siginfo`: the layout of
 `rt_sigframe`, which unwinders rely on. The launcher carries no BTI
-property, so its stubs need no landing instruction, and a branch
-through `x16` to a program's handler is one its `bti c` admits.
+property by construction, built with `-mbranch-protection=none`
+whatever the compiler's default, so its stubs need no landing
+instruction, and a branch through `x16` to a program's handler is one
+its `bti c` admits.
 
 **Where the signal landed.** The trampoline reads the interrupted
 counter from the frame:
@@ -2039,7 +2046,7 @@ has a fixed size on each architecture, so that the handler-call slot
 finds the block above it at a fixed offset from the stack pointer: at
 least the kernel's `rt_sigframe`, and room above the `ucontext` for a
 whole `ucontext_t` of the program's libc, which a handler may write back
-whole (glibc's is 936 bytes on x86-64, more than the kernel's
+whole (glibc's is 968 bytes on x86-64, more than the kernel's
 `ucontext` and `siginfo` together), so that no such write reaches the
 block, which holds the address the trampoline is re-entered by:
 1 040 bytes on x86-64 and 4 688 on aarch64, whose records' 4 096 bytes
@@ -2075,8 +2082,9 @@ kernel's. The presented frame holds:
   `__reserved`, each record at least 16 bytes and 16-aligned, an
   `extra_context` record still naming the trap's frame's extra space,
   and this delivery's own syndrome written into the trap's `esr_context`
-  where both frames carry one. The launcher depends on no save area's
-  layout either way;
+  where both frames carry one; a program using SVE across the copy and
+  its copy back is **[measure]** on the arm64 row. The launcher depends on
+  no save area's layout either way;
 - `uc_stack` as the trap's frame's, the alternate stack as it stood at
   the trap site;
 - the mask of this delivery's frame, the mask in force at the re-issue,
@@ -2204,7 +2212,8 @@ A fast path for queries, ahead of the scratch claim, saved too little
 of a query's trap to be taken (16.2).
 
 **What it costs.** Outside a trapped call, a few instructions per
-signal and no stack. Inside one, the presented frame and the block
+signal, and no stack but, on aarch64, one 16-byte slot for a register
+it saves. Inside one, the presented frame and the block
 above it, the copies and the comparison. On every trap, the record's
 four words, the re-issue slot's check, the entry stub's write and the
 filter's second stage for the `rt_sigreturn` of the trap's own return,
@@ -4039,8 +4048,11 @@ and stay fixed.
     `SIGSYS` would kill the process at its next trap (7.5.1), so a
     handler runs with it unblocked whatever its `sa_mask`, and a query
     of the thread's mask, `sigprocmask(SIG_BLOCK, NULL, &old)`, reports
-    it unblocked. A query of an action, `sigaction(sig, NULL, &old)`,
-    reports its `sa_mask` as the program wrote it (7.5.7). A handler
+    it unblocked. A query of an action for a handler, `sigaction(sig,
+    NULL, &old)`, reports its `sa_mask` as the program wrote it (7.5.7);
+    one for the default or ignored, installed with a mask that held
+    `SIGSYS`, and one for a handler past the 256 slots, report the mask
+    without it, since no slot keeps it. A handler
     whose signal lands outside any trap and that blocks `SIGSYS` in its
     own frame, as a `sigfillset` on `uc_sigmask` does, returns through
     the program's restorer unseen, and the process is killed at its next
@@ -4131,7 +4143,7 @@ and stay fixed.
     during a trap adds the kernel's frame, the presented frame and its
     block, 1 152 bytes on x86-64 and 4 800 on aarch64, whose presented
     frame holds the 4 KB of floating-point records whole, and the
-    trampoline's C below them, 184 and 304 bytes (7.5.7): `test/progs/sigstack.c` passes on 8 KB and
+    trampoline's C below them, 208 and 320 bytes (7.5.7): `test/progs/sigstack.c` passes on 8 KB and
     is killed on 6 KB on the reference machine, where the kernel alone
     passes on `MINSIGSTKSZ`. An overrun that lands in mapped memory
     below the alternate stack, not a guard page, is no fault: a signal
@@ -4390,7 +4402,9 @@ and stay fixed.
     reports `SS_ONSTACK`; one installed with it has the part of the
     stack below the launcher's frames, where natively it would have the
     whole. The presented frame and its block add 1 152 bytes on x86-64
-    and 4 800 on aarch64 to the kernel's own. A 5 KB handler beside
+    and 4 800 on aarch64 to the kernel's own; the aarch64 figure for
+    such a handler on a small alternate stack is **[measure]** on the
+    arm64 row. A 5 KB handler beside
     an 8 KB alternate stack armed for `SIGSEGV`, Rust's shape, reaches
     the guard page under the launcher and runs natively
     (`test/progs/sigstack.c`); on aarch64, whose signal frame is larger,
@@ -5683,7 +5697,10 @@ meaning items 4 and 7.
      such a handler that runs the trap site's cleanup handlers and
      destructors, the regression built from the measurement of that
      layout (`test/progs/unwind_frame.c`), and a handler that blocks
-     `SIGSYS` in its frame (7.5.7, 13 items 20 and 58), Go's goroutines beside a collector, 64 threads trapping
+     `SIGSYS` in its frame (7.5.7, 13 items 20 and 58); the rare places
+     a signal can land, the entry stub before its record, its tail
+     between the test and the write, the launcher's restorer, a stub
+     before its handler, are reached only by the rain, Go's goroutines beside a collector, 64 threads trapping
      at once and threads trapping while
      another spawns, a descriptor-relative path looked up while its
      directory's parent is renamed, in both forms of the walk (16.6
