@@ -721,9 +721,10 @@ def x28_kept_mid_trap(ctx: Ctx) -> str:
     Go without cgo keeps its goroutine in x28 and its preemption signal reads the register as it
     finds it. A program built -ffixed-x28, as Go's code is, holds a sentinel in x28 while bare svc
     calls trap under a 200 us timer; the timer's handler counts the reads that find another value,
-    which the kernel's answer makes none, and the signals that landed outside the program, which
-    must be some for the test to have tested anything. On x86-64 Go reloads its goroutine from
-    thread-local storage, and the rule has nothing to keep.
+    which the kernel's answer makes none, and the signals that landed during a trap, which must be
+    some for the test to have tested anything: the handler is presented the trap site's frame
+    (7.5.7), so it tells them by the frames that lie above its own. On x86-64 Go reloads its
+    goroutine from thread-local storage, and the rule has nothing to keep.
     """
     if ctx.machine != "aarch64":
         skip("aarch64 only: x86-64's Go reloads its goroutine from thread-local storage")
@@ -743,7 +744,7 @@ def x28_kept_mid_trap(ctx: Ctx) -> str:
     expect(rc == 0, "compile with x28 reserved: " + err[-600:])
     rc, out, err = inside(ctx, exe)
     m = re.fullmatch(
-        r"x28: (\d+) signals, (\d+) outside the program, (\d+) read another value, "
+        r"x28: (\d+) signals, (\d+) during a trap, (\d+) read another value, "
         r"(\d+) traps failed\n",
         out,
     )
@@ -752,7 +753,7 @@ def x28_kept_mid_trap(ctx: Ctx) -> str:
         f"x28 across signals that land mid-trap: rc={rc} {out!r} {err!r}",
     )
     assert m is not None  # for the type checker: expect has failed otherwise
-    return f"{m[1]} signals, {m[2]} of them outside the program"
+    return f"{m[1]} signals, {m[2]} of them during a trap"
 
 
 @test

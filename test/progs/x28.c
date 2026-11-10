@@ -2,9 +2,12 @@
  * in the launcher's handler mid-trap and read the register as it finds it there. Built with -ffixed-x28, as Go's code
  * is, the program holds a sentinel in x28 while it issues trapped syscalls with a bare svc under a 200 µs timer, whose
  * handler reads x28. The kernel keeps a program's registers, so every read finds the sentinel, wherever the signal
- * landed. Prints one line: the timer's signals while armed, how many of them landed outside the program's own text (in
- * the launcher's handler or the syscall page), how many read another value, and how many traps answered other than 0.
- * Elsewhere than aarch64 it says so and exits 0. */
+ * landed. Prints one line: the timer's signals while armed, how many of them landed during a trap, how many read
+ * another value, and how many traps answered other than 0. A signal that lands during a trap is presented the trap
+ * site's frame (7.5.7), counter and stack pointer, so the handler tells it by where its own frame lies: natively and
+ * outside a trap the context it is given sits one ucontext below the stack pointer that context names; during a trap
+ * the trap's frame, the launcher's and the kernel's second frame lie between. Elsewhere than aarch64 it says so and
+ * exits 0. */
 #define _GNU_SOURCE
 #include <stdio.h>
 
@@ -14,18 +17,18 @@
 #include <ucontext.h>
 
 #define SENTINEL 0x5e285e285e285e28UL
-extern char __executable_start[], etext[];
-static volatile long armed, ticks, outside, wrong;
+static volatile long armed, ticks, during, wrong;
 
 static void on_alrm(int s, siginfo_t *si, void *ctx)
 {
-    unsigned long v, pc = ((ucontext_t *)ctx)->uc_mcontext.pc;
+    unsigned long v, sp = ((ucontext_t *)ctx)->uc_mcontext.sp;
     (void)s;
     (void)si;
     __asm__ volatile("mov %0, x28" : "=r"(v));
     if (!armed) return;
     ticks++;
-    if (pc < (unsigned long)__executable_start || pc >= (unsigned long)etext) outside++;
+    /* more than two contexts between this one and the stack it names: other frames lie between */
+    if (sp - (unsigned long)ctx > 2 * sizeof(ucontext_t)) during++;
     if (v != SENTINEL) wrong++;
 }
 
@@ -49,7 +52,7 @@ int main(void)
     setitimer(ITIMER_REAL, &it, 0);
     long bad = 0;
     /* only this loop runs while armed: no C library code, which may use x28 as the callee-saved register it is */
-    for (int round = 0; round < 2000 && outside < 200; round++) {
+    for (int round = 0; round < 2000 && during < 200; round++) {
         __asm__ volatile("mov x28, %0" : : "r"(SENTINEL));
         armed = 1;
         for (int k = 0; k < 100; k++)
@@ -58,8 +61,8 @@ int main(void)
     }
     struct itimerval off = {{0, 0}, {0, 0}};
     setitimer(ITIMER_REAL, &off, 0);
-    printf("x28: %ld signals, %ld outside the program, %ld read another value, %ld traps failed\n", ticks, outside,
-           wrong, bad);
+    printf("x28: %ld signals, %ld during a trap, %ld read another value, %ld traps failed\n", ticks, during, wrong,
+           bad);
     return 0;
 }
 #else
