@@ -2081,8 +2081,13 @@ kernel's. The presented frame holds:
   `__reserved`, each record at least 16 bytes and 16-aligned, an
   `extra_context` record still naming the trap's frame's extra space,
   and this delivery's own syndrome written into the trap's `esr_context`
-  where both frames carry one; a program using SVE across the copy and
-  its copy back is **[measure]** on the arm64 row. The launcher depends on
+  where both frames carry one. A program whose SVE state is live at a
+  trapped call finds after it what a system call leaves, the low 128
+  bits of each register its own and the rest zero, and a handler that
+  lands during the trap reads the program's vector registers in its
+  frame and has what it writes there in the register afterwards, the
+  kernel's own answers on the same machine (`test/progs/sve_frame.c`,
+  run natively and inside). The launcher depends on
   no save area's layout either way;
 - `uc_stack` as the trap's frame's, the alternate stack as it stood at
   the trap site;
@@ -4440,9 +4445,10 @@ and stay fixed.
     reports `SS_ONSTACK`; one installed with it has the part of the
     stack below the launcher's frames, where natively it would have the
     whole. The presented frame and its block add 1 152 bytes on x86-64
-    and 4 800 on aarch64 to the kernel's own; the aarch64 figure for
-    such a handler on a small alternate stack is **[measure]** on the
-    arm64 row. A 5 KB handler beside
+    and 4 800 on aarch64 to the kernel's own. On aarch64 a 5 KB handler
+    that lands during a trap runs beside an alternate stack of 24 KB and
+    reaches the guard page beside 20 KB (kernel 6.8, 4 KB pages, an
+    emulated machine with SVE, November 2026). A 5 KB handler beside
     an 8 KB alternate stack armed for `SIGSEGV`, Rust's shape, reaches
     the guard page under the launcher and runs natively
     (`test/progs/sigstack.c`); on aarch64, whose signal frame is larger,
@@ -5921,7 +5927,9 @@ meaning items 4 and 7.
      tracee's `exe` and gdb's breakpoints inside, given the launcher or the
      program itself, run after run (7.6), a program installing
      its own filter, the speculation state, `x28` as a signal landing
-     mid-trap finds it on aarch64 (7.5.3), and an adversarial program
+     mid-trap finds it on aarch64 (7.5.3), the vector state across a
+     trapped call and in a handler's frame during one on aarch64 with
+     SVE (7.5.7), and an adversarial program
      (`adversarial`), which runs the handler's deepest paths on Rust's
      alternate stack too, and a start that reads what it needs of the
      tree once (16.4), and the positional entry given a wrapper by every

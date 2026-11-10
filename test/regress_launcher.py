@@ -757,6 +757,41 @@ def x28_kept_mid_trap(ctx: Ctx) -> str:
 
 
 @test
+def sve_across_traps(ctx: Ctx) -> str:
+    """7.5.7: on aarch64 the vector state across a trapped call and in a handler's frame meanwhile.
+
+    test/progs/sve_frame.c sets z8 by an SVE instruction before each trapped call under a 1 ms
+    timer. After the call the register's low 128 bits are the program's and the rest zero, as the
+    kernel leaves them across a system call; the timer's handler reads v8 in its frame's records
+    and writes v9 there, which the program then finds in the register. Natively the kernel answers
+    every line on this machine; inside, every line is the same, and some signal landed during a
+    trap, where the frame is the presented one and its records are copied to the trap's frame and
+    back. Skipped elsewhere than aarch64 and on a machine without SVE.
+    """
+    if ctx.machine != "aarch64":
+        skip("aarch64 only: x86-64's frame names the trap's save area, which sigframe reads")
+    loader = ctx.payload(ctx.interp)
+    libdir = os.path.dirname(ctx.payload(ctx.libc)) if ctx.libc else os.path.dirname(loader)
+    prog = os.path.join(ctx.progs, "sve_frame")
+    rc, out, err = run([loader, "--library-path", libdir, prog], cwd=ctx.work)
+    expect(rc == 0, f"sve_frame natively: rc={rc} {out!r} {err!r}")
+    if out.startswith("sve_frame: no SVE"):
+        skip("no SVE on this machine")
+    native = out.splitlines()
+    rc, out, err = inside(ctx, prog)
+    got = out.splitlines()
+    expect(
+        rc == 0 and len(got) == len(native) and got[:-1] == native[:-1],
+        f"sve_frame inside: rc={rc} {got}, the kernel says {native} {err!r}",
+    )
+    expect(
+        native[-1] == "signals during a trap: none" and got[-1] == "signals during a trap: some",
+        f"the signals that landed during a trap: natively {native[-1]!r}, inside {got[-1]!r}",
+    )
+    return native[3].partition(": ")[2]
+
+
+@test
 def shadow_stack_if_glibc_enables_it(ctx: Ctx) -> str | None:
     """13 item 49: a CET-marked program runs inside with the shadow-stack tunable set inside.
 
