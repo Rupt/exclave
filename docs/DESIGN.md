@@ -5473,6 +5473,51 @@ from one process leave its RSS flat, +160 to +176 kB against +248 to
 +252 kB natively in two runs of `test/bench.py`, and the regression of 17 item 4 fails when 300 in a row grow the
 address space by more than 256 kB, where it measures no growth at all.
 
+**The kernel's side**, profiled with kernel symbols, which the reference
+machine withholds from an unprivileged user: the ubuntu-26.10 row of the
+matrix (12.1), kernel 7.3, the nearest of the rows to the reference
+machine's, under QEMU 8.2 with KVM, the host's CPU passed through with
+its counters, two vCPUs and 2 GB; `test/bench.py`'s spawn loop, five
+rounds of 2 000 spawns alternating native and the launcher, sampled
+every 200 003 cycles with call chains (16.9). Natively the loop spawns
+the original of the exclave's own `true`, on the guest's loader and
+libc, since the guest's `/usr/bin/true` is another program. In the VM a
+spawn costs 1.6 times native, 608 to 614 µs in four rounds of the five
+(807 in the other) against 376 to 406, with 116 page faults against 58, 279 syscalls against
+39 and 12 signals against none; the kernel's cycles 1.77 times native,
+2.11 M against 1.20 M a spawn (`perf stat`), and the user's 0.39 M
+against 0.21 M. Of the profile's kernel time, 2 460 thousand cycles a
+spawn against 1 296, the 1 163 more go, by the inclusive time of the
+kernel's functions:
+
+| Where | thousand cycles a spawn, native | launcher | share of the difference |
+|---|---|---|---|
+| the start's file syscalls: `newfstatat`, `openat`, `getdents64`, `process_vm_readv`, `readlinkat`, `close`, `read` | 40 | 511 | 41% |
+| `mmap`, `mprotect` and `munmap`: the program and its loader mapped by the launcher | 297 | 538 | 21% |
+| page faults | 315 | 523 | 18%, anonymous pages 126 of it |
+| the filter, run on each syscall the action cache does not settle | 0 | 72 | 6% |
+| the signal of each trap, delivered and returned | 0 | 62 | 5% |
+| `execve` | 417 | 413 | 0% |
+| process creation, exit and `wait4` | 202 | 187 | -1% |
+
+The start's file syscalls are the ownership set's directory reads (19
+`getdents64` a spawn, 92 thousand cycles, most of it ext4's hashed
+directory order), the identity files' and the walk's `lstat`s (40
+`newfstatat`, 122), the opens of the tree's directories, the manifest,
+the program and its loader (22 `openat`, 97), and each trap's
+`process_vm_readv` (12, 60). The launcher makes 23 `mmap`s a spawn where
+`ld.so` natively makes 9, at about 16 thousand cycles each, and its
+image, scratch and stack take 155 thousand cycles of anonymous-page
+faults against 29. The filter's install is not in a spawn's cost, since
+a process inside inherits its parent's filter. The exec costs the same
+in total but not in its parts: no interpreter to load (94 fewer) and
+cheaper `exec_mmap` and vDSO setup are spent again on `alloc_bprm`'s new
+address space, whose `mm_init` costs 148 thousand cycles against 1, 97
+of it the per-CPU allocator searching its chunks, and on
+`setup_arg_pages`, 112 against 5; the profile does not show why either
+differs. The launcher's own code takes 0.21 M cycles of the user's
+0.39 M.
+
 ### 16.5 Speculative Store Bypass
 
 On a kernel whose default is `spec_store_bypass_disable=seccomp`, from
@@ -5658,10 +5703,17 @@ compile's extra syscalls, 591 are the one-question check of the
 directories above the tree (16.6 item 7), one for each path spelt
 through the tree's real root, as gcc spells its own files.
 
-If overhead matters again, the next steps are the spawn, whose kernel
-side, the exec and the faults, wants a profile with kernel symbols,
-which `kernel.kptr_restrict` withholds from an unprivileged user; then
-glibc's `realpath`, which costs *n* traps for a path *n* deep.
+A profile of the spawn's kernel side with kernel symbols (16.4) finds
+the same: what an exclave adds to a spawn in the kernel is the start's
+own syscalls, two fifths of it, the launcher's mapping of the program
+and its loader and the faults of what it maps, two fifths, and the
+filter and the signals of the start's traps, a tenth; the exec itself
+costs what it costs natively. If overhead matters again, the next steps
+are fewer of the start's syscalls and mappings, the items above
+included; then why the exec's new address space and argument pages cost
+more under the launcher, which a call graph of `mm_init` and
+`setup_arg_pages` in the same VM would show; then glibc's `realpath`,
+which costs *n* traps for a path *n* deep.
 
 ### 16.8 Measured results
 
@@ -5766,6 +5818,15 @@ of the hash too.
   `perf` folds the launcher's code into `_start` or `sig_restorer`.
   Make the copy with
   `tree.fresh_exclave(SRC, DST, launcher="build/launcher.debug")`.
+- `scripts/profile-spawn --exclave EXCLAVE` gives the kernel's side of
+  16.4: it boots the ubuntu-26.10 row (`--row` names another), installs the
+  guest kernel's `perf`, lifts `kernel.kptr_restrict` and
+  `kernel.perf_event_paranoid` there, and runs `test/bench.py`'s spawn
+  loop natively and through the launcher in alternated rounds, plain,
+  under `perf stat` and under `perf record -g`; `build/profile/profile.md`
+  holds the conditions, the counts and each side's kernel functions
+  with their difference a spawn. `--local` runs the same on the host,
+  without kernel symbols where it withholds them.
 
 ## 17. Testing
 

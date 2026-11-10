@@ -85,10 +85,11 @@ documents, gate, one commit per item. Status is in brackets.
    closed, TeX's through `exclave caches` writing in place and the
    keystore as an `unpack` rule, and the CA bundle rule now fires on
    Ubuntu 24.04 (10.1, 13 items 48, 56 and 57).
-7. **Investigations, after the items above** [pending]: the spawn's
-   kernel side profiled with kernel symbols in a matrix VM (DESIGN
-   16.7), and a defect hunt in the areas the last audit named next,
-   memory placement, descriptors and processes.
+7. **Investigations, after the items above** [half done]: the spawn's
+   kernel side is profiled with kernel symbols in a matrix VM
+   (`scripts/profile-spawn`, DESIGN 16.4 and 16.7); a defect hunt in the
+   areas the last audit named next, memory placement, descriptors and
+   processes, is pending.
 8. **The release point** [not decided]: the gate, the hosted workflow
    with the matrix, the emulated arm64 row and the release test all
    passing on one commit; `docs/DESIGN.md` and `README.md` consistent
