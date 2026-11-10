@@ -3,6 +3,7 @@
     scripts/profile-spawn --exclave EXCLAVE [--row NAME] [--images DIR] [--work DIR] [--out DIR]
                           [--rounds N] [--spawns N] [--memory MB]
     scripts/profile-spawn --local --exclave EXCLAVE [...]
+    scripts/profile-spawn --analyse [--out DIR] [--spawns N]
 
 The reference machine withholds kernel addresses from an unprivileged user (kernel.kptr_restrict),
 so the profile runs in one x86-64 VM of the matrix (test/matrix.py's rows and boot), by default
@@ -21,6 +22,8 @@ error, on SIGTERM or SIGINT, and when the file stop appears in --work.
 --local runs the guest's part on this machine, on a copy of the exclave relinked with
 build/launcher, and analyses it the same way: a test of the pipeline, without kernel symbols where
 the machine withholds them.
+
+--analyse writes profile.md again from the files of a run in --out.
 """
 
 import argparse
@@ -187,14 +190,14 @@ def run(
 # --- the guest's part: the measurement ------------------------------------------------------------
 
 
-def compile_spawn(ex: str, out: str, name: str, spawns: int) -> str:
-    """bench.SPAWN_C with `spawns` spawns a run, built by the exclave's gcc as bench builds it."""
-    plain = "int n = 300;"
-    if plain not in bench.SPAWN_C:
-        sys.exit("test/bench.py's SPAWN_C no longer says how many spawns it makes")
+def compile_spawn(ex: str, out: str, name: str, spawns: int, true: str) -> str:
+    """bench.SPAWN_C with `spawns` spawns a run of `true`, built by the exclave's gcc."""
+    plain, path = "int n = 300;", '"/usr/bin/true"'
+    if plain not in bench.SPAWN_C or path not in bench.SPAWN_C:
+        sys.exit("test/bench.py's SPAWN_C no longer says what it spawns and how often")
     src = os.path.join(out, name + ".c")
     with open(src, "w") as f:
-        f.write(bench.SPAWN_C.replace(plain, f"int n = {spawns:d};"))
+        f.write(bench.SPAWN_C.replace(plain, f"int n = {spawns:d};").replace(path, f'"{true}"'))
     prog = os.path.join(out, name)
     gcc = os.path.join(ex, "tree", "usr", "bin", bench.GCC)
     p = run([gcc, "-O2", "-o", prog, src], cwd=out, env={"PATH": "/usr/bin:/bin"})
@@ -214,12 +217,21 @@ def guest(args: argparse.Namespace) -> None:
     """Measure both sides into args.out: timings, perf stat, perf reports, strace counts."""
     ex, out, perf = os.path.abspath(args.exclave), os.path.abspath(args.out), args.perf
     os.makedirs(os.path.join(out, "raw"), exist_ok=True)
-    spawnb = compile_spawn(ex, out, "spawnb", args.spawns)
+    # both sides spawn the same program, the exclave's GNU true: inside by its name, natively as its
+    # original on the host's own loader and libc, whatever the host's /usr/bin/true is
+    true = os.path.join(ex, "tree", "usr", "bin", ".real", "true")
     strace_n = 100
-    spawns_strace = compile_spawn(ex, out, "spawns", strace_n)
+    prog = {
+        (side, n): compile_spawn(ex, out, f"spawn-{side}-{n:d}", n, t)
+        for side, t in (("native", true), ("launcher", "/usr/bin/true"))
+        for n in (args.spawns, strace_n)
+    }
     launcher = os.path.join(ex, ".exclave", "launcher")
     env = {"PATH": "/usr/bin:/bin"}
-    cmd = {"native": [spawnb], "launcher": [launcher, spawnb]}
+    cmd = {
+        "native": [prog["native", args.spawns]],
+        "launcher": [launcher, prog["launcher", args.spawns]],
+    }
     pmu = event_works(perf, "cycles")
     ev = "cycles" if pmu else "cpu-clock"
     stat_events = ["task-clock", "page-faults", "context-switches"]
@@ -234,6 +246,11 @@ def guest(args: argparse.Namespace) -> None:
         f"perf stat events {','.join(stat_events)}",
         "perf " + run([perf, "--version"]).stdout.strip(),
         "uname " + " ".join(platform.uname()),
+        (
+            f"native spawns {true}; the host's /usr/bin/true is "
+            f"{os.path.realpath('/usr/bin/true')}, "
+            f"{os.path.getsize(os.path.realpath('/usr/bin/true')):d} bytes"
+        ),
     ]
     for f in ("kernel/kptr_restrict", "kernel/perf_event_paranoid"):
         with open("/proc/sys/" + f) as fh:
@@ -314,7 +331,10 @@ def guest(args: argparse.Namespace) -> None:
         for side in SIDES:
             f.write(f"{side} " + " | ".join(times[side]) + "\n")
     if shutil.which("strace"):
-        for side, c in (("native", [spawns_strace]), ("launcher", [launcher, spawns_strace])):
+        for side, c in (
+            ("native", [prog["native", strace_n]]),
+            ("launcher", [launcher, prog["launcher", strace_n]]),
+        ):
             so = os.path.join(out, f"strace-{side}.txt")
             run(["strace", "-f", "-c", "-o", so, *c], cwd=out, env=env)
 
@@ -346,7 +366,9 @@ def parse_children(text: str) -> Table:
     for line in text.splitlines():
         m = re.match(r"\s*([\d.]+)%\s+([\d.]+)%\s+(.+?)\s*$", line)
         if m and not line.lstrip().startswith("#"):
-            t[m.group(3)] += float(m.group(1)) / 100 * total
+            # perf marks a function [k] or [.] by no rule a reader can use in this report, one entry
+            # each, so the bare name is the key
+            t[re.sub(r"^\[.\] ", "", m.group(3))] += float(m.group(1)) / 100 * total
     return t
 
 
@@ -384,8 +406,8 @@ def side_sum(raw: str, side: str, kind: str, parse: Callable[[str], Table]) -> t
     return total, n
 
 
-def analyse(out: str, spawns: int, host_conditions: list[str]) -> str:
-    """Write profile.md in out from the guest's files, and return it."""
+def analyse(out: str, spawns: int) -> str:
+    """Write profile.md in out from the files of a run, and return it."""
     raw = os.path.join(out, "raw")
     stats = {s: side_sum(raw, s, "stat", parse_stat) for s in SIDES}
     rounds = stats["native"][1]
@@ -407,9 +429,10 @@ def analyse(out: str, spawns: int, host_conditions: list[str]) -> str:
         return f"{v / scale:.2f}"
 
     lines: list[str] = ["# Spawn profile, native against the launcher", ""]
-    with open(os.path.join(out, "guest-conditions.txt")) as f:
-        lines += ["## Conditions", "", *[f"- {x}" for x in host_conditions]]
-        lines += [f"- {x.strip()}" for x in f if x.strip()]
+    lines += ["## Conditions", ""]
+    for name in ("host-conditions.txt", "guest-conditions.txt"):
+        with open(os.path.join(out, name)) as f:
+            lines += [f"- {x.strip()}" for x in f if x.strip()]
     if ghz:
         lines.append(f"- {ghz:.2f} cycles a nanosecond of task-clock over both sides")
     lines += ["", "## Plain runs (us a spawn, page faults a process), by round", ""]
@@ -429,6 +452,12 @@ def analyse(out: str, spawns: int, host_conditions: list[str]) -> str:
     selfs = {s: side_sum(raw, s, "self", parse_self)[0] for s in SIDES}
     kids = {s: side_sum(raw, s, "children", parse_children)[0] for s in SIDES}
     dsos = {s: side_sum(raw, s, "dso", parse_self)[0] for s in SIDES}
+    # perf names each process's anonymous executable memory, the launcher's syscall page, by its tid
+    for d in dsos.values():
+        for k in [k for k in d if k.startswith("[JIT] tid ")]:
+            d["[JIT] the syscall page and other anonymous code"] = d.get(
+                "[JIT] the syscall page and other anonymous code", 0
+            ) + d.pop(k)
 
     def kernel_total(side: str) -> float:
         return sum(v for k, v in selfs[side].items() if k.startswith("[k]"))
@@ -459,7 +488,7 @@ def analyse(out: str, spawns: int, host_conditions: list[str]) -> str:
     )
     for k in keys:
         a, b = dsos["native"].get(k, 0) / per, dsos["launcher"].get(k, 0) / per
-        if max(a, b) * 1000 >= scale * 0.01:
+        if max(a, b) >= 0.5 * scale:
             lines.append(f"| `{k}` | {fmt(a)} | {fmt(b)} | {fmt(b - a)} |")
     lines += [
         "",
@@ -470,10 +499,7 @@ def analyse(out: str, spawns: int, host_conditions: list[str]) -> str:
     ]
     for stage, funcs in ANCHORS:
         for fn in funcs:
-            a, b = (
-                kids["native"].get("[k] " + fn, 0) / per,
-                kids["launcher"].get("[k] " + fn, 0) / per,
-            )
+            a, b = (kids["native"].get(fn, 0) / per, kids["launcher"].get(fn, 0) / per)
             if a or b:
                 lines.append(f"| {stage} | `{fn}` | {fmt(a)} | {fmt(b)} | {fmt(b - a)} |")
     for title, tables, limit in (("self", selfs, 60), ("inclusive", kids, 80)):
@@ -604,9 +630,13 @@ S=sudo
 A="$S env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=900 install -y -q"
 $A linux-tools-$(uname -r) >apt.log 2>&1 || $A linux-tools-generic >>apt.log 2>&1 || {
     tail -5 apt.log; exit 1; }
-perf=/usr/lib/linux-tools/$(uname -r)/perf
-[ -x "$perf" ] || perf=$(ls /usr/lib/linux-tools/*/perf 2>/dev/null | tail -1)
-[ -x "$perf" ] || { echo no perf; exit 1; }
+# the perf built for the kernel, wherever its package puts it, else one that runs here
+for p in /usr/lib/linux-tools/$(uname -r)/perf /usr/lib/linux-tools-$(uname -r)/perf \
+    $(dpkg -L linux-tools-$(uname -r) linux-tools-generic 2>/dev/null | grep '/perf$') \
+    $(command -v perf); do
+    [ -f "$p" ] && "$p" --version >/dev/null 2>&1 && { perf=$p; break; }
+done
+[ -n "${perf-}" ] || { echo no perf; tail -5 apt.log; dpkg -l 'linux-tools*' | tail -5; exit 1; }
 $S sysctl -q -w kernel.kptr_restrict=0 kernel.perf_event_paranoid=-1
 $S mount -o remount,mode=755 /sys/kernel/tracing 2>/dev/null
 for e in raw_syscalls signal; do $S chmod -R a+rX /sys/kernel/tracing/events/$e 2>/dev/null; done
@@ -681,10 +711,12 @@ def host(args: argparse.Namespace) -> None:
         done.set()
         log("stopping the VM")
         stop_vm(vm, row.name, work)
-    for f in ("spawnb", "spawns"):
-        with contextlib.suppress(FileNotFoundError):
+    for f in os.listdir(out):
+        if f.startswith("spawn-") and not f.endswith(".c"):
             os.remove(os.path.join(out, f))
-    analyse(out, args.spawns, conditions)
+    with open(os.path.join(out, "host-conditions.txt"), "w") as f:
+        f.write("\n".join(conditions) + "\n")
+    analyse(out, args.spawns)
     log("written", os.path.join(out, "profile.md"))
 
 
@@ -698,7 +730,9 @@ def local(args: argparse.Namespace) -> None:
     args.out = out
     args.perf = shutil.which("perf") or sys.exit("no perf here")
     guest(args)
-    analyse(out, args.spawns, ["local run on the host, " + " ".join(platform.uname())])
+    with open(os.path.join(out, "host-conditions.txt"), "w") as f:
+        f.write("local run on the host, " + " ".join(platform.uname()) + "\n")
+    analyse(out, args.spawns)
     log("written", os.path.join(out, "profile.md"))
 
 
@@ -706,9 +740,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument(
-        "--exclave", required=True, help="the gcc exclave (scripts/inputs: gcc13.exclave)"
-    )
+    ap.add_argument("--exclave", help="the gcc exclave (scripts/inputs: gcc13.exclave)")
     ap.add_argument("--row", default="ubuntu-26.10", help="the x86-64 matrix row to boot")
     ap.add_argument("--images", default=os.path.join(REPO, "build", "images"))
     ap.add_argument("--work", default=os.path.join(REPO, "build", "profile-work"))
@@ -717,9 +749,17 @@ def main() -> None:
     ap.add_argument("--spawns", type=int, default=2000)
     ap.add_argument("--memory", type=int, default=2048)
     ap.add_argument("--local", action="store_true", help="run on this machine, without a VM")
+    ap.add_argument(
+        "--analyse", action="store_true", help="write profile.md again from --out's files"
+    )
     ap.add_argument("--guest", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--perf", help=argparse.SUPPRESS)
     args = ap.parse_args()
+    if args.analyse:
+        analyse(os.path.abspath(args.out), args.spawns)
+        return
+    if not args.exclave:
+        ap.error("--exclave is required")
     if args.guest:
         guest(args)
     elif args.local:
