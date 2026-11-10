@@ -602,6 +602,65 @@ class VM:
                     os.remove(f)
 
 
+def pack_payload(
+    work: str,
+    arch: str,
+    libc: str,
+    exclave: str,
+    *,
+    commit: str,
+    docker_profile: str | None = None,
+    release: str | None = None,
+) -> str:
+    """The payload a VM of arch and libc unpacks: the test tree, the pinned Python and the builds.
+
+    It carries the repository's test, src and tool, the pinned Python built for the VM, the
+    launchers and the command built here for arch, the Go regression's programs, and the exclave,
+    or, given release (make_release's directory) for this machine, the release that holds it.
+    """
+    payload = os.path.join(work, f"payload-{arch}-{libc}.tar.gz")
+    # packed afresh every run, so the VMs never test a stale tree
+    log("packing the test tree for", arch)
+    with tarfile.open(payload, "w:gz", compresslevel=1) as t:
+        # src and tool: the sources the suite's fixture is stamped with
+        for d in ("test", "src", "tool"):
+            t.add(os.path.join(REPO, d), arcname="repo/" + d)
+        # the text the launcher carries, which exclave_readme compares
+        t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")
+        # what scripts/reproduce copies and runs, and the commit it names, without a checkout
+        for f in ("scripts/build", "scripts/lib.sh", "scripts/reproduce", "VERSION"):
+            t.add(os.path.join(REPO, f), arcname="repo/" + f)
+        info = tarfile.TarInfo("repo/COMMIT")
+        info.size = len(commit) + 1
+        t.addfile(info, io.BytesIO(commit.encode() + b"\n"))
+        t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
+        if docker_profile:
+            t.add(docker_profile, arcname="docker-seccomp.json")
+        # the Go regression's programs, built here for the VM's machine: the VMs have no go
+        go = tree.go_toolchain()
+        if go:
+            for n, p in tree.go_build(go, os.path.join(work, "go-" + arch), arch, work):
+                t.add(p, arcname=f"repo/build/go/{arch}/{n}")
+            fwd = tree.go_build_cgo(go, os.path.join(work, "go-" + arch), arch, work)
+            if fwd:
+                t.add(fwd, arcname=f"repo/build/go/{arch}/go_fwd")
+        if arch == MACHINE and release:
+            out = os.path.join(release, "out")
+            for f in sorted(os.listdir(out)):
+                t.add(os.path.join(out, f), arcname="rel/" + f)
+            t.add(os.path.join(release, "key.pub"), arcname="releaser.pub")
+        else:
+            t.add(exclave, arcname="ex")
+        t.add(built("launcher", arch), arcname="repo/build/launcher")
+        t.add(built("exclave", arch), arcname="repo/build/exclave")
+        if os.path.exists(built("launcher-old", arch)):
+            t.add(built("launcher-old", arch), arcname="repo/build/launcher-old")
+        # test/sysroot.py's output: runs natively on every glibc of its machine
+        if arch == MACHINE and os.path.exists(os.path.join(REPO, "build", "sysroot-hello")):
+            t.add(os.path.join(REPO, "build", "sysroot-hello"), arcname="repo/build/sysroot-hello")
+    return payload
+
+
 def make_release(ex: str, reproduced_command: str, work: str) -> str | None:
     """A release of a copy of ex as scripts/release makes one (10.5), signed with a key made here.
 
@@ -776,52 +835,17 @@ def main() -> int:
     )
 
     def payload_for(arch: str, libc: str) -> str:
-        if (arch, libc) in payloads:
-            return payloads[arch, libc]
-        payload = os.path.join(work, f"payload-{arch}-{libc}.tar.gz")
-        # packed afresh every run, so the VMs never test a stale tree
-        log("packing the test tree for", arch)
-        with tarfile.open(payload, "w:gz", compresslevel=1) as t:
-            # src and tool: the sources the suite's fixture is stamped with
-            for d in ("test", "src", "tool"):
-                t.add(os.path.join(REPO, d), arcname="repo/" + d)
-            # the text the launcher carries, which exclave_readme compares
-            t.add(os.path.join(REPO, "LICENSE"), arcname="repo/LICENSE")
-            # what scripts/reproduce copies and runs, and the commit it names, without a checkout
-            for f in ("scripts/build", "scripts/lib.sh", "scripts/reproduce", "VERSION"):
-                t.add(os.path.join(REPO, f), arcname="repo/" + f)
-            info = tarfile.TarInfo("repo/COMMIT")
-            info.size = len(commit) + 1
-            t.addfile(info, io.BytesIO(commit.encode() + b"\n"))
-            t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
-            if args.docker_profile:
-                t.add(args.docker_profile, arcname="docker-seccomp.json")
-            # the Go regression's programs, built here for the VM's machine: the VMs have no go
-            go = tree.go_toolchain()
-            if go:
-                for n, p in tree.go_build(go, os.path.join(work, "go-" + arch), arch, work):
-                    t.add(p, arcname=f"repo/build/go/{arch}/{n}")
-                fwd = tree.go_build_cgo(go, os.path.join(work, "go-" + arch), arch, work)
-                if fwd:
-                    t.add(fwd, arcname=f"repo/build/go/{arch}/go_fwd")
-            if arch == MACHINE and release:
-                out = os.path.join(release, "out")
-                for f in sorted(os.listdir(out)):
-                    t.add(os.path.join(out, f), arcname="rel/" + f)
-                t.add(os.path.join(release, "key.pub"), arcname="releaser.pub")
-            else:
-                t.add(exclaves[arch], arcname="ex")
-            t.add(built("launcher", arch), arcname="repo/build/launcher")
-            t.add(built("exclave", arch), arcname="repo/build/exclave")
-            if os.path.exists(built("launcher-old", arch)):
-                t.add(built("launcher-old", arch), arcname="repo/build/launcher-old")
-            # test/sysroot.py's output: runs natively on every glibc of its machine
-            if arch == MACHINE and os.path.exists(os.path.join(REPO, "build", "sysroot-hello")):
-                t.add(
-                    os.path.join(REPO, "build", "sysroot-hello"), arcname="repo/build/sysroot-hello"
-                )
-        payloads[arch, libc] = payload
-        return payload
+        if (arch, libc) not in payloads:
+            payloads[arch, libc] = pack_payload(
+                work,
+                arch,
+                libc,
+                exclaves[arch],
+                commit=commit,
+                docker_profile=args.docker_profile,
+                release=release if arch == MACHINE else None,
+            )
+        return payloads[arch, libc]
 
     start_lock = threading.Lock()
 

@@ -1,0 +1,8 @@
+#!/bin/sh
+# scripts/profile-spawn: a spawn's kernel side profiled with kernel symbols in a matrix VM (docs/DESIGN.md 16.4,
+# 16.9), run by the pinned Python (scripts/lib.sh); --local runs it on this machine instead. It builds the launchers
+# and the command first (scripts/build), which takes no time when they are up to date.
+set -eu
+. "$(dirname -- "$0")/lib.sh"
+"$ROOT/scripts/build" || exit 2
+exec "$UV" run --quiet --project "$ROOT" python "$ROOT/test/profile_spawn.py" "$@"
