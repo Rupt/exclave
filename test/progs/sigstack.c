@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
@@ -177,6 +178,14 @@ static void child_wide(void)
 int main(void)
 {
     setvbuf(stdout, 0, _IOLBF, 0);
+    /* no core from the children that die here by design: a limit of 1 stops the kernel's dump to a file or to a
+     * pipe helper (do_coredump), and a helper that outlasts wait_bounded would have the death read as its SIGKILL,
+     * which is what the kernel reports for a process killed while it dumps */
+    struct rlimit core;
+    if (getrlimit(RLIMIT_CORE, &core) == 0 && core.rlim_max >= 1) {
+        core.rlim_cur = 1;
+        setrlimit(RLIMIT_CORE, &core);
+    }
     /* the least stack sigaltstack accepts: the constant MINSIGSTKSZ or the kernel's frame (AT_MINSIGSTKSZ, which
      * sysconf answers), whichever is larger (sigaltstack_size_valid) */
     long minsz = sysconf(_SC_MINSIGSTKSZ);
