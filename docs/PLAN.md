@@ -120,6 +120,12 @@ documents, gate, one commit per item. Status is in brackets.
     wrapper's real path, so the entry exec'd a directory; fixed, with a
     regression over every spelling, and item 57 names the entry as a way
     to run a venv from outside.
+12. **The start's memory** [done]: the first of the profile's candidate
+    cuts (item 7). The start keeps its buffers in the scratch chunk the
+    first trapped call takes and the exclave's paths in the arena, so a
+    process started inside touches two dozen pages fewer, and the
+    image's `.bss` is half what it was, which lowers the data limit a
+    wrapper runs under (DESIGN 7.2, 16.4, 16.6 item 10, 13 item 60).
 
 ## After the first release
 

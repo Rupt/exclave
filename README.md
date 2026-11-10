@@ -231,7 +231,7 @@ ones a first user meets, with the rule behind each and what to do:
   same binary at the same mtime; ccache needs `compiler_check =
   %compiler% -v`.
 - **Overhead is per trapped syscall:** 6 to 11 times native on a tight
-  `stat` loop, about two fifths more on thirty small compiles, where
+  `stat` loop, a tenth to two fifths more on small compiles, where
   process start dominates, and within noise on a compute-bound compile.
   Section 16 of `docs/DESIGN.md` has the measurements.
 - **A running program on a host path is not protected from another

@@ -792,6 +792,34 @@ def sve_across_traps(ctx: Ctx) -> str:
 
 
 @test
+def start_page_faults(ctx: Ctx) -> str:
+    """16.4: a start touches few pages of its own.
+
+    test/progs/spawn_faults.c runs a program twenty times and prints the page faults a run took.
+    Natively, the tree's true through the tree's loader, the count is the kernel's and the
+    program's. Behind its wrapper, spawned from inside, the launcher's start is added: it keeps
+    its buffers in one scratch chunk, the one the program's first trapped call takes next, and the
+    exclave's paths in the arena, so at most 50 more faults; a buffer of the start's kept in the
+    image again, a page touched for each, goes past that.
+    """
+    prog = os.path.join(ctx.progs, "spawn_faults")
+    loader = ctx.payload(ctx.interp)
+    libdir = os.path.dirname(ctx.payload(ctx.libc)) if ctx.libc else os.path.dirname(loader)
+    true = ctx.payload("true")
+    # an applet's link leads to busybox, which is told its applet
+    applet = ["true"] if os.path.basename(true) == "busybox" else []
+    native_cmd = [loader, "--library-path", libdir, true, *applet]
+    rc, out, err = run([*native_cmd[:3], prog, *native_cmd], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0 and out.strip().isdigit(), f"spawn_faults natively: rc={rc} {out!r} {err!r}")
+    native = int(out)
+    rc, out, err = inside(ctx, prog, [ctx.vbin("true")])
+    expect(rc == 0 and out.strip().isdigit(), f"spawn_faults inside: rc={rc} {out!r} {err!r}")
+    got = int(out)
+    expect(got - native <= 50, f"a start inside takes {got} page faults, natively {native}")
+    return f"{got} against {native}"
+
+
+@test
 def shadow_stack_if_glibc_enables_it(ctx: Ctx) -> str | None:
     """13 item 49: a CET-marked program runs inside with the shadow-stack tunable set inside.
 

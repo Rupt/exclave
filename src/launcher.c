@@ -190,11 +190,13 @@ static char **pointers(long n)
     if (m < 0 && m > -4096) die("out of memory", 0, ENOMEM);
     return (char **)m;
 }
+/* The program's environment: inside, the kernel's vector closed up in place over the launcher's own variables, which
+ * takes no memory; at the border, where the fixed variables are added, a vector of its own. */
 static char **env_prepare(char **envp, int boundary)
 {
     long n = 0;
     while (envp[n]) n++;
-    char **out = pointers(n + 6);
+    char **out = boundary ? pointers(n + 6) : envp;
     long k = 0;
     for (long i = 0; i < n; i++) {
         if (boundary ? env_denied(envp[i]) : internal_var(envp[i])) continue;
@@ -252,10 +254,19 @@ static void retrace(const char *exe, char **argv, char **envp)
     SC2(NR_munmap, env, ((size_t)(k + 1) * sizeof(char *) + 0xfff) & ~(size_t)0xfff);
 }
 
-static long manifest_fd;
-static void find_exclave(const char *exe)
+/* a path kept for the life of the process, in the arena: s, cut as a PATH_MAX buffer would cut it */
+static char *keep_path(const char *s)
 {
-    char d[PATH_MAX];
+    size_t l = xstrlen(s);
+    return arena_str(s, l < PATH_MAX ? l : PATH_MAX - 1);
+}
+
+/* Finds the exclave above the launcher's own path and returns its manifest, open, or the error of its open. S->cur is
+ * the directory in hand and S->tmp a name in it */
+static long find_exclave(struct scratch *S, const char *exe)
+{
+    char *d = S->cur, *p = S->tmp;
+    long manifest_fd;
     scpy(d, exe, PATH_MAX);
     for (;;) {
         char *s = xstrrchr(d, '/');
@@ -264,7 +275,6 @@ static void find_exclave(const char *exe)
                 "no directory above this one has .exclave/manifest",
                 exe, 0);
         *s = 0;
-        char p[PATH_MAX];
         scpy(p, d, PATH_MAX);
         scat(p, "/.exclave/manifest", PATH_MAX);
         /* opened where it is found, for read_manifest; one that fails to open for another reason than its absence
@@ -274,12 +284,14 @@ static void find_exclave(const char *exe)
         struct kstat st;
         if (manifest_fd != -ENOENT && manifest_fd != -ENOTDIR && sys_stat(p, &st) == 0) break;
     }
-    scpy(C.dir, d, PATH_MAX);
-    scpy(C.root, d, PATH_MAX);
-    scat(C.root, "/tree", PATH_MAX);
+    C.dir = keep_path(d);
+    scpy(p, d, PATH_MAX);
+    scat(p, "/tree", PATH_MAX);
+    C.root = keep_path(p);
     C.rootlen = (long)xstrlen(C.root);
-    scpy(C.launcher, d, PATH_MAX);
-    scat(C.launcher, "/.exclave/launcher", PATH_MAX);
+    scpy(p, d, PATH_MAX);
+    scat(p, "/.exclave/launcher", PATH_MAX);
+    C.launcher = keep_path(p);
     struct kstat st;
     if (sys_stat(C.launcher, &st) < 0) die("exclave has no launcher", C.launcher, 0);
     C.launcher_dev = st.st_dev;
@@ -288,32 +300,38 @@ static void find_exclave(const char *exe)
     if (sys_stat(C.root, &st) < 0 || (st.st_mode & S_IFMT) != S_IFDIR) die("exclave has no tree/", C.root, 0);
     C.root_dev = st.st_dev;
     C.root_ino = st.st_ino;
+    return manifest_fd;
 }
 
-static void read_manifest(unsigned long *auxv)
+/* a failure to read the manifest, which the message names */
+static __attribute__((noreturn)) void manifest_die(struct scratch *S, const char *what, long err)
 {
-    char p[PATH_MAX];
-    scpy(p, C.dir, PATH_MAX);
-    scat(p, "/.exclave/manifest", PATH_MAX);
-    long fd = manifest_fd;
-    if (fd < 0) die("cannot open manifest", p, fd);
-    /* one that fits a page, as most do, is read whole, with no stat and no mapping (16.4); a longer one is mapped */
-    static char small[4096];
+    scpy(S->tmp, C.dir, PATH_MAX);
+    scat(S->tmp, "/.exclave/manifest", PATH_MAX);
+    die(what, S->tmp, err);
+}
+static void read_manifest(struct scratch *S, long fd, unsigned long *auxv)
+{
+    if (fd < 0) manifest_die(S, "cannot open manifest", fd);
+    /* one that fits a page, as most do, is read whole, with no stat and no mapping (16.4), into the first page of
+     * S->rest; a longer one is mapped. The parser keeps nothing of either: what it keeps is the arena's */
+    char *small = S->rest;
+    const long page = 4096;
     long n = 0, r = 0;
-    while (n < (long)sizeof small && (r = sys_read((int)fd, small + n, sizeof small - (size_t)n)) > 0) n += r;
-    if (r < 0) die("cannot read manifest", p, r);
+    while (n < page && (r = sys_read((int)fd, small + n, (size_t)(page - n))) > 0) n += r;
+    if (r < 0) manifest_die(S, "cannot read manifest", r);
     const char *m = small;
     size_t size = (size_t)n;
-    if (n == (long)sizeof small) {
+    if (n == page) {
         struct kstat st;
-        if (SC2(NR_fstat, fd, &st) < 0) die("cannot stat manifest", p, 0);
+        if (SC2(NR_fstat, fd, &st) < 0) manifest_die(S, "cannot stat manifest", 0);
         long a = sys_mmap(0, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, (int)fd, 0);
-        if (a < 0 && a > -4096) die("cannot map manifest", p, a);
+        if (a < 0 && a > -4096) manifest_die(S, "cannot map manifest", a);
         m = (const char *)a;
         size = (size_t)st.st_size;
     }
     sys_close((int)fd);
-    if (size == 0) die("manifest is empty", p, 0);
+    if (size == 0) manifest_die(S, "manifest is empty", 0);
     char err[256];
     if (manifest_parse(m, size, &C, err, sizeof err) < 0) die("bad manifest", err, 0);
     if (m != small) SC2(NR_munmap, m, size);
@@ -385,14 +403,12 @@ static void exec_checks(const char *v, char *real)
  * before loading anything, so that the entry refuses what an exec inside refuses: the target is resolved as an exec
  * resolves it and checked (exec_checks), and a wrapper is exec'd as itself so that the kernel gives the program its
  * identity. */
-static void loader_mode_check(char **argv, char **env2)
+static void loader_mode_check(struct scratch *S, char **argv, char **env2)
 {
-    struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0);
-    if (!S) die("out of memory", 0, ENOMEM);
     scpy(S->arg, C.program, PATH_MAX);                        /* the target as given, for the wrapper's exec */
     long r = canon(S, C.program, AT_FDCWD, 1, S->v);
     if (r < 0) die_status(r == -ENOENT ? 127 : 126, "cannot execute", C.program, r);
-    scpy(C.program, S->v, PATH_MAX);
+    C.program = keep_path(S->v);
     exec_checks(C.program, S->real);
     /* a wrapper: the kernel runs the launcher under the program's name, exec'd by the name the caller spelt, /bin/sh,
      * so that comm is the kernel's answer for that name, and the kernel follows the last link. It follows it on the
@@ -416,7 +432,6 @@ static void loader_mode_check(char **argv, char **env2)
         long e = sys_execve(S->real2, argv, env2);
         die("cannot exec the wrapper", C.program, e);
     }
-    scratch_put(S);
 }
 
 /* joins dir and name into out, PATH_MAX bytes; 0 when it does not fit */
@@ -435,7 +450,7 @@ static int join_path(char *out, const char *dir, const char *name)
  * when it leads to the script, v. A script a link in the tree names, as /usr/bin/psql names postgresql-common's
  * pg_wrapper, which dispatches on its $0, thus gets the link's name, the last component the kernel would give it;
  * otherwise $0 is v. */
-static void outside_spelling(const char *v, const unsigned long *auxv, char *out)
+static void outside_spelling(struct scratch *S, const char *v, const unsigned long *auxv, char *out)
 {
     scpy(out, v, PATH_MAX);
     const char *fn = 0;
@@ -467,10 +482,7 @@ static void outside_spelling(const char *v, const unsigned long *auxv, char *out
         if (n < 0 || !join_path(at, text, base)) return;
         if (starts_dir(at, C.root) && xstrcmp(at, C.root) != 0) {
             from_real(at);
-            struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0);
-            if (!S) return;
             if (canon(S, at, AT_FDCWD, 1, S->v) >= 0 && xstrcmp(S->v, v) == 0) scpy(out, at, PATH_MAX);
-            scratch_put(S);
             return;
         }
         struct kstat st;
@@ -487,11 +499,12 @@ static void outside_spelling(const char *v, const unsigned long *auxv, char *out
     }
 }
 
-/* 7.3, 7.4.5: load the program at virtual path v; scripts go through their interpreter (kernel convention) */
-static __attribute__((noreturn)) void run(const char *v, const char *given, long argc, char **argv, char **envp,
-                                          unsigned long *auxv, int depth)
+/* 7.3, 7.4.5: load the program at virtual path v, a string that lasts; scripts go through their interpreter (kernel
+ * convention). The file's real path is resolved where the loader keeps it, and S->tmp holds its wrapper's original */
+static __attribute__((noreturn)) void run(struct scratch *S, const char *v, const char *given, long argc, char **argv,
+                                          char **envp, unsigned long *auxv, int depth)
 {
-    static char real[PATH_MAX], payload[PATH_MAX];
+    char *real = loader_real(), *payload = S->tmp;
     /* as binfmt_script: five may nest (7.4.5) */
     if (depth > 5) die_status(126, "interpreter chain too deep", v, ELOOP);
     to_real_exec(v, real);
@@ -500,10 +513,10 @@ static __attribute__((noreturn)) void run(const char *v, const char *given, long
     if (fd < 0) die("cannot open program", v, fd);
     /* the head the loader reads its headers from, of which a #! line is the first BINPRM_BUF_SIZE bytes */
     const char *head;
-    long n = loader_head((int)fd, &head);
+    long n = loader_head(S, (int)fd, &head);
     if (n >= 4 && head[0] == 0x7f && head[1] == 'E' && head[2] == 'L' && head[3] == 'F') {
-        if (!C.exe_fixed) scpy(C.exe, v, PATH_MAX);
-        loader_run(v, real, (int)fd, argc, argv, envp, auxv);
+        if (!C.exe_fixed) C.exe = v;
+        loader_run(S, v, (int)fd, argc, argv, envp, auxv);
     }
     sys_close((int)fd);
     if (n > BINPRM_BUF_SIZE) n = BINPRM_BUF_SIZE;
@@ -516,19 +529,16 @@ static __attribute__((noreturn)) void run(const char *v, const char *given, long
     /* the script's path as it was spelt, as the kernel passes it (7.4.5); a wrapped script run from outside the
      * exclave gets a virtual path instead, since the spelling names the file in the host's world, where "$0.bin"
      * and $(dirname "$0")/sibling are not (13 item 39) */
-    if (depth == 0 && C.boundary && !C.loader_mode) outside_spelling(v, auxv, script);
+    if (depth == 0 && C.boundary && !C.loader_mode) outside_spelling(S, v, auxv, script);
     else scpy(script, given, PATH_MAX);
     long k = shebang_argv(line, n, script, argv, argc, nargv, cap);
     if (k == -1) die_status(126, "not an executable", v, ENOEXEC);
     if (k == -2) die_status(126, "argument list too long", v, E2BIG);
-    struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0);
-    if (!S) die("out of memory", 0, ENOMEM);
     char *iv = arena_alloc(PATH_MAX);
     if (canon(S, nargv[0], AT_FDCWD, 1, iv) < 0) die_status(127, "cannot resolve interpreter", nargv[0], 0);
-    scratch_put(S);
     /* the interpreter is checked as an exec of it would be: one under a data directory is never run (6.2) */
     exec_checks(iv, real);
-    run(iv, nargv[0], k, nargv, envp, auxv, depth + 1);
+    run(S, iv, nargv[0], k, nargv, envp, auxv, depth + 1);
 }
 
 __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start */
@@ -565,7 +575,12 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
     unsigned long m = SIGSYS_BIT;                    /* 7.5.2: SIGSYS must never be blocked */
     sys_rt_sigprocmask(SIG_UNBLOCK, &m, 0, 8);
     if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, C.rlim) == 0) borrow();
-    static char exe[PATH_MAX];
+    /* the start's buffers are one chunk's, each in the role common.h gives it, held until the jump: the pages the
+     * start touches are then the ones the program's first trapped call would (16.4) */
+    struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0);
+    if (!S) die("out of memory", 0, ENOMEM);
+    C.exe = "";
+    char *exe = S->v;                                          /* until the program is named */
     long n = sys_readlink("/proc/self/exe", exe, PATH_MAX - 1);
     if (n < 0) die("cannot read /proc/self/exe", 0, n);
     exe[n] = 0;
@@ -578,46 +593,50 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
         if (argc >= 3 && xstrcmp(argv[1], "-c") == 0 && xstarts(argv[2], "exec ")) C.traced_pid = sys_getpid();
         else retrace(exe, argv, envp);
     }
-    find_exclave(exe);
+    long manifest = find_exclave(S, exe);
     log_open(envp);
-    read_manifest(auxv);
+    read_manifest(S, manifest, auxv);
 
     const char *target, *fn, *cm;
     C.descfd = -1;
     /* a wrapper: the kernel ran the launcher under the program's name. Decided first, so that EXCLAVE_EXEC in anyone's
      * environment is inert for the whole tree */
     if (starts_dir(exe, C.root)) {
-        scpy(C.program, exe, PATH_MAX);
-        from_real(C.program);
+        from_real(exe);
+        C.program = keep_path(exe);
         /* the identity the kernel would have given the program (7.6): the name a handler exec'd this wrapper by, as the
          * kernel spells it, carried in EXCLAVE_EXECFN and EXCLAVE_COMM by that handler, which only a launcher sets;
          * from the host, the kernel's own AT_EXECFN, a real path, and its last component */
         fn = have ? find_env(envp, "EXCLAVE_EXECFN") : 0;
         cm = have ? find_env(envp, "EXCLAVE_COMM") : 0;
-        if (fn) scpy(C.execfn, fn, PATH_MAX);
+        if (fn) C.execfn = keep_path(fn);
         else {
             for (long i = 0; auxv[i * 2] != AT_NULL; i++)
                 if (auxv[i * 2] == AT_EXECFN) fn = (const char *)auxv[i * 2 + 1];
-            scpy(C.execfn, fn ? fn : C.program, PATH_MAX);
-            if (fn) from_real(C.execfn);
+            if (fn) {
+                scpy(S->tmp, fn, PATH_MAX);
+                from_real(S->tmp);
+            }
+            C.execfn = keep_path(fn ? S->tmp : C.program);
         }
         scpy(C.comm, cm ? cm : base_name(C.execfn), sizeof C.comm);
     } else if ((target = find_env(envp, "EXCLAVE_EXEC"))) {
         /* the internal protocol of 7.4.5: re-exec'd by a handler, or by entry_exec */
         if (target[0] != '/') die("EXCLAVE_EXEC must be an absolute path", target, 0);
         C.loader_mode = 1;
-        scpy(C.program, target, PATH_MAX);
+        C.program = keep_path(target);
         /* the name the program was exec'd by, and its comm, as the kernel spells them (7.6) */
         fn = find_env(envp, "EXCLAVE_EXECFN");
         cm = find_env(envp, "EXCLAVE_COMM");
-        scpy(C.execfn, fn ? fn : target, PATH_MAX);
+        C.execfn = keep_path(fn ? fn : target);
         scpy(C.comm, cm ? cm : base_name(C.execfn), sizeof C.comm);
         /* a descriptor with no path (13 item 25): the kernel's identity for the program is the link's text; the dup is
          * closed once the segments are mapped */
         if (xstarts(target, "/proc/self/fd/")) {
-            long len = sys_readlink(target, C.exe, PATH_MAX - 1);
+            long len = sys_readlink(target, S->tmp, PATH_MAX - 1);
             if (len > 0) {
-                C.exe[len] = 0;
+                S->tmp[len] = 0;
+                C.exe = keep_path(S->tmp);
                 C.exe_fixed = 1;
             }
             long fd = 0;
@@ -631,9 +650,9 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
 
     C.boundary = have == 0;
     char **env2 = env_prepare(envp, C.boundary);
-    vis_init();
-    cache_init();
-    if (C.loader_mode) loader_mode_check(argv, env2);
+    vis_init(S);
+    cache_init(S->pid);
+    if (C.loader_mode) loader_mode_check(S, argv, env2);
     C.text_lo = (unsigned long)__ehdr_start;
     C.text_hi = (unsigned long)_etext;
     handler_install();
@@ -643,5 +662,5 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
         die("a launcher newer than the one that installed a program's own seccomp filter cannot run under it", 0, 0);
     if (have < FILTER_VERSION) filter_install();
     log_msg(C.boundary ? "border" : "inside", C.program);
-    run(C.program, C.execfn, argc, argv, env2, auxv, 0);
+    run(S, C.program, C.execfn, argc, argv, env2, auxv, 0);
 }

@@ -924,7 +924,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
     if (bufsiz <= 0) return -EINVAL; /* do_readlinkat: before the path is read at all */
     long r = resolve(S, a, pi, di, 0, di >= 0);
     if (r < 0) return r;
-    char *ans = 0;
+    const char *ans = 0;
     /* readlinkat(fd, ""): the kernel reads the descriptor's own link */
     if (r == 1) {
         r = RE5(NR_readlinkat, a[di], "", S->tmp, PATH_MAX - 1, 0);

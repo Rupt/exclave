@@ -207,16 +207,19 @@ struct hostmap {
 };
 
 struct exclave {
-    char dir[PATH_MAX]; /* directory holding .exclave/ */
-    char root[PATH_MAX]; /* dir/tree */
+    /* the paths are strings of the arena, each as long as it is, so that a start touches one page for them and not one
+     * for each (16.4) */
+    const char *dir; /* directory holding .exclave/ */
+    const char *root; /* dir/tree */
     long rootlen;
-    char launcher[PATH_MAX]; /* dir/.exclave/launcher */
+    const char *launcher; /* dir/.exclave/launcher */
     unsigned long launcher_dev, launcher_ino;
     long launcher_size;
-    char program[PATH_MAX]; /* virtual path of the program this process runs */
-    char exe[PATH_MAX]; /* what /proc/self/exe answers: the program, or a wrapped script's interpreter */
-    /* the path the program was exec'd by, as the kernel spells it: AT_EXECFN, a script's $0 (7.6) */
-    char execfn[PATH_MAX];
+    const char *program; /* virtual path of the program this process runs */
+    const char *exe; /* what /proc/self/exe answers: the program, or a wrapped script's interpreter */
+    /* the path the program was exec'd by, as the kernel spells it: AT_EXECFN, a script's $0 (7.6); the program's to
+     * write, as the kernel's is */
+    char *execfn;
     /* the name the kernel would set as comm: the exec'd path's last component, or empty for the name of the file
      * finally run, after an exec through a bare descriptor (7.6) */
     char comm[NAME_MAX + 1];
@@ -228,20 +231,14 @@ struct exclave {
     int boundary; /* 1: no filter of ours inherited: this process is at the border (7.2) */
     /* a process newly traced whose launcher left the second exec to its next one, a debugger's shell (7.6): its pid */
     long traced_pid;
-    /* the manifest (6.2) and what the tree says (8.1); the limits are stated in 8.1 and enforced by exclave wrap */
+    /* the manifest (6.2) and what the tree says (8.1); the limits are stated in 8.1 and enforced by exclave wrap. The
+     * counts of the tables, which come last */
     char cpu[32];
-    /* the manifest's own records (at most 256), then every non-empty top-level entry of the tree (at most 256) */
-    const char *own[MAX_OWN_RECORDS + MAX_TOP_LEVEL];
-    int nown;
-    struct hostmap host[MAX_HOST_RECORDS + N_IDENTITY + 2 * N_IDENTITY_DIRS];
-    /* the manifest's host records (at most 32), then the identity files (8.4) and the identity directories, each with
-     * the directory a host link at its name resolves to */
-    int nhost;
-    const char *data[MAX_DATA_RECORDS];
+    int nown, nhost;
     int ndata; /* data directories: never executed, never a loader (6.2) */
     /* cwd rule (8.1.4) */
-    char cwdclaim[PATH_MAX];
-    long cwdclaim_len; /* subtree given to the host; empty if none */
+    const char *cwdclaim;
+    long cwdclaim_len; /* subtree given to the host; 0 and no string if none */
     /* RLIMIT_NOFILE as the program had it, raised for the launcher's own opens (7.4.5) */
     unsigned long rlim[2];
     int borrowed;
@@ -257,6 +254,14 @@ struct exclave {
     /* the size of a directory entry on the tree's filesystem, where a directory's size counts them, or 0 (8.3) */
     long dirent_size;
     int dirent_known;
+    /* the tables last, each filled from its start: the fields above and the entries an exclave has then fit one page,
+     * the one the state begins (log.c), and a start touches no other for them (16.4) */
+    /* the manifest's host records (at most 32), then the identity files (8.4) and the identity directories, each with
+     * the directory a host link at its name resolves to */
+    struct hostmap host[MAX_HOST_RECORDS + N_IDENTITY + 2 * N_IDENTITY_DIRS];
+    const char *data[MAX_DATA_RECORDS];
+    /* the manifest's own records (at most 256), then every non-empty top-level entry of the tree (at most 256) */
+    const char *own[MAX_OWN_RECORDS + MAX_TOP_LEVEL];
 };
 extern struct exclave C;
 
@@ -270,11 +275,14 @@ int starts_dir(const char *s, const char *pfx); /* s == pfx or s starts with pfx
 /* bump allocator for the manifest's strings, the tables, the environment; never freed */
 void *arena_alloc(size_t n);
 char *arena_str(const char *s, size_t n);
+/* the paths of struct exclave: its directory, its tree, its launcher, the program as it arrived and as the entry
+ * resolved it, the exe answer, the name it was exec'd by and the working directory given to the host */
+#define EXCLAVE_PATHS 8
 /* the arena's whole capacity, which str.c's comment counts */
 #define ARENA_SIZE                                                                                                     \
     ((2 + MAX_OWN_RECORDS + MAX_HOST_RECORDS + MAX_DATA_RECORDS + MANIFEST_FIELDS) * (MANIFEST_FIELD_MAX + 17) +       \
      MAX_TOP_LEVEL * (NAME_MAX + 18) + (N_IDENTITY_DIRS + N_IDENTITY + MAX_OWN_RECORDS) * (PATH_MAX + 16) + 4 * 64 +   \
-     3 * (PATH_MAX + 32) + 6 * (BINPRM_BUF_SIZE + 17 + 2 * (PATH_MAX + 16)))
+     3 * (PATH_MAX + 32) + 6 * (BINPRM_BUF_SIZE + 17 + 2 * (PATH_MAX + 16)) + EXCLAVE_PATHS * (PATH_MAX + 16))
 /* the reserve (str.c): the cache's strings, its full table of CACHE_SLOTS 16-byte slots, the arena's rest */
 #define RESERVE_STEP 65536UL
 #define CACHE_STRINGS (1024UL * 1024)
@@ -308,7 +316,16 @@ __attribute__((noreturn)) void die_status(int status, const char *what, const ch
 int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, size_t errn);
 
 /* ---------- scratch (scratch.c) ---------- */
-/* Each buffer has one role, named here, so that no site reads a buffer another has reused (7.5.4). */
+/* Each buffer has one role, named here, so that no site reads a buffer another has reused (7.5.4).
+ *
+ * The start holds one chunk from its first path to the jump (launcher.c) and keeps every buffer of its own there, so
+ * that the pages it touches are the ones the program's first trapped call would, and the image carries none (16.4).
+ * Between its walks, which have the buffers in the roles below, it uses them one step at a time: v is the launcher's
+ * own path until the program is named, then the directories the rule's resolution has found (tree_real_of); cur and
+ * tmp are the search for the exclave and then the name a message needs, a link's text or a wrapper's original; rest
+ * is the manifest, then the listing of the tree's top level, then the head of each file loaded; comp is the listing of
+ * a top-level directory, then a file's notes; real is the working directory; given is the loader's name as the program
+ * spells it, across the walk that resolves it; extra is the program headers. */
 struct scratch {
     /* canon's working buffers: the walk's remaining path (a directory and a relative path, or a link's text and the
      * rest, each under PATH_MAX), the directory so far, its real path and a link's text; real and v are what canon
@@ -351,8 +368,9 @@ void scratch_keep(struct scratch *s, pid_t tracer);
 pid_t scratch_deferred(pid_t pid, pid_t tid, int take);
 
 /* ---------- visibility (vis.c) ---------- */
-void vis_init(void);
-void cache_init(void);
+/* S: the start's chunk, whose buffers the tables are built in (launcher.c) */
+void vis_init(struct scratch *S);
+void cache_init(pid_t pid); /* pid: the process's own */
 /* 1 when the caller, pid, shares the memory of its parent, ppid: a vfork child (7.5.4) */
 int vfork_child(pid_t pid, pid_t ppid);
 int vis_is_host(const char *v, const char **real); /* 1 if host-owned; *real = host path */
@@ -409,10 +427,13 @@ long status_tracer(const char *buf, long n);
 long tracer_of(const char *path);
 
 /* ---------- loader (loader.c) ---------- */
-/* reads the first bytes of fd, the file the startup loads, for loader_run: returns their count, *bytes the bytes */
-long loader_head(int fd, const char **bytes);
-/* fd: real, open, its head read by loader_head */
-__attribute__((noreturn)) void loader_run(const char *vpath, const char *real, int fd, long argc, char **argv,
+/* the buffer the program's real path is resolved into, PATH_MAX, which loader_run loads and gdb's script reads (7.6) */
+char *loader_real(void);
+/* reads the first bytes of fd, the file the startup loads, for loader_run, into S->rest: returns their count, *bytes
+ * the bytes, which last until the next walk */
+long loader_head(struct scratch *S, int fd, const char **bytes);
+/* fd: the file at loader_real(), open, its head read by loader_head; S: the start's chunk, released before the jump */
+__attribute__((noreturn)) void loader_run(struct scratch *S, const char *vpath, int fd, long argc, char **argv,
                                           char **envp, const unsigned long *auxv);
 /* real opened O_RDONLY|O_CLOEXEC, the soft descriptor limit raised to the hard one for the open when the program is at
  * it (7.4.5): the descriptor or -errno */

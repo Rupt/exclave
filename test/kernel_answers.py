@@ -1788,16 +1788,17 @@ MEM_LAYOUT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("AS 16MB", "ran"),
     ("DATA 4096KB", "ran"),
     ("DATA 1024KB", "ran"),
-    # the libc's and the page size's: 240 KB is enough for glibc's true on x86-64
-    ("DATA 256KB", ("ran", "signal 11")),
+    # the libc's: glibc's loader cannot map its libc beside this program's own data and says so,
+    # status 127; a smaller libc fits
+    ("DATA 128KB", ("ran", "status 127", "signal 11")),
     ("arg limit slack under 64 bytes", "yes"),
     ("arg limit E2BIG past it", "yes"),
 )
 # The launcher's: the kernel's copy of the auxiliary vector is the launcher's (13 item 62);
 # the program's break is the launcher's, below a PIE image the loader maps
-# top-down (13 item 59); the launcher's own memory counts against RLIMIT_DATA, 256 KB too little
-# for it and the program together (13 item 60); the launcher's variables take room from the
-# argument area (13 item 61).
+# top-down (13 item 59); the launcher's own memory counts against RLIMIT_DATA, 128 KB less than
+# its image charges (13 item 60); the launcher's variables take room from the argument area (13
+# item 61).
 MEM_LAYOUT_LAUNCHER: dict[str, str] = {
     **{
         f"{run} {c}": "no"
@@ -1817,9 +1818,10 @@ MEM_LAYOUT_LAUNCHER: dict[str, str] = {
     "norand brk above image end": "no",
     "norand brk within 1 MB above image end": "no",
     "norand image below loader": "no",
-    # the launcher's image alone, its .bss with the arena's first block, charges RLIMIT_DATA more
-    # than 256 KB, so the kernel kills its exec: a .bss shrunk below that makes this "ran"
-    "DATA 256KB": "signal 11",
+    # the launcher's image alone, its .bss with the arena's first block and its tables, charges
+    # RLIMIT_DATA more than 128 KB, so the kernel kills its exec: a .bss shrunk below that moves
+    # this answer to the next charge's
+    "DATA 128KB": "signal 11",
     "arg limit slack under 64 bytes": "no",
 }
 

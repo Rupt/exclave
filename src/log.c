@@ -1,7 +1,8 @@
 /* log.c — EXCLAVE_LOG (6.2) and fatal messages. */
 #include "common.h"
 
-struct exclave C;
+/* at a page's start, so that what a start writes of it is one page (common.h) */
+struct exclave C __attribute__((aligned(4096)));
 
 static unsigned long log_dev, log_ino;
 

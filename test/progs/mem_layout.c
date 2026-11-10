@@ -178,6 +178,10 @@ static void run(const char *label, int resource, rlim_t soft, unsigned long pers
     pid_t pid = fork();
     if (pid == 0) {
         if (resource >= 0) {
+            /* a loader that cannot map its libraries under the limit says so, and so does the launcher: the status
+             * is the answer */
+            int quiet = open("/dev/null", O_WRONLY);
+            if (quiet >= 0) dup2(quiet, 2);
             struct rlimit rl;
             getrlimit(resource, &rl);
             if (soft < rl.rlim_cur) rl.rlim_cur = soft;
@@ -190,11 +194,12 @@ static void run(const char *label, int resource, rlim_t soft, unsigned long pers
         execve(self, argv, environ);
         printf("%s: exec %s\n", label, strerror(errno));
         fflush(stdout);
-        _exit(127);
+        _exit(0); /* its line is written: a status is the new image's */
     }
     int st;
     waitpid(pid, &st, 0);
     if (WIFSIGNALED(st)) printf("%s: signal %d\n", label, WTERMSIG(st));
+    else if (WIFEXITED(st) && WEXITSTATUS(st)) printf("%s: status %d\n", label, WEXITSTATUS(st));
 }
 
 /* the largest argument that still execs with the environment as it is, against the kernel's rule (bprm_stack_limits:
@@ -286,7 +291,7 @@ int main(int argc, char **argv)
         snprintf(label, sizeof label, "AS %ldMB", as_mb[i]);
         run(label, RLIMIT_AS, (rlim_t)as_mb[i] << 20, 0);
     }
-    static const long data_kb[] = {4096, 1024, 256};
+    static const long data_kb[] = {4096, 1024, 128};
     for (size_t i = 0; i < sizeof data_kb / sizeof *data_kb; i++) {
         char label[32];
         snprintf(label, sizeof label, "DATA %ldKB", data_kb[i]);

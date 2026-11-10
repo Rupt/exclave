@@ -8,7 +8,11 @@
 #include "common.h"
 #include "elf.h"
 
-static Phdr ph_main[128], ph_interp[64];
+/* the program's headers, then its loader's, are read into the start's chunk, S->extra, which the handler's probes of a
+ * file use the same way (elf_probe) */
+#define MAX_PHDRS 128
+_Static_assert(MAX_PHDRS * sizeof(Phdr) <= sizeof((struct scratch *)0)->extra, "extra holds a program's headers");
+_Static_assert(offsetof(struct scratch, extra) % _Alignof(Phdr) == 0, "extra is aligned for program headers");
 
 /* 7.6: what a debugger needs, exported for the script the launcher carries in .debug_gdb_scripts (src/gdb.py):
  * where the program and its loader were mapped and which files they are, and a function gdb breakpoints to
@@ -33,14 +37,17 @@ __asm__(".pushsection .debug_gdb_scripts,\"MS\",@progbits,1\n"
 
 /* The first bytes of the file being loaded, read once (16.4): its header, program headers, notes and PT_INTERP lie
  * there in nearly every file, so each is copied from them, and what lies beyond is read from the descriptor. Only the
- * startup's loading uses them; the handler's probes of a file read it themselves. */
-static unsigned char head[4096];
+ * startup's loading uses them; the handler's probes of a file read it themselves. They are the first page of the
+ * start's chunk's rest, which a walk takes: loader_run reads all it needs of a file before it resolves the next. */
+static const unsigned char *head;
 static long head_n;
-long loader_head(int fd, const char **bytes)
+char *loader_real(void) { return payload_path; }
+long loader_head(struct scratch *S, int fd, const char **bytes)
 {
-    head_n = sys_pread(fd, head, sizeof head, 0);
+    head = (const unsigned char *)S->rest;
+    head_n = sys_pread(fd, S->rest, 4096, 0);
     if (head_n < 0) head_n = 0;
-    *bytes = (const char *)head;
+    *bytes = S->rest;
     return head_n;
 }
 static long elf_read(int fd, void *dst, size_t n, unsigned long off)
@@ -67,16 +74,16 @@ static void read_elf(int fd, const char *real, Ehdr *eh, Phdr *ph, int maxph)
         die("cannot read program headers", real, 0);
 }
 /* Maps every PT_LOAD of fd as the kernel would; returns the load bias, and sets *entry, the program headers' address
- * and, when the file names an interpreter, its path in interp. A failure here is one the kernel meets past its point
- * of no return, where it kills the new image with SIGSEGV (bprm_execve): the message names the segment, then the
- * process dies by that signal. */
+ * and, when the file names an interpreter, its path in interp; interp is null for a loader, whose own PT_INTERP the
+ * kernel does not read either. A failure here is one the kernel meets past its point of no return, where it kills the
+ * new image with SIGSEGV (bprm_execve): the message names the segment, then the process dies by that signal. */
 static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned long *entry, unsigned long *phdr_va,
                              int *has_interp, char *interp, const char *name)
 {
     unsigned long lo = ~0UL, hi = 0, mask = C.pagesz - 1;   /* the kernel's page, as load_elf_binary rounds (7.3) */
     *has_interp = 0;
     for (int i = 0; i < eh->e_phnum; i++) {
-        if (ph[i].p_type == PT_INTERP) {
+        if (ph[i].p_type == PT_INTERP && interp) {
             if (ph[i].p_filesz >= PATH_MAX) die("interpreter path too long", name, 0);
             if (elf_read(fd, interp, ph[i].p_filesz, ph[i].p_offset) != (long)ph[i].p_filesz)
                 die("cannot read interpreter path", name, 0);
@@ -262,7 +269,8 @@ int elf_interp_probe(const char *real, void *buf)
 
 /* The kernel makes the initial stack executable when the program's PT_GNU_STACK asks for it (nested functions, old
  * assembly); the loader must do the same or the program dies on its first trampoline. The stack is found in
- * /proc/self/maps. */
+ * /proc/self/maps, read through buf a line at a time: a line is a range, a few fields and a path, under two
+ * PATH_MAXes, and one that does not fit size bytes is none of that file's. */
 static int wants_exec_stack(const Phdr *ph, int n)
 {
     for (int i = 0; i < n; i++)
@@ -271,91 +279,97 @@ static int wants_exec_stack(const Phdr *ph, int n)
 }
 /* /proc's lowercase hex */
 static unsigned long hex_digit(char c) { return (unsigned long)(c <= '9' ? c - '0' : c - 'a' + 10); }
-static void stack_make_exec(void)
+static void stack_make_exec(char *buf, size_t size)
 {
-    static char maps[65536];
     long fd = sys_open("/proc/self/maps", O_RDONLY | O_CLOEXEC, 0);
     if (fd < 0) return;
-    long n = 0, r;
-    while (n < (long)sizeof maps - 1 && (r = sys_read((int)fd, maps + n, sizeof maps - 1 - (size_t)n)) > 0) n += r;
-    sys_close((int)fd);
-    maps[n] = 0;
-    for (char *l = maps; l && *l;) {
-        char *e = xstrchr(l, '\n');
-        if (e) *e = 0;
-        if (xstrstr(l, "[stack]")) {
+    size_t have = 0;
+    long r;
+    while (have < size - 1 && (r = sys_read((int)fd, buf + have, size - 1 - have)) > 0) {
+        have += (size_t)r;
+        buf[have] = 0;
+        char *l = buf;
+        for (char *e; (e = xstrchr(l, '\n')); l = e + 1) {
+            *e = 0;
+            if (!xstrstr(l, "[stack]")) continue;
             unsigned long lo = 0, hi = 0;
             char *p = l;
             for (; *p != '-'; p++) lo = lo * 16 + hex_digit(*p);
             for (p++; *p != ' '; p++) hi = hi * 16 + hex_digit(*p);
+            sys_close((int)fd);
             sys_mprotect((void *)lo, hi - lo, PROT_READ | PROT_WRITE | PROT_EXEC);
             return;
         }
-        l = e ? e + 1 : 0;
+        /* the line the read ended in, kept for the next */
+        have -= (size_t)(l - buf);
+        memmove(buf, l, have + 1);
     }
+    sys_close((int)fd);
 }
 
-void loader_run(const char *vpath, const char *real, int fd, long argc, char **argv, char **envp,
+void loader_run(struct scratch *S, const char *vpath, int fd, long argc, char **argv, char **envp,
                 const unsigned long *auxv)
 {
     Ehdr eh;
     unsigned long entry, phdr_va, base = 0, jump;
     int has_interp;
-    char interp_v[PATH_MAX];
-    read_elf(fd, real, &eh, ph_main, 128);
+    /* the start's chunk (launcher.c): the file's real path is where run resolved it, its headers go to extra, its notes
+     * to comp and the loader's name, as the program spells it, to given, which no walk writes */
+    const char *real = payload_path;
+    Phdr *ph = (Phdr *)S->extra;
+    unsigned char *nb = (unsigned char *)S->comp;
+    char *interp_v = S->given;
+    read_elf(fd, real, &eh, ph, MAX_PHDRS);
     /* another exclave's launcher of an older page generation, which a handler sends here (7.4.2) */
-    static unsigned char nb[512];
     int gen = 0;
     for (int i = 0; i < eh.e_phnum; i++)
-        if (ph_main[i].p_type == PT_NOTE && ph_main[i].p_filesz <= 512) {
-            int v, g = note_gen(fd, &ph_main[i], nb, 1, &v);
+        if (ph[i].p_type == PT_NOTE && ph[i].p_filesz <= 512) {
+            int v, g = note_gen(fd, &ph[i], nb, 1, &v);
             if (g) gen = g;
         }
     if (gen && gen < PAGE_GENERATION)
         die("a launcher from before the syscall page moved cannot run here; relink its exclave with the current "
             "launcher (docs/DESIGN.md 13 item 45)",
             vpath, 0);
-    payload_base = map_elf(fd, &eh, ph_main, &entry, &phdr_va, &has_interp, interp_v, real);
+    payload_base = map_elf(fd, &eh, ph, &entry, &phdr_va, &has_interp, interp_v, real);
+    int exec_stack = wants_exec_stack(ph, eh.e_phnum);
     /* a program run from a descriptor with no path (13 item 25): mapped, the dup goes */
     if (C.descfd > 2) {
         sys_close(C.descfd);
         C.descfd = -1;
     }
     sys_close(fd);
+    head_n = 0;                                               /* the head's page is the walk's from here */
     jump = entry;
     payload_entry = entry;
-    scpy(payload_path, real, PATH_MAX);
     if (has_interp) {
         /* the program's own PT_INTERP, resolved in the exclave as the kernel would resolve it in a chroot (7.3);
          * that every ELF in an exclave names one loader is the tool's static check, not a run-time rule */
-        static char ireal[PATH_MAX];
         Ehdr ih;
         unsigned long ientry, iphdr;
         int ii;
-        char dummy[PATH_MAX];
-        struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0);
-        if (!S) die("out of memory", 0, ENOMEM);
         /* through the wrapper redirect: ld.so is wrapped; a loader that is not there fails to open, below */
         if (canon(S, interp_v, AT_FDCWD, 1, S->v) < 0)
             die("program wants a loader this exclave does not have", interp_v, 0);
-        to_real(S->v, ireal, S->tmp);
+        to_real(S->v, interp_path, S->tmp);
         /* one world (7.4.5): the loader must be the exclave's own file, not one the visibility rule found on the
          * host (a Nix or --dynamic-linker binary) and not one parked in a data directory */
         if (!is_exclave_path(S->v) || vis_in_data(S->v))
             die("program wants a loader this exclave does not have", interp_v, 0);
-        scratch_put(S);
-        long ifd = sys_open(ireal, O_RDONLY | O_CLOEXEC, 0);
+        long ifd = sys_open(interp_path, O_RDONLY | O_CLOEXEC, 0);
         if (ifd < 0) die("program wants a loader this exclave does not have", interp_v, 0);
         const char *ihead;
-        loader_head((int)ifd, &ihead);
-        read_elf((int)ifd, ireal, &ih, ph_interp, 64);
-        base = map_elf((int)ifd, &ih, ph_interp, &ientry, &iphdr, &ii, dummy, ireal);
+        loader_head(S, (int)ifd, &ihead);
+        /* a loader's headers are at most half a program's */
+        read_elf((int)ifd, interp_path, &ih, ph, MAX_PHDRS / 2);
+        base = map_elf((int)ifd, &ih, ph, &ientry, &iphdr, &ii, 0, interp_path);
         sys_close((int)ifd);
         jump = ientry;
         interp_base = base;
-        scpy(interp_path, ireal, PATH_MAX);
     }
-    if (wants_exec_stack(ph_main, eh.e_phnum)) stack_make_exec();
+    if (exec_stack) stack_make_exec(S->rest, sizeof S->rest);
+    /* the chunk goes back before the program runs: its first trapped call claims it */
+    scratch_put(S);
     /* the program's own descriptor limit, as it had it (7.4.5) */
     if (C.borrowed) SC4(NR_prlimit64, 0, RLIMIT_NOFILE, C.rlim, 0);
     long auxc = 0;

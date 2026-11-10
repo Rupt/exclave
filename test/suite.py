@@ -502,6 +502,7 @@ PROGS = (
     "mem_layout",
     "fd_procs",
     "sve_frame",
+    "spawn_faults",
     "traceme",
     "tracer_exe",
     "seccomp_filter",
