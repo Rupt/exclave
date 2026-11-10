@@ -5488,41 +5488,43 @@ rounds of 2 000 spawns alternating native and the launcher, sampled
 every 200 003 cycles with call chains (16.9). Natively the loop spawns
 the original of the exclave's own `true`, on the guest's loader and
 libc, since the guest's `/usr/bin/true` is another program. In the VM a
-spawn costs 1.6 times native, 608 to 614 µs in four rounds of the five
-(807 in the other) against 376 to 406, with 116 page faults against 58, 279 syscalls against
-39 and 12 signals against none; the kernel's cycles 1.77 times native,
-2.11 M against 1.20 M a spawn (`perf stat`), and the user's 0.39 M
-against 0.21 M. Of the profile's kernel time, 2 460 thousand cycles a
-spawn against 1 296, the 1 163 more go, by the inclusive time of the
-kernel's functions:
+spawn costs 1.6 times native, 534 to 545 µs against 317 to 334, with 117
+page faults against 58, 281 syscalls against 39 and 12 signals against
+none; the kernel's cycles 1.79 times native, 1.92 M against 1.08 M a
+spawn (`perf stat`), and the user's 0.40 M against 0.20 M. Of the
+profile's kernel time, 2 398 thousand cycles a spawn against 1 042, the
+1 357 more go, by the inclusive time of the kernel's functions:
 
 | Where | thousand cycles a spawn, native | launcher | share of the difference |
 |---|---|---|---|
-| the start's file syscalls: `newfstatat`, `openat`, `getdents64`, `process_vm_readv`, `readlinkat`, `close`, `read` | 40 | 511 | 41% |
-| `mmap`, `mprotect` and `munmap`: the program and its loader mapped by the launcher | 297 | 538 | 21% |
-| page faults | 315 | 523 | 18%, anonymous pages 126 of it |
-| the filter, run on each syscall the action cache does not settle | 0 | 72 | 6% |
-| the signal of each trap, delivered and returned | 0 | 62 | 5% |
-| `execve` | 417 | 413 | 0% |
-| process creation, exit and `wait4` | 202 | 187 | -1% |
+| the start's file syscalls: `readlinkat`, `newfstatat`, `getdents64`, `openat`, `process_vm_readv`, `close`, `read` | 17 | 551 | 39% |
+| `mmap`, `mprotect` and `munmap`: the program and its loader mapped by the launcher | 252 | 515 | 19% |
+| page faults | 307 | 542 | 17%, anonymous pages 206 of it |
+| `execve` | 289 | 394 | 8% |
+| the filter, run on each syscall the action cache does not settle | 0 | 57 | 4% |
+| the signal of each trap, delivered and returned | 0 | 52 | 4% |
+| process creation, exit and `wait4` | 142 | 191 | 4% |
 
-The start's file syscalls are the ownership set's directory reads (19
-`getdents64` a spawn, 92 thousand cycles, most of it ext4's hashed
-directory order), the identity files' and the walk's `lstat`s (40
-`newfstatat`, 122), the opens of the tree's directories, the manifest,
-the program and its loader (22 `openat`, 97), and each trap's
-`process_vm_readv` (12, 60). The launcher makes 23 `mmap`s a spawn where
-`ld.so` natively makes 9, at about 16 thousand cycles each, and its
-image, scratch and stack take 155 thousand cycles of anonymous-page
-faults against 29. The filter's install is not in a spawn's cost, since
-a process inside inherits its parent's filter. The exec costs the same
-in total but not in its parts: no interpreter to load (94 fewer) and
-cheaper `exec_mmap` and vDSO setup are spent again on `alloc_bprm`'s new
-address space, whose `mm_init` costs 148 thousand cycles against 1, 97
-of it the per-CPU allocator searching its chunks, and on
-`setup_arg_pages`, 112 against 5; the profile does not show why either
-differs. The launcher's own code takes 0.21 M cycles of the user's
-0.39 M.
+The start's file syscalls are four `readlinkat`s a spawn, 149 thousand
+cycles: `/proc/self/exe`, whose lookup builds the new process's entries
+in `/proc` and whose answer composes a path, and the tree's links on the
+way to the loader, `lib64`, the loader's own link and `lib`; the
+identity files' and the walk's `lstat`s (40 `newfstatat`, 133); the
+ownership set's directory reads (19 `getdents64`, 128, most of it ext4's
+hashed directory order); the opens of the tree's directories, the
+manifest, the program and its loader (22 `openat`, 62); and each trap's
+`process_vm_readv` (12, 50). The launcher makes 24 `mmap`s a spawn where
+`ld.so` natively makes 9, at about 17 thousand cycles each, and its
+image, scratch and stack take 253 thousand cycles of anonymous-page
+faults against 48. The filter's install is not in a spawn's cost, since
+a process inside inherits its parent's filter. The exec has no
+interpreter to load (18 fewer) and a cheaper vDSO setup (15 fewer), but
+the first touches of its new address space cost about 150 thousand
+cycles on either side and land in different functions: in
+`setup_arg_pages` natively, 157 against 24, and under the launcher in
+the copy of its first argument page (`copy_string_kernel` faulting the
+page in through `get_arg_page`), 158 against 1. The launcher's own code
+takes 0.23 M cycles of the user's 0.40 M.
 
 ### 16.5 Speculative Store Bypass
 
@@ -5712,14 +5714,14 @@ through the tree's real root, as gcc spells its own files.
 A profile of the spawn's kernel side with kernel symbols (16.4) finds
 the same: what an exclave adds to a spawn in the kernel is the start's
 own syscalls, two fifths of it, the launcher's mapping of the program
-and its loader and the faults of what it maps, two fifths, and the
-filter and the signals of the start's traps, a tenth; the exec itself
-costs what it costs natively. If overhead matters again, the next steps
-are fewer of the start's syscalls and mappings, the items above
-included; then why the exec's new address space and argument pages cost
-more under the launcher, which a call graph of `mm_init` and
-`setup_arg_pages` in the same VM would show; then glibc's `realpath`,
-which costs *n* traps for a path *n* deep.
+and its loader and the faults of what it maps, more than a third, the
+exec a twelfth, and the filter and the signals of the start's traps
+another. If overhead matters again, the next steps are fewer of the
+start's mappings, about 17 thousand cycles each, and fewer anonymous
+pages touched at start, then fewer of its syscalls, the items above
+included, and the `readlinkat` of `/proc/self/exe`, whose lookup builds
+a new process's entries in `/proc`; then glibc's `realpath`, which costs *n* traps for a path
+*n* deep.
 
 ### 16.8 Measured results
 
