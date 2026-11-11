@@ -891,7 +891,8 @@ def trust_directory_host(ctx: Ctx) -> None:
     would under bwrap: a .. at the directory climbs into the exclave, so ../openssl.cnf is the
     tree's /etc/ssl/openssl.cnf, and RESOLVE_NO_XDEV refuses the crossing into it; an identity file
     there that the host lacks, the bundle or Java's keystore, is the tree's (8.1 rule 5); and the
-    path through Debian's /usr/lib/ssl/certs is compared only where the tree's leads there. Skipped
+    path through Debian's /usr/lib/ssl/certs is compared only where the tree's leads there, and
+    openat2's cases only where the kernel has the call (kernel_answers.has_openat2). Skipped
     where the host has no hash link there, and for a user who can write the directory, root among
     them, since the cases that write would change the host.
     """
@@ -933,6 +934,8 @@ def trust_directory_host(ctx: Ctx) -> None:
     skipped = set()
     if tree.resolve(root, "/usr/lib/ssl/certs") != "/etc/ssl/certs":
         skipped = {f"{k} libssl_hash" for k in ("stat", "lstat", "readlink", "open")}
+    if not kernel_answers.has_openat2():
+        skipped |= {case for case in native if case.startswith("openat2 ")}
     bad = [
         f"{case}: {got.get(case)!r}, the kernel says {bind.get(case, n)!r}"
         for case, n in native.items()
@@ -963,7 +966,8 @@ def trust_directory_rules(ctx: Ctx) -> str | None:
     its mount by ..; and where the host's directory is a link into another directory, the names
     below it, the exclave's copy among them, answer the same, readlink answers the host's text, the
     directory it reaches is the host's at its own name, and a .. at the name climbs from there.
-    Skipped without user namespaces.
+    openat2's cases are judged where the kernel has the call (kernel_answers.has_openat2). Skipped
+    without user namespaces.
     """
     if subprocess.run(
         ["unshare", "-Urm", "true"],
@@ -1146,7 +1150,10 @@ def trust_directory_rules(ctx: Ctx) -> str | None:
         n, _, rest = block.partition("\n")
         got[int(n)] = rest.strip().split("\n") if rest.strip() else [""]
     wanted = [(w, want) for w, _, _, want in cases + link_cases + rel_cases]
+    openat2 = kernel_answers.has_openat2()
     for i, (what, want) in enumerate(wanted):
+        if want.startswith("openat2 ") and not openat2:
+            continue
         expect(
             want in got.get(i, []), f"the trust directory, {what.strip()}: {got.get(i)!r} {err!r}"
         )

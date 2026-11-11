@@ -219,7 +219,7 @@ def host_walk_one_step(ctx: Ctx) -> None:
     expect(rc != 0 and "No such file" in err, f"a missing directory in the middle: {err!r}")
     # these answers hold with or without the one-step check; where the launcher would use it, it
     # must have run
-    if shutil.which("strace") and has_openat2() and mounted_once(ctx.root):
+    if shutil.which("strace") and kernel_answers.has_openat2() and mounted_once(ctx.root):
         trace = os.path.join(ctx.work, f"deephost-{os.getpid()}.trace")
         run(
             ["strace", "-f", "-e", "trace=openat2", "-o", trace, cat, os.path.join(deep, "f")],
@@ -230,21 +230,6 @@ def host_walk_one_step(ctx: Ctx) -> None:
             "RESOLVE_NO_SYMLINKS" in read_text(trace),
             "the one-step check did not run where the tree's filesystem is mounted once",
         )
-
-
-def has_openat2() -> bool:
-    """The one-step check's other condition: the kernel has openat2 (5.6).
-
-    Asked of the kernel, not of its version.
-    """
-    libc = ctypes.CDLL(None, use_errno=True)
-    how = (ctypes.c_uint64 * 3)(0o10000000, 0, 0)  # O_PATH
-    nr = {"x86_64": 437, "aarch64": 437}.get(os.uname().machine, 437)
-    fd = libc.syscall(nr, -100, b"/", ctypes.byref(how), ctypes.c_size_t(24))
-    if fd >= 0:
-        os.close(fd)
-        return True
-    return False
 
 
 def mounted_once(path: str) -> bool:

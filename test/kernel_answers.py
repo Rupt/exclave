@@ -126,6 +126,22 @@ def kernel() -> tuple[int, int]:
     return int(major), int(minor.split("-")[0])
 
 
+def has_openat2() -> bool:
+    """Whether the kernel has openat2 (5.6), asked of the kernel and not of its version.
+
+    A kernel without it answers ENOSYS to every openat2, where the handler answers what it can from
+    its own rule, as the newest kernel does, and re-issues the rest (DESIGN.md 17 item 7): a test
+    of openat2's answers judges them only where the kernel has the call.
+    """
+    libc = ctypes.CDLL(None, use_errno=True)
+    how = (ctypes.c_uint64 * 3)(0o10000000, 0, 0)  # O_PATH
+    fd = libc.syscall(437, -100, b"/", ctypes.byref(how), ctypes.c_size_t(24))
+    if fd >= 0:
+        os.close(fd)
+        return True
+    return False
+
+
 def open_flags_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     """The lines of open_flags's output that differ from the kernel's answers.
 
