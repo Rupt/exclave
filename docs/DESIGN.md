@@ -5617,45 +5617,46 @@ per number.
 ### 16.4 Process start
 
 A `posix_spawn` of `/usr/bin/true` from inside an exclave costs twice
-the native time, 253 to 257 µs against 127 to 129, and each process it
-starts takes 91 page faults against 55 (`getrusage` of the children):
-five rounds of 2 000 spawns pinned to one CPU, November 2026,
-alternating native, this launcher and one that reads every top-level
-directory of the tree at its start, which takes 265 to 267 µs (16.6
-item 11). At the border the
-filter install adds 75 to 100 µs (16.3).
+the native time, 256 to 264 µs against 131 to 135, and each process it
+starts takes 90 page faults against 55 (`getrusage` of the children):
+seven rounds of 2 000 spawns pinned to one CPU, November 2026,
+alternating native, this launcher and one that maps a program where
+`mmap` puts it and leaves the break (7.3), which takes 256 to 267 µs:
+placing the program as the kernel does costs half a percent of a
+spawn's instructions and no time that these rounds tell. At the border
+the filter install adds 75 to 100 µs (16.3).
 
 Where the time goes, by stamps of the cycle counter in a scratch build,
 at the call, in the parent's exec handler, around each syscall of the
 launcher's start and at the wait's return, medians of 400 spawns pinned
-to one CPU, in a round where a spawn took 272 µs against 126 natively:
+to one CPU, in a round where a spawn took 277 µs against 134 natively:
 21 µs from the call to the trapped `execve`, `clone3` refused (7.5.5)
 and glibc's fallback resetting each signal's disposition by hand, 64
 `rt_sigaction` calls, two of them trapped; the exec handler (7.4.5),
-6 µs; the kernel's exec of the launcher, 34 µs; the launcher's start
-(7.2), 88 µs; then 113 µs for the loader `ld.so`, the program and its
+6 µs; the kernel's exec of the launcher, 36 µs; the launcher's start
+(7.2), 90 µs; then 114 µs for the loader `ld.so`, the program and its
 end, where `ld.so`'s three path calls and two `fstat`s trap and the
 first of them reads `/etc`'s directory (8.1 rule 1). The start
-is 82 syscalls, 50 µs in them and 41 µs between them, its page faults
+is 77 syscalls, 50 µs in them and 42 µs between them, its page faults
 included, so its syscalls are most of its time; one costs 0.2 to 1 µs
 in a process that has just started, a first read of a directory or a
 first mapping several times that, where a warm loop measures a fraction
-of it. Of the start, the ownership set (8.1 rule 1) takes 12 µs: the
-read of the tree's top level, 8 µs, and of the two directories the
-start has paths into, the one above the working directory and the one
-the program lies under, 2 µs each, an empty one read twice, since only
-an empty read proves a directory empty; a start that read all ten of the gcc
-exclave, seven of them placeholders, took 27 µs for the set in the
-same round (16.6 item 11). The identity files'
-and directories' `lstat`s (8.4) and the rule's table take 15 µs: twenty
+of it. Of the start, the ownership set (8.1 rule 1) takes 11 µs: the
+read of the tree's top level, 9 µs, and of the one directory the start
+has a path into, the one the program lies under, 2 µs; the one above
+the working directory is not read, since a start inside is told the
+run's working directory and asks for none (8.1 rule 4). The identity files'
+and directories' `lstat`s (8.4) and the rule's table take 16 µs: twenty
 syscalls, one per file and per directory, one more for the target of
 each of the two files that are host symlinks on this machine, and one
 for each directory on the way, in the tree, to the copy of Java's
 keystore, which this machine lacks, so sixteen on this machine with the
 keystore. The search for the manifest and its read take 8 µs, the read
-of `/proc/self/exe` 5 µs, and the loading of the program and its
-loader, with the loader's name walked through the tree in a cache that
-is empty in a new process, 40 µs.
+of `/proc/self/exe` 5 µs, the start's one mapping, its opening and the
+advice for the lock's page (16.6 item 12) 5 µs, and the loading of the
+program and its loader, with the draw and the record that place the
+program (7.3) and the loader's name walked through the tree in a cache
+that is empty in a new process, 41 µs.
 
 The start reads what it needs of the tree once: a volatile top-level
 directory is not read at all, since the host owns it whatever it holds
@@ -5665,10 +5666,10 @@ whole when it fits a page; the program's original is opened once and
 its header, program headers, notes and `PT_INTERP` taken from one read
 of its first page, as are the loader's; and a classification makes its
 wrapper check from its own `lstat` (7.4.4). The tables a start touches
-are sized to it (16.6 item 9), and its large ones are opened as they
-fill: one reserve mapped without access and the cache's first strings
-opened in it, two syscalls, the arena's first block being the image's
-(13 item 60). Its buffers are one scratch chunk's and the paths it
+are sized to it (16.6 item 9), and its large ones are parts of a
+reserve opened as they fill, which the start maps in one span with the
+cache's lock page and its first chunk (16.6 item 12), the arena's first
+block being the image's (13 item 60). Its buffers are one scratch chunk's and the paths it
 keeps the arena's (7.2, 16.6 item 10). A wrapper of `true` run from
 outside, from a host working directory, makes 151 syscalls, where the
 native `true` makes 29 (`strace -f -c`, November 2026, the reference
@@ -5683,9 +5684,9 @@ its own when the batch cannot read it whole, at the end of a mapping.
 A spawn traps little: glibc's `posix_spawn` makes two trapping
 `rt_sigaction` installs and one trapping `rt_sigprocmask`, its child's
 queries of the actions passing to the kernel (7.5.5, 7.5.7); 1 000
-spawns take 1.92 G instructions, kernel and user, against 0.90 G
-natively, where they take 2.05 G with every top-level directory read
-at the start (`perf stat`, three runs of each,
+spawns take 1.90 G instructions, kernel and user, against 0.90 G
+natively, where they take 1.89 G with the program mapped where `mmap`
+puts it (`perf stat`, three runs of each,
 alternated, the environment the border's three variables). 100 000 spawns
 from one process leave its RSS flat, +232 to +280 kB against +200 to
 +236 kB natively in two runs of `test/bench.py`, and the regression of
@@ -5701,55 +5702,60 @@ rounds of 2 000 spawns alternating native and the launcher, sampled
 every 200 003 cycles with call chains (16.9). Natively the loop spawns
 the original of the exclave's own `true`, on the guest's loader and
 libc, since the guest's `/usr/bin/true` is another program. In the VM a
-spawn costs 1.5 times native, 515 to 529 µs against 335 to 344, with 91
-page faults against 58, 252 syscalls against 39 and 12 signals against
-none; the kernel's cycles 1.78 times native, 1.90 M against 1.07 M a
-spawn (`perf stat`), and the user's 0.39 M against 0.20 M. The sampled
+spawn costs 1.6 times native, 562 to 611 µs against 356 to 383, with 89
+page faults against 58, 247 syscalls against 39 and 12 signals against
+none; the kernel's instructions are 2.1 times native, 1.74 M against
+0.83 M a spawn (`perf stat`), its cycles 1.66 times, 2.06 M against
+1.25 M, and the user's cycles 0.39 M against 0.21 M, the launcher's
+start and its handler being the difference. The sampled
 runs cost more than the counted ones: of the profile's kernel time,
-2 418 thousand cycles a spawn against 1 101, the
-1 318 more go, by the inclusive time of the kernel's functions:
+2 349 thousand cycles a spawn against 1 286, the
+1 063 more go, by the inclusive time of the kernel's functions:
 
 | Where | thousand cycles a spawn, native | launcher | share of the difference |
 |---|---|---|---|
-| the start's file syscalls: `readlinkat`, `newfstatat`, `getdents64`, `openat`, `process_vm_readv`, `close`, `read` | 18 | 593 | 44% |
-| `mmap`, `mprotect` and `munmap`: the program and its loader mapped by the launcher | 267 | 541 | 21% |
-| page faults | 314 | 443 | 10% |
-| `execve` | 317 | 395 | 6% |
-| the filter, run on each syscall the action cache does not settle | 0 | 61 | 5% |
-| the signal of each trap, delivered and returned | 0 | 67 | 5% |
-| process creation, exit and `wait4` | 149 | 185 | 3% |
+| the start's file syscalls: `readlinkat`, `newfstatat`, `getdents64`, `openat`, `process_vm_readv`, `close`, `read` | 54 | 494 | 41% |
+| `mmap`, `mprotect` and `munmap`: the program and its loader mapped by the launcher | 296 | 473 | 17% |
+| page faults | 305 | 473 | 16% |
+| `execve` | 410 | 481 | 7% |
+| the filter, run on each syscall the action cache does not settle | 0 | 71 | 7% |
+| the signal of each trap, delivered and returned | 0 | 76 | 7% |
 
-The start's file syscalls are four `readlinkat`s a spawn, 155 thousand
-cycles: `/proc/self/exe`, whose lookup builds the new process's entries
-in `/proc`, 38 of them in `proc_pid_lookup`, and whose answer composes a
+The counts are exact. The cycles are one run's, on a host in use: a
+second run that day put each row within a quarter of these, in much the
+same proportions, and process creation, exit and `wait4`, which the
+table leaves out, cost the same on the two sides within that.
+
+The start's file syscalls are four `readlinkat`s a spawn:
+`/proc/self/exe`, whose lookup builds the new process's entries
+in `/proc` and whose answer composes a
 path, and the tree's links on the way to the loader, `lib64`, the
 loader's own link and `lib`; the identity files' and the walk's `lstat`s
-(40 `newfstatat`, 164); the reads of the tree's top level and of the
-three directories a spawn's paths reach (6 `getdents64`, 111, nearly
-all of it ext4's hashed directory order, which sorts a block of names
-to give the first); the opens
-of those directories, the manifest, the program and its loader (15
-`openat`, 86); and each trap's `process_vm_readv` (12, 44). The
-launcher makes 23 `mmap`s a spawn where `ld.so` natively makes 9, at
-about 19 thousand cycles each. Its page faults, 34 more than native,
-cost 129 thousand cycles more, the start's buffers being a scratch
+(40 `newfstatat`); the reads of the tree's top level and of the
+two directories a spawn's paths reach (4 `getdents64`, nearly
+all of their time ext4's hashed directory order, which sorts a block of
+names to give the first); the opens
+of those directories, the manifest, the program and its loader (14
+`openat`); and each trap's `process_vm_readv` (12). The
+launcher makes 21 `mmap`s a spawn where `ld.so` natively makes 9, at
+about 14 thousand cycles each. Its page faults, 31 more than native,
+cost 169 thousand cycles more, the start's buffers being a scratch
 chunk's (16.6 item 10). The filter's install is not in a spawn's cost,
 since a process inside inherits its parent's filter. The exec has no
-interpreter to load and a cheaper vDSO setup (22 fewer), but the load
-of the launcher's own image costs more than the program's and its
-interpreter's natively (`elf_load`, 177 against 32), and the first
-touches of its new address space cost about 150 thousand cycles on
-either side and land in different functions: in `setup_arg_pages`
-natively, 147 against 16, and under the launcher in the copy of its
-first argument page (`copy_string_kernel` faulting the page in through
-`get_arg_page`), 150 against 1. The launcher's own code
-takes 0.14 M cycles of the user's 0.39 M.
+interpreter to load and a cheaper vDSO setup, and its largest pieces
+land in different functions on the two sides and from one boot of the
+VM to the next: natively in `begin_new_exec`, about 150 thousand
+cycles against 40, and under the launcher in the new address space's
+allocation (`alloc_bprm`, most of it `mm_init` with its per-CPU
+counters) and the stack's setup (`setup_arg_pages`), 135 to 169 and
+82 to 102 against next to none, where an earlier boot had the native
+side's in `setup_arg_pages`. The profile gives the two execs' totals, not the
+reason their pieces lie as they do.
 
 The same VM does not show what the reference machine's rounds show for
-the top-level directories' reads (16.6 item 11). A launcher that reads
-all ten at its start, profiled there the same day, makes 279 syscalls a
-spawn and 1.89 M kernel instructions against this one's 1.77 M, but
-its kernel cycles, 1.88 M, and its time, 504 to 530 µs, are this one's
+the top-level directories' reads (16.6 item 11). A launcher that read
+all ten at its start made 27 more syscalls a spawn there and 6% more
+kernel instructions, and its kernel cycles and its time were the same
 within the spread of the runs, about 2%: on ext4 an empty directory's
 read costs little, and what the reads of the others cost is the hashed
 order, which is paid as before.
@@ -5899,8 +5905,8 @@ as a whole.
     puts the state's tables after its fields, so that the fields and
     the entries an exclave has share a page; and inside, closes the
     environment's vector up in place rather than map a copy. A process
-    `posix_spawn` starts then takes 91 page faults, against 55
-    natively, where it took 117, and a spawn 6% less time, in five
+    `posix_spawn` starts then takes 26 page faults fewer, and a spawn
+    6% less time, in five
     rounds of 2 000 alternated; the image's `.bss` is 181 KB rather
     than 366 KB, which `RLIMIT_DATA` is charged with (13 item 60).
     Check: `start_page_faults`, which fails past 50 faults more than
@@ -5919,10 +5925,10 @@ as a whole.
     the first's answer. A tree with more directories has the rest read
     at the start, and so has one whose entries could be more than the
     table's 256, since a placeholder takes no slot. A start then makes
-    82 syscalls rather than 112 and takes 88 µs rather than 103, the
-    program after it 4 µs more, where its first path into `/etc` reads
-    that directory, and a spawn 253 to 257 µs rather than 265 to 267
-    (16.4's rounds), on the reference machine's ZFS, where an empty
+    thirty syscalls fewer and takes 15 µs less, the program after it
+    4 µs more, where its first path into `/etc` reads that directory,
+    and a spawn some 10 µs less of 265, in five alternated rounds, on
+    the reference machine's ZFS, where an empty
     directory's read costs 1.8 µs. On the matrix's ext4, where it costs
     little, a spawn's kernel instructions fall 6% and its cycles and
     its time not measurably (16.4). What a late read needs, a
@@ -5943,7 +5949,8 @@ as a whole.
     cannot be had, under a limit on the address space or on data,
     each of the three maps its own when it is needed, as a later
     chunk does, so the limits a start runs under are as they were
-    (13 item 60). Check: `start_maps_once`.
+    (13 item 60). The three calls are 5 µs of a start (16.4). Check:
+    `start_maps_once`.
 
 Items 4 and 7 are shortcuts past the walk, and a shortcut drops every
 question the walk asked, the ones nobody wrote down included. Each
@@ -5969,7 +5976,7 @@ the pointer gives.
   back from `/proc/self/fd`: possible, and not built (16.6 item 4).
 - Deciding which identity files and directories are the host's at
   each call rather than at startup (13 item 18): 20 syscalls of a start
-  on the reference machine, 10 µs of its 88 (16.4). The directories on
+  on the reference machine, 10 µs of its 90 (16.4). The directories on
   the way to one the host has are
   directories to the walk whether or not the tree ships them (8.4), so
   the walk would have to ask the host about the name at every such
@@ -5992,16 +5999,17 @@ through the tree's real root, as gcc spells its own files.
 
 A profile of the spawn's kernel side with kernel symbols (16.4) finds
 the same: what an exclave adds to a spawn in the kernel is the start's
-own syscalls, more than two fifths of it, the launcher's mapping of the
-program and its loader, a fifth, its page faults, a tenth, and the exec,
+own syscalls, two fifths of it, the launcher's mapping of the program
+and its loader and its page faults, about a sixth each, and the exec,
 the filter and
-the signals of the start's traps, about a twentieth each. If overhead
+the signals of the start's traps, about a fifteenth each. If overhead
 matters again, the next steps are fewer of the start's syscalls, the
 items above included, and the `readlinkat` of `/proc/self/exe`, whose
 lookup builds a new process's entries in `/proc`; fewer of the start's
-mappings, about 17 thousand cycles each, and a cheaper load of the
-launcher's own image; then glibc's `realpath`, which costs *n* traps
-for a path *n* deep.
+mappings, about 14 thousand cycles each; the exec's allocation of its
+new address space, which the profile charges the launcher's exec and
+not the native one, once it is understood; then glibc's `realpath`,
+which costs *n* traps for a path *n* deep.
 
 ### 16.8 Measured results
 
@@ -6022,13 +6030,13 @@ pace.
 | `stat()`, relative name, working directory nine deep on the host | 278 ns | 3.08 µs |
 | `realpath()` of that working directory | 1.69 µs | 23.3 µs |
 | `getppid()`, untrapped | 45 ns | 54 ns |
-| `posix_spawn` of `/usr/bin/true`, alternated runs pinned to one CPU (16.4) | 127 to 129 µs | 253 to 257 µs |
-| page faults of each process `posix_spawn` starts (16.4) | 55 | 91 |
+| `posix_spawn` of `/usr/bin/true`, alternated runs pinned to one CPU (16.4) | 131 to 135 µs | 256 to 264 µs |
+| page faults of each process `posix_spawn` starts (16.4) | 55 | 90 |
 | 100 000 `posix_spawn`s from one process, RSS | +200 to +236 kB | +232 to +280 kB |
 | thirty `gcc -O0 hello.c` | 0.74 s | 0.80 s |
 | a 61-file project, `-O1 -c` each then link | 0.61 s | 0.86 s |
 | `gcc -O2 -c sqlite3.c` | 14.09 s | 13.41 s, identical object |
-| syscalls for one `gcc -O0 hello.c`, all processes (`strace -f -c`) | 2 649 | 13 216 |
+| syscalls for one `gcc -O0 hello.c`, all processes (`strace -f -c`) | 2 651 | 13 130 |
 
 Thirty small compiles, each a compile and a link, cost 8% more than
 natively, 16% in the other run, and the 61-file project, a compile to
@@ -6036,11 +6044,11 @@ an object for each file, 41% more: 2 to 4 ms for each run of the
 compiler either way. The compute-bound compile runs within noise of
 native and produces an identical object, also on the kernels
 that would force the speculation mitigation (16.5). A `posix_spawn`
-costs twice native, from five rounds of 2 000 spawns pinned to one CPU,
-alternating native, this launcher and one that reads every top-level
-directory at its start, its
-page faults from the same rounds (16.4); those two rows are not
-`test/bench.py`'s. The syscall count moves with the depth of the
+costs twice native, from seven rounds of 2 000 spawns pinned to one
+CPU, alternating native, this launcher and one that places nothing,
+its page faults from the same rounds (16.4); those two rows are not
+`test/bench.py`'s, and the syscall counts are its command's, run by
+hand on this launcher. The syscall count moves with the depth of the
 compiler's temporary directory, since its temporary files are walked on
 the host, not with the working directory's.
 What is left of a small compile's overhead, by `strace` and
