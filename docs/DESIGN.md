@@ -2588,7 +2588,9 @@ it, and every part rules it as it rules that directory.
    the exclave's. One the host lacks falls through to the exclave's, an
    identity file inside an identity directory the host has included: Red
    Hat's hosts have `/etc/ssl/certs` and no `ca-certificates.crt` in it,
-   so a Debian tree reads its own bundle there. Where the host's
+   so a Debian tree reads its own bundle there, and Fedora 44 keeps the
+   hash links in `/etc/pki/tls/certs` and neither bundle, so any tree
+   does. Where the host's
    identity directory is a link at its name, as Fedora's and Red Hat's
    `/etc/ssl/certs` are, the directory the kernel resolves it to is an
    identity directory too, at its own name, so that the names the kernel
@@ -6752,7 +6754,11 @@ rename or a link from the trust directory to another host path, which
 the binds make a crossing of mounts (`EXDEV`) where the host's one
 mount answers the permission, and for a `chown` to root, a third run, the probe on the host itself through the
 tree's own loader, answers the cases that name such a path, and the
-launcher must answer as it does. The trust directory's renames and
+launcher must answer as it does. An identity file the host lacks in an
+identity directory it has, the bundle on Fedora 44, is the exclave's
+copy inside (8.1 rule 5) and no name in the directory `bwrap` binds, so
+there the launcher must answer as the kernel answers the same call on a
+file of the tree. The trust directory's renames and
 links run first in their groups, while the host area is as it was
 made, since the third run answers them and none of the area's own
 renames. The host is only looked at: a bound host entry or a name in

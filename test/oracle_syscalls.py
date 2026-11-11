@@ -110,7 +110,10 @@ covers:
     launcher answers as the native run; uid 0 is unmapped in bwrap's user
     namespace; a new top-level name is the host's (8.1),
     whose / answers EACCES where bwrap's root says EROFS; RESOLVE_CACHED answers EAGAIN under
-    bwrap's cold cache where the handler answers the retry's answer itself;
+    bwrap's cold cache where the handler answers the retry's answer itself; an identity file the
+    host lacks in an identity directory it has, Fedora 44's bundle, is the exclave's copy inside
+    and no name in the directory bwrap binds, where the launcher answers as the kernel answers
+    the same call on a file of the tree;
   - for the kernel matrix (12.1), what an older kernel lacks or decided differently, each with the
     kernel change, the handler answering as the newest kernel does: ENOSYS for a syscall added after
     3.10, named with its release; EISDIR for O_CREAT|O_EXCL on ., .. or / before 5.8; linkat with
@@ -1733,6 +1736,7 @@ class Ctx(NamedTuple):
     launcher: dict[str, str]  # the launcher's answers in its group, by label
     area: str  # the probe's own area on the host, a bind of its own under bwrap
     empty: tuple[str, ...]  # the directory each empty path names (empty_names)
+    call: str  # the syscall's name
 
 
 def named_paths(name: str, toks: list[str], host: str) -> tuple[str, ...]:
@@ -1786,6 +1790,21 @@ def lexical(path: str) -> str:
 
 def failed(answer: str) -> bool:
     return answer.startswith("ret=-1 ")
+
+
+def alike(call: str, a: str, b: str) -> bool:
+    """Whether two answers to call succeed alike or refuse alike, whatever each names.
+
+    The errno, which an exec's answer carries in its child's wait status.
+    """
+    x, y = exec_errnos(a, b) if call in ("execve", "execveat") else errnos(a, b)
+    return x == y and failed(a) == failed(b)
+
+
+# The form ca_bundle's file on a host that has its directory and not the file, as Fedora 44 has,
+# whose /etc/pki/tls/certs holds the hash links and no bundle
+BUNDLE = "/etc/pki/tls/certs/ca-bundle.crt"
+HOST_LACKS_BUNDLE = os.path.isdir(os.path.dirname(BUNDLE)) and not os.path.lexists(BUNDLE)
 
 
 # The calls that take two names: a rename or a link
@@ -2058,6 +2077,29 @@ EXPECTED: list[tuple[str | None, Callable[[str, str, str, Ctx], object], str]] =
             "of its own, so the kernel compares the mounts first (EXDEV); a host that keeps the "
             "two on one mount, as GitHub's aarch64 runner does, judges the name instead (EBUSY, "
             "or EEXIST under RENAME_NOREPLACE), and the launcher re-issues the name to that kernel"
+        ),
+    ),
+    (
+        None,
+        lambda label, _b, o, c: (
+            HOST_LACKS_BUNDLE
+            and "ca_bundle" in label.split("/")
+            and (twin := c.kernel.get(label.replace("ca_bundle", "exclave_file", 1))) is not None
+            and (
+                alike(c.call, twin, o)
+                or (
+                    c.call in ("getxattr", "lgetxattr", "getxattrat")
+                    and not failed(twin)
+                    and errnos(o, o)[0] == errno.ENODATA
+                )
+            )
+        ),
+        (
+            "an identity file the host lacks in an identity directory it has, as Fedora 44's "
+            "/etc/pki/tls/certs has no ca-bundle.crt: inside it is the exclave's copy (8.1 rule "
+            "5), and no name in the host's directory, which bwrap binds; the launcher answers as "
+            "the kernel answers the same call on a file of the tree, the maze's, whose attribute "
+            "the copy has not (ENODATA)"
         ),
     ),
     (
@@ -2593,6 +2635,7 @@ def main() -> int:
                 launcher,
                 os.path.dirname(host),
                 tuple(lexical(r) for r in empty_names(toks, host)),
+                n,
             )
             which = [i for i, (_why, pred, _s) in enumerate(DEFECTS) if pred(n, label, b, o, ctx)]
             if which:
