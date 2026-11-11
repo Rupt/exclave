@@ -92,7 +92,11 @@ def exclave_directory_visible(ctx: Ctx) -> None:
 
 @test
 def identity_link_consistency(ctx: Ctx) -> str | None:
-    """lstat, readlink and the link's target agree for each identity file that is a host symlink."""
+    """lstat, readlink and the link's target agree for each identity file that is a host symlink.
+
+    The file's first bytes are compared as od prints them: a Red Hat host's /etc/pki/java/cacerts
+    is a link to a keystore, which is not text.
+    """
     links = [f for f in tree.IDENTITY_FILES if os.path.islink(f)]
     if not links:
         skip("no host identity file is a symlink")
@@ -105,13 +109,14 @@ def identity_link_consistency(ctx: Ctx) -> str | None:
             [
                 wrapper(ctx, "sh"),
                 "-c",
-                f"test -L {link} && echo link; readlink {link}; head -c 8 {link}",
+                f"test -L {link} && echo link; readlink {link}; head -c 8 {link} | od -An -tx1",
             ],
             cwd=ctx.work,
             env=ctx.env,
         )
+        got = out.split("\n", 2)
         expect(
-            out.encode() == b"link\n" + target.encode() + b"\n" + head,
+            got[:2] == ["link", target] and bytes.fromhex("".join(got[2:])) == head,
             f"identity link {link}: {out!r} {err!r}",
         )
     return None
