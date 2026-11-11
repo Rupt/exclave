@@ -358,12 +358,23 @@ static void passing(void)
     close(pidfd);
 }
 
+/* a tool of the tree by its path: in /usr/bin, or in /bin where a tree keeps it there, as Alpine's does */
+static char *tool(const char *name)
+{
+    static char path[4][64];
+    static int k;
+    char *p = path[k++ % 4];
+    snprintf(p, sizeof path[0], "/usr/bin/%s", name);
+    if (access(p, X_OK)) snprintf(p, sizeof path[0], "/bin/%s", name);
+    return p;
+}
+
 static void statuses(const char *hostdir)
 {
     struct {
         const char *label;
         char *path;
-    } t[] = {{"wrapper false", "/usr/bin/false"}, {"wrapper true", "/usr/bin/true"}};
+    } t[] = {{"wrapper false", tool("false")}, {"wrapper true", tool("true")}};
     for (unsigned i = 0; i < sizeof t / sizeof *t; i++) {
         pid_t p = fork();
         if (p == 0) {
@@ -398,7 +409,7 @@ static void statuses(const char *hostdir)
     p = fork();
     if (p == 0) {
         char *av[] = {"sleep", "5", 0};
-        execv("/usr/bin/sleep", av);
+        execv(tool("sleep"), av);
         _exit(99);
     }
     usleep(200000);
@@ -411,7 +422,7 @@ static void statuses(const char *hostdir)
     if (p == 0) {
         setsid();
         char *av[] = {"sleep", "5", 0};
-        execv("/usr/bin/sleep", av);
+        execv(tool("sleep"), av);
         _exit(99);
     }
     usleep(200000);
