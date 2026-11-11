@@ -2463,11 +2463,15 @@ def main() -> int:
     # A host entry this user could change is only looked at, by any form that names it: the host is
     # not the probe's to change, whatever its modes are (GitHub's runners keep /usr/share writable
     # to all, the certificates behind the trust directory's links among it). Without protected
-    # hard links a link from any host file would give it a name in the area, so none is made
+    # hard links a link from any host file would give it a name in the area, so none is made; a
+    # kernel that keeps the setting from its users (4.15's file is root's alone) is taken so
     named = {p for _label, n, toks, _group in cases for p in host_names(n, toks, host)}
     keep = frozenset(p for p in named if changeable(p))
-    with open("/proc/sys/fs/protected_hardlinks") as f:
-        loose_links = f.read().strip() == "0"
+    try:
+        with open("/proc/sys/fs/protected_hardlinks") as f:
+            loose_links = f.read().strip() == "0"
+    except OSError:
+        loose_links = True
     whole = len(cases)
     cases = [
         (label, n, toks, group)
