@@ -4455,10 +4455,15 @@ and stay fixed.
     `EXCLAVE_EXEC` are removed from the environment the launcher hands
     a program, so `environ`, `getenv` and every child see none of them.
     The kernel's copy, which it filled at exec and which
-    `/proc/<pid>/environ` and `ps e` read, keeps them; replacing it
-    takes `PR_SET_MM_ENV_START`, which needs `CAP_SYS_RESOURCE`. A
-    program that reads its own `/proc/self/environ` sees the name it was
-    exec'd by and its `comm`, which are the kernel's own facts about it.
+    `/proc/<pid>/environ` and `ps e` read, keeps them. The record the
+    loader gives the kernel (7.3) could end the environment's area
+    before them, and names the area as the kernel laid it, since the
+    copy is where the launcher's facts about a process are read from
+    outside it: another process's handler reads `EXCLAVE_EXEC` there to
+    answer that process's `exe` (7.6), and gdb's script the name the
+    program was exec'd by. A program that reads its own
+    `/proc/self/environ` sees the name it was exec'd by and its `comm`,
+    which are the kernel's own facts about it.
 
 47. **An Alpine exclave carries its licences by name, as Alpine
     does.** Alpine records each package's licence as an SPDX
@@ -4822,16 +4827,27 @@ and stay fixed.
 
 62. **The kernel's copy of the auxiliary vector is the launcher's.**
     The kernel keeps the vector it built at exec and answers it in
-    `/proc/<pid>/auxv` and `prctl(PR_GET_AUXV)` (6.4). It built it for
-    the launcher, so `AT_PHDR`, `AT_PHNUM`, `AT_ENTRY`, `AT_BASE` and
-    `AT_EXECFN` there describe the launcher, where the vector on the
-    program's stack, which `getauxval` reads, describes the program
-    (7.3). Changing the kernel's copy takes `PR_SET_MM_AUXV`, which
-    needs `CAP_SYS_RESOURCE`; answering the file from the launcher's
-    copy would make it a file of another kind, a `memfd`, to `fstat`
-    and to its link. A program that reads its own headers through the
-    file finds the launcher's; gdb, which reads the file of the process
-    it attaches to, sees the launcher, as item 1 says.
+    `/proc/<pid>/auxv`, in `prctl(PR_GET_AUXV)` (6.4) and in a core
+    dump's note. It built it for the launcher, so `AT_PHDR`,
+    `AT_PHNUM`, `AT_ENTRY`, `AT_BASE` and `AT_EXECFN` there describe the
+    launcher, where the vector on the program's stack, which
+    `getauxval` reads, describes the program (7.3). A program that
+    reads its own headers through the file or the call finds the
+    launcher's. The loader could give the kernel the program's vector
+    in the call that gives it the rest of the record (7.3), and leaves
+    it out for the debugger's sake: gdb takes the file of a process it
+    attaches to from `exe`, the launcher (item 16), places that file's
+    symbols by the vector's `AT_ENTRY`, and first checks the program
+    headers the vector names against the file's. Given the program's
+    vector, gdb 15.1 attached to a program inside leaves the launcher's
+    symbols at their addresses in the file, cannot insert the carried
+    script's breakpoint there, memory that is not mapped, and refuses
+    to continue (measured November 2026). With the launcher's vector
+    the attached program runs on (`gdb_attach`). A run that gdb starts
+    is the same either way, since gdb reads the vector at the exec,
+    before the launcher has run. Answering the file from the
+    launcher's copy instead would make it a file of another kind, a
+    `memfd`, to `fstat` and to its link.
 
 63. **The working directory handed to the host is each process's
     own.** A launcher hands its starting working directory on an
@@ -5058,6 +5074,7 @@ every file at its base, originals included.
 | Caching host paths | A host directory can be replaced at any time. The one-step host check (7.4.4) gets most of the benefit without remembering anything. |
 | Telling an empty top-level directory without reading it | The placeholders are how `ls /` lists the host's directories (8.3), and only reading a directory says it is empty: its link count or its size says so on some filesystems and nothing on others. The read waits for the first path that reaches the directory (8.1 rule 1, 16.6 item 11), and the five volatile ones are never read, since the host owns them whatever they hold (8.1 rule 3). |
 | Mapping a position-independent program just below the break the kernel left the launcher | The break would then lie above the image with no call at all, but the image's place would be the break's draw, 1 GB wide, where the kernel's is `mmap`'s 28 bits, and on a kernel that puts a static PIE's break after its image there is no room below it. The kernel's record of the image moves the break instead (7.3). |
+| Giving the kernel the program's auxiliary vector with the rest of its record | One more field of the same call, and `/proc/<pid>/auxv` would then describe the program. But `exe` stays the launcher's file, which only a capability changes, and a debugger reads the two together: gdb attached to a wrapped program no longer places the launcher's symbols and refuses to continue (13 item 62). |
 | Dropping `getpid` and `gettid` per trap | About 100 ns a trap, but a process-wide value is wrong in a `vfork` child while a parent's thread is in its handler (7.5.4), and the launcher has no thread-local storage. |
 
 ### 14.4 The environment
@@ -6142,7 +6159,9 @@ meaning items 4 and 7.
      image, a start under lowered `RLIMIT_AS` and `RLIMIT_DATA`, and
      one with the record or the random draw refused by a filter
      around the launcher (`mem_layout`, `exec_auxv`,
-     `layout_without_the_record`, 7.3, 13 items 59 to 62), and
+     `layout_without_the_record`, 7.3, 13 items 59 to 62), gdb attached
+     to a program inside, which reads the launcher and lets the
+     program run on (`gdb_attach`, 13 item 62), and
      descriptors and processes
      around trapped calls, the lowest free number at a soft limit's
      edge and after `close_range`, other processes' links, `clone`,

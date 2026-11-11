@@ -142,7 +142,11 @@ documents, gate, one commit per item. Status is in brackets.
     two thirds up the address space with its break above it, as the
     kernel does, and at the kernel's own addresses without
     randomization; the record's code, data and stack are the
-    program's too (DESIGN 7.3, 13 items 24, 50 and 59).
+    program's too (DESIGN 7.3, 13 items 24, 50 and 59). The auxiliary
+    vector could go with the record and stays the launcher's: gdb
+    attached to a program reads it beside the launcher's file, and
+    refuses to continue when it describes the program (13 item 62,
+    `gdb_attach`).
 
 ## After the first release
 

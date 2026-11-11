@@ -322,3 +322,73 @@ def gdb_hooks(ctx: Ctx) -> str | None:
         f"an exclave under a path with a space: {out[-600:]!r} {err[-300:]!r}",
     )
     return None
+
+
+@test
+def gdb_attach(ctx: Ctx) -> str | None:
+    """7.6, 13 item 62: gdb attached to a program inside reads the launcher and lets it run on.
+
+    gdb takes an attached process's file from its exe link, the launcher, and places that file's
+    symbols by the kernel's copy of the process's auxiliary vector, checking the program headers
+    the vector names against the file's. The kernel's copy is the launcher's, so the symbols are
+    placed, the carried script's breakpoint lies in mapped memory, and the process continues to its
+    end with its translated calls passed. Given the program's vector, which the loader could give
+    the kernel with the rest of the record (7.3), gdb leaves the launcher's symbols unplaced and
+    refuses to continue: that is why the kernel's copy stays the launcher's.
+    """
+    gdb = shutil.which("gdb")
+    if not gdb:
+        skip("no gdb")
+    rc, out, err = run([gdb, "-batch", "-nx", "-ex", "python print(gdb.VERSION)"])
+    if rc or not out.strip():
+        skip("gdb without Python")
+    # the program lets any process of its user trace it, which Yama's scopes above 1 still refuse
+    try:
+        scope = int(read_bytes("/proc/sys/kernel/yama/ptrace_scope"))
+    except OSError:
+        scope = 0
+    if scope > 1:
+        skip(f"ptrace_scope {scope}: no process may attach")
+    with subprocess.Popen(
+        [ctx.launcher, os.path.join(ctx.progs, "attach_me")],
+        stdout=subprocess.PIPE,
+        cwd=ctx.work,
+        env=ctx.env,
+        text=True,
+    ) as p:
+        try:
+            assert p.stdout is not None
+            pid = p.stdout.readline().strip()
+            expect(pid.isdigit(), f"the program prints its pid: {pid!r}")
+            rc, out, err = run(
+                [
+                    gdb,
+                    "-batch",
+                    "-nx",
+                    "-iex",
+                    "set auto-load safe-path /",
+                    "-iex",
+                    "set debuginfod enabled off",
+                    "-p",
+                    pid,
+                    "-ex",
+                    "info auto-load python-scripts",
+                    "-ex",
+                    "continue",
+                ],
+                cwd=ctx.work,
+                env=ctx.env,
+                timeout=120,
+            )
+            status = p.wait(timeout=30)
+        finally:
+            p.kill()
+    expect(
+        "exclave-launcher.py" in out and "Cannot insert" not in out + err,
+        f"gdb attached reads the launcher and its script: {out[-600:]!r} {err[-400:]!r}",
+    )
+    expect(
+        status == 0 and "exited normally" in out,
+        f"the attached program runs on to its end: status {status} {out[-600:]!r} {err[-400:]!r}",
+    )
+    return None

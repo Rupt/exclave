@@ -502,6 +502,7 @@ PROGS = (
     "mem_layout",
     "fd_procs",
     "top_reach",
+    "attach_me",
     "sve_frame",
     "spawn_faults",
     "traceme",
