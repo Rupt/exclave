@@ -1866,22 +1866,33 @@ def mem_layout_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     PR_GET_AUXV is 6.4's: an older kernel's refusal drops its cases. On a kernel that takes no
     record of an image from a process, PR_SET_MM_MAP's absence, or has no getrandom, the launcher
     places a program where mmap does and the break stays the kernel's, so what it places is not
-    judged there.
+    judged there. Three answers are an older kernel's own: before 3.16 the vDSO's data lies in the
+    fixmap, with no [vvar] mapping; before 4.7 RLIMIT_DATA counts the break alone, so the
+    launcher's image is not charged and its exec is not killed; and before 5.0 exec checks the
+    argument area against its limit a page at a time (get_arg_page), so the room left under the
+    limit is up to a page, where a later kernel counts bytes.
     """
     want = MEM_LAYOUT
+    launcher = MEM_LAYOUT_LAUNCHER
+    if kernel() < (3, 16):
+        want = tuple((c, "no" if c.endswith(" [vvar]") else a) for c, a in want)
+    if kernel() < (4, 7):
+        launcher = {c: a for c, a in launcher.items() if c != "DATA 128KB"}
+    if kernel() < (5, 0):
+        want = tuple((c, None if c == "arg limit slack under 64 bytes" else a) for c, a in want)
     if not by_the_kernel and "PR_SET_MM_MAP and getrandom: no" in out.splitlines():
         want = tuple((c, None if c in MEM_LAYOUT_PLACED else a) for c, a in want)
     if "own PR_GET_AUXV AT_PHDR: refused" in out.splitlines():
         want = tuple(c for c in want if "PR_GET_AUXV" not in c[0])
         out = "\n".join(x for x in out.splitlines() if "PR_GET_AUXV" not in x)
-    return lines_wrong(out, want, MEM_LAYOUT_LAUNCHER, by_the_kernel=by_the_kernel)
+    return lines_wrong(out, want, launcher, by_the_kernel=by_the_kernel)
 
 
 # fd_procs HOSTDIR (test/progs/fd_procs.c), measured under bwrap on 7.0: the descriptors a program
 # starts with and gets, at the soft limit's edge and after close_range, other processes' links,
 # working directories changed by clones, threads and posix_spawn, a descriptor passed or taken,
-# and wait statuses. close_range is 5.9's, its CLOEXEC 5.11's and the pidfd calls 5.6's: an
-# older kernel's refusal drops those cases (FD_PROCS_SINCE).
+# and wait statuses. close_range is 5.9's, its CLOEXEC 5.11's, the pidfd calls 5.6's and
+# /proc/thread-self 3.17's: an older kernel's refusal drops those cases (FD_PROCS_SINCE).
 FD_PROCS: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("start fds", "0,1,2"),
     ("start F_GETFD 0", "0"),
@@ -1956,6 +1967,7 @@ FD_PROCS_SINCE: tuple[tuple[str, str, str], ...] = (
     ("close_range all", "ENOSYS", "close_range"),
     ("close_range cloexec", "EINVAL", "close_range cloexec"),
     ("pidfd_getfd link", "ENOSYS", "pidfd"),
+    ("thread-self fd link", "ENOENT", "thread-self"),
 )
 
 

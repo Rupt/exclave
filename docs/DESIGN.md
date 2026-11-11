@@ -4832,7 +4832,9 @@ and stay fixed.
     `RLIMIT_AS`.** The kernel charges a process's private writable
     memory to `RLIMIT_DATA` from its exec on, the launcher's image
     included, and kills the exec with `SIGSEGV` when the image does not
-    fit (`load_elf_binary`). The launcher keeps its large tables out of
+    fit (`load_elf_binary`); a kernel before 4.7 charges that limit
+    with the break alone, and the launcher's memory counts against
+    `RLIMIT_AS` only. The launcher keeps its large tables out of
     its image, the arena's rest, the cache's strings and its full table
     in a reserve opened as each fills (7.3, 7.4.4, 16.6 item 9), so what
     it charges is its image and what it uses: the image's tables, the
@@ -5918,7 +5920,8 @@ as a whole.
     rounds of 2 000 alternated; the image's `.bss` is 181 KB rather
     than 366 KB, which `RLIMIT_DATA` is charged with (13 item 60).
     Check: `start_page_faults`, which fails past 50 faults more than
-    native.
+    native, 80 on a kernel before 3.15, where each page of the
+    launcher's file is a fault of its own.
 
 11. **A top-level directory is read when a path first reaches it**
     (specified in 8.1 rule 1). Only reading a directory says whether

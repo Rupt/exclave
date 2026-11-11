@@ -800,7 +800,9 @@ def start_page_faults(ctx: Ctx) -> str:
     program's. Behind its wrapper, spawned from inside, the launcher's start is added: it keeps
     its buffers in one scratch chunk, the one the program's first trapped call takes next, and the
     exclave's paths in the arena, so at most 50 more faults; a buffer of the start's kept in the
-    image again, a page touched for each, goes past that.
+    image again, a page touched for each, goes past that. A kernel before 3.15 maps one page of a
+    file at a fault, where a later one maps sixteen around it, so each page of the launcher's own
+    file is a fault there and the bound is 80.
     """
     prog = os.path.join(ctx.progs, "spawn_faults")
     loader = ctx.payload(ctx.interp)
@@ -815,7 +817,8 @@ def start_page_faults(ctx: Ctx) -> str:
     rc, out, err = inside(ctx, prog, [ctx.vbin("true")])
     expect(rc == 0 and out.strip().isdigit(), f"spawn_faults inside: rc={rc} {out!r} {err!r}")
     got = int(out)
-    expect(got - native <= 50, f"a start inside takes {got} page faults, natively {native}")
+    most = 50 if kernel_answers.kernel() >= (3, 15) else 80
+    expect(got - native <= most, f"a start inside takes {got} page faults, natively {native}")
     return f"{got} against {native}"
 
 
