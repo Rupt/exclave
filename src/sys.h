@@ -136,11 +136,18 @@ enum {
     NR_setxattrat = 463, NR_getxattrat = 464, NR_listxattrat = 465, NR_removexattrat = 466, NR_open_tree_attr = 467,
     NR_file_getattr = 468, NR_file_setattr = 469, NR_bind = 49, NR_connect = 42,
     NR_pipe2 = 293, NR_prlimit64 = 302, NR_ptrace = 101, NR_getppid = 110, NR_kcmp = 312,
+    NR_brk = 12, NR_getrandom = 318,
 };
 /* clang-format on */
 #define ARCH_NAME "x86_64"
 #define ARCH_ISA_DEFAULT "x86-64"
 #define TASK_SIZE 0x7ffffffff000UL /* the kernel's bound on a segment (load_elf_binary) */
+/* where the kernel lays a new image out (7.3), from the end of the stack it gave: the stack's end without
+ * randomization (STACK_TOP), the base of a program that names a loader (ELF_ET_DYN_BASE, two thirds of the address
+ * space) and the width of the random offset added to it (arch_mmap_rnd, 28 bits of pages by default) */
+#define STACK_TOP(end) 0x7ffffffff000UL
+#define ET_DYN_BASE(end) 0x555555554000UL
+#define MMAP_RND_SPAN (1UL << 40)
 #define EM_NATIVE 62
 #define AUDIT_ARCH_NATIVE 0xC000003EU
 #define R_NATIVE_RELATIVE 8                 /* R_X86_64_RELATIVE */
@@ -244,11 +251,18 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
     NR_setxattrat = 463, NR_getxattrat = 464, NR_listxattrat = 465, NR_removexattrat = 466, NR_open_tree_attr = 467,
     NR_file_getattr = 468, NR_file_setattr = 469, NR_bind = 200, NR_connect = 203,
     NR_pipe2 = 59, NR_prlimit64 = 261, NR_ptrace = 117, NR_getppid = 173, NR_kcmp = 272,
+    NR_brk = 214, NR_getrandom = 278,
 };
 /* clang-format on */
 #define ARCH_NAME "aarch64"
 #define ARCH_ISA_DEFAULT "aarch64"
 #define TASK_SIZE (1UL << 52) /* the widest arm64 address space; a tighter kernel refuses the mapping itself */
+/* where the kernel lays a new image out (7.3), as on x86-64. The address space is the kernel's choice, 39 to 48 bits
+ * (DEFAULT_MAP_WINDOW_64), and the stack ends at its top, less a random distance under half of it: the power of two
+ * the stack's end rounds up to. The random offset is 18 bits of 4 KB pages by default, 1 GB at every page size */
+#define STACK_TOP(end) (1UL << (64 - __builtin_clzl((end) - 1)))
+#define ET_DYN_BASE(end) (2 * STACK_TOP(end) / 3)
+#define MMAP_RND_SPAN (1UL << 30)
 #define EM_NATIVE 183
 #define AUDIT_ARCH_NATIVE 0xC00000B7U
 #define R_NATIVE_RELATIVE 1027              /* R_AARCH64_RELATIVE */
@@ -343,6 +357,9 @@ long __sc6_judge_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define FD_CLOEXEC 1
 
 #define PR_SET_NO_NEW_PRIVS 38
+#define PR_SET_MM 35
+#define PR_SET_MM_MAP 14
+#define GRND_NONBLOCK 1
 
 #define AT_NULL 0
 #define AT_EXECFN 31

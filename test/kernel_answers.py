@@ -1341,6 +1341,8 @@ EXEC_ELF_LAUNCHER: dict[str, str] = {
 # as its own, the vector's entries, the page size, the hardware capabilities and the loader's name,
 # is any (None), and AT_PLATFORM is the machine's name (MACHINE)
 EXEC_AUXV: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
+    # the machine's: whether a process may give the kernel the record of its image
+    ("PR_SET_MM_MAP", None),
     ("own sp aligned 16", "yes"),
     ("own argc at sp", "yes"),
     ("own argv at sp+8", "yes"),
@@ -1552,38 +1554,37 @@ EXEC_AUXV: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("hard 3 open fds", "opendir EMFILE"),
     ("hard 3 soft limit", "3"),
 )
-# where the launcher answers otherwise by a stated rule: on the loader path the kernel's image is
-# the launcher's, so /proc/self/stat's code, stack and environment fields and the strings' places
-# are its (13 item 50); at the border the four fixed variables are the launcher's strings (6.2), so
-# the own run's environment is not the kernel's area; an exec under a hard descriptor limit of 3 is
-# EMFILE (13 item 12)
+# where the launcher answers otherwise by a stated rule: the kernel laid the strings out for the
+# launcher, so AT_EXECFN names a string of the launcher's own and the environment's end in
+# /proc/self/stat is not its place (13 item 50); at the border the four fixed variables are the
+# launcher's strings (6.2), so the own run's environment is not the kernel's area; an exec under a
+# hard descriptor limit of 3 is EMFILE (13 item 12)
 EXEC_AUXV_LAUNCHER: dict[str, str] = {
     "own envp[0] after argv's last": "no",
     "own envp strings contiguous ascending": "no",
     "own AT_EXECFN after envp's last": "no",
     "own AT_EXECFN ends 8 below the stack top": "no",
-    "own stat code holds main": "no",
-    "own stat startstack is sp": "no",
     "own stat arg_end is envp[0]": "no",
     "own stat env_start is envp[0]": "no",
     "own stat env_end is AT_EXECFN": "no",
     "exec AT_EXECFN after envp's last": "no",
     "exec AT_EXECFN ends 8 below the stack top": "no",
-    "exec stat code holds main": "no",
-    "exec stat startstack is sp": "no",
     "exec stat env_end is AT_EXECFN": "no",
     "suid AT_EXECFN after envp's last": "no",
     "suid AT_EXECFN ends 8 below the stack top": "no",
-    "suid stat code holds main": "no",
-    "suid stat startstack is sp": "no",
     "suid stat env_end is AT_EXECFN": "no",
     "sgid AT_EXECFN after envp's last": "no",
     "sgid AT_EXECFN ends 8 below the stack top": "no",
-    "sgid stat code holds main": "no",
-    "sgid stat startstack is sp": "no",
     "sgid stat env_end is AT_EXECFN": "no",
     "hard 3 open fds": "exec EMFILE",
     "hard 3 soft limit": "exec EMFILE",
+}
+# on a kernel that takes no record of an image from a process, PR_SET_MM_MAP's absence, the
+# record's code and stack stay the launcher's (7.3, 13 item 50)
+EXEC_AUXV_NO_RECORD: dict[str, str] = {
+    f"{run} stat {c}": "no"
+    for run in ("own", "exec", "suid", "sgid")
+    for c in ("code holds main", "startstack is sp")
 }
 # exec_state HOSTDIR (test/progs/exec_state.c), measured under bwrap on 7.0; what the caller's own
 # state decides, the timer slack, the affinity, the umask and the ignored signals of the plain and
@@ -1744,7 +1745,10 @@ def exec_auxv_wrong(
     want = EXEC_AUXV
     if not static_libc:
         want = (*(c for c in EXEC_AUXV if not c[0].startswith(EXEC_AUXV_FDS)), EXEC_AUXV_NO_STATIC)
-    return lines_wrong(out, want, EXEC_AUXV_LAUNCHER, by_the_kernel=by_the_kernel)
+    launcher = EXEC_AUXV_LAUNCHER
+    if "PR_SET_MM_MAP: no" in out.splitlines():
+        launcher = {**launcher, **EXEC_AUXV_NO_RECORD}
+    return lines_wrong(out, want, launcher, by_the_kernel=by_the_kernel)
 
 
 def exec_state_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
@@ -1752,15 +1756,16 @@ def exec_state_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     return lines_wrong(out, EXEC_STATE, EXEC_STATE_LAUNCHER, by_the_kernel=by_the_kernel)
 
 
-# mem_layout (test/progs/mem_layout.c), measured under bwrap on 7.0: the break, the image's place
-# and a lowered RLIMIT_AS and RLIMIT_DATA, from the program's own run, an exec and an exec without
-# randomization. Where a libc moves the break before main, the break's first value is the libc's.
+# mem_layout (test/progs/mem_layout.c), measured under bwrap on 7.0: the break, the image's place,
+# the kernel's record of the image and a lowered RLIMIT_AS and RLIMIT_DATA, from the program's own
+# run, an exec and an exec without randomization. Where a libc moves the break before main, the
+# break's first value is the libc's.
 MEM_LAYOUT_RUN = (
     ("brk above image end", "yes"),
     ("brk within 1 GB above image end", "yes"),
     ("brk above end symbol", "yes"),
     ("brk page aligned", None),
-    ("sbrk 1 MB", "ok"),
+    ("brk 1 MB further", "ok"),
     ("[heap] holds it", "yes"),
     ("[heap] starts at the first break", None),
     ("image below loader", "yes"),
@@ -1770,8 +1775,13 @@ MEM_LAYOUT_RUN = (
     ("[stack] holds sp", "yes"),
     ("/proc/self/exe header is ours", "yes"),
     ("AT_EXECFN opens", "ok"),
+    ("stat data in the image", "yes"),
+    ("stat start_brk within 1 GB above image end", "yes"),
 )
 MEM_LAYOUT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
+    # the machine's: whether a process may give the kernel the record of its image, and has
+    # random numbers to place one by
+    ("PR_SET_MM_MAP and getrandom", None),
     *((f"own {c}", a) for c, a in MEM_LAYOUT_RUN),
     *(
         (f"own {src} {t}", "the program's")
@@ -1780,6 +1790,7 @@ MEM_LAYOUT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ),
     *((f"plain {c}", a) for c, a in MEM_LAYOUT_RUN),
     ("norand personality", "yes"),
+    ("norand image at the kernel's base", "yes"),
     ("norand brk above image end", "yes"),
     ("norand brk within 1 MB above image end", "yes"),
     ("norand image below loader", "yes"),
@@ -1794,46 +1805,58 @@ MEM_LAYOUT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("arg limit slack under 64 bytes", "yes"),
     ("arg limit E2BIG past it", "yes"),
 )
-# The launcher's: the kernel's copy of the auxiliary vector is the launcher's (13 item 62);
-# the program's break is the launcher's, below a PIE image the loader maps
-# top-down (13 item 59); the launcher's own memory counts against RLIMIT_DATA, 128 KB less than
-# its image charges (13 item 60); the launcher's variables take room from the argument area (13
-# item 61).
+# The launcher's: the kernel's copy of the auxiliary vector is the launcher's (13 item 62); the
+# launcher's own memory counts against RLIMIT_DATA, 128 KB less than its image charges (13 item
+# 60); the launcher's variables take room from the argument area (13 item 61).
 MEM_LAYOUT_LAUNCHER: dict[str, str] = {
-    **{
-        f"{run} {c}": "no"
-        for run in ("own", "plain")
-        for c in (
-            "brk above image end",
-            "brk within 1 GB above image end",
-            "brk above end symbol",
-            "image below loader",
-        )
-    },
     **{
         f"own {src} {t}": "another"
         for src in ("/proc/self/auxv", "PR_GET_AUXV")
         for t in ("AT_PHDR", "AT_ENTRY", "AT_BASE")
     },
-    "norand brk above image end": "no",
-    "norand brk within 1 MB above image end": "no",
-    "norand image below loader": "no",
     # the launcher's image alone, its .bss with the arena's first block and its tables, charges
     # RLIMIT_DATA more than 128 KB, so the kernel kills its exec: a .bss shrunk below that moves
     # this answer to the next charge's
     "DATA 128KB": "signal 11",
     "arg limit slack under 64 bytes": "no",
 }
+# What the launcher places as the kernel does only where the kernel takes the record of an image
+# from it (7.3, 13 item 59): the image, the break and the record's bounds.
+MEM_LAYOUT_PLACED = frozenset(
+    {
+        *(
+            f"{run} {c}"
+            for run in ("own", "plain")
+            for c in (
+                "brk above image end",
+                "brk within 1 GB above image end",
+                "brk above end symbol",
+                "image below loader",
+                "stat data in the image",
+                "stat start_brk within 1 GB above image end",
+            )
+        ),
+        "norand image at the kernel's base",
+        "norand brk above image end",
+        "norand brk within 1 MB above image end",
+        "norand image below loader",
+    }
+)
 
 
 def mem_layout_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     """The lines of mem_layout's output that differ from the kernel's answers.
 
-    PR_GET_AUXV is 6.4's: an older kernel's refusal drops its cases.
+    PR_GET_AUXV is 6.4's: an older kernel's refusal drops its cases. On a kernel that takes no
+    record of an image from a process, PR_SET_MM_MAP's absence, or has no getrandom, the launcher
+    places a program where mmap does and the break stays the kernel's, so what it places is not
+    judged there.
     """
     want = MEM_LAYOUT
+    if not by_the_kernel and "PR_SET_MM_MAP and getrandom: no" in out.splitlines():
+        want = tuple((c, None if c in MEM_LAYOUT_PLACED else a) for c, a in want)
     if "own PR_GET_AUXV AT_PHDR: refused" in out.splitlines():
-        want = tuple(c for c in MEM_LAYOUT if "PR_GET_AUXV" not in c[0])
+        want = tuple(c for c in want if "PR_GET_AUXV" not in c[0])
         out = "\n".join(x for x in out.splitlines() if "PR_GET_AUXV" not in x)
     return lines_wrong(out, want, MEM_LAYOUT_LAUNCHER, by_the_kernel=by_the_kernel)
 

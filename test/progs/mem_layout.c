@@ -1,7 +1,8 @@
 /* mem_layout.c — where a program's memory lies and how it grows (fs/binfmt_elf.c's load_elf_binary, mm/mmap.c;
  * DESIGN.md 7.3, 17 item 4): the break against the image, its growth, the image against its loader and the stack, the
- * named mappings, what /proc/self/exe holds, the kernel's copy of the auxiliary vector, and an exec of itself under a
- * lowered RLIMIT_AS and RLIMIT_DATA, without randomization, and with the argument area full. usage:
+ * named mappings, the kernel's record of the image in /proc/self/stat, what /proc/self/exe holds, the kernel's copy of
+ * the auxiliary vector, and an exec of itself under a lowered RLIMIT_AS and RLIMIT_DATA, without randomization, where
+ * the image lies at the kernel's base, and with the argument area full. usage:
  * mem_layout; "mem_layout --child LABEL" is the program it re-executes. Prints one line per case, "<case>:
  * <answer>", the same in every world, so the kernel under bwrap is the oracle. Exit 0 always. */
 #define _GNU_SOURCE
@@ -18,6 +19,7 @@
 #include <sys/personality.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -65,22 +67,79 @@ static void image_span(uintptr_t *lo, uintptr_t *hi)
     }
 }
 
+/* field n of /proc/self/stat, counted from 1 as proc(5) counts them, 0 where it cannot be read */
+static uintptr_t stat_field(int n)
+{
+    char buf[2048];
+    int fd = open("/proc/self/stat", O_RDONLY);
+    ssize_t len = fd < 0 ? -1 : read(fd, buf, sizeof buf - 1);
+    if (fd >= 0) close(fd);
+    if (len <= 0) return 0;
+    buf[len] = 0;
+    /* the comm, field 2, may hold spaces and parentheses: the fields after it follow its last one */
+    const char *p = strrchr(buf, ')');
+    for (int i = 2; p && i < n; i++) p = strchr(p + 1, ' ');
+    return p ? (uintptr_t)strtoul(p + 1, 0, 10) : 0;
+}
+
+/* the kernel's record of the image's data and of its break (mm_struct, proc(5)'s fields 45 to 47) against the
+ * program's own; exec_auxv measures the record's code, stack and strings */
+static void record(const char *label)
+{
+    uintptr_t ilo, ihi;
+    image_span(&ilo, &ihi);
+    uintptr_t sd = stat_field(45), ed = stat_field(46), sb = stat_field(47);
+    printf("%s stat data in the image: %s\n", label, yn(sd >= ilo && sd <= ed && ed <= ihi));
+    printf("%s stat start_brk within 1 GB above image end: %s\n", label, yn(sb >= ihi && sb - ihi <= (1UL << 30)));
+}
+
+/* whether a mapping named [heap] holds the megabyte from a, and where the first of that name starts, read by the
+ * calls themselves: a libc's stream may take its buffer from the break. musl's allocator maps guard pages into the
+ * break, so several mappings bear the name */
+static int heap_holds(uintptr_t a, uintptr_t *first)
+{
+    char buf[1 << 15]; /* on the stack: the image's own data is what the lowered RLIMIT_DATA cases measure */
+    int fd = open("/proc/self/maps", O_RDONLY), holds = 0;
+    ssize_t n = 0, r;
+    while (fd >= 0 && n < (ssize_t)sizeof buf - 1 && (r = read(fd, buf + n, sizeof buf - 1 - (size_t)n)) > 0) n += r;
+    if (fd >= 0) close(fd);
+    buf[n] = 0;
+    *first = 0;
+    for (char *l = buf, *nl; (nl = strchr(l, '\n')); l = nl + 1) {
+        *nl = 0;
+        if (!strstr(l, "[heap]")) continue;
+        char *e;
+        uintptr_t lo = strtoul(l, &e, 16), hi = strtoul(e + 1, 0, 16);
+        if (!*first) *first = lo;
+        if (lo <= a && hi >= a + (1 << 20)) holds = 1;
+    }
+    return holds;
+}
+
 static void report(const char *label)
 {
     uintptr_t ilo, ihi, slo, shi, llo = 0, lhi = 0;
     image_span(&ilo, &ihi);
-    uintptr_t brk0 = (uintptr_t)sbrk(0);
+    /* the break by the call itself, which answers where the break is: musl's sbrk grows nothing */
+    uintptr_t brk0 = (uintptr_t)syscall(SYS_brk, 0);
     printf("%s brk above image end: %s\n", label, yn(brk0 >= ihi));
     printf("%s brk within 1 GB above image end: %s\n", label, yn(brk0 >= ihi && brk0 - ihi <= (1UL << 30)));
     printf("%s brk above end symbol: %s\n", label, yn(brk0 >= (uintptr_t)end));
     printf("%s brk page aligned: %s\n", label, yn(brk0 % 4096 == 0));
-    void *p = sbrk(1 << 20);
-    printf("%s sbrk 1 MB: %s\n", label, p == (void *)-1 ? strerror(errno) : "ok");
-    if (p != (void *)-1) {
-        memset(p, 1, 1 << 20);
-        uintptr_t hlo = 0, hhi = 0;
-        printf("%s [heap] holds it: %s\n", label,
-               yn(maps_find(0, "[heap]", &hlo, &hhi) && hlo <= (uintptr_t)p && hhi >= (uintptr_t)p + (1 << 20)));
+    /* a megabyte further from where the break is by now, a libc's first buffer taken: the libc keeps its own note of
+     * the break, so nothing of its that may take memory runs until the break is back */
+    uintptr_t cur = (uintptr_t)syscall(SYS_brk, 0);
+    int grew = (uintptr_t)syscall(SYS_brk, cur + (1 << 20)) == cur + (1 << 20);
+    uintptr_t hlo = 0;
+    int heap = 0;
+    if (grew) {
+        memset((void *)cur, 1, 1 << 20);
+        heap = heap_holds(cur, &hlo);
+        syscall(SYS_brk, cur);
+    }
+    printf("%s brk 1 MB further: %s\n", label, grew ? "ok" : "refused");
+    if (grew) {
+        printf("%s [heap] holds it: %s\n", label, yn(heap));
         printf("%s [heap] starts at the first break: %s\n", label, yn(hlo == brk0));
     }
     const char *at_base = (const char *)getauxval(AT_BASE);
@@ -119,6 +178,15 @@ static void exe_file(const char *label)
 #ifndef PR_GET_AUXV
 #define PR_GET_AUXV 0x41555856
 #endif
+#ifndef PR_SET_MM_MAP_SIZE
+#define PR_SET_MM_MAP_SIZE 15
+#endif
+#ifndef GRND_NONBLOCK
+#define GRND_NONBLOCK 1
+#endif
+#ifndef SYS_getrandom
+#define SYS_getrandom (-1)
+#endif
 /* the kernel's copy of the auxiliary vector, from /proc/self/auxv and PR_GET_AUXV (6.4), against the program's */
 static void kernel_auxv(const char *label)
 {
@@ -146,16 +214,43 @@ static void kernel_auxv(const char *label)
     }
 }
 
+/* where the kernel puts a program without randomization: where it is linked, or, a position-independent one that
+ * names a loader, two thirds up the address space (ELF_ET_DYN_BASE), which ends where the stack does then, aligned
+ * down as the image asks */
+static uintptr_t et_dyn_base(void)
+{
+    uintptr_t slo, shi, base;
+    const ElfW(Ehdr) *eh = (const ElfW(Ehdr) *)((uintptr_t)getauxval(AT_PHDR) - sizeof(ElfW(Ehdr)));
+    if (eh->e_type == ET_EXEC) {
+        image_span(&slo, &shi);
+        return slo & ~((uintptr_t)sysconf(_SC_PAGESIZE) - 1);
+    }
+    if (!maps_find(0, "[stack]", &slo, &shi)) return 0;
+#if defined(__x86_64__)
+    base = 0x555555554000UL;
+#else
+    base = 2 * (1UL << (64 - __builtin_clzl(shi - 1))) / 3;
+#endif
+    const ElfW(Phdr) *ph = (const ElfW(Phdr) *)getauxval(AT_PHDR);
+    uintptr_t align = (uintptr_t)sysconf(_SC_PAGESIZE);
+    for (size_t i = 0; i < getauxval(AT_PHNUM); i++)
+        if (ph[i].p_type == PT_LOAD && ph[i].p_align > align && !(ph[i].p_align & (ph[i].p_align - 1)))
+            align = ph[i].p_align;
+    return base & ~(align - 1);
+}
+
 static void child(const char *label)
 {
     if (strcmp(label, "plain") == 0) {
         report(label);
+        record(label);
         exe_file(label);
     } else if (strcmp(label, "norand") == 0) {
         uintptr_t ilo, ihi, llo = 0, lhi = 0;
         image_span(&ilo, &ihi);
-        uintptr_t b = (uintptr_t)sbrk(0);
+        uintptr_t b = (uintptr_t)syscall(SYS_brk, 0);
         printf("norand personality: %s\n", yn(personality(0xffffffff) & ADDR_NO_RANDOMIZE));
+        printf("norand image at the kernel's base: %s\n", yn(ilo == et_dyn_base()));
         printf("norand brk above image end: %s\n", yn(b >= ihi));
         printf("norand brk within 1 MB above image end: %s\n", yn(b >= ihi && b - ihi <= (1UL << 20)));
         const char *at_base = (const char *)getauxval(AT_BASE);
@@ -164,7 +259,7 @@ static void child(const char *label)
     } else if (strcmp(label, "aslr") == 0) {
         uintptr_t ilo, ihi;
         image_span(&ilo, &ihi);
-        printf("%#lx %#lx\n", (unsigned long)ilo, (unsigned long)sbrk(0));
+        printf("%#lx %#lx\n", (unsigned long)ilo, (unsigned long)syscall(SYS_brk, 0));
     } else {
         printf("%s: ran\n", label);
     }
@@ -261,7 +356,15 @@ int main(int argc, char **argv)
         child(argv[2]);
         return 0;
     }
+    /* whether this kernel lets a process give it the record of its image, and has random numbers to place one by:
+     * the launcher places a program as the kernel does where both hold (7.3) */
+    unsigned size = 0;
+    unsigned long rnd;
+    printf("PR_SET_MM_MAP and getrandom: %s\n",
+           yn(prctl(PR_SET_MM, PR_SET_MM_MAP_SIZE, &size, 0, 0) == 0 &&
+              syscall(SYS_getrandom, &rnd, sizeof rnd, GRND_NONBLOCK) == (long)sizeof rnd));
     report("own");
+    record("own");
     exe_file("own");
     kernel_auxv("own");
     run("plain", -1, 0, 0);

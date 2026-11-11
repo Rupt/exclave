@@ -567,6 +567,9 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
     char **e = envp;
     while (*e) e++;
     unsigned long *auxv = (unsigned long *)(e + 1);
+    /* where the kernel laid the strings, which its record of the image keeps (7.3) */
+    C.arg_start = (unsigned long)argv[0];
+    C.arg_end = (unsigned long)envp[0];
     /* the loader maps at the kernel's page size (7.3); a power of two, or 4 KB */
     C.pagesz = 4096;
     for (long i = 0; auxv[i * 2] != AT_NULL; i++)

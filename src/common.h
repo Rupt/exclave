@@ -245,6 +245,9 @@ struct exclave {
     /* RLIMIT_NOFILE as the program had it, raised for the launcher's own opens (7.4.5) */
     unsigned long rlim[2];
     int borrowed;
+    /* the kernel's argument strings, where the exec laid them: the first one's start and the environment's, each 0
+     * where there is none (7.3) */
+    unsigned long arg_start, arg_end;
     /* diagnostics */
     int logfd;
     unsigned long text_lo, text_hi; /* the launcher's own text range, for the nesting rule (7.5.3) */

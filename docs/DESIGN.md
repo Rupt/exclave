@@ -966,7 +966,8 @@ and its loader. It takes what the kernel takes, an `ET_EXEC` or an
 kernel's `elf_check_arch` does not read it, with program headers of the
 kernel's size. It maps each `PT_LOAD`, an `ET_EXEC` at its address with
 `MAP_FIXED_NOREPLACE`, checked since an older kernel takes it as a hint,
-an `ET_DYN` at a base chosen by reserving its span. Segments are rounded
+an `ET_DYN` at a base chosen by reserving its span, where the kernel's
+exec would put it (below). Segments are rounded
 to the kernel's page size from `AT_PAGESZ`, as the kernel rounds them,
 16 or 64 KB on some aarch64 kernels (13 item 43). What the kernel meets
 past its point of no return kills the new image with `SIGSEGV`
@@ -990,13 +991,59 @@ own auxiliary vector with `AT_PHDR`, `AT_PHENT`, `AT_PHNUM`, `AT_ENTRY`,
 `comm` (7.6), and jumps to the loader's entry, or the original's for a
 static binary. `AT_EXECFN` is the name the program was exec'd by, as the
 kernel spells it (7.4.5). It takes only 64-bit ELF of its own machine.
-The break the program finds is the launcher's, which the kernel placed
-(13 item 59). The launcher keeps its large tables out of its own image,
+The launcher keeps its large tables out of its own image,
 whose writable memory the kernel charges to `RLIMIT_DATA` at the exec:
 the arena of startup's strings and buffers has a first block of 32 KB
 in the image, which an ordinary start does not outgrow, and its rest,
 the cache's strings and its full table are one reserve mapped without
 access at the first need and opened as each fills (7.4.4, 13 item 60).
+
+**Where the image and its break lie.** The kernel's exec puts a
+position-independent program that names a loader two thirds up the
+address space (`ELF_ET_DYN_BASE`) at a random offset of `mmap`'s
+width, aligned down to the largest alignment a segment asks for, a
+program linked at an address where it is linked, and either one's
+break past its image's end by a random distance under 1 GB; without
+randomization, under `personality(ADDR_NO_RANDOMIZE)` as gdb runs a
+program, the offset and the distance are none. The loader does the
+same by a draw of its own from `getrandom`, 28 bits of pages on x86-64
+and 1 GB on aarch64, the kernels' usual defaults, and tells whether
+the kernel randomizes from the end of the stack, which the kernel
+moves down by a random number of pages when it does. So the image, the
+break above it and the loader, which `mmap` places, lie as they do
+natively, and without randomization at the kernel's own addresses:
+under `setarch -R` Ubuntu 24.04's `cat` wrapped in an exclave lies at
+`0x555555554000` with its `[heap]` from `0x55555555f000`, where the
+reference machine's own `cat`, the same build, lies (November 2026).
+
+The break is not the launcher's to place by a call of `brk`, which
+only grows it. It is a field of the kernel's record of the image it
+exec'd (`mm_struct`), beside the bounds of the code and the data, the
+start of the stack and the places of the argument and environment
+strings, from which the kernel answers `/proc/<pid>/stat`, names
+`[heap]` and `[stack]` and counts the break against `RLIMIT_DATA`. The
+kernel filled the record for the launcher. `prctl(PR_SET_MM,
+PR_SET_MM_MAP)` takes it whole and without a capability, where the
+kernel has the call (Linux 3.18, built with `CONFIG_CHECKPOINT_RESTORE`,
+as the reference machine's is), and the loader gives it the
+program's: its code and data, the break above its image, its first
+stack pointer, and the strings where the kernel laid them. The loader
+reserves the image's place, gives the record and then maps the image,
+so that the break is moved only above an image that is there. Where
+the kernel refuses the record the place is given up, since an image
+two thirds up would stand in the way of the break the kernel left
+there; where the place is in use, or the kernel has no `getrandom`
+(before 3.17), none is reserved. The image then goes where `mmap`
+puts it and the break stays the launcher's (13 item 59), as they do
+on a kernel that loads a static PIE two thirds up itself, 4.1 to 4.12
+and older ones without randomization: there the place and the room
+above it are the launcher's own. A position-independent program that names no
+loader, a static PIE or the loader run as a program, the kernel maps
+where `mmap` does, with its break two thirds up, and there the
+launcher's own break already is, the launcher being one. The record's
+auxiliary vector is left out of the call, so the kernel's copy stays
+the launcher's (13 item 62). A start is two syscalls longer for the
+draw and the record.
 
 The loader is whatever the original's `PT_INTERP` names, resolved in
 the exclave as the kernel would resolve it in a chroot and opened
@@ -3787,7 +3834,7 @@ another, or copy a sysroot into a data directory (9). The cost is disk space.
 
 | Dimension | Requirement or behaviour |
 |---|---|
-| Kernel | A seccomp filter with `SECCOMP_RET_TRAP` (Linux 3.5), installed with `seccomp(2)` or `prctl(PR_SET_SECCOMP)`. `SECCOMP_RET_KILL_PROCESS` (Linux 4.14) degrades to killing the thread on older kernels. `/proc` mounted. `process_vm_readv` for speed, with a pipe keeping `EFAULT` fidelity where it is refused (7.5.6). Measured from 3.10 to 7.3 (12.1) |
+| Kernel | A seccomp filter with `SECCOMP_RET_TRAP` (Linux 3.5), installed with `seccomp(2)` or `prctl(PR_SET_SECCOMP)`. `SECCOMP_RET_KILL_PROCESS` (Linux 4.14) degrades to killing the thread on older kernels. `/proc` mounted. `process_vm_readv` for speed, with a pipe keeping `EFAULT` fidelity where it is refused (7.5.6). `PR_SET_MM_MAP` (3.18, `CONFIG_CHECKPOINT_RESTORE`) and `getrandom` (3.17) for a program's image and break where the kernel's exec puts them, without which they lie where `mmap` and the launcher's exec left them (7.3, 13 item 59). Measured from 3.10 to 7.3 (12.1) |
 | Ubuntu 23.10+ desktops, Docker and CI default profiles, RHEL 7, HPC, hardened kernels | Designed to work: no privilege, user namespace or mount is needed. Docker's default seccomp profile was checked syscall by syscall, and a workload runs under it, twice: as assembled for the running kernel and as Docker installs it before Linux 4.8, where `process_vm_readv` is refused (17) |
 | Read-only media, NFS, FUSE homes | Work: nothing is written |
 | `noexec` media, including a `noexec` `/tmp` in CI | Not supported: neither `execve` nor `mmap(PROT_EXEC)` of a file is allowed there |
@@ -4160,6 +4207,18 @@ and stay fixed.
     runs, and the `low_image` test runs a C program laid out the same
     way on every exclave kind. A launcher built for an earlier address
     and the current one cannot run under each other (item 45, 7.4.2).
+    A break that starts below the page grows only up to it: a program
+    linked at a low address, as one built without `-pie` is at
+    `0x400000`, has 2 016 MB of break, grown in 16 MB steps and
+    untouched (November 2026, the reference machine), where natively
+    it has the address space up to its libraries. The loader keeps
+    such a break within 32 MB of its image, not the kernel's 1 GB, so
+    that the room does not vary with the draw (7.3). At the page `brk`
+    answers `ENOMEM`: glibc's and musl's `malloc` then take memory from
+    `mmap`, as they do natively when the break meets a mapping, and a
+    program that takes its memory from the break alone is out of
+    memory. A position-independent program's break lies far above the
+    page.
 
 25. **A program run from a descriptor with no path cannot re-open
     itself.** `fexecve` of a `memfd` or of an unlinked file runs on the
@@ -4449,20 +4508,23 @@ and stay fixed.
     `exec`, and reports whether a shadow stack was on (17); the day a glibc turns them on, the handler's paths run on
     one there. Until then the handler has not run on a shadow stack.
 
-50. **On the loader path the kernel's image is the launcher's.** The
-    fields of `/proc/<pid>/stat` the kernel fills at exec, the code's
-    start and end, the stack's start and the end of the argument and
-    environment areas, describe the launcher, which the kernel exec'd,
-    not the program it loaded; `arg_start`, `cmdline` and `comm` are the
-    program's. The program's argument and environment strings lie where
-    the kernel put them for the launcher, the program's environment
-    contiguous after its arguments and the launcher's variables
-    after that (item 46), and `AT_EXECFN` names a string of the
-    launcher's own rather than the top of the stack; at the border the
-    three fixed variables of 6.2 are the launcher's strings. Moving the
-    kernel's fields takes `PR_SET_MM`, which needs `CAP_SYS_RESOURCE`.
-    `exec_auxv` measures every other entry of the initial stack and the
-    auxiliary vector against the kernel (17 item 4).
+50. **A program's strings lie where the kernel laid them for the
+    launcher.** The program's argument and environment strings are the
+    ones the kernel copied at the launcher's exec, the program's
+    environment contiguous after its arguments and the launcher's
+    variables after that (item 46), and `AT_EXECFN` names a string of
+    the launcher's own rather than the top of the stack, so the end of
+    the environment area in `/proc/<pid>/stat` is not that name's
+    place; at the border the three fixed variables of 6.2 are the
+    launcher's strings. The other fields of `/proc/<pid>/stat` that the
+    kernel fills at exec, the bounds of the code and the data and the
+    starts of the break and the stack, are the program's where the
+    kernel takes the record of an image from the loader (7.3), and
+    describe the launcher, which the kernel exec'd, on a kernel that
+    does not (item 59); `arg_start`, `cmdline` and `comm` are the
+    program's on every kernel. `exec_auxv` measures the record, the
+    initial stack and the auxiliary vector against the kernel (17 item
+    4).
 
 51. **A handler that did not ask for the alternate stack runs on it
     when its signal lands during a trap.** The launcher's handler runs
@@ -4688,29 +4750,43 @@ and stay fixed.
       launcher's frame.
     - The handler runs on less of the alternate stack (item 51).
 
-59. **A program's break is the launcher's.** On the reference kernel,
-    7.0, the kernel sets the break at exec after the image it loads, at
-    a random distance of up to 1 GB above it on x86-64 and aarch64
-    (`arch_randomize_brk`), and for a static PIE, the launcher, at
-    `ELF_ET_DYN_BASE` with that distance added (`load_elf_binary`);
-    older kernels place both otherwise. The loader maps an `ET_DYN`
-    program and its loader by reserving their spans where the kernel's
-    `mmap` places them, top-down below the stack in the default layout
-    and bottom-up under an unlimited stack limit (7.3), so a program's
-    `sbrk(0)` lies away from its image, below it in the default layout,
-    rather than above its `end`, and the image lies above its loader
-    rather than below it. The break grows as natively and `[heap]` names
-    it; what reads the break against the image, a memory report of
-    `sbrk(0) - &end`, gets another number. Under
-    `personality(ADDR_NO_RANDOMIZE)`, gdb's default, the program's
-    addresses are fixed run after run, as natively, but not the
-    kernel's: x86-64's kernel puts a PIE at `0x555555554000`, the
-    loader at the top of the address space. Placing the image just
-    below the launcher's break would give the break its place, at the
-    cost of the image's randomisation, which would come from the
-    break's 1 GB rather than `mmap`'s 28 bits; `PR_SET_MM`, which
-    moves the break, needs `CAP_SYS_RESOURCE`. `mem_layout` measures
-    the rest of the layout against the kernel (17 item 4).
+59. **A program's image and break lie where the launcher's own draw
+    puts them, and where `mmap` and the launcher's exec left them on a
+    kernel that takes no record.** The loader places a program and its
+    break as the kernel's exec would and gives the kernel the record of
+    them (7.3). What differs from a native start:
+    - On a kernel without `PR_SET_MM_MAP`, before 3.18 or built
+      without `CONFIG_CHECKPOINT_RESTORE`, or without `getrandom`,
+      before 3.17, wherever a filter around the launcher refuses
+      either, and where the kernel loaded the launcher itself two
+      thirds up (7.3), the image lies where `mmap` puts it, top-down below the
+      stack in the default layout and above its loader, and the break
+      is the one the kernel gave the launcher: on the reference kernel,
+      7.0, two thirds up the address space, far below such an image,
+      so that what reads the break against the image, a memory report
+      of `sbrk(0) - &end`, gets another number, and the record's
+      bounds describe the launcher (item 50). The break grows there as
+      natively and `[heap]` names it. An older kernel also refuses a
+      record whose break does not lie above its data, as a static
+      PIE's does not, and that program's record stays the launcher's.
+      `layout_without_the_record` runs a program with the record and
+      with the draw refused.
+    - The random offset is the launcher's draw at the kernels' default
+      width, 28 bits of pages on x86-64 and 1 GB on aarch64, whatever
+      `vm.mmap_rnd_bits` says: the reference machine's kernel is built
+      with 32 bits, so a program there lies within 1 TB of the base
+      where natively it lies within 16 TB. With
+      `kernel.randomize_va_space` at 1, where the kernel
+      randomizes the image and leaves the break at its end, the loader
+      moves the break as well, and a stack the kernel's draw happened
+      to leave at its place, once in some millions of starts, once in
+      2^14 on aarch64 with 64 KB pages, reads as no randomization.
+    - The loader aligns the image as its segments ask on every kernel,
+      where an older kernel aligns it to a page.
+    - A break below the syscall page grows only up to it (item 24).
+
+    `mem_layout` measures the layout against the kernel, with and
+    without randomization, and `exec_auxv` the record (17 item 4).
 
 60. **The launcher's memory counts against `RLIMIT_DATA` and
     `RLIMIT_AS`.** The kernel charges a process's private writable
@@ -4981,6 +5057,7 @@ every file at its base, originals included.
 | A canonicalisation cache shared across processes | Would save a few hundred `lstat`s per compile, but an inherited descriptor is visible to the program (descriptor counts, `close_range`, leak checks), and a file outside the exclave is state an edited tree makes wrong (14.5). |
 | Caching host paths | A host directory can be replaced at any time. The one-step host check (7.4.4) gets most of the benefit without remembering anything. |
 | Telling an empty top-level directory without reading it | The placeholders are how `ls /` lists the host's directories (8.3), and only reading a directory says it is empty: its link count or its size says so on some filesystems and nothing on others. The read waits for the first path that reaches the directory (8.1 rule 1, 16.6 item 11), and the five volatile ones are never read, since the host owns them whatever they hold (8.1 rule 3). |
+| Mapping a position-independent program just below the break the kernel left the launcher | The break would then lie above the image with no call at all, but the image's place would be the break's draw, 1 GB wide, where the kernel's is `mmap`'s 28 bits, and on a kernel that puts a static PIE's break after its image there is no room below it. The kernel's record of the image moves the break instead (7.3). |
 | Dropping `getpid` and `gettid` per trap | About 100 ns a trap, but a process-wide value is wrong in a `vfork` child while a parent's thread is in its handler (7.5.4), and the launcher has no thread-local storage. |
 
 ### 14.4 The environment
@@ -5248,7 +5325,22 @@ Read from source:
   string, so NUL padding after a shorter path is valid. The
   interpreter's own `PT_INTERP` is ignored. `AT_BASE` is the
   interpreter's load address; `AT_EXECFN` is the filename passed to
-  `execve` (7.3).
+  `execve` (7.3). An `ET_DYN` with an interpreter is loaded at
+  `ELF_ET_DYN_BASE` plus `arch_mmap_rnd()` under `PF_RANDOMIZE`,
+  aligned down to the largest `p_align` (`maximum_alignment`), and one
+  without at `mmap`'s base; the break is set to the page-aligned end
+  of the image, or to `ELF_ET_DYN_BASE` for an `ET_DYN` without an
+  interpreter, and with `randomize_va_space` above 1 moved up by
+  `arch_randomize_brk`, a random distance under 1 GB on x86-64 and
+  aarch64. `randomize_stack_top` (`mm/util.c`) lowers the
+  stack's end by a random number of pages under `PF_RANDOMIZE` and
+  leaves it at `STACK_TOP` otherwise, and `bprm_mm_init` (`fs/exec.c`)
+  puts the exec'd name a pointer's size below it (7.3).
+- **`kernel/sys.c`.** `prctl_set_mm_map` asks for a capability only
+  when `exe_fd` is given, checks the addresses against `mmap_min_addr`
+  and `TASK_SIZE` and the break against `RLIMIT_DATA`, and replaces the
+  record's fields, keeping `saved_auxv` when `auxv_size` is 0; the
+  single-field forms of `PR_SET_MM` need `CAP_SYS_RESOURCE` (7.3).
 - **`kernel/signal.c`.** `force_sig_info_to_task()` resets the handler
   to `SIG_DFL` and unblocks the signal when it is blocked or ignored;
   `force_sig_seccomp()` uses `HANDLER_CURRENT` for `SECCOMP_RET_TRAP`,
@@ -6045,8 +6137,13 @@ meaning items 4 and 7.
      exec'd from inside gets, and another process's `exe` link, one
      running a wrapped script whose relative interpreter the reader
      cannot resolve among them, a program's memory against the
-     kernel's layout and under lowered `RLIMIT_AS` and `RLIMIT_DATA`
-     (`mem_layout`, 13 items 59 to 62), and descriptors and processes
+     kernel's layout, the image at the kernel's own address without
+     randomization and the break above it, the kernel's record of the
+     image, a start under lowered `RLIMIT_AS` and `RLIMIT_DATA`, and
+     one with the record or the random draw refused by a filter
+     around the launcher (`mem_layout`, `exec_auxv`,
+     `layout_without_the_record`, 7.3, 13 items 59 to 62), and
+     descriptors and processes
      around trapped calls, the lowest free number at a soft limit's
      edge and after `close_range`, other processes' links, `clone`,
      thread and `posix_spawn` working directories, descriptors passed
@@ -6970,6 +7067,12 @@ specified.
   floating-point state is the program's, by pointer on x86-64 and by
   the records' own lengths on aarch64, so nothing ties the launcher to
   a save area's layout (7.5.7, 14.3, 13 item 58).
+- **A program lies where the kernel's exec would put it, its break
+  above it, and the kernel's record of the image is given the
+  program's by `PR_SET_MM_MAP`, without the auxiliary vector**: the
+  break is the record's to place, not `brk`'s, and the vector stays
+  the launcher's beside the launcher's file in `exe`, which a debugger
+  reads together (7.3, 13 items 59 and 62).
 - **Handler memory comes from scratch chunks reclaimed by liveness,
   with no lock and a stack budget**: the handler runs on whatever
   alternate stack a program set up (7.5.4).

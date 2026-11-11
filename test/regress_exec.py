@@ -3,12 +3,16 @@
 Run by test/run.py, on the fixtures test/suite.py makes.
 """
 
+import errno
 import os
+import platform
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
 lazy import ctypes
+lazy from collections.abc import Callable
 
 import kernel_answers
 import tree
@@ -665,9 +669,11 @@ def exec_auxv(ctx: Ctx) -> str | None:
     environment strings contiguous after its arguments with the launcher's own variables after
     them, cmdline and comm the program's, a setuid and a setgid copy (no_new_privs: AT_SECURE 0),
     and the descriptors an exec'd static program finds open under soft limits of 3, 4 and 8
-    lowered below its open descriptors, which the launcher borrows against; 13 item 50 for the
-    kernel's stat fields and item 12 for a hard limit of 3. The kernel under bwrap measured these
-    answers.
+    lowered below its open descriptors, which the launcher borrows against; the kernel's record of
+    the image in /proc/self/stat, its code and its first stack pointer the program's where the
+    kernel takes the record from the loader (7.3), the launcher's where it does not; 13 item 50 for
+    the environment's end there and item 12 for a hard limit of 3. The kernel under bwrap measured
+    these answers.
     """
     static_libc = tree.has_static_libc(ctx.tree)
     bad = kernel_answers.exec_auxv_wrong(
@@ -693,19 +699,86 @@ def exec_state(ctx: Ctx) -> None:
 
 @test
 def mem_layout(ctx: Ctx) -> None:
-    """7.3: a program's memory grows as the kernel lets it, from an image the kernel's shape.
+    """7.3: a program's memory lies where the kernel's exec puts it and grows as the kernel lets it.
 
-    sbrk grows a [heap] the program's, the image lies below the stack with [vdso] and [vvar]
-    beside it, /proc/self/exe and AT_EXECFN open the program's own file, two runs place it apart,
-    and an exec under RLIMIT_AS of 16 MB and RLIMIT_DATA of 1 MB runs, since the launcher maps its
-    tables as they fill rather than in its image (7.3); the break lies away from the image (13 item
-    59), 128 KB of RLIMIT_DATA is less than the launcher's image charges, so the kernel kills its
-    exec (13 item 60), the launcher's variables take room from the argument area (13 item 61),
-    and the kernel's copy of the auxiliary vector, /proc/self/auxv and PR_GET_AUXV, is the
-    launcher's (13 item 62). The kernel under bwrap measured these answers.
+    The break lies above the image, within 1 GB of its end, and grows a [heap] the program's; the
+    image lies below its loader and the stack, with [vdso] and [vvar]; the kernel's record of the
+    image, /proc/self/stat's data and break, is the program's; /proc/self/exe and AT_EXECFN open the
+    program's own file; two runs place it apart, and one without randomization places it at the
+    kernel's own base with the break at its end; and an exec under RLIMIT_AS of 16 MB and
+    RLIMIT_DATA of 1 MB runs, since the launcher maps its tables as they fill rather than in its
+    image (7.3). On a kernel that takes no record of an image from a process the launcher places
+    nothing, and what it places is not judged there (13 item 59). 128 KB of RLIMIT_DATA is less
+    than the launcher's image charges, so the kernel kills its exec (13 item 60), the launcher's
+    variables take room from the argument area (13 item 61), and the kernel's copy of the auxiliary
+    vector, /proc/self/auxv and PR_GET_AUXV, is the launcher's (13 item 62). The kernel under
+    bwrap measured these answers.
     """
     bad = kernel_answers.mem_layout_wrong(exerciser(ctx, "mem_layout", []))
     expect(not bad, "; ".join(bad))
+
+
+def refusing(name: str, first: int | None, err: int) -> Callable[[], None]:
+    """A function a child runs before its exec: a seccomp filter that answers err to one call.
+
+    The call is the syscall named name, prctl or getrandom, with first as its first argument where
+    one is given; every other call is allowed. The filter stays around whatever the child execs, as
+    a container's profile stays around a launcher.
+    """
+    arch, numbers = {
+        "x86_64": (0xC000003E, {"prctl": 157, "getrandom": 318}),
+        "aarch64": (0xC00000B7, {"prctl": 167, "getrandom": 278}),
+    }[platform.machine()]
+    ld, jeq, ret = 0x20, 0x15, 0x06  # BPF_LD|BPF_W|BPF_ABS, BPF_JMP|BPF_JEQ|BPF_K, BPF_RET|BPF_K
+    # seccomp_data: the number at 0, the architecture at 4, the first argument's low word at 16
+    tests = [(4, arch), (0, numbers[name])] + ([(16, first)] if first is not None else [])
+    prog = b""
+    for i, (at, value) in enumerate(tests):
+        # on a mismatch, past the tests that remain and the refusal, to the allow
+        prog += struct.pack("HBBI", ld, 0, 0, at)
+        prog += struct.pack("HBBI", jeq, 0, 2 * (len(tests) - 1 - i) + 1, value)
+    prog += struct.pack("HBBI", ret, 0, 0, 0x00050000 | err)  # SECCOMP_RET_ERRNO
+    prog += struct.pack("HBBI", ret, 0, 0, 0x7FFF0000)  # SECCOMP_RET_ALLOW
+
+    def install() -> None:
+        class Fprog(ctypes.Structure):
+            _fields_ = (("len", ctypes.c_ushort), ("filter", ctypes.c_char_p))
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        fprog = Fprog(len(prog) // 8, prog)
+        zero = ctypes.c_ulong(0)
+        # PR_SET_NO_NEW_PRIVS, then PR_SET_SECCOMP with SECCOMP_MODE_FILTER
+        if libc.prctl(38, ctypes.c_ulong(1), zero, zero, zero) or libc.prctl(
+            22, ctypes.c_ulong(2), ctypes.byref(fprog), zero, zero
+        ):
+            raise OSError(ctypes.get_errno(), "seccomp filter")
+
+    return install
+
+
+@test
+def layout_without_the_record(ctx: Ctx) -> None:
+    """7.3, 13 item 59: a program runs where mmap puts it when the kernel takes no record of it.
+
+    A seccomp filter around the launcher answers EPERM to prctl(PR_SET_MM), as a kernel built
+    without PR_SET_MM_MAP answers it, and in a second run ENOSYS to getrandom, as a kernel before
+    3.17 does. The loader then gives up the place it reserved two thirds up the address space, or
+    reserves none, maps the image where mmap puts it and leaves the break where the kernel put the
+    launcher's, and the program runs as it did before the loader placed anything: the break grows a
+    [heap], the exec under lowered limits runs, two runs lie apart. mem_layout says the kernel has
+    neither, so what the loader places is not judged and its every other answer is.
+    """
+    prog = os.path.join(ctx.progs, "mem_layout")
+    for name, first, err in (("prctl", 35, errno.EPERM), ("getrandom", None, errno.ENOSYS)):
+        rc, out, serr = run(
+            [ctx.launcher, prog], cwd=ctx.work, env=ctx.env, preexec=refusing(name, first, err)
+        )
+        expect(
+            rc == 0 and "PR_SET_MM_MAP and getrandom: no" in out.splitlines(),
+            f"{name} refused: mem_layout runs and finds it refused: rc={rc} {out[:200]!r} {serr!r}",
+        )
+        bad = kernel_answers.mem_layout_wrong(out)
+        expect(not bad, f"{name} refused: " + "; ".join(bad))
 
 
 @test

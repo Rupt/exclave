@@ -15,10 +15,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/auxv.h>
+#include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#ifndef PR_SET_MM_MAP_SIZE
+#define PR_SET_MM_MAP_SIZE 15
+#endif
 
 extern char **environ;
 #ifdef __GLIBC__
@@ -303,6 +307,9 @@ int main(int argc, char **argv)
     const char *hd = argv[1];
     static char exe[4096];
     char p[4096];
+    /* whether this kernel lets a process give it the record of its image, as the launcher does (7.3) */
+    unsigned size = 0;
+    printf("PR_SET_MM_MAP: %s\n", yes_no(prctl(PR_SET_MM, PR_SET_MM_MAP_SIZE, &size, 0, 0) == 0));
     ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
     if (n < 0) {
         perror("readlink");

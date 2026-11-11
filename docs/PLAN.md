@@ -134,6 +134,15 @@ documents, gate, one commit per item. Status is in brackets.
     lock, a directory's entry changing once by a compare-and-swap, and
     the late read needs a descriptor, which is a limitation of its own
     (DESIGN 8.1 rule 1, 16.4, 16.6 item 11, 13 item 64).
+14. **A program where the kernel's exec would put it** [done, the
+    kernel rows on it due]: of the limitations the defect hunt stated
+    (item 7), the break. The kernel's record of the image it exec'd
+    takes the program's through `PR_SET_MM_MAP`, which needs no
+    capability, so the loader places a position-independent program
+    two thirds up the address space with its break above it, as the
+    kernel does, and at the kernel's own addresses without
+    randomization; the record's code, data and stack are the
+    program's too (DESIGN 7.3, 13 items 24, 50 and 59).
 
 ## After the first release
 
