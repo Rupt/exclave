@@ -277,9 +277,10 @@ def inherited_identity_dropped(ctx: Ctx) -> None:
     """7.4.5: an exec from inside drops every inherited copy of the launcher's own variables.
 
     It drops them before it adds its own, so the program's environment as the kernel holds it
-    (/proc/PID/environ, 13 item 46) has one EXCLAVE_EXECFN and one EXCLAVE_COMM, the handler's, and
-    EXCLAVE_EXEC only on the loader path. The batch of 16-byte heads is what sees EXCLAVE_EXECFN=;
-    with 12 an inherited copy would survive beside the handler's.
+    (/proc/PID/environ, 13 item 46) has one EXCLAVE_EXECFN and one EXCLAVE_COMM, the handler's,
+    EXCLAVE_EXEC only on the loader path, and one EXCLAVE_CWD, the run's working directory (8.1
+    rule 4). The batch of 16-byte heads is what sees EXCLAVE_EXECFN=; with 12 an inherited copy
+    would survive beside the handler's.
     """
     sh = ctx.vbin("sh")
     original = os.path.join(
@@ -292,8 +293,12 @@ def inherited_identity_dropped(ctx: Ctx) -> None:
     os.makedirs(hostbin, exist_ok=True)
     hostsh = os.path.join(hostbin, "sh")  # not a wrapper: a host program, run on the loader path
     shutil.copy2(original, hostsh)
-    show = "tr '\\0' '\\n' < /proc/$$/environ | grep -a -E '^EXCLAVE_(EXEC|EXECFN|COMM)=' | sort"
-    planted = "EXCLAVE_EXEC=/planted EXCLAVE_EXECFN=/planted EXCLAVE_COMM=planted"
+    show = (
+        "tr '\\0' '\\n' < /proc/$$/environ | grep -a -E '^EXCLAVE_(EXEC|EXECFN|COMM|CWD)=' | sort"
+    )
+    planted = (
+        "EXCLAVE_EXEC=/planted EXCLAVE_EXECFN=/planted EXCLAVE_COMM=planted EXCLAVE_CWD=/planted"
+    )
     for target, loader in ((sh, False), (hostsh, True)):
         rc, out, err = run(
             [wrapper(ctx, "sh"), "-c", f"{planted} exec {target} -c {shlex.quote(show)}"],
@@ -301,7 +306,9 @@ def inherited_identity_dropped(ctx: Ctx) -> None:
             env=ctx.env,
         )
         names = [line.split("=", 1)[0] for line in out.splitlines()]
-        want = sorted(["EXCLAVE_COMM", "EXCLAVE_EXECFN"] + (["EXCLAVE_EXEC"] if loader else []))
+        want = sorted(
+            ["EXCLAVE_COMM", "EXCLAVE_CWD", "EXCLAVE_EXECFN"] + (["EXCLAVE_EXEC"] if loader else [])
+        )
         expect(
             rc == 0 and names == want and "planted" not in out,
             f"{target}: the kernel's copy of the environment holds {out!r}, "

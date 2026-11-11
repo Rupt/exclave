@@ -267,7 +267,7 @@ static void cwds(const char *hostdir)
     posix_spawn_file_actions_init(&fa);
     posix_spawn_file_actions_addchdir_np(&fa, "/usr/share");
     posix_spawn_file_actions_addopen(&fa, 5, "exclave-test-marker", O_RDONLY, 0);
-    /* the tree's shell, which every view holds; this program may lie where the child cannot see it (13 item 63) */
+    /* the tree's shell, started in a directory of the tree */
     char *av[] = {"sh", "-c", "echo \"spawned cwd: $(pwd)\"; echo \"spawned fd 5: $(readlink /proc/self/fd/5)\"", 0};
     int r = posix_spawn(&p, "/bin/sh", &fa, 0, av, environ);
     printf("spawn chdir+open: %s\n", r ? en(r) : "ok");
@@ -476,15 +476,13 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc < 2) return 0;
-    static char start[PATH_MAX];
-    if (!getcwd(start, sizeof start)) return 0;
     numbers();
     other_links();
     cwds(argv[1]);
     passing();
     statuses(argv[1]);
-    /* from the directory it started in, whose view holds this program (13 item 63) */
-    if (chdir(start)) return 0;
+    /* from wherever the cases left the working directory: the program this one execs is this one, by its path, which
+     * every process of the run sees (8.1 rule 4) */
     closed_std();
     return 0;
 }

@@ -208,9 +208,9 @@ int vis_in_data(const char *v)
 }
 
 static void rule_build(struct scratch *S);
-static void claim_cwd(struct scratch *S);
+static void claim_cwd(struct scratch *S, const char *given);
 
-void vis_init(struct scratch *S)
+void vis_init(struct scratch *S, const char *cwd)
 {
     int nrec = C.nhost; /* the manifest's host records come first */
     identity_defaults();
@@ -286,7 +286,7 @@ void vis_init(struct scratch *S)
     }
     C.nhost = n;
     rule_build(S);
-    claim_cwd(S);
+    claim_cwd(S, cwd);
 }
 
 /* The rule compiled (DESIGN.md 16.2, 16.6 item 3). Every string the rule matches a path against, an owned path,
@@ -644,31 +644,67 @@ static int base_is_host_facts(const char *v, const struct facts *f, const char *
     }
     return 0;
 }
-/* 8.1.4: the working directory the start finds itself in, given to the host where it is the host's own */
-static void claim_cwd(struct scratch *S)
+/* EXCLAVE_CWD's value, as a launcher of this exclave tells the ones it execs (7.4.5): the tree's root, its device and
+ * its inode in decimal with a dot between them, then the real path of the run's working directory, or nothing where
+ * the run's was given to no one. 1 with *path at the path, or at the empty string; 0 for a value that is not this
+ * exclave's, another's or none at all. */
+static int told(const char *v, const char **path)
+{
+    unsigned long n[2] = {0, 0};
+    for (int k = 0; k < 2; k++) {
+        if (*v < '0' || *v > '9') return 0;
+        while (*v >= '0' && *v <= '9') n[k] = n[k] * 10 + (unsigned long)(*v++ - '0');
+        if (k == 0 && *v++ != '.') return 0;
+    }
+    if (n[0] != C.root_dev || n[1] != C.root_ino) return 0;
+    if (*v && (*v != '/' || xstrlen(v) >= PATH_MAX)) return 0;
+    *path = v;
+    return 1;
+}
+/* 8.1.4: the working directory of the run, given to the host where it is the host's own. A run of an exclave starts
+ * where a process enters it, at the border or from another exclave's process, and its directory is the one that
+ * start finds itself in; every launcher of the run is told it by the one that exec'd it, given, and takes it in place
+ * of its own, so that each process of the run has one view wherever it was started. A launcher told nothing of this
+ * exclave's, another's value or none, starts a run. What it tells in turn is what it gives the host, nothing where it
+ * gives nothing, so that a launcher of the run never takes a directory of its own. */
+static void claim_cwd(struct scratch *S, const char *given)
 {
     char *real = S->real;
+    const char *path;
     C.cwdclaim = 0;
     C.cwdclaim_len = 0;
-    long n = sys_getcwd(real, PATH_MAX);
-    if (n <= 0) return;
+    if (given && told(given, &path)) scpy(real, path, PATH_MAX);
+    else if (sys_getcwd(real, PATH_MAX) <= 0) real[0] = 0;
     /* the workload's directory, for the dynamic check (10.3) */
-    if (C.boundary) log_msg("cwd", real);
-    /* inside the tree: virtual path, nothing given (8.1.4) */
-    if (starts_dir(real, C.root)) return;
-    /* the root itself is the tree's (8.3): nothing to give */
-    if (real[0] == '/' && real[1] == 0) return;
-    /* a real host path: give it to the host as a subtree if the base rule would otherwise hand it to the exclave; the
-     * subtrees given do not count, or a cwd above the exclave's directory would never be given */
-    const char *r;
-    struct facts f;
-    rule_facts(real, &f);
-    /* the start's failure to read the tree is fatal, as its every one is (6.3) */
-    for (int k = 0; f.err && k < ntop; k++)
-        if (top[k] && starts_dir(real, top[k])) top_die(top[k] - C.rootlen, f.err);
-    if (base_is_host_facts(real, &f, &r)) return;
-    C.cwdclaim_len = (long)xstrlen(real);
-    C.cwdclaim = arena_str(real, (size_t)C.cwdclaim_len);
+    else if (C.boundary) log_msg("cwd", real);
+    /* inside the tree: virtual path, nothing given (8.1.4); the root itself is the tree's (8.3): nothing to give */
+    int own = real[0] && !starts_dir(real, C.root) && !(real[0] == '/' && real[1] == 0);
+    if (own) {
+        /* a real host path: give it to the host as a subtree if the base rule would otherwise hand it to the exclave;
+         * the subtrees given do not count, or a cwd above the exclave's directory would never be given */
+        const char *r;
+        struct facts f;
+        rule_facts(real, &f);
+        /* the start's failure to read the tree is fatal, as its every one is (6.3) */
+        for (int k = 0; f.err && k < ntop; k++)
+            if (top[k] && starts_dir(real, top[k])) top_die(top[k] - C.rootlen, f.err);
+        own = !base_is_host_facts(real, &f, &r);
+    }
+    char id[24];
+    size_t l = own ? xstrlen(real) : 0;
+    char *v = C.cwdvar = arena_alloc(12 + 2 * sizeof id + l + 1);
+    scpy(v, "EXCLAVE_CWD=", 13);
+    ltoa_((long)C.root_dev, id);
+    scat(v, id, 12 + sizeof id);
+    scat(v, ".", 12 + sizeof id + 1);
+    ltoa_((long)C.root_ino, id);
+    scat(v, id, 12 + 2 * sizeof id);
+    v += xstrlen(v);
+    xmemcpy(v, real, l);
+    v[l] = 0;
+    if (!own) return;
+    C.cwdclaim = v;
+    C.cwdclaim_len = (long)l;
     log_msg("cwd given to the host", real);
 }
 

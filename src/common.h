@@ -242,6 +242,9 @@ struct exclave {
     /* cwd rule (8.1.4) */
     const char *cwdclaim;
     long cwdclaim_len; /* subtree given to the host; 0 and no string if none */
+    /* EXCLAVE_CWD with this exclave's mark and the run's working directory, as given to the host or none, for the
+     * launchers this one execs (7.4.5, vis.c) */
+    char *cwdvar;
     /* RLIMIT_NOFILE as the program had it, raised for the launcher's own opens (7.4.5) */
     unsigned long rlim[2];
     int borrowed;
@@ -283,14 +286,15 @@ int starts_dir(const char *s, const char *pfx); /* s == pfx or s starts with pfx
 void *arena_alloc(size_t n);
 char *arena_str(const char *s, size_t n);
 /* the paths of struct exclave: its directory, its tree, its launcher, the program as it arrived and as the entry
- * resolved it, the exe answer, the name it was exec'd by and the working directory given to the host */
+ * resolved it, the exe answer, the name it was exec'd by and the working directory given to the host, which has its
+ * variable's name and the exclave's mark before it, the 64 bytes more */
 #define EXCLAVE_PATHS 8
 /* the arena's whole capacity, which str.c's comment counts */
 #define ARENA_SIZE                                                                                                     \
     ((2 + MAX_OWN_RECORDS + MAX_HOST_RECORDS + MAX_DATA_RECORDS + MANIFEST_FIELDS) * (MANIFEST_FIELD_MAX + 17) +       \
      MAX_TOP_LEVEL * (NAME_MAX + 18) + MAX_UNREAD_TOP * (PATH_MAX + 16) +                                              \
      (N_IDENTITY_DIRS + N_IDENTITY + MAX_OWN_RECORDS) * (PATH_MAX + 16) + 4 * 64 + 3 * (PATH_MAX + 32) +               \
-     6 * (BINPRM_BUF_SIZE + 17 + 2 * (PATH_MAX + 16)) + EXCLAVE_PATHS * (PATH_MAX + 16))
+     6 * (BINPRM_BUF_SIZE + 17 + 2 * (PATH_MAX + 16)) + EXCLAVE_PATHS * (PATH_MAX + 16) + 64)
 /* the reserve (str.c): the cache's strings, its full table of CACHE_SLOTS 16-byte slots, the arena's rest */
 #define RESERVE_STEP 65536UL
 #define CACHE_STRINGS (1024UL * 1024)
@@ -377,7 +381,7 @@ pid_t scratch_deferred(pid_t pid, pid_t tid, int take);
 
 /* ---------- visibility (vis.c) ---------- */
 /* S: the start's chunk, whose buffers the tables are built in (launcher.c) */
-void vis_init(struct scratch *S);
+void vis_init(struct scratch *S, const char *cwd);
 void cache_init(pid_t pid); /* pid: the process's own */
 /* 1 when the caller, pid, shares the memory of its parent, ppid: a vfork child (7.5.4) */
 int vfork_child(pid_t pid, pid_t ppid);

@@ -412,6 +412,81 @@ def cwd_rules(ctx: Ctx) -> str | None:
 
 
 @test
+def cwd_given_for_the_run(ctx: Ctx) -> str | None:
+    """8.1 rule 4: the working directory given to the host is the run's, in every process of it.
+
+    The suite's exclave owns the top-level name its work directory lies under, so a program started
+    there has the directory from the host by rule 4. A shell started there that changes to / starts
+    its programs elsewhere, and each still sees the directory as the shell does: it reads a file in
+    it, runs a program without a wrapper that lies in it, and so does a shell started from that
+    shell, a program run through the launcher's positional entry, and a wrapper the entry execs.
+    Each launcher is told the directory by the one that exec'd it, in EXCLAVE_CWD, which no program
+    finds in its environment. A view of each process's own start answered ENOENT and exit 127 here.
+    The directory is the one the run starts in and no other: a start from / is given nothing,
+    whatever variable its caller sets, and stays so when its shell moves into the work directory,
+    which it can as a directory on the way to the exclave's own (rule 6), and starts programs
+    there. A run is one exclave's: a program of this exclave started by another exclave's shell,
+    whose own run was given another directory, starts a run of this one and has the directory it
+    starts in.
+    """
+    if not ctx.cwd_given:
+        skip("the work directory lies under a volatile directory, the host's by rule 3")
+    probe = os.path.join(ctx.work, f"cwd-run-{os.getpid()}")
+    with open(probe, "w") as f:
+        f.write("of the run\n")
+    prog = os.path.join(ctx.progs, "mem_layout")
+    sh, cat = ctx.vbin("sh"), ctx.vbin("cat")
+    try:
+        script = (
+            "cd / || exit 9; "
+            f"{cat} {probe}; "
+            f"{prog} --child child; "
+            f"{sh} -c '{cat} {probe}'; "
+            f"{ctx.launcher} {prog} --child entry; "
+            f"{ctx.launcher} {cat} {probe}; "
+            "env | grep -c -E '^EXCLAVE_(CWD|EXEC|EXECFN|COMM|TRACED)='"
+        )
+        rc, out, err = run([wrapper(ctx, "sh"), "-c", script], cwd=ctx.work, env=ctx.env)
+        expect(
+            out == "of the run\nchild: ran\nof the run\nentry: ran\nof the run\n0\n",
+            f"programs started after cd / see the run's working directory: rc={rc} {out!r} {err!r}",
+        )
+        rc, out, err = run(
+            [wrapper(ctx, "cat"), probe], cwd="/", env=dict(ctx.env, EXCLAVE_CWD=ctx.work)
+        )
+        expect(
+            rc != 0 and out == "" and "No such file" in err,
+            f"a start from / is given nothing, whatever its caller sets: rc={rc} {out!r} {err!r}",
+        )
+        script = f"cd {ctx.work} || exit 9; {cat} {probe}; {sh} -c 'cd /; {cat} {probe}'; echo end"
+        rc, out, err = run([wrapper(ctx, "sh"), "-c", script], cwd="/", env=ctx.env)
+        expect(
+            out == "end\n" and err.count("No such file") == 2,
+            f"a run started at / is given nothing where its shell moves: rc={rc} {out!r} {err!r}",
+        )
+        # another exclave, which owns /usr as every tree does and nothing above the work directory
+        other = os.path.join(ctx.work, "cwd-other.exclave")
+        if not os.path.isdir(other):
+            copy_exclave(ctx.exclave, other)
+            with open(os.path.join(other, ".exclave", "manifest"), "wb") as f:
+                f.write(b"exclave 1\n")
+        script = f"cd {ctx.work} || exit 9; {wrapper(ctx, 'cat')} {os.path.basename(probe)}"
+        rc, out, err = run(
+            [os.path.join(other, "tree", sh.lstrip("/")), "-c", script],
+            cwd="/usr/share",
+            env=ctx.env,
+        )
+        expect(
+            rc == 0 and out == "of the run\n",
+            f"a program of this exclave started in another's run has its own directory: rc={rc} "
+            f"{out!r} {err!r}",
+        )
+    finally:
+        os.unlink(probe)
+    return None
+
+
+@test
 def real_root_is_the_tree(ctx: Ctx) -> None:
     """The tree's real root is an alias of /.
 

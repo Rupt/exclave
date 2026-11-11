@@ -147,6 +147,13 @@ documents, gate, one commit per item. Status is in brackets.
     attached to a program reads it beside the launcher's file, and
     refuses to continue when it describes the program (13 item 62,
     `gdb_attach`).
+15. **One working directory for a run** [done]: of the same
+    limitations, the view. The directory a run starts in, given to the
+    host by rule 4, is told from each launcher to the ones it execs,
+    in `EXCLAVE_CWD` under the exclave's mark, so a program started
+    after a `chdir` elsewhere sees it as its parent does, where each
+    process had a view of its own start (DESIGN 8.1 rule 4, 7.4.5, 13
+    item 63).
 
 ## After the first release
 

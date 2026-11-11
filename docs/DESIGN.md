@@ -346,7 +346,7 @@ the design. Where they are available they serve as the test oracle
 | **`exclave`** (command) | The build tool: `wrap`, `unwrap`, `check`, `prune`, `hash`, `relink` and `format`. Takes a directory holding `tree/`, fetches nothing (10). |
 | **`unpack`** | The step before the tool: package files to an unwrapped exclave, run as `scripts/unpack` (10.1). |
 | **unwrapped** | An exclave before `wrap`: a plain tree, editable with ordinary tools. After `wrap` it is wrapped. |
-| **`EXCLAVE_LOG`** | The one run-time knob, which only logs (6.2). `EXCLAVE_EXEC`, `EXCLAVE_EXECFN` and `EXCLAVE_COMM` are the launcher's own protocol, never an interface; the test scripts' inputs are `EXCLAVE_TEST_…`. |
+| **`EXCLAVE_LOG`** | The one run-time knob, which only logs (6.2). `EXCLAVE_EXEC`, `EXCLAVE_EXECFN`, `EXCLAVE_COMM`, `EXCLAVE_TRACED` and `EXCLAVE_CWD` are the launcher's own protocol, never an interface; the test scripts' inputs are `EXCLAVE_TEST_…`. |
 | **syscall probe** | The differential test of 17 item 7: every trapped syscall, flag and path form, run under `bwrap` and under the launcher and compared case by case. "The probe" always means this one. |
 | **fixture** | The exclave the suite runs on: a copy of the given exclave pruned to what the suite touches, kept under `build/fixtures/` and remade when the exclave, the suite or the tool changes (17). |
 
@@ -575,9 +575,10 @@ needs it reads from the tree (6.3).
 host into the exclave: a process with no exclave filter of its own
 starting a wrapper, which the version probe detects (7.4.2). At the
 border the launcher passes the environment through unchanged except
-for two groups, and for its own `EXCLAVE_EXEC`, `EXCLAVE_EXECFN` and
-`EXCLAVE_COMM`, which every launcher removes before a program runs,
-inside the exclave too (7.4.5).
+for two groups, and for its own `EXCLAVE_EXEC`, `EXCLAVE_EXECFN`,
+`EXCLAVE_COMM`, `EXCLAVE_TRACED` and `EXCLAVE_CWD`, which every
+launcher removes before a program runs, inside the exclave too
+(7.4.5).
 
 It removes the variables which steer the loader or libc to host files:
 `LD_*`, `GLIBC_TUNABLES`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`,
@@ -1702,11 +1703,25 @@ component (from 6.12, for a bare descriptor the name of the file it
 finally loads, a script's interpreter's) and a script's `$0`. The handler spells the name the same way and carries it,
 with the `comm` it computed, in `EXCLAVE_EXECFN` and `EXCLAVE_COMM` on
 every exec it makes, of a wrapper or of the launcher, dropping any
-inherited copy of the three and of `EXCLAVE_TRACED`, which marks the
-exec that leaves a process newly traced (7.6). The launcher it execs takes them for the
+inherited copy of the three, of `EXCLAVE_TRACED`, which marks the
+exec that leaves a process newly traced (7.6), and of `EXCLAVE_CWD`.
+The launcher it execs takes them for the
 program's identity (7.6), a wrapper only when a filter is inherited, so
 that from the host they are as inert as `EXCLAVE_EXEC`.
-Every launcher removes all four from the environment a program is
+`EXCLAVE_CWD` tells the working directory of a run (8.1 rule 4): the
+exclave's mark, the device and the inode of its tree's root, and after
+it the real path of the directory the run's first launcher gave the
+host, or nothing where it gave none. The handler adds it to every exec
+it makes, and the positional entry passes it on inside, to the
+launcher it re-execs and to a wrapper it execs. A launcher reads it
+only under an inherited filter. A value that bears its own exclave's
+mark is its run's: it takes that directory in place of its own,
+putting it to its rule again, and asks for no working directory. Any
+other value, another exclave's or none, is the start of a run: the
+launcher gives the host the directory its own process started in, as
+one at the border does. A launcher from before the variable passes it
+to its program.
+Every launcher removes all five from the environment a program is
 given; the kernel's copy in `/proc/<pid>/environ` keeps them (13 item
 46). A script's interpreter therefore receives the script's path as the
 caller spelt it, for a wrapped script too, and a script behind a
@@ -2507,8 +2522,9 @@ it, and every part rules it as it rules that directory.
 3. **The kernel's volatile directories are always the host's:** `/proc`,
    `/dev`, `/sys`, `/tmp`, `/var/tmp` and `/run`, whatever the tree
    ships, and whatever an `own` record says.
-4. **The working directory.** At startup the launcher canonicalises the
-   inherited working directory. Under `<exclave>/tree/` it becomes its
+4. **The working directory.** At the start of a run the launcher
+   canonicalises the inherited working directory. Under
+   `<exclave>/tree/` it becomes its
    virtual path and is given to no one, so a wrapper run from inside the
    tree does not hand `/usr/bin` to the host. Host-owned, it needs
    nothing. On an exclave path, the working directory is given to the
@@ -2519,7 +2535,14 @@ it, and every part rules it as it rules that directory.
    path can walk them; their other entries are not, and `..` above the
    working directory otherwise stays in the exclave (13 item 14).
    Whether the working directory is an exclave path is decided by the
-   other rules, without this one.
+   other rules, without this one. The directory is the run's. A run
+   of an exclave starts where a process enters it, at the border or
+   from another exclave's process; every launcher of the run is told
+   the directory by the one that exec'd it (7.4.5) and gives the host
+   the same subtree wherever its own process was started, so that a
+   shell that has changed directory and the programs it then starts
+   see one tree, as natively. A run that starts where there is
+   nothing to give is given nothing later (13 item 63).
 5. **Eleven host identity files and three identity directories are the
    host's by default.** The files: `/etc/passwd`, `/etc/group`,
    `/etc/nsswitch.conf`, `/etc/host.conf`, `/etc/resolv.conf`,
@@ -4451,9 +4474,10 @@ and stay fixed.
     fixes it.
 
 46. **The launcher's own variables stay in `/proc/<pid>/environ`.**
-    `EXCLAVE_EXECFN`, `EXCLAVE_COMM` and, on the loader path,
-    `EXCLAVE_EXEC` are removed from the environment the launcher hands
-    a program, so `environ`, `getenv` and every child see none of them.
+    `EXCLAVE_EXECFN`, `EXCLAVE_COMM`, `EXCLAVE_CWD` and, on the loader
+    path, `EXCLAVE_EXEC` are removed from the environment the launcher
+    hands a program, so `environ`, `getenv` and every child see none of
+    them.
     The kernel's copy, which it filled at exec and which
     `/proc/<pid>/environ` and `ps e` read, keeps them. The record the
     loader gives the kernel (7.3) could end the environment's area
@@ -4818,12 +4842,13 @@ and stay fixed.
     kernel refuses an exec with `E2BIG` when the arguments, the
     environment and their pointers pass a quarter of the stack limit
     (`bprm_stack_limits`). Every exec the handler makes adds
-    `EXCLAVE_EXECFN` and `EXCLAVE_COMM`, an exec of a program without a
-    wrapper `EXCLAVE_EXEC` too, and the exec that leaves a process newly
-    traced `EXCLAVE_TRACED` (7.4.5): the name the program was exec'd
-    by, twice for a program without a wrapper, its `comm`, and their
-    pointers, so an exec within that many bytes of the limit is `E2BIG`
-    inside where it runs natively.
+    `EXCLAVE_EXECFN`, `EXCLAVE_COMM` and `EXCLAVE_CWD`, an exec of a
+    program without a wrapper `EXCLAVE_EXEC` too, and the exec that
+    leaves a process newly traced `EXCLAVE_TRACED` (7.4.5): the name
+    the program was exec'd by, twice for a program without a wrapper,
+    its `comm`, the exclave's mark with the run's working directory
+    where one was given, and their pointers, so an exec within that
+    many bytes of the limit is `E2BIG` inside where it runs natively.
 
 62. **The kernel's copy of the auxiliary vector is the launcher's.**
     The kernel keeps the vector it built at exec and answers it in
@@ -4849,18 +4874,24 @@ and stay fixed.
     launcher's copy instead would make it a file of another kind, a
     `memfd`, to `fstat` and to its link.
 
-63. **The working directory handed to the host is each process's
-    own.** A launcher hands its starting working directory on an
-    exclave path to the host as a subtree (8.1 rule 4) for the life
-    of the process. A child started after a `chdir` elsewhere has a
-    starting directory of its own, and the subtree its parent saw is
-    the exclave's in it: a shell started in `/opt/proj` of an exclave
-    that owns `/opt` sees `/opt/proj` after `cd /`, and an `ls
-    /opt/proj` it runs from there answers `ENOENT`, as does an exec of
-    a program without a wrapper in that subtree, whose child launcher
-    cannot find it and exits 127. Natively one view serves both. A
-    directory of the host, and every path when the exclave owns no
-    prefix of the working directory, is the same in every process.
+63. **Only the directory a run starts in is given to the host.** The
+    working directory on an exclave path that rule 4 of 8.1 gives the
+    host is the one the run was started in at the border, with what
+    lies under it, and it is the same in every process of the run: a
+    shell started in `/opt/proj` of an exclave that owns `/opt`, and
+    the programs it starts after `cd /`, see `/opt/proj` alike
+    (`cwd_given_for_the_run`). No process gets another host directory
+    under a prefix the exclave owns by moving there: from `/opt/proj`,
+    `cd ../other` is the tree's `/opt/other`, `ENOENT` where the tree
+    has none and natively the host's (item 14); a `host` record gives
+    such a directory to every run (8.1). A run that starts where there
+    is nothing to give, at `/` or in a directory the host owns, is
+    given nothing later, though its shell can enter a directory on the
+    way to the exclave's own (8.1 rule 6) and start programs there.
+    The run is one exclave's: a program of another exclave started
+    inside starts a run of that exclave, with the directory that
+    program starts in, and so does a launcher exec'd by one from
+    before `EXCLAVE_CWD`.
 
 64. **The first path into a top-level directory needs a descriptor.**
     Whether a top-level directory of the tree is a placeholder is read
@@ -6166,7 +6197,11 @@ meaning items 4 and 7.
      around trapped calls, the lowest free number at a soft limit's
      edge and after `close_range`, other processes' links, `clone`,
      thread and `posix_spawn` working directories, descriptors passed
-     and taken, and wait statuses (`fd_procs`, 13 item 63);
+     and taken, and wait statuses (`fd_procs`), and the run's working
+     directory seen alike by programs started after a `chdir`
+     elsewhere, through a shell, the positional entry and a wrapper it
+     execs, none given to a run that started with none, and another
+     exclave's run with its own (`cwd_given_for_the_run`, 8.1 rule 4);
    - *the launcher and its filter*: a CET-marked program inside with the
      shadow-stack tunable set, reporting whether glibc enabled one (13
      item 49), a blocked or sent `SIGSYS`, older
@@ -7033,8 +7068,8 @@ specified.
   any libc reads, and an allowlist would stop a user passing `CC` (6.2,
   8.4).
 - **One run-time knob, `EXCLAVE_LOG`, an absolute host path outside the
-  exclave**; `EXCLAVE_EXEC`,
-  `EXCLAVE_EXECFN` and `EXCLAVE_COMM` are the launcher's own protocol,
+  exclave**; `EXCLAVE_EXEC`, `EXCLAVE_EXECFN`, `EXCLAVE_COMM`,
+  `EXCLAVE_TRACED` and `EXCLAVE_CWD` are the launcher's own protocol,
   honoured by a wrapper only under an inherited filter (6.2, 7.4.5).
 - **What the launcher derives from the tree fails closed and loud**: a
   tree it cannot read correctly is refused by name (6.3).

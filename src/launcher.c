@@ -145,12 +145,15 @@ static void reloc_self(void)
     }
 }
 
+/* the value of the last variable named name: a launcher's own variables come after the program's (exec_env), so the
+ * last of a name is the one a launcher set, where a copy the handler could not read to drop stayed before it */
 static const char *find_env(char **envp, const char *name)
 {
     size_t l = xstrlen(name);
+    const char *v = 0;
     for (char **e = envp; *e; e++)
-        if (xstrncmp(*e, name, l) == 0 && (*e)[l] == '=') return *e + l + 1;
-    return 0;
+        if (xstrncmp(*e, name, l) == 0 && (*e)[l] == '=') v = *e + l + 1;
+    return v;
 }
 
 /* 6.2: at the border the host's environment passes through minus the variables that would rebind the loader, the libc
@@ -165,13 +168,14 @@ static const char *denied[] = {"GLIBC_TUNABLES",   "GCONV_PATH",   "LOCPATH", "N
                                "LANGUAGE",         "TZ",           "SHELL",   0};
 static const char *fixed[] = {"PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "SHELL=/bin/sh", 0};
 /* the launcher's protocol with itself (7.4.5): EXCLAVE_EXEC names a loader-path target, EXCLAVE_EXECFN and
- * EXCLAVE_COMM the identity the kernel would give the program, EXCLAVE_TRACED a process newly traced (retrace); set
- * by a handler or the positional entry, read by the launcher they exec, removed from the environment a program is
- * given (the kernel's copy in /proc/<pid>/environ keeps them, 13 item 46) */
+ * EXCLAVE_COMM the identity the kernel would give the program, EXCLAVE_TRACED a process newly traced (retrace),
+ * EXCLAVE_CWD the working directory of the run (8.1.4); set by a handler or the positional entry, read by the
+ * launcher they exec, removed from the environment a program is given (the kernel's copy in /proc/<pid>/environ
+ * keeps them, 13 item 46) */
 static int internal_var(const char *e)
 {
     return xstarts(e, "EXCLAVE_EXEC=") || xstarts(e, "EXCLAVE_EXECFN=") || xstarts(e, "EXCLAVE_COMM=") ||
-           xstarts(e, "EXCLAVE_TRACED=");
+           xstarts(e, "EXCLAVE_TRACED=") || xstarts(e, "EXCLAVE_CWD=");
 }
 static int env_denied(const char *e)
 {
@@ -344,8 +348,9 @@ static void read_manifest(struct scratch *S, long fd, unsigned long *auxv)
  * as its first argument and re-execs itself once the way a handler does for a program on the loader path (7.4.5): the
  * target carried in EXCLAVE_EXEC, which is the launcher's own protocol and is removed from the program's environment,
  * and argv shifted, so that the program's argv, cmdline and comm are its own. A relative program path is taken from
- * the working directory as execve would take it. */
-static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **envp)
+ * the working directory as execve would take it. inside: under an inherited filter, where the run's working directory
+ * that a handler named is passed on (8.1.4). */
+static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **envp, int inside)
 {
     if (argc < 2)
         die("this is an exclave's launcher, behind every program in tree/: run one of those by path, or "
@@ -372,7 +377,7 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
     char **env = pointers(n + 3);
     long k = 0;
     for (long i = 0; i < n; i++)
-        if (!internal_var(envp[i])) env[k++] = envp[i];
+        if (!internal_var(envp[i]) || (inside && xstarts(envp[i], "EXCLAVE_CWD="))) env[k++] = envp[i];
     /* after the program's own, as a handler places them (exec_env), so that the kernel lays the program's strings out
      * contiguously after its arguments */
     env[k++] = var;
@@ -429,6 +434,14 @@ static void loader_mode_check(struct scratch *S, char **argv, char **env2)
         if (fd >= 0) sys_close((int)fd);
         if (n < 0 || xstrcmp(S->cur, S->real) != 0) scpy(S->real2, S->real, PATH_MAX);
         unborrow();
+        /* the wrapper's launcher is told the run's working directory, as a handler's exec would tell it (8.1.4);
+         * inside, the vector is the kernel's closed up over EXCLAVE_EXEC at least, so it has the room */
+        if (!C.boundary) {
+            long k = 0;
+            while (env2[k]) k++;
+            env2[k] = C.cwdvar;
+            env2[k + 1] = 0;
+        }
         long e = sys_execve(S->real2, argv, env2);
         die("cannot exec the wrapper", C.program, e);
     }
@@ -649,12 +662,14 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
         }
     } else {
         /* the launcher run by hand: .exclave/launcher PROGRAM ARGS... */
-        entry_exec(argc, argv, envp);
+        entry_exec(argc, argv, envp, have != 0);
     }
 
     C.boundary = have == 0;
+    /* 8.1.4: the run's working directory, as the launcher that exec'd this one names it; only from inside */
+    const char *cwd = have ? find_env(envp, "EXCLAVE_CWD") : 0;
     char **env2 = env_prepare(envp, C.boundary);
-    vis_init(S);
+    vis_init(S, cwd);
     cache_init(S->pid);
     if (C.loader_mode) loader_mode_check(S, argv, env2);
     C.text_lo = (unsigned long)__ehdr_start;
