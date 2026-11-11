@@ -4,13 +4,15 @@ Run by test/run.py, on the fixtures test/suite.py makes.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 
+import kernel_answers
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
-from suite import TOOL, Ctx, copy_exclave, hello_source, inside, wrapper
+from suite import TOOL, VOLATILE, Ctx, copy_exclave, hello_source, inside, wrapper
 
 
 @test
@@ -275,7 +277,9 @@ def identity_link_nofollow(ctx: Ctx) -> str | None:
 def ownership_fails_closed(ctx: Ctx) -> None:
     """8.1: a top-level directory the launcher cannot list is the exclave's, not a placeholder.
 
-    A spawn with no descriptor to spare fails loudly instead of running on the host.
+    A spawn with no descriptor to spare fails loudly instead of running on the host, and one with a
+    single descriptor to spare runs the exclave's libc or fails as loudly: a start reads one file at
+    a time, and a top-level directory when a path first reaches it.
     """
     ex2 = os.path.join(ctx.work, "perm.exclave")
     copy_exclave(ctx.exclave, ex2)
@@ -297,16 +301,18 @@ def ownership_fails_closed(ctx: Ctx) -> None:
     press = os.path.join(ctx.progs, "fdpress")
     # the exclave's libc as the maps show it
     libc_real = ".real/" + (os.path.basename(ctx.libc) if ctx.libc else ctx.ldso_name)
-    rc, out, err = inside(ctx, press, ["1", cat, "/proc/self/maps"])
-    # musl's posix_spawn wants a pipe first
-    loud = (rc == 127 and "Too many open files" in err) or (
-        ctx.musl and "No file descriptors" in err
-    )
-    expect(
-        loud and libc_real not in out,
-        "with one spare descriptor the launcher must fail loudly, never run the host's libc: "
-        f"rc={rc} {out[:200]!r} {err!r}",
-    )
+    for spare in ("0", "1"):
+        rc, out, err = inside(ctx, press, [spare, cat, "/proc/self/maps"])
+        # the exec's own open, or the launcher's; musl's posix_spawn wants a pipe first
+        loud = rc != 0 and (
+            "Too many open files" in err or (ctx.musl and "No file descriptors" in err)
+        )
+        ran = rc == 0 and libc_real in out
+        expect(
+            loud and not out if spare == "0" else loud or ran,
+            f"with {spare} spare descriptors the launcher must fail loudly or run the exclave's "
+            f"libc, never the host's: rc={rc} {out[:200]!r} {err!r}",
+        )
     rc, out, err = inside(ctx, press, ["4", cat, "/proc/self/maps"])
     expect(
         rc == 0 and libc_real in out,
@@ -491,7 +497,7 @@ def log_names_and_escapes(ctx: Ctx) -> None:
 
 @test
 def ownership_from_tree(ctx: Ctx) -> None:
-    """8.1: the ownership set is read from the tree at startup.
+    """8.1: the ownership set is read from the tree, by each start for itself.
 
     A file added under a placeholder therefore makes the directory the exclave's with nothing to
     refresh; an empty placeholder stays the host's.
@@ -534,6 +540,155 @@ def ownership_from_tree(ctx: Ctx) -> None:
         out.strip().endswith("host") or "Permission denied" in err,
         f"an empty placeholder stays the host's: {out!r} {err!r}",
     )
+
+
+def reach_exclave(ctx: Ctx, name: str, own: int, empty: int) -> tuple[str, list[str], list[str]]:
+    """A copy with new top-level directories: own that hold a file, and empty placeholders.
+
+    Returns the copy, a path to each directory's file and the placeholders' paths, which no host
+    has, so that a path answers ok where the exclave owns the directory and ENOENT where the host
+    does; and the copy's tree holds test/progs/top_reach.c built, at /usr/bin/top_reach.
+    """
+    ex2 = os.path.join(ctx.work, name)
+    copy_exclave(ctx.exclave, ex2)
+    root2 = os.path.join(ex2, "tree")
+    files, holders = [], []
+    for i in range(own):
+        os.makedirs(os.path.join(root2, f"reach-own-{i}"))
+        with open(os.path.join(root2, f"reach-own-{i}", "marker"), "w"):
+            pass
+        files.append(f"/reach-own-{i}/marker")
+    for i in range(empty):
+        os.makedirs(os.path.join(root2, f"reach-empty-{i}"))
+        holders.append(f"/reach-empty-{i}")
+    shutil.copy(os.path.join(ctx.progs, "top_reach"), os.path.join(root2, "usr", "bin"))
+    return ex2, files, holders
+
+
+@test
+def top_level_read_on_reach(ctx: Ctx) -> str | None:
+    """8.1 rule 1, 16.6 item 11: a top-level directory is read when a path first reaches it.
+
+    Whose it is does not depend on who asks first. In a copy with four new directories that hold a
+    file and four that are empty, two threads for each, released together in a process that has
+    reached none, and a vfork child asking before its parent, all get the tree's answer, round
+    after round; a directory whose one entry has a name longer than the read's buffer is the
+    exclave's; and so do the 80 of a copy with more directories than the 32 whose reading waits.
+    Under strace a start of true opens none of the nine, and no top-level directory twice.
+    """
+    ex2, own, empty = reach_exclave(ctx, "reach.exclave", 4, 4)
+    root2 = os.path.join(ex2, "tree")
+    long_name = "n" * 200
+    os.makedirs(os.path.join(root2, "reach-long"))
+    with open(os.path.join(root2, "reach-long", long_name), "w"):
+        pass
+    own.append("/reach-long/" + long_name)
+    launcher = os.path.join(ex2, ".exclave", "launcher")
+    rc, out, err = run(
+        [launcher, "/usr/bin/top_reach", "race", "300", *own, *empty], cwd=ctx.work, env=ctx.env
+    )
+    want = [
+        f"{who} {p}: {'ok' if p in own else 'ENOENT'}"
+        for who in ("threads", "vfork")
+        for p in (*own, *empty)
+    ]
+    wrong = [x for x in out.splitlines() if x not in want]
+    expect(
+        rc == 0 and out.splitlines() == want,
+        f"the first paths into top-level directories, by the tree: rc={rc} {wrong!r} {err!r}",
+    )
+    # more directories than the 32 whose reading waits: the rest are read at the start, and
+    # which those are is the listing's order, so every one is asked
+    ex3, own, empty = reach_exclave(ctx, "reach-many.exclave", 40, 40)
+    paths = [*own, *empty]
+    for i in range(0, len(paths), 16):
+        launcher3 = os.path.join(ex3, ".exclave", "launcher")
+        rc, out, err = run(
+            [launcher3, "/usr/bin/top_reach", "race", "2", *paths[i : i + 16]],
+            cwd=ctx.work,
+            env=ctx.env,
+        )
+        want = [
+            f"{who} {p}: {'ok' if p in own else 'ENOENT'}"
+            for who in ("threads", "vfork")
+            for p in paths[i : i + 16]
+        ]
+        wrong = [x for x in out.splitlines() if x not in want]
+        expect(
+            rc == 0 and out.splitlines() == want,
+            f"80 new top-level directories, by the tree: rc={rc} {wrong!r} {err!r}",
+        )
+    if not shutil.which("strace"):
+        return "no strace: what a start opens is unchecked"
+    tr = os.path.join(ctx.work, f"reach-{os.getpid()}.trace")
+    true = os.path.join(root2, ctx.vbin("true").lstrip("/"))
+    rc, _out, err = run(
+        ["strace", "-f", "-s", "4096", "-o", tr, "-e", "trace=openat", true],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    expect(rc == 0, f"true under strace: {err!r}")
+    real = os.path.realpath(root2)
+    tops = {os.path.join(real, n) for n in os.listdir(real)}
+    opens: dict[str, int] = {}
+    with open(tr) as f:
+        for line in f:
+            m = re.search(r'\bopenat\((?:AT_FDCWD|\d+), "([^"]*)"', line)
+            # a name relative to a descriptor is taken from the tree, which a start may hold open
+            p = os.path.join(real, m.group(1)) if m else ""
+            if p in tops:
+                opens[p] = opens.get(p, 0) + 1
+    unreached = sorted(p for p in opens if os.path.basename(p).startswith("reach-"))
+    expect(not unreached, f"a start of true read directories it has no path into: {unreached!r}")
+    again = {p: n for p, n in opens.items() if n > 1}
+    expect(not again, f"top-level directories read more than once: {again!r}")
+    expect(opens, "a start of true read no top-level directory: the trace names none")
+    return f"a start of true read {len(opens)} of {len(tops)} top-level entries"
+
+
+@test
+def top_level_unread_without_descriptor(ctx: Ctx) -> str | None:
+    """13 item 64: the first path into a top-level directory needs a descriptor for its read.
+
+    The kernel's answers, which the namespace oracle asserts of the kernel, but for the stated
+    ones: at a full soft limit the read borrows under the hard one and the limit is as it was;
+    with none to be had under the hard limit a path's call answers EMFILE, again at the next, and
+    a call on a descriptor whose file lies under such a directory takes it as the exclave's,
+    read-only; a path into a directory read before answers as ever, and with a descriptor freed
+    all do. The program runs from the tree with the root as its working directory, in a copy whose
+    manifest owns nothing, so that the start reaches neither the two placeholders nor the
+    directory the work lies under.
+    """
+    ex2, _own, empty = reach_exclave(ctx, "reach-limit.exclave", 0, 2)
+    # the suite's own record for the work directory's top-level name (suite.py) would own it unread
+    with open(os.path.join(ex2, ".exclave", "manifest"), "wb") as f:
+        f.write(b"exclave 1\n")
+    host = os.path.join(ctx.work, f"reach-in-{os.getpid()}")
+    with open(host, "w") as f:
+        f.write("x\n")
+    # the work directory's top-level name: unread at the program's start where the tree ships it
+    # as a placeholder, which /home is; anything else is the kernel's own answer for the file
+    top = os.path.join(ex2, "tree", host.split("/")[1])
+    unread = "/" + host.split("/")[1] not in VOLATILE and os.path.isdir(top) and not os.listdir(top)
+    with open(host, "rb") as stdin:
+        rc, out, err = run(
+            [
+                os.path.join(ex2, ".exclave", "launcher"),
+                "/usr/bin/top_reach",
+                "limit",
+                empty[0] + "/none",
+                empty[1] + "/none",
+                host,
+            ],
+            cwd="/",
+            env=ctx.env,
+            stdin=stdin,
+        )
+    bad = kernel_answers.top_reach_limit_wrong(out, file_unread=unread)
+    expect(rc == 0 and not bad, f"rc={rc} " + "; ".join(bad) + f" {err!r}")
+    if unread:
+        return None
+    return "the work directory is under no placeholder: the file's cases are the kernel's"
 
 
 @test

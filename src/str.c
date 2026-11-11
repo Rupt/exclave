@@ -111,7 +111,8 @@ long reserve_open(char *at, size_t n)
 /* arena: the manifest's strings, the ownership and host tables, the entry's buffers; never freed. It holds the most
  * the limits allow (common.h), so that "arena full" is a broken invariant and never an input's doing: every field of
  * the records a manifest keeps, the exclave and cpu records with them, and of the record that fails (6.2); a name for
- * each top-level entry of the tree and the real path of each identity directory that is a host link and of each
+ * each top-level entry of the tree, the real path of each top-level directory whose reading waits (MAX_UNREAD_TOP)
+ * and the real path of each identity directory that is a host link and of each
  * identity file's copy and own'd path the rule maps (vis.c); the border's four fixed variables, the positional entry's
  * three buffers, the #! line, script and interpreter of each of the six levels of an interpreter chain, and the
  * exclave's own paths (launcher.c, struct exclave). Each block is rounded up to 16 bytes. An array as long as the

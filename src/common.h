@@ -30,6 +30,9 @@
 #define MAX_HOST_RECORDS 32
 #define MAX_DATA_RECORDS 32
 #define MAX_TOP_LEVEL 256
+/* the top-level directories of the tree whose reading waits for the first path that reaches one (8.1.1); a tree
+ * with more has the rest read at startup */
+#define MAX_UNREAD_TOP 32
 #define N_IDENTITY 11
 /* the identity directories (8.1.5, 8.4): the two trust directories and SSSD's state */
 #define N_IDENTITY_DIRS 3
@@ -260,7 +263,8 @@ struct exclave {
      * the directory a host link at its name resolves to */
     struct hostmap host[MAX_HOST_RECORDS + N_IDENTITY + 2 * N_IDENTITY_DIRS];
     const char *data[MAX_DATA_RECORDS];
-    /* the manifest's own records (at most 256), then every non-empty top-level entry of the tree (at most 256) */
+    /* the manifest's own records (at most 256), then the top-level entries of the tree the start found the exclave's
+     * (at most 256): every one but a directory, and a directory it read (vis.c) */
     const char *own[MAX_OWN_RECORDS + MAX_TOP_LEVEL];
 };
 extern struct exclave C;
@@ -281,8 +285,9 @@ char *arena_str(const char *s, size_t n);
 /* the arena's whole capacity, which str.c's comment counts */
 #define ARENA_SIZE                                                                                                     \
     ((2 + MAX_OWN_RECORDS + MAX_HOST_RECORDS + MAX_DATA_RECORDS + MANIFEST_FIELDS) * (MANIFEST_FIELD_MAX + 17) +       \
-     MAX_TOP_LEVEL * (NAME_MAX + 18) + (N_IDENTITY_DIRS + N_IDENTITY + MAX_OWN_RECORDS) * (PATH_MAX + 16) + 4 * 64 +   \
-     3 * (PATH_MAX + 32) + 6 * (BINPRM_BUF_SIZE + 17 + 2 * (PATH_MAX + 16)) + EXCLAVE_PATHS * (PATH_MAX + 16))
+     MAX_TOP_LEVEL * (NAME_MAX + 18) + MAX_UNREAD_TOP * (PATH_MAX + 16) +                                              \
+     (N_IDENTITY_DIRS + N_IDENTITY + MAX_OWN_RECORDS) * (PATH_MAX + 16) + 4 * 64 + 3 * (PATH_MAX + 32) +               \
+     6 * (BINPRM_BUF_SIZE + 17 + 2 * (PATH_MAX + 16)) + EXCLAVE_PATHS * (PATH_MAX + 16))
 /* the reserve (str.c): the cache's strings, its full table of CACHE_SLOTS 16-byte slots, the arena's rest */
 #define RESERVE_STEP 65536UL
 #define CACHE_STRINGS (1024UL * 1024)
@@ -323,9 +328,9 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
  * Between its walks, which have the buffers in the roles below, it uses them one step at a time: v is the launcher's
  * own path until the program is named, then the directories the rule's resolution has found (tree_real_of); cur and
  * tmp are the search for the exclave and then the name a message needs, a link's text or a wrapper's original; rest
- * is the manifest, then the listing of the tree's top level, then the head of each file loaded; comp is the listing of
- * a top-level directory, then a file's notes; real is the working directory; given is the loader's name as the program
- * spells it, across the walk that resolves it; extra is the program headers. */
+ * is the manifest, then the listing of the tree's top level, then the head of each file loaded; comp is a file's
+ * notes; real is the working directory; given is the loader's name as the program spells it, across the walk that
+ * resolves it; extra is the program headers. */
 struct scratch {
     /* canon's working buffers: the walk's remaining path (a directory and a relative path, or a link's text and the
      * rest, each under PATH_MAX), the directory so far, its real path and a link's text; real and v are what canon
@@ -381,7 +386,10 @@ int from_real(char *r); /* in place, no buffer; -ENAMETOOLONG where the virtual 
 /* the directory the kernel named at startup for an identity directory whose host name is a link, or 0 */
 const char *vis_identity_link_reached(const char *v);
 int is_exclave_path(const char *v);
-/* the walk's questions in one pass: 1 if the host's; *idd as vis.c says */
+/* the same for a walk, which can fail: 1 the exclave's, 0 the host's, or the negative errno of the read of a top-level
+ * directory of the tree that v reaches first (8.1.1) */
+int vis_owned(const char *v);
+/* the walk's questions in one pass: 1 if the host's, or the negative errno vis_owned answers; *idd as vis.c says */
 int vis_walk_facts(const char *v, int *identity, int *leads, int *idd, const char **real);
 /* every prefix from that long the host's plainly: the one-step check may stand in */
 int vis_plain_host_chain(const char *p, unsigned from);
@@ -435,9 +443,9 @@ long loader_head(struct scratch *S, int fd, const char **bytes);
 /* fd: the file at loader_real(), open, its head read by loader_head; S: the start's chunk, released before the jump */
 __attribute__((noreturn)) void loader_run(struct scratch *S, const char *vpath, int fd, long argc, char **argv,
                                           char **envp, const unsigned long *auxv);
-/* real opened O_RDONLY|O_CLOEXEC, the soft descriptor limit raised to the hard one for the open when the program is at
- * it (7.4.5): the descriptor or -errno */
-long open_borrowed(const char *real);
+/* path, relative to dfd, opened with flags and O_CLOEXEC, the soft descriptor limit raised to the hard one for the open
+ * when the program is at it (7.4.5): the descriptor or -errno */
+long open_borrowed(int dfd, const char *path, int flags);
 /* 1 has interp, 0 none, <0 -errno as load_elf_binary answers before its point of no return; buf >= 7680 bytes;
  * is_launcher: the note's page generation, 0 for no launcher, filter_version its filter version, 0 for none */
 int elf_probe(const char *real, char *interp, int *is_launcher, int *filter_version, void *buf);

@@ -126,6 +126,14 @@ documents, gate, one commit per item. Status is in brackets.
     process started inside touches two dozen pages fewer, and the
     image's `.bss` is half what it was, which lowers the data limit a
     wrapper runs under (DESIGN 7.2, 16.4, 16.6 item 10, 13 item 60).
+13. **Top-level directories read on reach** [done]: the second of the
+    profile's candidate cuts (item 7). A start lists the tree's top
+    level and reads a directory when a path first reaches it, so a
+    process that names no placeholder reads none: thirty syscalls
+    fewer in a start. The rule's table stays one its readers never
+    lock, a directory's entry changing once by a compare-and-swap, and
+    the late read needs a descriptor, which is a limitation of its own
+    (DESIGN 8.1 rule 1, 16.4, 16.6 item 11, 13 item 64).
 
 ## After the first release
 

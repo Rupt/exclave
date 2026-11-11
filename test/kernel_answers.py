@@ -1929,6 +1929,49 @@ def fd_procs_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     return lines_wrong(out, want, {}, by_the_kernel=by_the_kernel)
 
 
+# top_reach limit A B FILE (test/progs/top_reach.c), measured under bwrap on 7.0: the kernel's walk
+# needs no descriptor, so a path's answer is the same with every descriptor in use
+TOP_REACH_LIMIT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
+    ("soft limit full, a path under the first", "ENOENT"),
+    ("soft limit after", "3"),
+    ("hard limit full, a path under the second", "ENOENT"),
+    ("hard limit full, the same again", "ENOENT"),
+    ("hard limit full, the path under the first", "ENOENT"),
+    ("hard limit full, the file by its path", "ok"),
+    ("hard limit full, standard input's filesystem read-only", "no"),
+    ("a descriptor freed, the file by its path", "ok"),
+    ("a descriptor freed, standard input's filesystem read-only", "no"),
+    ("a descriptor freed, the path under the second", "ENOENT"),
+)
+# where the launcher answers otherwise by a stated rule (13 item 64): a top-level directory of the
+# tree is read when a path first reaches it, and the read needs a descriptor, so with none to be
+# had under the hard limit a path's call answers EMFILE and a call on a descriptor takes the
+# directory as the exclave's, read-only; the file's two cases are the launcher's only where the
+# file lies under such a directory
+TOP_REACH_LIMIT_LAUNCHER: dict[str, str] = {
+    "hard limit full, a path under the second": "EMFILE",
+    "hard limit full, the same again": "EMFILE",
+    "hard limit full, the file by its path": "EMFILE",
+    "hard limit full, standard input's filesystem read-only": "yes",
+}
+TOP_REACH_LIMIT_FILE = ("hard limit full, the file", "hard limit full, standard input")
+
+
+def top_reach_limit_wrong(
+    out: str, *, by_the_kernel: bool = False, file_unread: bool = True
+) -> list[str]:
+    """The lines of top_reach limit's output that differ from the kernel's answers.
+
+    file_unread says that no path has reached the top-level directory the file lies under.
+    """
+    rule = {
+        c: a
+        for c, a in TOP_REACH_LIMIT_LAUNCHER.items()
+        if file_unread or not c.startswith(TOP_REACH_LIMIT_FILE)
+    }
+    return lines_wrong(out, TOP_REACH_LIMIT, rule, by_the_kernel=by_the_kernel)
+
+
 # seccomp_filter HOSTDIR (test/progs/seccomp_filter.c), measured under bwrap on 7.0: a program's own
 # filter as the kernel applies it, every install in a child of its own. An older kernel lacks some
 # of what the cases use, and those answer as it decides (SECCOMP_FILTER_SINCE).

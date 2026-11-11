@@ -367,6 +367,7 @@ PROGRAMS = (
     "exec_state",
     "mem_layout",
     "fd_procs",
+    "top_reach",
     "sigcalls",
     "sigrain",
     "sigstack",
@@ -432,6 +433,8 @@ def judge(name: str, rc: int, out: str, hostdir: str, root: str) -> list[str]:
         wrong = kernel_answers.mem_layout_wrong(out, by_the_kernel=True)
     elif name == "fd_procs":
         wrong = kernel_answers.fd_procs_wrong(out, by_the_kernel=True)
+    elif name == "top_reach":
+        wrong = kernel_answers.top_reach_limit_wrong(out, by_the_kernel=True)
     elif name == "sigcalls":
         wrong = kernel_answers.sigcalls_wrong(out)
     elif name == "sigrain":
@@ -528,6 +531,11 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
         "exec_state": f"mkdir -p {hostdir}/t && {work}/exec_state {hostdir}/t",
         "mem_layout": f"{work}/mem_layout",
         "fd_procs": f"mkdir -p {hostdir}/fdp && {work}/fd_procs {hostdir}/fdp",
+        # two placeholders every tree ships (8.1), and a host file that is its standard input
+        "top_reach": (
+            f"echo x > {hostdir}/reach-in && "
+            f"{work}/top_reach limit /srv/none /mnt/none {hostdir}/reach-in < {hostdir}/reach-in"
+        ),
         "sigcalls": f"{work}/sigcalls",
         "sigrain": f"mkdir -p {hostdir}/sigrain && {work}/sigrain {hostdir}/sigrain",
         "sigstack": f"{work}/sigstack",

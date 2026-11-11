@@ -16,7 +16,7 @@ from packages import make_apk, make_deb
 if TYPE_CHECKING:
     from collections.abc import Sequence
 from harness import expect, read_bytes, read_text, run, skip, test
-from suite import REPO, TOOL, Ctx, check, copy_exclave, inside
+from suite import REPO, TOOL, VOLATILE, Ctx, check, copy_exclave, inside
 
 UNPACK = tree.UNPACK
 
@@ -562,6 +562,29 @@ def wrap_refusals(ctx: Ctx) -> None:
     expect(
         rc != 0 and "more than 256 top-level entries" in err,
         f"300 top-level entries must be refused by the launcher: {err[-300:]!r}",
+    )
+    # a placeholder takes no slot, though a directory's reading waits for a path (8.1 rule 1): a
+    # tree filled to its 256th owned entry starts, its placeholders beside them, and one more
+    # entry is refused
+    ex4 = os.path.join(ctx.work, "top256.exclave")
+    copy_exclave(ctx.exclave, ex4)
+    root4 = os.path.join(ex4, "tree")
+    tops = [os.path.join(root4, n) for n in os.listdir(root4) if "/" + n not in VOLATILE]
+    owned = [p for p in tops if os.path.islink(p) or not os.path.isdir(p) or os.listdir(p)]
+    for i in range(256 - len(owned)):
+        open(os.path.join(root4, f"top{i:03}"), "w").close()
+    cat4 = os.path.join(root4, ctx.vbin("cat").lstrip("/"))
+    rc, out, err = run([cat4, "/etc/hosts"], cwd=ctx.work, env=ctx.env)
+    expect(
+        rc == 0 and out == read_text("/etc/hosts") and len(tops) > len(owned),
+        f"256 owned top-level entries and {len(tops) - len(owned)} placeholders must start: "
+        f"rc={rc} {err[-300:]!r}",
+    )
+    open(os.path.join(root4, "top-one-more"), "w").close()
+    rc, out, err = run([cat4, "/etc/hosts"], cwd=ctx.work, env=ctx.env)
+    expect(
+        rc != 0 and "more than 256 top-level entries" in err,
+        f"a 257th owned top-level entry must be refused by the launcher: rc={rc} {err[-300:]!r}",
     )
     # a data directory is neither wrapped nor executed
     dp = os.path.join(ctx.work, "data.exclave")

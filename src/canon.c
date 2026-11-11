@@ -382,7 +382,9 @@ static int walk_start(struct scratch *S, struct walk *w, const char *path, int d
         S->touched_exclave = 1;                      /* the root is the tree's */
         scpy(rest, path, sizeof S->rest);
         scpy(cur, w->base, PATH_MAX);
-        if (w->base[0]) w->dom = is_exclave_path(w->base);
+        /* whose a name is can fail, here and below: the read of a top-level directory of the tree that the name
+         * reaches first (8.1.1), whose error is then the walk's */
+        if (w->base[0] && (w->dom = vis_owned(w->base)) < 0) return w->dom;
         /* a path spelt through the tree's real root, as a program that finds its files from its argv[0] spells them:
          * the walk would lstat every directory above the tree and then see the tree's root by name, and the
          * launcher resolved that name from /proc/self/exe, so the path starts at the root (DESIGN.md 16.6 item 7) */
@@ -405,8 +407,9 @@ static int walk_start(struct scratch *S, struct walk *w, const char *path, int d
         return r < 0 ? r : 1;
     }
     if (r < 0) return r;
-    if (w->rf & RESOLVE_NO_XDEV) w->dom = rest[1] ? is_exclave_path(rest) : 1;
-    int owned = !rest[1] || is_exclave_path(rest);
+    int owned = rest[1] ? vis_owned(rest) : 1;
+    if (owned < 0) return owned;
+    if (w->rf & RESOLVE_NO_XDEV) w->dom = owned;
     if (owned) S->touched_exclave = 1; /* the directory the walk starts from */
     if (!w->rf && rest[1] && start_resolved(S, rest, owned, tree)) {
         /* the walk starts in the directory, resolved */
@@ -466,7 +469,8 @@ static int walk_dotdot(struct scratch *S, struct walk *w)
     w->start_len = 0; /* past the starting directory, which the kernel names without a .. */
     /* the tree's root or an exclave directory, reached from below, from an identity directory say (8.4): the walk is
      * the handler's, not the kernel's own */
-    int d = cur[0] ? is_exclave_path(cur) : 1;
+    int d = cur[0] ? vis_owned(cur) : 1;
+    if (d < 0) return d;
     if (d) S->touched_exclave = 1;
     if (w->rf & RESOLVE_NO_XDEV) { /* follow_dotdot: leaving a mount upward is a crossing */
         if (d != w->dom) return -EXDEV;
@@ -581,6 +585,7 @@ static int walk_classify(struct scratch *S, struct walk *w, int last, int *err)
     const char *hreal;
     /* the rule asked once for the candidate (DESIGN.md 16.6 item 3) */
     int host = vis_walk_facts(cur, &idf, &leads, &idd, &hreal);
+    if (host < 0) return host;
     leads = leads && !last;
     if (idf || leads || idd || !host) S->touched_exclave = 1; /* anything but a plain host component */
     /* 8.4: followed on the host, by its host name, at each call; its host symlinks are not ours to follow */
@@ -680,13 +685,14 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         int last = (*w.rp == 0);
         /* an exclave path is re-issued under the tree's root prefix: one that would not fit PATH_MAX there is refused
          * here, ENAMETOOLONG, and never cut to a shorter name (13 item 13) */
-        if (C.rootlen + (long)(curl + 1 + cl) + (last ? trailing : 0) >= PATH_MAX && is_exclave_path(cur))
-            return -ENAMETOOLONG;
+        if (C.rootlen + (long)(curl + 1 + cl) + (last ? trailing : 0) >= PATH_MAX && (r = vis_owned(cur)) != 0)
+            return r < 0 ? r : -ENAMETOOLONG;
         /* the mount changes where the domain does; an identity symlink that is not followed is the tree's own entry,
          * and its host target is not reached; a last name with a trailing slash that a create refuses before any
          * lookup (open_last_lookups, EISDIR) is never stepped into, so its mount is not met */
         if (w.rf & RESOLVE_NO_XDEV) {
-            int d = is_exclave_path(cur);
+            int d = vis_owned(cur);
+            if (d < 0) return d;
             /* the starting directory's own way, walked again: the kernel starts in it and crosses nothing there */
             if (w.start_len && xstrlen(cur) > w.start_len) w.start_len = 0;
             if (!w.start_len && d != w.dom && !(last && trailing && (follow_last & WALK_PARENT)) &&
@@ -699,7 +705,12 @@ int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *o
         /* the last component is the caller's where the kernel leaves it to the call (WALK_FOLLOW, WALK_PARENT): a
          * trailing slash means "a directory", which a lookup follows (lookup_last) and a call on the parent never
          * looks up (filename_parentat) */
-        if (last && (trailing ? (follow_last & WALK_PARENT) != 0 : !(follow_last & WALK_FOLLOW))) break;
+        if (last && (trailing ? (follow_last & WALK_PARENT) != 0 : !(follow_last & WALK_FOLLOW))) {
+            /* a top-level name left to the call is still a name the walk reached: its directory is read, or the
+             * walk fails, before the handler asks whose the path is (8.1.1) */
+            if (!curl && (r = vis_owned(cur)) < 0) return r;
+            break;
+        }
         /* the process's own exe names the program, not the launcher (7.6), on the loader path and for a script whose
          * exe is its interpreter */
         if ((C.loader_mode || xstrcmp(C.exe, C.program) != 0) && is_self_exe(cur, S->pid)) {

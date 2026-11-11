@@ -535,7 +535,8 @@ static __attribute__((noreturn)) void run(struct scratch *S, const char *v, cons
     if (k == -1) die_status(126, "not an executable", v, ENOEXEC);
     if (k == -2) die_status(126, "argument list too long", v, E2BIG);
     char *iv = arena_alloc(PATH_MAX);
-    if (canon(S, nargv[0], AT_FDCWD, 1, iv) < 0) die_status(127, "cannot resolve interpreter", nargv[0], 0);
+    long r = canon(S, nargv[0], AT_FDCWD, 1, iv);
+    if (r < 0) die_status(127, "cannot resolve interpreter", nargv[0], r == -ENOENT ? 0 : r);
     /* the interpreter is checked as an exec of it would be: one under a data directory is never run (6.2) */
     exec_checks(iv, real);
     run(S, iv, nargv[0], k, nargv, envp, auxv, depth + 1);

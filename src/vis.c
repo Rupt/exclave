@@ -51,43 +51,38 @@ struct dirent64 {
     char d_name[];
 };
 
-/* a top-level directory of the tree that cannot be read, named by its real path, built in S->tmp */
-static __attribute__((noreturn)) void top_die(struct scratch *S, const char *name, long err)
-{
-    scpy(S->tmp, C.root, PATH_MAX);
-    scat(S->tmp, "/", PATH_MAX);
-    scat(S->tmp, name, PATH_MAX);
-    die("cannot read a top-level directory of tree/", S->tmp, err);
-}
+/* a top-level directory of the tree that the start cannot read, by its real path */
+static __attribute__((noreturn)) void top_die(const char *real, long err)
+{ die("cannot read a top-level directory of tree/", real, err); }
 
-/* does name, an entry of the tree's top level open as dfd, hold anything but . and ..? Read until an entry or the end,
- * since only a read that returns nothing proves a directory empty. A directory that cannot be listed is not a
- * placeholder: it counts as the exclave's, and a failure that is not the directory's own, no descriptor left or an
- * I/O error, is fatal rather than a silent answer of "the host's". The buffer, the head of S->comp, holds . and ..
- * and one name of the longest kind, all an answer needs */
-static int dir_nonempty(struct scratch *S, int dfd, const char *name)
+/* does the directory path, relative to dfd, hold anything but . and ..? 1 where it does, 0 where it is empty, or the
+ * negative errno of a read that could not say. Read until an entry or the end, since only a read that returns nothing
+ * proves a directory empty. A directory that cannot be listed is not a placeholder: it counts as the exclave's, and a
+ * failure that is not the directory's own, no descriptor left or an I/O error, is an error, never a silent answer of
+ * "the host's" (6.3). The descriptor is borrowed under the hard limit where the soft one is full (7.4.5). The buffer is
+ * on the stack, the handler's as well as the start's (7.5.4), and small: . and .., 24 bytes each, and one more entry
+ * of a short name, so that a directory that holds anything mostly says so in its first read; an entry the kernel has
+ * and the buffer cannot hold, which getdents64 answers EINVAL (fs/readdir.c, filldir64), is an entry all the same. */
+static int dir_nonempty(int dfd, const char *path)
 {
-    char *buf = S->comp;
-    const size_t room = 512;
-    long fd = sys_openat(dfd, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+    unsigned long buf[11];
+    long fd = open_borrowed(dfd, path, O_RDONLY | O_DIRECTORY);
     if (fd == -EACCES || fd == -EPERM) return 1;
-    if (fd < 0) top_die(S, name, fd);
-    for (;;) {
-        long n = sys_getdents64((int)fd, buf, room);
-        if (n < 0) top_die(S, name, n);
-        if (n == 0) {
-            sys_close((int)fd);
-            return 0;
-        }
-        for (long o = 0; o < n;) {
-            struct dirent64 *d = (struct dirent64 *)(buf + o);
-            if (!(d->d_name[0] == '.' && (d->d_name[1] == 0 || (d->d_name[1] == '.' && d->d_name[2] == 0)))) {
-                sys_close((int)fd);
-                return 1;
-            }
+    if (fd < 0) return (int)fd;
+    int r = 0;
+    while (!r) {
+        long n = sys_getdents64((int)fd, buf, sizeof buf);
+        if (n == -EINVAL) r = 1;
+        else if (n < 0) r = (int)n;
+        if (n <= 0) break;
+        for (long o = 0; o < n && !r;) {
+            const struct dirent64 *d = (const struct dirent64 *)((const char *)buf + o);
+            r = !(d->d_name[0] == '.' && (d->d_name[1] == 0 || (d->d_name[1] == '.' && d->d_name[2] == 0)));
             o += d->d_reclen;
         }
     }
+    sys_close((int)fd);
+    return r;
 }
 
 /* 8.1.3: a top-level name that is a volatile directory, /tmp say, is the host's whatever the tree ships there, so
@@ -99,17 +94,45 @@ static int volatile_top(const char *name)
     return 0;
 }
 
-/* 8.1.1: the exclave owns every top-level entry of its tree that is not an empty directory. Read from the tree at
- * startup, so an edited tree needs no index to be refreshed; the manifest's own records are added by the parser before
- * this runs. One directory read per top-level directory, opened by its name in tree/, and none for a volatile
- * directory, which takes no slot either (8.1.3). The listing is read into S->rest. */
+/* the top-level directories of the tree the start has not read (8.1.1), each by its virtual name, which is the tail of
+ * its real path in the arena, so that the read needs no buffer to spell it; 0 for one read since. Startup's: from
+ * rule_build on, the rule's entry holds the name and says whether the directory was read (R_TOP). */
+static const char *top[MAX_UNREAD_TOP];
+static int ntop;
+/* where the tree's entries start in C.own, after the manifest's own records: the tree has 256 slots of its own */
+static int own_at;
+
+static void own_top(const char *v)
+{
+    if (C.nown - own_at >= MAX_TOP_LEVEL) die("more than 256 top-level entries in tree/", C.root, 0);
+    C.own[C.nown++] = v;
+}
+/* startup: the directory top[k] read after all, the exclave's where it holds anything, and no longer waiting */
+static void top_read_now(int k)
+{
+    const char *v = top[k];
+    if (!v) return;
+    top[k] = 0;
+    int r = dir_nonempty(AT_FDCWD, v - C.rootlen);
+    if (r < 0) top_die(v - C.rootlen, r);
+    if (r) own_top(v);
+}
+
+/* 8.1.1: the exclave owns every top-level entry of its tree that is not an empty directory. The start reads the tree's
+ * top level, so an edited tree needs no index to be refreshed: an entry that is no directory is the exclave's, and a
+ * directory is noted, to be read when a path first reaches it (rule_flags), since a start that never names /srv need
+ * not learn whether it is empty (16.6 item 11). A volatile directory is neither read nor noted, and takes no slot
+ * (8.1.3). A directory past the MAX_UNREAD_TOP noted, or whose real path would not fit PATH_MAX, is read here, by its
+ * name in tree/; and where the entries and the directories noted could together be more than the table's 256, every
+ * directory is read here, since a placeholder takes no slot. The manifest's own records are added by the parser
+ * before this runs. The listing is read into S->rest. */
 static void own_from_tree(struct scratch *S)
 {
     char *buf = S->rest;
     long fd = sys_open(C.root, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
     if (fd < 0) die("cannot read tree/", C.root, fd);
-    /* the manifest's own records come first; the tree has 256 slots of its own */
-    int first = C.nown;
+    own_at = C.nown;
+    ntop = 0;
     for (;;) {
         long n = sys_getdents64((int)fd, buf, sizeof S->rest);
         if (n < 0) die("cannot read tree/", C.root, n);
@@ -125,17 +148,35 @@ static void own_from_tree(struct scratch *S)
                 if (sys_fstatat((int)fd, d->d_name, &st, AT_SYMLINK_NOFOLLOW) < 0) continue;
                 type = (st.st_mode & S_IFMT) == S_IFDIR ? DT_DIR : (st.st_mode & S_IFMT) == S_IFLNK ? DT_LNK : DT_REG;
             }
-            /* a placeholder: ls / shows it, the host owns it */
-            if (type == DT_DIR && !dir_nonempty(S, (int)fd, d->d_name)) continue;
-            if (C.nown - first >= MAX_TOP_LEVEL) die("more than 256 top-level entries in tree/", C.root, 0);
             size_t l = xstrlen(d->d_name);
+            if (type == DT_DIR && ntop < MAX_UNREAD_TOP && (size_t)C.rootlen + 1 + l < PATH_MAX) {
+                char *real = arena_alloc((size_t)C.rootlen + 1 + l + 1);
+                xmemcpy(real, C.root, (size_t)C.rootlen);
+                real[C.rootlen] = '/';
+                xmemcpy(real + C.rootlen + 1, d->d_name, l + 1);
+                top[ntop++] = real + C.rootlen;
+                continue;
+            }
+            if (type == DT_DIR) {
+                int r = dir_nonempty((int)fd, d->d_name);
+                if (r < 0) {
+                    scpy(S->tmp, C.root, PATH_MAX);
+                    scat(S->tmp, "/", PATH_MAX);
+                    scat(S->tmp, d->d_name, PATH_MAX);
+                    top_die(S->tmp, r);
+                }
+                /* a placeholder: ls / shows it, the host owns it */
+                if (!r) continue;
+            }
             char *v = arena_alloc(l + 2);
             v[0] = '/';
             xmemcpy(v + 1, d->d_name, l + 1);
-            C.own[C.nown++] = v;
+            own_top(v);
         }
     }
     sys_close((int)fd);
+    if (C.nown - own_at + ntop > MAX_TOP_LEVEL)
+        for (int k = 0; k < ntop; k++) top_read_now(k);
 }
 
 /* 8.1.5: the identity files and directories join the host table unless an own record names one; the table has room
@@ -166,30 +207,8 @@ int vis_in_data(const char *v)
     return 0;
 }
 
-static int base_is_host(const char *v, const char **real);
 static void rule_build(struct scratch *S);
-
-static void claim_cwd(struct scratch *S)
-{
-    char *real = S->real;
-    C.cwdclaim = 0;
-    C.cwdclaim_len = 0;
-    long n = sys_getcwd(real, PATH_MAX);
-    if (n <= 0) return;
-    /* the workload's directory, for the dynamic check (10.3) */
-    if (C.boundary) log_msg("cwd", real);
-    /* inside the tree: virtual path, nothing given (8.1.4) */
-    if (starts_dir(real, C.root)) return;
-    /* the root itself is the tree's (8.3): nothing to give */
-    if (real[0] == '/' && real[1] == 0) return;
-    /* a real host path: give it to the host as a subtree if the base rule would otherwise hand it to the exclave; the
-     * subtrees given do not count, or a cwd above the exclave's directory would never be given */
-    const char *r;
-    if (base_is_host(real, &r)) return;
-    C.cwdclaim_len = (long)xstrlen(real);
-    C.cwdclaim = arena_str(real, (size_t)C.cwdclaim_len);
-    log_msg("cwd given to the host", real);
-}
+static void claim_cwd(struct scratch *S);
 
 void vis_init(struct scratch *S)
 {
@@ -252,7 +271,10 @@ void vis_init(struct scratch *S)
         n++;
     }
     for (int i = 0; i < nextra; i++) {
-        /* an own record naming the directory reached removes it, as it removes any default (8.1.5) */
+        /* an own record naming the directory reached removes it, as it removes any default (8.1.5), and so does a
+         * top-level directory of the tree by that name that holds anything, which is read here to say */
+        for (int k = 0; k < ntop; k++)
+            if (top[k] && xstrcmp(top[k], extra[i]) == 0) top_read_now(k);
         int owned = 0;
         for (int j = 0; j < C.nown && !owned; j++) owned = xstrcmp(C.own[j], extra[i]) == 0;
         if (owned) continue;
@@ -272,9 +294,14 @@ void vis_init(struct scratch *S)
  * entry of one table built at startup, with what it is. starts_dir(v, p) holds exactly when p is v cut at a '/'
  * or at its end, so the prefixes of v the rule can match are found by one pass over v, hashing as it goes and
  * looking each cut up: a path's answer costs one pass over its length. The table is written once before
- * anything traps and only read afterwards. */
+ * anything traps and only read afterwards, but for one word: the flags of a top-level directory not yet read (R_TOP)
+ * change once, by a compare-and-swap, to what its read found (top_settle), whichever thread, nested handler or vfork
+ * child reads it first. No entry is added and no string moves, so a lookup beside the change finds what it would have
+ * found before or after it. */
 /* R_IDDIR: an identity directory the host has (8.4), and R_IDLINK where its host name is a link; R_EXREAL: an exclave
- * path in an identity directory the host has, at absent_real[mapped], and its subtree (rule_build) */
+ * path in an identity directory the host has, at absent_real[mapped], and its subtree (rule_build); R_TOP: a top-level
+ * directory of the tree that no path has reached, the exclave's if it holds anything (8.1.1), its string the tail of
+ * its real path */
 enum {
     R_OWN = 1,
     R_HOSTDIR = 2,
@@ -283,13 +310,15 @@ enum {
     R_LEADS = 16,
     R_IDDIR = 32,
     R_IDLINK = 64,
-    R_EXREAL = 128
+    R_EXREAL = 128,
+    R_TOP = 256
 };
 #define RULE_SLOTS 2048
 /* host: the index of a file's record */
 static struct rule {
     const char *s;
-    unsigned len, flags;
+    unsigned len;
+    volatile unsigned flags;
     int host;   /* R_HOSTFILE: the index of the file's record */
     int mapped; /* R_EXREAL: the index of its real path in absent_real; R_IDLINK: of its target in link_reached */
 } rules[RULE_SLOTS];
@@ -442,7 +471,8 @@ static void rule_build(struct scratch *S)
 {
     S->v[0] = 0;                                              /* tree_real_of's known chain */
     dir_len = (unsigned)xstrlen(C.dir);
-    unsigned most = (unsigned)C.nown + (unsigned)nabsent + (unsigned)(sizeof volatile_dirs / sizeof volatile_dirs[0]);
+    unsigned most = (unsigned)C.nown + (unsigned)ntop + (unsigned)nabsent +
+                    (unsigned)(sizeof volatile_dirs / sizeof volatile_dirs[0]);
     for (int i = 0; i < C.nhost; i++)
         for (const char *p = C.host[i].v; *p; p++) most += *p == '/';
     /* the directories on the way to an absent identity file, which the walk takes as directories */
@@ -450,6 +480,14 @@ static void rule_build(struct scratch *S)
         for (const char *p = absent[i]; *p; p++) most += *p == '/';
     while (rule_mask + 1 > 64 && rule_mask / 2 + 1 >= 2 * most) rule_mask /= 2;
     for (int i = 0; i < C.nown; i++) rule_add(C.own[i], (unsigned)xstrlen(C.own[i]), R_OWN, -1);
+    /* a top-level directory not yet read: its entry's string is the one in the arena, whatever record named the path
+     * first; one an own record names is the exclave's whatever it holds, and is never read */
+    for (int k = 0; k < ntop; k++) {
+        struct rule *r = top[k] ? rule_add(top[k], (unsigned)xstrlen(top[k]), 0, -1) : 0;
+        if (!r || (r->flags & R_OWN)) continue;
+        r->s = top[k];
+        r->flags |= R_TOP;
+    }
     for (int i = 0; volatile_dirs[i]; i++)
         rule_add(volatile_dirs[i], (unsigned)xstrlen(volatile_dirs[i]), R_VOLATILE, -1);
     for (int i = 0; i < C.nhost; i++) {
@@ -499,6 +537,34 @@ static void rule_build(struct scratch *S)
         }
 }
 
+/* 8.1.1: the top-level directory of r, R_TOP, read: its flags from then on, R_TOP gone and R_OWN there where the
+ * directory holds anything, or the negative errno of a read that could not say, the entry left as it was for the next
+ * path to ask again. Whoever reads first decides: a thread, a nested handler or a vfork child that read beside it takes
+ * the answer already there, so the word changes once. */
+static long top_settle(struct rule *r)
+{
+    unsigned fl = r->flags;
+    if (!(fl & R_TOP)) return fl;
+    int k = dir_nonempty(AT_FDCWD, r->s - C.rootlen);
+    if (k < 0) return k;
+    unsigned now = (fl & ~(unsigned)R_TOP) | (k ? R_OWN : 0);
+    unsigned was = __sync_val_compare_and_swap(&r->flags, fl, now);
+    return was == fl ? now : was;
+}
+/* an entry's flags, a top-level directory not yet read being read first. Where that read fails, *err is its error and
+ * the directory counts as the exclave's for this question: a walk answers the error (vis_owned, 13 item 64), since a
+ * handler does not end a program for a call it can refuse, and a question with no error to give, of a descriptor's
+ * name say, fails closed, never to the host (6.3). */
+static unsigned rule_flags(struct rule *r, int *err)
+{
+    unsigned fl = r->flags;
+    if (!(fl & R_TOP)) return fl;
+    long s = top_settle(r);
+    if (s >= 0) return (unsigned)s;
+    *err = (int)s;
+    return (fl & ~(unsigned)R_TOP) | R_OWN;
+}
+
 /* what the rule's strings say of v: the identity file it is, the longest host record and owned path that are prefixes
  * of it, whether a volatile directory is */
 struct facts {
@@ -506,6 +572,7 @@ struct facts {
     long best_host, best_own;
     long iddir; /* the longest identity directory that is a prefix, or -1 */
     int vol;
+    int err; /* the error of a top-level directory's read, which then counts as the exclave's, or 0 (rule_flags) */
     unsigned len;
 };
 static void rule_facts(const char *v, struct facts *f)
@@ -513,6 +580,7 @@ static void rule_facts(const char *v, struct facts *f)
     f->exact = 0;
     f->best_host = f->best_own = f->iddir = -1;
     f->vol = 0;
+    f->err = 0;
     if (v[0] == '/') {                                         /* starts_dir(v, "/") */
         if (root_flags & R_OWN) f->best_own = 1;
         if (root_flags & R_HOSTDIR) f->best_host = 1;
@@ -526,10 +594,11 @@ static void rule_facts(const char *v, struct facts *f)
         if (i > 0 && (c == '/' || c == 0)) {
             struct rule *r = rule_find(v, i, h);
             if (r) {
-                if (r->flags & R_OWN) f->best_own = i;
-                if (r->flags & R_HOSTDIR) f->best_host = i;
-                if (r->flags & R_IDDIR) f->iddir = i;
-                if (r->flags & R_VOLATILE) f->vol = 1;
+                unsigned fl = rule_flags(r, &f->err);
+                if (fl & R_OWN) f->best_own = i;
+                if (fl & R_HOSTDIR) f->best_host = i;
+                if (fl & R_IDDIR) f->iddir = i;
+                if (fl & R_VOLATILE) f->vol = 1;
                 if (end) f->exact = r;
             }
         }
@@ -575,11 +644,32 @@ static int base_is_host_facts(const char *v, const struct facts *f, const char *
     }
     return 0;
 }
-static int base_is_host(const char *v, const char **real)
+/* 8.1.4: the working directory the start finds itself in, given to the host where it is the host's own */
+static void claim_cwd(struct scratch *S)
 {
+    char *real = S->real;
+    C.cwdclaim = 0;
+    C.cwdclaim_len = 0;
+    long n = sys_getcwd(real, PATH_MAX);
+    if (n <= 0) return;
+    /* the workload's directory, for the dynamic check (10.3) */
+    if (C.boundary) log_msg("cwd", real);
+    /* inside the tree: virtual path, nothing given (8.1.4) */
+    if (starts_dir(real, C.root)) return;
+    /* the root itself is the tree's (8.3): nothing to give */
+    if (real[0] == '/' && real[1] == 0) return;
+    /* a real host path: give it to the host as a subtree if the base rule would otherwise hand it to the exclave; the
+     * subtrees given do not count, or a cwd above the exclave's directory would never be given */
+    const char *r;
     struct facts f;
-    rule_facts(v, &f);
-    return base_is_host_facts(v, &f, real);
+    rule_facts(real, &f);
+    /* the start's failure to read the tree is fatal, as its every one is (6.3) */
+    for (int k = 0; f.err && k < ntop; k++)
+        if (top[k] && starts_dir(real, top[k])) top_die(top[k] - C.rootlen, f.err);
+    if (base_is_host_facts(real, &f, &r)) return;
+    C.cwdclaim_len = (long)xstrlen(real);
+    C.cwdclaim = arena_str(real, (size_t)C.cwdclaim_len);
+    log_msg("cwd given to the host", real);
 }
 
 /* the full rule: the root, the identity files, the two subtrees given to the host (8.1.4, 8.1.6), then the base rule */
@@ -618,6 +708,13 @@ int is_exclave_path(const char *v)
     const char *r;
     return !vis_is_host(v, &r);
 }
+int vis_owned(const char *v)
+{
+    struct facts f;
+    const char *r;
+    rule_facts(v, &f);
+    return f.err ? f.err : !is_host_facts(v, &f, &r);
+}
 static int leads_facts(const char *v, const struct facts *f)
 {
     /* starts_dir(file, "") and (file, "/") */
@@ -633,6 +730,7 @@ int vis_plain_host_chain(const char *p, unsigned from)
     f.exact = 0;
     f.best_host = f.best_own = f.iddir = -1;
     f.vol = 0;
+    f.err = 0;
     f.len = 0;
     if (p[0] != '/' || from < 2) return 0;
     if (root_flags & R_OWN) f.best_own = 1;
@@ -643,13 +741,14 @@ int vis_plain_host_chain(const char *p, unsigned from)
         char c = p[i];
         if (i > 0 && (c == '/' || c == 0)) {
             struct rule *r = rule_find(p, i, h);
-            if (r) {
-                if (r->flags & R_OWN) f.best_own = i;
-                if (r->flags & R_HOSTDIR) f.best_host = i;
-                if (r->flags & R_VOLATILE) f.vol = 1;
-            }
+            unsigned fl = r ? rule_flags(r, &f.err) : 0;
+            /* a top-level directory that could not be read: the walk's, which answers the error */
+            if (f.err) return 0;
+            if (fl & R_OWN) f.best_own = i;
+            if (fl & R_HOSTDIR) f.best_host = i;
+            if (fl & R_VOLATILE) f.vol = 1;
             if (i >= from) {                                   /* the candidate p[0..i), i >= 2: never the root */
-                if (r && (r->flags & (R_HOSTFILE | R_LEADS | R_IDDIR))) return 0;
+                if (fl & (R_HOSTFILE | R_LEADS | R_IDDIR)) return 0;
                 if (C.rootlen == (long)i && xmemcmp(p, C.root, i) == 0) return 0;
                 struct facts g = f;
                 g.exact = r;
@@ -665,11 +764,13 @@ int vis_plain_host_chain(const char *p, unsigned from)
 /* the walk's questions of a candidate in one pass (7.4.4): whether it is an identity file, whether it is a directory on
  * the way to one, whether it is an identity directory or the host's below one, and whose it is; 1 if the host's, *real
  * its real path. *idd is 1 at an identity directory the host has as a directory, 2 at one whose host name is a link, 3
- * below either where the rule gives the name to the host, and 0 otherwise (8.4) */
+ * below either where the rule gives the name to the host, and 0 otherwise (8.4). Or the negative errno of the read
+ * of a top-level directory that v reaches first, as vis_owned answers it, with nothing else said */
 int vis_walk_facts(const char *v, int *identity, int *leads, int *idd, const char **real)
 {
     struct facts f;
     rule_facts(v, &f);
+    if (f.err) return f.err;
     *identity = f.exact && (f.exact->flags & R_HOSTFILE);
     *leads = leads_facts(v, &f);
     int host = is_host_facts(v, &f, real);

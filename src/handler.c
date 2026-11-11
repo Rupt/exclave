@@ -535,7 +535,7 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
 
 /* the first bytes of a file the exec must look at: the kernel needs no descriptor for its own exec, so a program at its
  * descriptor limit may still exec; the handler needs one and borrows it under the hard limit (7.4.5) */
-static long open_header(const char *real) { return open_borrowed(real); }
+static long open_header(const char *real) { return open_borrowed(AT_FDCWD, real, O_RDONLY); }
 
 /* A pointer vector of n entries: a scratch region when it fits, an anonymous mapping otherwise, set in *big; NULL
  * when the mapping fails. A mapping made by a vfork child stays in the parent, unused. */

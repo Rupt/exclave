@@ -168,9 +168,9 @@ static int note_gen(int fd, const Phdr *p, unsigned char *nb, int loading, int *
     return g;
 }
 
-long open_borrowed(const char *real)
+long open_borrowed(int dfd, const char *path, int flags)
 {
-    long fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
+    long fd = sys_openat(dfd, path, flags | O_CLOEXEC, 0);
     if (fd != -EMFILE) return fd;
     /* a program at its descriptor limit: the kernel's exec needs no descriptor, the launcher's one; the soft limit is
      * raised to the hard one for the open, since the lowest free number may lie anywhere above a limit a program
@@ -179,7 +179,7 @@ long open_borrowed(const char *real)
     if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, lim) < 0 || lim[0] >= lim[1]) return fd;
     all[0] = all[1] = lim[1];
     if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, all, 0) < 0) return fd;
-    fd = sys_open(real, O_RDONLY | O_CLOEXEC, 0);
+    fd = sys_openat(dfd, path, flags | O_CLOEXEC, 0);
     SC4(NR_prlimit64, 0, RLIMIT_NOFILE, lim, 0);
     return fd;
 }
@@ -205,7 +205,7 @@ int elf_probe(const char *real, char *interp, int *is_launcher, int *filter_vers
     *is_launcher = 0;
     *filter_version = 0;
     interp[0] = 0;
-    long fd = open_borrowed(real);
+    long fd = open_borrowed(AT_FDCWD, real, O_RDONLY);
     if (fd < 0) return (int)fd;
     /* 7168 + 512 bytes: the loader's own limit of headers */
     Ehdr eh;
@@ -248,7 +248,7 @@ int elf_probe(const char *real, char *interp, int *is_launcher, int *filter_vers
 
 int elf_interp_probe(const char *real, void *buf)
 {
-    long fd = open_borrowed(real);
+    long fd = open_borrowed(AT_FDCWD, real, O_RDONLY);
     if (fd < 0) return (int)fd;
     Ehdr *eh = (Ehdr *)buf;
     struct kstat *st = (struct kstat *)((char *)buf + sizeof *eh);
@@ -349,8 +349,9 @@ void loader_run(struct scratch *S, const char *vpath, int fd, long argc, char **
         unsigned long ientry, iphdr;
         int ii;
         /* through the wrapper redirect: ld.so is wrapped; a loader that is not there fails to open, below */
-        if (canon(S, interp_v, AT_FDCWD, 1, S->v) < 0)
-            die("program wants a loader this exclave does not have", interp_v, 0);
+        long r = canon(S, interp_v, AT_FDCWD, 1, S->v);
+        /* a walk's other error is said, a top-level directory's that could not be read say (8.1.1) */
+        if (r < 0) die("program wants a loader this exclave does not have", interp_v, r == -ENOENT ? 0 : r);
         to_real(S->v, interp_path, S->tmp);
         /* one world (7.4.5): the loader must be the exclave's own file, not one the visibility rule found on the
          * host (a Nix or --dynamic-linker binary) and not one parked in a data directory */
