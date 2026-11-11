@@ -24,7 +24,7 @@
 #endif
 int cache_get(const char *v, char *link_out);
 void cache_put(const char *v, int kind, const char *link);
-void cache_init(pid_t pid);
+void cache_init(pid_t pid, void *page);
 void cache_test_hold(void);
 void cache_test_release(void);
 /* src/str.c's arena asks for it; nothing here allocates */
@@ -127,7 +127,7 @@ int main(void)
         printf("SKIP cache lock: this kernel has no MADV_WIPEONFORK, so a fork child inherits a held lock\n");
         return 0;
     }
-    cache_init(getpid());
+    cache_init(getpid(), 0);
     /* names of 2 KB: the strings' first 64 KB step holds 31; 224 short names fill the first table to its share */
     if (!fails_closed("strings", 31, 10, 2048) || !fails_closed("table", 224, 10, 0)) return 1;
     if (!grows()) return 1;

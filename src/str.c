@@ -70,6 +70,7 @@ int starts_dir(const char *s, const char *pfx)
  * image for all of them (16.4) */
 static struct {
     char *reserve; /* 0 until mapped */
+    size_t opened; /* the bytes from the reserve's start that the start's mapping opened with it */
     size_t first_used, rest_used, rest_open;
     char first[ARENA_FIRST] __attribute__((aligned(16)));
 } arena;
@@ -103,8 +104,29 @@ char *reserve_base(long *err)
 }
 long reserve_open(char *at, size_t n)
 {
+    if (at >= arena.reserve && at + n <= arena.reserve + arena.opened) return 0;
     long r = sys_mprotect(at, n, PROT_READ | PROT_WRITE);
     return r < 0 ? r : 0;
+}
+/* The start's mapping (16.6 item 12): the cache's lock page, the first scratch chunk and the reserve as one span,
+ * mapped without access by one call and opened by a second from the lock page through the cache's first strings,
+ * which begin the reserve, where each had a mapping of its own and the strings an opening besides: two calls where
+ * there were four. chunk is the chunk's size. Returns the lock page, which the chunk follows at the next page, or 0
+ * where the span or its opening cannot be had, under a limit on the address space or on data: each of the three then
+ * maps its own when it comes to need it, as it does in a process that has used them up. */
+_Static_assert(RESERVE_STRINGS_AT == 0, "the cache's strings begin the reserve");
+char *start_map(size_t chunk)
+{
+    size_t page = C.pagesz, head = page + ((chunk + page - 1) & ~(page - 1));
+    long m = sys_mmap(0, head + RESERVE_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (m < 0 && m > -4096) return 0;
+    if (sys_mprotect((void *)m, head + RESERVE_STEP, PROT_READ | PROT_WRITE) < 0) {
+        SC2(NR_munmap, m, head + RESERVE_SIZE);
+        return 0;
+    }
+    arena.reserve = (char *)m + head;
+    arena.opened = RESERVE_STEP;
+    return (char *)m;
 }
 #endif
 

@@ -997,7 +997,10 @@ whose writable memory the kernel charges to `RLIMIT_DATA` at the exec:
 the arena of startup's strings and buffers has a first block of 32 KB
 in the image, which an ordinary start does not outgrow, and its rest,
 the cache's strings and its full table are one reserve mapped without
-access at the first need and opened as each fills (7.4.4, 13 item 60).
+access and opened as each fills (7.4.4, 13 item 60). A start maps the
+reserve in one span with the cache's lock page and its first scratch
+chunk before it, and opens the span from its start through the cache's
+first strings (16.6 item 12).
 
 **Where the image and its break lie.** The kernel's exec puts a
 position-independent program that names a loader two thirds up the
@@ -4832,7 +4835,8 @@ and stay fixed.
     reference machine). Below the image's own charge the exec dies
     with `SIGSEGV`; above it the failure is whichever charge comes
     next: the launcher's own message and status 127 where its reserve
-    or a scratch chunk cannot be had, the loader's "cannot map" message
+    or a scratch chunk cannot be had, each mapped by itself where the
+    start's one span is refused (16.6 item 12), the loader's "cannot map" message
     and `SIGSEGV` for a segment, the dynamic loader's own error, or,
     later, a cache that merely stops inserting. The reserve counts
     against `RLIMIT_AS` as reservations do; a program runs inside under
@@ -5926,6 +5930,20 @@ as a whole.
     which threads and `vfork` children race to the first path and a
     start under `strace` opens no directory it has no path into, and
     `top_level_unread_without_descriptor`.
+
+12. **The start makes one mapping for the lock page, its first chunk
+    and the reserve.** The cache's lock page (7.4.4), the scratch
+    chunk the start holds (7.2) and the reserve (7.3) were three
+    mappings and, for the cache's first strings, an opening. They are
+    one span, mapped without access and without a reservation in one
+    call and opened in a second from its start, the lock page, the
+    chunk and the first 64 KB of the strings, which begin the reserve:
+    two calls where there were four, and three mappings in the
+    process where there were four. Where the span or its opening
+    cannot be had, under a limit on the address space or on data,
+    each of the three maps its own when it is needed, as a later
+    chunk does, so the limits a start runs under are as they were
+    (13 item 60). Check: `start_maps_once`.
 
 Items 4 and 7 are shortcuts past the walk, and a shortcut drops every
 question the walk asked, the ones nobody wrote down included. Each

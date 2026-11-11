@@ -52,6 +52,12 @@ static int slots(void)
     return n > MAX_CHUNKS ? MAX_CHUNKS : n;
 }
 
+/* memory the start mapped for the first chunk with its other mappings (str.c's start_map), which the first growth
+ * takes, the start's own, while the process is one thread */
+static void *spare;
+size_t scratch_chunk_bytes(void) { return sizeof(struct chunk); }
+void scratch_spare(void *mem) { spare = mem; }
+
 static int owner_alive(struct chunk *c, pid_t mypid)
 {
     if (c->pid == mypid) return sys_tgkill(mypid, c->tid, 0) != -ESRCH;
@@ -114,7 +120,9 @@ struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame)
     /* the pool's ceiling (13 item 26) */
     if (i >= MAX_CHUNKS) return 0;
     size_t sz = (sizeof(struct chunk) + 0xfff) & ~(size_t)0xfff;
-    long m = sys_mmap(0, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    long m = (long)spare;
+    spare = 0;
+    if (!m) m = sys_mmap(0, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m < 0 && m > -4096) return 0;
     c = (struct chunk *)m;
     c->busy = 1;

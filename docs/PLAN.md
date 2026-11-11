@@ -154,6 +154,11 @@ documents, gate, one commit per item. Status is in brackets.
     after a `chdir` elsewhere sees it as its parent does, where each
     process had a view of its own start (DESIGN 8.1 rule 4, 7.4.5, 13
     item 63).
+16. **One mapping at the start** [done]: another of the profile's
+    candidate cuts (item 7). The cache's lock page, the first scratch
+    chunk and the reserve are one span, mapped in one call and opened
+    in a second, two calls and one mapping fewer in every start
+    (DESIGN 16.6 item 12).
 
 ## After the first release
 

@@ -305,6 +305,7 @@ char *arena_str(const char *s, size_t n);
 #define RESERVE_SIZE (RESERVE_ARENA_AT + ((ARENA_SIZE + RESERVE_STEP - 1) & ~(RESERVE_STEP - 1)))
 char *reserve_base(long *err); /* the reserve, mapped without access at the first call; 0 and *err where not */
 long reserve_open(char *at, size_t n); /* opened for reading and writing; 0, or the negative errno */
+char *start_map(size_t chunk); /* the lock page, the first chunk and the reserve as one mapping; the lock page, or 0 */
 _Static_assert(CACHE_STRINGS % RESERVE_STEP == 0, "the strings' size a multiple of the step");
 _Static_assert(RESERVE_TABLE_AT % RESERVE_STEP == 0 && RESERVE_TABLE_AT >= RESERVE_STRINGS_AT + CACHE_STRINGS,
                "the table's part after the strings', at a step");
@@ -371,6 +372,8 @@ struct scratch {
     unsigned long how0[3];
 };
 struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame);
+size_t scratch_chunk_bytes(void); /* the size of a chunk's mapping, before its rounding to pages */
+void scratch_spare(void *mem); /* memory the start mapped for the first chunk (start_map) */
 void scratch_put(struct scratch *s);
 /* returns depth, 1 for outermost; releases frames left by longjmp */
 int nest_enter(pid_t pid, pid_t tid, unsigned long frame);
@@ -382,7 +385,7 @@ pid_t scratch_deferred(pid_t pid, pid_t tid, int take);
 /* ---------- visibility (vis.c) ---------- */
 /* S: the start's chunk, whose buffers the tables are built in (launcher.c) */
 void vis_init(struct scratch *S, const char *cwd);
-void cache_init(pid_t pid); /* pid: the process's own */
+void cache_init(pid_t pid, void *page); /* pid: the process's own; page: the lock's, mapped already, or 0 */
 /* 1 when the caller, pid, shares the memory of its parent, ppid: a vfork child (7.5.4) */
 int vfork_child(pid_t pid, pid_t ppid);
 int vis_is_host(const char *v, const char **real); /* 1 if host-owned; *real = host path */

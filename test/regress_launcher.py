@@ -917,6 +917,41 @@ def start_reads_once(ctx: Ctx) -> str | None:
 
 
 @test
+def start_maps_once(ctx: Ctx) -> str | None:
+    """16.6 item 12: a start maps the lock page, its first chunk and the reserve as one span.
+
+    A wrapper of true run from outside, under strace: one mapping without access and without a
+    reservation, the span; one opening for reading and writing that starts where the span does, the
+    lock page, the chunk and the cache's first strings; and the advice that wipes the lock's page
+    at a fork given for the span's first page. Each of the three had a mapping of its own, and the
+    strings an opening.
+    """
+    if not shutil.which("strace"):
+        skip("no strace")
+    tr = os.path.join(ctx.work, f"maps-{os.getpid()}.trace")
+    rc, _out, err = run(
+        ["strace", "-f", "-o", tr, "-e", "trace=mmap,mprotect,madvise", wrapper(ctx, "true")],
+        cwd=ctx.work,
+        env=ctx.env,
+    )
+    expect(rc == 0, f"true under strace: {err!r}")
+    trace = read_text(tr)
+    spans = re.findall(
+        r"mmap\(NULL, (\d+), PROT_NONE, [A-Z_|]*MAP_NORESERVE[A-Z_|]*, -1, 0\) = (0x[0-9a-f]+)",
+        trace,
+    )
+    expect(len(spans) == 1, f"one span mapped without access: {spans!r}")
+    at = spans[0][1]
+    opened = re.findall(rf"mprotect\({at}, (\d+), PROT_READ\|PROT_WRITE\) = 0", trace)
+    expect(len(opened) == 1, f"the span opened once from its start: {opened!r}")
+    wiped = re.findall(r"madvise\((0x[0-9a-f]+), \d+, MADV_WIPEONFORK\)", trace)
+    if "MADV_WIPEONFORK) = -1" in trace:
+        return "no MADV_WIPEONFORK on this kernel: the lock's page is not told from the trace"
+    expect(wiped == [at], f"the lock's page is the span's first, {at}: {wiped!r}")
+    return f"a span of {int(spans[0][0]) >> 10} KB, {int(opened[0]) >> 10} KB of it opened"
+
+
+@test
 def traceme_exec(ctx: Ctx) -> str | None:
     """7.4.5, 13 item 54: a child that asks to be traced and execs, as gdb and strace start one.
 

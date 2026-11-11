@@ -594,6 +594,8 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
     if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, C.rlim) == 0) borrow();
     /* the start's buffers are one chunk's, each in the role common.h gives it, held until the jump: the pages the
      * start touches are then the ones the program's first trapped call would (16.4) */
+    char *lock = start_map(scratch_chunk_bytes());
+    if (lock) scratch_spare(lock + C.pagesz);
     struct scratch *S = scratch_get((pid_t)sys_getpid(), (pid_t)sys_gettid(), 0);
     if (!S) die("out of memory", 0, ENOMEM);
     C.exe = "";
@@ -670,7 +672,7 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
     const char *cwd = have ? find_env(envp, "EXCLAVE_CWD") : 0;
     char **env2 = env_prepare(envp, C.boundary);
     vis_init(S, cwd);
-    cache_init(S->pid);
+    cache_init(S->pid, lock);
     if (C.loader_mode) loader_mode_check(S, argv, env2);
     C.text_lo = (unsigned long)__ehdr_start;
     C.text_hi = (unsigned long)_etext;

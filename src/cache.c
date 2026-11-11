@@ -55,10 +55,12 @@ static volatile int full;
 /* The lock on a page that reads as zero in a fork child (MADV_WIPEONFORK, 4.14+), since the holder's release never
  * reaches a copy; a vfork child shares the page, and the parent's release does reach it. On a kernel without the
  * advice the lock is inherited as a copy, held until the child execs: inserts are skipped there, never wrong. The
- * same page holds the pid the launcher started as, which tells a vfork child (7.5.4). */
-void cache_init(pid_t pid)
+ * same page holds the pid the launcher started as, which tells a vfork child (7.5.4). page: the page, where the start
+ * mapped it with the first chunk and the reserve (str.c's start_map), or 0. */
+void cache_init(pid_t pid, void *page)
 {
-    long m = sys_mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    long m = (long)page;
+    if (!m) m = sys_mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m < 0 && m > -4096) return;
     long w = sys_madvise((void *)m, 4096, MADV_WIPEONFORK);
     lock = (volatile int *)m;
