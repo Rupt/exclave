@@ -728,13 +728,13 @@ def mem_layout(ctx: Ctx) -> None:
 def refusing(name: str, first: int | None, err: int) -> Callable[[], None]:
     """A function a child runs before its exec: a seccomp filter that answers err to one call.
 
-    The call is the syscall named name, prctl or getrandom, with first as its first argument where
-    one is given; every other call is allowed. The filter stays around whatever the child execs, as
-    a container's profile stays around a launcher.
+    The call is the syscall named name, prctl, getrandom or process_vm_readv, with first as its
+    first argument where one is given; every other call is allowed. The filter stays around
+    whatever the child execs, as a container's profile stays around a launcher.
     """
     arch, numbers = {
-        "x86_64": (0xC000003E, {"prctl": 157, "getrandom": 318}),
-        "aarch64": (0xC00000B7, {"prctl": 167, "getrandom": 278}),
+        "x86_64": (0xC000003E, {"prctl": 157, "getrandom": 318, "process_vm_readv": 310}),
+        "aarch64": (0xC00000B7, {"prctl": 167, "getrandom": 278, "process_vm_readv": 270}),
     }[platform.machine()]
     ld, jeq, ret = 0x20, 0x15, 0x06  # BPF_LD|BPF_W|BPF_ABS, BPF_JMP|BPF_JEQ|BPF_K, BPF_RET|BPF_K
     # seccomp_data: the number at 0, the architecture at 4, the first argument's low word at 16
@@ -786,6 +786,42 @@ def layout_without_the_record(ctx: Ctx) -> None:
         )
         bad = kernel_answers.mem_layout_wrong(out)
         expect(not bad, f"{name} refused: " + "; ".join(bad))
+
+
+@test
+def mem_edge(ctx: Ctx) -> None:
+    """7.5.6, 13 item 15: what ends where its mapping does is read as the kernel reads it.
+
+    test/progs/mem_edge.c gives calls a path, an attribute's name, an argument vector, an
+    environment vector and a variable whose last byte is the last of a mapping, and a buffer that
+    ends there: the kernel reads a string to its NUL and a vector to its NULL, so each call answers
+    as anywhere else, where the handler reads a window past them, 256 bytes of a path and a page
+    of a vector. Twice: with process_vm_readv, which gives what it could read, and with it refused
+    by a seccomp filter around the launcher, as Docker's profile refuses it before kernel 4.8,
+    where the copy goes through a pipe, which gives nothing of a write that faults partway, so the
+    copy steps by the source's pages. A program's vectors lie within a page of its stack's end in
+    some starts when its environment is small, where a copy that took the window whole or not at
+    all answered its exec EFAULT. The kernel under bwrap measured the answers.
+    """
+    bad = kernel_answers.mem_edge_wrong(exerciser(ctx, "mem_edge", ["HOSTDIR"]))
+    expect(not bad, "; ".join(bad))
+    d = os.path.join(ctx.work, "mem_edge-pipe")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    log = os.path.join(d, "log")
+    rc, out, err = run(
+        [ctx.launcher, os.path.join(ctx.progs, "mem_edge"), d],
+        cwd=ctx.work,
+        env=dict(ctx.env, EXCLAVE_LOG=log),
+        preexec=refusing("process_vm_readv", None, errno.EPERM),
+    )
+    expect(rc == 0, f"mem_edge without process_vm_readv: rc={rc} {out!r} {err!r}")
+    expect(
+        "copies through a pipe" in read_text(log),
+        "the launcher did not log that process_vm_readv was refused",
+    )
+    bad = kernel_answers.mem_edge_wrong(out)
+    expect(not bad, "without process_vm_readv: " + "; ".join(bad))
 
 
 @test

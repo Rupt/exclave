@@ -1982,8 +1982,19 @@ unmapped a buffer the kernel validated a moment earlier. Docker's
 default profile allows both on kernels 4.8 and later. Where
 they are refused, `EPERM` under a profile that gates them on a
 capability, the handler copies through a pipe made for the copy alone,
-whose `write` and `read` fault exactly as the kernel's own copy would;
-the cost is 13 item 15.
+whose `write` and `read` fault as the kernel's own copy would. A pipe
+takes nothing of a `write` that faults partway (`pipe_write`), where
+`process_vm_readv` gives what it could read, and the handler reads a
+window, 256 bytes of a path and a page of a vector, where the kernel
+reads to the string's end: so the copy steps by the 4 KB pages of its
+source, each step whole or not at all, and what ends where its mapping
+does is read as the kernel reads it. A program's vectors lie within a
+page of their mapping's end in some starts when its environment is
+small, since the kernel places them a random distance, up to 8 KB on
+x86-64, below the strings at the stack's end: in 39 of 300 starts
+inside with an empty environment on the reference machine, and in 4 of
+300 with the 628 bytes of an SSH session's on kernel 4.15. The cost is
+13 item 15.
 
 The kernel checks a thread's access to memory against its protection
 keys, x86-64's PKRU, and a signal handler starts with the kernel's own
@@ -4136,8 +4147,10 @@ and stay fixed.
     is refused, `EPERM` under a seccomp profile that gates it on a
     capability as Docker's does before kernel 4.8, every copy from or
     into program memory goes through a pipe: five syscalls for the
-    first page and two for each page after. `EFAULT` is still answered
-    as the kernel would; the cost is the limitation.
+    first 4 KB page of the source and two for each page after. `EFAULT`
+    is still answered as the kernel would, at the page where the
+    kernel's own copy would fault (7.5.6, `mem_edge`); the cost is the
+    limitation.
 
 16. **From the host, every executable in an exclave is the launcher.**
     `ldd`, `file`, `debsums`, IDE indexers, antivirus and gdb see the
@@ -6229,7 +6242,9 @@ meaning items 4 and 7.
      around the launcher (`mem_layout`, `exec_auxv`,
      `layout_without_the_record`, 7.3, 13 items 59 to 62), gdb attached
      to a program inside, which reads the launcher and lets the
-     program run on (`gdb_attach`, 13 item 62), and
+     program run on (`gdb_attach`, 13 item 62), a path, a vector and a
+     variable that end where their mapping does, read with
+     `process_vm_readv` and through the pipe (`mem_edge`, 7.5.6), and
      descriptors and processes
      around trapped calls, the lowest free number at a soft limit's
      edge and after `close_range`, other processes' links, `clone`,
@@ -6349,7 +6364,7 @@ meaning items 4 and 7.
 
 | Item | Implementation |
 |---|---|
-| 1 | `test/oracle_ns.py`: shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus programs of the suite under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv`, `exec_state`, `mem_layout` and `fd_procs`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones`, `memfd_exec`, and `seccomp_filter`, a program's own filter (`test/kernel_answers.py`) |
+| 1 | `test/oracle_ns.py`: shell workloads under `bwrap` and under the launcher, compared, those meant to succeed first checked to show under `bwrap` what they are meant to, so that one failing alike in both worlds on a tool or a file the tree lacks is no pass; plus programs of the suite under `bwrap` against the suite's own expectations: the read-only matrix (`test/progs/ro_matrix.c`), `openat2`, `creat_slash`, `slash_links`, `open_flags`, `unix_socket`, `magic_links`, `rename_dots`, `program_perm`, `exe_link` and the exec exercisers `exec_script`, `exec_elf`, `exec_auxv`, `exec_state`, `mem_layout`, `mem_edge` and `fd_procs`, and the signal exercisers `sigcalls`, `sigrain`, `sigstack` and `clones`, `memfd_exec`, and `seccomp_filter`, a program's own filter (`test/kernel_answers.py`) |
 | 2 | `test/oracle_resolve.py`: 30 000 paths over ten random mazes, resolved by `openat2(RESOLVE_IN_ROOT)` on the tree and by the launcher from inside |
 | 3 | `test/manifest_test.c` and `test/grammar_test.py`: two properties on random byte strings asked of the command's `format` (a value in canonical form is canonical, and one with every byte escaped is rewritten to it), and both spellings decoded by the launcher's parser to the bytes they were made from; the command's parser and the launcher's compared on manifests, their mutations and the line an error names. `test/filter_test.c` runs the filter against the rule of 7.4.2, and a program's filter as the handler builds it from the program's, the page's and the judge slot's addresses; `tool/*_test.go` the command's grammar, readers and tree hash against their statements here |
 | 4 | `test/run.py` with `test/regress_*.py` and `test/progs/`: the named tests |

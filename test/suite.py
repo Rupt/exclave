@@ -500,6 +500,7 @@ PROGS = (
     "exec_auxv",
     "exec_state",
     "mem_layout",
+    "mem_edge",
     "fd_procs",
     "top_reach",
     "attach_me",

@@ -1904,6 +1904,34 @@ def mem_layout_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     return lines_wrong(out, want, launcher, by_the_kernel=by_the_kernel)
 
 
+# mem_edge HOSTDIR (test/progs/mem_edge.c), measured under bwrap on 7.0: a path, an attribute's
+# name, a vector and a variable that end where their mapping does are read to their end and no
+# further, and a buffer that ends there is written; what is not ended before its mapping is, is
+# EFAULT. A filesystem without user attributes answers the name's case so.
+MEM_EDGE_RAN = "ran with 3 arguments, A=1 B=2"
+MEM_EDGE: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
+    ("stat, a path that ends where its mapping does", "ok"),
+    ("open, the same path", "ok"),
+    ("stat, a path of 300 bytes that ends there", "ok"),
+    ("stat, a path that runs off its mapping", "Bad address"),
+    ("getxattr, a name that ends there", ("No data available", "Operation not supported")),
+    ("readlink, a buffer of the text's length that ends there", "6"),
+    ("readlink, a size that runs off the mapping", "6"),
+    ("readlink, a path and a buffer that end there", "6"),
+    ("exec, an argument vector that ends there", MEM_EDGE_RAN),
+    ("exec, an environment vector that ends there", MEM_EDGE_RAN),
+    ("exec, a variable that ends there", MEM_EDGE_RAN),
+    ("exec, a path and an argument that end there", MEM_EDGE_RAN),
+    ("exec, an argument vector that runs off its mapping", "Bad address"),
+    ("exec, an environment vector that runs off its mapping", "Bad address"),
+)
+
+
+def mem_edge_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
+    """The lines of mem_edge's output that differ from the kernel's answers."""
+    return lines_wrong(out, MEM_EDGE, {}, by_the_kernel=by_the_kernel)
+
+
 # fd_procs HOSTDIR (test/progs/fd_procs.c), measured under bwrap on 7.0: the descriptors a program
 # starts with and gets, at the soft limit's edge and after close_range, other processes' links,
 # working directories changed by clones, threads and posix_spawn, a descriptor passed or taken,

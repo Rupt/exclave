@@ -366,6 +366,7 @@ PROGRAMS = (
     "exec_auxv",
     "exec_state",
     "mem_layout",
+    "mem_edge",
     "fd_procs",
     "top_reach",
     "sigcalls",
@@ -431,6 +432,8 @@ def judge(name: str, rc: int, out: str, hostdir: str, root: str) -> list[str]:
         }[name](out, by_the_kernel=True)
     elif name == "mem_layout":
         wrong = kernel_answers.mem_layout_wrong(out, by_the_kernel=True)
+    elif name == "mem_edge":
+        wrong = kernel_answers.mem_edge_wrong(out, by_the_kernel=True)
     elif name == "fd_procs":
         wrong = kernel_answers.fd_procs_wrong(out, by_the_kernel=True)
     elif name == "top_reach":
@@ -530,6 +533,7 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
         "exec_auxv": f"mkdir -p {hostdir}/a && {work}/exec_auxv {hostdir}/a",
         "exec_state": f"mkdir -p {hostdir}/t && {work}/exec_state {hostdir}/t",
         "mem_layout": f"{work}/mem_layout",
+        "mem_edge": f"mkdir -p {hostdir}/edge && {work}/mem_edge {hostdir}/edge",
         "fd_procs": f"mkdir -p {hostdir}/fdp && {work}/fd_procs {hostdir}/fdp",
         # two placeholders every tree ships (8.1), and a host file that is its standard input
         "top_reach": (

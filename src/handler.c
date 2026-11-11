@@ -71,9 +71,11 @@ static int keys_restricted(void)
 #endif
 }
 /* Where process_vm_readv is refused, EPERM under a seccomp profile that gates it on a capability, as Docker's does
- * before kernel 4.8, the copy goes through a pipe: write() from program memory and read() into it fault exactly as the
- * syscall's own copy would, EFAULT or short at the boundary (13 item 15). The pipe lives for the copy alone, a page a
- * step. Returns the bytes copied, or pipe2's -errno. */
+ * before kernel 4.8, the copy goes through a pipe: write() from program memory and read() into it fault as the
+ * syscall's own copy would (13 item 15). A write that faults partway gives the pipe nothing (pipe_write), so a step
+ * ends where a 4 KB page of the source does, as a mapping ends at one: a step is copied whole or not at all, and the
+ * copy is short at the boundary. A step always fits an empty pipe, which lives for the copy alone. Returns the bytes
+ * copied, or pipe2's -errno. */
 static long pipe_copy(void *dst, const void *src, size_t n)
 {
     int fds[2];
@@ -81,8 +83,8 @@ static long pipe_copy(void *dst, const void *src, size_t n)
     /* no descriptor left: the syscall answers that, never a raw copy that could fault the handler */
     if (e < 0) return e;
     while (done < (long)n) {
-        size_t chunk = n - (size_t)done;
-        if (chunk > 4096) chunk = 4096;   /* a page always fits an empty pipe */
+        size_t chunk = n - (size_t)done, in_page = 4096 - (((unsigned long)src + (unsigned long)done) & 4095);
+        if (chunk > in_page) chunk = in_page;
         long w = sys_write(fds[1], (const char *)src + done, chunk);
         long r = w > 0 ? sys_read(fds[0], (char *)dst + done, (size_t)w) : w;
         if (r <= 0) break;
