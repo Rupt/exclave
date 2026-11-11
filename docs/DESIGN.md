@@ -4294,7 +4294,15 @@ and stay fixed.
     3 KB budget (7.5.4). Rust's 8 KB stack is enough; a stack of exactly
     `MINSIGSTKSZ` is not. `adversarial` runs the deepest paths on
     Rust's layout, a guard page below, on every row of the matrix: on
-    the reference machine they pass on 5 KB and fail on 4.4 KB. A
+    the reference machine they pass on 5 KB and fail on 4.4 KB. The
+    install of a handler is itself a trap (7.5.7), which lands on an
+    alternate stack once one is armed: on x86-64 it takes 672 bytes
+    beyond the kernel's frame, 3 624 bytes of the stack on the
+    reference machine, whose frame is 2 952, so a handler that does
+    nothing passes on a 4 KB stack there with 472 bytes to spare and
+    is killed where the kernel's frame is that much larger;
+    `alternate_stacks` judges such a stack by the frame of the machine
+    it runs on, `AT_MINSIGSTKSZ`. A
     handler on the alternate stack that traps adds the kernel's frame
     a second time, its own, and a program's handler whose signal lands
     during a trap adds the kernel's frame, the presented frame and its

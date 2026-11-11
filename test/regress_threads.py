@@ -65,7 +65,9 @@ def alternate_stacks(ctx: Ctx) -> str:
 
     A handler that traps on an alternate stack of each size from MINSIGSTKSZ to 16 KB above a
     guard page: the kernel passes every size, the launcher 8 KB and up, since the trap adds the
-    kernel's frame and the handler's budget (item 30); a 5 KB handler without SA_ONSTACK landing
+    kernel's frame and the handler's budget (item 30), and a handler that does nothing on every
+    size that holds the kernel's frame on the machine and the install's own, a trap on that stack,
+    which 4 KB does on the reference machine; a 5 KB handler without SA_ONSTACK landing
     during traps beside an 8 KB alternate stack, which natively runs on the main stack and under
     the launcher on the alternate stack, into the guard page (item 51); SS_AUTODISARM, sigaltstack
     queried and changed inside a handler, traps nested on the alternate stack and from a handler

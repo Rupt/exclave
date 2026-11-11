@@ -520,6 +520,10 @@ SIGSTACK_SMALL = ("MINSIGSTKSZ", "4 KB", "5 KB", "6 KB")
 # exerciser's child exits 3 in both worlds
 MINSIGSTKSZ_LEAST = {"x86_64": 2048, "aarch64": 5120}
 SIGSTACK_SIZES = {"4 KB": 4096, "5 KB": 5120, "6 KB": 6144}
+# what the install of a handler takes of an alternate stack beyond the kernel's frame, where the
+# install is a trap and the launcher's handler runs on that stack (13 item 30): 672 bytes measured
+# on the reference machine, whose frame of 2 952 bytes leaves a 4 KB stack 472 to spare
+SIGSTACK_INSTALL = {"x86_64": 720}
 
 
 def minsigstksz() -> int:
@@ -534,13 +538,21 @@ def sigstack_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
 
     by_the_kernel: the kernel itself answered. Otherwise the launcher did, and a handler that traps
     on an alternate stack smaller than 8 KB is its stated limitation (13 item 30), 8 KB too where
-    the kernel's frame passes 3.5 KB; and a 5 KB handler without SA_ONSTACK landing during a trap
-    exits 9 from the SIGSEGV handler, since it runs on the 8 KB alternate stack (13 item 51), or
-    is killed where that handler has no room either, as on aarch64.
+    the kernel's frame passes 3.5 KB; a handler that does nothing is installed by a trap on that
+    stack, so a stack smaller than the kernel's frame on this machine and the install's own is the
+    same limitation, a 4 KB stack on a CPU whose frame passes 3.4 KB; and a 5 KB handler without
+    SA_ONSTACK landing during a trap exits 9 from the SIGSEGV handler, since it runs on the 8 KB
+    alternate stack (13 item 51), or is killed where that handler has no room either, as on
+    aarch64.
     """
     got = out.splitlines()
     wrong = []
     least = MINSIGSTKSZ_LEAST.get(platform.machine(), 0)
+    # the exerciser's own MINSIGSTKSZ, its first line, beside the named sizes
+    sizes = dict(SIGSTACK_SIZES)
+    if got and got[0].startswith("MINSIGSTKSZ: ") and got[0].split()[1].isdigit():
+        sizes["MINSIGSTKSZ"] = int(got[0].split()[1])
+    install = minsigstksz() + SIGSTACK_INSTALL.get(platform.machine(), 0)
     for g, w in zip(got, SIGSTACK, strict=False):
         if g == w or (w.startswith("MINSIGSTKSZ: ") and g.startswith("MINSIGSTKSZ: ")):
             continue
@@ -559,6 +571,10 @@ def sigstack_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
             if case.endswith("handler traps") and (
                 any(f"of {size}," in case for size in SIGSTACK_SMALL)
                 or ("of 8 KB," in case and minsigstksz() > 3500)
+            ):
+                continue
+            if case.endswith("handler does nothing") and any(
+                f"of {name}," in case and size < install for name, size in sizes.items()
             ):
                 continue
             if case.startswith("5 KB handler") and (
