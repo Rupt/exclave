@@ -185,9 +185,16 @@ def rust(ctx: Ctx) -> str | None:
         skip("no rustc")
     if ctx.musl:
         skip("the host's rustc targets glibc; the exclave has musl")
+    # rustup's rustc installs its toolchain at the first call where the machine has none, from
+    # the network and for minutes; told not to, it says at once that none is installed, and a
+    # machine whose rustc does not run is one without rustc. A test touches no network (17).
+    env = {**os.environ, "RUSTUP_AUTO_INSTALL": "0"}
+    rc, out, err = run([rustc, "--version"], env=env)
+    if rc:
+        skip("the machine's rustc does not run: " + (err.strip().splitlines() or ["no reason"])[0])
     exe = os.path.join(ctx.progs, "rs")
     rc, out, err = run(
-        [rustc, "-O", "-o", exe, os.path.join(ctx.work, "src", "rs.rs")], cwd=ctx.work
+        [rustc, "-O", "-o", exe, os.path.join(ctx.work, "src", "rs.rs")], cwd=ctx.work, env=env
     )
     expect(rc == 0, "rustc: " + err[-600:])
     rc, out, err = inside(ctx, exe)

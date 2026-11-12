@@ -6487,7 +6487,9 @@ machine. The namespace oracle, the syscall probe, the
 Docker profile run and the exerciser need `bwrap` (bubblewrap) and
 unprivileged user namespaces; the resolution oracle needs `openat2`
 (Linux 5.6). The suite uses `strace`, `gdb`, Go and `rustc`; a test
-whose tool is missing skips and names it. The plain-label run of
+whose tool is missing skips and names it, and so does the Rust test
+where rustup's `rustc` has no toolchain installed, which it is told not
+to fetch (`RUSTUP_AUTO_INSTALL=0`), since a test touches no network. The plain-label run of
 `scripts/extra` needs AppArmor's `aa-exec` and is left out without it. Optionally,
 `aarch64-linux-gnu-gcc` builds the aarch64 launcher and command, and the matrix
 needs QEMU with KVM and `cloud-image-utils` (`qemu-system-arm` and the
