@@ -1860,7 +1860,7 @@ MEM_LAYOUT_PLACED = frozenset(
 def mem_layout_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     """The lines of mem_layout's output that differ from the kernel's answers.
 
-    PR_GET_AUXV is 6.4's: an older kernel's refusal drops its cases. On a kernel that takes no
+    PR_GET_AUXV is 6.4's: a kernel without it drops its cases. On a kernel that takes no
     record of an image from a process, PR_SET_MM_MAP's absence, or has no getrandom, the launcher
     places a program where mmap does and the break stays the kernel's, so what it places is not
     judged there. Three answers are an older kernel's own: before 3.16 the vDSO's data lies in the
@@ -1879,7 +1879,7 @@ def mem_layout_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
         want = tuple((c, None if c == "arg limit slack under 64 bytes" else a) for c, a in want)
     if not by_the_kernel and "PR_SET_MM_MAP and getrandom: no" in out.splitlines():
         want = tuple((c, None if c in MEM_LAYOUT_PLACED else a) for c, a in want)
-    if "own PR_GET_AUXV AT_PHDR: refused" in out.splitlines():
+    if not kernel.has("PR_GET_AUXV"):
         want = tuple(c for c in want if "PR_GET_AUXV" not in c[0])
         out = "\n".join(x for x in out.splitlines() if "PR_GET_AUXV" not in x)
     return lines_wrong(out, want, launcher, by_the_kernel=by_the_kernel)
@@ -1917,7 +1917,7 @@ def mem_edge_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
 # starts with and gets, at the soft limit's edge and after close_range, other processes' links,
 # working directories changed by clones, threads and posix_spawn, a descriptor passed or taken,
 # and wait statuses. close_range is 5.9's, its CLOEXEC 5.11's, the pidfd calls 5.6's and
-# /proc/thread-self 3.17's: an older kernel's refusal drops those cases (FD_PROCS_SINCE).
+# /proc/thread-self 3.17's: a kernel without one drops those cases (FD_PROCS_SINCE).
 FD_PROCS: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("start fds", "0,1,2"),
     ("start F_GETFD 0", "0"),
@@ -1987,19 +1987,20 @@ FD_PROCS: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("closed 0 1 2 0 1 2 open", "1 0 0"),
     ("closed 0 1 2 first open", "0"),
 )
-# the cases a kernel without the call answers otherwise, by the case whose answer says so
-FD_PROCS_SINCE: tuple[tuple[str, str, str], ...] = (
-    ("close_range all", "ENOSYS", "close_range"),
-    ("close_range cloexec", "EINVAL", "close_range cloexec"),
-    ("pidfd_getfd link", "ENOSYS", "pidfd"),
-    ("thread-self fd link", "ENOENT", "thread-self"),
+# the cases a kernel without the call answers otherwise, by their prefix, and what the kernel must
+# have for them (kernel.has): asked of the kernel, since a refusal the program prints under the
+# launcher might be the launcher's own
+FD_PROCS_SINCE: tuple[tuple[str, str], ...] = (
+    ("close_range", "close_range"),
+    ("close_range cloexec", "close_range cloexec"),
+    ("pidfd", "pidfd_getfd"),
+    ("thread-self", "/proc/thread-self"),
 )
 
 
 def fd_procs_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     """The lines of fd_procs's output that differ from the kernel's answers."""
-    got = dict(line.split(": ", 1) for line in out.splitlines() if ": " in line)
-    drop = tuple(p for c, refusal, p in FD_PROCS_SINCE if got.get(c, "").startswith(refusal))
+    drop = tuple(p for p, needs in FD_PROCS_SINCE if not kernel.has(needs))
     want = tuple(c for c in FD_PROCS if not c[0].startswith(drop)) if drop else FD_PROCS
     out = "\n".join(x for x in out.splitlines() if not drop or not x.startswith(drop))
     return lines_wrong(out, want, {}, by_the_kernel=by_the_kernel)
