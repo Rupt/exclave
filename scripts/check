@@ -151,7 +151,7 @@ if [ -e "tool/launcher-$(uname -m)" ]; then
     # shellcheck disable=SC2086  # the packages, one word each
     run quiet "$GO" tool deadcode -test $gopkgs
     if awk '{ gsub(/\t/, "    ") } length > 120 { print FILENAME ":" FNR ": over 120 columns"; bad = 1 } END { exit bad }' \
-        tool/*.go fetch/*.go unpack/*.go unpack/*/*.go; then :; else status=1; fi
+        tool/*.go tool/*/*.go fetch/*.go unpack/*.go unpack/*/*.go; then :; else status=1; fi
 else
     echo "check: no tool/launcher-$(uname -m) for the command to embed; run scripts/build: the Go is unchecked" >&2
     status=1

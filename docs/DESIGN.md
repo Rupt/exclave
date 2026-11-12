@@ -3105,7 +3105,9 @@ ln -s tree/usr/bin/gcc-13 gcc-13.exclave/gcc
 **Unpack** is the step before the tool, as fetching is the step before
 it: the command's `unpack` subcommand, `exclave unpack OUT PKG...`
 (`scripts/unpack`), the package `unpack/`, which shares with the tool's
-other commands only the layout of 6.1 and the hashes file of 6.4. It reads `.deb`, `.apk`
+other commands only the layout of 6.1 and the hashes file of 6.4, the
+second written through the one package of the format, `tool/format`,
+which holds the grammar, a hash's text and the volatile directories. It reads `.deb`, `.apk`
 and `.rpm` files, each through a reader chosen by the file's suffix;
 the three share one interface, and a set that mixes formats is
 refused. From `.deb` files, in five steps:
@@ -3806,8 +3808,9 @@ reader, the `ld.so.cache` reader, the log reader and the grammar, answer
 a hostile file with a refusal and never a crash: the gate's unit step
 runs `check` on hand-made trees whose ELF files, `ld.so.cache` and logs
 lie about themselves (`test/readers_test.py`) and the grammar's
-properties (`test/grammar_test.py`), and the package's own tests and
-fuzz targets (`tool/*_test.go`) hold each reader to its answers (17).
+properties (`test/grammar_test.py`), and the packages' own tests and
+fuzz targets (`tool/*_test.go`, `tool/format/format_test.go`) hold each
+reader to its answers (17).
 Its BLAKE3 is `lukechampine.com/blake3`'s, which hashes each write of a
 large file on several goroutines, 16 KB apiece, so one file is hashed on
 many cores; Go runs on eight threads at most, these goroutines too, since

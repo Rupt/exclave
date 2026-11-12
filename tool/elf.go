@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"math"
 	"os"
+
+	"exclave/tool/format"
 )
 
 const (
@@ -189,7 +191,7 @@ func cacheStr(data []byte, at uint64) (string, bool) {
 		return "", false
 	}
 	end := bytes.IndexByte(data[at:], 0)
-	if end < 0 || !utf8Valid(data[at:at+uint64(end)]) {
+	if end < 0 || !format.UTF8Valid(data[at:at+uint64(end)]) {
 		return "", false
 	}
 	return string(data[at : at+uint64(end)]), true

@@ -7,10 +7,9 @@ import (
 	"os"
 	"slices"
 	"strings"
-)
 
-// The host's volatile directories (8.1): always the host's at run time.
-var volatileDirs = []string{"/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run"}
+	"exclave/tool/format"
+)
 
 // under reports whether v is prefix or lies below it.
 func under(v, prefix string) bool {
@@ -27,7 +26,7 @@ func underAny(v string, prefixes []string) bool {
 	return false
 }
 
-func volatilePath(v string) bool { return underAny(v, volatileDirs) }
+func volatilePath(v string) bool { return underAny(v, format.VolatileDirs) }
 
 func longest(v string, prefixes []string) int {
 	best := -1
@@ -185,23 +184,23 @@ func treeRealDir(root, d string) (string, string) {
 // ---------------------------------------------------------------- the manifest and ownership (6.2, 8.1)
 
 // manifestOf is the exclave's manifest's records, none when it has no manifest.
-func manifestOf(ex string) []record {
+func manifestOf(ex string) []format.Record {
 	p := pathJoin(ex, ".exclave/manifest")
 	if _, err := os.Stat(p); err != nil {
 		return nil
 	}
-	rs, err := grammarParse(readFile(p), kindManifest)
+	rs, err := format.Parse(readFile(p), format.Manifest)
 	if err != nil {
 		failGrammar(err)
 	}
 	return rs
 }
 
-func valuesOf(rs []record, key string) []string {
+func valuesOf(rs []format.Record, key string) []string {
 	var out []string
 	for _, r := range rs {
-		if r.key == key {
-			out = append(out, r.f[0].v)
+		if r.Key == key {
+			out = append(out, r.F[0].V)
 		}
 	}
 	return out
@@ -220,7 +219,7 @@ func ownedTop(ex string) []string {
 	}
 	var out []string
 	for i := range e {
-		if slices.Contains(volatileDirs, "/"+e[i].name) {
+		if slices.Contains(format.VolatileDirs, "/"+e[i].name) {
 			continue
 		}
 		empty := false

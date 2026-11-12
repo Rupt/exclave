@@ -39,8 +39,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
-	"lukechampine.com/blake3"
 
+	"exclave/tool/format"
 	"exclave/unpack"
 )
 
@@ -168,13 +168,6 @@ func isDir(path string) bool {
 	return err == nil && st.IsDir()
 }
 
-// hashText is "b3:" and the lowercase hex of the BLAKE3-256 of data, as the hashes file writes
-// it (6.4).
-func hashText(data []byte) string {
-	d := blake3.Sum256(data)
-	return "b3:" + fmt.Sprintf("%x", d[:])
-}
-
 // ---------------------------------------------------------------- the commands
 
 func cmdVersion(args []string) int {
@@ -197,7 +190,7 @@ func cmdHash(args []string) int {
 		if j.err != nil {
 			failErrno(args[0], j.err)
 		}
-		fmt.Fprintln(out, "b3:"+j.hex)
+		fmt.Fprintln(out, format.HashPrefix+j.hex)
 		return 0
 	}
 	requireExclave(args[0], "hash")
@@ -237,17 +230,17 @@ func cmdFormat(args []string) int {
 			}
 			first = first[lf+1:]
 		}
-		k := kindManifest
+		k := format.Manifest
 		if bytes.HasPrefix(first, []byte("hashes ")) {
-			k = kindHashes
+			k = format.Hashes
 		}
-		rs, err := grammarParse(data, k)
+		rs, err := format.Parse(data, k)
 		if err != nil {
 			fmt.Fprintf(out, "%s: %s\n", path, err)
 			rc = 1
 			continue
 		}
-		canon := grammarDump(rs, k)
+		canon := format.Dump(rs, k)
 		if !bytes.Equal(canon, data) {
 			if check {
 				fmt.Fprintf(out, "%s: not canonical\n", path)

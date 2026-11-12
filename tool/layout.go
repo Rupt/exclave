@@ -11,6 +11,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"exclave/tool/format"
 )
 
 func writeReadme(ex string) {
@@ -19,17 +21,17 @@ func writeReadme(ex string) {
 	}
 }
 
-func loadHashes(p string) []record {
-	rs, err := grammarParse(readFile(p), kindHashes)
+func loadHashes(p string) []format.Record {
+	rs, err := format.Parse(readFile(p), format.Hashes)
 	if err != nil {
 		failGrammar(err)
 	}
 	return rs
 }
 
-func find(rs []record, key string) *record {
+func find(rs []format.Record, key string) *format.Record {
 	for i := range rs {
-		if rs[i].key == key {
+		if rs[i].Key == key {
 			return &rs[i]
 		}
 	}
@@ -47,7 +49,7 @@ func hasTreeRecord(ex string) bool {
 // record if there was one, from the file as it stands, as after prune and relink.
 func writeHashes(ex, manifestHash string, tree, keep bool) {
 	p, ld := pathJoin(ex, ".exclave/hashes"), pathJoin(ex, ".exclave/launcher")
-	var old []record
+	var old []format.Record
 	if lexists(p) {
 		old = loadHashes(p)
 	}
@@ -56,26 +58,26 @@ func writeHashes(ex, manifestHash string, tree, keep bool) {
 		m := find(old, "manifest")
 		hasManifest = m != nil
 		if hasManifest { // the record as it stands, whatever it holds
-			manifestHash = m.f[0].v
+			manifestHash = m.F[0].V
 		}
 		tree = find(old, "tree") != nil
 	}
-	rs := []record{{key: "hashes", f: []field{{'t', "1"}}}, {key: "tool", f: []field{{'s', version}}}}
+	rs := []format.Record{format.Rec("hashes", format.T("1")), format.Rec("tool", format.S(version))}
 	if hasManifest || tree {
-		rs = append(rs, record{key: "launcher", f: []field{{'s', hashText(readFile(ld))}}})
+		rs = append(rs, format.Rec("launcher", format.S(format.HashText(readFile(ld)))))
 	}
 	for _, r := range old {
-		if r.key == "pkg" {
-			rs = append(rs, record{key: "pkg", f: append([]field(nil), r.f...)})
+		if r.Key == "pkg" {
+			rs = append(rs, format.Rec("pkg", r.F...))
 		}
 	}
 	if hasManifest {
-		rs = append(rs, record{key: "manifest", f: []field{{'s', manifestHash}}})
+		rs = append(rs, format.Rec("manifest", format.S(manifestHash)))
 	}
 	if tree {
-		rs = append(rs, record{key: "tree", f: []field{{'s', treeHash(pathJoin(ex, "tree"))}}})
+		rs = append(rs, format.Rec("tree", format.S(treeHash(pathJoin(ex, "tree")))))
 	}
-	writeFile(p, grammarDump(rs, kindHashes), 0o666)
+	writeFile(p, format.Dump(rs, format.Hashes), 0o666)
 }
 
 // ---------------------------------------------------------------- unwrap
@@ -362,11 +364,11 @@ func cmdWrap(args []string) int {
 		writeFile(mp, []byte("exclave 1\n"), 0o666)
 	}
 	mdata := readFile(mp)
-	rs, err := grammarParse(mdata, kindManifest)
+	rs, err := format.Parse(mdata, format.Manifest)
 	if err != nil {
 		failGrammar(err)
 	}
-	if !bytes.Equal(grammarDump(rs, kindManifest), mdata) {
+	if !bytes.Equal(format.Dump(rs, format.Manifest), mdata) {
 		fail("refusing: %s is not canonical; run exclave format on it", mp)
 	}
 	// the launcher's own table of top-level names (8.1): a placeholder takes no slot
@@ -386,7 +388,7 @@ func cmdWrap(args []string) int {
 	}
 	fmt.Fprintf(out, "wrapped %d executables\n", wrapFiles(ex, data))
 	writeReadme(ex)
-	writeHashes(ex, hashText(mdata), true, false)
+	writeHashes(ex, format.HashText(mdata), true, false)
 	fmt.Fprintf(out, "%s is wrapped\n", ex)
 	return 0
 }

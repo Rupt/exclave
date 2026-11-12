@@ -1028,7 +1028,7 @@ func cmdCaches(args []string) int {
 	if n := restoreInPlace(root, staging); n > 0 {
 		fmt.Fprintf(out, "%s: %s a killed run left aside put back\n", ex, plural(n, "directory"))
 	}
-	if rec := find(loadHashes(pathJoin(ex, ".exclave/hashes")), "tree"); treeHash(root) != rec.f[0].v {
+	if rec := find(loadHashes(pathJoin(ex, ".exclave/hashes")), "tree"); treeHash(root) != rec.F[0].V {
 		fail("refusing: %s's tree differs from the hash its hashes file records; exclave check reports it, and "+
 			"exclave wrap records the tree as it is", ex)
 	}

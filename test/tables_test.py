@@ -3,9 +3,9 @@
     test/tables_test.py
 
 The host identity files (8.4) are listed in src/vis.c, tool/layout.go and test/tree.py; the
-volatile directories (8.1) in src/vis.c, tool/paths.go, unpack/steps.go and test/tree.py, the
-one copy the tests share; the identity directories (8.1 rule 5) in src/vis.c,
-tool/paths.go and test/tree.py; and the syscalls
+volatile directories (8.1) in src/vis.c, tool/format/format.go, the one copy the command and
+unpack share, and test/tree.py, the one the tests share; the identity directories (8.1 rule 5) in
+src/vis.c, tool/paths.go and test/tree.py; and the syscalls
 src/filter.c traps are exactly the ones `dispatch` in src/handler.c has a case for, since a trapped
 call without one is answered ENOSYS (7.4.3), and the ones `sysname` there names for the log, but
 for the three it leaves to its default. Each is read from its source here, so a table changed in
@@ -88,8 +88,7 @@ def main() -> int:
         "volatile directories",
         {
             "src/vis.c": c_strings("src/vis.c", "volatile_dirs"),
-            "tool/paths.go": go_strings("tool/paths.go", "volatileDirs"),
-            "unpack/steps.go": go_strings("unpack/steps.go", "volatile"),
+            "tool/format/format.go": go_strings("tool/format/format.go", "VolatileDirs"),
             "test/tree.py": tree.VOLATILE,
         },
     )

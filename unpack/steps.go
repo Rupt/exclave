@@ -5,7 +5,6 @@
 package unpack
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -24,16 +23,13 @@ import (
 	"golang.org/x/sys/unix"
 	"lukechampine.com/blake3"
 
+	"exclave/tool/format"
 	"exclave/unpack/reader"
 	"exclave/unpack/root"
 )
 
 // mergedUsr are the directories Debian's and Fedora's merged /usr links into usr/.
 var mergedUsr = []string{"bin", "sbin", "lib", "lib32", "lib64", "libx32"}
-
-// volatile are the host's volatile directories (8.1): always the host's at run time, never
-// shipped.
-var volatile = []string{"/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run"}
 
 var aliasRe = regexp.MustCompile(`^(bin|sbin|lib|lib32|lib64|libx32)(/|$)`)
 
@@ -513,7 +509,7 @@ func stripVolatile(rootPath string) error {
 		return err
 	}
 	defer r.Close()
-	for _, d := range volatile {
+	for _, d := range format.VolatileDirs {
 		if r.Lexists(d) && !r.IsLink(d) {
 			if err := r.Rmtree(d); err != nil {
 				return refusing(err)
@@ -607,11 +603,11 @@ func dependencyReport(packages []*Package, rd reader.Reader, rootPath string) ([
 // ---------------------------------------------------------------- the inputs (step 5, 6.4)
 
 // writeRecords writes OUT/.exclave/hashes with one pkg record per package file, in canonical
-// form (6.4): the name, version and architecture from the file's control data and the file's
-// BLAKE3-256. `exclave wrap` keeps the records and adds its own. A field that is not printable
-// ASCII, which no package format allows, is refused.
+// form (6.4), which is the format package's to write: the name, version and architecture from
+// the file's control data and the file's BLAKE3-256. `exclave wrap` keeps the records and adds
+// its own. A field that is not printable ASCII, which no package format allows, is refused.
 func writeRecords(out string, packages []*Package) error {
-	var rows [][4]string
+	records := []format.Record{format.Rec("hashes", format.T("1"))}
 	for _, p := range packages {
 		f, err := os.Open(p.Path)
 		if err != nil {
@@ -623,32 +619,17 @@ func writeRecords(out string, packages []*Package) error {
 		if err != nil {
 			return err
 		}
-		row := [4]string{p.Name, p.Version(), p.Arch(), "b3:" + hex.EncodeToString(h.Sum(nil))}
-		for _, v := range row {
+		row := []string{p.Name, p.Version(), p.Arch(), format.DigestText(h.Sum(nil))}
+		fields := make([]format.Field, len(row))
+		for i, v := range row {
 			for _, c := range v {
 				if c < ' ' || c > '~' {
 					return refuse("%s: control field %s is not printable ASCII", p.Path, reader.Pyrepr(v))
 				}
 			}
+			fields[i] = format.S(v)
 		}
-		rows = append(rows, row)
+		records = append(records, format.Rec("pkg", fields...))
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		for k := range rows[i] {
-			if rows[i][k] != rows[j][k] {
-				return rows[i][k] < rows[j][k]
-			}
-		}
-		return false
-	})
-	var b strings.Builder
-	b.WriteString("hashes 1\n\n")
-	for _, row := range rows {
-		b.WriteString("pkg")
-		for _, v := range row {
-			b.WriteString(` "` + strings.ReplaceAll(strings.ReplaceAll(v, `\`, `\\`), `"`, `\"`) + `"`)
-		}
-		b.WriteString("\n")
-	}
-	return os.WriteFile(filepath.Join(out, ".exclave", "hashes"), []byte(b.String()), 0o666)
+	return os.WriteFile(filepath.Join(out, ".exclave", "hashes"), format.Dump(records, format.Hashes), 0o666)
 }

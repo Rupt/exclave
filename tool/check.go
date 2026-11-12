@@ -23,6 +23,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"exclave/tool/format"
 )
 
 // objectKey is an object and the RPATHs it inherited, as one key.
@@ -286,7 +288,7 @@ func trustWarnings(root string, owns []string, rep *report) {
 				continue
 			}
 			rep.warnf("%s: the tree ships it in a trust directory, which the host's hides where the host has "+
-				"one (8.1 rule 5); own %s keeps it", v, grammarQuote(v))
+				"one (8.1 rule 5); own %s keeps it", v, format.Quote(v))
 		}
 	}
 }
@@ -297,7 +299,7 @@ func staticCheck(ex string, own *ownership, data []string, l *listing) *report {
 	for _, cpu := range valuesOf(manifestOf(ex), "cpu") {
 		if !slices.Contains(launcherMachine.cpus, cpu) {
 			rep.errorf("cpu %s: not a level the %s launcher knows (%s): no program would start",
-				grammarQuote(cpu), launcherMachine.uname, strings.Join(launcherMachine.cpus, ", "))
+				format.Quote(cpu), launcherMachine.uname, strings.Join(launcherMachine.cpus, ", "))
 		}
 	}
 	// the tree is read as its launcher's machine's loader reads it (10.1): nothing of it runs
@@ -838,14 +840,14 @@ func cmdCheck(args []string) int {
 		}
 	})
 	if _, err := os.Stat(hashes); err == nil {
-		rs, err := grammarParse(readFile(hashes), kindHashes)
+		rs, err := format.Parse(readFile(hashes), format.Hashes)
 		if err != nil {
 			failGrammar(err)
 		}
 		if recorded := find(rs, "tree"); recorded != nil {
-			if actual := ls.treeHash(root); recorded.f[0].v != actual {
+			if actual := ls.treeHash(root); recorded.F[0].V != actual {
 				problems = append(problems, fmt.Sprintf("the tree differs from the hashes file: recorded %s, now %s",
-					recorded.f[0].v, actual))
+					recorded.F[0].V, actual))
 			}
 		} else {
 			problems = append(problems, "an unwrapped exclave: the hashes file has no tree hash; run exclave wrap")

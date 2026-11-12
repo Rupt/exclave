@@ -17,6 +17,8 @@ import (
 
 	"golang.org/x/sys/unix"
 	"lukechampine.com/blake3"
+
+	"exclave/tool/format"
 )
 
 // requireExclave refuses ex before anything is read or written unless it holds tree/, and
@@ -259,7 +261,7 @@ func (l *listing) treeHash(root string) string {
 	for _, l := range lines {
 		d.Write(l)
 	}
-	return "b3:" + hex.EncodeToString(d.Sum(nil))
+	return format.DigestText(d.Sum(nil))
 }
 
 // ---------------------------------------------------------------- the listing
