@@ -344,7 +344,7 @@ the design. Where they are available they serve as the test oracle
 | **border** | Where a program passes from the host into the exclave, its launcher finding no inherited filter; the environment is set there (6.2). |
 | **data directory** | An exclave path that is never executed or loaded, named by a `data` record: a sysroot, headers, documentation (6.2). |
 | **`exclave`** (command) | The build tool: `wrap`, `unwrap`, `check`, `prune`, `hash`, `relink` and `format`. Takes a directory holding `tree/`, fetches nothing (10). |
-| **`unpack`** | The step before the tool: package files to an unwrapped exclave, run as `scripts/unpack` (10.1). |
+| **`unpack`** | The step before the tool: package files to an unwrapped exclave, the command's subcommand `exclave unpack` (10.1). |
 | **unwrapped** | An exclave before `wrap`: a plain tree, editable with ordinary tools. After `wrap` it is wrapped. |
 | **`EXCLAVE_LOG`** | The one run-time knob, which only logs (6.2). `EXCLAVE_EXEC`, `EXCLAVE_EXECFN`, `EXCLAVE_COMM`, `EXCLAVE_TRACED` and `EXCLAVE_CWD` are the launcher's own protocol, never an interface; the test scripts' inputs are `EXCLAVE_TEST_…`. |
 | **syscall probe** | The differential test of 17 item 7: every trapped syscall, flag and path form, run under `bwrap` and under the launcher and compared case by case. "The probe" always means this one. |
@@ -3008,7 +3008,7 @@ the host's modules nscd could stand in for.
   runtimes are in a package that set does not include. It is one of
   the four test exclaves (17).
 - **An Alpine exclave**: `gcc musl-dev binutils make linux-headers`
-  and the base from Alpine 3.21, fetched with `scripts/fetch-apks`,
+  and the base from Alpine 3.21, fetched with `exclave-fetch apks`,
   unpacked and wrapped: no error from the static check, and a tree
   hash that reproduces from the same files. Its gcc 14.2 compiles and runs C inside, dynamically linked
   on musl 1.2.5 and statically linked. The static output runs on a
@@ -3016,7 +3016,7 @@ the host's modules nscd could stand in for.
   loader. A compile touches no host path, and it is one of the four
   test exclaves (17).
 - **A Fedora exclave**: `gcc glibc-devel binutils make` and the base
-  from Fedora 42, fetched with `scripts/fetch-rpms`, with
+  from Fedora 42, fetched with `exclave-fetch rpms`, with
   `glibc-minimal-langpack` chosen for the langpack, unpacked and
   wrapped: no error from the static check, and a tree
   hash that reproduces from the same files. Its gcc 15 compiles and
@@ -3098,15 +3098,15 @@ every one except `wrap` refuses one without `.exclave/`.
 ### 10.1 From packages
 
 ```
-scripts/fetch-debs --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --out debs gcc-13 libc6-dev   # or apt, a mirror, a hand-made directory
-scripts/unpack gcc-13.exclave debs/*.deb
+exclave-fetch debs --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --out debs gcc-13 libc6-dev   # or apt, a mirror, a hand-made directory
+exclave unpack gcc-13.exclave debs/*.deb
 exclave wrap gcc-13.exclave
 ln -s tree/usr/bin/gcc-13 gcc-13.exclave/gcc
 ```
 
 **Unpack** is the step before the tool, as fetching is the step before
 it: the command's `unpack` subcommand, `exclave unpack OUT PKG...`
-(`scripts/unpack`), the package `unpack/`, which shares with the tool's
+(`scripts/exclave unpack` from a checkout), the package `unpack/`, which shares with the tool's
 other commands only the layout of 6.1 and the hashes file of 6.4, the
 second written through the one package of the format, `tool/format`,
 which holds the grammar, a hash's text and the volatile directories. It reads `.deb`, `.apk`
@@ -3527,7 +3527,7 @@ into `bin` and Fedora's p11-kit CA bundle. The package comments of
 **The step before the tool** belongs to whoever makes the exclave, and
 `exclave-fetch` is exclave's own: three fetchers, one for each format,
 `exclave-fetch debs`, `apks` and `rpms` (the package `fetch/`, run from
-a checkout as `scripts/fetch-debs`, `fetch-apks` and `fetch-rpms`). It
+a checkout as `scripts/exclave-fetch`). It
 is a program of its own, shipped beside the command in a release, the
 one program of exclave that opens a network connection, and nothing
 the tool's commands do depends on it; its arguments, as each fetcher's
@@ -3615,7 +3615,7 @@ result:
 
 ```
 gcc-13.exclave/tree/usr/bin/sh -c './configure --prefix=/usr/local && make && make install DESTDIR=$PWD/stage'
-scripts/unpack tool.exclave runtime/*.deb          # libc6 and whatever else the result links against
+exclave unpack tool.exclave runtime/*.deb          # libc6 and whatever else the result links against
 cp -a stage/usr/local tool.exclave/tree/usr/
 exclave wrap tool.exclave                          # the static check says whether it all links inside
 ```

@@ -140,9 +140,9 @@ The loop that has served well, in the order it pays:
   paths are bytes and every list it prints or hashes is in the order of
   their bytes. The tests judge it only through its commands. The step
   before it is its subcommand, `unpack/` (`exclave unpack`,
-  `scripts/unpack`), which makes a tree from package files; the step
+  `scripts/exclave unpack`), which makes a tree from package files; the step
   before that is `exclave-fetch`, a program of its own from `fetch/`
-  (`build/exclave-fetch debs|apks|rpms`, `scripts/fetch-*`), whose
+  (`build/exclave-fetch debs|apks|rpms`, `scripts/exclave-fetch`), whose
   arguments and cache a release keeps (6.7). Their delicate parsers are Go's standard library's
   where it has them, with
   xz, zstd and OpenPGP from the pure-Go modules `go.mod` pins and no

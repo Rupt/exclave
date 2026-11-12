@@ -4,7 +4,7 @@
 
 Each test makes a repository of one package under its work directory, signed with keys made here
 (an OpenPGP key from gpg, an RSA key from openssl), and runs build/exclave-fetch on it through a file://
-URL, as scripts/fetch-debs, fetch-rpms and fetch-apks run it. The signed repository must yield its
+URL, as scripts/exclave-fetch runs it. The signed repository must yield its
 package; the same repository signed by another key, with its signed text altered, with the
 package altered, or without its signature, must be refused in one line with nothing fetched, and
 so must one whose signed text is intact but a digest below it, of an index or of a package, does
@@ -379,7 +379,7 @@ def refused(name: str, result: tuple[int, str, list[str]], why: str) -> None:
     rc, err, got = result
     last = err.strip().splitlines()[-1] if err.strip() else ""
     expect(
-        rc == 1 and why in err and "Traceback" not in err and last.startswith("fetch-"),
+        rc == 1 and why in err and "Traceback" not in err and last.startswith("exclave-fetch "),
         f"{name}: wanted a one-line refusal naming {why!r}: rc={rc} {err[-500:]!r}",
     )
     expect(not got, f"{name}: fetched {got} although refused")

@@ -9,7 +9,7 @@
 // Each takes the arguments its --help lists, which are part of what a release keeps (6.7). It is
 // the one program of exclave that opens a network connection: `exclave unpack OUT DIR/*` takes
 // whatever directory of package files this program, a package manager, a mirror or a person has
-// made. A refusal is one line, "fetch-KIND: " and the reason.
+// made. A refusal is one line, "exclave-fetch KIND: " and the reason.
 package fetch
 
 import (
@@ -104,10 +104,10 @@ func Main(v string, args []string) int {
 			return 0
 		}
 		if _, usageErr := err.(*usageError); usageErr {
-			fmt.Fprintf(os.Stderr, "fetch-%s: error: %s\n", kind, err)
+			fmt.Fprintf(os.Stderr, "exclave-fetch %s: error: %s\n", kind, err)
 			return 2
 		}
-		fmt.Fprintf(os.Stderr, "fetch-%s: %s\n", kind, err)
+		fmt.Fprintf(os.Stderr, "exclave-fetch %s: %s\n", kind, err)
 		return 1
 	}
 	return 0

@@ -87,11 +87,11 @@ hand:
 
 1. `scripts/build` builds `build/launcher`, the freestanding binary every
    executable in an exclave is a hard link to.
-2. `scripts/fetch-debs` downloads Ubuntu 24.04's `gcc-13` closure, and
-   `unpack` makes an unwrapped exclave from the files: the tree under
+2. `exclave-fetch debs` downloads Ubuntu 24.04's `gcc-13` closure, and
+   `exclave unpack` makes an unwrapped exclave from the files: the tree under
    `gcc.exclave/tree/`, the maintainer scripts' effects synthesised,
    every input recorded by hash in `gcc.exclave/.exclave/hashes`.
-3. `scripts/fetch-rpms` downloads CentOS 7's glibc, headers and `libgcc`.
+3. `exclave-fetch rpms` downloads CentOS 7's glibc, headers and `libgcc`.
    Unpacked into a tree of their own, they are copied into the gcc
    exclave at `/opt/sysroot-el7`, and a two-line manifest says `data
    "/opt/sysroot-el7"`: nothing there is wrapped, checked or executed.
@@ -255,8 +255,10 @@ from the checkout. Its `wrap` takes a directory holding `tree/` and
 never fetches.
 
 Whatever made the tree is the step before it. For package files that is
-`exclave unpack` (`scripts/unpack`), beside the three fetchers of
-`exclave-fetch`, `debs`, `apks` and `rpms` (`scripts/fetch-*`):
+`exclave unpack`, beside the three fetchers of `exclave-fetch`, `debs`,
+`apks` and `rpms` (from a checkout, `scripts/exclave` and
+`scripts/exclave-fetch` run the two programs as `scripts/build` built
+them):
 
 - it reads each package's own control archive and reports the
   dependencies the set does not satisfy;
@@ -282,10 +284,10 @@ and how to check it. The tool writes one where the exclave has none, so
 a maker's own stays.
 
 ```
-scripts/fetch-debs --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --out debs gcc-13 libc6-dev make   # Ubuntu or Debian: the closure of the packages named; InRelease checked against the keyring, every file against the index
-scripts/fetch-apks --key alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub --out apks gcc musl-dev binutils  # Alpine: the index checked against the key its signature names (https://alpinelinux.org/keys/)
-scripts/fetch-rpms --keyring RPM-GPG-KEY-fedora-42-primary --repo URL --out rpms gcc glibc-devel   # Fedora, Rocky, CentOS: any repository with repodata/; every rpm checked against the key, repomd.xml where signed
-scripts/unpack gcc.exclave debs/*.deb                     # package files -> an unwrapped exclave, a directory you may edit; .apk and .rpm files likewise
+scripts/exclave-fetch debs --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --out debs gcc-13 libc6-dev make   # Ubuntu or Debian: the closure of the packages named; InRelease checked against the keyring, every file against the index
+scripts/exclave-fetch apks --key alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub --out apks gcc musl-dev binutils  # Alpine: the index checked against the key its signature names (https://alpinelinux.org/keys/)
+scripts/exclave-fetch rpms --keyring RPM-GPG-KEY-fedora-42-primary --repo URL --out rpms gcc glibc-devel   # Fedora, Rocky, CentOS: any repository with repodata/; every rpm checked against the key, repomd.xml where signed
+scripts/exclave unpack gcc.exclave debs/*.deb                     # package files -> an unwrapped exclave, a directory you may edit; .apk and .rpm files likewise
 scripts/exclave wrap gcc.exclave                          # wrap every executable, run the static check, record the hashes in .exclave/hashes
 scripts/exclave caches py.exclave                         # Python bytecode, GSettings schemas, the MIME database, the GIO, gdk-pixbuf, icon, desktop and font caches, graphviz's plugin configuration and TeX Live's indexes and formats, made by the tree's own programs inside it
 ln -s tree/usr/bin/gcc-13 gcc.exclave/gcc                    # a shortcut, if you want one
@@ -331,7 +333,7 @@ build system's own installer doing the building:
 
 ```
 gcc.exclave/tree/usr/bin/sh -c './configure --prefix=/usr/local && make && make install DESTDIR=$PWD/stage'
-scripts/unpack tool.exclave runtime/*.deb                 # libc6 and whatever else the result links against
+scripts/exclave unpack tool.exclave runtime/*.deb                 # libc6 and whatever else the result links against
 cp -a stage/usr/local tool.exclave/tree/usr/
 scripts/exclave wrap tool.exclave                         # the static check says whether it all links inside
 ```
@@ -481,7 +483,7 @@ The repository's layout:
 ```
 scripts/install-go   the pinned Go into .go/, checked against a committed checksum per architecture, which builds the command
 scripts/install-uv   the pinned uv into .uv/, checked the same way, which provides the Python the tests run on; scripts/lib.sh what every script sources
-scripts/exclave      the exclave command; scripts/unpack, fetch-debs, fetch-apks and fetch-rpms the steps before it
+scripts/exclave      the exclave command, its unpack with it; scripts/exclave-fetch the fetchers, the step before
 scripts/example      the first run: from the build to a program built inside an exclave that runs on any glibc since 2.17, every command shown
 scripts/check        the code checks, gofmt, go vet, staticcheck and deadcode among them; scripts/gate the commit gate; scripts/extra the checks beyond it (scripts/steps.sh their step runner); scripts/inputs the development inputs; scripts/examples the example runs
 scripts/release      a signed release of exclaves with the command beside them; test/release_test.py, a step of scripts/extra, takes one as a consumer would

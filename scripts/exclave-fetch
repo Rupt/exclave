@@ -1,9 +1,9 @@
 #!/bin/sh
-# scripts/fetch-rpms: an rpm package closure, downloaded (docs/DESIGN.md 10.1): exclave-fetch rpms, as scripts/build built it.
+# scripts/exclave-fetch: the fetchers, exclave-fetch debs|apks|rpms (docs/DESIGN.md 10.1), as scripts/build built them.
 set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 [ -x "$root/build/exclave-fetch" ] || {
     echo "no $root/build/exclave-fetch: run scripts/build" >&2
     exit 1
 }
-exec "$root/build/exclave-fetch" rpms "$@"
+exec "$root/build/exclave-fetch" "$@"

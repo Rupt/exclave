@@ -3,8 +3,8 @@
 # (README; DESIGN.md 9, 10). Everything it makes goes under DIR, and nothing anywhere else; a second run
 # keeps the fetched files and fetches nothing. The steps, each a command you can run by hand:
 #   1. scripts/build builds the launcher.
-#   2. scripts/fetch-debs downloads Ubuntu 24.04's gcc-13 closure; scripts/unpack makes an unwrapped exclave from the files.
-#   3. scripts/fetch-rpms downloads CentOS 7's glibc; unpacked into an exclave of its own, its tree is copied into the
+#   2. exclave-fetch debs downloads Ubuntu 24.04's gcc-13 closure; exclave unpack makes an unwrapped exclave from the files.
+#   3. exclave-fetch rpms downloads CentOS 7's glibc; unpacked into an exclave of its own, its tree is copied into the
 #      gcc exclave at /opt/sysroot-el7, and the manifest says `data "/opt/sysroot-el7"`: nothing there is wrapped,
 #      checked or executed. exclave wrap wraps the exclave, and a shortcut names its gcc.
 #   4. hello.c is compiled inside the exclave twice, plainly and against the sysroot, with EXCLAVE_LOG on; objdump shows
