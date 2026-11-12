@@ -124,7 +124,8 @@ covers:
     utimensat refusing AT_EMPTY_PATH and checking the nanoseconds first before 5.9; an
     exec of a socket answered ENXIO before 5.9; truncate checking the mount before the permission on
     6.1 and earlier (6.14 checks the permission first).
-More differences are accepted on older kernels, where more of the kernel entries apply.
+More differences are accepted on older kernels, where more of the kernel entries apply; --expected
+prints each accepted difference and, at the end, how many each entry explained in the run.
 
 Open defects. DEFECTS lists the differences that are the launcher's defects, found and not yet
 fixed, each entry by what the kernel does and the cases and exact answers it covers. Every run
@@ -2370,10 +2371,15 @@ DEFECTS_MEASURED = (7, 0)
 DEFECTS: list[tuple[str, Callable[[str, str, str, str, Ctx], object], Callable[[], bool]]] = []
 
 
+# how many differences each entry of EXPECTED explained in this run, by its place in the list
+EXPLAINED: dict[int, int] = {}
+
+
 def expected(name: str, label: str, b: str, o: str, ctx: Ctx) -> str | None:
-    """The reason EXPECTED gives for a difference, or None."""
-    for n, pred, reason in EXPECTED:
+    """The reason EXPECTED gives for a difference, or None; the entry is counted in EXPLAINED."""
+    for i, (n, pred, reason) in enumerate(EXPECTED):
         if (n is None or n == name) and pred(label, b, o, ctx):
+            EXPLAINED[i] = EXPLAINED.get(i, 0) + 1
             return reason
     return None
 
@@ -2658,6 +2664,10 @@ def main() -> int:
                 differ += 1
             else:
                 print("(this host cannot show it)")
+    if args.expected:
+        # each entry's share, so that one no kernel and no host of the matrix needs any more shows
+        for i, (n, _pred, reason) in enumerate(EXPECTED):
+            print(f"EXPECTED {EXPLAINED.get(i, 0):5d} cases: {n or 'any call'}: {reason[:90]}")
     # an invariant of the probe's own: what this user could change on the host is as it was
     for p, was in marks.items():
         if host_marks(frozenset({p}))[p] != was:
