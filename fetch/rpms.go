@@ -294,7 +294,7 @@ func (r *rpmRepo) loadIndex() error {
 				return fmt.Errorf("repository metadata: no version in package")
 			}
 			ver := evr(p.Version.Epoch, p.Version.Ver, p.Version.Rel)
-			if have, ok := r.index[p.Name]; ok && rpm.Vercmp(have.version, ver) >= 0 {
+			if !r.newer(p.Name, ver) {
 				continue
 			}
 			if p.Format == nil || p.Checksum == nil || p.Location == nil || p.Size == nil {
@@ -329,14 +329,36 @@ func (r *rpmRepo) loadIndex() error {
 					pkg.files = append(pkg.files, f)
 				}
 			}
-			if _, ok := r.index[p.Name]; !ok {
-				r.order = append(r.order, p.Name)
-			}
-			r.index[p.Name] = pkg
+			r.add(pkg)
 			count++
 		}
 		log(fmt.Sprintf("index %s: %d packages", u, count))
 	}
+	r.capabilities()
+	return nil
+}
+
+// newer says whether a package of this name and version would be indexed: the highest version of
+// each name is, across the repositories, and of two alike the first.
+func (r *rpmRepo) newer(name, version string) bool {
+	have, ok := r.index[name]
+	return !ok || rpm.Vercmp(have.version, version) < 0
+}
+
+// add indexes one package under its name, in place of a lower version of it.
+func (r *rpmRepo) add(pkg *rpmPackage) {
+	if !r.newer(pkg.name, pkg.version) {
+		return
+	}
+	if _, ok := r.index[pkg.name]; !ok {
+		r.order = append(r.order, pkg.name)
+	}
+	r.index[pkg.name] = pkg
+}
+
+// capabilities indexes what each package provides and the files it lists, once every index is
+// read, in the order the packages were first seen.
+func (r *rpmRepo) capabilities() {
 	for _, name := range r.order {
 		pkg := r.index[name]
 		for _, p := range pkg.provides {
@@ -346,7 +368,6 @@ func (r *rpmRepo) loadIndex() error {
 			r.files[f] = append(r.files[f], pkg)
 		}
 	}
-	return nil
 }
 
 // pick returns the package that meets one dependency, or nil. The package --choose names for it

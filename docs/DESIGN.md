@@ -6620,7 +6620,9 @@ its time, ok, SKIP or FAIL:
   the tree's resolution, the version orders, the dependency parsers and the header
   fields, the root walk's escapes and loops, the ld.so.cache writer on
   a shared object made in the test, the signature checks on keys made
-  in the test, and the seeds of their fuzz targets, each reader on a
+  in the test, each fetcher's resolver on an index filled in the test,
+  rule by rule and refusal by refusal, and the seeds of their fuzz
+  targets, each reader on a
   package made in the test and on cut and corrupt ones, the OpenPGP
   packet reader, and the laws of each order; and the modules in the
   cache as `go.sum` records them;

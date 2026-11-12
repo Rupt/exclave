@@ -198,29 +198,42 @@ func (r *apkRepo) loadIndex() error {
 					st[line[:1]] = line[2:]
 				}
 			}
-			if _, ok := r.index[st["P"]]; st["P"] == "" || st["V"] == "" || ok {
-				continue
-			}
 			st["_repo"] = repo
-			r.index[st["P"]] = st
-			groups, err := apk.ParseDeps(st["p"])
+			added, err := r.add(st)
 			if err != nil {
 				return err
 			}
-			for _, alts := range groups {
-				for _, d := range alts {
-					provided := ""
-					if d.Op == "=" {
-						provided = d.Version
-					}
-					r.provides[d.Name] = append(r.provides[d.Name], provider{st, provided})
-				}
+			if added {
+				count++
 			}
-			count++
 		}
 		log(fmt.Sprintf("index %s/%s: %d packages", r.branch, repo, count))
 	}
 	return nil
+}
+
+// add indexes one stanza under its name and under each name it provides, with the version it
+// provides where it gives one; false for a stanza without a name or a version, and for a package
+// an earlier repository listed, which is the one used.
+func (r *apkRepo) add(st stanza) (bool, error) {
+	if _, ok := r.index[st["P"]]; st["P"] == "" || st["V"] == "" || ok {
+		return false, nil
+	}
+	r.index[st["P"]] = st
+	groups, err := apk.ParseDeps(st["p"])
+	if err != nil {
+		return false, err
+	}
+	for _, alts := range groups {
+		for _, d := range alts {
+			provided := ""
+			if d.Op == "=" {
+				provided = d.Version
+			}
+			r.provides[d.Name] = append(r.provides[d.Name], provider{st, provided})
+		}
+	}
+	return true, nil
 }
 
 // pick returns the package that meets one dependency, or nil. The package of that name wins

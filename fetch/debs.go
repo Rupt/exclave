@@ -194,31 +194,45 @@ func (r *debRepo) loadIndex() error {
 					continue
 				}
 				st["_suite"] = suite
-				r.index[st["Package"]] = append(r.index[st["Package"]], st)
-				groups, err := deb.ParseDeps(st["Provides"])
-				if err != nil {
+				if err := r.add(st); err != nil {
 					return err
-				}
-				for _, alts := range groups {
-					for _, d := range alts {
-						provided := ""
-						if d.Op == "=" {
-							provided = d.Version
-						}
-						r.provides[d.Name] = append(r.provides[d.Name], provider{st, provided})
-					}
 				}
 				count++
 			}
 			log(fmt.Sprintf("index %s/%s: %d packages", suite, comp, count))
 		}
 	}
+	r.sortVersions()
+	return nil
+}
+
+// add indexes one stanza under its name and under each name it provides, with the version it
+// provides where it gives one.
+func (r *debRepo) add(st stanza) error {
+	r.index[st["Package"]] = append(r.index[st["Package"]], st)
+	groups, err := deb.ParseDeps(st["Provides"])
+	if err != nil {
+		return err
+	}
+	for _, alts := range groups {
+		for _, d := range alts {
+			provided := ""
+			if d.Op == "=" {
+				provided = d.Version
+			}
+			r.provides[d.Name] = append(r.provides[d.Name], provider{st, provided})
+		}
+	}
+	return nil
+}
+
+// sortVersions puts each package's versions highest first, once every index is read.
+func (r *debRepo) sortVersions() {
 	for _, versions := range r.index {
 		sort.SliceStable(versions, func(i, j int) bool {
 			return deb.Vercmp(versions[i]["Version"], versions[j]["Version"]) > 0
 		})
 	}
-	return nil
 }
 
 // best returns the highest version of the package name that meets the constraint, or nil.
