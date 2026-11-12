@@ -11,6 +11,8 @@ import (
 	"os"
 	"runtime"
 	"strings"
+
+	"exclave/unpack/ldcache"
 )
 
 // ---------------------------------------------------------------- machines (7.1)
@@ -179,97 +181,10 @@ func findLibrary(s *search, name string, e *elfFile, vpath string, rpaths []stri
 
 // ---------------------------------------------------------------- the loader's own directories
 
-// dirsRun is the first run of two or more NUL-terminated strings spelt /.../ in data, each ending
-// in a slash, without the trailing slash; none when there is no such run.
-func dirsRun(data []byte) []string {
-	at, runFrom, run := 0, 0, 0
-	for at < len(data) {
-		k := bytes.IndexByte(data[at:], 0)
-		if k < 0 {
-			k = len(data) - at
-		}
-		if k >= 2 && data[at] == '/' && data[at+k-1] == '/' {
-			if run == 0 {
-				runFrom = at
-			}
-			run++
-		} else if run >= 2 {
-			break
-		} else {
-			run = 0
-		}
-		at += k + 1
-	}
-	if run < 2 {
-		return nil
-	}
-	var out []string
-	for i, left := runFrom, run; left > 0; left-- {
-		k := bytes.IndexByte(data[i:], 0)
-		if k < 0 {
-			k = len(data) - i
-		}
-		v := string(data[i : i+k])
-		for len(v) > 1 && v[len(v)-1] == '/' {
-			v = v[:len(v)-1]
-		}
-		out = append(out, v)
-		i += k + 1
-	}
-	return out
-}
-
-// dirsTable finds the table in an ELF file's read-only data: its allocated sections that are
-// neither code nor writable, in file order, so that a string is one a section holds and not the
-// tail of the code before it; a file without section headers is read whole.
-func dirsTable(data []byte) []string {
-	n := uint64(len(data))
-	if n < 64 || string(data[:4]) != "\x7fELF" || (data[4] != 1 && data[4] != 2) {
-		return dirsRun(data)
-	}
-	cls := data[4]
-	f := func(off32, n32, off64, n64 int) uint64 {
-		if cls == 1 {
-			return le(data[off32:], n32)
-		}
-		return le(data[off64:], n64)
-	}
-	shoff, shentsize, shnum := f(32, 4, 40, 8), f(46, 2, 58, 2), f(48, 2, 60, 2)
-	var found []string
-	seen := 0
-	entsz := uint64(64)
-	if cls == 1 {
-		entsz = 40
-	}
-	for i := uint64(0); i < shnum && found == nil; i++ {
-		// the header's place, checked without overflow: shoff and i*shentsize each within the file first
-		if shoff > n || i*shentsize > n-shoff || n-shoff-i*shentsize < entsz {
-			break
-		}
-		o := shoff + i*shentsize
-		kind := le(data[o+4:], 4)
-		var flags, off, size uint64
-		if cls == 1 {
-			flags, off, size = le(data[o+8:], 4), le(data[o+16:], 4), le(data[o+20:], 4)
-		} else {
-			flags, off, size = le(data[o+8:], 8), le(data[o+24:], 8), le(data[o+32:], 8)
-		}
-		// SHT_PROGBITS, SHF_ALLOC, neither SHF_EXECINSTR nor SHF_WRITE
-		if kind != 1 || flags&2 == 0 || flags&5 != 0 || off > n || size > n-off {
-			continue
-		}
-		seen++
-		found = dirsRun(data[off : off+size])
-	}
-	if seen == 0 {
-		return dirsRun(data)
-	}
-	return found
-}
-
 // loaderDirs reads the default search directories of the tree's loader from the loader file:
 // glibc's build writes them into the loader as a table of consecutive strings, each `/.../`, the
-// same table `--list-diagnostics` prints as path.system_dirs; musl's are fixed. Nothing of the
+// same table `--list-diagnostics` prints as path.system_dirs, read as unpack reads it for the
+// tree's ld.so.cache (ldcache.TrustedDirs); musl's are fixed. Nothing of the
 // tree runs, so a loader of another machine is read like this one's (10.3). The loader read is
 // the file PT_INTERP names in the tree, never a host file an absolute link names. Returns the
 // reason when the directories were assumed instead: Debian's and Fedora's defaults, for a loader
@@ -290,7 +205,13 @@ func loaderDirs(root string, interp *string) ([]string, string) {
 	if st, err := os.Stat(loader); err == nil && st.Mode().IsRegular() {
 		data = readFile(loader)
 	}
-	if out := dirsTable(data); len(out) > 0 {
+	if out := ldcache.TrustedDirs(data); len(out) > 0 {
+		for i, d := range out { // as a search names them, without the slash that ends each in the table
+			for len(d) > 1 && d[len(d)-1] == '/' {
+				d = d[:len(d)-1]
+			}
+			out[i] = d
+		}
 		return out, ""
 	}
 	out := defaultDirs()

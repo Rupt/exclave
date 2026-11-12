@@ -282,28 +282,6 @@ func sectioned(shoff uint64, shnum uint16) []byte {
 	return h
 }
 
-// TestDirsTable: a loader whose section offset wraps, or lies past the end, has no table and no
-// panic; one whose read-only data holds the run of directories gives them.
-func TestDirsTable(t *testing.T) {
-	for _, data := range [][]byte{sectioned(0xFFFFFFFFFFFFFFF8, 1), sectioned(1<<62, 1<<15), sectioned(100, 0xFFFF)} {
-		if got := dirsTable(data); got != nil {
-			t.Errorf("a lying section table gives %v", got)
-		}
-	}
-	// one SHT_PROGBITS, SHF_ALLOC section at 128 holding the run, the header's table at 64
-	run := []byte("\x00/lib/\x00/usr/lib/\x00x\x00")
-	data := append(sectioned(64, 1), make([]byte, 64)...)
-	le := binary.LittleEndian
-	le.PutUint32(data[64+4:], 1)
-	le.PutUint64(data[64+8:], 2)
-	le.PutUint64(data[64+24:], 128)
-	le.PutUint64(data[64+32:], uint64(len(run)))
-	data = append(data, run...)
-	if got := dirsTable(data); len(got) != 2 || got[0] != "/lib" || got[1] != "/usr/lib" {
-		t.Errorf("the loader's table read as %v", got)
-	}
-}
-
 func FuzzElf(f *testing.F) {
 	f.Add(makeELF(elfOpts{interp: new("/lib/ld.so"), needed: []string{"libc.so.6"}, soname: "x"}))
 	f.Add(sectioned(64, 2))
@@ -314,7 +292,6 @@ func FuzzElf(f *testing.F) {
 			t.Fatal(err)
 		}
 		elfRead(p)
-		dirsTable(data)
 	})
 }
 
