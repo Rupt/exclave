@@ -2,4 +2,4 @@
 # scripts/sysroot: a glibc sysroot as a data directory, its output run inside and out (docs/DESIGN.md 9), run by the pinned Python (scripts/lib.sh).
 set -eu
 . "$(dirname -- "$0")/lib.sh"
-exec "$UV" run --quiet --project "$ROOT" python "$ROOT/test/sysroot.py" "$@"
+py_exec "$ROOT/test/sysroot.py" "$@"

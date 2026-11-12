@@ -18,6 +18,7 @@ fix=false
 [ "${1-}" = --fix ] && fix=true
 
 # Bring .venv up to date once; every run below then uses it as it is.
+need_uv || exit 2
 "$UV" sync --quiet || exit 2
 export UV_NO_SYNC=1
 

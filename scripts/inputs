@@ -56,13 +56,6 @@ counted() {                            # counted: every item done, the failures 
 }
 
 exclave() { "$repo/build/exclave" "$@"; }
-download() { # download URL FILE: through curl or wget, with their retries
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -A exclave-inputs --connect-timeout 30 --retry 5 --retry-delay 5 --retry-all-errors --retry-connrefused -o "$2" "$1"
-    else
-        wget -q -U exclave-inputs --timeout=30 --tries=5 --waitretry=5 -O "$2" "$1"
-    fi
-}
 unpack() { "$repo/build/exclave" unpack "$@"; }
 
 fetch() { # fetch NAME KIND ARGS...: package files into DIR/NAME through the cache DIR/packages/KIND; KIND is debs, apks or rpms

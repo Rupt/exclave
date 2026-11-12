@@ -28,11 +28,15 @@ export UV_MANAGED_PYTHON=1
 export TMPDIR="$ROOT/build/tmp"
 mkdir -p "$TMPDIR"
 
-# install-uv sets this, because it is the one script that runs before uv exists.
-if [ -z "${UV_BOOTSTRAP-}" ] && [ ! -x "$UV" ]; then
-    echo "no uv at $UV; run scripts/install-uv" >&2
-    exit 1
-fi
+# need_uv: the pinned uv is there, or the line that says how to get it. Asked where Python is run (py, py_exec) and
+# by a script that runs uv itself, not where this file is sourced: the build, the install scripts and a build inside
+# an exclave (scripts/reproduce) run none.
+need_uv() {
+    [ -x "$UV" ] || {
+        echo "no uv at $UV; run scripts/install-uv" >&2
+        return 1
+    }
+}
 
 # The Go: the pinned toolchain scripts/install-go puts in .go/ builds the
 # exclave command (DESIGN.md 10.5), never the go on PATH. Its module
@@ -112,7 +116,31 @@ go_notices() {
 # The pinned Python, the project's environment brought up to date first:
 # py script.py args. Quiet, so a script's output is its own.
 py() {
+    need_uv || return 1
     "$UV" run --quiet --project "$ROOT" python "$@"
+}
+
+# py_exec script.py args: the same in this shell's place, a wrapper's last line.
+# shellcheck disable=SC2329  # called by the wrappers
+py_exec() {
+    need_uv || exit 1
+    exec "$UV" run --quiet --project "$ROOT" python "$@"
+}
+
+# download URL FILE: through curl or wget, a connection that fails or stalls tried again, five times over about a
+# minute, since GitHub has refused a runner's connection for two minutes at a time. scripts/inputs, the install
+# scripts and scripts/example are the scripts that download.
+# shellcheck disable=SC2329  # called by those scripts
+download() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -A exclave --connect-timeout 30 --retry 5 --retry-delay 5 --retry-all-errors --retry-connrefused \
+            -o "$2" "$1"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -U exclave --timeout=30 --tries=5 --waitretry=5 -O "$2" "$1"
+    else
+        echo "neither curl nor wget is installed" >&2
+        return 1
+    fi
 }
 
 # The C: the flags every build of it shares, scripts/build's, scripts/check's

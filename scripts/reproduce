@@ -9,7 +9,6 @@
 # there is no Go, as in the matrix's VMs, where the launcher's is printed alone. The commit is the checkout's, or the file COMMIT's in
 # a copy of the sources without one, as the matrix carries into its VMs. It runs no Python.
 set -eu
-UV_BOOTSTRAP=1 # lib.sh's check for the pinned uv: this script runs no Python
 . "$(dirname -- "$0")/lib.sh"
 [ $# -eq 2 ] || {
     echo "usage: scripts/reproduce EXCLAVE DIR" >&2
@@ -37,7 +36,7 @@ done
 cp "$ROOT/scripts/build" "$ROOT/scripts/lib.sh" "$dir/scripts/"
 printf '%s\n' "$commit" >"$dir/COMMIT"
 # the exclave's own programs alone on PATH, so that no tool of the machine's takes part
-env -i HOME="$dir" PATH="$ex/tree/usr/bin:$ex/tree/bin" CC="$cc" UV_BOOTSTRAP=1 \
+env -i HOME="$dir" PATH="$ex/tree/usr/bin:$ex/tree/bin" CC="$cc" \
     "$ex/tree/usr/bin/sh" "$dir/scripts/build" >"$dir/build.log" 2>&1 || {
     tail -n 20 "$dir/build.log" >&2
     echo "reproduce: the build inside $ex failed; $dir/build.log has its output" >&2
