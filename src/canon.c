@@ -29,6 +29,18 @@ __attribute__((noinline)) static int pathless(const char *link, const char *text
 }
 /* the virtual path of a descriptor or of the working directory; *tree, when asked, says whether the kernel's real path
  * lay in the tree. -ENOENT: the descriptor's file has no path, and the caller passes the syscall through */
+/* The real path the kernel gives descriptor fd, its /proc/self/fd link's text, into out[PATH_MAX]: its length, or
+ * -errno (ENOENT for no such descriptor). */
+long fd_real_path(int fd, char *out)
+{
+    char link[32] = "/proc/self/fd/", n[24];
+    ltoa_(fd, n);
+    scat(link, n, sizeof link);
+    long r = sys_readlink(link, out, PATH_MAX - 1);
+    if (r >= 0) out[r] = 0;
+    return r;
+}
+
 static int fd_virtual_in(int fd, char *out, int *tree)
 {
     /* no such link: no such descriptor */
@@ -138,20 +150,6 @@ long tracer_of(const char *path)
     while (have < (long)sizeof buf && (n = sys_read((int)fd, buf + have, sizeof buf - (size_t)have)) > 0) have += n;
     sys_close((int)fd);
     return status_tracer(buf, have);
-}
-
-/* The TracerPid field of a status file's head, buf of n bytes: the pid, or 0 where the line is absent or cut short */
-long status_tracer(const char *buf, long n)
-{
-    static const char key[] = "\nTracerPid:\t";
-    long k = (long)sizeof key - 1;
-    for (long i = 0; i + k <= n; i++) {
-        if (xmemcmp(buf + i, key, (size_t)k) != 0) continue;
-        long v = 0, j = i + k;
-        for (; j < n && buf[j] >= '0' && buf[j] <= '9'; j++) v = v * 10 + (buf[j] - '0');
-        return j < n && buf[j] == '\n' ? v : 0;
-    }
-    return 0;
 }
 
 /* Another process's exe link whose text names the launcher: that process runs a program on the loader path, the one

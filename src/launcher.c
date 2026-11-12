@@ -8,6 +8,10 @@
  */
 #include "common.h"
 
+/* The exclave's run-time state (7.2), which the start fills: at a page's start, so that what a start writes of it is
+ * one page (common.h). */
+struct exclave C __attribute__((aligned(4096)));
+
 extern char __ehdr_start[] __attribute__((visibility("hidden"))), _etext[] __attribute__((visibility("hidden"))),
     _DYNAMIC[] __attribute__((visibility("hidden")));
 

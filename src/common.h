@@ -126,7 +126,8 @@ char *scpy(char *d, const char *s, size_t n);
 char *scat(char *d, const char *s, size_t n);
 const char *base_name(const char *p);
 void ltoa_(long v, char *b); /* decimal, buffer >= 24 */
-long fd_real_path(int fd, char *out);
+/* the TracerPid field of a /proc/<pid>/status head of n bytes, 0 for none (7.6) */
+long status_tracer(const char *buf, long n);
 int starts_dir(const char *s, const char *pfx); /* s == pfx or s starts with pfx + "/" ; "/" matches all */
 /* bump allocator for the manifest's strings, the tables, the environment; never freed */
 void *arena_alloc(size_t n);
@@ -235,9 +236,6 @@ pid_t scratch_deferred(pid_t pid, pid_t tid, int take);
 /* ---------- visibility (vis.c) ---------- */
 /* S: the start's chunk, whose buffers the tables are built in (launcher.c) */
 void vis_init(struct scratch *S, const char *cwd);
-void cache_init(pid_t pid, void *page); /* pid: the process's own; page: the lock's, mapped already, or 0 */
-/* 1 when the caller, pid, shares the memory of its parent, ppid: a vfork child (7.5.4) */
-int vfork_child(pid_t pid, pid_t ppid);
 int vis_is_host(const char *v, const char **real); /* 1 if host-owned; *real = host path */
 char *to_real(const char *v, char *out, char *tmp); /* v -> real, with wrapper redirect; tmp PATH_MAX */
 char *to_real_exec(const char *v, char *out); /* v -> real, no wrapper redirect */
@@ -266,6 +264,9 @@ int vis_identity_dir_kind(const char *v);
 int vis_in_data(const char *v); /* 1 if v lies under a data directory (6.2) */
 
 /* ---------- the canonicalisation cache (cache.c, 7.4.4) ---------- */
+void cache_init(pid_t pid, void *page); /* pid: the process's own; page: the lock's, mapped already, or 0 */
+/* 1 when the caller, pid, shares the memory of its parent, ppid: a vfork child (7.5.4), by the cache's own page */
+int vfork_child(pid_t pid, pid_t ppid);
 enum { CK_NONE = 1, CK_DIR, CK_LINK, CK_FILE, CK_WRAPPER };
 int cache_get(const char *v, char *link_out); /* 0 on a miss; link_out PATH_MAX gets a symlink's text */
 void cache_put(const char *v, int kind, const char *link);
@@ -286,12 +287,11 @@ _Static_assert(WALK_FOLLOW == 1, "a caller passes a truth value for it: follow, 
 int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *out); /* 0 or -errno */
 int through_magic(struct scratch *S, const char *path, int dfd, char *out);
 int fd_virtual(int fd, char *out);
+long fd_real_path(int fd, char *out); /* the kernel's own name for the descriptor, its length or -errno */
 int cwd_virtual(char *out);
 int is_self_exe(const char *p, pid_t pid); /* /proc/self/exe in any spelling, for this process */
 /* another process's exe link v whose text is the launcher: text becomes the program it runs (PATH_MAX); 1 if so */
 int other_exe(const struct scratch *S, const char *v, char *text);
-/* the TracerPid field of a /proc/<pid>/status head of n bytes, 0 for none (7.6) */
-long status_tracer(const char *buf, long n);
 /* the TracerPid of the status file at path, 0 for none or one unreadable (7.6) */
 long tracer_of(const char *path);
 
@@ -328,13 +328,13 @@ void filter_install(void);
  * epilogue, in out, which holds BPF_MAXINSNS; returns its length, or -EINVAL where the kernel refuses the body,
  * -ENOSYS where the launcher does */
 long filter_wrap(const struct sock_filter *body, long n, struct sock_filter *out);
-/* 1 once a program's filter may exist in this process: set before an install, and by the start under one (7.4.2) */
-extern volatile int program_filters;
 extern const int path_syscalls[];
 extern const int n_path_syscalls;
 
 /* ---------- handler (handler.c) ---------- */
 void handler_install(void);
+/* 1 once a program's filter may exist in this process: set before an install, and by the start under one (7.4.2) */
+extern volatile int program_filters;
 /* The trap's record (7.5.7), made by the handler's entry stub on its stack before anything else, its address in a
  * register reserved for it throughout the launcher's code (r15, x27): what a trampoline reads of a trap it
  * interrupts. The offsets are the re-issue slot's and the entry stub's (launcher.c, handler.c). */

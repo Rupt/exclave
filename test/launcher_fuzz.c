@@ -47,6 +47,8 @@ void fuzz_one(const unsigned char *data, size_t n)
     memcpy(line, data, (size_t)k);
     char *argv[] = {script, one, two, NULL}, *nargv[8];
     if (!setjmp(refused)) shebang_argv(line, k, script, argv, 3, nargv, 8);
+    /* the head of a /proc/<pid>/status file, read for its TracerPid */
+    status_tracer((const char *)data, (long)n);
     filter_case(data, n);
 }
 

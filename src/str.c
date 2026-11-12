@@ -1,4 +1,5 @@
-/* str.c — string, number and arena helpers. No syscalls but the reserve's mapping. */
+/* str.c — string, number and arena helpers, and the parsers of a #! line and of a status file's head. No syscalls but
+ * the reserve's mapping, so that the unit tests and the fuzz target link it for the host. */
 #include "common.h"
 
 void *memcpy(void *d, const void *s, size_t n) { return xmemcpy(d, s, n); }
@@ -187,7 +188,7 @@ static int blank(char c) { return c == ' ' || c == '\t'; }
 long shebang_argv(char *line, long n, char *script, char **argv, long argc, char **nargv, long cap)
 {
     if (n < 2 || line[0] != '#' || line[1] != '!') return -1;
-    for (long i = n; i <= BINPRM_BUF_SIZE; i++) line[i] = 0;   /* the kernel's buffer is padded with NULs */
+    for (long i = n; i <= BINPRM_BUF_SIZE; i++) line[i] = 0; /* the kernel's buffer is padded with NULs */
     char *end = 0;
     for (long i = 0; i < BINPRM_BUF_SIZE && !end; i++)
         if (line[i] == '\n') end = line + i;
@@ -196,7 +197,7 @@ long shebang_argv(char *line, long n, char *script, char **argv, long argc, char
         while (p < buf_end && blank(*p)) p++;
         if (p == buf_end) return -1;
         while (p < buf_end && *p && !blank(*p)) p++;
-        if (p == buf_end) return -1;                         /* the interpreter's path runs past the buffer */
+        if (p == buf_end) return -1; /* the interpreter's path runs past the buffer */
         end = buf_end;
     }
     while (blank(end[-1])) end--;
@@ -222,14 +223,16 @@ long shebang_argv(char *line, long n, char *script, char **argv, long argc, char
     return k;
 }
 
-/* The real path the kernel gives descriptor fd, its /proc/self/fd link's text, into out[PATH_MAX]: its length, or
- * -errno (ENOENT for no such descriptor). */
-long fd_real_path(int fd, char *out)
+/* The TracerPid field of a status file's head, buf of n bytes: the pid, or 0 where the line is absent or cut short */
+long status_tracer(const char *buf, long n)
 {
-    char link[32] = "/proc/self/fd/", n[24];
-    ltoa_(fd, n);
-    scat(link, n, sizeof link);
-    long r = sys_readlink(link, out, PATH_MAX - 1);
-    if (r >= 0) out[r] = 0;
-    return r;
+    static const char key[] = "\nTracerPid:\t";
+    long k = (long)sizeof key - 1;
+    for (long i = 0; i + k <= n; i++) {
+        if (xmemcmp(buf + i, key, (size_t)k) != 0) continue;
+        long v = 0, j = i + k;
+        for (; j < n && buf[j] >= '0' && buf[j] <= '9'; j++) v = v * 10 + (buf[j] - '0');
+        return j < n && buf[j] == '\n' ? v : 0;
+    }
+    return 0;
 }
