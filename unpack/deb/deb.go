@@ -204,11 +204,7 @@ func (Format) Control(p string) (map[string]string, map[string]string, error) {
 
 // Interests returns the package's trigger interests: the `interest` lines of its control file
 // `triggers`.
-func (f Format) Interests(p string) ([]string, error) {
-	_, scripts, err := f.Control(p)
-	if err != nil {
-		return nil, err
-	}
+func (Format) Interests(_, scripts map[string]string) []string {
 	var out []string
 	for line := range strings.SplitSeq(scripts["triggers"], "\n") {
 		words := strings.Fields(line)
@@ -217,7 +213,7 @@ func (f Format) Interests(p string) ([]string, error) {
 			out = append(out, words[1])
 		}
 	}
-	return out, nil
+	return out
 }
 
 // ---------------------------------------------------------------- indexes

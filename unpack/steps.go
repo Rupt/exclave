@@ -176,7 +176,7 @@ func extractInto(r *root.Root, packages []*Package, log logger) error {
 	// Debian's and Fedora's merged /usr; Alpine's directories are its own
 	allMerged := true
 	for _, p := range packages {
-		if !readerFor(p.Path).MergedUsr() {
+		if !p.Reader.MergedUsr() {
 			allMerged = false
 		}
 	}
@@ -223,11 +223,7 @@ func extractInto(r *root.Root, packages []*Package, log logger) error {
 	// only where another package ships a file it ships too, which extractPackage finds. Every
 	// other renaming diversion is refused. The scripts are read before anything is extracted.
 	for _, pkg := range packages {
-		name, rd := pkg.Name, readerFor(pkg.Path)
-		_, scripts, err := rd.Control(pkg.Path)
-		if err != nil {
-			return err
-		}
+		name, scripts := pkg.Name, pkg.Scripts
 		for _, sname := range []string{"preinst", "postinst"} {
 			for line := range strings.SplitSeq(strings.ReplaceAll(scripts[sname], "\\\n", " "), "\n") {
 				if strings.HasPrefix(strings.TrimSpace(line), "#") || !strings.Contains(line, "dpkg-divert") {
@@ -254,8 +250,8 @@ func extractInto(r *root.Root, packages []*Package, log logger) error {
 		}
 	}
 	for _, pkg := range packages {
-		name, rd := pkg.Name, readerFor(pkg.Path)
-		groups, err := rd.ParseDeps(pkg.Fields["Replaces"])
+		name := pkg.Name
+		groups, err := pkg.Reader.ParseDeps(pkg.Fields["Replaces"])
 		if err != nil {
 			return err
 		}
@@ -265,7 +261,7 @@ func extractInto(r *root.Root, packages []*Package, log logger) error {
 				replaces[name][a.Name] = true
 			}
 		}
-		t, err := rd.OpenData(pkg.Path)
+		t, err := pkg.Reader.OpenData(pkg.Path)
 		if err != nil {
 			return err
 		}
@@ -329,7 +325,7 @@ func scanAll(packages []*Package) []scan {
 }
 
 func scanPackage(pkg *Package) (sc scan) {
-	t, err := readerFor(pkg.Path).OpenData(pkg.Path)
+	t, err := pkg.Reader.OpenData(pkg.Path)
 	if err != nil {
 		sc.err = err
 		return sc

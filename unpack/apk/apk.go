@@ -283,12 +283,8 @@ func (Format) Control(p string) (map[string]string, map[string]string, error) {
 }
 
 // Interests returns the package's trigger interests: the directories .PKGINFO's `triggers` names.
-func (f Format) Interests(p string) ([]string, error) {
-	fields, _, err := f.Control(p)
-	if err != nil {
-		return nil, err
-	}
-	return strings.Fields(fields["Triggers"]), nil
+func (Format) Interests(fields, _ map[string]string) []string {
+	return strings.Fields(fields["Triggers"])
 }
 
 // a name is anything up to an operator: cmd:[ and so:libstdc++.so.6 are names

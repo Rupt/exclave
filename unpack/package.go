@@ -11,11 +11,16 @@ import (
 	"exclave/unpack/rpm"
 )
 
-// Package is a package file to unpack, with the control fields its reader gave.
+// Package is a package file to unpack, with what its reader gave of its control data, read
+// once: the fields, and the maintainer scripts and other control files by name. Format is the
+// run's, "deb", "apk" or "rpm", and Reader that format's (10.1).
 type Package struct {
-	Name   string
-	Path   string
-	Fields map[string]string
+	Name    string
+	Path    string
+	Fields  map[string]string
+	Scripts map[string]string
+	Format  string
+	Reader  reader.Reader
 }
 
 // Version is the package's version, as its control fields spell it.
@@ -69,9 +74,4 @@ func packageFormat(p string) string {
 		return "rpm"
 	}
 	return "deb"
-}
-
-// readerFor returns the reader for a package file, chosen by its name (10.1).
-func readerFor(p string) reader.Reader {
-	return readers[packageFormat(p)]
 }

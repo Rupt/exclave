@@ -86,9 +86,10 @@ type Reader interface {
 	// control file's own text is among them under ControlText, which names no maintainer script.
 	Control(path string) (fields, scripts map[string]string, err error)
 	// Interests returns the paths, or named triggers, the package's maintainer scripts are run
-	// for: where a package keeps a cache or an index other packages' files feed, which unpack does
-	// not build (10.1); a format without them returns none.
-	Interests(path string) ([]string, error)
+	// for, from what Control gave of it: where a package keeps a cache or an index other
+	// packages' files feed, which unpack does not build (10.1); a format without them returns
+	// none.
+	Interests(fields, scripts map[string]string) []string
 	// OpenData returns the package's payload, the files it installs.
 	OpenData(path string) (Archive, error)
 	// ParseDeps parses a dependency field into groups of alternatives.

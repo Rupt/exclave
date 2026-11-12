@@ -47,8 +47,8 @@ func FuzzApk(f *testing.F) {
 		if err := os.WriteFile(p, raw, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		Reader.Control(p)
-		Reader.Interests(p)
+		fields, scripts, _ := Reader.Control(p)
+		Reader.Interests(fields, scripts)
 		ControlChecksum(p)
 		a, err := Reader.OpenData(p)
 		if err != nil {

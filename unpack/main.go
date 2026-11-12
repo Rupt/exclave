@@ -75,11 +75,12 @@ func unpack(out string, paths []string, log logger) error {
 	if len(formats) > 1 {
 		return refuse("the package files mix formats %s: one format per exclave", pylist(keys(formats)))
 	}
-	rd := readerFor(paths[0])
+	format := packageFormat(paths[0])
+	rd := readers[format]
 	var packages []*Package
 	seen := map[string]string{}
 	for _, p := range paths {
-		fields, _, err := rd.Control(p)
+		fields, scripts, err := rd.Control(p)
 		if err != nil {
 			return err
 		}
@@ -91,7 +92,8 @@ func unpack(out string, paths []string, log logger) error {
 			return refuse("%s and %s both carry package %s: one version of a package per exclave", prev, p, name)
 		}
 		seen[name] = p
-		packages = append(packages, &Package{Name: name, Path: p, Fields: fields})
+		packages = append(packages,
+			&Package{Name: name, Path: p, Fields: fields, Scripts: scripts, Format: format, Reader: rd})
 	}
 	arches := map[string]bool{}
 	for _, p := range packages {

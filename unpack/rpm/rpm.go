@@ -621,8 +621,8 @@ func (Format) Control(p string) (map[string]string, map[string]string, error) {
 
 // Interests returns none: rpm's file triggers are in other packages' headers, which this reader
 // does not read.
-func (Format) Interests(string) ([]string, error) {
-	return nil, nil
+func (Format) Interests(_, _ map[string]string) []string {
+	return nil
 }
 
 var tokenRe = regexp.MustCompile(`^([^\s<>=]+)(?:(<=|>=|<|>|=)([^\s<>=]+))?$`)

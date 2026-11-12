@@ -154,10 +154,7 @@ func unrollLoops(text string) (_ string, ok bool) {
 // postinstText is a package's postinst as the rules read it: continued lines joined, and loops over
 // literal words unrolled; a script that would unroll past unrolledMax is refused.
 func postinstText(pkg *Package) (string, error) {
-	_, scripts, err := readerFor(pkg.Path).Control(pkg.Path)
-	if err != nil {
-		return "", err
-	}
+	scripts := pkg.Scripts
 	text, ok := unrollLoops(strings.ReplaceAll(scripts["postinst"], "\\\n", " "))
 	if !ok {
 		return "", refuse("%s's postinst unrolls its loops past %d bytes or %d loops", pkg.Name, unrolledMax,
@@ -387,7 +384,7 @@ func busyboxApplets(r *root.Root, _ []*Package, log logger) (bool, error) {
 func apkDatabase(r *root.Root, packages []*Package, log logger) (bool, error) {
 	var apks []*Package
 	for _, p := range packages {
-		if packageFormat(p.Path) == "apk" {
+		if p.Format == "apk" {
 			apks = append(apks, p)
 		}
 	}
@@ -497,7 +494,7 @@ func statusStanza(control string) (string, error) {
 func dpkgDatabase(r *root.Root, packages []*Package, log logger) (bool, error) {
 	var debs []*Package
 	for _, p := range packages {
-		if packageFormat(p.Path) == "deb" {
+		if p.Format == "deb" {
 			debs = append(debs, p)
 		}
 	}
@@ -508,11 +505,7 @@ func dpkgDatabase(r *root.Root, packages []*Package, log logger) (bool, error) {
 	sort.Slice(debs, func(i, j int) bool { return debs[i].Name < debs[j].Name })
 	var b strings.Builder
 	for _, p := range debs {
-		_, files, err := readerFor(p.Path).Control(p.Path)
-		if err != nil {
-			return false, err
-		}
-		stanza, err := statusStanza(files[reader.ControlText])
+		stanza, err := statusStanza(p.Scripts[reader.ControlText])
 		if err != nil {
 			return false, refuse("%s's control file: %s; dpkg's database cannot record it", p.Name, err)
 		}
@@ -537,11 +530,7 @@ func sbinMerge(r *root.Root, packages []*Package, log logger) (bool, error) {
 		if pkg.Name != "filesystem" {
 			continue
 		}
-		_, scripts, err := readerFor(pkg.Path).Control(pkg.Path)
-		if err != nil {
-			return false, err
-		}
-		if !strings.Contains(scripts["posttrans"], `posix.symlink("bin", path)`) {
+		if !strings.Contains(pkg.Scripts["posttrans"], `posix.symlink("bin", path)`) {
 			continue
 		}
 		for _, sb := range []string{"/usr/sbin", "/usr/local/sbin"} {
@@ -1347,11 +1336,7 @@ var interests = [][2]string{
 func notes(packages []*Package) ([]string, error) {
 	var out []string
 	for _, pkg := range packages {
-		paths, err := readerFor(pkg.Path).Interests(pkg.Path)
-		if err != nil {
-			return nil, err
-		}
-		for _, path := range paths {
+		for _, path := range pkg.Reader.Interests(pkg.Fields, pkg.Scripts) {
 			what := "a cache or index its trigger would have built; the tree lacks it"
 			best := -1
 			for _, pt := range interests {

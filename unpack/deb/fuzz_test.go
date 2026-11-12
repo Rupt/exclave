@@ -27,8 +27,8 @@ func arBytes(members ...[2][]byte) []byte {
 }
 
 func readAll(rd reader.Reader, path string) {
-	rd.Control(path)
-	rd.Interests(path)
+	fields, scripts, _ := rd.Control(path)
+	rd.Interests(fields, scripts)
 	a, err := rd.OpenData(path)
 	if err != nil {
 		return
