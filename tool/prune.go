@@ -154,7 +154,7 @@ func neededClosure(root string, elfs []string) *uniq {
 // so ownership and ls do not change. Then the static check runs on what is left.
 func cmdPrune(args []string) int {
 	if len(args) < 2 {
-		usage("prune EXCLAVE LOG...")
+		usage()
 	}
 	ex := args[0]
 	requireExclave(ex, "prune")

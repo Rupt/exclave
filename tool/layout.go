@@ -99,7 +99,7 @@ func refuseStrays(ex string) {
 // exclave.
 func cmdUnwrap(args []string) int {
 	if len(args) != 1 {
-		usage("unwrap EXCLAVE")
+		usage()
 	}
 	ex := args[0]
 	requireExclave(ex, "unwrap")
@@ -162,7 +162,7 @@ func linkOrCopy(src, dst string) {
 // wrapped exclave's hashes file records the new launcher and tree hashes.
 func cmdRelink(args []string) int {
 	if len(args) != 1 && len(args) != 2 {
-		usage("relink EXCLAVE [LAUNCHER]")
+		usage()
 	}
 	ex := args[0]
 	requireExclave(ex, "relink")
@@ -332,7 +332,7 @@ func wrapFiles(ex string, data []string) int {
 // (10.1).
 func cmdWrap(args []string) int {
 	if len(args) != 1 && len(args) != 2 {
-		usage("wrap EXCLAVE [LAUNCHER]")
+		usage()
 	}
 	ex, given := args[0], len(args) == 2
 	requireExclave(ex, "wrap")

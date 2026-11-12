@@ -364,7 +364,17 @@ def unpack_and_wrap(ctx: Ctx) -> str | None:
     rc, o, e = run([*TOOL, "format", "--check", lockcopy])
     expect(rc == 0, "format recognises a hashes file by its first record, not its name: " + o + e)
     rc, o, e = run([*TOOL, "format", "--chec", lockcopy])
-    expect(rc == 2 and "usage:" in e, f"format takes --check and no shortening of it: {rc} {o}{e}")
+    expect(
+        rc == 2 and e == "usage: exclave format [--check] FILE...\n",
+        f"format takes --check and no shortening of it, and says its own usage: {rc} {o}{e}",
+    )
+    names = ("caches", "check", "format", "hash", "prune", "relink", "unpack", "unwrap", "wrap")
+    for args in ([], ["no-such-command"]):
+        rc, o, e = run([*TOOL, *args])
+        expect(
+            rc == 2 and all(f"usage: exclave {n} " in e for n in names),
+            f"exclave {args} lists its commands and is a usage error: {rc} {o}{e}",
+        )
     return note
 
 

@@ -3088,8 +3088,10 @@ exclave-fetch debs|apks|rpms ...    a package closure from a repository, verifie
 exclave-fetch version               the build it is from, as exclave version
 ```
 
-`wrap` and `relink` also write the exclave's `README` (6.1) where it
-has none. Every command of the tool's own except `format` refuses,
+`exclave` alone, or given a command it does not know, lists its
+commands with their arguments, and a command given the wrong arguments
+prints its own line; either is a usage error, status 2. `wrap` and
+`relink` also write the exclave's `README` (6.1) where it has none. Every command of the tool's own except `format` refuses,
 before reading or writing anything, a directory without `tree/`, and
 every one except `wrap` refuses one without `.exclave/`.
 

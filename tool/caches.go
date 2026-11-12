@@ -1007,7 +1007,7 @@ func plural(n int, noun string) string {
 // seen.
 func cmdCaches(args []string) int {
 	if len(args) != 1 {
-		usage("caches EXCLAVE")
+		usage()
 	}
 	ex := args[0]
 	if abs, err := filepath.Abs(ex); err == nil {

@@ -3,24 +3,8 @@
 // it, unpack, is its subcommand. It opens no network connection and holds no code that could:
 // fetching package files is exclave-fetch's (fetch/exclave-fetch).
 //
-//	exclave caches EXCLAVE              Run the tree's generators of Python bytecode, GSettings schemas, the MIME
-//	                                    database, GIO's, gdk-pixbuf's, icon, desktop and font caches, graphviz's
-//	                                    plugin configuration and TeX Live's indexes and formats inside the wrapped
-//	                                    exclave, on its machine, and add what they make.
-//	exclave check EXCLAVE [LOG...]      Wrappers, originals, the tree against its recorded hash and the static
-//	                                    check; with EXCLAVE_LOG files, the dynamic check of what a workload opened.
-//	exclave format [--check] FILE...    Parse with the strict grammar and rewrite in canonical form; --check
-//	                                    only reports.
-//	exclave hash EXCLAVE                The tree hash of 6.4.
-//	exclave prune EXCLAVE LOG...        Drop every file no logged workload touched (10.4).
-//	exclave relink EXCLAVE [LAUNCHER]   Replace the launcher, relink the wrappers and ship missing placeholders.
-//	exclave unwrap EXCLAVE              Move every original back over its wrapper.
-//	exclave wrap EXCLAVE [LAUNCHER]     Wrap an exclave: add the launcher, the one given or this command's own, and
-//	                                    the placeholders where missing, check the manifest, the wrappers and every
-//	                                    ELF as the launcher's machine, then wrap every executable and write the
-//	                                    launcher, manifest and tree hashes to .exclave/hashes.
-//	exclave version                     The build this command is from.
-//	exclave unpack OUT PKG...           The unwrapped exclave OUT from package files (10.1, unpack/).
+// Its commands are the table commands below, which `exclave` alone lists: each one's arguments,
+// as its usage line spells them, and what it does in a line; DESIGN.md 10 says the rest.
 //
 // Paths are bytes, as the kernel has them, and every list the command prints or hashes is sorted
 // by its bytes. A refusal prints one line, "exclave: " and the reason (unpack's its own prefix,
@@ -108,8 +92,45 @@ func failGrammar(err error) {
 }
 
 // usage prints the command's usage line and exits 2.
-func usage(line string) {
-	fmt.Fprintf(os.Stderr, "usage: exclave %s\n", line)
+// A command is one of exclave's: its name, its arguments as a usage line spells them, what it does
+// in a line, and what runs it.
+type command struct {
+	name, args, does string
+	run              func(args []string) int
+}
+
+// commands lists the commands in the order of their names. It is made when asked for and not
+// kept, since each command's function names its own usage through the table.
+func commands() []command {
+	return []command{
+		{"caches", "EXCLAVE", "run the tree's own generators of caches inside and add what they make", cmdCaches},
+		{"check", "EXCLAVE [LOG...]", "check the wrappers, the tree hash and every ELF; with logs, what a run opened",
+			cmdCheck},
+		{"format", "[--check] FILE...", "put a manifest or hashes file in canonical form, or only report", cmdFormat},
+		{"hash", "EXCLAVE|FILE", "print the tree hash of an exclave, or a file's hash", cmdHash},
+		{"prune", "EXCLAVE LOG...", "drop every file no logged run touched", cmdPrune},
+		{"relink", "EXCLAVE [LAUNCHER]", "replace the launcher and relink the wrappers to it", cmdRelink},
+		{"unpack", "OUT PKG...", "make the unwrapped exclave OUT from package files",
+			func(args []string) int { return unpack.Main(version, args) }},
+		{"unwrap", "EXCLAVE", "move every original back over its wrapper", cmdUnwrap},
+		{"version", "", "print the build this command is from", cmdVersion},
+		{"wrap", "EXCLAVE [LAUNCHER]", "check an exclave, wrap every executable and record its hashes", cmdWrap},
+	}
+}
+
+// running is the name of the command that runs, for its usage line.
+var running string
+
+// usage ends the command that runs with its usage line, or, before one runs, with every
+// command's; either way the status is 2.
+func usage() {
+	for _, c := range commands() {
+		if running == "" {
+			fmt.Fprintf(os.Stderr, "usage: exclave %-27s %s\n", strings.TrimSpace(c.name+" "+c.args), c.does)
+		} else if c.name == running {
+			fmt.Fprintf(os.Stderr, "usage: exclave %s\n", strings.TrimSpace(c.name+" "+c.args))
+		}
+	}
 	out.Flush()
 	os.Exit(2)
 }
@@ -172,7 +193,7 @@ func isDir(path string) bool {
 
 func cmdVersion(args []string) int {
 	if len(args) != 0 {
-		usage("version")
+		usage()
 	}
 	fmt.Fprintf(out, "exclave %s\n", version)
 	return 0
@@ -182,7 +203,7 @@ func cmdVersion(args []string) int {
 // so that a machine with the command needs no other tool to check one (6.4).
 func cmdHash(args []string) int {
 	if len(args) != 1 {
-		usage("hash EXCLAVE|FILE")
+		usage()
 	}
 	if st, err := os.Stat(args[0]); err == nil && st.Mode().IsRegular() {
 		j := hashJob{path: args[0]}
@@ -210,13 +231,13 @@ func cmdFormat(args []string) int {
 		case options && a == "--check":
 			check = true
 		case options && len(a) > 1 && a[0] == '-':
-			usage("format [--check] FILE...")
+			usage()
 		default:
 			files = append(files, a)
 		}
 	}
 	if len(files) == 0 {
-		usage("format [--check] FILE...")
+		usage()
 	}
 	rc := 0
 	for _, path := range files {
@@ -258,18 +279,18 @@ func main() {
 	// Go runs on eight threads at most, BLAKE3's own goroutines too, since the machine may be in
 	// use beside the command (10.5)
 	runtime.GOMAXPROCS(threads())
-	commands := map[string]func([]string) int{
-		"caches": cmdCaches, "check": cmdCheck, "format": cmdFormat, "hash": cmdHash, "prune": cmdPrune,
-		"relink": cmdRelink, "unwrap": cmdUnwrap, "version": cmdVersion, "wrap": cmdWrap,
-		"unpack": func(args []string) int { return unpack.Main(version, args) },
-	}
 	if len(os.Args) < 2 {
-		usage("COMMAND ARGS...")
+		usage()
 	}
-	run, ok := commands[os.Args[1]]
-	if !ok {
+	var run func([]string) int
+	for _, c := range commands() {
+		if c.name == os.Args[1] {
+			running, run = c.name, c.run
+		}
+	}
+	if run == nil {
 		fmt.Fprintf(os.Stderr, "exclave: unknown command %s\n", os.Args[1])
-		os.Exit(2)
+		usage()
 	}
 	rc := run(os.Args[2:])
 	if err := out.Flush(); err != nil {

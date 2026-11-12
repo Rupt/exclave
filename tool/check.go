@@ -730,7 +730,7 @@ func staticReport(ex string, l *listing) int {
 // check, and with EXCLAVE_LOG files the dynamic check.
 func cmdCheck(args []string) int {
 	if len(args) < 1 {
-		usage("check EXCLAVE [LOG...]")
+		usage()
 	}
 	ex := args[0]
 	requireExclave(ex, "check")
