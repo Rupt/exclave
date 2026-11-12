@@ -173,7 +173,6 @@ char *arena_str(const char *s, size_t n)
 }
 #ifdef HOST_TEST
 /* test/launcher_fuzz.c parses one manifest after another in a process */
-void arena_reset(void);
 void arena_reset(void) { arena.first_used = arena.rest_used = 0; }
 #endif
 

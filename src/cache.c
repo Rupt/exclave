@@ -95,8 +95,6 @@ static unsigned long hash_str(const char *s)
 
 #ifdef HOST_TEST
 /* test/cache_test.c: the lock as another thread holds it mid-insert */
-void cache_test_hold(void);
-void cache_test_release(void);
 void cache_test_hold(void) { *lock = 1; }
 void cache_test_release(void) { __sync_lock_release(lock); }
 #endif

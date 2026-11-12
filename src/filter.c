@@ -477,8 +477,6 @@ long filter_wrap(const struct sock_filter *body, long n, struct sock_filter *out
 
 #ifdef HOST_TEST
 /* test/filter_test.c: the built program and the lists it was built from, for the model of 7.4.2 */
-const void *filter_for_test(int *n);
-const int *filter_list_for_test(int which, int *n);
 const void *filter_for_test(int *n)
 {
     build();

@@ -33,7 +33,6 @@ static void expect(const char *name, const char *text, int want_ok, const char *
 /* with file arguments: parse each and print one line for it, "ok" and each own value in hex, or the error, for
  * test/grammar_test.py's comparison with the command's parser; a line each as it goes, so that the file a sanitiser's
  * finding stopped on is the one after the last line */
-void arena_reset(void);
 static int parse_files(int n, char **paths)
 {
     static char buf[1 << 20];

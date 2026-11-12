@@ -412,6 +412,17 @@ unsigned long tramp_stub_for(unsigned long h, unsigned long mask, unsigned long 
 /* the slot a handler address names, or -1 when it is no stub's */
 long tramp_slot_of(unsigned long h);
 
+/* ---------- the unit tests' hooks (-DHOST_TEST): what a source adds for test/ and the fuzz target ---------- */
+#ifdef HOST_TEST
+const void *filter_for_test(int *n); /* filter.c: the program as built */
+const int *filter_list_for_test(int which, int *n); /* and one of its lists of syscalls */
+void cache_test_hold(void); /* cache.c: the lock as a thread mid-insert holds it */
+void cache_test_release(void);
+void arena_reset(void); /* str.c: the arena emptied, for a parser run again */
+extern int reserve_test_fail; /* str.c: the reserve's mapping made to fail */
+void scratch_test_between(void *chunk); /* scratch.c calls it between a sweep's judgement and its release */
+#endif
+
 /* ---------- CPU level (isa.c) ---------- */
 /* 1 yes, 0 no, -1 unknown string; auxv for AT_HWCAP on aarch64 */
 int isa_supported(const char *isa, const unsigned long *auxv);

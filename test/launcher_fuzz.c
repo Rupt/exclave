@@ -27,8 +27,6 @@ void die_invariant(const char *what, long n)
     abort();
 }
 
-void arena_reset(void);
-
 static void filter_case(const unsigned char *data, size_t size);
 
 void fuzz_init(const char *work) { (void)work; }

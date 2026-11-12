@@ -111,7 +111,7 @@ for f in src/filter.c src/handler.c; do
         -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD
 done
 for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c; do
-    run quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11
+    run quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 -DHOST_TEST
 done
 # no C line over 120 columns, a table between clang-format off and on aside:
 # clang-format leaves comments as written, so it does not hold them to it
