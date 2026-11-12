@@ -3,7 +3,9 @@
  * vector register the program set before the call, the signal mask, the floating-point state. A sibling thread
  * sends the signal while the thread is blocked in a trapped open of a FIFO, with and without SA_RESTART; while it
  * spins in a loop of its own, outside any trap; and as a rain on a loop of stats of a long path, so that signals land
- * while the call's path is walked. Then what a query of an action reports of the mask and flags it was given.
+ * while the call's path is walked. Then what a query of an action reports of the mask and flags it was given, and
+ * what a handler that decides leaves behind: one that moves the counter, edits the mask or jumps out during a blocking
+ * open, and one that moves the counter when it finds it at a listing's call, which is then never made.
  * usage: sigframe HOSTDIR. Prints one line per case, "<case>: <answer>", each field a relation to what the program
  * set, the same in every world where the kernel is the oracle. Exit 0 always. */
 #define _GNU_SOURCE
@@ -323,6 +325,48 @@ static void on_jump(int sig, siginfo_t *si, void *ucv)
     decided = 1;
     siglongjmp(back, 1);
 }
+/* a rain on listings of a directory, whose handler moves the counter away whenever it finds it at the call's
+ * instruction: a call the program was moved away from is never made, so the directory is read from where it was */
+static int list_fd;
+static volatile int list_armed, list_raining;
+static volatile long list_moved, list_late;
+static pid_t list_tid;
+static sigjmp_buf list_back;
+__attribute__((noinline)) static void list_landing(void) { siglongjmp(list_back, 1); }
+static void on_list(int sig, siginfo_t *si, void *ucv)
+{
+    (void)sig;
+    (void)si;
+    ucontext_t *uc = ucv;
+    if (!list_armed || frame_of(ucv).pc != (unsigned long)sf_insn) return;
+    list_armed = 0;
+#if defined(__x86_64__)
+    uc->uc_mcontext.gregs[REG_RSP] = (uc->uc_mcontext.gregs[REG_RSP] & ~15L) - 8;
+    uc->uc_mcontext.gregs[REG_RIP] = (long)list_landing;
+#elif defined(__aarch64__)
+    uc->uc_mcontext.pc = (unsigned long)list_landing;
+#endif
+}
+static void *listings(void *arg)
+{
+    (void)arg;
+    static char buf[4096];
+    list_tid = (pid_t)syscall(SYS_gettid);
+    while (!list_raining) usleep(100);
+    for (volatile int i = 0; i < 20000 && list_moved < 20; i++) {
+        lseek(list_fd, 0, SEEK_SET);
+        if (sigsetjmp(list_back, 0) == 0) {
+            list_armed = 1;
+            marked_syscall(SYS_getdents64, list_fd, (long)buf, sizeof buf);
+            list_armed = 0;
+        } else {
+            list_moved++;
+            if (lseek(list_fd, 0, SEEK_CUR) != 0) list_late++;
+        }
+    }
+    list_raining = 0;
+    return 0;
+}
 static char after[64];
 static void *decide_open(void *arg)
 {
@@ -596,6 +640,26 @@ int main(int argc, char **argv)
     decide("a handler that blocks SIGUSR2 in its frame", on_mask, 1);
     decide("a handler that blocks every signal in its frame, then a trap", on_fill, 2);
     decide("a handler that siglongjmps out", on_jump, 3);
+    {
+        list_fd = open("/usr/share", O_RDONLY | O_DIRECTORY);
+        install(SIGUSR2, on_list, SA_RESTART);
+        pthread_t t;
+        pthread_create(&t, 0, listings, 0);
+        while (!list_tid) usleep(100);
+        list_raining = 1;
+        while (list_raining) {
+            syscall(SYS_tgkill, me, list_tid, SIGUSR2);
+            struct timespec ts = {0, 30000};
+            nanosleep(&ts, 0);
+        }
+        pthread_join(t, 0);
+        close(list_fd);
+        if (list_late)
+            printf("a handler that moves the counter before a listing's call: the listing was made all the same, %ld "
+                   "of %ld times\n",
+                   list_late, list_moved);
+        else printf("a handler that moves the counter before a listing's call: the directory where it was\n");
+    }
 
     /* 6. installs: from two threads at once, from a vfork child, SA_RESETHAND, a bad oldact, across execve */
     {

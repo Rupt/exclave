@@ -2350,8 +2350,10 @@ which the action cache no longer proves allowed (16.2). `test/progs/sigframe.c` 
 finds for a signal that lands during a blocking trapped open, with and
 without `SA_RESTART`, outside any trap, and in a rain on stats of a
 long path, and what a query and an install's `oldact` report, and a
-handler called by another through a stub a query returned; the
-kernel's answers are its expectation, but for the query. `test/stackcheck.py` walks the trampoline's C as a root of
+handler called by another through a stub a query returned, and that a
+listing a handler moved the program away from leaves the directory
+where it was; the kernel's answers are its expectation, but for the
+query. `test/stackcheck.py` walks the trampoline's C as a root of
 its own, with a budget of its own, and fails on any call it makes out
 of the trampoline's section, since that code runs where the reserved
 register may hold the program's value (7.5.4).
@@ -6202,7 +6204,8 @@ meaning items 4 and 7.
      by the counter in the frame, the frame a handler finds for a
      signal that lands in a blocking trapped open with and without
      `SA_RESTART`, outside any trap and in a rain on stats of a long
-     path, a handler that redirects a blocked call, one that changes
+     path, a handler that redirects a blocked call, one that redirects
+     at a listing's call, which is then not made, one that changes
      its mask in the frame, one that `siglongjmp`s out and one that
      unwinds, installs from a `vfork` child and from two threads at
      once, an install's old action as written and a query's the

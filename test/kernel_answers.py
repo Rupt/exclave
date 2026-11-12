@@ -687,6 +687,7 @@ SIGFRAME: tuple[str | dict[str, str] | None, ...] = (
     "a handler that blocks SIGUSR2 in its frame: open EINTR, SIGUSR2 blocked",
     "a handler that blocks every signal in its frame, then a trap: open EINTR, stat ok",
     "a handler that siglongjmps out: back, stat ok",
+    "a handler that moves the counter before a listing's call: the directory where it was",
     "installs from two threads at once: the last installed",
     "an install in a vfork child: the parent's action unchanged",
     "SA_RESETHAND: the handler ran, then default",

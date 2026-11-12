@@ -1833,7 +1833,9 @@ static int next_is_real(struct scratch *S, int nr, int fd, int *ours, unsigned l
  * batch is filled. Both records hold d_reclen at 16; the name is at 19, or at 18 in getdents' older record, which
  * ends in d_type, where getdents64's ends in the padding after the name's NUL. A copy that fails on memory the
  * kernel has just written, which only another thread's unmapping or a pipe the fallback cannot make can cause,
- * answers the kernel's count. */
+ * answers the kernel's count. Each listing the kernel is asked for is the program's call, through the re-issue slot:
+ * one a handler of the program's moved it away from is not made, and the directory is read from where it was
+ * (7.5.7). */
 static long do_getdents(struct scratch *S, int nr, long *a)
 {
     unsigned int count = (unsigned int)a[2];
@@ -1841,7 +1843,7 @@ static long do_getdents(struct scratch *S, int nr, long *a)
     int fd = (int)a[0], ours = -1;
     unsigned long name_at = nr == NR_getdents64 ? 19 : 18;
     for (;;) {
-        long n = SC3(nr, fd, a[1], count), kept = 0, end = 0, real_seen = 0;
+        long n = RE5(nr, fd, a[1], count, 0, 0), kept = 0, end = 0, real_seen = 0;
         if ((n == -EINVAL || n == -EFAULT) && next_is_real(S, nr, fd, &ours, name_at)) continue;
         if (n <= 0) return n;
         if (copy_in(S->pid, S->extra, (const void *)a[1], (size_t)n) != n) return n;
@@ -1872,7 +1874,7 @@ static long do_getdents(struct scratch *S, int nr, long *a)
         if (copy_out(S->pid, (void *)a[1], S->extra, (size_t)end)) return n;
         /* the room .real took, filled as the kernel fills a batch; a directory holds one .real, and an error after a
          * record is the records' count */
-        long more = SC3(nr, fd, a[1] + kept, count - (unsigned long)kept);
+        long more = RE5(nr, fd, a[1] + kept, count - (unsigned long)kept, 0, 0);
         return more > 0 ? kept + more : kept;
     }
 }
