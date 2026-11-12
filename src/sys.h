@@ -104,7 +104,8 @@ static inline long __sc6_reissue(long n, long a, long b, long c, long d, long e,
     return ret;
 }
 #endif
-/* the syscall numbers, laid out as a table, which test/syscalls.py checks against the kernel's */
+/* the syscall numbers, laid out as a table, which test/syscalls.py checks against the kernel's, every one, this
+ * architecture's and the other's */
 /* clang-format off */
 enum {
     NR_read = 0, NR_write = 1, NR_close = 3, NR_fstat = 5,
@@ -137,6 +138,7 @@ enum {
     NR_file_getattr = 468, NR_file_setattr = 469, NR_bind = 49, NR_connect = 42,
     NR_pipe2 = 293, NR_prlimit64 = 302, NR_ptrace = 101, NR_getppid = 110, NR_kcmp = 312,
     NR_brk = 12, NR_getrandom = 318,
+    NR_open_tree = 428, NR_move_mount = 429, NR_fsopen = 430, NR_fsconfig = 431, NR_fsmount = 432, NR_fspick = 433,
 };
 /* clang-format on */
 #define ARCH_NAME "x86_64"
@@ -252,6 +254,7 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
     NR_file_getattr = 468, NR_file_setattr = 469, NR_bind = 200, NR_connect = 203,
     NR_pipe2 = 59, NR_prlimit64 = 261, NR_ptrace = 117, NR_getppid = 173, NR_kcmp = 272,
     NR_brk = 214, NR_getrandom = 278,
+    NR_open_tree = 428, NR_move_mount = 429, NR_fsopen = 430, NR_fsconfig = 431, NR_fsmount = 432, NR_fspick = 433,
 };
 /* clang-format on */
 #define ARCH_NAME "aarch64"

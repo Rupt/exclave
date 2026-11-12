@@ -6380,8 +6380,9 @@ uses) up to the filter's ceiling. It fails on one it does not know. It
 names any syscall above the ceiling as a note, since the filter traps it
 and the handler answers `ENOSYS` until it is classified (7.4.2). It
 requires the trap list in `src/filter.c` to equal its own and the
-filter's ceiling to be the one it classifies up to, the
-syscall numbers in `src/sys.h` to be the kernel's, the trap set and the
+filter's ceiling to be the one it classifies up to, every
+syscall number in `src/sys.h` to be the kernel's, this machine's and,
+from the generic table an x86-64 machine's headers carry, aarch64's, the trap set and the
 syscall page to be those the filter's version shipped with (7.4.2), and
 every path and descriptor syscall the filter traps to have a case in the
 probe of item 7.

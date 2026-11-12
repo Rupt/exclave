@@ -5,8 +5,9 @@ the generic table aarch64 uses. One at or below the filter's ceiling that this f
 fails the test; one above it, which the running kernel is probed for, is a note, since the filter
 traps it and the handler answers ENOSYS until it is classified here and the ceiling moves (7.4.2).
 The launcher's trap list (src/filter.c) must equal TRAP, its refusals must cover DENIED and its
-ceiling must be HIGHEST_KNOWN; the
-numbers in src/sys.h's block for this machine must be the kernel's. The filter's trap set and the
+ceiling must be HIGHEST_KNOWN; every number src/sys.h lays out must be the kernel's, a call the
+launcher makes as much as one it traps, for this machine and, where this machine has its table, for
+the other architecture. The filter's trap set and the
 syscall page must be the ones its FILTER_VERSION shipped with (SHIPPED), and every path and
 descriptor syscall the filter traps must have a case in the syscall probe (test/oracle_syscalls.py).
 
@@ -577,36 +578,54 @@ def kernel_probe(lo: int, hi: int) -> list[int]:
     return present
 
 
-def launcher_lists() -> tuple[set[str], set[str], set[str], dict[str, int], int]:
-    """The trap list, the refusal lists and the descriptor syscalls of src/filter.c, by name.
-
-    Then the launcher's numbers for this machine, and the filter's ceiling.
-    """
-    with open(os.path.join(REPO, "src", "filter.c")) as f:
-        src = f.read()
+def launcher_numbers() -> dict[str, dict[str, int | None]]:
+    """The syscall numbers src/sys.h lays out, by architecture: None for a form marked ABSENT."""
     with open(os.path.join(REPO, "src", "sys.h")) as f:
         sysh = f.read()
     x86, a64 = sysh.split("#if defined(__x86_64__)", 1)[1].split("#elif defined(__aarch64__)", 1)
-    block = x86 if MACHINE == "x86_64" else a64.split("#else", 1)[0]
-    numbers = {n: int(v) for n, v in re.findall(r"NR_([a-z0-9_]+) = (\d+)", block)}
+    return {
+        arch: {
+            n: None if v.startswith("ABSENT") else int(v)
+            for n, v in re.findall(r"NR_([a-z0-9_]+) = (ABSENT\(\d+\)|\d+)", block)
+        }
+        for arch, block in (("x86_64", x86), ("aarch64", a64.split("#else", 1)[0]))
+    }
+
+
+def other_table(arch: str) -> dict[str, int] | None:
+    """Another architecture's table from this machine's headers, or None where it has none.
+
+    The generic table is aarch64's, and an x86-64 machine's kernel headers carry it; x86-64's own
+    is installed for that machine alone.
+    """
+    path = {
+        "aarch64": "/usr/include/asm-generic/unistd.h",
+        "x86_64": "/usr/include/x86_64-linux-gnu/asm/unistd_64.h",
+    }[arch]
+    return kernel_table(path) if os.path.exists(path) else None
+
+
+def launcher_lists() -> tuple[set[str], set[str], set[str], int]:
+    """The trap list, the refusal lists and the descriptor syscalls of src/filter.c, by name.
+
+    Then the filter's ceiling.
+    """
+    with open(os.path.join(REPO, "src", "filter.c")) as f:
+        src = f.read()
 
     def block(name: str) -> set[str]:
         m = re.search(name + r"\[\] = \{(.*?)\};", src, re.DOTALL)
         assert m, f"no {name} in src/filter.c"
-        out = set()
-        for tok in re.findall(r"NR_([a-z0-9_]+)|(\d+) /\* (\w+) \*/", m.group(1)):
-            if tok[0]:
-                out.add(tok[0])
-            else:
-                out.add(tok[2])
-        return out
+        bare = re.findall(r"[{,]\s*(\d+)\b", m.group(1))
+        assert not bare, f"{name} in src/filter.c lists {bare} by number, not by src/sys.h's name"
+        return set(re.findall(r"NR_([a-z0-9_]+)", m.group(1)))
 
     trap = block("path_syscalls")
     denied = block("enosys_syscalls") | block("eperm_syscalls")
     fd = block("fd_syscalls")
     m = re.search(r"#define HIGHEST_KNOWN_SYSCALL (\d+)", src)
     assert m, "no HIGHEST_KNOWN_SYSCALL in src/filter.c"
-    return trap, denied, fd, numbers, int(m.group(1))
+    return trap, denied, fd, int(m.group(1))
 
 
 def trap_digest() -> tuple[int, str]:
@@ -648,10 +667,8 @@ def trap_digest() -> tuple[int, str]:
         body = re.search(table + r"\[\](?:\[2\])? = \{(.*?)\};", src, re.DOTALL)
         assert body, f"no {table} in src/filter.c"
         text = re.sub(r"^#.*$", "", body.group(1), flags=re.MULTILINE)  # every build's entries
-        for nr, arg, _number, name in re.findall(
-            r"NR_(\w+)(?:, (\d+)\})?|(\d+) /\* (\w+) \*/", text
-        ):
-            lines.append(f"{table} {nr or name}" + (f" {arg}" if arg else ""))
+        for name, arg in re.findall(r"NR_(\w+)(?:, (\d+)\})?", text):
+            lines.append(f"{table} {name}" + (f" {arg}" if arg else ""))
     blob = "".join(x + "\n" for x in sorted(lines)).encode()
     return version, hashlib.blake2b(blob, digest_size=8).hexdigest()
 
@@ -730,7 +747,7 @@ def main() -> int:
         if nr <= HIGHEST_KNOWN and name not in known:
             print(f"FAIL unclassified syscall {nr:d} {name} below the filter's ceiling")
             fails += 1
-    trap, denied, fd, numbers, ceiling = launcher_lists()
+    trap, denied, fd, ceiling = launcher_lists()
     if ceiling != HIGHEST_KNOWN:
         # a ceiling raised in the filter alone would allow by number what is not classified here
         print(
@@ -748,10 +765,26 @@ def main() -> int:
     for n in sorted(DENIED - denied):
         print(f"FAIL {n} should be refused by the filter")
         fails += 1
-    for n in sorted(TRAP | DENIED):
-        if n in table and n in numbers and numbers[n] != table[n]:
-            print(f"FAIL {n}: launcher number {numbers[n]:d}, kernel {table[n]:d}")
-            fails += 1
+    # every number the launcher lays out, a call it makes itself as much as one it traps, for this
+    # architecture and, where this machine has its table, the other
+    numbers = launcher_numbers()
+    tables = {MACHINE: table}
+    for arch in numbers:
+        if arch != MACHINE and (other := other_table(arch)) is not None:
+            tables[arch] = other
+        elif arch != MACHINE:
+            print(f"note: no {arch} table on this machine: its numbers in src/sys.h unchecked")
+    for arch, kernel in tables.items():
+        unknown = [n for n, nr in numbers[arch].items() if nr is not None and n not in kernel]
+        if unknown:
+            print(f"note: the {arch} table here lacks {' '.join(sorted(unknown))}: unchecked")
+        for n, nr in sorted(numbers[arch].items()):
+            if nr is None and n in kernel:
+                print(f"FAIL {arch} {n}: marked absent in src/sys.h, the kernel's {kernel[n]:d}")
+                fails += 1
+            elif nr is not None and n in kernel and nr != kernel[n]:
+                print(f"FAIL {arch} {n}: launcher number {nr:d}, kernel {kernel[n]:d}")
+                fails += 1
     version, digest = trap_digest()
     if SHIPPED.get(version) != digest:
         print(

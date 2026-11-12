@@ -132,10 +132,9 @@ static const int fd_syscalls[] = {NR_fchmod,     NR_fchown,   NR_fsetxattr, NR_f
 /* signal-mask syscalls the handler scrubs (7.5.2) */
 static const int mask_syscalls[] = {NR_rt_sigprocmask, NR_rt_sigsuspend};
 /* refused with ENOSYS rather than emulated (7.4.3): each would bypass or confuse translation */
-static const int enosys_syscalls[] = {NR_clone3,        NR_io_uring_setup,   NR_name_to_handle_at,
-                                      NR_uselib,        428 /* open_tree */, 429 /* move_mount */,
-                                      430 /* fsopen */, 431 /* fsconfig */,  432 /* fsmount */,
-                                      433 /* fspick */, NR_mount_setattr,    NR_open_tree_attr};
+static const int enosys_syscalls[] = {
+    NR_clone3, NR_io_uring_setup, NR_name_to_handle_at, NR_uselib, NR_open_tree,     NR_move_mount,
+    NR_fsopen, NR_fsconfig,       NR_fsmount,           NR_fspick, NR_mount_setattr, NR_open_tree_attr};
 static const int eperm_syscalls[] = {NR_chroot, NR_acct, NR_pivot_root, NR_mount, NR_umount2};
 /* The program has two stages (7.4.2). The first answers by the number alone: a binary tree over the numbers, whose leaf
  * is ALLOW for every number the rule does not single out at or below the ceiling, so that the kernel's action cache
