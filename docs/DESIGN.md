@@ -3124,6 +3124,13 @@ exclave wrap gcc-13.exclave
 ln -s tree/usr/bin/gcc-13 gcc-13.exclave/gcc
 ```
 
+Each part below opens with its name in bold, in this order: **Unpack**
+and its five steps, of which the third, what stands in for the
+maintainer scripts, is the longest; a tree made **by hand**; **Wrap**,
+**Unwrap**, **Relink**, **Check** and **Hash**; what differs for
+**Alpine and rpm sets**; and **the step before the tool**, the
+fetchers.
+
 **Unpack** is the step before the tool, as fetching is the step before
 it: the command's `unpack` subcommand, `exclave unpack OUT PKG...`
 (`scripts/exclave unpack` from a checkout), the package `unpack/`, which shares with the tool's
@@ -6218,7 +6225,12 @@ resolving with chroot semantics. Where the kernel cannot be the
 oracle (signals, threads, nesting, the border), a named regression
 states the expected answer and gives the reason. The seven items below
 are the strategy. Source comments cite them as "17.4" and "17.7",
-meaning items 4 and 7.
+meaning items 4 and 7. After them, each part opening with its name in
+bold, come what implements each item, the requirements, running it,
+the gate, what lies beyond the gate, the suite and its fixture, the
+probe, the exerciser, the kernel matrix and its emulated rows, the
+hosted runners, the example runs and the rules that hold the suite
+together.
 
 1. **Namespaces as the oracle.** Where user namespaces are available
    (on the reference machine and in most of the matrix VMs), a workload
