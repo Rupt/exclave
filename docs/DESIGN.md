@@ -6526,9 +6526,9 @@ its time, ok, SKIP or FAIL:
   `test/grammar_test.py`); and `test/tables_test.py`, which
   reads the tables more than one part carries, the identity files
   (8.4), the volatile directories (8.1), the identity directories
-  (8.1 rule 5) and the names the launcher
-  logs for the syscalls the filter traps, from each source and fails
-  when they differ; and `test/affected_test.py`, which holds the
+  (8.1 rule 5), the cases of the handler's dispatch, which are the
+  syscalls the filter traps, and the names the launcher logs for them,
+  from each source and fails when they differ; and `test/affected_test.py`, which holds the
   derivation above to changes whose steps are known, a fetcher's
   source, a launcher's, a document, a path nothing names;
 - the stack budget of both launchers (the aarch64 one when it is
