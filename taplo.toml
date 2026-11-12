@@ -1,4 +1,4 @@
-# The repository's own TOML, not everything under data/, .uv/ and .venv/.
+# The repository's own TOML, not everything under build/, .uv/, .go/ and .venv/.
 include = ["*.toml"]
 
 [formatting]
