@@ -61,7 +61,7 @@ void cache_init(pid_t pid, void *page)
 {
     long m = (long)page;
     if (!m) m = sys_mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m < 0 && m > -4096) return;
+    if (map_failed(m)) return;
     long w = sys_madvise((void *)m, 4096, MADV_WIPEONFORK);
     lock = (volatile int *)m;
     if (w == 0) {

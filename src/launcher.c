@@ -192,7 +192,7 @@ static char **pointers(long n)
 {
     long m = sys_mmap(0, ((size_t)n * sizeof(char *) + 0xfff) & ~(size_t)0xfff, PROT_READ | PROT_WRITE,
                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m < 0 && m > -4096) die("out of memory", 0, ENOMEM);
+    if (map_failed(m)) die("out of memory", 0, ENOMEM);
     return (char **)m;
 }
 /* The program's environment: inside, the kernel's vector closed up in place over the launcher's own variables, which
@@ -222,7 +222,7 @@ static void borrow(void)
 {
     if (C.rlim[0] < 16 && C.rlim[0] < C.rlim[1]) {
         unsigned long more[2] = {C.rlim[1], C.rlim[1]};
-        C.borrowed = SC4(NR_prlimit64, 0, RLIMIT_NOFILE, more, 0) == 0;
+        C.borrowed = sys_prlimit(RLIMIT_NOFILE, more, 0) == 0;
     }
 }
 /* the descriptor room borrowed at startup, given back before the launcher execs another launcher, which borrows for
@@ -230,7 +230,7 @@ static void borrow(void)
 static void unborrow(void)
 {
     if (C.borrowed) {
-        SC4(NR_prlimit64, 0, RLIMIT_NOFILE, C.rlim, 0);
+        sys_prlimit(RLIMIT_NOFILE, C.rlim, 0);
         C.borrowed = 0;
     }
 }
@@ -256,7 +256,7 @@ static void retrace(const char *exe, char **argv, char **envp)
     sys_execve(exe, argv, env);
     /* the exec failed: the room borrowed again for the launcher's own opens, the vector given back */
     if (had) borrow();
-    SC2(NR_munmap, env, ((size_t)(k + 1) * sizeof(char *) + 0xfff) & ~(size_t)0xfff);
+    sys_munmap(env, ((size_t)(k + 1) * sizeof(char *) + 0xfff) & ~(size_t)0xfff);
 }
 
 /* a path kept for the life of the process, in the arena: s, cut as a PATH_MAX buffer would cut it */
@@ -329,9 +329,9 @@ static void read_manifest(struct scratch *S, long fd, unsigned long *auxv)
     size_t size = (size_t)n;
     if (n == page) {
         struct kstat st;
-        if (SC2(NR_fstat, fd, &st) < 0) manifest_die(S, "cannot stat manifest", 0);
+        if (sys_fstat(fd, &st) < 0) manifest_die(S, "cannot stat manifest", 0);
         long a = sys_mmap(0, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, (int)fd, 0);
-        if (a < 0 && a > -4096) manifest_die(S, "cannot map manifest", a);
+        if (map_failed(a)) manifest_die(S, "cannot map manifest", a);
         m = (const char *)a;
         size = (size_t)st.st_size;
     }
@@ -339,7 +339,7 @@ static void read_manifest(struct scratch *S, long fd, unsigned long *auxv)
     if (size == 0) manifest_die(S, "manifest is empty", 0);
     char err[256];
     if (manifest_parse(m, size, &C, err, sizeof err) < 0) die("bad manifest", err, 0);
-    if (m != small) SC2(NR_munmap, m, size);
+    if (m != small) sys_munmap(m, size);
     int ok = isa_supported(C.cpu, auxv);
     if (ok < 0) die("the exclave names a CPU level this launcher does not know", C.cpu, 0);
     if (ok == 0) die("this CPU lacks the exclave's CPU level", C.cpu, 0);
@@ -584,7 +584,7 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
 
     unsigned long m = SIGSYS_BIT;                    /* 7.5.2: SIGSYS must never be blocked */
     sys_rt_sigprocmask(SIG_UNBLOCK, &m, 0, 8);
-    if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, C.rlim) == 0) borrow();
+    if (sys_prlimit(RLIMIT_NOFILE, 0, C.rlim) == 0) borrow();
     /* the start's buffers are one chunk's, each in the role common.h gives it, held until the jump: the pages the
      * start touches are then the ones the program's first trapped call would (16.4) */
     char *lock = start_map(scratch_chunk_bytes());

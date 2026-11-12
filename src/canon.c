@@ -48,7 +48,7 @@ static int fd_virtual_in(int fd, char *out, int *tree)
     if (r < 0) return r == -ENOENT ? -EBADF : (int)r;
     if (r > 10 && xstrcmp(out + r - 10, " (deleted)") == 0) {
         struct kstat obj;
-        if (SC2(NR_fstat, fd, &obj) < 0 || !names_object(out, &obj)) return -ENOENT;
+        if (sys_fstat(fd, &obj) < 0 || !names_object(out, &obj)) return -ENOENT;
     }
     if (tree) *tree = in_tree(out);
     return from_real(out);

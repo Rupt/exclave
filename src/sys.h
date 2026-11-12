@@ -645,6 +645,12 @@ static inline long sys_getdents64(int fd, void *b, size_t n) { return SC3(NR_get
 static inline long sys_prctl(int op, unsigned long a, unsigned long b, unsigned long c, unsigned long d)
 { return SC5(NR_prctl, op, a, b, c, d); }
 static inline long sys_kill(pid_t p, int s) { return SC2(NR_kill, p, s); }
+/* whether a mapping's answer is an error: an address may be negative as a long, an errno is never below -4095 */
+static inline int map_failed(long m) { return m < 0 && m > -4096; }
+/* calls whose arguments are a descriptor or an address held as a long as often as not: by name, untyped */
+#define sys_fstat(fd, st) SC2(NR_fstat, fd, st)
+#define sys_munmap(at, n) SC2(NR_munmap, at, n)
+#define sys_prlimit(resource, new, old) SC4(NR_prlimit64, 0, resource, new, old)
 static inline long sys_mmap(void *a, size_t n, int prot, int fl, int fd, long off)
 { return SC6(NR_mmap, a, n, prot, fl, fd, off); }
 static inline long sys_madvise(void *a, size_t n, int advice) { return SC3(NR_madvise, a, n, advice); }

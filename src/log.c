@@ -55,7 +55,7 @@ void log_open(char **envp)
         fd = hi;
     }
     struct kstat st;
-    if (SC2(NR_fstat, fd, &st) == 0) {
+    if (sys_fstat(fd, &st) == 0) {
         log_dev = st.st_dev;
         log_ino = st.st_ino;
     }
@@ -68,7 +68,7 @@ static int log_ok(void)
 {
     if (C.logfd < 0) return 0;
     struct kstat st;
-    if (SC2(NR_fstat, C.logfd, &st) < 0 || st.st_dev != log_dev || st.st_ino != log_ino) {
+    if (sys_fstat(C.logfd, &st) < 0 || st.st_dev != log_dev || st.st_ino != log_ino) {
         C.logfd = -1;
         return 0;
     }

@@ -122,7 +122,7 @@ struct scratch *scratch_get(pid_t pid, pid_t tid, unsigned long frame)
     long m = (long)spare;
     spare = 0;
     if (!m) m = sys_mmap(0, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m < 0 && m > -4096) return 0;
+    if (map_failed(m)) return 0;
     c = (struct chunk *)m;
     c->busy = 1;
     c->pid = pid;

@@ -95,7 +95,7 @@ char *reserve_base(long *err)
 {
     if (!arena.reserve) {
         long m = sys_mmap(0, RESERVE_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-        if (m < 0 && m > -4096) {
+        if (map_failed(m)) {
             *err = -m;
             return 0;
         }
@@ -120,9 +120,9 @@ char *start_map(size_t chunk)
 {
     size_t page = C.pagesz, head = page + ((chunk + page - 1) & ~(page - 1));
     long m = sys_mmap(0, head + RESERVE_SIZE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-    if (m < 0 && m > -4096) return 0;
+    if (map_failed(m)) return 0;
     if (sys_mprotect((void *)m, head + RESERVE_STEP, PROT_READ | PROT_WRITE) < 0) {
-        SC2(NR_munmap, m, head + RESERVE_SIZE);
+        sys_munmap(m, head + RESERVE_SIZE);
         return 0;
     }
     arena.reserve = (char *)m + head;

@@ -475,7 +475,7 @@ static long do_openat2(struct scratch *S, long *a)
         if ((rf & RESOLVE_BENEATH) && S->given[0] == '/') return -EXDEV; /* nd_jump_root: an absolute path, likewise */
         if (dfd != AT_FDCWD) {
             struct kstat *st = &S->st;
-            if ((r = SC2(NR_fstat, dfd, st)) < 0) return r;
+            if ((r = sys_fstat(dfd, st)) < 0) return r;
             if ((st->st_mode & S_IFMT) != S_IFDIR && (rf & RESOLVE_IN_ROOT)) return -ENOTDIR;
         }
         r = dfd_virtual(dfd, S->v2);
@@ -513,13 +513,13 @@ static char **vector(void *region, size_t region_size, long n, void **big)
     if ((size_t)n * sizeof(char *) <= region_size) return (char **)region;
     long m = sys_mmap(0, ((size_t)n * sizeof(char *) + 0xfff) & ~(size_t)0xfff, PROT_READ | PROT_WRITE,
                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m < 0 && m > -4096) return 0;
+    if (map_failed(m)) return 0;
     *big = (void *)m;
     return (char **)m;
 }
 static void vector_free(void *big, long n)
 {
-    if (big) SC2(NR_munmap, big, ((size_t)n * sizeof(char *) + 0xfff) & ~(size_t)0xfff);
+    if (big) sys_munmap(big, ((size_t)n * sizeof(char *) + 0xfff) & ~(size_t)0xfff);
 }
 
 #define VEC_MAX (1L << 20)
@@ -827,7 +827,7 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
         struct kstat st;
         /* AT_FDCWD with an empty path is the working directory, no descriptor */
         if (dfd != AT_FDCWD) {
-            if (SC2(NR_fstat, dfd, &st) == 0) {
+            if (sys_fstat(dfd, &st) == 0) {
                 unsigned m = st.st_mode & S_IFMT;
                 /* a symlink descriptor (O_PATH|O_NOFOLLOW) cannot be run */
                 if (m == S_IFLNK) return -ELOOP;
@@ -1353,7 +1353,7 @@ static long do_access(struct scratch *S, int nr, long *a)
      * a regular file, a directory or a symlink under a read-only mount is EROFS, and a special file never is */
     if (r < 0 || !(mode & W_OK) || !(empty ? fd_exclave(S, (int)a[0]) : is_exclave_path(S->v))) return r;
     struct kstat st;
-    if ((empty ? SC2(NR_fstat, a[0], &st) : sys_lstat(S->real, &st)) < 0) return r;
+    if ((empty ? sys_fstat(a[0], &st) : sys_lstat(S->real, &st)) < 0) return r;
     unsigned m = st.st_mode & S_IFMT;
     return m == S_IFREG || m == S_IFDIR || m == S_IFLNK ? -EROFS : r;
 }
@@ -1871,7 +1871,7 @@ static __attribute__((noinline)) long do_seccomp(struct scratch *S, int nr, long
     if (fp.len == 0 || fp.len > BPF_MAXINSNS || !fp.filter) return -EINVAL;
     size_t room = 2UL * BPF_MAXINSNS * sizeof(struct sock_filter);
     long m = sys_mmap(0, room, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (m < 0 && m > -4096) return -ENOMEM;
+    if (map_failed(m)) return -ENOMEM;
     struct sock_filter *body = (struct sock_filter *)m, *out = body + BPF_MAXINSNS;
     long r = copy_exact(S->pid, body, fp.filter, fp.len * sizeof *body);
     if (r == 0) r = filter_wrap(body, fp.len, out);
@@ -1889,7 +1889,7 @@ static __attribute__((noinline)) long do_seccomp(struct scratch *S, int nr, long
         r = nr == NR_prctl ? RE5(NR_prctl, PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &fp, a[3], a[4])
                            : RE5(NR_seccomp, SECCOMP_SET_MODE_FILTER, flags, &fp, 0, 0);
     }
-    SC2(NR_munmap, m, room);
+    sys_munmap(m, room);
     return r;
 }
 #endif

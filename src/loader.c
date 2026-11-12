@@ -187,12 +187,12 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
             pl->mm.start_brk = pl->mm.brk = brk;
             given = 1;
             if (mm_give(&pl->mm, b, at - lo) < 0) {
-                SC2(NR_munmap, at, hi - lo);
+                sys_munmap(at, hi - lo);
                 base = -ENOMEM;
             }
         }
-        if (base < 0 && base > -4096) base = sys_mmap(0, hi - lo, 0, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (base < 0 && base > -4096) die_signal(SIGSEGV, "cannot reserve address space", name, base);
+        if (map_failed(base)) base = sys_mmap(0, hi - lo, 0, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (map_failed(base)) die_signal(SIGSEGV, "cannot reserve address space", name, base);
         bias = (unsigned long)base - lo;
     } else if (at) {
         pl->mm.start_brk = pl->mm.brk = brk;
@@ -214,7 +214,7 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
         int fixed = (eh->e_type == ET_DYN) ? MAP_FIXED : MAP_FIXED_NOREPLACE;
         if (flen) {
             long m = sys_mmap((void *)mstart, flen, prot, MAP_PRIVATE | fixed, fd, (long)(ph[i].p_offset - off));
-            if (m < 0 && m > -4096) die_signal(SIGSEGV, "cannot map segment", name, m);
+            if (map_failed(m)) die_signal(SIGSEGV, "cannot map segment", name, m);
             /* a kernel without MAP_FIXED_NOREPLACE treats the address as a hint and may map elsewhere */
             if ((unsigned long)m != mstart) die_signal(SIGSEGV, "segment address already in use", name, EEXIST);
         }
@@ -223,7 +223,7 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
             if ((ph[i].p_flags & PF_W) && flen) xmemset((void *)fend, 0, zend - fend);
             if (mstart + mlen > zend) {
                 long m = sys_mmap((void *)zend, mstart + mlen - zend, prot, MAP_PRIVATE | MAP_ANONYMOUS | fixed, -1, 0);
-                if (m < 0 && m > -4096) die_signal(SIGSEGV, "cannot map bss", name, m);
+                if (map_failed(m)) die_signal(SIGSEGV, "cannot map bss", name, m);
                 if ((unsigned long)m != zend) die_signal(SIGSEGV, "bss address already in use", name, EEXIST);
             }
         }
@@ -270,11 +270,11 @@ long open_borrowed(int dfd, const char *path, int flags)
      * raised to the hard one for the open, since the lowest free number may lie anywhere above a limit a program
      * lowered below its open descriptors (7.4.5) */
     unsigned long lim[2], all[2];
-    if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, 0, lim) < 0 || lim[0] >= lim[1]) return fd;
+    if (sys_prlimit(RLIMIT_NOFILE, 0, lim) < 0 || lim[0] >= lim[1]) return fd;
     all[0] = all[1] = lim[1];
-    if (SC4(NR_prlimit64, 0, RLIMIT_NOFILE, all, 0) < 0) return fd;
+    if (sys_prlimit(RLIMIT_NOFILE, all, 0) < 0) return fd;
     fd = sys_openat(dfd, path, flags | O_CLOEXEC, 0);
-    SC4(NR_prlimit64, 0, RLIMIT_NOFILE, lim, 0);
+    sys_prlimit(RLIMIT_NOFILE, lim, 0);
     return fd;
 }
 
@@ -380,7 +380,7 @@ int elf_interp_probe(const char *real, void *buf)
      * looked at: an ET_EXEC interpreter loads */
     else if (eh->e_ident[0] != 0x7f || eh->e_ident[1] != 'E' || eh->e_ident[2] != 'L' || eh->e_ident[3] != 'F' ||
              eh->e_machine != EM_NATIVE || eh->e_phentsize != sizeof(Phdr) || eh->e_phnum == 0 ||
-             (size_t)eh->e_phnum * sizeof(Phdr) > 65536 || SC2(NR_fstat, fd, st) < 0 ||
+             (size_t)eh->e_phnum * sizeof(Phdr) > 65536 || sys_fstat(fd, st) < 0 ||
              eh->e_phoff > (unsigned long)st->st_size ||
              (unsigned long)st->st_size - eh->e_phoff < (size_t)eh->e_phnum * sizeof(Phdr))
         ret = -ELIBBAD;
@@ -515,7 +515,7 @@ void loader_run(struct scratch *S, const char *vpath, int fd, long argc, char **
     /* the chunk goes back before the program runs: its first trapped call claims it */
     scratch_put(S);
     /* the program's own descriptor limit, as it had it (7.4.5) */
-    if (C.borrowed) SC4(NR_prlimit64, 0, RLIMIT_NOFILE, C.rlim, 0);
+    if (C.borrowed) sys_prlimit(RLIMIT_NOFILE, C.rlim, 0);
     *w++ = (unsigned long)argc;
     for (long i = 0; i < argc; i++) *w++ = (unsigned long)argv[i];
     *w++ = 0;
