@@ -338,9 +338,7 @@ func cmdPrune(args []string) int {
 		}
 	}
 	fmt.Fprintf(out, "pruned %s: kept %d files, removed %d, %d bytes freed\n", ex, kept, removed, freed)
-	if hasTreeRecord(ex) {
-		writeHashes(ex, "", false, true)
-	}
+	recordAgain(ex)
 	if staticReport(ex, nil) > 0 {
 		return 1
 	}

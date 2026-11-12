@@ -43,27 +43,43 @@ func hasTreeRecord(ex string) bool {
 	return lexists(p) && find(loadHashes(p), "tree") != nil
 }
 
+// The hashes file has three states, each written by the command that makes it. An unwrapped
+// exclave records its packages alone (recordUnwrapped); a wrapped one its launcher, its manifest
+// and its tree too (recordWrapped); and a wrapped one whose launcher or tree a command changed
+// records them anew and keeps its manifest record as it stands (recordAgain), which says nothing
+// of an exclave that was not wrapped.
+
+func recordUnwrapped(ex string) { writeHashes(ex, nil, false) }
+
+func recordWrapped(ex, manifestHash string) { writeHashes(ex, &manifestHash, true) }
+
+func recordAgain(ex string) {
+	p := pathJoin(ex, ".exclave/hashes")
+	if !lexists(p) {
+		return
+	}
+	old := loadHashes(p)
+	if find(old, "tree") == nil {
+		return
+	}
+	var manifestHash *string
+	if m := find(old, "manifest"); m != nil { // the record as it stands, whatever it holds
+		manifestHash = &m.F[0].V
+	}
+	writeHashes(ex, manifestHash, true)
+}
+
 // writeHashes writes the hashes file: the hashes and tool records, the launcher's hash when the
-// exclave is wrapped, the pkg records the file holds already, then the manifest's hash and the
-// tree hash when given ("" for no manifest hash). keep takes the manifest hash, and the tree
-// record if there was one, from the file as it stands, as after prune and relink.
-func writeHashes(ex, manifestHash string, tree, keep bool) {
+// exclave is wrapped, the pkg records the file holds already, then the manifest's hash, if there
+// is one to record, and the tree hash when tree is set.
+func writeHashes(ex string, manifestHash *string, tree bool) {
 	p, ld := pathJoin(ex, ".exclave/hashes"), pathJoin(ex, ".exclave/launcher")
 	var old []format.Record
 	if lexists(p) {
 		old = loadHashes(p)
 	}
-	hasManifest := manifestHash != ""
-	if keep {
-		m := find(old, "manifest")
-		hasManifest = m != nil
-		if hasManifest { // the record as it stands, whatever it holds
-			manifestHash = m.F[0].V
-		}
-		tree = find(old, "tree") != nil
-	}
 	rs := []format.Record{format.Rec("hashes", format.T("1")), format.Rec("tool", format.S(version))}
-	if hasManifest || tree {
+	if manifestHash != nil || tree {
 		rs = append(rs, format.Rec("launcher", format.S(format.HashText(readFile(ld)))))
 	}
 	for _, r := range old {
@@ -71,8 +87,8 @@ func writeHashes(ex, manifestHash string, tree, keep bool) {
 			rs = append(rs, format.Rec("pkg", r.F...))
 		}
 	}
-	if hasManifest {
-		rs = append(rs, format.Rec("manifest", format.S(manifestHash)))
+	if manifestHash != nil {
+		rs = append(rs, format.Rec("manifest", format.S(*manifestHash)))
 	}
 	if tree {
 		rs = append(rs, format.Rec("tree", format.S(treeHash(pathJoin(ex, "tree")))))
@@ -134,7 +150,7 @@ func cmdUnwrap(args []string) int {
 		}
 	})
 	fmt.Fprintf(out, "unwrapped %d executables\n", moved)
-	writeHashes(ex, "", false, false)
+	recordUnwrapped(ex)
 	return 0
 }
 
@@ -212,9 +228,7 @@ func cmdRelink(args []string) int {
 	for _, p := range left {
 		fmt.Fprintf(out, "original without wrapper, left alone: %s\n", p)
 	}
-	if hasTreeRecord(ex) {
-		writeHashes(ex, "", false, true)
-	}
+	recordAgain(ex)
 	fmt.Fprintf(out, "relinked %d wrappers to the new launcher\n", n)
 	return 0
 }
@@ -388,7 +402,7 @@ func cmdWrap(args []string) int {
 	}
 	fmt.Fprintf(out, "wrapped %d executables\n", wrapFiles(ex, data))
 	writeReadme(ex)
-	writeHashes(ex, format.HashText(mdata), true, false)
+	recordWrapped(ex, format.HashText(mdata))
 	fmt.Fprintf(out, "%s is wrapped\n", ex)
 	return 0
 }

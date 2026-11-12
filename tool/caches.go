@@ -1090,7 +1090,7 @@ func cmdCaches(args []string) int {
 		fmt.Fprintf(out, "%s: %s, %d new or changed\n", m.what, n, changed)
 	}
 	removeStaging(staging)
-	writeHashes(ex, "", false, true)
+	recordAgain(ex)
 	fmt.Fprintf(out, "%s: the tree hash recorded\n", ex)
 	return 0
 }
