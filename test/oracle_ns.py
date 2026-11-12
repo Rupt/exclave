@@ -14,7 +14,6 @@ import argparse
 import concurrent.futures
 import errno
 import os
-import platform
 import re
 import shutil
 import subprocess
@@ -301,36 +300,20 @@ def worlds(given: str, work: str) -> tuple[str, str]:
     return ex, root
 
 
-# the suite's path programs whose expectations the kernel can check (17 item 4), each judged here as
-# the suite judges the launcher's answers
-PROGRAMS = (
+# The suite's programs whose expectations the kernel can check (17 item 4), each judged here as the
+# suite judges the launcher's answers: every exerciser test/kernel_answers.py registers, by its
+# record, and these, whose command or judgement under bwrap is the oracle's own.
+OWN = (
     "ro_matrix",
     "openat2",
-    "creat_slash",
     "slash_links",
-    "open_flags",
     "unix_socket",
     "magic_links",
     "rename_dots",
-    "program_perm",
-    "exe_link",
-    "exec_script",
-    "exec_elf",
-    "exec_auxv",
-    "exec_state",
-    "mem_layout",
-    "mem_edge",
-    "fd_procs",
     "top_reach",
-    "sigcalls",
-    "sigrain",
-    "sigstack",
-    "clones",
-    "sigframe",
-    "unwind_frame",
     "memfd_exec",
-    "seccomp_filter",
 )
+PROGRAMS = (*OWN, *kernel_answers.EXERCISERS)
 
 
 def judge(name: str, rc: int, out: str, hostdir: str, root: str) -> list[str]:
@@ -338,6 +321,10 @@ def judge(name: str, rc: int, out: str, hostdir: str, root: str) -> list[str]:
 
     hostdir is the writable host directory the program was given, root the kernel's root.
     """
+    if name in kernel_answers.EXERCISERS:
+        world = kernel_answers.World(by_the_kernel=True, root=root)
+        wrong = kernel_answers.EXERCISERS[name].wrong(out, world)
+        return wrong or ([] if rc == 0 and out else [out])
     if name == "ro_matrix":
         # under bwrap there is no wrapper, so the program's redirect line is not meaningful there;
         # it exits 1 on any FAIL line, the wrapper's included
@@ -356,55 +343,17 @@ def judge(name: str, rc: int, out: str, hostdir: str, root: str) -> list[str]:
             kernel_answers.magic_links_missing(hostdir)
             | kernel_answers.link_empty_allowed(hostdir),
         )
-    elif name == "open_flags":
-        wrong = kernel_answers.open_flags_wrong(out, by_the_kernel=True)
     elif name == "rename_dots":
         # bwrap's /tmp is a tmpfs of its own, hostdir a bind of the host's
         wrong = kernel_answers.rename_dots_wrong(out, across=True)
-    elif name == "program_perm":
-        wrong = kernel_answers.program_perm_wrong(out)
-    elif name == "exe_link":
-        wrong = kernel_answers.exe_link_wrong(out)
     elif name == "memfd_exec":
         # a confined bwrap child is refused every exec of a memfd (tree.memfd_exec_under_bwrap)
         denied = tree.memfd_exec_under_bwrap() == errno.EACCES
         wrong = kernel_answers.memfd_exec_wrong(out, exec_denied=denied)
         if wrong:
             wrong += [x for x in out.splitlines() if x.startswith("facts:")]
-    elif name == "creat_slash":
-        wrong = kernel_answers.creat_slash_wrong(out, by_the_kernel=True)
-    elif name == "exec_auxv":
-        wrong = kernel_answers.exec_auxv_wrong(
-            out, by_the_kernel=True, static_libc=tree.has_static_libc(root)
-        )
-    elif name.startswith("exec_"):
-        wrong = {
-            "exec_script": kernel_answers.exec_script_wrong,
-            "exec_elf": kernel_answers.exec_elf_wrong,
-            "exec_state": kernel_answers.exec_state_wrong,
-        }[name](out, by_the_kernel=True)
-    elif name == "mem_layout":
-        wrong = kernel_answers.mem_layout_wrong(out, by_the_kernel=True)
-    elif name == "mem_edge":
-        wrong = kernel_answers.mem_edge_wrong(out, by_the_kernel=True)
-    elif name == "fd_procs":
-        wrong = kernel_answers.fd_procs_wrong(out, by_the_kernel=True)
     elif name == "top_reach":
         wrong = kernel_answers.top_reach_limit_wrong(out, by_the_kernel=True)
-    elif name == "sigcalls":
-        wrong = kernel_answers.sigcalls_wrong(out)
-    elif name == "sigrain":
-        wrong = kernel_answers.sigrain_wrong(out)
-    elif name == "sigstack":
-        wrong = kernel_answers.sigstack_wrong(out, by_the_kernel=True)
-    elif name == "clones":
-        wrong = kernel_answers.clones_wrong(out, by_the_kernel=True)
-    elif name == "sigframe":
-        wrong = kernel_answers.sigframe_wrong(out, by_the_kernel=True)
-    elif name == "unwind_frame":
-        wrong = kernel_answers.unwind_frame_wrong(out, musl=tree.musl(root, platform.machine()))
-    elif name == "seccomp_filter":
-        wrong = kernel_answers.seccomp_filter_wrong(out, by_the_kernel=True)
     else:
         wrong = {
             "slash_links": kernel_answers.slash_links_wrong,
@@ -416,8 +365,9 @@ def judge(name: str, rc: int, out: str, hostdir: str, root: str) -> list[str]:
 def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> int:
     """Run PROGRAMS under bwrap, where the kernel answers, and judge them; the number that fail.
 
-    Each is compiled with the exclave's compiler and run with the arguments the suite gives it,
-    unwind_frame with -fexceptions as its test builds it; a program says nothing on stderr.
+    Each is compiled with the exclave's compiler as the suite compiles it (tree.PROG_CFLAGS, and
+    its record's own flags) and run with the arguments the suite gives it, an exerciser in a host
+    directory of its own; a program says nothing on stderr.
     """
     tr = os.path.join(ex, "tree")
     gcc = os.path.join(tr, tree.vbin(tr, sp.gcc).lstrip("/"))
@@ -426,11 +376,12 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
         r = subprocess.run(
             [
                 gcc,
-                "-O1",
-                *(["-fexceptions"] if name == "unwind_frame" else []),
+                *tree.PROG_CFLAGS,
+                *(e.cflags if (e := kernel_answers.EXERCISERS.get(name)) else ()),
                 "-o",
                 os.path.join(work, name),
                 os.path.join(HERE, "progs", name + ".c"),
+                *tree.PROG_LIBS,
             ],
             cwd=work,
             env={"PATH": "/usr/bin:/bin"},
@@ -460,12 +411,10 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
             f"{work}/openat2 pathless {hostdir} && "
             f"EXCLAVE_TEST_TRUE={true} exec {work}/openat2 {hostdir}"
         ),
-        "creat_slash": f"{work}/creat_slash {hostdir}",
         "slash_links": (
             f"mkdir -p {hostdir}/slash_links && {work}/slash_links {hostdir}/slash_links {true} "
             f"/usr/share {tree.dir_link(root)}"
         ),
-        "open_flags": f"{work}/open_flags {hostdir}",
         "unix_socket": (
             f"mkdir {sockhost} && {work}/unix_socket {sockhost} /usr/share {true} "
             f"/usr/share/exclave-test.sock {deep}"
@@ -475,30 +424,18 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
             f"{work}/magic_links link-empty {hostdir}"
         ),
         "rename_dots": f"{work}/rename_dots {hostdir} /tmp",
-        "program_perm": f"{work}/program_perm",
-        "exe_link": f"{work}/exe_link",
         "memfd_exec": f"{work}/memfd_exec",
-        # each in a host directory of its own: their files share names
-        "exec_script": f"mkdir -p {hostdir}/s && {work}/exec_script run {hostdir}/s",
-        "exec_elf": f"mkdir -p {hostdir}/e && {work}/exec_elf {hostdir}/e",
-        "exec_auxv": f"mkdir -p {hostdir}/a && {work}/exec_auxv {hostdir}/a",
-        "exec_state": f"mkdir -p {hostdir}/t && {work}/exec_state {hostdir}/t",
-        "mem_layout": f"{work}/mem_layout",
-        "mem_edge": f"mkdir -p {hostdir}/edge && {work}/mem_edge {hostdir}/edge",
-        "fd_procs": f"mkdir -p {hostdir}/fdp && {work}/fd_procs {hostdir}/fdp",
         # two placeholders every tree ships (8.1), and a host file that is its standard input
         "top_reach": (
             f"echo x > {hostdir}/reach-in && "
             f"{work}/top_reach limit /srv/none /mnt/none {hostdir}/reach-in < {hostdir}/reach-in"
         ),
-        "sigcalls": f"{work}/sigcalls",
-        "sigrain": f"mkdir -p {hostdir}/sigrain && {work}/sigrain {hostdir}/sigrain",
-        "sigstack": f"{work}/sigstack",
-        "clones": f"mkdir -p {hostdir}/clones && {work}/clones {hostdir}/clones",
-        "sigframe": f"mkdir -p {hostdir}/sigframe && {work}/sigframe {hostdir}/sigframe",
-        "unwind_frame": f"mkdir -p {hostdir}/unwind && {work}/unwind_frame {hostdir}/unwind",
-        "seccomp_filter": f"mkdir -p {hostdir}/seccomp && {work}/seccomp_filter {hostdir}/seccomp",
     }
+    # an exerciser by its record, in a host directory of its own: their files share names
+    for name, e in kernel_answers.EXERCISERS.items():
+        d = os.path.join(hostdir, name)
+        args = " ".join(d if a == "HOSTDIR" else a for a in e.args)
+        cmds[name] = f"mkdir -p {d} && {work}/{name} {args}".rstrip()
     fails = 0
     for name in PROGRAMS:
         try:

@@ -17,7 +17,7 @@ import kernel_answers
 import machines
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
-from suite import Ctx, copy_exclave, inside, wrapper
+from suite import Ctx, copy_exclave, exerciser_wrong, inside, wrapper
 
 PER_LINUX32 = 0x8  # personality(2)
 
@@ -470,8 +470,8 @@ def another_process_exe_link(ctx: Ctx) -> None:
     one its EXCLAVE_EXEC names (13 item 46), as the kernel's link does natively. Measured under
     bwrap; the launcher once named itself, and running the link ran it without a program.
     """
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "exe_link"))
-    expect(rc == 0 and not kernel_answers.exe_link_wrong(out), out + err)
+    bad = exerciser_wrong(ctx, "exe_link")
+    expect(not bad, "; ".join(bad))
 
 
 @test
@@ -613,21 +613,6 @@ def fexec(ctx: Ctx) -> None:
     expect(not bad, "; ".join(bad))
 
 
-def exerciser(ctx: Ctx, name: str, args: list[str]) -> str:
-    """Run test/progs/NAME in a fresh host directory of its own, HOSTDIR in args; its output."""
-    d = os.path.join(ctx.work, name + "-host")
-    shutil.rmtree(d, ignore_errors=True)
-    os.makedirs(d)
-    rc, out, err = inside(
-        ctx,
-        os.path.join(ctx.progs, name),
-        [d if a == "HOSTDIR" else a for a in args],
-        env={**ctx.env, "CC": ctx.vbin(ctx.gcc)},  # the programs some cases build
-    )
-    expect(rc == 0, f"{name}: rc={rc} {out!r} {err!r}")
-    return out
-
-
 @test
 def exec_script(ctx: Ctx) -> None:
     """7.4.5: what execve makes of a #! line and of a file that is no program, as the kernel does.
@@ -641,7 +626,7 @@ def exec_script(ctx: Ctx) -> None:
     file is EACCES, the launcher's own answer (13 item 12). The kernel under bwrap measured these
     answers (test/kernel_answers.py, checked again by the namespace oracle).
     """
-    bad = kernel_answers.exec_script_wrong(exerciser(ctx, "exec_script", ["run", "HOSTDIR"]))
+    bad = exerciser_wrong(ctx, "exec_script")
     expect(not bad, "; ".join(bad))
 
 
@@ -663,7 +648,7 @@ def exec_elf(ctx: Ctx) -> None:
     fixed-address programs the tree's compiler builds run. The kernel under bwrap measured these
     answers.
     """
-    bad = kernel_answers.exec_elf_wrong(exerciser(ctx, "exec_elf", ["HOSTDIR"]))
+    bad = exerciser_wrong(ctx, "exec_elf")
     expect(not bad, "; ".join(bad))
 
 
@@ -682,10 +667,8 @@ def exec_auxv(ctx: Ctx) -> str | None:
     the environment's end there and item 12 for a hard limit of 3. The kernel under bwrap measured
     these answers.
     """
-    static_libc = tree.has_static_libc(ctx.tree)
-    bad = kernel_answers.exec_auxv_wrong(
-        exerciser(ctx, "exec_auxv", ["HOSTDIR"]), static_libc=static_libc
-    )
+    static_libc = tree.has_static_libc(ctx.root)
+    bad = exerciser_wrong(ctx, "exec_auxv")
     expect(not bad, "; ".join(bad))
     return None if static_libc else "the tree has no static libc: the descriptor cases not run"
 
@@ -700,7 +683,7 @@ def exec_state(ctx: Ctx) -> None:
     a second thread, with the thread's own mask and pending signals and the process's; SIGSYS is
     the launcher's (7.5.1, 13 item 23). The kernel under bwrap measured these answers.
     """
-    bad = kernel_answers.exec_state_wrong(exerciser(ctx, "exec_state", ["HOSTDIR"]))
+    bad = exerciser_wrong(ctx, "exec_state")
     expect(not bad, "; ".join(bad))
 
 
@@ -721,7 +704,7 @@ def mem_layout(ctx: Ctx) -> None:
     vector, /proc/self/auxv and PR_GET_AUXV, is the launcher's (13 item 62). The kernel under
     bwrap measured these answers.
     """
-    bad = kernel_answers.mem_layout_wrong(exerciser(ctx, "mem_layout", []))
+    bad = exerciser_wrong(ctx, "mem_layout")
     expect(not bad, "; ".join(bad))
 
 
@@ -801,7 +784,7 @@ def mem_edge(ctx: Ctx) -> None:
     some starts when its environment is small, where a copy that took the window whole or not at
     all answered its exec EFAULT. The kernel under bwrap measured the answers.
     """
-    bad = kernel_answers.mem_edge_wrong(exerciser(ctx, "mem_edge", ["HOSTDIR"]))
+    bad = exerciser_wrong(ctx, "mem_edge")
     expect(not bad, "; ".join(bad))
     d = os.path.join(ctx.work, "mem_edge-pipe")
     shutil.rmtree(d, ignore_errors=True)
@@ -836,7 +819,7 @@ def fd_procs(ctx: Ctx) -> None:
     exec'd wrappers, and the first open of a program exec'd with 0, 1 and 2 closed, are the
     kernel's. The kernel under bwrap measured these answers.
     """
-    bad = kernel_answers.fd_procs_wrong(exerciser(ctx, "fd_procs", ["HOSTDIR"]))
+    bad = exerciser_wrong(ctx, "fd_procs")
     expect(not bad, "; ".join(bad))
 
 

@@ -7,22 +7,26 @@ and 4). What a kernel is and has, for an answer an older one gives otherwise, is
 to say.
 
 A table written now is a tuple of (case, answer) lines with its judge, NAME_wrong, which calls
-lines_wrong: the answers are the newest kernel's, since the handler answers as that kernel does;
+lines_wrong, and its program's record in EXERCISERS, which registers it with the suite and the
+oracle: the answers are the newest kernel's, since the handler answers as that kernel does;
 what a stated rule makes the launcher answer otherwise is in a NAME_LAUNCHER dict beside it; and an
 answer an older kernel gives otherwise is dropped or replaced in the judge, by kernel.has where the
 difference is a call or a feature the kernel can be asked for, by kernel.version where it is a
 change of behaviour. The earlier tables keep the shapes they were written in.
 """
 
+import dataclasses
 import errno
 import itertools
 import os
 import platform
 import re
 lazy import ctypes
+lazy from collections.abc import Callable
 
 import kernel
 import machines
+import tree
 
 # creat_slash HOSTDIR: one line per case, the case and the errno text
 CREAT_SLASH = (
@@ -2231,3 +2235,70 @@ def seccomp_filter_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
         if not any(k < v and c.startswith(p) for v, ps in SECCOMP_FILTER_SINCE for p in ps)
     }
     return lines_wrong(out, want, launcher, by_the_kernel=by_the_kernel)
+
+
+# ---------- the exercisers, each registered once ----------
+
+
+@dataclasses.dataclass(frozen=True)
+class World:
+    """Where a program ran, for a judge whose answer depends on it."""
+
+    by_the_kernel: bool  # under bwrap's read-only bind of the tree, where the kernel answers
+    root: str  # the tree, by its real path
+
+
+@dataclasses.dataclass(frozen=True)
+class Exerciser:
+    """A program of test/progs that prints one line per case, registered here once.
+
+    The suite compiles it with the tree's compiler and its test runs it under the launcher
+    (suite.exerciser); the namespace oracle runs it under the kernel (test/oracle_ns.py); both
+    judge its lines by wrong. One with flags of its own is built by its test, which skips where
+    the tree's compiler takes none of them.
+    """
+
+    args: tuple[str, ...]  # HOSTDIR stands for a fresh writable host directory of its own
+    wrong: Callable[[str, World], list[str]]
+    cflags: tuple[str, ...] = ()
+
+
+def _plain(judge: Callable[[str], list[str]]) -> Callable[[str, World], list[str]]:
+    """A judge whose answers are the same in both worlds."""
+    return lambda out, _world: judge(out)
+
+
+def _by_world(judge: Callable[..., list[str]]) -> Callable[[str, World], list[str]]:
+    """A judge that is told which world answered."""
+    return lambda out, world: judge(out, by_the_kernel=world.by_the_kernel)
+
+
+EXERCISERS: dict[str, Exerciser] = {
+    "creat_slash": Exerciser(("HOSTDIR",), _by_world(creat_slash_wrong)),
+    "open_flags": Exerciser(("HOSTDIR",), _by_world(open_flags_wrong)),
+    "program_perm": Exerciser((), _plain(program_perm_wrong)),
+    "exe_link": Exerciser((), _plain(exe_link_wrong)),
+    "exec_script": Exerciser(("run", "HOSTDIR"), _by_world(exec_script_wrong)),
+    "exec_elf": Exerciser(("HOSTDIR",), _by_world(exec_elf_wrong)),
+    "exec_auxv": Exerciser(
+        ("HOSTDIR",),
+        lambda out, world: exec_auxv_wrong(
+            out, by_the_kernel=world.by_the_kernel, static_libc=tree.has_static_libc(world.root)
+        ),
+    ),
+    "exec_state": Exerciser(("HOSTDIR",), _by_world(exec_state_wrong)),
+    "mem_layout": Exerciser((), _by_world(mem_layout_wrong)),
+    "mem_edge": Exerciser(("HOSTDIR",), _by_world(mem_edge_wrong)),
+    "fd_procs": Exerciser(("HOSTDIR",), _by_world(fd_procs_wrong)),
+    "sigcalls": Exerciser((), _plain(sigcalls_wrong)),
+    "sigrain": Exerciser(("HOSTDIR",), _plain(sigrain_wrong)),
+    "sigstack": Exerciser((), _by_world(sigstack_wrong)),
+    "clones": Exerciser(("HOSTDIR",), _by_world(clones_wrong)),
+    "sigframe": Exerciser(("HOSTDIR",), _by_world(sigframe_wrong)),
+    "unwind_frame": Exerciser(
+        ("HOSTDIR",),
+        lambda out, world: unwind_frame_wrong(out, musl=tree.musl(world.root, platform.machine())),
+        cflags=("-fexceptions",),
+    ),
+    "seccomp_filter": Exerciser(("HOSTDIR",), _by_world(seccomp_filter_wrong)),
+}

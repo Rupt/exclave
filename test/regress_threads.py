@@ -11,7 +11,7 @@ import subprocess
 import kernel_answers
 import tree
 from harness import expect, run, skip, test
-from suite import REPO, Ctx, inside, wrapper
+from suite import REPO, Ctx, exerciser, exerciser_wrong, inside, wrapper
 
 
 @test
@@ -32,9 +32,8 @@ def signal_calls_in_order(ctx: Ctx) -> None:
     and unknown flag bits round-trip. The kernel's answers (test/kernel_answers.py), which the
     namespace oracle confirms under bwrap.
     """
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "sigcalls"))
-    wrong = kernel_answers.sigcalls_wrong(out)
-    expect(rc == 0 and not wrong, "\n".join(wrong) + err)
+    wrong = exerciser_wrong(ctx, "sigcalls")
+    expect(not wrong, "\n".join(wrong))
 
 
 @test
@@ -51,12 +50,8 @@ def signals_during_traps(ctx: Ctx) -> None:
     result, as the kernel gives it (test/kernel_answers.py), confirmed under bwrap by the
     namespace oracle.
     """
-    d = os.path.join(ctx.work, f"hostdir-sigrain-{os.getpid()}")
-    shutil.rmtree(d, ignore_errors=True)
-    os.makedirs(d)
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "sigrain"), [d], timeout=60)
-    wrong = kernel_answers.sigrain_wrong(out)
-    expect(rc == 0 and not wrong, "\n".join(wrong) + err)
+    wrong = exerciser_wrong(ctx, "sigrain")
+    expect(not wrong, "\n".join(wrong))
 
 
 @test
@@ -74,9 +69,9 @@ def alternate_stacks(ctx: Ctx) -> str:
     on the main stack while one is armed, all the kernel's answers (test/kernel_answers.py),
     confirmed under bwrap by the namespace oracle.
     """
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "sigstack"), timeout=60)
+    out = exerciser(ctx, "sigstack")
     wrong = kernel_answers.sigstack_wrong(out)
-    expect(rc == 0 and not wrong, "\n".join(wrong) + err)
+    expect(not wrong, "\n".join(wrong))
     small = [
         line.split(": ")[1]
         for line in out.splitlines()
@@ -101,14 +96,8 @@ def clones_trapping(ctx: Ctx) -> None:
     pthread_exit from a handler that interrupted a blocking trap. The kernel's answers
     (test/kernel_answers.py), confirmed under bwrap by the namespace oracle.
     """
-    d = os.path.join(ctx.work, f"hostdir-clones-{os.getpid()}")
-    shutil.rmtree(d, ignore_errors=True)
-    os.makedirs(d)
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "clones"), [d], timeout=60)
-    wrong = kernel_answers.clones_wrong(out)
-    if wrong:
-        wrong.append(f"rc {rc}, output {out!r}, stderr {err!r}")
-    expect(rc == 0 and not wrong, "\n".join(wrong) + err)
+    wrong = exerciser_wrong(ctx, "clones")
+    expect(not wrong, "\n".join(wrong))
 
 
 @test
@@ -128,14 +117,8 @@ def signal_frames(ctx: Ctx) -> None:
     across execve. The kernel's answers (test/kernel_answers.py), confirmed under bwrap by the
     namespace oracle.
     """
-    d = os.path.join(ctx.work, f"hostdir-sigframe-{os.getpid()}")
-    shutil.rmtree(d, ignore_errors=True)
-    os.makedirs(d)
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "sigframe"), [d], timeout=60)
-    wrong = kernel_answers.sigframe_wrong(out)
-    if wrong:
-        wrong.append(f"rc {rc}, output {out!r}, stderr {err!r}")
-    expect(rc == 0 and not wrong, "\n".join(wrong) + err)
+    wrong = exerciser_wrong(ctx, "sigframe")
+    expect(not wrong, "\n".join(wrong))
 
 
 @test

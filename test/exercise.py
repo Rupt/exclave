@@ -62,7 +62,15 @@ def main() -> int:
     gcc = os.path.join(r, tree.vbin(r, sp.gcc).lstrip("/"))
     prog = os.path.join(work, os.path.basename(args.prog).rsplit(".", 1)[0])
     p = subprocess.run(
-        [gcc, "-O1", *args.cflag, "-o", prog, os.path.abspath(args.prog)],
+        [
+            gcc,
+            *tree.PROG_CFLAGS,
+            *args.cflag,
+            "-o",
+            prog,
+            os.path.abspath(args.prog),
+            *tree.PROG_LIBS,
+        ],
         cwd=work,
         env={"PATH": "/usr/bin:/bin"},
         stdout=subprocess.PIPE,

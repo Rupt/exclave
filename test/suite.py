@@ -16,12 +16,13 @@ from typing import TYPE_CHECKING
 lazy import argparse
 lazy import hashlib
 
+import kernel_answers
 import machines
 import tree
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
-from harness import read_bytes, run
+from harness import expect, read_bytes, run
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -293,6 +294,34 @@ def make_fixture(ctx: Ctx, dst: str, sources: str, skipped: set[str]) -> None:
     print(f"fixture: {n} files, kept at {dst}")
 
 
+def exerciser(ctx: Ctx, name: str, args: Sequence[str] | None = None) -> str:
+    """Run the exerciser NAME under the launcher in a fresh host directory of its own; its output.
+
+    The arguments are its record's (kernel_answers.EXERCISERS) unless given, HOSTDIR in them the
+    directory. A status but 0 fails the test.
+    """
+    d = os.path.join(ctx.work, name + "-host")
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    if args is None:
+        args = kernel_answers.EXERCISERS[name].args
+    rc, out, err = inside(
+        ctx,
+        os.path.join(ctx.progs, name),
+        [d if a == "HOSTDIR" else a for a in args],
+        env={**ctx.env, "CC": ctx.vbin(ctx.gcc)},  # the programs some cases build
+        timeout=60,
+    )
+    expect(rc == 0, f"{name}: rc={rc} {out!r} {err!r}")
+    return out
+
+
+def exerciser_wrong(ctx: Ctx, name: str) -> list[str]:
+    """The lines the exerciser NAME prints under the launcher that its record's judge refuses."""
+    world = kernel_answers.World(by_the_kernel=False, root=ctx.root)
+    return kernel_answers.EXERCISERS[name].wrong(exerciser(ctx, name), world)
+
+
 def check(ex: str, *logs: str) -> tuple[list[str], list[str], str]:
     """Run exclave check on ex with the given EXCLAVE_LOG files (10.3).
 
@@ -426,14 +455,11 @@ def tree_facts(ctx: Ctx) -> None:
 
 
 # the test programs compile_progs builds, each from test/progs/NAME.c
+# The programs of test/progs compiled at setup: every exerciser test/kernel_answers.py registers
+# that its test does not build itself, and these, whose tests judge them in their own ways.
 PROGS = (
     "ro_matrix",
     "signals",
-    "sigcalls",
-    "sigrain",
-    "sigstack",
-    "clones",
-    "sigframe",
     "threads",
     "spawn",
     "exec",
@@ -446,7 +472,6 @@ PROGS = (
     "openat2_xdev",
     "fexec",
     "exec_identity",
-    "exe_link",
     "memfd_exec",
     "path_length",
     "spawn_threads",
@@ -454,9 +479,7 @@ PROGS = (
     "magic_links",
     "rename_race",
     "cwd_race",
-    "creat_slash",
     "slash_links",
-    "open_flags",
     "xattrat",
     "readlink_fault",
     "listing",
@@ -465,21 +488,13 @@ PROGS = (
     "identity_nofollow",
     "trustdir",
     "rename_dots",
-    "program_perm",
-    "exec_script",
-    "exec_elf",
-    "exec_auxv",
-    "exec_state",
-    "mem_layout",
-    "mem_edge",
-    "fd_procs",
     "top_reach",
     "attach_me",
     "sve_frame",
     "spawn_faults",
     "traceme",
     "tracer_exe",
-    "seccomp_filter",
+    *(name for name, e in kernel_answers.EXERCISERS.items() if not e.cflags),
 )
 
 
@@ -512,16 +527,7 @@ def compile_progs(ctx: Ctx) -> None:
         """Build one program, or the origin test's library and program; the error, or None."""
         if name != "origin":
             out = os.path.join(ctx.progs, name)
-            cmd = [
-                "-O1",
-                "-g",
-                "-pthread",
-                "-o",
-                out,
-                os.path.join(src, name + ".c"),
-                "-lm",
-                "-ldl",
-            ]
+            cmd = [*tree.PROG_CFLAGS, "-o", out, os.path.join(src, name + ".c"), *tree.PROG_LIBS]
             rc, _out, err = run([gcc, *cmd], cwd=ctx.work, env=ctx.env)
             # nested functions are gcc's; clang has none
             return None if not rc or (name == "execstack" and "not allowed here" in err) else err

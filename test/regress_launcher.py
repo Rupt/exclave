@@ -13,10 +13,9 @@ import time
 lazy import resource
 
 import kernel
-import kernel_answers
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
-from suite import VOLATILE, Ctx, copy_exclave, inside, wrapper
+from suite import VOLATILE, Ctx, copy_exclave, exerciser_wrong, inside, wrapper
 
 
 @test
@@ -1182,12 +1181,7 @@ def own_seccomp_filter(ctx: Ctx) -> str | None:
     before filter version 10, which would re-issue a trapped call unjudged, is not exec'd: EACCES.
     A case an older kernel lacks answers as that kernel decides (SECCOMP_FILTER_SINCE).
     """
-    d = os.path.join(ctx.work, "seccomp-filter-host")
-    shutil.rmtree(d, ignore_errors=True)
-    os.makedirs(d)
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "seccomp_filter"), [d])
-    expect(rc == 0, f"seccomp_filter: rc={rc} {out!r} {err!r}")
-    bad = kernel_answers.seccomp_filter_wrong(out)
+    bad = exerciser_wrong(ctx, "seccomp_filter")
     expect(not bad, "; ".join(bad))
     old = os.path.join(os.path.dirname(ctx.launcher_src), "launcher-old")
     if not os.path.exists(old):

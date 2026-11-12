@@ -14,7 +14,7 @@ import kernel
 import kernel_answers
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
-from suite import VOLATILE, Ctx, check, copy_exclave, hello_source, inside, wrapper
+from suite import VOLATILE, Ctx, check, copy_exclave, exerciser_wrong, hello_source, inside, wrapper
 
 PATH_MAX = 4096
 
@@ -1098,10 +1098,8 @@ def open_flags_order(ctx: Ctx) -> None:
     loaded program's ETXTBSY and an identity symlink's ELOOP included. Measured under bwrap; the
     launcher once answered these from its walk and its read-only rules.
     """
-    d = os.path.join(ctx.work, "open_flags")
-    os.makedirs(d, exist_ok=True)
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "open_flags"), [d])
-    expect(rc == 0 and not kernel_answers.open_flags_wrong(out), out + err)
+    bad = exerciser_wrong(ctx, "open_flags")
+    expect(not bad, "; ".join(bad))
 
 
 @test
@@ -1115,8 +1113,8 @@ def program_perm_order(ctx: Ctx) -> None:
     vfs_truncate's before its own. The program makes its own file on a host path unwritable and
     puts it back. Measured under bwrap; the launcher once answered ETXTBSY first.
     """
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "program_perm"))
-    expect(rc == 0 and not kernel_answers.program_perm_wrong(out), out + err)
+    bad = exerciser_wrong(ctx, "program_perm")
+    expect(not bad, "; ".join(bad))
 
 
 @test
@@ -1128,10 +1126,8 @@ def create_through_a_slashed_link(ctx: Ctx) -> None:
     directory; a plain open through it finds nothing, and O_EXCL does not follow the link.
     Measured natively and under bwrap; the launcher once answered EROFS or ELOOP.
     """
-    d = os.path.join(ctx.work, "slashed")
-    os.makedirs(d, exist_ok=True)
-    rc, out, err = inside(ctx, os.path.join(ctx.progs, "creat_slash"), [d])
-    expect(rc == 0 and not kernel_answers.creat_slash_wrong(out), out + err)
+    bad = exerciser_wrong(ctx, "creat_slash")
+    expect(not bad, "; ".join(bad))
 
 
 @test

@@ -54,6 +54,10 @@ IDENTITY_FILES = (
 IDENTITY_DIRS = ("/etc/ssl/certs", "/etc/pki/tls/certs", "/var/lib/sss")
 
 
+# How every program of test/progs is compiled, by the suite, the namespace oracle and an exercise
+# alike: the flags before the source and the libraries after it.
+PROG_CFLAGS = ("-O1", "-g", "-pthread")
+PROG_LIBS = ("-lm", "-ldl")
 # The host's volatile directories (8.1), always the host's; test/tables_test.py holds the tuple to
 # the launcher's, the command's and unpack's.
 VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
