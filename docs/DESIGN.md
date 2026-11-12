@@ -18,7 +18,7 @@ measure it.
 | Section | What it holds |
 |---|---|
 | 1. Summary | the design in a page |
-| 2. Status | what exists, what is tested, the counts |
+| 2. Status | what exists and how it is tested |
 | 3. Goals and non-goals | what exclave is for, and what it will not do |
 | 4. Problem analysis | why a program is bound to its host |
 | 5. Concepts and names | the words the rest uses |
@@ -26,7 +26,7 @@ measure it.
 | 7. The launcher | the filter, the handler, the loader, exec |
 | 8. Visibility rule | which paths are the exclave's and which the host's |
 | 9. Compilers specifically | toolchains, sysroots and their outputs |
-| 10. The `exclave` command | unpack, wrap, check, prune, release |
+| 10. The `exclave` command | unpack and the fetchers, wrap, relink, the checks, caches, pruning, the command as one file |
 | 11. Layers | why there are none |
 | 12. Portability envelope | the kernels and hosts it runs on, measured |
 | 13. Limitations and risks | each numbered, each with its cause |
@@ -191,8 +191,8 @@ How it is tested (17):
   under it, standing for a CI container where user namespaces are
   blocked (17 item 5).
 - **The commit gate**, `scripts/gate`, which runs the unit tests, the
-  suite, the oracles and the probe on the gcc exclave in under a
-  minute, and `scripts/extra`, the broader and slower checks on the
+  suite, the oracles and the probe on the gcc exclave, and
+  `scripts/extra`, the broader and slower checks on the
   four exclaves, run when asked; an oracle that cannot run on the
   machine, for want of `bwrap` or user namespaces, is reported as
   SKIP, not as passing (17).
@@ -343,7 +343,8 @@ the design. Where they are available they serve as the test oracle
 | **identity directory** | One of three directories, `/etc/ssl/certs`, `/etc/pki/tls/certs` and `/var/lib/sss`, that are the host's by default: the host's directory at its name, its links followed on the host at each call, as an identity file's chain is, with `..` at its root climbing in the exclave (8.1 rule 5, 8.4). |
 | **border** | Where a program passes from the host into the exclave, its launcher finding no inherited filter; the environment is set there (6.2). |
 | **data directory** | An exclave path that is never executed or loaded, named by a `data` record: a sysroot, headers, documentation (6.2). |
-| **`exclave`** (command) | The build tool: `wrap`, `unwrap`, `check`, `prune`, `hash`, `relink` and `format`. Takes a directory holding `tree/`, fetches nothing (10). |
+| **`exclave`** (command) | The build tool: `wrap`, `unwrap`, `relink`, `check`, `caches`, `prune`, `hash`, `format` and `version`, with `unpack`. Takes a directory holding `tree/`, fetches nothing (10). |
+| **`exclave-fetch`** | The step before `unpack`, a program of its own: `debs`, `apks` and `rpms` download a package closure from a repository and verify it, the one program of exclave that opens a connection (10.1). |
 | **`unpack`** | The step before the tool: package files to an unwrapped exclave, the command's subcommand `exclave unpack` (10.1). |
 | **unwrapped** | An exclave before `wrap`: a plain tree, editable with ordinary tools. After `wrap` it is wrapped. |
 | **`EXCLAVE_LOG`** | The one run-time knob, which only logs (6.2). `EXCLAVE_EXEC`, `EXCLAVE_EXECFN`, `EXCLAVE_COMM`, `EXCLAVE_TRACED` and `EXCLAVE_CWD` are the launcher's own protocol, never an interface; the test scripts' inputs are `EXCLAVE_TEST_…`. |
@@ -366,6 +367,7 @@ gcc-13.exclave/
     launcher                                ET_DYN, one per architecture
     manifest                                edited by people, 6.2; `exclave 1` when nothing is overridden
     hashes                                  6.4
+    caches/                                 only while exclave caches runs: its staging directory (10.1)
   tree/
     usr/bin/gcc-13                          hard link to .exclave/launcher: the wrapper
     usr/bin/.real/gcc-13                    the original, byte-identical to upstream
@@ -646,7 +648,22 @@ the tool undoes the escapes when it reads a log (10.3, 10.4). Format
 1, which escaped the newline and the backslash alone, is read as
 well, since a run's log may hold an older exclave's launcher's lines
 beside a newer one's. The launcher at the border also logs the working directory
-it started in. The log changes nothing else. Every launcher of a run
+it started in. The log changes nothing else. The lines are these, and
+the spellings the command reads are part of the format (6.7): of the
+launcher's own, `border` or `inside` with the program, at each
+launcher's start; `cwd` with the border's working directory, or `cwd
+given to the host` with it when the run's working directory is given to
+the host (8.1), both of which `check` reads (10.3); `host path absent,
+using the exclave's` and `host path unresolvable, using the exclave's`
+for an identity path (8.4); the pipe copy's notice (7.5.6); the refusal
+of a launcher without the judge rule (7.4.2); and `fatal` with a dying
+launcher's reason. A translated syscall is named by its kind: `open`,
+`stat`, `access`, `readlink`, `exec`, `chdir`, `getcwd`, `mkdir`,
+`mknod`, `unlink`, `rename`, `link`, `symlink`, `attr`, `xattr`,
+`ioctl`, `watch`, `statfs`, `listing`, `signal`, `bind`, `connect`,
+and `trap` for any other; `load` is a file the loader maps, a program
+or its loader. `check` and `prune` read `open`, `exec` and `load`
+(10.3, 10.4). Every launcher of a run
 writes a line when it starts, so a log several launchers share says
 each one's version; `check` and `prune` refuse by name a log with a
 launcher line of a later version rather than misread it.
@@ -886,8 +903,10 @@ itself. x86-64 adds `-mno-red-zone`, since every syscall is a `call`
 into the page, which pushes below the stack pointer; aarch64 adds
 `-ffixed-x28` (7.5.3). Architecture-specific code lives in `src/sys.h`,
 `src/common.h` and a few `#if` blocks: the syscall instruction and
-table, `_start`, the relocation type, the signal-frame offsets, the
-restorer, the loader's final jump and the CPU check. x86-64 and aarch64
+table, the syscall page's code, `_start`, the relocation type, the
+signal-frame offsets, the trampolines' stubs and the handler's entry
+stub (7.5.7), x86-64's protection-key register, the loader's final
+jump and the CPU check. x86-64 and aarch64
 build from the same sources, and each launcher runs only programs of
 its own machine (7.3).
 
@@ -902,10 +921,11 @@ The kernel has executed the launcher at some path. The launcher:
 3. Unblocks `SIGSYS` in the inherited mask, since a parent that blocks
    signals in its children would otherwise kill the first trap
    (7.5.1); raises a soft descriptor limit below 16 to the hard one for
-   its own opens (7.4.5); opens `EXCLAVE_LOG` if set (6.2).
+   its own opens (7.4.5).
 4. Reads `/proc/self/exe` and walks up until a directory holds
    `.exclave/manifest`; that directory is the exclave, and without one
-   the launcher says so and exits.
+   the launcher says so and exits. Then it opens `EXCLAVE_LOG` if set,
+   which it refuses inside the exclave it has just found (6.2).
 5. Parses the manifest (6.2) and checks `cpu` (7.7).
 6. Decides what it runs: a wrapper, if `/proc/self/exe` lies below
    `tree/`, the program's virtual path being the path below it;
@@ -6423,8 +6443,9 @@ and enforces the handler's stack budget of 7.5.4.
 `scripts/install-uv` need curl or wget. The command is built by the
 pinned Go in `.go/`, its modules pinned by `go.sum`;
 every driver runs on the pinned Python uv installs into the checkout,
-and the code checks' ruff, ty, shellcheck, shfmt and taplo come from
-`uv.lock` the same way; none is taken from the machine. The namespace oracle, the syscall probe, the
+and the code checks' ruff, ty, shellcheck, shfmt, taplo, clang-format
+and clang-tidy come from `uv.lock` the same way; none is taken from the
+machine. The namespace oracle, the syscall probe, the
 Docker profile run and the exerciser need `bwrap` (bubblewrap) and
 unprivileged user namespaces; the resolution oracle needs `openat2`
 (Linux 5.6). The suite uses `strace`, `gdb`, Go and `rustc`; a test
@@ -6713,8 +6734,9 @@ unless the hash is the hashes file's `tree` record: the suite's copies
 hard-link the input's files, so a write that escaped one would change
 the input itself, and every later run would test a tree no exclave has.
 
-The Go regression is built static with cgo off, by the host's `go`, or
-on the reference machine for a matrix VM's machine. It runs as a host
+The Go regression is built static with cgo off, by the pinned Go, the
+host's `go` where a checkout has none, or on the reference machine for
+a matrix VM's machine. It runs as a host
 program, its goroutines trapping beside one that collects garbage, so
 that Go's preemption signal lands in the handler mid-trap (7.5.3); the
 image from `0x10000` that Go's aarch64 linker lays out is `low_image`'s
@@ -7005,7 +7027,7 @@ stated here.
   rewrites its manifest copies a small exclave setup makes too, the
   shared one pruned to what a shell, `cat`, `grep` and a test program
   touch. `-k NAME` passes like the whole
-  run. Suites run side by side in the gate, so a name
+  run. Suites run side by side in `scripts/extra`, so a name
   in a shared namespace (an abstract socket, a file in `/tmp`) carries
   the pid.
 - *Nothing downloads during a test.* A test, an oracle and the gate
