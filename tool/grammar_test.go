@@ -35,6 +35,8 @@ func TestPositions(t *testing.T) {
 		{"exclave 1\n\nown \"/" + strings.Repeat("a", 9000) + "\"\n", "line 3 col 4101"},
 		{"exclave 1\n\nown \"/" + strings.Repeat("é", 3000) + "\"\n", "line 3 col 2054"},
 		{"exclave 1\n\ncpu " + strings.Repeat("1", 5000) + "\n", "line 3 col 4100"},
+		{"exclave 1\n\n" + strings.Repeat("a", 32) + " \"/x\"\n", "line 3 col 32"},
+		{"exclave 1\n\nown" + strings.Repeat(" \"/a\"", 9) + "\n", "line 3 col 45"},
 		{"", "line 1 col 1"},
 		{"\n", "line 2 col 1"},
 		{"hashes 1\n", "line 1 col 1"},

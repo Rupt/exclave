@@ -38,6 +38,7 @@
 #define N_IDENTITY_DIRS 3
 /* a manifest record's most fields, and the most bytes a field holds, a string's decoded (6.2) */
 #define MANIFEST_FIELDS 8
+#define MANIFEST_KEY_MAX 31 /* a key's characters; no key of the grammar is as long */
 #define MANIFEST_FIELD_MAX (PATH_MAX - 1)
 
 /* ---------- open / at flags ---------- */

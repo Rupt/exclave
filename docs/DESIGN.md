@@ -521,12 +521,15 @@ more than 256 `own` records, more than 32 `host` records or more than
 32 `data` records, which are the sizes of the launcher's tables (8.1),
 and a field of more than 4095 bytes, a string's counted as it decodes:
 a path that long is `ENAMETOOLONG` to the kernel anyway, and the bound
-lets the launcher hold the largest manifest the limits allow. A path
+lets the launcher hold the largest manifest the limits allow; and a key
+of more than 31 characters or a record of more than eight fields, which
+no key and no record of the grammar reaches. A path
 has one spelling because the visibility rule matches a path by it and
 would silently match nothing else (13 item 34). Any error names the
 line and the column, counting characters from 1, so that a column is
-the same whatever the bytes before it; a field too long is named by
-the character that takes it past the bound. Records are checked in the
+the same whatever the bytes before it; a field or a key too long, and
+a field too many, is named by the character that takes it past the
+bound. Records are checked in the
 file's order, each as it is read, so the launcher and the tool name the
 same place for every error; nothing is guessed.
 

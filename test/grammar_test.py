@@ -176,6 +176,8 @@ MUTATIONS: list[Callable[[bytes, random.Random], bytes]] = [
     ),
     lambda t, _: t.replace(b'"\n', b'" \n', 1),
     lambda t, _: t.replace(b"own", b'own "/x" own', 1),
+    lambda t, rng: t.replace(b"own", b"o" * rng.randint(30, 34), 1),
+    lambda t, rng: t.replace(b'own "/', b"own" + b' "/a"' * rng.randint(6, 9) + b' "/', 1),
 ]
 
 
@@ -235,6 +237,9 @@ POSITIONS = [
     (b'exclave 1\n\nown "/' + b"a" * 9000 + b'"\n', "line 3 col 4101"),
     (b'exclave 1\n\nown "/' + "\u00e9".encode() * 3000 + b'"\n', "line 3 col 2054"),
     (b"exclave 1\n\ncpu " + b"1" * 5000 + b"\n", "line 3 col 4100"),
+    # a key's limit of 31 characters and a record's of eight fields, each past it by one
+    (b"exclave 1\n\n" + b"a" * 32 + b' "/x"\n', "line 3 col 32"),
+    (b"exclave 1\n\nown" + b' "/a"' * 9 + b"\n", "line 3 col 45"),
 ]
 
 

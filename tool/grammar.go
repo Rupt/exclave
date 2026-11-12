@@ -74,6 +74,14 @@ var limits = []struct {
 // hold, which a longer one would not fit in the kernel's either (6.2).
 const fieldMax = 4095
 
+// keyMax and fieldsMax are the most characters of a key and the most fields of a record the
+// launcher's parser takes (MANIFEST_KEY_MAX, MANIFEST_FIELDS): past either, the error is named
+// by the character that takes the record past the bound, as the launcher names it.
+const (
+	keyMax    = 31
+	fieldsMax = 8
+)
+
 func schemaOf(key string, k kind) int {
 	for i, s := range schema {
 		if s.kind == k && s.key == key {
@@ -341,6 +349,9 @@ func grammarParse(data []byte, k kind) ([]record, error) {
 			} else if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
 				break
 			}
+			if col == keyMax {
+				return nil, &grammarError{line, column(raw, col), "key too long"}
+			}
 			col++
 		}
 		if col == 0 {
@@ -361,6 +372,9 @@ func grammarParse(data []byte, k kind) ([]record, error) {
 			}
 			if raw[col] == ' ' {
 				return nil, &grammarError{line, column(raw, col), "multiple spaces"}
+			}
+			if len(r.f) == fieldsMax {
+				return nil, &grammarError{line, column(raw, col), "too many fields"}
 			}
 			if raw[col] == '"' {
 				v, next, err := parseString(raw, col, line)

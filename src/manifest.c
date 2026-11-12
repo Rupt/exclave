@@ -208,14 +208,15 @@ int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, si
         }
         /* record */
         const unsigned char *ks = K->p;
+        char key[MANIFEST_KEY_MAX + 1];
         if (!(*K->p >= 'a' && *K->p <= 'z')) return fail(err, errn, K, "record must start with a lowercase key");
         while (K->p < K->end && ((*K->p >= 'a' && *K->p <= 'z') || (*K->p >= '0' && *K->p <= '9') || *K->p == '-')) {
+            /* named by the character that takes it past the bound, as a field too long is (6.2) */
+            if (K->p - ks == MANIFEST_KEY_MAX) return fail(err, errn, K, "key too long");
             K->p++;
             K->col++;
         }
-        char key[32];
         size_t kl = (size_t)(K->p - ks);
-        if (kl >= sizeof key) return fail(err, errn, K, "key too long");
         xmemcpy(key, ks, kl);
         key[kl] = 0;
         struct field f[MANIFEST_FIELDS];
