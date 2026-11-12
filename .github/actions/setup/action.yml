@@ -1,0 +1,36 @@
+# What both jobs of the workflow set up (docs/DESIGN.md 17): the pinned uv with its Python and
+# tools, the pinned Go, and the development inputs, each by the repository's own script and
+# through a cache of what that script downloads. $INPUTS is the workflow's.
+name: setup
+description: the pinned uv and Go and the development inputs, through their caches
+runs:
+  using: composite
+  steps:
+    - name: the pinned uv, its Python and its package cache, from the last run with the same pins
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .uv
+        key: uv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-uv', '.python-version', 'uv.lock') }}
+    - name: the pinned uv, its Python and the locked tools
+      shell: bash
+      run: scripts/install-uv
+    - name: the pinned Go, its modules and its build cache, from the last run with the same pins
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .go
+        key: go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-go', 'go.mod', 'go.sum') }}
+    - name: the pinned Go
+      shell: bash
+      run: scripts/install-go
+    - name: package files and sources the inputs are made from
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          build/inputs/packages
+          build/inputs/src
+        # the fetchers keep files by digest; a cache of the earlier layout, by URL, is not restored
+        key: packages-by-digest-${{ hashFiles('scripts/inputs', 'fetch/**') }}
+        restore-keys: packages-by-digest-
+    - name: the development inputs
+      shell: bash
+      run: scripts/inputs "$INPUTS"

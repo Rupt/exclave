@@ -1,16 +1,17 @@
 #!/bin/sh
-# Install the pinned uv into .uv/, verified against a checksum committed here.
-# uv then provides the pinned Python (.python-version) and the development
-# tools (pyproject.toml), all under .uv/ and .venv/, so nothing the machine
-# has installed decides how the project's Python runs.
+# Install the pinned uv into .uv/, verified against a checksum committed here,
+# and have it install the pinned Python (.python-version) and the development
+# tools (uv.lock), all under .uv/ and .venv/, so nothing the machine has
+# installed decides how the project's Python runs.
 #
 # Portable across Linux: the uv builds pinned are astral's musl ones, which
 # are statically linked, so one build per architecture runs on every
 # distribution, glibc or musl. Needs only curl or wget, tar, and sha256sum
 # or shasum.
 #
-# Idempotent: does nothing when the pinned version is in place. --force
-# reinstalls.
+# Idempotent: with the pinned version in place it only brings the Python and
+# the tools up to date, which fetches nothing when they are. --force
+# reinstalls uv.
 set -eu
 
 # The pinned release. To upgrade, change the version and both checksums, which
@@ -38,7 +39,8 @@ if [ "${1-}" != --force ] && [ -x "$UV" ]; then
     installed=$("$UV" --version 2>/dev/null | cut -d' ' -f2 || echo none)
     if [ "$installed" = "$UV_VERSION" ]; then
         echo "uv $UV_VERSION already installed at $UV"
-        exit 0
+        "$UV" sync --quiet --project "$ROOT"
+        exit
     fi
     echo "replacing uv $installed with $UV_VERSION"
 fi
@@ -71,3 +73,4 @@ for tool in uv uvx; do
     mv "$UV_HOME/bin/.$tool.new" "$UV_HOME/bin/$tool"
 done
 echo "installed $("$UV" --version) at $UV"
+"$UV" sync --quiet --project "$ROOT"
