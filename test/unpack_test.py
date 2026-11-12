@@ -1418,7 +1418,7 @@ def main() -> int:
             f.write("the host's own\n")
         return t(Ctx(work=d, host=host))
 
-    failed = run_tests(chosen, call)
+    failed = run_tests(chosen, call, budget=30)
     print(f"{len(chosen)} tests, {len(failed)} failures")
     return min(len(failed), 255)
 

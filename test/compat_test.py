@@ -24,18 +24,10 @@ import sys
 
 import tables_test
 import tree
-from harness import cannot_run
+from harness import FAILED, cannot_run, step
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-
-fails: list[str] = []
-
-
-def step(name: str, ok: object, detail: str = "") -> None:
-    if not ok:
-        fails.append(name)
-    print(f"{'ok  ' if ok else 'FAIL'} {name}{': ' + detail if detail and not ok else ''}")
 
 
 def run(cmd: list[str], env: dict[str, str] | None = None) -> tuple[int, str]:
@@ -185,8 +177,8 @@ def main() -> int:
         rc, out = run([shell(outer), "-c", f"{shell(inner)} -c '{inner_cmd}'"])
         step(f"nested, {name}", rc == 0 and out.strip() == "nested", out[-300:])
 
-    print(f"compat: {'every step passed' if not fails else f'{len(fails)} steps failed'}")
-    return len(fails)
+    print(f"compat: {'every step passed' if not FAILED else f'{len(FAILED)} steps failed'}")
+    return len(FAILED)
 
 
 if __name__ == "__main__":

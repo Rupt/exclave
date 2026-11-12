@@ -28,38 +28,14 @@ import sys
 import threading
 import time
 import zlib
-from typing import Protocol
 lazy from collections.abc import Callable, Sequence
 
-from harness import cannot_run
+from harness import TESTS, Test, cannot_run, expect, run_tests, select, test
 from packages import DEB_ARCH, MACHINE, make_apk, make_deb, make_rpm, tar_bytes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 FETCH = (os.path.join(REPO, "build", "exclave-fetch"),)  # exclave-fetch, as scripts/build built it
-
-
-class Test(Protocol):
-    """A test: given its work directory, it raises AssertionError when a rule does not hold."""
-
-    __name__: str
-
-    def __call__(self, work: str, /) -> None: ...
-
-
-TESTS: list[Test] = []
-
-
-def test(f: Test) -> Test:
-    """Register a test."""
-    TESTS.append(f)
-    return f
-
-
-def expect(cond: object, msg: str) -> None:
-    """Fail the test with msg unless cond holds."""
-    if not cond:
-        raise AssertionError(msg)
 
 
 def run(cmd: Sequence[str], inp: bytes = b"", env: dict[str, str] | None = None) -> bytes:
@@ -716,25 +692,22 @@ def main() -> int:
         return cannot_run("the fetchers' test", f"{', '.join(missing)} not installed")
     work = os.path.abspath(args.work)
     shutil.rmtree(work, ignore_errors=True)
-    failures = 0
-    chosen = [t for t in TESTS if args.select in t.__name__]
-    for t in chosen:
+    chosen = select(TESTS, args.select)
+
+    def call(t: Test[str]) -> str | None:
+        """Run a test in a work directory of its own, and stop the agents its keys started."""
         d = os.path.join(work, t.__name__)
         os.makedirs(d)
-        start = time.monotonic()
         try:
-            t(d)
-        except (AssertionError, OSError) as e:
-            failures += 1
-            print(f"FAIL {t.__name__:<34} {time.monotonic() - start:5.1f}s {str(e)[:700]}")
-            continue
+            return t(d)
         finally:
             for key in KEYS:
                 key.kill_agent()
             KEYS.clear()
-        print(f"PASS {t.__name__:<34} {time.monotonic() - start:5.1f}s")
-    print(f"{len(chosen)} tests, {failures} failures")
-    return min(failures, 255)
+
+    failed = run_tests(chosen, call, budget=30)
+    print(f"{len(chosen)} tests, {len(failed)} failures")
+    return min(len(failed), 255)
 
 
 if __name__ == "__main__":

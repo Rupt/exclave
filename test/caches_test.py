@@ -45,7 +45,7 @@ import time
 from typing import Any
 
 import tree
-from harness import read_text
+from harness import FAILED, read_text, step
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -54,13 +54,11 @@ BMP = bytes.fromhex(
     "424d3a000000000000003600000028000000010000000100000001001800000000000400000013"
     "0b0000130b00000000000000000000ff000000"
 )
-fails = 0
 
 
-def expect(ok: bool, what: str, got: object) -> None:  # noqa: FBT001  the verdict first, as harness.expect
-    global fails  # noqa: PLW0603  one count for the run, as the other drivers keep
-    print(f"{'ok' if ok else 'FAIL'}: {what}{'' if ok else f': {got!r}'}")
-    fails += not ok
+def holds(ok: bool, what: str, got: object) -> None:  # noqa: FBT001  the verdict first
+    """One check of the run (harness.step): what holds, or what was got instead."""
+    step(what, ok, repr(got))
 
 
 def tool(*args: str) -> tuple[int, str]:
@@ -317,35 +315,35 @@ class Generators:
     def check(self, before: dict[str, Any], after: dict[str, Any]) -> None:
         n = self.name
         if "gio" in self.cases:
-            expect(
+            holds(
                 before["gio"] == (True, False) and after["gio"] == (False, True),
                 f"{n}: before, GIO opens its modules; after, giomodule.cache and no module",
                 (before["gio"], after["gio"]),
             )
         if "pixbuf" in self.cases:
             b, a = before["pixbuf"], after["pixbuf"]
-            expect(
+            holds(
                 b[0] != 0 and b[1] and a == (0, False),
                 f"{n}: before, gdk-pixbuf cannot read a BMP image; after, it reads it",
                 (b, a),
             )
         if "icons" in self.cases:
             b, a = before["icons"], after["icons"]
-            expect(
+            holds(
                 all(rc != 0 and made is None for _t, rc, made in b)
                 and all(rc == 0 and made == ([], True) for _t, rc, made in a),
                 f"{n}: before, no icon cache; after, each theme's validates, names every icon "
                 "and is no older than its directory",
                 (b, a),
             )
-            expect(
+            holds(
                 not any(after["bare"]),
                 f"{n}: a theme whose index names no directory gets no cache, and the run succeeds",
                 (self.bare, after["bare"]),
             )
         if "desktop" in self.cases:
             want = desktop_types(str(self.apps))
-            expect(
+            holds(
                 before["desktop"] is None and after["desktop"] == want,
                 f"{n}: before, no desktop database; after, each MIME type's desktop files "
                 f"({len(want)} types)",
@@ -353,7 +351,7 @@ class Generators:
             )
         if "fonts" in self.cases:
             b, a = before["fonts"], after["fonts"]
-            expect(
+            holds(
                 b[0] == 0 and b[1] > 0 and b[2] > 0 and a == (0, b[1], 0),
                 f"{n}: before, fc-list writes font caches under the home; after, it lists the "
                 "same fonts and writes none",
@@ -361,7 +359,7 @@ class Generators:
             )
         if "graphviz" in self.cases:
             b, a = before["graphviz"], after["graphviz"]
-            expect(
+            holds(
                 b[0] != 0 and b[1] and not b[2] and a == (0, False, True),
                 f"{n}: before, dot knows no svg format; after, it draws a graph as SVG",
                 (b, a),
@@ -379,7 +377,7 @@ def one(given: str, work: str) -> None:
         for n in sorted(os.listdir(os.path.join(root, "usr", "lib")))
         if re.fullmatch(r"python3\.\d+", n)
     ]
-    expect(
+    holds(
         bool(pys),
         f"{name}: a Python under /usr/lib",
         sorted(os.listdir(os.path.join(root, "usr", "lib"))),
@@ -402,7 +400,7 @@ def one(given: str, work: str) -> None:
         with open(os.path.join(icons, "zz-cursors", "index.theme"), "w") as f:
             f.write("[Icon Theme]\nInherits=hicolor\n")
         rc, out = tool("wrap", ex)
-        expect(rc == 0, f"{name}: the copy with a cursor theme wraps again", out[-300:])
+        holds(rc == 0, f"{name}: the copy with a cursor theme wraps again", out[-300:])
     probe = (
         'python3 -v -c "import enum" 2>&1 | grep "code object from .*/enum"; '
         "GSETTINGS_BACKEND=memory gsettings get org.gnome.desktop.interface clock-format 2>&1; "
@@ -429,7 +427,7 @@ def one(given: str, work: str) -> None:
         f.write(BMP)
     gens = Generators(root, Probe(root, runs), name)
     before = state()
-    expect(
+    holds(
         before
         == [
             f"# code object from /usr/lib/{py}/enum.py",
@@ -442,7 +440,7 @@ def one(given: str, work: str) -> None:
     gens_before = gens.state()
     rc, out = tool("caches", ex)
     made = re.findall(r", \d+ new or changed$", out, re.MULTILINE)
-    expect(
+    holds(
         rc == 0
         and f"{py} bytecode:" in out
         and "GSettings schemas: 1 file, 1 new or changed" in out
@@ -453,7 +451,7 @@ def one(given: str, work: str) -> None:
         out[-600:],
     )
     after = state()
-    expect(
+    holds(
         after == [f"# code object from '/{pyc}'", "'24h'", "standard::content-type: text/html"],
         f"{name}: after, enum from its bytecode, the schemas' default read, HTML known",
         after,
@@ -461,15 +459,15 @@ def one(given: str, work: str) -> None:
     gens.check(gens_before, gens.state())
     with open(os.path.join(root, pyc), "rb") as f:
         flags = int.from_bytes(f.read(8)[4:8], "little")
-    expect(
+    holds(
         flags == 3, f"{name}: the bytecode is checked by its source's hash (PEP 552 flags 3)", flags
     )
     rc, out = tool("check", ex)
-    expect(rc == 0, f"{name}: exclave check passes on the tree hash recorded", out[-300:])
+    holds(rc == 0, f"{name}: exclave check passes on the tree hash recorded", out[-300:])
     first_hash = recorded(ex)
     rc, again = tool("caches", ex)
     counts = re.findall(r", (\d+) new or changed$", again, re.MULTILINE)
-    expect(
+    holds(
         rc == 0
         and len(counts) == len(made)
         and set(counts) == {"0"}
@@ -477,7 +475,7 @@ def one(given: str, work: str) -> None:
         f"{name}: a second run changes no file and the same tree hash is recorded",
         again[-400:],
     )
-    expect(
+    holds(
         not os.path.exists(os.path.join(ex, ".exclave", "caches")),
         f"{name}: no staging is left",
         ex,
@@ -492,7 +490,7 @@ def one(given: str, work: str) -> None:
         stale = gens.state()["fonts"]
         rc, out = tool("caches", ex)
         remade = gens.state()["fonts"]
-        expect(
+        holds(
             stale[2] > 0 and rc == 0 and "font caches:" in out and remade == (0, stale[1], 0),
             f"{name}: font directories with new times leave the caches stale; a run remakes them",
             (stale, remade, out[-300:]),
@@ -501,13 +499,13 @@ def one(given: str, work: str) -> None:
     with open(os.path.join(root, "zz-edited"), "w") as f:
         f.write("an edit the hash has not seen\n")
     rc, out = tool("caches", ex)
-    expect(
+    holds(
         rc == 1 and "differs from the hash" in out and recorded(ex) == first_hash,
         f"{name}: a tree changed since its hash was recorded is refused",
         out,
     )
     rc, out = tool("hash", given)
-    expect(
+    holds(
         recorded(given) == given_hash
         and out.strip() == given_hash
         and not os.path.lexists(os.path.join(given, "tree", pyc)),
@@ -519,11 +517,11 @@ def one(given: str, work: str) -> None:
     ex2 = tree.fresh_exclave(given, os.path.join(work, "failing-" + name))
     os.makedirs(os.path.join(ex2, "tree", "usr", "share", "mime", "packages", "zz-a-directory.xml"))
     rc, out = tool("wrap", ex2)
-    expect(rc == 0, f"{name}: the altered copy wraps again", out[-300:])
+    holds(rc == 0, f"{name}: the altered copy wraps again", out[-300:])
     before_fail = recorded(ex2)
     rc, out = tool("caches", ex2)
     _rc, now = tool("hash", ex2)
-    expect(
+    holds(
         rc == 1
         and now.strip() == before_fail
         and recorded(ex2) == before_fail
@@ -617,10 +615,10 @@ def in_place(given: str, work: str) -> None:
             f.write("#!/bin/sh\n" + body + "\ntrue\n")
         os.chmod(os.path.join(root, path), 0o755)
     rc, out = tool("wrap", ex)
-    expect(rc == 0, f"{name}: the copy with in-place generators wraps", out[-300:])
+    holds(rc == 0, f"{name}: the copy with in-place generators wraps", out[-300:])
     rc, out = tool("caches", ex)
     got = {p: read_text(os.path.join(root, p)) for p in IN_PLACE_MADE}
-    expect(
+    holds(
         rc == 0
         and got == IN_PLACE_MADE
         and "TeX Live's configuration, indexes and formats:" in out,
@@ -638,7 +636,7 @@ def in_place(given: str, work: str) -> None:
             and not os.path.exists(staging)
         )
 
-    expect(
+    holds(
         as_it_was()
         and os.readlink(os.path.join(root, "usr/share/texmf/ls-R"))
         == "/var/lib/texmf/ls-R-TEXMFMAIN",
@@ -646,10 +644,10 @@ def in_place(given: str, work: str) -> None:
         os.listdir(os.path.join(ex, ".exclave")),
     )
     rc, out = tool("check", ex)
-    expect(rc == 0, f"{name}: exclave check passes after the in-place run", out[-300:])
+    holds(rc == 0, f"{name}: exclave check passes after the in-place run", out[-300:])
     hashed = recorded(ex)
     rc, again = tool("caches", ex)
-    expect(
+    holds(
         rc == 0
         and "TeX Live's configuration, indexes and formats: 9 files, 0 new or changed" in again
         and recorded(ex) == hashed,
@@ -662,7 +660,7 @@ def in_place(given: str, work: str) -> None:
     fcntl.flock(fd, fcntl.LOCK_EX)
     rc, out = tool("caches", ex)
     os.close(fd)
-    expect(
+    holds(
         rc == 1 and "another exclave caches runs" in out, f"{name}: a run at once is refused", out
     )
 
@@ -681,14 +679,14 @@ def in_place(given: str, work: str) -> None:
         kill_at(state)
         rc, out = tool("check", ex)
         rc2, out2 = tool("wrap", ex)
-        expect(
+        holds(
             state == "before the move"
             or (rc == 1 and rc2 == 1 and "exclave caches" in out and "exclave caches" in out2),
             f"{name}: check and wrap refuse an exclave a run killed {state} left",
             (out[-200:], out2[-200:]),
         )
         rc, out = tool("caches", ex)
-        expect(
+        holds(
             rc == 0
             and ("a killed run left aside put back" in out) == (state != "before the move")
             and as_it_was()
@@ -718,7 +716,7 @@ def in_place(given: str, work: str) -> None:
                     f.write(kind)
         before = sorted(os.listdir(keep))
         rc, out = tool("caches", ex)
-        expect(
+        holds(
             rc == 1
             and why in out
             and sorted(os.listdir(keep)) == before
@@ -742,7 +740,7 @@ def in_place(given: str, work: str) -> None:
         rc, out = tool("wrap", ex)
         failed_hash = recorded(ex)
         rc, out = tool("caches", ex)
-        expect(
+        holds(
             rc == 1
             and why in out
             and recorded(ex) == failed_hash
@@ -770,7 +768,7 @@ def in_place(given: str, work: str) -> None:
         time.sleep(0.05)
     p.send_signal(signal.SIGTERM)
     out = p.communicate(timeout=60)[0].decode(errors="replace")
-    expect(
+    holds(
         linked
         and p.returncode == 1
         and "interrupted" in out
@@ -801,8 +799,8 @@ def main() -> int:
         one(os.path.abspath(ex), work)
         if ex == args.exclave[0]:
             in_place(os.path.abspath(ex), work)
-    print(f"caches: {fails} failures")
-    return 1 if fails else 0
+    print(f"caches: {len(FAILED)} failures")
+    return 1 if FAILED else 0
 
 
 if __name__ == "__main__":

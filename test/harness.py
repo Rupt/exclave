@@ -6,8 +6,9 @@ missing tool, a tree or a kernel that cannot answer); otherwise it returns a not
 or None. A test that asserted part of what it states and cannot run the rest passes, with a note
 naming the rest.
 `run_tests` prints one PASS, SKIP or FAIL line per test, any other exception a FAIL, and returns
-the failures. test/run.py and test/unpack_test.py run on it, each with its own fixture. A driver
-that cannot run at all says so through `cannot_run` and exits with its status.
+the failures. test/run.py, test/unpack_test.py, test/readers_test.py and test/fetch_test.py run
+on it, each with its own fixture; a driver that is one run of checks prints each through `step`. A
+driver that cannot run at all says so through `cannot_run` and exits with its status.
 """
 
 import contextlib
@@ -42,6 +43,18 @@ def cannot_run(what: str, why: str) -> int:
     """Say that what cannot run here and why; the status a driver then exits with."""
     print(f"{why}; {what} cannot run here")
     return CANNOT_RUN
+
+
+# The checks of a driver that is one run and not a list of tests (the compatibility, release and
+# caches tests): each is printed as it is made, and the names of those that failed are kept.
+FAILED: list[str] = []
+
+
+def step(name: str, ok: object, detail: str = "") -> None:
+    """Print one check of such a driver, ok or FAIL with its detail, and keep a failure's name."""
+    if not ok:
+        FAILED.append(name)
+    print(f"{'ok  ' if ok else 'FAIL'} {name}{': ' + detail if detail and not ok else ''}")
 
 
 class Skip(Exception):  # noqa: N818 -- an outcome, like a pass, not an error

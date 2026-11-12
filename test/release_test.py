@@ -22,17 +22,10 @@ import subprocess
 import sys
 
 import tree
+from harness import FAILED, step
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-
-fails: list[str] = []
-
-
-def step(name: str, ok: object, detail: str = "") -> None:
-    if not ok:
-        fails.append(name)
-    print(f"{'ok  ' if ok else 'FAIL'} {name}{': ' + detail if detail and not ok else ''}")
 
 
 def run(cmd: list[str], cwd: str, inp: bytes | None = None) -> tuple[int, str]:
@@ -82,7 +75,7 @@ def main() -> int:
     rc, out = run([os.path.join(REPO, "scripts", "release"), key, release, toolchain, ex], work)
     step("scripts/release", rc == 0, out[-500:])
     if rc:
-        return len(fails)
+        return len(FAILED)
 
     # the consumer's directory: the release's files and nothing of the checkout
     consumer = os.path.join(work, "consumer")
@@ -170,8 +163,8 @@ def main() -> int:
         sums = f.read()
     rc, out = run(verify, consumer, sums)
     step("a changed sums file fails the signature", rc != 0, out)
-    print(f"release: {'every step passed' if not fails else f'{len(fails)} steps failed'}")
-    return len(fails)
+    print(f"release: {'every step passed' if not FAILED else f'{len(FAILED)} steps failed'}")
+    return len(FAILED)
 
 
 if __name__ == "__main__":
