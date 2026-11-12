@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 
 from harness import expect, read_bytes, run, skip, test
 from suite import Ctx, copy_exclave, hello_source, inside, wrapper
@@ -189,17 +190,22 @@ def rust(ctx: Ctx) -> str | None:
     # the network and for minutes; told not to, it says at once that none is installed, and a
     # machine whose rustc does not run is one without rustc. A test touches no network (17).
     env = {**os.environ, "RUSTUP_AUTO_INSTALL": "0"}
-    rc, out, err = run([rustc, "--version"], env=env)
+    t0 = time.monotonic()
+    rc, version, err = run([rustc, "--version"], env=env)
     if rc:
         skip("the machine's rustc does not run: " + (err.strip().splitlines() or ["no reason"])[0])
+    t1 = time.monotonic()
     exe = os.path.join(ctx.progs, "rs")
     rc, out, err = run(
         [rustc, "-O", "-o", exe, os.path.join(ctx.work, "src", "rs.rs")], cwd=ctx.work, env=env
     )
+    t2 = time.monotonic()
     expect(rc == 0, "rustc: " + err[-600:])
     rc, out, err = inside(ctx, exe)
     expect(rc == 0 and "FAIL" not in out, out + err)
-    return None
+    # the compiler's time is the machine's, and most of the test's where the machine is slow
+    name = " ".join(version.split()[:2]) or "rustc"
+    return f"{name} answered in {t1 - t0:.1f} s and compiled in {t2 - t1:.1f} s"
 
 
 @test
