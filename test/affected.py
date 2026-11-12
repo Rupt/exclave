@@ -33,6 +33,7 @@ STEPS: dict[str, tuple[str, ...]] = {
         "test/readers_test.py",
         "test/syscalls.py",
         "test/tables_test.py",
+        "test/harness_test.py",
         "test/affected_test.py",
         "src/*",
     ),

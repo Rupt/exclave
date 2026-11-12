@@ -129,7 +129,7 @@ def run_tests[T: Test[Any]](
                 if budget is not None and took >= budget
                 else f"{prog} killed after its timeout of {e.timeout:g} s"
             )
-            print(f"FAIL {t.__name__:<{width}} {took:5.1f}s {why}")
+            print(f"FAIL {t.__name__:<{width}} {took:5.1f}s {why}, {last_words(e)}")
         except Exception as e:  # noqa: BLE001 -- any exception is that test's FAIL line
             failed.append(t)
             print(
@@ -181,14 +181,28 @@ def run(
     ) as p:
         try:
             out, err = p.communicate(inp, timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(p.pid, signal.SIGKILL)
-            # a program that left the group may still hold the pipes: not waited for
+            # what it had written goes with the exception, for the line that reports the kill; a
+            # program that left the group may still hold the pipes: not waited for
             with contextlib.suppress(subprocess.TimeoutExpired):
-                p.communicate(timeout=5)
+                e.output, e.stderr = p.communicate(timeout=5)
             raise
     return p.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+
+
+def last_words(e: subprocess.TimeoutExpired) -> str:
+    """What a program run() killed had written, for the line that reports the kill.
+
+    Its last lines on standard error, or on standard output when that was silent: a tool that
+    waits, on the network or on a lock, has usually said what for.
+    """
+    for stream in (e.stderr, e.output):
+        text = stream.decode("utf-8", "replace").strip() if isinstance(stream, bytes) else ""
+        if text:
+            return "having written:\n     " + "\n     ".join(text.splitlines()[-3:])
+    return "having written nothing"
 
 
 def expect(cond: object, msg: str) -> None:

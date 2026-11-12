@@ -69,7 +69,8 @@ unit() {
     done || return 1
     unit_tests | while read -r name _; do "$out/$name" </dev/null || exit 1; done || return 1
     py "$here/grammar_test.py" --c-parser "$out/manifest_test" && py "$here/readers_test.py" --work "$out/readers" &&
-        py "$here/syscalls.py" && py "$here/tables_test.py" && py "$here/affected_test.py"
+        py "$here/syscalls.py" && py "$here/tables_test.py" && py "$here/harness_test.py" &&
+        py "$here/affected_test.py"
 }
 # shellcheck disable=SC2329  # run through step, by name
 stack() {
