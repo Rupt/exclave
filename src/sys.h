@@ -605,10 +605,6 @@ struct kstatfs {
     long f_namelen, f_frsize, f_flags, f_spare[4];
 };
 
-struct mount_attr {
-    uint64_t attr_set, attr_clr, propagation, userns_fd;
-};
-
 struct linux_dirent64 {
     uint64_t d_ino;
     int64_t d_off;

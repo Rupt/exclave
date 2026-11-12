@@ -17,8 +17,6 @@ typedef struct {
 
 #define ET_EXEC 2
 #define ET_DYN 3
-#define EM_X86_64 62
-#define EM_AARCH64 183
 #define PT_LOAD 1
 #define PT_INTERP 3
 #define PT_NOTE 4
@@ -27,4 +25,3 @@ typedef struct {
 #define PF_X 1
 #define PF_W 2
 #define PF_R 4
-#define ELFCLASS64 2

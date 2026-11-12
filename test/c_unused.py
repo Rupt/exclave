@@ -1,8 +1,8 @@
 """Name every definition in the shared C headers that no source uses (scripts/check).
 
 The compiler reports an unused static function or macro of a .c file, but not one of a header: a
-header's definitions are there to be used by someone. This lists each macro, enum constant and
-function that src/sys.h and src/common.h define or declare, and fails on one that
+header's definitions are there to be used by someone. This lists each macro, enum constant, struct
+and function that src/sys.h, src/common.h and src/elf.h define or declare, and fails on one that
 appears in no other place in src/ or the unit tests, counting a use in the headers
 themselves. A function's
 definition in a .c file, a line that starts with its type, is not a use.
@@ -14,13 +14,14 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-HEADERS = ("src/sys.h", "src/common.h")
+HEADERS = ("src/sys.h", "src/common.h", "src/elf.h")
 # Defined for a reader of the kernel's ABI beside the names that are used; none at present.
 KEEP: set[str] = set()
 
 DEFINE = re.compile(r"^\s*#\s*define\s+([A-Za-z_]\w*)")
 FUNCTION = re.compile(r"^[A-Za-z_][\w \*]*?\b([a-z_]\w*)\s*\([^;{]*\)\s*(?:\{|;|$)")
 ENUM_CONSTANT = re.compile(r"\b(NR_\w+|REG_\w+)\s*=")
+STRUCT = re.compile(r"^struct\s+([a-z_]\w*)\s*\{")
 
 
 def defined(path: str) -> dict[str, int]:
@@ -28,7 +29,7 @@ def defined(path: str) -> dict[str, int]:
     names: dict[str, int] = {}
     with open(os.path.join(REPO, path)) as f:
         for line in f:
-            for pattern in (DEFINE, FUNCTION):
+            for pattern in (DEFINE, FUNCTION, STRUCT):
                 m = pattern.match(line)
                 if m:
                     names[m.group(1)] = names.get(m.group(1), 0) + 1

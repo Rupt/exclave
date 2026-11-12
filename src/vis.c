@@ -43,14 +43,6 @@ static const char *link_reached[N_IDENTITY_DIRS];
 static const char *mapped_v[N_IDENTITY + MAX_OWN_RECORDS]; /* the virtual path each stands for, for from_real */
 static int nmapped;
 
-struct dirent64 {
-    unsigned long d_ino;
-    long d_off;
-    unsigned short d_reclen;
-    unsigned char d_type;
-    char d_name[];
-};
-
 /* a top-level directory of the tree that the start cannot read, by its real path */
 static __attribute__((noreturn)) void top_die(const char *real, long err)
 { die("cannot read a top-level directory of tree/", real, err); }
@@ -76,7 +68,7 @@ static int dir_nonempty(int dfd, const char *path)
         else if (n < 0) r = (int)n;
         if (n <= 0) break;
         for (long o = 0; o < n && !r;) {
-            const struct dirent64 *d = (const struct dirent64 *)((const char *)buf + o);
+            const struct linux_dirent64 *d = (const struct linux_dirent64 *)((const char *)buf + o);
             r = !(d->d_name[0] == '.' && (d->d_name[1] == 0 || (d->d_name[1] == '.' && d->d_name[2] == 0)));
             o += d->d_reclen;
         }
@@ -138,7 +130,7 @@ static void own_from_tree(struct scratch *S)
         if (n < 0) die("cannot read tree/", C.root, n);
         if (n == 0) break;
         for (long o = 0; o < n;) {
-            struct dirent64 *d = (struct dirent64 *)(buf + o);
+            struct linux_dirent64 *d = (struct linux_dirent64 *)(buf + o);
             o += d->d_reclen;
             if (d->d_name[0] == '.' && (d->d_name[1] == 0 || (d->d_name[1] == '.' && d->d_name[2] == 0))) continue;
             if (volatile_top(d->d_name)) continue;
