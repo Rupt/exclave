@@ -100,43 +100,100 @@ func (c *counting) ReadByte() (byte, error) {
 	return b, err
 }
 
-// controlCap bounds the plaintext of a member read for the control section, which is small.
-const controlCap = 4 << 20
+// PlainCap bounds what of a section's plaintext is kept: the signature and control sections are
+// small, and the data section's is not kept, only its end found.
+const PlainCap = 4 << 20
+
+// A Section is one gzip member of an apk: where it lies in the file, and its plaintext up to
+// PlainCap, which Whole says it does not pass.
+type Section struct {
+	Start, End int64
+	Plain      []byte
+	Whole      bool
+}
+
+// section reads the gzip member at c's place, to its end.
+func section(c *counting) (Section, error) {
+	start := c.n
+	z, err := gzip.NewReader(c)
+	if err != nil {
+		return Section{}, err
+	}
+	z.Multistream(false)
+	plain, err := io.ReadAll(io.LimitReader(z, PlainCap+1))
+	if err != nil {
+		return Section{}, err
+	}
+	whole := len(plain) <= PlainCap
+	if !whole {
+		plain = plain[:PlainCap]
+		if _, err := io.Copy(io.Discard, z); err != nil {
+			return Section{}, err
+		}
+	}
+	return Section{start, c.n, plain, whole}, nil
+}
+
+// errShape is the refusal of a file with a section too many, or none that is the control section.
+var errShape = reader.Errorf("no control section before the data, or more than three sections")
+
+// head reads an apk's sections up to its control section, the one whose tar names .PKGINFO among
+// its first entries: at most one signature section, then it, whole. The data after it is not read.
+func head(c *counting) (signature *Section, control Section, err error) {
+	for {
+		s, err := section(c)
+		if err != nil {
+			return nil, Section{}, reader.Errorf("no control section: %s", err)
+		}
+		if bytes.Contains(s.Plain[:min(len(s.Plain), 4096)], []byte(".PKGINFO")) {
+			if !s.Whole {
+				return nil, Section{}, reader.Errorf("the control section passes %d bytes", PlainCap)
+			}
+			return signature, s, nil
+		}
+		if signature != nil {
+			return nil, Section{}, errShape
+		}
+		signature = &s
+	}
+}
+
+// Sections reads all of an apk, as the fetcher checks one against its index: the signature section
+// if it has one, the control section, and the data section, the one member that is the rest of
+// the file. A file of another shape is refused.
+func Sections(r io.Reader) (signature *Section, control, data Section, err error) {
+	c := &counting{r: bufio.NewReader(r)}
+	if signature, control, err = head(c); err != nil {
+		return nil, Section{}, Section{}, err
+	}
+	if data, err = section(c); err != nil {
+		return nil, Section{}, Section{}, reader.Errorf("no data section: %s", err)
+	}
+	if _, err := c.r.Peek(1); err != io.EOF {
+		return nil, Section{}, Section{}, errShape
+	}
+	return signature, control, data, nil
+}
 
 // ControlChecksum is the package's checksum as apk's index and its database record it: Q1 and the
-// base64 of the SHA-1 of the gzip member that holds .PKGINFO, the control section. The members
-// before it, the signatures, are read to find their ends; the data after it is not read.
+// base64 of the SHA-1 of the gzip member that holds .PKGINFO, the control section. The section
+// before it, the signature's, is read to find its end; the data after it is not read.
 func ControlChecksum(p string) (string, error) {
-	label := p + ": not an apk"
 	f, err := os.Open(p)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	c := &counting{r: bufio.NewReader(f)}
-	for start := int64(0); ; start = c.n {
-		z, err := gzip.NewReader(c)
-		if err != nil {
-			return "", reader.Errorf("%s: no control section: %s", label, err)
-		}
-		z.Multistream(false)
-		plain, err := io.ReadAll(io.LimitReader(z, controlCap+1))
-		if err != nil {
-			return "", reader.Errorf("%s: %s", label, err)
-		}
-		if len(plain) > controlCap {
-			return "", reader.Errorf("%s: no control section within %d bytes", label, controlCap)
-		}
-		if !bytes.Contains(plain, []byte(".PKGINFO")) {
-			continue
-		}
-		raw := make([]byte, c.n-start)
-		if _, err := f.ReadAt(raw, start); err != nil {
-			return "", err
-		}
-		sum := sha1.Sum(raw) // apk-tools records SHA-1
-		return "Q1" + base64.StdEncoding.EncodeToString(sum[:]), nil
+	_, control, err := head(&counting{r: bufio.NewReader(f)})
+	if err != nil {
+		return "", reader.Errorf("%s: not an apk: %s", p, err)
 	}
+	raw := make([]byte, control.End-control.Start)
+	if _, err := f.ReadAt(raw, control.Start); err != nil {
+		return "", err
+	}
+	sum := sha1.Sum(raw) // apk-tools records SHA-1
+	return "Q1" + base64.StdEncoding.EncodeToString(sum[:]), nil
 }
 
 // OpenData returns the package's payload, the files it installs: the archive without its dot-files.

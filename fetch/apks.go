@@ -74,47 +74,6 @@ func newApkRepo(mirror, branch string, repos []string, arch, cacheDir string, ke
 	return r, nil
 }
 
-// plainCap bounds what of a gzip member's plaintext is kept: the signature and control
-// sections are small, and the data section's plaintext is not read, only its end found.
-const plainCap = 4 << 20
-
-// gzipMember is one member of a concatenated gzip stream: its compressed bytes, and its
-// plaintext up to plainCap, which whole says the member was no larger.
-type gzipMember struct {
-	raw   []byte
-	plain []byte
-	whole bool
-}
-
-// gzipMembers splits a concatenated gzip stream into its members, each inflated to find its end.
-func gzipMembers(data []byte) ([]gzipMember, error) {
-	var out []gzipMember
-	pos := 0
-	for pos < len(data) {
-		br := bytes.NewReader(data[pos:])
-		z, err := gzip.NewReader(br)
-		if err != nil {
-			return nil, err
-		}
-		z.Multistream(false)
-		plain, err := io.ReadAll(io.LimitReader(z, plainCap+1))
-		if err != nil {
-			return nil, err
-		}
-		whole := len(plain) <= plainCap
-		if !whole {
-			plain = plain[:plainCap]
-			if _, err := io.Copy(io.Discard, z); err != nil {
-				return nil, err
-			}
-		}
-		end := pos + len(data[pos:]) - br.Len()
-		out = append(out, gzipMember{data[pos:end], plain, whole})
-		pos = end
-	}
-	return out, nil
-}
-
 // signaturesOnly says whether a tar stream, a signature section's, holds nothing but regular
 // files named .SIGN.* at the top, as apk-tools writes one.
 func signaturesOnly(plain []byte) bool {
@@ -146,7 +105,7 @@ func (r *apkRepo) signedIndex(u string) ([]byte, error) {
 		return nil, r.cache.reject(u, fmt.Sprintf("%s: not an index archive: %s", u, err))
 	}
 	z.Multistream(false)
-	plain, err := io.ReadAll(io.LimitReader(z, plainCap))
+	plain, err := io.ReadAll(io.LimitReader(z, apk.PlainCap))
 	if err != nil {
 		return nil, r.cache.reject(u, fmt.Sprintf("%s: not an index archive: %s", u, err))
 	}
@@ -394,38 +353,20 @@ func (r *apkRepo) check(name string, st stanza, p string) error {
 	if size, ok := st["S"]; ok && strconv.Itoa(len(data)) != size {
 		return errors.New(name + ": size does not match the index")
 	}
-	members, err := gzipMembers(data)
+	// the sections as unpack reads them for the checksum it records (apk.Sections)
+	signature, control, payload, err := apk.Sections(bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("%s: not an apk: %s", name, err)
 	}
-	var control []int
-	for i, m := range members {
-		head := m.plain
-		if len(head) > 4096 {
-			head = head[:4096]
-		}
-		if bytes.Contains(head, []byte(".PKGINFO")) {
-			control = append(control, i)
-		}
+	if signature != nil && (!signature.Whole || !signaturesOnly(signature.Plain)) {
+		return errors.New(name + ": not an apk: the signature section holds more than signatures")
 	}
-	if len(control) != 1 || control[0] != len(members)-2 || len(members) > 3 {
-		return errors.New(name + ": not an apk: no control section before the data, or more than three sections")
-	}
-	for _, m := range members[:control[0]] {
-		if !m.whole || !signaturesOnly(m.plain) {
-			return errors.New(name + ": not an apk: the signature section holds more than signatures")
-		}
-	}
-	raw, plain := members[control[0]].raw, members[control[0]].plain
-	if !members[control[0]].whole {
-		return errors.New(name + ": not an apk: the control section is too large")
-	}
-	sum := sha1.Sum(raw) // apk's index records SHA-1
+	sum := sha1.Sum(data[control.Start:control.End]) // apk's index records SHA-1
 	if base64.StdEncoding.EncodeToString(sum[:]) != st["C"][2:] {
 		return errors.New(name + ": checksum does not match the index")
 	}
-	m := datahashRe.FindSubmatch(plain)
-	if m == nil || sha256hex(members[len(members)-1].raw) != string(m[1]) {
+	m := datahashRe.FindSubmatch(control.Plain)
+	if m == nil || sha256hex(data[payload.Start:payload.End]) != string(m[1]) {
 		return errors.New(name + ": the data section does not match the datahash of .PKGINFO")
 	}
 	return nil

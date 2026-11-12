@@ -1,9 +1,12 @@
 package fetch
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
+
+	"exclave/unpack/apk"
 )
 
 // FuzzSignatures reads any bytes as OpenPGP packets, armoured or not, against an empty keyring:
@@ -21,6 +24,6 @@ func FuzzSignatures(f *testing.F) {
 		dearmor(sig)
 		k.detached(signed, sig)
 		k.clearsigned(sig)
-		gzipMembers(sig)
+		apk.Sections(bytes.NewReader(sig))
 	})
 }

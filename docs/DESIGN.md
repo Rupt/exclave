@@ -3546,7 +3546,11 @@ are locators; the tool does not, because a hash is not a locator.
   its signature names (`--key`, a file named as apk names it in
   `/etc/apk/keys`), and checks each package's checksums as apk does: the
   index's checksum against the control section, and `.PKGINFO`'s
-  `datahash` against the data section.
+  `datahash` against the data section. A package's sections are split
+  once, for this check and for the checksum `unpack` records: at most
+  one signature section, then the control section, whose tar names
+  `.PKGINFO` among its first entries, then the data, and a file of
+  another shape is no apk to either.
 - `fetch rpms` reads a yum or dnf repository's `repomd.xml` and
   `primary.xml`, resolves `Requires` through `Provides` and the files
   the index lists, checks `repomd.xml`'s signature where the repository
