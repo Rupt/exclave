@@ -62,8 +62,8 @@ func newCache(dir string, timeout time.Duration, trim int) (*cache, error) {
 	dialer := &net.Dialer{Timeout: timeout}
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
-		// every read of the body has timeout to deliver a byte, as urllib's socket timeout had,
-		// so a mirror that stalls is tried again rather than waited on
+		// every read of the body has timeout to deliver a byte, so a mirror that stalls is tried
+		// again rather than waited on
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			c, err := dialer.DialContext(ctx, network, addr)
 			if err != nil {

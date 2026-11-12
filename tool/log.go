@@ -55,7 +55,7 @@ func parseLog(data []byte) []logLine {
 		if num == "" || strings.Trim(num, "0123456789") != "" {
 			continue
 		}
-		result, err := strconv.ParseInt(line[sp1+1:sp2], 10, 64) // a number past the range saturates, as strtol does
+		result, err := strconv.ParseInt(line[sp1+1:sp2], 10, 64) // a number past the range reads as the range's end
 		if err != nil && !errors.Is(err, strconv.ErrRange) {
 			continue
 		}

@@ -103,8 +103,8 @@ func searchDir(root, d, name string) string {
 
 func splitAdd(out *[]string, list, origin string) {
 	for part := range strings.SplitSeq(list, ":") {
-		if part != "" { // a part is at most a path's 4095 bytes, as the C's buffer held it
-			*out = append(*out, expand(part[:min(len(part), 4095)], origin))
+		if part != "" && len(part) <= 4095 { // a part longer than a path can be names no directory
+			*out = append(*out, expand(part, origin))
 		}
 	}
 }
@@ -225,8 +225,8 @@ func isAlnum(c byte) bool {
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
-// digits parses the decimal number at data[t:] as the C read it, strtol's long saturating at its
-// largest and then cast to int, and says where it ends.
+// digits parses the decimal number at data[t:], one past an int32's range read as its largest,
+// and says where it ends.
 func digits(data []byte, t int) (int, int) {
 	var v int64
 	end := t
@@ -238,7 +238,7 @@ func digits(data []byte, t int) (int, int) {
 		}
 		end++
 	}
-	return int(int32(v)), end
+	return int(min(v, math.MaxInt32)), end
 }
 
 // glibcVersion is the major and minor version libc.so.6's banner names, found in the default
