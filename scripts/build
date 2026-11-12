@@ -112,10 +112,14 @@ launcher() {
         echo "build: $out lost its version" >&2
         return 1
     }
-    "${tools}readelf" --dyn-syms "$out" | grep -q exclave_debug_hook || {
-        echo "build: $out does not export the gdb hook" >&2
-        return 1
-    }
+    syms=$("${tools}readelf" --dyn-syms -W "$out")
+    for name in exclave_original_base exclave_original_entry exclave_interp_base exclave_original_path \
+        exclave_interp_path exclave_debug_hook; do
+        printf '%s\n' "$syms" | grep -qw "$name" || {
+            echo "build: $out does not export $name, which gdb's script reads" >&2
+            return 1
+        }
+    done
     "${tools}readelf" -h "$out" | grep -q 'DYN' || {
         echo "build: $out is not ET_DYN" >&2
         return 1
