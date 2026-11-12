@@ -171,19 +171,16 @@ static const char *denied[] = {"GLIBC_TUNABLES",   "GCONV_PATH",   "LOCPATH", "N
                                "COMPILER_PATH",    "LIBRARY_PATH", "PATH",    "LANG",
                                "LANGUAGE",         "TZ",           "SHELL",   0};
 static const char *fixed[] = {"PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "SHELL=/bin/sh", 0};
-/* the launcher's protocol with itself (7.4.5): EXCLAVE_EXEC names a loader-path target, EXCLAVE_EXECFN and
- * EXCLAVE_COMM the identity the kernel would give the program, EXCLAVE_TRACED a process newly traced (retrace),
- * EXCLAVE_CWD the working directory of the run (8.1.4); set by a handler or the positional entry, read by the
- * launcher they exec, removed from the environment a program is given (the kernel's copy in /proc/<pid>/environ
- * keeps them, 13 item 46) */
-static int internal_var(const char *e)
+/* which of the launcher's own variables a string of the environment is (internal_var), 0 for none */
+static int own_var(const char *e)
 {
-    return xstarts(e, "EXCLAVE_EXEC=") || xstarts(e, "EXCLAVE_EXECFN=") || xstarts(e, "EXCLAVE_COMM=") ||
-           xstarts(e, "EXCLAVE_TRACED=") || xstarts(e, "EXCLAVE_CWD=");
+    long n = 0;
+    while (n < VAR_HEAD && e[n]) n++;
+    return internal_var(e, n);
 }
 static int env_denied(const char *e)
 {
-    if (xstarts(e, "LD_") || xstarts(e, "LC_") || internal_var(e)) return 1;
+    if (xstarts(e, "LD_") || xstarts(e, "LC_") || own_var(e)) return 1;
     for (int i = 0; denied[i]; i++) {
         size_t l = xstrlen(denied[i]);
         if (xstrncmp(e, denied[i], l) == 0 && e[l] == '=') return 1;
@@ -207,7 +204,7 @@ static char **env_prepare(char **envp, int boundary)
     char **out = boundary ? pointers(n + 6) : envp;
     long k = 0;
     for (long i = 0; i < n; i++) {
-        if (boundary ? env_denied(envp[i]) : internal_var(envp[i])) continue;
+        if (boundary ? env_denied(envp[i]) : own_var(envp[i])) continue;
         out[k++] = envp[i];
     }
     /* writable: bash writes into its environment strings */
@@ -250,9 +247,9 @@ static void retrace(const char *exe, char **argv, char **envp)
     if (!tracer_of("/proc/self/status")) return;
     long k = 0;
     while (envp[k]) k++;
-    static char again[] = "EXCLAVE_TRACED=2";
+    static char again[] = VAR_TRACED "=2";
     char **env = pointers(k + 1);
-    for (long i = 0; i < k; i++) env[i] = xstarts(envp[i], "EXCLAVE_TRACED=") ? again : envp[i];
+    for (long i = 0; i < k; i++) env[i] = own_var(envp[i]) == IS_TRACED ? again : envp[i];
     env[k] = 0;
     int had = C.borrowed;
     unborrow();
@@ -369,19 +366,21 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
         if (xstrcmp(t, "/") != 0) scat(t, "/", PATH_MAX);
         scat(t, argv[1], PATH_MAX);
     }
-    char *var = arena_alloc(PATH_MAX + 13);
-    scpy(var, "EXCLAVE_EXEC=", PATH_MAX + 13);
-    scat(var, t, PATH_MAX + 13);
+    char *var = arena_alloc(PATH_MAX + sizeof VAR_EXEC);
+    scpy(var, VAR_EXEC "=", PATH_MAX + sizeof VAR_EXEC);
+    scat(var, t, PATH_MAX + sizeof VAR_EXEC);
     /* the name as given: AT_EXECFN, comm, a script's $0 (7.6) */
-    char *fn = arena_alloc(PATH_MAX + 15);
-    scpy(fn, "EXCLAVE_EXECFN=", PATH_MAX + 15);
-    scat(fn, argv[1], PATH_MAX + 15);
+    char *fn = arena_alloc(PATH_MAX + sizeof VAR_EXECFN);
+    scpy(fn, VAR_EXECFN "=", PATH_MAX + sizeof VAR_EXECFN);
+    scat(fn, argv[1], PATH_MAX + sizeof VAR_EXECFN);
     long n = 0;
     while (envp[n]) n++;
     char **env = pointers(n + 3);
     long k = 0;
-    for (long i = 0; i < n; i++)
-        if (!internal_var(envp[i]) || (inside && xstarts(envp[i], "EXCLAVE_CWD="))) env[k++] = envp[i];
+    for (long i = 0; i < n; i++) {
+        int which = own_var(envp[i]);
+        if (!which || (inside && which == IS_CWD)) env[k++] = envp[i];
+    }
     /* after the program's own, as a handler places them (exec_env), so that the kernel lays the program's strings out
      * contiguously after its arguments */
     env[k++] = var;
@@ -611,7 +610,7 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
      * arguments are -c and a command beginning "exec ", the shape of a debugger's shell (gdb's startup-with-shell runs
      * SHELL -c "exec PROGRAM ARGS"), leaves the second exec to its next, which its handler marks, since the debugger
      * counts the shell's exec among its start's */
-    const char *traced = have ? find_env(envp, "EXCLAVE_TRACED") : 0;
+    const char *traced = have ? find_env(envp, VAR_TRACED) : 0;
     if (traced && traced[0] == '1') {
         if (argc >= 3 && xstrcmp(argv[1], "-c") == 0 && xstarts(argv[2], "exec ")) C.traced_pid = sys_getpid();
         else retrace(exe, argv, envp);
@@ -630,8 +629,8 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
         /* the identity the kernel would have given the program (7.6): the name a handler exec'd this wrapper by, as the
          * kernel spells it, carried in EXCLAVE_EXECFN and EXCLAVE_COMM by that handler, which only a launcher sets;
          * from the host, the kernel's own AT_EXECFN, a real path, and its last component */
-        fn = have ? find_env(envp, "EXCLAVE_EXECFN") : 0;
-        cm = have ? find_env(envp, "EXCLAVE_COMM") : 0;
+        fn = have ? find_env(envp, VAR_EXECFN) : 0;
+        cm = have ? find_env(envp, VAR_COMM) : 0;
         if (fn) C.execfn = keep_path(fn);
         else {
             for (long i = 0; auxv[i * 2] != AT_NULL; i++)
@@ -643,14 +642,14 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
             C.execfn = keep_path(fn ? S->tmp : C.program);
         }
         scpy(C.comm, cm ? cm : base_name(C.execfn), sizeof C.comm);
-    } else if ((target = find_env(envp, "EXCLAVE_EXEC"))) {
+    } else if ((target = find_env(envp, VAR_EXEC))) {
         /* the internal protocol of 7.4.5: re-exec'd by a handler, or by entry_exec */
-        if (target[0] != '/') die("EXCLAVE_EXEC must be an absolute path", target, 0);
+        if (target[0] != '/') die(VAR_EXEC " must be an absolute path", target, 0);
         C.loader_mode = 1;
         C.program = keep_path(target);
         /* the name the program was exec'd by, and its comm, as the kernel spells them (7.6) */
-        fn = find_env(envp, "EXCLAVE_EXECFN");
-        cm = find_env(envp, "EXCLAVE_COMM");
+        fn = find_env(envp, VAR_EXECFN);
+        cm = find_env(envp, VAR_COMM);
         C.execfn = keep_path(fn ? fn : target);
         scpy(C.comm, cm ? cm : base_name(C.execfn), sizeof C.comm);
         /* a descriptor with no path (13 item 25): the kernel's identity for the program is the link's text; the dup is
@@ -673,7 +672,7 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
 
     C.boundary = have == 0;
     /* 8.1.4: the run's working directory, as the launcher that exec'd this one names it; only from inside */
-    const char *cwd = have ? find_env(envp, "EXCLAVE_CWD") : 0;
+    const char *cwd = have ? find_env(envp, VAR_CWD) : 0;
     char **env2 = env_prepare(envp, C.boundary);
     vis_init(S, cwd);
     cache_init(S->pid, lock);

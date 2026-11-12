@@ -103,8 +103,9 @@ static int exec_of_pid(long pid, char *out)
         for (size_t i = 0; i < have && !found; i++) {
             if (out[i]) continue;
             if (skipping) skipping = 0;
-            else if (i - start > 13 && xmemcmp(out + start, "EXCLAVE_EXEC=", 13) == 0 && out[start + 13] == '/') {
-                for (size_t k = 0; k <= i - start - 13; k++) out[k] = out[start + 13 + k];
+            else if (i - start > sizeof VAR_EXEC && xmemcmp(out + start, VAR_EXEC "=", sizeof VAR_EXEC) == 0 &&
+                     out[start + sizeof VAR_EXEC] == '/') {
+                for (size_t k = 0; k <= i - start - sizeof VAR_EXEC; k++) out[k] = out[start + sizeof VAR_EXEC + k];
                 found = 1;
             }
             start = i + 1;

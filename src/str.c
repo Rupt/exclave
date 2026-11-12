@@ -223,6 +223,17 @@ long shebang_argv(char *line, long n, char *script, char **argv, long argc, char
     return k;
 }
 
+int internal_var(const char *s, long n)
+{
+    static const char vars[][VAR_HEAD] = {VAR_EXEC "=", VAR_EXECFN "=", VAR_COMM "=", VAR_TRACED "=", VAR_CWD "="};
+    _Static_assert(sizeof VAR_EXECFN < VAR_HEAD, "the head tells the longest name");
+    for (int i = 0; i < (int)(sizeof vars / sizeof vars[0]); i++) {
+        long len = (long)xstrlen(vars[i]);
+        if (n >= len && xmemcmp(s, vars[i], (size_t)len) == 0) return i + 1;
+    }
+    return 0;
+}
+
 /* The TracerPid field of a status file's head, buf of n bytes: the pid, or 0 where the line is absent or cut short */
 long status_tracer(const char *buf, long n)
 {

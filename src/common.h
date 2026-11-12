@@ -121,6 +121,24 @@ struct exclave {
 };
 extern struct exclave C;
 
+/* ---------- the launcher's protocol with itself (7.4.5) ----------
+ * Five variables: EXCLAVE_EXEC names a loader-path target, EXCLAVE_EXECFN and EXCLAVE_COMM the identity the kernel
+ * would give the program, EXCLAVE_TRACED a process newly traced (retrace), EXCLAVE_CWD the working directory of the
+ * run (8.1.4). A handler or the positional entry sets them, the launcher they exec reads them, and they are removed
+ * from the environment a program is given (the kernel's copy in /proc/<pid>/environ keeps them, 13 item 46). Each
+ * name's size is its length with the = that follows it. */
+#define VAR_EXEC "EXCLAVE_EXEC"
+#define VAR_EXECFN "EXCLAVE_EXECFN"
+#define VAR_COMM "EXCLAVE_COMM"
+#define VAR_TRACED "EXCLAVE_TRACED"
+#define VAR_CWD "EXCLAVE_CWD"
+#define VAR_HEAD 16 /* the bytes of a string that tell whether it is one of them: the longest name, its = and one */
+enum { IS_EXEC = 1, IS_EXECFN, IS_COMM, IS_TRACED, IS_CWD };
+/* which of them the n bytes at s begin, by the names above, or 0 for a variable of the program's own */
+int internal_var(const char *s, long n);
+/* the variables an exec adds to a program's environment: the four but EXCLAVE_CWD's, which is there, and a spare */
+#define EXEC_ENV_EXTRA 5
+
 /* ---------- string helpers (str.c) ---------- */
 char *scpy(char *d, const char *s, size_t n);
 char *scat(char *d, const char *s, size_t n);

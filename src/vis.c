@@ -684,13 +684,13 @@ static void claim_cwd(struct scratch *S, const char *given)
     }
     char id[24];
     size_t l = own ? xstrlen(real) : 0;
-    char *v = C.cwdvar = arena_alloc(12 + 2 * sizeof id + l + 1);
-    scpy(v, "EXCLAVE_CWD=", 13);
+    char *v = C.cwdvar = arena_alloc(sizeof VAR_CWD + 2 * sizeof id + l + 1);
+    scpy(v, VAR_CWD "=", sizeof VAR_CWD + 1);
     ltoa_((long)C.root_dev, id);
-    scat(v, id, 12 + sizeof id);
-    scat(v, ".", 12 + sizeof id + 1);
+    scat(v, id, sizeof VAR_CWD + sizeof id);
+    scat(v, ".", sizeof VAR_CWD + sizeof id + 1);
     ltoa_((long)C.root_ino, id);
-    scat(v, id, 12 + 2 * sizeof id);
+    scat(v, id, sizeof VAR_CWD + 2 * sizeof id);
     v += xstrlen(v);
     xmemcpy(v, real, l);
     v[l] = 0;

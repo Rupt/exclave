@@ -6537,8 +6537,10 @@ its time, ok, SKIP or FAIL:
   `scripts/figures` prints;
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py`, the scratch-pool test, the cache's
-  growth and its lock across `fork` (`test/cache_test.c`), the `#!` line
-  test and the CPU level test, each built from the current sources for
+  growth and its lock across `fork` (`test/cache_test.c`), the test of
+  the `#!` line, of the launcher's own variables told from a string's
+  head and of a status file's `TracerPid` (`test/str_test.c`), and the
+  CPU level test, each built from the current sources for
   the host under AddressSanitizer and UndefinedBehaviorSanitizer, where
   a finding exits 99, which no test answers; the command's ELF,
   `ld.so.cache` and log readers on hostile files, and its grammar,
