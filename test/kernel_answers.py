@@ -3,7 +3,8 @@
 The suite asserts them of the launcher (test/regress_paths.py) and the namespace oracle asserts
 them of the kernel itself, on a read-only bind of the same tree (test/oracle_ns.py), so that an
 expectation written by hand is checked against the kernel at every run (DESIGN.md 17 items 1
-and 4).
+and 4). What a kernel is and has, for an answer an older one gives otherwise, is test/kernel.py's
+to say.
 """
 
 import errno
@@ -12,6 +13,8 @@ import os
 import platform
 import re
 lazy import ctypes
+
+import kernel
 
 # creat_slash HOSTDIR: one line per case, the case and the errno text
 CREAT_SLASH = (
@@ -120,28 +123,6 @@ OPEN_FLAGS = (
 OPEN_FLAGS_SINCE_6_3 = ("O_DIRECTORY|O_CREAT ", "openat O_DIRECTORY|O_CREAT ")
 
 
-def kernel() -> tuple[int, int]:
-    """The running kernel's major and minor version."""
-    major, minor = os.uname().release.split(".")[:2]
-    return int(major), int(minor.split("-")[0])
-
-
-def has_openat2() -> bool:
-    """Whether the kernel has openat2 (5.6), asked of the kernel and not of its version.
-
-    A kernel without it answers ENOSYS to every openat2, where the handler answers what it can from
-    its own rule, as the newest kernel does, and re-issues the rest (DESIGN.md 17 item 7): a test
-    of openat2's answers judges them only where the kernel has the call.
-    """
-    libc = ctypes.CDLL(None, use_errno=True)
-    how = (ctypes.c_uint64 * 3)(0o10000000, 0, 0)  # O_PATH
-    fd = libc.syscall(437, -100, b"/", ctypes.byref(how), ctypes.c_size_t(24))
-    if fd >= 0:
-        os.close(fd)
-        return True
-    return False
-
-
 def open_flags_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     """The lines of open_flags's output that differ from the kernel's answers.
 
@@ -149,7 +130,7 @@ def open_flags_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     OPEN_FLAGS_SINCE_6_3 as it did then.
     """
     got = out.splitlines()
-    old = by_the_kernel and kernel() < (6, 3)
+    old = by_the_kernel and kernel.version() < (6, 3)
     wrong = [
         f"got {g!r}, the kernel says {w!r}"
         for g, w in zip(got, OPEN_FLAGS, strict=False)
@@ -434,7 +415,7 @@ def sigcalls_wrong(out: str) -> list[str]:
             w.replace("SA_RESTORER: killed by Segmentation fault", "SA_RESTORER: exit 1")
             for w in want
         ]
-    k = kernel()
+    k = kernel.version()
     if k < (5, 11):
         want = [w.replace("flag bit reported: dropped", "flag bit reported: kept") for w in want]
     # a syscall this kernel lacks: ENOSYS from the kernel, where the launcher's own checks of the
@@ -574,7 +555,7 @@ def sigstack_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
             continue
         if (
             w.startswith("SS_AUTODISARM: ")
-            and kernel() < (4, 7)
+            and kernel.version() < (4, 7)
             and g == "SS_AUTODISARM: sigaltstack Invalid argument"
         ):
             continue  # the flag is 4.7's
@@ -764,7 +745,7 @@ def unwind_frame_wrong(out: str, *, musl: bool = False) -> list[str]:
 # against exec where vm.memfd_noexec is 1, which the program's last line, the host's facts, shows
 # in its seals (F_SEAL_EXEC); and under a bwrap whose child an AppArmor profile confines, every
 # exec of a memfd is EACCES (tree.memfd_exec_under_bwrap)
-OLD_MEMFD = kernel() < (6, 3)
+OLD_MEMFD = kernel.version() < (6, 3)
 F_SEAL_EXEC = 0x20
 
 
@@ -831,7 +812,7 @@ def creat_slash_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     """
     got = out.splitlines()
     want = list(CREAT_SLASH)
-    if by_the_kernel and kernel() < (5, 8):
+    if by_the_kernel and kernel.version() < (5, 8):
         want = [
             w.replace("File exists", "Is a directory") if w.startswith(CREAT_SLASH_SINCE_5_8) else w
             for w in want
@@ -1001,7 +982,7 @@ def slash_links_wrong(out: str) -> list[str]:
     skipped = "exlink: skipped" in got
     got = [x for x in got if x != "exlink: skipped"]
     want = [x for x in SLASH_LINKS if not (skipped and x.startswith("exlink "))]
-    no_openat2 = kernel() < (5, 6)
+    no_openat2 = not kernel.has("openat2")
     return [
         f"got {g!r}, the kernel says {w!r}"
         for g, w in itertools.zip_longest(got, want)
@@ -1146,7 +1127,7 @@ def lines_wrong(
 # script's status is its interpreter's, dash's 2 or bash's 126
 # the #! buffer of 128 bytes until 5.1, which cut the interpreter's argument sooner; a distribution
 # kernel may carry the change (RHEL 8's 4.18 does), so before 5.1 either answer is the kernel's
-OLD_BUF = kernel() < (5, 1)
+OLD_BUF = kernel.version() < (5, 1)
 
 
 def shebang_line(case: str, new: str, old: str) -> tuple[str, str | tuple[str, ...]]:
@@ -1161,7 +1142,7 @@ def shebang_line(case: str, new: str, old: str) -> tuple[str, str | tuple[str, .
 # before 5.9 exec opened the file before checking that it was regular, and a socket's open answers
 # ENXIO; a distribution kernel may carry the change (Ubuntu's 4.15 does), so either answer is the
 # kernel's, and the launcher answers as the newer kernels do
-OLD_EXEC_OPEN = kernel() < (5, 9)
+OLD_EXEC_OPEN = kernel.version() < (5, 9)
 EXEC_SCRIPT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     ("line127", "status=0 out=argv=[$E|interp a*full|$H/line127|x]"),
     ("line127-nonl", "status=0 out=argv=[$E|interp a*full|$H/line127-nonl|x]"),
@@ -1188,7 +1169,7 @@ EXEC_SCRIPT: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
     # a bare "#!" without a newline: ENOEXEC until binfmt_script's truncation rework in 5.5
     # (allow interpreter argument truncation); EACCES since (measured: 5.4 and 5.10); the
     # launcher answers EACCES on every kernel
-    ("only #! no newline", "ENOEXEC" if kernel() < (5, 5) else "EACCES"),
+    ("only #! no newline", "ENOEXEC" if kernel.version() < (5, 5) else "EACCES"),
     ("only # no newline", "ENOEXEC"),
     ("empty file", "ENOEXEC"),
     ("one newline", "ENOEXEC"),
@@ -1243,7 +1224,7 @@ EXEC_SCRIPT_LAUNCHER: dict[str, str] = {
     "unreadable script": "EACCES",
     "unreadable script, elf interpreter": "EACCES",
     # the launcher answers as the newer kernels do, whatever this kernel's buffer or rule
-    **({"only #! no newline": "EACCES"} if kernel() < (5, 5) else {}),
+    **({"only #! no newline": "EACCES"} if kernel.version() < (5, 5) else {}),
     **({"socket": "EACCES"} if OLD_EXEC_OPEN else {}),
     **(
         {
@@ -1269,12 +1250,12 @@ STACK = "signal=11" if platform.machine() == "x86_64" else "status=42"
 # newer kernels do
 # a distribution kernel before 5.8 may carry the change (RHEL 8's 4.18 does), so the kernel's
 # own answer is either
-OLD_RIE = kernel() < (5, 8)
+OLD_RIE = kernel.version() < (5, 8)
 OLD_RIE_ANSWER: str | tuple[str, ...] = ("status=42", STACK) if OLD_RIE else STACK
 # a PT_INTERP naming an ET_EXEC image already at its own address: until 6.7 the interpreter's
 # mapping failed and the exec was killed; elf_load() took the interpreter's mapping in 6.7 and the
 # image runs (measured: 6.6 kills, 6.8 runs); the launcher answers by 7.3's own rule either way
-OLD_INTERP = "signal=11" if kernel() < (6, 7) else "status=42"
+OLD_INTERP = "signal=11" if kernel.version() < (6, 7) else "status=42"
 
 
 # a host that registered a binfmt_misc handler for other machines, as Fedora's cloud image does,
@@ -1890,11 +1871,11 @@ def mem_layout_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     """
     want = MEM_LAYOUT
     launcher = MEM_LAYOUT_LAUNCHER
-    if kernel() < (3, 16):
+    if kernel.version() < (3, 16):
         want = tuple((c, "no" if c.endswith(" [vvar]") else a) for c, a in want)
-    if kernel() < (4, 7):
+    if kernel.version() < (4, 7):
         launcher = {c: a for c, a in launcher.items() if c != "DATA 128KB"}
-    if kernel() < (5, 0):
+    if kernel.version() < (5, 0):
         want = tuple((c, None if c == "arg limit slack under 64 bytes" else a) for c, a in want)
     if not by_the_kernel and "PR_SET_MM_MAP and getrandom: no" in out.splitlines():
         want = tuple((c, None if c in MEM_LAYOUT_PLACED else a) for c, a in want)
@@ -2227,7 +2208,7 @@ SECCOMP_FILTER_SINCE: tuple[tuple[tuple[int, int], tuple[str, ...]], ...] = (
 
 def seccomp_filter_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     """The lines of seccomp_filter's output that differ from the kernel's answers."""
-    k = kernel()
+    k = kernel.version()
     want = tuple(
         (
             case,

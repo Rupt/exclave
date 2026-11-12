@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 
+import kernel
 import tree
 from harness import cannot_run, run
 
@@ -175,11 +176,7 @@ def main() -> int:
     args = ap.parse_args()
     seed = head_seed() if args.seed is None else args.seed
     rng = random.Random(seed)
-    probe = OpenHow(O_PATH, 0, RESOLVE_IN_ROOT)
-    if (
-        libc.syscall(SYS_openat2, -100, b".", ctypes.byref(probe), ctypes.sizeof(probe)) < 0
-        and ctypes.get_errno() == errno.ENOSYS
-    ):
+    if not kernel.has("openat2"):
         return cannot_run(
             "the resolution oracle", "openat2 is not available on this kernel (5.6 and later)"
         )

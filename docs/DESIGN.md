@@ -6784,7 +6784,14 @@ the list `EXPECTED` names its reason: the oracle's own
 construction, a stated limitation (13 items 29 and 41), or what an
 older kernel lacks or decided differently, such as `truncate` checking
 the mount before the permission on 6.1 and earlier (6.14 checks the
-permission first). The handler answers as the newest kernel does. A
+permission first). The handler answers as the newest kernel does. What
+a kernel is and has is asked of the kernel itself, outside any exclave
+(`test/kernel.py`): whether it has a call by making the call, since a
+distribution's kernel carries backports its version does not show, and
+never by the answer of the program under test, whose refusal might be
+the launcher's own; its version only for a change of behaviour that no
+call can be asked about. The suite's tables of the kernel's answers
+(`test/kernel_answers.py`) take an older kernel's answers the same way. A
 difference that is a launcher defect, found and not yet fixed, is
 listed apart by its two exact answers, printed by every run, and fails
 once the answers agree until its entry goes, on a host whose files can

@@ -12,6 +12,7 @@ import subprocess
 import time
 lazy import resource
 
+import kernel
 import kernel_answers
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
@@ -817,7 +818,7 @@ def start_page_faults(ctx: Ctx) -> str:
     rc, out, err = inside(ctx, prog, [ctx.vbin("true")])
     expect(rc == 0 and out.strip().isdigit(), f"spawn_faults inside: rc={rc} {out!r} {err!r}")
     got = int(out)
-    most = 50 if kernel_answers.kernel() >= (3, 15) else 80
+    most = 50 if kernel.version() >= (3, 15) else 80
     expect(got - native <= most, f"a start inside takes {got} page faults, natively {native}")
     return f"{got} against {native}"
 

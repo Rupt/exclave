@@ -11,6 +11,7 @@ import shutil
 import subprocess
 lazy import ctypes
 
+import kernel
 import kernel_answers
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
@@ -219,7 +220,7 @@ def host_walk_one_step(ctx: Ctx) -> None:
     expect(rc != 0 and "No such file" in err, f"a missing directory in the middle: {err!r}")
     # these answers hold with or without the one-step check; where the launcher would use it, it
     # must have run
-    if shutil.which("strace") and kernel_answers.has_openat2() and mounted_once(ctx.root):
+    if shutil.which("strace") and kernel.has("openat2") and mounted_once(ctx.root):
         trace = os.path.join(ctx.work, f"deephost-{os.getpid()}.trace")
         run(
             ["strace", "-f", "-e", "trace=openat2", "-o", trace, cat, os.path.join(deep, "f")],
@@ -748,9 +749,8 @@ def directory_stats_hide_real(ctx: Ctx) -> None:
         "fstat O_PATH",
     )
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "dirstat"), [bindir, hostdir])
-    # statx is 4.11's: on an older kernel both worlds fail it
-    release = tuple(int(x) for x in re.findall(r"\d+", platform.release())[:2])
-    old = release < (4, 11)
+    # statx is 4.11's: on a kernel without it both worlds fail it
+    old = not kernel.has("statx")
 
     def line(d: str, c: str, nlink: int, size: int) -> str:
         failed = old and c.startswith("statx")
@@ -843,11 +843,11 @@ def openat2_resolve(ctx: Ctx) -> str | None:
     exclave-to-host crossing, the read-only rule holds, and the struct's own rules answer EINVAL
     before any lookup. Skips on a kernel without openat2.
     """
+    if not kernel.has("openat2"):
+        skip("no openat2 on this kernel (5.6 and later)")
     d = os.path.join(ctx.work, "o2host")
     os.makedirs(d, exist_ok=True)
     rc, out, err = inside(ctx, os.path.join(ctx.progs, "openat2"), [d])
-    if rc == 3:
-        skip("no openat2 on this kernel (5.6 and later)")
     expect(rc == 0 and "FAIL" not in out, out + err)
     return None
 

@@ -143,7 +143,6 @@ import argparse
 import errno
 import os
 import platform
-import re
 import shutil
 import stat
 import subprocess
@@ -151,6 +150,7 @@ import sys
 from typing import NamedTuple
 lazy from collections.abc import Callable
 
+import kernel
 import tree
 from harness import cannot_run, run
 from syscalls import kernel_table
@@ -161,9 +161,7 @@ REPO = os.path.dirname(HERE)
 
 MACHINE = platform.machine()
 # orderings have moved between kernels (8.2)
-RELEASE = re.match(r"(\d+)\.(\d+)", os.uname().release)
-assert RELEASE
-KERNEL = tuple(int(x) for x in RELEASE.groups())
+KERNEL = kernel.version()
 O_RDONLY, O_WRONLY, O_RDWR, O_CREAT, O_EXCL, O_TRUNC = 0, 1, 2, os.O_CREAT, os.O_EXCL, os.O_TRUNC
 # this machine's bits
 O_DIRECTORY, O_NOFOLLOW, O_PATH, O_TMPFILE = os.O_DIRECTORY, os.O_NOFOLLOW, os.O_PATH, os.O_TMPFILE
