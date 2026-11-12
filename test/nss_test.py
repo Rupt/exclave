@@ -11,7 +11,7 @@ user both ways, as it would on a host whose users come from LDAP through SSSD; e
 the same nsswitch.conf, warns of no module for sss and of winbind's and mdns4_minimal's, naming
 their packages; and with --musl, on a musl exclave, it warns that the users of sss and winbind are
 found only through the host's nscd and that mdns4_minimal's names are not found. Says so and exits
-0 when it cannot run, without user namespaces or with a work directory too deep for the socket's
+77 when it cannot run, without user namespaces or with a work directory too deep for the socket's
 path.
 """
 
@@ -26,6 +26,7 @@ import threading
 lazy import socket
 
 import tree
+from harness import cannot_run
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -104,8 +105,7 @@ def main() -> int:
     ap.add_argument("--work", default=os.path.join(REPO, "build", "nss-work"))
     args = ap.parse_args()
     if subprocess.run(["unshare", "-Urm", "true"], capture_output=True, check=False).returncode:
-        print("nss: cannot run here: no user namespaces")
-        return 0
+        return cannot_run("the lookup test", "no user namespaces")
     work = os.path.abspath(args.work)
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(os.path.join(work, "sss", "pipes"))
@@ -119,10 +119,9 @@ def main() -> int:
         f.write("passwd: files sss winbind\ngroup: files sss\nhosts: files mdns4_minimal dns\n")
     path = os.path.join(work, "sss", "pipes", "nss")
     if len(path.encode()) > 107:
-        print(
-            f"nss: cannot run here: the socket's path passes the 107 bytes sun_path holds: {path}"
+        return cannot_run(
+            "the lookup test", f"the socket's path passes the 107 bytes sun_path holds, {path}"
         )
-        return 0
     server = socketserver.ThreadingUnixStreamServer(path, Handler)
     server.daemon_threads = True
     os.chmod(path, 0o666)
@@ -134,8 +133,7 @@ def main() -> int:
         for key in (NAME, str(UID)):
             p = in_namespace(work, f"{getent} passwd {key}")
             if p.returncode == 99:
-                print(f"nss: cannot run here: {p.stderr.strip()[-120:]}")
-                return 0
+                return cannot_run("the lookup test", p.stderr.strip()[-120:])
             ok = p.returncode == 0 and p.stdout == line + "\n"
             got = f"{p.stdout.strip()!r} {p.stderr.strip()!r}"
             print(f"{'ok' if ok else 'FAIL'}: getent passwd {key}: {got}")

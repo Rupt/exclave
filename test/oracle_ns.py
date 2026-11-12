@@ -5,7 +5,7 @@ the launcher. Exit status, stdout and stderr are compared, a workload meant to s
 under bwrap what it is meant to, so that one that fails alike in both worlds is not taken for a
 pass, and the suite's path programs whose answers the kernel can give, the read-only matrix among
 them, run under bwrap so that their expectations are checked against the kernel itself rather than
-against the launcher. Needs user namespaces and bwrap; says so and exits 0 when it cannot run.
+against the launcher. Needs user namespaces and bwrap; says so and exits 77 when it cannot run.
 
     test/oracle_ns.py --exclave EXCLAVE [--work DIR] [--keep]
 """
@@ -24,7 +24,7 @@ lazy from collections.abc import Callable, Iterable
 
 import kernel_answers
 import tree
-from harness import run
+from harness import cannot_run, run
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -577,8 +577,7 @@ def main() -> int:
     args = ap.parse_args()
     why = bwrap_unusable()
     if why:
-        print(f"{why}; the oracle cannot run")
-        return 0
+        return cannot_run("the namespace oracle", why)
     work = os.path.abspath(args.work)
     if os.path.exists(work):
         shutil.rmtree(work)

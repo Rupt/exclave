@@ -6,7 +6,8 @@ missing tool, a tree or a kernel that cannot answer); otherwise it returns a not
 or None. A test that asserted part of what it states and cannot run the rest passes, with a note
 naming the rest.
 `run_tests` prints one PASS, SKIP or FAIL line per test, any other exception a FAIL, and returns
-the failures. test/run.py and test/unpack_test.py run on it, each with its own fixture.
+the failures. test/run.py and test/unpack_test.py run on it, each with its own fixture. A driver
+that cannot run at all says so through `cannot_run` and exits with its status.
 """
 
 import contextlib
@@ -29,6 +30,18 @@ class Test[C](Protocol):
 
 
 TESTS: list[Test[Any]] = []
+
+
+# The exit status of a driver that cannot run here at all, for want of a tool, a kernel feature or
+# an input: the step runner prints its step as SKIP, not ok (scripts/steps.sh), and the matrix does
+# not fail the row for it.
+CANNOT_RUN = 77
+
+
+def cannot_run(what: str, why: str) -> int:
+    """Say that what cannot run here and why; the status a driver then exits with."""
+    print(f"{why}; {what} cannot run here")
+    return CANNOT_RUN
 
 
 class Skip(Exception):  # noqa: N818 -- an outcome, like a pass, not an error

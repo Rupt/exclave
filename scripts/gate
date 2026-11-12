@@ -129,7 +129,7 @@ if has oracles; then
     step "syscalls-$n" py "$here/oracle_syscalls.py" --exclave "$ex" --work "$out/s-$n"
     if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
         step "docker-$n" py "$here/docker_profile.py" --exclave "$ex" --profile "$EXCLAVE_TEST_INPUTS/src/docker-seccomp.json" --work "$out/d-$n"
-    else echo "docker: EXCLAVE_TEST_INPUTS not set; skipped"; fi
+    else step "docker-$n" cannot_run "EXCLAVE_TEST_INPUTS is not set; the Docker-profile run cannot run here"; fi
 fi
 if has nss; then # a user from SSSD looked up inside, through the exclave's own lookup module (13 item 17)
     if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
@@ -138,7 +138,7 @@ if has nss; then # a user from SSSD looked up inside, through the exclave's own 
         [ -d "$musl" ] && [ "$(uname -m)" = x86_64 ] || musl=''
         step nss py "$here/nss_test.py" --exclave "$EXCLAVE_TEST_INPUTS/sss.exclave" ${musl:+--musl "$musl"} \
             --work "$out/nss"
-    else echo "nss: EXCLAVE_TEST_INPUTS not set; skipped"; fi
+    else step nss cannot_run "EXCLAVE_TEST_INPUTS is not set; the lookup test cannot run here"; fi
 fi
 if has caches; then # the caches only a tree's own programs make, made inside by exclave caches (13 item 48)
     if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
@@ -147,17 +147,17 @@ if has caches; then # the caches only a tree's own programs make, made inside by
         [ -d "$alpine_caches" ] || alpine_caches=''
         step caches py "$here/caches_test.py" --exclave "$EXCLAVE_TEST_INPUTS/caches.exclave" \
             ${alpine_caches:+--exclave "$alpine_caches"} --work "$out/caches"
-    else echo "caches: EXCLAVE_TEST_INPUTS not set; skipped"; fi
+    else step caches cannot_run "EXCLAVE_TEST_INPUTS is not set; the caches test cannot run here"; fi
 fi
 if has gdb; then # gdb inside an exclave (13 item 1), on the inputs' gdb.exclave, since the gate's gcc exclave carries no gdb
     if [ -n "${EXCLAVE_TEST_INPUTS:-}" ] && [ -d "$EXCLAVE_TEST_INPUTS/gdb.exclave" ]; then
         step gdb py "$here/run.py" --exclave "$EXCLAVE_TEST_INPUTS/gdb.exclave" --work "$out/w-gdb" -k gdb
-    else echo "gdb: EXCLAVE_TEST_INPUTS not set or without gdb.exclave; skipped"; fi
+    else step gdb cannot_run "EXCLAVE_TEST_INPUTS is not set or holds no gdb.exclave; the gdb tests cannot run here"; fi
 fi
 if has compat; then # this build held to the baseline release's files (6.7), SKIP before there is one
     if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
         step compat py "$here/compat_test.py" --old "$EXCLAVE_TEST_INPUTS/baseline" --work "$out/compat"
-    else echo "compat: EXCLAVE_TEST_INPUTS not set; skipped"; fi
+    else step compat cannot_run "EXCLAVE_TEST_INPUTS is not set; the compatibility test cannot run here"; fi
 fi
 wait
 report gate "$start"

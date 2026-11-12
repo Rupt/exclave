@@ -10,7 +10,7 @@ launcher, and each build reads the other's: this command checks, hashes, unwraps
 earlier exclave and reads its launcher's log in check and prune; the earlier command checks and
 hashes this one's; and each launcher runs the other's programs, a listing among them, nested either
 way. A DIR that does not exist is the state before the first release, or on a machine the release
-is not for: the test says it cannot run and exits 0, which the step runner reports as SKIP.
+is not for: the test says it cannot run and exits 77, which the step runner reports as SKIP.
 Prints one line per step; the exit status is the number of failures.
 """
 
@@ -24,6 +24,7 @@ import sys
 
 import tables_test
 import tree
+from harness import cannot_run
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -119,8 +120,7 @@ def main() -> int:
     args = ap.parse_args()
     old = os.path.abspath(args.old)
     if not os.path.isdir(old):
-        print(f"compat: no baseline release yet at {old}; cannot run")
-        return 0
+        return cannot_run("the compatibility test", f"no baseline release yet at {old}")
     old_cmd = os.path.join(old, "exclave")
     if not os.access(old_cmd, os.X_OK):
         sys.exit(f"compat: no earlier build's command at {old_cmd}")

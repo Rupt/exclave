@@ -24,7 +24,7 @@ import subprocess
 import sys
 
 import tree
-from harness import run
+from harness import cannot_run, run
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -180,11 +180,9 @@ def main() -> int:
         libc.syscall(SYS_openat2, -100, b".", ctypes.byref(probe), ctypes.sizeof(probe)) < 0
         and ctypes.get_errno() == errno.ENOSYS
     ):
-        print(
-            "openat2 is not available on this kernel (5.6 and later); "
-            "the resolution oracle cannot run here"
+        return cannot_run(
+            "the resolution oracle", "openat2 is not available on this kernel (5.6 and later)"
         )
-        return 0
     work = os.path.abspath(args.work)
     if os.path.exists(work):
         shutil.rmtree(work)

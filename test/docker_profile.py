@@ -6,7 +6,7 @@ read-only, the way a CI container would run it. The launcher then stacks its own
 profile runs twice: as assembled for this kernel, and as Docker installs it before kernel 4.8, where
 process_vm_readv is refused and the launcher copies program memory through a pipe (13); the workload
 includes a bad pointer that must be EFAULT either way. Needs bwrap and user namespaces; says so and
-exits 0 when it cannot run.
+exits 77 when it cannot run.
 
     test/docker_profile.py --exclave EXCLAVE --profile docker-seccomp.json [--work DIR]
 """
@@ -23,6 +23,7 @@ from typing import Any
 lazy from collections.abc import Callable
 
 import tree
+from harness import cannot_run
 lazy import syscalls
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -234,8 +235,7 @@ def main() -> int:
             check=False,
         ).returncode
     ):
-        print("bwrap or user namespaces unavailable; the Docker-profile run cannot run here")
-        return 0
+        return cannot_run("the Docker-profile run", "bwrap or user namespaces unavailable")
     work = os.path.abspath(args.work)
     if os.path.exists(work):
         shutil.rmtree(work)

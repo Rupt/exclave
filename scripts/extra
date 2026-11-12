@@ -60,10 +60,10 @@ gofuzz() {
 step fuzz fuzz "$1"
 step gofuzz gofuzz
 step release py "$here/release_test.py" --exclave "$1" --work "$out/release"
+n=$(basename "$1" .exclave)
 if command -v aa-exec >/dev/null 2>&1 && aa-exec -p unconfined true 2>/dev/null; then # the plain terminal's label (12)
-    n=$(basename "$1" .exclave)
     step "suite-$n-plain" aa-exec -p unconfined "$UV" run --quiet --project "$ROOT" python "$here/run.py" --exclave "$1" --work "$out/w-$n-plain"
-else echo "plain: no aa-exec here; the plain-label suite skipped"; fi
+else step "suite-$n-plain" cannot_run "no aa-exec here; the suite under the plain terminal's label cannot run here"; fi
 for ex in "$@"; do
     n=$(basename "$ex" .exclave)
     step "suite-$n" py "$here/run.py" --exclave "$ex" --work "$out/w-$n"
@@ -73,8 +73,7 @@ for ex in "$@"; do
     step "syscalls-$n" py "$here/oracle_syscalls.py" --exclave "$ex" --work "$out/s-$n"
     if [ -n "${EXCLAVE_TEST_INPUTS:-}" ]; then
         step "docker-$n" py "$here/docker_profile.py" --exclave "$ex" --profile "$EXCLAVE_TEST_INPUTS/src/docker-seccomp.json" --work "$out/d-$n"
-    fi
+    else step "docker-$n" cannot_run "EXCLAVE_TEST_INPUTS is not set; the Docker-profile run cannot run here"; fi
 done
-[ -n "${EXCLAVE_TEST_INPUTS:-}" ] || echo "docker: EXCLAVE_TEST_INPUTS not set; skipped"
 wait
 report extra "$start"

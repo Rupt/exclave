@@ -24,21 +24,29 @@ sanitized() { # sanitized OUT ARGS...: a host program built under ASan and UBSan
     host_cc -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -o "$o" "$@" "$ROOT/test/sanitize.c"
 }
 
-# report WHAT START: one line per step, ok, SKIP (an oracle that could not run here, or the
-# compatibility test before a baseline release) or FAIL with its last line; prints
-# the count and the time since START; returns the number of failed steps
+# cannot_run WHY...: the command of a step that cannot run here, for want of an input: it says why and returns the
+# status a driver exits with when it cannot run (test/harness.py), which report prints as SKIP.
+# shellcheck disable=SC2329  # run through step, by name
+cannot_run() {
+    echo "$*"
+    return 77
+}
+
+# report WHAT START: one line per step, ok, SKIP (status 77: the step said it cannot run here, an oracle without
+# bwrap, namespaces or openat2, the compatibility test before a baseline release, a step whose input was not
+# given) or FAIL with its last line; prints the count and the time since START; returns the number of failed steps
 report() {
     fails=0 skips=0
     for rc in "$out"/*.rc; do
         name=$(basename "$rc" .rc)
         read -r r secs <"$rc"
         last=$(grep -v '^$' "$out/$name.log" | tail -1 | cut -c1-110)
-        if [ "$r" != 0 ]; then
+        if [ "$r" = 77 ]; then
+            printf '%-22s SKIP %4ss  %s\n' "$name" "$secs" "$last"
+            skips=$((skips + 1))
+        elif [ "$r" != 0 ]; then
             printf '%-22s FAIL %4ss  %s\n' "$name" "$secs" "$last"
             fails=$((fails + 1))
-        elif case $name in resolve-* | ns-* | syscalls-* | docker-* | nss | compat) grep -q 'cannot run' "$out/$name.log" ;; *) false ;; esac then
-            printf '%-22s SKIP %4ss  %s\n' "$name" "$secs" "$last"
-            skips=$((skips + 1)) # an oracle without bwrap, namespaces or openat2; no baseline yet
         else printf '%-22s ok   %4ss  %s\n' "$name" "$secs" "$last"; fi
     done
     echo "$1: $fails failed, $skips skipped, $(($(date +%s) - $2)) s"

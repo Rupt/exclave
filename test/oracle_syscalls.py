@@ -9,8 +9,8 @@ agree case by case; every file of the maze and the host area has a size and a us
 its own and the process keeps one inotify descriptor, so a stat's size, an attribute's value and a
 watch descriptor also tell which object a path reached. A difference fails unless EXPECTED names
 its reason, so the expectations come from the kernel, not from a test's author. Like oracle_ns, the
-probe needs user namespaces and bwrap; without them it says so ("cannot run") and exits 0, and the
-gate prints that step as SKIP.
+probe needs user namespaces and bwrap; without them it says so and exits 77, and the gate prints
+that step as SKIP.
 
     test/oracle_syscalls.py --exclave EXCLAVE [--work DIR] [--only NAME] [--keep]
         [--show N] [--expected]
@@ -152,7 +152,7 @@ from typing import NamedTuple
 lazy from collections.abc import Callable
 
 import tree
-from harness import run
+from harness import cannot_run, run
 from syscalls import kernel_table
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -2394,19 +2394,16 @@ def main() -> int:
     )
     args = ap.parse_args()
     if not shutil.which("bwrap"):
-        print("no bwrap; the syscall probe cannot run here")
-        return 0
+        return cannot_run("the syscall probe", "no bwrap")
     if subprocess.run(
         ["bwrap", "--ro-bind", "/", "/", "true"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
     ).returncode:
-        print(
-            "bwrap cannot create namespaces here (user namespaces denied); "
-            "the syscall probe cannot run"
+        return cannot_run(
+            "the syscall probe", "bwrap cannot create namespaces here (user namespaces denied)"
         )
-        return 0
     given, work = os.path.abspath(args.exclave), os.path.abspath(args.work)
     rmtree(work)
     os.makedirs(work)

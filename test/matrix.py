@@ -991,7 +991,10 @@ def main() -> int:
                 )
                 # an oracle that failed, or one whose status line never came, fails the row
                 statuses = re.findall(r"^oracle exit status (\d+)$", out, re.MULTILINE)
-                oracle_failed = len(statuses) != len(steps) or any(s != "0" for s in statuses)
+                # (77: it said it cannot run on this kernel, test/harness.py)
+                oracle_failed = len(statuses) != len(steps) or any(
+                    s not in ("0", "77") for s in statuses
+                )
                 with open(os.path.join(work, name + "-oracles.log"), "w") as f:
                     f.write(out)
                 keep = [

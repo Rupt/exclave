@@ -31,6 +31,7 @@ import zlib
 from typing import Protocol
 lazy from collections.abc import Callable, Sequence
 
+from harness import cannot_run
 from packages import DEB_ARCH, MACHINE, make_apk, make_deb, make_rpm, tar_bytes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -712,8 +713,7 @@ def main() -> int:
     args = ap.parse_args()
     missing = [t for t in ("gpg", "openssl") if not shutil.which(t)]
     if missing:
-        print(f"SKIP: {', '.join(missing)} not installed; the fetchers' checks cannot be tested")
-        return 0
+        return cannot_run("the fetchers' test", f"{', '.join(missing)} not installed")
     work = os.path.abspath(args.work)
     shutil.rmtree(work, ignore_errors=True)
     failures = 0

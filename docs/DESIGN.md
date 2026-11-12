@@ -6412,8 +6412,10 @@ whose tool is missing skips and names it. The plain-label run of
 needs QEMU with KVM and `cloud-image-utils` (`qemu-system-arm` and the
 AAVMF firmware for the emulated row). Where `bwrap` cannot create a user namespace (Ubuntu
 23.10 and later from a plain terminal, most containers), an oracle or
-the probe says it cannot run and exits 0, and the gate prints that step
-as SKIP rather than ok.
+the probe says it cannot run and exits 77, the status of every driver
+and step that cannot run where it is, for want of a tool, a kernel
+feature or an input, and the gate prints that step as SKIP rather than
+ok and counts it.
 
 **Running it.** From a clean checkout, these commands reach a passing
 gate:
