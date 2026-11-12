@@ -13,6 +13,35 @@ from suite import TOOL, Ctx, check, copy_exclave, hello_source, inside, wrapper
 
 
 @test
+def cpu_level_known(ctx: Ctx) -> None:
+    """7.7, 10.3: a manifest's cpu names a level its launcher knows, or the static check refuses.
+
+    A name the launcher does not know stops every program at its start, so check, and wrap
+    through it, call the name an error before that: a misspelt level and another machine's. The
+    machine's baseline passes the check and starts.
+    """
+    ex = os.path.join(ctx.work, f"cpu-{os.getpid()}.exclave")
+    copy_exclave(ctx.mini, ex)
+    manifest = os.path.join(ex, ".exclave", "manifest")
+    baseline, other = {"x86_64": ("x86-64", "armv8.1-a"), "aarch64": ("aarch64", "x86-64-v2")}[
+        ctx.machine
+    ]
+    start = [os.path.join(ex, ".exclave", "launcher"), ctx.vbin("cat"), "/dev/null"]
+    for level, known in ((baseline, True), (baseline + "-v9", False), (other, False)):
+        os.remove(manifest)  # the copy's files are links to the fixture's
+        with open(manifest, "w") as f:
+            f.write(f'exclave 1\n\ncpu "{level}"\n')
+        errors, _warnings, out = check(ex)
+        named = [e for e in errors if e.startswith(f'cpu "{level}": not a level')]
+        expect(bool(named) != known, f"check of cpu {level}: {out[-400:]}")
+        rc, _out, err = run(start, env=ctx.env)
+        expect(
+            (rc == 0) == known and (known or "a CPU level this launcher does not know" in err),
+            f"a start with cpu {level}: rc={rc} {err!r}",
+        )
+
+
+@test
 def wrap_refuses_unreadable(ctx: Ctx) -> None:
     """10.1, 10.3: a file the user cannot read is an error of the static check.
 

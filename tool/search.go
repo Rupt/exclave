@@ -19,12 +19,14 @@ type machine struct {
 	eMachine       int
 	uname, triplet string   // uname -m, which glibc's loader substitutes for $PLATFORM; the multiarch triplet
 	hwcaps         []string // the glibc-hwcaps subdirectories searched first, best first
+	cpus           []string // the levels a manifest's cpu may name: the ones this machine's launcher knows (7.7)
 }
 
 var machines = []machine{
 	{62, "x86_64", "x86_64-linux-gnu",
-		[]string{"glibc-hwcaps/x86-64-v4", "glibc-hwcaps/x86-64-v3", "glibc-hwcaps/x86-64-v2"}},
-	{183, "aarch64", "aarch64-linux-gnu", nil},
+		[]string{"glibc-hwcaps/x86-64-v4", "glibc-hwcaps/x86-64-v3", "glibc-hwcaps/x86-64-v2"},
+		[]string{"x86-64", "x86-64-v2", "x86-64-v3", "x86-64-v4"}},
+	{183, "aarch64", "aarch64-linux-gnu", nil, []string{"aarch64", "armv8-a", "armv8.1-a", "armv8.2-a"}},
 }
 
 // launcherMachine is the exclave's launcher's machine; the command's own build until one is read.

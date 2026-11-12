@@ -2488,7 +2488,8 @@ levels are read from `AT_HWCAP`: `armv8.1-a` (LSE atomics and CRC32) and
 the baselines. Each launcher knows its own machine's names only. A
 mismatch, or a `cpu` string the launcher does not know, is a clear
 error before anything runs; since the launcher ships inside the
-exclave, an unknown string means a damaged exclave. An exclave built
+exclave, an unknown string means a damaged exclave, and `exclave check`
+and `wrap` refuse one that names it (10.3). An exclave built
 for two CPU levels is two exclaves: several roots chosen by this check
 would be the one thing that made an exclave more than one tree.
 
@@ -3627,6 +3628,10 @@ tree; it cannot re-derive the prefix, and does not claim to.
 
 **Static.** The static check runs on every ELF file under `tree/`
 outside data directories, reading originals in place of wrappers.
+
+- The manifest's `cpu`, if it has one, names a level the exclave's
+  launcher knows (7.7): any other name would stop every program at its
+  start, a misspelt level and another machine's alike.
 
 - Every `PT_INTERP` resolves through the tree's symlinks, outside every
   data directory, to a path the exclave owns by 8.1 with its `host`
@@ -6317,8 +6322,8 @@ meaning items 4 and 7.
      unwrapped again, the
      exclave's README and version;
    - *the tool's check and prune*: the static check's model of the
-     loader, a tree naming two loaders, an unreadable file, and
-     pruning with logs.
+     loader, a tree naming two loaders, an unreadable file, a `cpu`
+     the launcher does not know, and pruning with logs.
 
    The tests say what each asserts, in their docstrings and their
    failure messages. `test/run.py` runs them on the fixtures

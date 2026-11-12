@@ -293,6 +293,13 @@ func trustWarnings(root string, owns []string, rep *report) {
 
 func staticCheck(ex string, own *ownership, data []string, l *listing) *report {
 	rep := &report{}
+	// a level its launcher does not know stops every program at its start (7.7)
+	for _, cpu := range valuesOf(manifestOf(ex), "cpu") {
+		if !slices.Contains(launcherMachine.cpus, cpu) {
+			rep.errorf("cpu %s: not a level the %s launcher knows (%s): no program would start",
+				grammarQuote(cpu), launcherMachine.uname, strings.Join(launcherMachine.cpus, ", "))
+		}
+	}
 	// the tree is read as its launcher's machine's loader reads it (10.1): nothing of it runs
 	root := pathJoin(ex, "tree")
 	cache, hasCache := readCache(root)
