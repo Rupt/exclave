@@ -35,6 +35,7 @@ import threading
 import time
 import urllib.request
 
+import machines
 import tree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -42,7 +43,7 @@ REPO = os.path.dirname(HERE)
 UV = os.path.join(REPO, ".uv", "bin", "uv")
 MACHINE = platform.machine()
 # ELF e_machine to the name uname gives it, for the launcher an exclave carries
-MACHINES = {62: "x86_64", 183: "aarch64"}
+MACHINES = {m.em: name for name, m in machines.TABLE.items()}
 
 
 def built(name: str, arch: str) -> str:

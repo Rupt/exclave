@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 lazy import argparse
 lazy import hashlib
 
+import machines
 import tree
 
 if TYPE_CHECKING:
@@ -405,13 +406,7 @@ def tree_facts(ctx: Ctx) -> None:
 
     ctx.vbin, ctx.vreal, ctx.payload = vbin, vreal, payload
     true = payload("true")
-    interp = (
-        tree.interp(true)
-        if os.path.exists(true)
-        else {"x86_64": "/lib64/ld-linux-x86-64.so.2", "aarch64": "/lib/ld-linux-aarch64.so.1"}[
-            ctx.machine
-        ]
-    )
+    interp = tree.interp(true) if os.path.exists(true) else machines.HERE.glibc_loader
     assert interp, f"{true} names no loader"
     ctx.interp = interp
     ctx.ldso_dir, ctx.ldso_name = ctx.interp.split("/")[1], os.path.basename(ctx.interp)
@@ -419,7 +414,7 @@ def tree_facts(ctx: Ctx) -> None:
     ctx.musl_interp = f"/lib/ld-musl-{ctx.machine}.so.1"
     # a loader this exclave lacks, no longer than its own
     ctx.other_interp = f"/lib/ld-gnu-{ctx.machine}.so.2" if ctx.musl else ctx.musl_interp
-    ctx.deb_arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(ctx.machine, ctx.machine)
+    ctx.deb_arch = machines.HERE.deb
     # what /proc/self/exe reads for a script: dash, bash or busybox by its path
     ctx.sh_exe = vreal(vbin("sh"))
     ctx.sh_link = (

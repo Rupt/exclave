@@ -9,14 +9,15 @@ import gzip
 import hashlib
 import io
 import lzma
-import platform
 import struct
 import tarfile
 from compression import zstd
 lazy from collections.abc import Callable, Sequence
 
-MACHINE = platform.machine()
-DEB_ARCH = {"x86_64": "amd64", "aarch64": "arm64"}.get(MACHINE, MACHINE)
+import machines
+
+MACHINE = machines.NAME
+DEB_ARCH = machines.HERE.deb
 MTIME = 1_700_000_000
 
 # a package member: (path, kind, None for a directory, a link's target or a file's bytes, mode)

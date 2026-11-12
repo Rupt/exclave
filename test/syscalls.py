@@ -24,6 +24,8 @@ import sys
 lazy import ctypes
 lazy from collections.abc import Sequence
 
+import machines
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 MACHINE = platform.machine()
@@ -578,20 +580,6 @@ def kernel_probe(lo: int, hi: int) -> list[int]:
     return present
 
 
-def launcher_numbers() -> dict[str, dict[str, int | None]]:
-    """The syscall numbers src/sys.h lays out, by architecture: None for a form marked ABSENT."""
-    with open(os.path.join(REPO, "src", "sys.h")) as f:
-        sysh = f.read()
-    x86, a64 = sysh.split("#if defined(__x86_64__)", 1)[1].split("#elif defined(__aarch64__)", 1)
-    return {
-        arch: {
-            n: None if v.startswith("ABSENT") else int(v)
-            for n, v in re.findall(r"NR_([a-z0-9_]+) = (ABSENT\(\d+\)|\d+)", block)
-        }
-        for arch, block in (("x86_64", x86), ("aarch64", a64.split("#else", 1)[0]))
-    }
-
-
 def other_table(arch: str) -> dict[str, int] | None:
     """Another architecture's table from this machine's headers, or None where it has none.
 
@@ -767,7 +755,7 @@ def main() -> int:
         fails += 1
     # every number the launcher lays out, a call it makes itself as much as one it traps, for this
     # architecture and, where this machine has its table, the other
-    numbers = launcher_numbers()
+    numbers = machines.numbers()
     tables = {MACHINE: table}
     for arch in numbers:
         if arch != MACHINE and (other := other_table(arch)) is not None:

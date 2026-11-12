@@ -15,6 +15,7 @@ import re
 lazy import ctypes
 
 import kernel
+import machines
 
 # creat_slash HOSTDIR: one line per case, the case and the errno text
 CREAT_SLASH = (
@@ -994,8 +995,6 @@ def slash_links_wrong(out: str) -> list[str]:
 
 # magic_links pathless: the descriptors it checks, and the syscalls it makes that a kernel may lack
 MAGIC_LINKS_FDS = ("stdin", "pipe", "memfd", "inotify", "unlinked")
-SYS_STATX = {"x86_64": 332, "aarch64": 291}
-SYS_LINKAT = {"x86_64": 265, "aarch64": 37}
 SYS_FACCESSAT2 = 439
 AT_FDCWD = -100
 AT_EMPTY_PATH = 0x1000
@@ -1030,7 +1029,7 @@ def link_empty_allowed(hostdir: str) -> set[str]:
         return allowed
     libc = ctypes.CDLL(None, use_errno=True)
     dst = os.path.join(hostdir, f"link-empty-probe-{os.getpid()}").encode()
-    r = libc.syscall(SYS_LINKAT[platform.machine()], fd, b"", AT_FDCWD, dst, AT_EMPTY_PATH)
+    r = libc.syscall(machines.nr("linkat"), fd, b"", AT_FDCWD, dst, AT_EMPTY_PATH)
     old = r < 0 and ctypes.get_errno() == errno.ENOENT
     os.close(fd)
     if r == 0:
@@ -1059,7 +1058,7 @@ def magic_links_missing(hostdir: str) -> set[str]:
     libc = ctypes.CDLL(None, use_errno=True)
     buf = ctypes.create_string_buffer(256)
     for call, args in (
-        ("statx", (SYS_STATX[platform.machine()], AT_FDCWD, b"/proc/self/fd/0", 0, 0x100, buf)),
+        ("statx", (machines.nr("statx"), AT_FDCWD, b"/proc/self/fd/0", 0, 0x100, buf)),
         ("faccessat2", (SYS_FACCESSAT2, AT_FDCWD, b"/proc/self/fd/0", os.F_OK, 0)),
     ):
         if libc.syscall(*args) < 0 and ctypes.get_errno() == errno.ENOSYS:

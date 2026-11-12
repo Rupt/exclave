@@ -14,7 +14,6 @@ exits 77 when it cannot run.
 import argparse
 import json
 import os
-import platform
 import shutil
 import struct
 import subprocess
@@ -22,6 +21,7 @@ import sys
 from typing import Any
 lazy from collections.abc import Callable
 
+import machines
 import tree
 from harness import cannot_run
 lazy import syscalls
@@ -31,9 +31,9 @@ REPO = os.path.dirname(HERE)
 
 
 # seccomp's architecture word and Docker's names for this machine, whose profile entries name arches
-MACHINE = platform.machine()
-AUDIT_ARCH = {"x86_64": 0xC000003E, "aarch64": 0xC00000B7}[MACHINE]
-ARCH_NAMES = {"x86_64": ("amd64", "x86_64"), "aarch64": ("arm64", "aarch64")}[MACHINE]
+MACHINE = machines.NAME
+AUDIT_ARCH = machines.HERE.audit
+ARCH_NAMES = (machines.HERE.deb, MACHINE)
 RET_ALLOW, RET_ERRNO, RET_KILL, RET_LOG = 0x7FFF0000, 0x00050000, 0x80000000, 0x7FFC0000
 # the capabilities a default Docker container holds
 DEFAULT_CAPS = {

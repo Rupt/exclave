@@ -5,7 +5,6 @@ Run by test/run.py, on the fixtures test/suite.py makes.
 
 import errno
 import os
-import platform
 import shlex
 import shutil
 import struct
@@ -15,6 +14,7 @@ lazy import ctypes
 lazy from collections.abc import Callable
 
 import kernel_answers
+import machines
 import tree
 from harness import expect, read_bytes, read_text, run, skip, test
 from suite import Ctx, copy_exclave, inside, wrapper
@@ -732,13 +732,11 @@ def refusing(name: str, first: int | None, err: int) -> Callable[[], None]:
     first argument where one is given; every other call is allowed. The filter stays around
     whatever the child execs, as a container's profile stays around a launcher.
     """
-    arch, numbers = {
-        "x86_64": (0xC000003E, {"prctl": 157, "getrandom": 318, "process_vm_readv": 310}),
-        "aarch64": (0xC00000B7, {"prctl": 167, "getrandom": 278, "process_vm_readv": 270}),
-    }[platform.machine()]
+    number = machines.nr(name)
+    assert number is not None, f"{name} is no call of this machine's"
     ld, jeq, ret = 0x20, 0x15, 0x06  # BPF_LD|BPF_W|BPF_ABS, BPF_JMP|BPF_JEQ|BPF_K, BPF_RET|BPF_K
     # seccomp_data: the number at 0, the architecture at 4, the first argument's low word at 16
-    tests = [(4, arch), (0, numbers[name])] + ([(16, first)] if first is not None else [])
+    tests = [(4, machines.HERE.audit), (0, number)] + ([(16, first)] if first is not None else [])
     prog = b""
     for i, (at, value) in enumerate(tests):
         # on a mismatch, past the tests that remain and the refusal, to the allow

@@ -14,12 +14,12 @@ message missing. Prints one line per test; the exit status is the number of fail
 import argparse
 import dataclasses
 import os
-import platform
 import shutil
 import struct
 import sys
 from typing import TYPE_CHECKING, Any
 
+import machines
 from harness import TESTS, expect, run, run_tests, select, test
 
 if TYPE_CHECKING:
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 LAUNCHER = os.path.join(REPO, "build", "launcher")
-EM = {"x86_64": 62, "aarch64": 183}[platform.machine()]  # the launcher's machine, the tree's
+EM = machines.HERE.em  # the launcher's machine, the tree's
 PT_LOAD, PT_DYNAMIC, PT_INTERP = 1, 2, 3
 DT_NULL, DT_NEEDED, DT_STRTAB, DT_STRSZ, DT_SONAME = 0, 1, 5, 10, 14
 

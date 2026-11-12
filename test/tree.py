@@ -26,6 +26,7 @@ import subprocess
 import sys
 lazy from collections.abc import Iterator
 
+import machines
 from b3 import blake3
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -753,7 +754,7 @@ def kept_worlds(src: str, driver: str) -> tuple[str, str]:
 # the Go regression's programs (17.4), as go links them for the machine; low_image is the image
 # from 0x10000 that Go's aarch64 linker lays out (13 item 24)
 GO_BUILDS: tuple[tuple[str, list[str]], ...] = (("go_paths", []),)
-GOARCH = {"x86_64": "amd64", "aarch64": "arm64"}
+GOARCH = {name: m.deb for name, m in machines.TABLE.items()}
 
 
 def go_toolchain() -> str | None:

@@ -5,13 +5,12 @@ Run by test/run.py, on the fixtures test/suite.py makes.
 
 import errno
 import os
-import platform
 import re
 import shutil
 from typing import TYPE_CHECKING
 
 import tree
-from packages import make_apk, make_deb
+from packages import DEB_ARCH, make_apk, make_deb
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -19,13 +18,6 @@ from harness import expect, read_bytes, read_text, run, skip, test
 from suite import REPO, TOOL, VOLATILE, Ctx, check, copy_exclave, inside
 
 UNPACK = tree.UNPACK
-
-
-# the synthetic packages of the tool tests carry this machine's architecture
-MACHINE = platform.machine()
-
-
-DEB_ARCH = {"x86_64": "amd64", "aarch64": "arm64"}.get(MACHINE, MACHINE)
 
 
 @test

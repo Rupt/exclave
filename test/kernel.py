@@ -11,15 +11,11 @@ of behaviour that no call can be asked about.
 import errno
 import functools
 import os
-import platform
 lazy import ctypes
 lazy from collections.abc import Callable
 
-import syscalls
+import machines
 
-MACHINE = platform.machine()
-# calls the launcher has no number for (src/sys.h), by the number every architecture gives them
-NUMBERS = {"close_range": 436, "pidfd_getfd": 438}
 CLOSE_RANGE_CLOEXEC = 4
 PR_GET_AUXV = 0x41555856
 O_PATH = 0o10000000
@@ -59,7 +55,7 @@ def _get_auxv() -> bool:
 FEATURES: dict[str, Callable[[], bool]] = {
     "openat2": _openat2,
     "close_range cloexec": lambda: (
-        call(NUMBERS["close_range"], 0x7FFFFFFF, 0x7FFFFFFF, CLOSE_RANGE_CLOEXEC) == 0
+        call(machines.UNIFIED["close_range"], 0x7FFFFFFF, 0x7FFFFFFF, CLOSE_RANGE_CLOEXEC) == 0
     ),
     "/proc/thread-self": lambda: os.path.lexists("/proc/thread-self"),
     "PR_GET_AUXV": _get_auxv,
@@ -76,5 +72,5 @@ def has(what: str) -> bool:
     """
     if what in FEATURES:
         return FEATURES[what]()
-    nr = NUMBERS[what] if what in NUMBERS else syscalls.launcher_numbers()[MACHINE][what]
+    nr = machines.nr(what)
     return nr is not None and call(nr, -1, 0, 0, 0, 0, 0) != errno.ENOSYS
