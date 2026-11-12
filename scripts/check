@@ -92,10 +92,10 @@ for f in src/*.c; do
     done
     compiled launcher_cc "$(uname -m)" -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD "$f"
 done
-for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c src/manifest.c src/filter.c src/isa.c src/str.c; do
+# the unit tests' and the fuzz target's own files, and the launcher's sources they are built with (lib.sh's unit_tests)
+for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c $(unit_tests | cut -d' ' -f2- | tr ' ' '\n' | sort -u); do
     compiled host_cc -DHOST_TEST "$f"
 done
-compiled host_cc -DSCRATCH_TEST src/scratch.c
 # the test programs too, but for string literals in an exec's argv, its natural spelling
 for f in test/progs/*.c; do
     run quiet host_cc -pthread -Wno-discarded-qualifiers "$f" -Werror -c -o /dev/null

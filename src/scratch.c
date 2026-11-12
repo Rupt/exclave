@@ -15,7 +15,7 @@
  */
 #include "common.h"
 
-#ifdef SCRATCH_TEST
+#ifdef HOST_TEST
 /* test/scratch_test.c: what other threads do between a sweep's judgement and its release */
 void scratch_test_between(void *chunk);
 #define BETWEEN(k) scratch_test_between(k)

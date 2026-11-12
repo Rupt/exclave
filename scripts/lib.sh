@@ -172,3 +172,18 @@ launcher_cc() {
 host_cc() {
     c_compile "${CC:-gcc}" -O1 -g -Wno-redundant-decls -fno-builtin -fno-tree-loop-distribute-patterns "$@"
 }
+
+# unit_tests: the launcher's unit tests, one a line: the test's name, then the launcher's sources it is built with.
+# test/NAME.c and those sources are compiled for the host with -DHOST_TEST, which turns on a source's test hooks.
+# scripts/gate's unit step builds and runs each under the sanitisers, and scripts/check holds the same files,
+# compiled the same way, to the warnings and the analyser.
+unit_tests() {
+    cat <<'EOF'
+manifest_test src/manifest.c src/str.c
+filter_test src/filter.c src/str.c
+scratch_test src/scratch.c
+cache_test src/cache.c src/str.c
+isa_test src/isa.c src/str.c
+str_test src/str.c
+EOF
+}
