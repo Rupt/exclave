@@ -371,6 +371,8 @@ def unpack_and_wrap(ctx: Ctx) -> str | None:
     shutil.copy2(os.path.join(out, ".exclave", "hashes"), lockcopy)
     rc, o, e = run([*TOOL, "format", "--check", lockcopy])
     expect(rc == 0, "format recognises a hashes file by its first record, not its name: " + o + e)
+    rc, o, e = run([*TOOL, "format", "--chec", lockcopy])
+    expect(rc == 2 and "usage:" in e, f"format takes --check and no shortening of it: {rc} {o}{e}")
     return note
 
 

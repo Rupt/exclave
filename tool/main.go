@@ -214,7 +214,7 @@ func cmdFormat(args []string) int {
 		switch {
 		case options && a == "--":
 			options = false
-		case options && len(a) > 2 && strings.HasPrefix("--check", a): // any prefix, as argparse takes one
+		case options && a == "--check":
 			check = true
 		case options && len(a) > 1 && a[0] == '-':
 			usage("format [--check] FILE...")
