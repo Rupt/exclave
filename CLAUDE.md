@@ -33,7 +33,12 @@ The loop that has served well, in the order it pays:
    `EXPECTED` list with the rule that makes it right, since a
    difference accepted without a reason hides the next defect.
 3. **Regression.** The exerciser becomes a named test in `test/regress_*.py`
-   asserting the kernel's answers. A test that asserts what the tree
+   asserting the kernel's answers: its table and judge go in
+   `test/kernel_answers.py`, with a record in `EXERCISERS` there, which
+   registers the program once for the suite and for the namespace
+   oracle; an answer an older kernel gives otherwise is told by what
+   `test/kernel.py` says the kernel has, never by the program's own
+   refusal. A test that asserts what the tree
    says rather than what Debian says (`test/tree.py`, `tree_facts`)
    passes on every exclave kind, and an exclave kind that cannot answer
    can skip with its reason.
@@ -44,17 +49,16 @@ The loop that has served well, in the order it pays:
 5. **Gate, commit; the rest when the user asks.** `scripts/gate
    EXCLAVE` on the gcc exclave at zero failures, then the commit. It is
    the one gate, and it is fast: every step is a test, which fails on a
-   case with the answer expected, in seconds (the code checks, the
-   unit tests, the stack budget, the command's Go tests, unpack's and the fetchers' tests, the
-   suite once, the oracles, the syscall probe and the Docker profile
-   run); it runs the steps the change can affect, in seconds for a
+   case with the answer expected, in seconds (`docs/DESIGN.md` 17 lists
+   the steps and `test/affected.py` names them); it runs the steps the
+   change can affect, in seconds for a
    document or a script, `--full` all of them, and says when the
    change reaches the VMs. Everything else is separate, optional and
    discretionary, run only when the user asks for it in so many words:
    `scripts/extra EXCLAVE...` (the suite on the other exclaves, on the
    debug launcher and under the plain terminal's label, the fuzz
    budget and the release test), `scripts/matrix --exclave EXCLAVE` (the
-   kernels, about sixteen minutes on this laptop), the examples, and
+   kernels), the examples, and
    the workflow `.github/workflows/ci.yml`, dispatched from the
    Actions tab or as `gh workflow run ci.yml -f matrix=true` (`false`:
    the gate alone) on the pushed `main`, which runs the gate on x86-64
@@ -97,11 +101,12 @@ The loop that has served well, in the order it pays:
   scripts may take arguments.
 - **The launcher is freestanding C**: no libc, raw syscalls from
   `src/sys.h`, every syscall issued through the syscall page (a bare
-  `syscall` or `svc` instruction belongs only in the bootstrap, the
-  filter-version probe and the restorer, since the filter recognises the
-  page and the probe must not be allowed by it). One source builds both
-  launchers, and what differs by architecture sits best in `src/sys.h`,
-  `src/common.h` and `#if` blocks named for it; the aarch64 build leaves
+  `syscall` or `svc` instruction belongs only in the bootstrap and the
+  filter-version probe, since the filter recognises the page and the
+  probe must not be allowed by it). One source builds both launchers:
+  `src/sys.h` holds the kernel's ABI and `src/common.h` the launcher's
+  own interface, and what differs by architecture sits best in those
+  two and in `#if` blocks named for it; the aarch64 build leaves
   `x28` alone (`-ffixed-x28`), where a Go program keeps its goroutine
   while the handler runs (7.5.3). `scripts/build` builds `build/launcher-aarch64`
   when `aarch64-linux-gnu-gcc` is installed; it is tested in the arm64
@@ -125,12 +130,15 @@ The loop that has served well, in the order it pays:
   `build/launcher-old`, an older filter version without syscalls a later
   one added (version 3, without version 4's `bind` and `connect`), for
   the nesting regression; the version moves whenever the trap set
-  grows or the syscall page moves (6: to `0x7fe00000`, above program
-  images; 7: the listings, which hide `.real/`; 8: `fstat`, for a directory's link count), and a version that adds syscalls moves that build and the
-  regression's trap with it. A new syscall the
+  grows or the syscall page moves (`docs/DESIGN.md` 7.4.2 has each
+  version's reason), the move records the new set's digest in `SHIPPED`
+  (`test/syscalls.py`), and a version that adds syscalls moves that
+  build and the regression's trap with it. A new syscall the
   kernel adds is trapped by the filter's ceiling and answered `ENOSYS`
   until it is classified in `test/syscalls.py` and, if it takes a path,
-  handled in `src/handler.c` and listed in `src/filter.c`.
+  handled in `src/handler.c` and listed in `src/filter.c`; the unit
+  step holds the three to one another and the numbers of `src/sys.h` to
+  the kernel's.
 - **The tool is Go**, in `tool/`: one static file per architecture,
   `build/exclave`, that `scripts/build` builds with the pinned toolchain
   in `.go/` (`scripts/install-go`, checked against a committed checksum,
@@ -138,7 +146,10 @@ The loop that has served well, in the order it pays:
   `go:embed`, so the Go is checked after a build) and the exclave
   README, takes a directory holding `tree/` and holds no network code;
   paths are bytes and every list it prints or hashes is in the order of
-  their bytes. The tests judge it only through its commands. The step
+  their bytes. The Python drivers judge it through its commands; a Go
+  test stands where a parser wants a fuzz target or a pure function
+  states a rule. The format the command and unpack both write is one
+  package, `tool/format`. The step
   before it is its subcommand, `unpack/` (`exclave unpack`,
   `scripts/exclave unpack`), which makes a tree from package files; the step
   before that is `exclave-fetch`, a program of its own from `fetch/`
@@ -151,8 +162,9 @@ The loop that has served well, in the order it pays:
   (`unpack/deb`, `apk`, `rpm`) has one interface, `unpack/reader`'s
   `Reader`, and is chosen by the file. `scripts/check` runs gofmt, go
   fix, go vet, staticcheck and deadcode; the gate's go step runs `go
-  test`, whose fuzz targets `scripts/extra` fuzzes for ten seconds each. `curl` has not been
-  needed. `src/gdb.py`
+  test`, whose fuzz targets `scripts/extra` fuzzes for ten seconds each. The fetchers
+  download through Go's own client; `curl` or `wget` is `lib.sh`'s
+  `download` alone, for the install scripts and `scripts/inputs`. `src/gdb.py`
   is data the launcher carries for gdb, not code it runs, and it runs
   on gdb's own Python (ruff targets 3.7 there).
 - **Python runs only through the pinned uv**, never the machine's
@@ -160,7 +172,8 @@ The loop that has served well, in the order it pays:
   per architecture, checked against a committed checksum), uv installs
   the Python `.python-version` names (3.15) and the dev tools `uv.lock`
   pins, and every command is a POSIX `sh` wrapper in `scripts/` that
-  sources `scripts/lib.sh`. A test driver imports its helpers as a
+  sources `scripts/lib.sh`, but for the wrappers of the two built
+  programs and `scripts/clean-tmp`, which need nothing of it. A test driver imports its helpers as a
   script's siblings, never by editing `sys.path`. Python files are
   programs the wrappers run, without shebangs or executable bits. The
   matrix carries the same Python into its VMs.
@@ -171,9 +184,11 @@ The loop that has served well, in the order it pays:
   modern types, a rule ignored in `pyproject.toml` only with its reason
   beside it, and a `# noqa` or `# ty: ignore[rule]` only where fixing
   would be wrong, with its reason on the line.
-- **The C is built by `scripts/build`**, the launchers and the command,
-  with the flags `scripts/lib.sh` gives every C build, and nothing is
-  built when they are up to date; the gate runs it first.
+- **`scripts/build` builds the launchers and the command**, the C with
+  the flags `scripts/lib.sh` gives every C build, and nothing is built
+  when they are up to date; the gate runs it first. The unit tests' C
+  is the gate's unit step's to build, from `lib.sh`'s `unit_tests`
+  table, and the fuzz target `scripts/extra`'s.
 - **A parser takes a pointer and a length** and reads through one
   checked bound, so the bound lives in one place, and it answers every
   input: a refusal is an answer, an exit or a crash is not. An invariant
@@ -192,7 +207,7 @@ The loop that has served well, in the order it pays:
   and a table stays one between `clang-format off` and `on`. A check is
   turned off in `.clang-tidy` with its reason, and a `NOLINT(check)`
   carries its reason on the line. The gate's unit step runs the unit
-  tests under ASan and UBSan, and the gate runs the suite once on
+  tests under ASan and UBSan, and `scripts/extra` runs the suite on
   `build/launcher-debug`, whose UBSan checks trap.
 - **Hashes are BLAKE3-256**, `lukechampine.com/blake3`'s in the command and
   `test/b3.py`'s, from the specification, in the tests, since the standard
@@ -203,15 +218,18 @@ The loop that has served well, in the order it pays:
 - **Claims and measurements.** Figures in `docs/DESIGN.md` are current
   and measured on the reference machine; a change that moves one
   measures it again, and a number the current code has not produced is
-  better left out than quoted.
+  better left out than quoted. A figure that development moves, a
+  count of tests, cases, packages or files, a duration, a version the
+  code owns, is removed rather than kept current; what stays is a
+  measurement that supports a claim, with its conditions, a constant
+  that is the design's own, and a figure inside a quoted transcript.
 - **The gate.** `scripts/gate EXCLAVE` (`EXCLAVE_TEST_INPUTS=DIR`,
-  the directory `scripts/inputs` filled, adds the Docker profile, the
-  SSSD lookup on its `sss.exclave` and `exclave caches` on its
-  `caches.exclave`) runs,
-  of the code checks, the unit tests, the stack budget, the command's
-  Go tests, unpack's and the fetchers' tests, the suite, the oracles and the syscall probe on
-  the one exclave, the ones the changed paths can affect (`--full`: all
-  of them), two steps at a time (`--jobs N`; this laptop is in use
+  the directory `scripts/inputs` filled, gives the steps that need
+  more than the one exclave their inputs: the Docker profile, the SSSD
+  lookup, the caches test, the gdb tests and the compatibility test; a
+  step without its input, or one that cannot run on the machine, is a
+  SKIP, by exit status 77) runs, of its steps, the ones the changed
+  paths can affect (`--full`: all of them), two steps at a time (`--jobs N`; this laptop is in use
   meanwhile) on copies with its time printed, and a 30 s budget per
   test. `scripts/extra EXCLAVE...` runs the same step runner
   (`scripts/steps.sh`) over the broader and slower set. Every driver
@@ -239,7 +257,8 @@ The loop that has served well, in the order it pays:
 - **Local, as an exclave is.** exclave makes software local and portable,
   and its tooling keeps to the same design: what it makes stays inside
   the repository's tree, the pinned uv and Go and their caches in `.uv/`
-  and `.go/`, builds, images, inputs, temporary files (`TMPDIR` is
+  and `.go/`, uv's environment in `.venv/`, the launcher the command
+  embeds in `tool/launcher-ARCH`, builds, images, inputs, temporary files (`TMPDIR` is
   `build/tmp`, which `scripts/clean-tmp` empties) and locks under
   `build/`, or in a `DIR` the user gives.
   Nothing goes in the home directory or `/tmp` unless the user asks, and
@@ -257,9 +276,9 @@ The loop that has served well, in the order it pays:
 
 Ubuntu 24.04, kernel 7.0, x86-64, glibc 2.39; `gcc-aarch64-linux-gnu`,
 `qemu-system-arm` and `qemu-efi-aarch64` are installed for the arm64
-row, which runs under TCG at a tenth of native speed; `golang-go`
-(Go 1.22) for the Go regression, and rustc from rustup for the Rust
-one. From a plain terminal user namespaces are denied by AppArmor;
+row, which runs under TCG at a tenth of native speed; the Go
+regression is built by the pinned Go, and rustc from rustup builds the
+Rust one. From a plain terminal user namespaces are denied by AppArmor;
 `aa-exec -p unconfined` reproduces that label from a session that is
 otherwise permitted. `gdb -p` on a non-descendant is refused by Yama.
 `perf` cannot read the maps of a process under a different AppArmor
@@ -271,10 +290,11 @@ mirror configured on this machine is `http://gb.archive.ubuntu.com/ubuntu`;
 ## Scratch space
 
 Every development input is made by `scripts/inputs DIR`, which holds the
-exact fetch commands: the gcc, Alpine, Fedora and clang exclaves of the
-gate, the arm64 gcc exclave, the SSSD lookup's `sss.exclave`, the
-caches test's `caches.exclave` and `alpine-caches.exclave` and
-Docker's seccomp profile, from the
+exact fetch commands: the gcc exclave of the gate and the Alpine,
+Fedora and clang exclaves of `scripts/extra`, the arm64 gcc exclave,
+the SSSD lookup's `sss.exclave`, the caches test's `caches.exclave`
+and `alpine-caches.exclave`, the gdb tests' `gdb.exclave`, Docker's
+seccomp profile and, once there is one, the baseline release, from the
 package archives and GitHub alone, which is all the CI workflow
 fetches; `scripts/inputs DIR examples` adds the examples' inputs, the
 CentOS 7 rpms for `test/sysroot.py`, the workloads' exclaves and the
