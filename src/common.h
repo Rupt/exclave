@@ -282,6 +282,7 @@ int cache_classify(const char *v, const char *real, char *tmp);
  * without a trailing slash WALK_FOLLOW decides, since O_CREAT follows what the lookup found (open_last_lookups) */
 #define WALK_FOLLOW 1
 #define WALK_PARENT 2
+_Static_assert(WALK_FOLLOW == 1, "a caller passes a truth value for it: follow, or do not");
 int canon(struct scratch *S, const char *path, int dfd, int follow_last, char *out); /* 0 or -errno */
 int through_magic(struct scratch *S, const char *path, int dfd, char *out);
 int fd_virtual(int fd, char *out);

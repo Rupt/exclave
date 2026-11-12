@@ -304,9 +304,9 @@ int elf_probe(const char *real, char *interp, int *is_launcher, int *filter_vers
     /* 7168 + 512 bytes: the loader's own limit of headers */
     Ehdr eh;
     Phdr *ph = (Phdr *)buf;
-    unsigned char *nb = (unsigned char *)buf + 128 * sizeof(Phdr);
+    unsigned char *nb = (unsigned char *)buf + MAX_PHDRS * sizeof(Phdr);
     int ret = -ENOEXEC;
-    if (sys_pread((int)fd, &eh, sizeof eh, 0) == sizeof eh && header_ok(&eh) == 0 && eh.e_phnum <= 128 &&
+    if (sys_pread((int)fd, &eh, sizeof eh, 0) == sizeof eh && header_ok(&eh) == 0 && eh.e_phnum <= MAX_PHDRS &&
         sys_pread((int)fd, ph, (size_t)eh.e_phnum * sizeof(Phdr), (long)eh.e_phoff) ==
             (long)(eh.e_phnum * sizeof(Phdr))) {
         ret = 0;
@@ -465,7 +465,7 @@ void loader_run(struct scratch *S, const char *vpath, int fd, long argc, char **
         unsigned long ientry, iphdr;
         int ii;
         /* through the wrapper redirect: ld.so is wrapped; a loader that is not there fails to open, below */
-        long r = canon(S, interp_v, AT_FDCWD, 1, S->v);
+        long r = canon(S, interp_v, AT_FDCWD, WALK_FOLLOW, S->v);
         /* a walk's other error is said, a top-level directory's that could not be read say (8.1.1) */
         if (r < 0) die("program wants a loader this exclave does not have", interp_v, r == -ENOENT ? 0 : r);
         to_real(S->v, interp_path, S->tmp);

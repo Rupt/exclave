@@ -411,7 +411,7 @@ static void exec_checks(const char *v, char *real)
 static void loader_mode_check(struct scratch *S, char **argv, char **env2)
 {
     scpy(S->arg, C.program, PATH_MAX);                        /* the target as given, for the wrapper's exec */
-    long r = canon(S, C.program, AT_FDCWD, 1, S->v);
+    long r = canon(S, C.program, AT_FDCWD, WALK_FOLLOW, S->v);
     if (r < 0) die_status(r == -ENOENT ? 127 : 126, "cannot execute", C.program, r);
     C.program = keep_path(S->v);
     exec_checks(C.program, S->real);
@@ -495,7 +495,7 @@ static void outside_spelling(struct scratch *S, const char *v, const unsigned lo
         if (n < 0 || !join_path(at, text, base)) return;
         if (starts_dir(at, C.root) && xstrcmp(at, C.root) != 0) {
             from_real(at);
-            if (canon(S, at, AT_FDCWD, 1, S->v) >= 0 && xstrcmp(S->v, v) == 0) scpy(out, at, PATH_MAX);
+            if (canon(S, at, AT_FDCWD, WALK_FOLLOW, S->v) >= 0 && xstrcmp(S->v, v) == 0) scpy(out, at, PATH_MAX);
             return;
         }
         struct kstat st;
@@ -548,7 +548,7 @@ static __attribute__((noreturn)) void run(struct scratch *S, const char *v, cons
     if (k == -1) die_status(126, "not an executable", v, ENOEXEC);
     if (k == -2) die_status(126, "argument list too long", v, E2BIG);
     char *iv = arena_alloc(PATH_MAX);
-    long r = canon(S, nargv[0], AT_FDCWD, 1, iv);
+    long r = canon(S, nargv[0], AT_FDCWD, WALK_FOLLOW, iv);
     if (r < 0) die_status(127, "cannot resolve interpreter", nargv[0], r == -ENOENT ? 0 : r);
     /* the interpreter is checked as an exec of it would be: one under a data directory is never run (6.2) */
     exec_checks(iv, real);

@@ -17,8 +17,8 @@ static inline unsigned long *frame_mask(void *uc) { return (unsigned long *)((ch
 /* the program's call, through the re-issue slot, which a program's handler's redirect stops (7.5.7) */
 #define RE5(nr, a, b, c, d, e) __sc6_reissue((nr), (long)(a), (long)(b), (long)(c), (long)(d), (long)(e), 0)
 #define RE6(nr, a, b, c, d, e, f) __sc6_reissue((nr), (long)(a), (long)(b), (long)(c), (long)(d), (long)(e), (long)(f))
-/* a call of the launcher's on the way to the program's, through the page's first slot: it leaves the call not made */
-#define AUX5(nr, a, b, c, d, e) __sc6((nr), (long)(a), (long)(b), (long)(c), (long)(d), (long)(e), 0)
+/* every other call here is the launcher's own, on the way to the program's or after it, through the page's first slot
+ * (SCn and the sys_ wrappers): it leaves the program's call not made */
 
 /* ---------- copying from the program's memory with EFAULT fidelity (7.5.6) ---------- */
 /* process_vm_readv refused: copies go through a pipe (13 item 15) */
@@ -295,7 +295,7 @@ static long delete_overlong(struct scratch *S, int dfd)
     /* the parent: what precedes the component, or the directory itself */
     char c = p[s];
     p[s] = 0;
-    long r = canon(S, s ? p : ".", dfd, 1, S->v);
+    long r = canon(S, s ? p : ".", dfd, WALK_FOLLOW, S->v);
     p[s] = c;
     r = r < 0 ? -ENAMETOOLONG : is_exclave_path(S->v) ? -EROFS : -ENAMETOOLONG;
     scpy(S->v, S->given, PATH_MAX); /* the log names what was asked for */
@@ -561,7 +561,7 @@ static long vec_read(struct scratch *S, void *region, size_t region_size, char *
  * the request is to be made. */
 static long exec_reissue(const char *path, char **argv, char **envp, int asked)
 {
-    if (asked) AUX5(NR_ptrace, PTRACE_TRACEME, 0, 0, 0, 0);
+    if (asked) SC5(NR_ptrace, PTRACE_TRACEME, 0, 0, 0, 0);
     return RE5(NR_execve, path, argv, envp, 0, 0);
 }
 
@@ -681,7 +681,7 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
         long k = shebang_argv(line, n, vcopy, av, argc, nargv, argc + 4);
         if (k == -1) r = -ENOEXEC;
         else if (k == -2) r = -E2BIG;
-        else if ((r = canon(S, nargv[0], AT_FDCWD, 1, S->v)) >= 0)
+        else if ((r = canon(S, nargv[0], AT_FDCWD, WALK_FOLLOW, S->v)) >= 0)
             r = exec_target(S, S->v, nargv[0], nargv, envp, depth + 1, 0);
     }
     vector_free(big2, argc + 4);
@@ -765,7 +765,7 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
      * directory, is left to the child launcher, which refuses it by name */
     if (pr == 1) {
         scpy(S->arg, S->tmp, PATH_MAX);
-        if ((e = canon(S, S->arg, AT_FDCWD, 1, S->tmp)) < 0) return e;
+        if ((e = canon(S, S->arg, AT_FDCWD, WALK_FOLLOW, S->tmp)) < 0) return e;
         to_real(S->tmp, S->real, S->cur); /* through the wrapper redirect: ld.so is wrapped */
         if ((e = sys_stat(S->real, st)) < 0) return e;
         if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
@@ -943,7 +943,7 @@ static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, l
                 char *nargv[4]; /* the interpreter as exec reads it */
                 if (n > 0 && shebang_argv(line, n, S->real2, 0, 1, nargv, 4) > 0) {
                     scpy(S->arg, nargv[0], PATH_MAX);
-                    if (canon(S, S->arg, AT_FDCWD, 1, S->v) == 0) ans = S->v;
+                    if (canon(S, S->arg, AT_FDCWD, WALK_FOLLOW, S->v) == 0) ans = S->v;
                 }
             }
         }
@@ -1047,7 +1047,7 @@ static long do_sigprocmask(struct scratch *S, long *a, void *uc)
      * read and the store, where a program's handler's mask would be overwritten (7.5.7): a signal arriving now waits
      * for the trap's return, as natively one arriving during the call is delivered after it */
     unsigned long cur, all = ~SIGSYS_BIT;
-    if (AUX5(NR_rt_sigprocmask, SIG_SETMASK, &all, &cur, 8, 0) == 0) *frame_mask(uc) = cur;
+    if (SC5(NR_rt_sigprocmask, SIG_SETMASK, &all, &cur, 8, 0) == 0) *frame_mask(uc) = cur;
     /* the old mask is written last, as sys_rt_sigprocmask writes it: a bad pointer is EFAULT with the mask changed */
     return old ? copy_out(S->pid, old, &was, 8) : 0;
 }
@@ -1412,7 +1412,7 @@ static long do_truncate(struct scratch *S, int nr, long *a)
 {
     long r;
     if (a[1] < 0) return -EINVAL; /* do_sys_truncate: the length first */
-    if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
+    if ((r = resolve(S, a, 0, -1, WALK_FOLLOW, 0)) < 0) return r;
     /* the loaded program (13 item 29): vfs_truncate checks the permission, EACCES, before its ETXTBSY */
     if (C.loader_mode && xstrcmp(S->v, C.program) == 0) {
         to_real(S->v, S->real, S->tmp);
@@ -1891,7 +1891,7 @@ static __attribute__((noinline)) long do_seccomp(struct scratch *S, int nr, long
         flags = (unsigned)a[1];
         uargs = (const void *)a[2];
         /* the kernel's answer for the flags, which it checks before it reads the program: EFAULT for none */
-        long r = AUX5(NR_seccomp, SECCOMP_SET_MODE_FILTER, a[1], 0, 0, 0);
+        long r = SC5(NR_seccomp, SECCOMP_SET_MODE_FILTER, a[1], 0, 0, 0);
         if (r != -EFAULT) return r;
         if (flags & ~(unsigned long)SECCOMP_FLAGS_HONOURED) return -ENOSYS; /* a listener, or a flag newer than this */
     }
@@ -1911,7 +1911,7 @@ static __attribute__((noinline)) long do_seccomp(struct scratch *S, int nr, long
     for (long i = 0; r > 0 && i < fp.len; i++)
         if (body[i].code == 0x06 && (body[i].k & SECCOMP_RET_ACTION_FULL) == SECCOMP_RET_LOG) {
             unsigned action = SECCOMP_RET_LOG;
-            if (AUX5(NR_seccomp, SECCOMP_GET_ACTION_AVAIL, 0, &action, 0, 0)) r = -ENOSYS;
+            if (SC5(NR_seccomp, SECCOMP_GET_ACTION_AVAIL, 0, &action, 0, 0)) r = -ENOSYS;
             break;
         }
     if (r > 0) {
@@ -1952,7 +1952,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
     case NR_readlinkat: return do_readlink(S, a, 1, 0, (char *)a[2], (int)a[3]);
     case NR_getcwd: return do_getcwd(S, a);
     case NR_chdir:
-        if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
+        if ((r = resolve(S, a, 0, -1, WALK_FOLLOW, 0)) < 0) return r;
         to_real_exec(S->v, S->real);
         return RE5(NR_chdir, S->real, 0, 0, 0, 0);
     case NR_execve: return do_execve(S, a, 0, -1, 0, (char **)a[1], (char **)a[2]);
@@ -2016,7 +2016,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
     case NR_listxattr:
     case NR_llistxattr: return do_xattr(S, nr, a);
     case NR_statfs:
-        if ((r = resolve(S, a, 0, -1, 1, 0)) < 0) return r;
+        if ((r = resolve(S, a, 0, -1, WALK_FOLLOW, 0)) < 0) return r;
         to_real(S->v, S->real, S->tmp);
         r = RE5(NR_statfs, S->real, a[1], 0, 0, 0);
         return r == 0 && is_exclave_path(S->v) ? ro_flag(S, (char *)a[1] + STATFS_FLAGS_OFF) : r;
