@@ -349,8 +349,6 @@ long __sc6_judge_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define S_IFBLK 0060000
 #define S_IFSOCK 0140000
 
-#define ST_RDONLY 1 /* statfs's f_flags bit for a read-only mount */
-
 #define F_DUPFD 0
 #define F_GETFD 1
 #define F_GETFL 3
@@ -359,17 +357,208 @@ long __sc6_judge_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define F_DUPFD_CLOEXEC 1030
 #define FD_CLOEXEC 1
 
-#define PR_SET_NO_NEW_PRIVS 38
-#define PR_SET_MM 35
-#define PR_SET_MM_MAP 14
 #define GRND_NONBLOCK 1
-
-#define AT_NULL 0
-#define AT_EXECFN 31
 
 #define X_OK 1
 #define W_OK 2
 #define R_OK 4
+
+/* ---------- open / at flags ---------- */
+#define O_ACCMODE 03
+#define O_APPEND 02000
+#define O_NONBLOCK 04000
+#define O_TMPFILE (020000000 | O_DIRECTORY)
+/* every O_ flag the kernel accepts, the same bits on x86-64 and aarch64 (fs/open.c) */
+#define VALID_OPEN_FLAGS 0x7fffc3UL
+#define O_PATH_FLAGS (O_PATH | O_CLOEXEC | O_NOFOLLOW | O_DIRECTORY)
+/* openat2's resolve flags (7.4.3) */
+#define RESOLVE_NO_XDEV 0x01
+#define RESOLVE_NO_MAGICLINKS 0x02
+#define RESOLVE_NO_SYMLINKS 0x04
+#define RESOLVE_BENEATH 0x08
+#define RESOLVE_IN_ROOT 0x10
+#define RESOLVE_CACHED 0x20
+#define RESOLVE_ALL 0x3f
+#define AT_EACCESS 0x200
+#define AT_SYMLINK_FOLLOW 0x400
+#define AT_STATX_SYNC_TYPE 0x6000
+
+/* ---------- signals ---------- */
+#define SIGKILL 9
+#define SIGSEGV 11
+#define SIGSTOP 19
+#define SIGSYS 31
+#define SIGSYS_BIT (1UL << (SIGSYS - 1))
+#define SA_SIGINFO 4
+#define SA_ONSTACK 0x08000000
+#define SA_RESTORER 0x04000000
+#define SA_NODEFER 0x40000000
+#define SIG_BLOCK 0
+#define SIG_UNBLOCK 1
+#define SIG_SETMASK 2
+#define SYS_SECCOMP 1
+
+/* ---------- seccomp ---------- */
+#define PR_SET_SECCOMP 22
+#define PR_SET_NO_NEW_PRIVS 38
+#define PR_SET_MM 35
+#define PR_SET_MM_MAP 14
+#define RLIMIT_NOFILE 7
+#define PR_SET_NAME 15
+#define SECCOMP_MODE_FILTER 2
+#define SECCOMP_SET_MODE_FILTER 1
+#define SECCOMP_GET_ACTION_AVAIL 2
+#define SECCOMP_SET_MODE_STRICT 0
+#define SECCOMP_MODE_STRICT 1
+#define SECCOMP_GET_NOTIF_SIZES 3
+#define SECCOMP_FILTER_FLAG_TSYNC 1
+#define SECCOMP_FILTER_FLAG_LOG 2
+#define SECCOMP_FILTER_FLAG_SPEC_ALLOW 4    /* 4.17 */
+#define SECCOMP_FILTER_FLAG_TSYNC_ESRCH 16
+#define SECCOMP_RET_KILL_THREAD 0U
+#define SECCOMP_RET_LOG 0x7ffc0000U
+#define SECCOMP_RET_ACTION_FULL 0xffff0000U
+#define BPF_MAXINSNS 4096
+/* 7.4.2: the judge's answers, errnos a program's filter is not let give (one of 4095 or below, which the kernel
+ * returns unclamped): MARK_NONE, the launcher filter's to a call from the judge slot, and MARK_PRESENT, a program
+ * filter's prologue's to the probe from it */
+#define MARK_NONE 4094
+#define MARK_PRESENT 4093
+/* the filter's answer to an rt_sigreturn from the handler-call slot, so that a program's handler returns into the
+ * trampoline (7.5.7) */
+#define MARK_HANDLER_RETURN 4092
+#define SECCOMP_RET_KILL_PROCESS 0x80000000U
+#define SECCOMP_RET_TRAP 0x00030000U
+#define SECCOMP_RET_ERRNO 0x00050000U
+#define SECCOMP_RET_ALLOW 0x7fff0000U
+#define X32_SYSCALL_BIT 0x40000000U
+
+/* ---------- mmap ---------- */
+#define PROT_NONE 0
+#define PROT_READ 1
+#define PROT_WRITE 2
+#define PROT_EXEC 4
+#define MAP_PRIVATE 2
+#define MAP_FIXED 0x10
+#define MAP_ANONYMOUS 0x20
+#define MAP_NORESERVE 0x4000
+#define MADV_WIPEONFORK 18 /* 4.14+: the range reads as zero in a fork child; a vfork child shares it */
+#define MAP_FIXED_NOREPLACE 0x100000
+
+/* the ptrace request the filter traps (7.4.2): a vfork child's is deferred to its exec (7.4.5) */
+#define PTRACE_TRACEME 0
+#define KCMP_VM 1
+
+/* ---------- ioctl requests the filter traps (chattr) ---------- */
+#define FS_IOC_SETFLAGS 0x40086602UL
+#define FS_IOC_FSSETXATTR 0x401c5820UL /* _IOW('X', 32, struct fsxattr) */
+
+/* ---------- statfs flag ---------- */
+#define ST_RDONLY 1 /* statfs's f_flags bit for a read-only mount */
+
+/* ---------- auxv ---------- */
+#define AT_NULL 0
+#define AT_EXECFN 31
+#define AT_PHDR 3
+#define AT_PHENT 4
+#define AT_PHNUM 5
+#define AT_PAGESZ 6
+#define AT_BASE 7
+#define AT_ENTRY 9
+#define AT_HWCAP 16
+
+/* ---------- the signal frame (rt_sigframe), by architecture ----------
+ * x86-64: uc_mcontext.gregs at +40 from the ucontext, uc_sigmask at +296; verified against a real frame. The names
+ * index the argument registers of the syscall convention and the result register.
+ * aarch64: the ucontext is uc_flags, uc_link, uc_stack (24), uc_sigmask (8) at +40, 120 unused bytes, then
+ * struct sigcontext at +176: fault_address, regs[31] from +184, sp, pc, pstate. The arguments are x0 to x5, the
+ * number x8, the result x0, which is also the first argument: the handler copies the arguments before it writes. */
+#if defined(__x86_64__)
+#define UC_GREGS_OFF 40
+#define UC_SIGMASK_OFF 296
+/* the XSAVE area the kernel saved, which uc_mcontext.fpregs at +224 points to: the software bytes at +464 begin with
+ * FP_XSTATE_MAGIC1 and hold the frame's features at +472, and the XSAVE header at +512 those in use; a component is at
+ * the offset cpuid leaf 0xd gives it, in the standard format a signal frame always uses */
+#define UC_FPREGS_OFF 224
+#define FP_XSTATE_MAGIC1 0x46505853U
+#define XFEATURE_PKRU 9
+enum {
+    REG_R8 = 0,
+    REG_R9,
+    REG_R10,
+    REG_R11,
+    REG_R12,
+    REG_R13,
+    REG_R14,
+    REG_R15,
+    REG_RDI,
+    REG_RSI,
+    REG_RBP,
+    REG_RBX,
+    REG_RDX,
+    REG_RAX,
+    REG_RCX,
+    REG_RSP,
+    REG_RIP
+};
+#define REG_ARG0 REG_RDI
+#define REG_ARG1 REG_RSI
+#define REG_ARG2 REG_RDX
+#define REG_ARG3 REG_R10
+#define REG_ARG4 REG_R8
+#define REG_ARG5 REG_R9
+#define REG_RESULT REG_RAX
+#elif defined(__aarch64__)
+#define UC_GREGS_OFF 184
+#define UC_SIGMASK_OFF 40
+#define REG_ARG0 0
+#define REG_ARG1 1
+#define REG_ARG2 2
+#define REG_ARG3 3
+#define REG_ARG4 4
+#define REG_ARG5 5
+#define REG_RESULT 0
+#endif
+/* siginfo: si_signo@0 si_errno@4 si_code@8; SIGSYS: _call_addr@16 _syscall@24 _arch@28 */
+#define SI_CODE_OFF 8
+#define SI_CALL_ADDR_OFF 16
+#define SI_SYSCALL_OFF 24
+
+/* ---------- what the handler reads of its calls' flags and structs ---------- */
+#define IN_DONT_FOLLOW 0x02000000
+#define FAN_MARK_ADD 0x1
+#define FAN_MARK_REMOVE 0x2
+#define FAN_MARK_DONT_FOLLOW 0x4
+#define FAN_MARK_FLUSH 0x80
+#define STATFS_FLAGS_OFF offsetof(struct kstatfs, f_flags)
+#define RENAME_NOREPLACE 1
+#define RENAME_EXCHANGE 2
+#define RENAME_WHITEOUT 4
+#define AT_NO_AUTOMOUNT 0x800
+#define STATX__RESERVED 0x80000000U
+/* statx's mask bits and the offsets of the fields a directory's correction reads and writes (struct statx) */
+#define STATX_TYPE 0x1U
+#define STATX_NLINK 0x4U
+#define STATX_SIZE 0x200U
+#define STX_NLINK_OFF 16
+#define STX_MODE_OFF 28
+#define STX_SIZE_OFF 40
+#define STX_DEV_MAJOR_OFF 136
+#define STX_DEV_MINOR_OFF 140
+#define STATX_SIZE_BYTES 256
+/* statfs's f_type for the filesystems whose directory size counts entries */
+#define ZFS_SUPER_MAGIC 0x2fc12fc1L
+#define BTRFS_SUPER_MAGIC 0x9123683eL
+#define TMPFS_MAGIC 0x01021994L
+#define XATTR_CREATE 1
+#define XATTR_REPLACE 2
+#define XATTR_NAME_MAX 255
+#define XATTR_SIZE_MAX 65536
+#define IN_MASK_CREATE 0x10000000
+#define IN_MASK_ADD 0x20000000
+#define ALL_INOTIFY_BITS 0xf700efffU /* include/linux/inotify.h */
+#define UTIME_OMIT ((1L << 30) - 2)
+#define UTIME_NOW ((1L << 30) - 1)
 
 /* ---------- structs ---------- */
 struct kstat {              /* struct stat, x86_64 & aarch64 kernel layout */

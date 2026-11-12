@@ -9,40 +9,6 @@
  */
 #include "common.h"
 
-#define IN_DONT_FOLLOW 0x02000000
-#define FAN_MARK_ADD 0x1
-#define FAN_MARK_REMOVE 0x2
-#define FAN_MARK_DONT_FOLLOW 0x4
-#define FAN_MARK_FLUSH 0x80
-#define STATFS_FLAGS_OFF offsetof(struct kstatfs, f_flags)
-#define RENAME_NOREPLACE 1
-#define RENAME_EXCHANGE 2
-#define RENAME_WHITEOUT 4
-#define AT_NO_AUTOMOUNT 0x800
-#define STATX__RESERVED 0x80000000U
-/* statx's mask bits and the offsets of the fields a directory's correction reads and writes (struct statx) */
-#define STATX_TYPE 0x1U
-#define STATX_NLINK 0x4U
-#define STATX_SIZE 0x200U
-#define STX_NLINK_OFF 16
-#define STX_MODE_OFF 28
-#define STX_SIZE_OFF 40
-#define STX_DEV_MAJOR_OFF 136
-#define STX_DEV_MINOR_OFF 140
-#define STATX_SIZE_BYTES 256
-/* statfs's f_type for the filesystems whose directory size counts entries */
-#define ZFS_SUPER_MAGIC 0x2fc12fc1L
-#define BTRFS_SUPER_MAGIC 0x9123683eL
-#define TMPFS_MAGIC 0x01021994L
-#define XATTR_CREATE 1
-#define XATTR_REPLACE 2
-#define XATTR_NAME_MAX 255
-#define XATTR_SIZE_MAX 65536
-#define IN_MASK_CREATE 0x10000000
-#define IN_MASK_ADD 0x20000000
-#define ALL_INOTIFY_BITS 0xf700efffU /* include/linux/inotify.h */
-#define UTIME_OMIT ((1L << 30) - 2)
-#define UTIME_NOW ((1L << 30) - 1)
 /* fs/utimes.c */
 static int nsec_valid(long ns) { return ns == UTIME_OMIT || ns == UTIME_NOW || (ns >= 0 && ns <= 999999999); }
 
