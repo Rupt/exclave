@@ -55,9 +55,8 @@ func writeHashes(ex, manifestHash string, tree, keep bool) {
 	if keep {
 		m := find(old, "manifest")
 		hasManifest = m != nil
-		if hasManifest { // the value as a C string of at most 131 bytes, which is how the C kept it
-			manifestHash = cString([]byte(m.f[0].v))
-			manifestHash = manifestHash[:min(len(manifestHash), 131)]
+		if hasManifest { // the record as it stands, whatever it holds
+			manifestHash = m.f[0].v
 		}
 		tree = find(old, "tree") != nil
 	}

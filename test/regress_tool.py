@@ -466,7 +466,17 @@ def wrap_refusals(ctx: Ctx) -> None:
         read_bytes(os.path.join(b, "tree", "usr", "bin", ".real", "hi")) == script,
         "the original was overwritten",
     )
+    # relink keeps the hashes file's manifest record as it stands, whatever it holds
+    hashes = os.path.join(b, ".exclave", "hashes")
+    recorded, long_value = tree.records(hashes)["manifest"][0][0], "b3:" + "0" * 200
+    text = read_text(hashes)
+    with open(hashes, "w") as f:
+        f.write(text.replace(recorded, long_value))
     rc, o, e = run([*TOOL, "relink", b, ctx.launcher_src])
+    expect(
+        rc == 0 and tree.records(hashes)["manifest"][0][0] == long_value,
+        f"relink rewrote the manifest record it keeps: {tree.records(hashes)['manifest']} {o}{e}",
+    )
     rc, o, e = run([*TOOL, "wrap", b])
     expect(rc == 0, "after relink the copy is wrapped: " + o + e)
     # an executable its user cannot execute
