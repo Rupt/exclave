@@ -321,6 +321,36 @@ func eachAtOnce(n int, job func(int) error) []error {
 	return errs
 }
 
+// fetched is a package a download put in the cache: the name of its file in the output, the
+// cache's file, and the check of it against its index, which place makes again of a copy.
+type fetched struct {
+	name, cached string
+	verify       func(string) error
+}
+
+// fill downloads n packages, a few at once, each by download, and places them in out in their
+// order; the first that fails, in that order, is the error.
+func fill(out string, n int, download func(i int) (fetched, error)) error {
+	if err := os.MkdirAll(out, 0o777); err != nil {
+		return err
+	}
+	got := make([]fetched, n)
+	errs := eachAtOnce(n, func(i int) (err error) {
+		got[i], err = download(i)
+		return err
+	})
+	for i, f := range got {
+		if errs[i] != nil {
+			return errs[i]
+		}
+		if err := place(f.cached, filepath.Join(out, f.name), f.verify); err != nil {
+			return err
+		}
+	}
+	log(fmt.Sprintf("%d packages in %s", n, out))
+	return nil
+}
+
 // place puts the cache's file src at dst, a hard link where the filesystem allows it; a copy is
 // checked again by verify, since it is not the file verified.
 func place(src, dst string, verify func(string) error) error {

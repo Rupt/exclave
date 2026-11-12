@@ -33,9 +33,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -323,25 +325,27 @@ var datahashRe = regexp.MustCompile(`(?m)^datahash = ([0-9a-f]{64})$`)
 // .PKGINFO is the SHA-256 of the compressed data member, as abuild computes it. The sections
 // before the control section may hold nothing but signatures, since unpack reads every section as
 // one archive: a member planted there would be extracted with no digest over it.
-func (r *apkRepo) download(st stanza) (string, string, error) {
+func (r *apkRepo) download(st stanza) (fetched, error) {
 	name := fmt.Sprintf("%s-%s.apk", st["P"], st["V"])
 	want := st["C"]
 	if !strings.HasPrefix(want, "Q1") {
-		return "", "", fmt.Errorf("%s: the index carries no checksum for it; refusing an unverifiable download", name)
+		return fetched{},
+			fmt.Errorf("%s: the index carries no checksum for it; refusing an unverifiable download", name)
 	}
 	sum, err := base64.StdEncoding.DecodeString(want[2:])
 	if err != nil || len(sum) != sha1.Size {
-		return "", "", fmt.Errorf("%s: the index's checksum %s is not a SHA-1", name, want)
+		return fetched{}, fmt.Errorf("%s: the index's checksum %s is not a SHA-1", name, want)
 	}
 	p, err := r.cache.keyed("sha1-control", hex.EncodeToString(sum))
 	if err != nil {
-		return "", "", err
+		return fetched{}, err
 	}
 	u := fmt.Sprintf("%s/%s/%s/%s/%s", r.mirror, r.branch, st["_repo"], r.arch, name)
-	if err := r.cache.getVerified(u, p, func(f string) error { return r.check(name, st, f) }); err != nil {
-		return "", "", err
+	verify := func(f string) error { return r.check(name, st, f) }
+	if err := r.cache.getVerified(u, p, verify); err != nil {
+		return fetched{}, err
 	}
-	return name, p, nil
+	return fetched{name, p, verify}, nil
 }
 
 // check reports whether the file at p is the package the index names, as download describes.
@@ -406,30 +410,6 @@ func fetchApks(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(*out, 0o777); err != nil {
-		return err
-	}
-	names := make([]string, 0, len(selected))
-	for n := range selected {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	filenames, cached := make([]string, len(names)), make([]string, len(names))
-	errs := eachAtOnce(len(names), func(i int) (err error) {
-		filenames[i], cached[i], err = repo.download(selected[names[i]])
-		return err
-	})
-	for i, name := range names {
-		if errs[i] != nil {
-			return errs[i]
-		}
-		filename, cached, st := filenames[i], cached[i], selected[name]
-		if err := place(cached, filepath.Join(*out, filename), func(f string) error {
-			return repo.check(filename, st, f)
-		}); err != nil {
-			return err
-		}
-	}
-	log(fmt.Sprintf("%d packages in %s", len(selected), *out))
-	return nil
+	names := slices.Sorted(maps.Keys(selected))
+	return fill(*out, len(names), func(i int) (fetched, error) { return repo.download(selected[names[i]]) })
 }

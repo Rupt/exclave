@@ -40,9 +40,10 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"maps"
 	"os"
 	"path"
-	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -451,14 +452,14 @@ func (r *rpmRepo) resolve(wanted []string, base bool, choose map[string]string) 
 
 // download fetches one package into the cache, checks it against the index and its signatures,
 // and returns its file name and the cache's file.
-func (r *rpmRepo) download(pkg *rpmPackage) (string, string, error) {
+func (r *rpmRepo) download(pkg *rpmPackage) (fetched, error) {
 	name := path.Base(pkg.href)
 	if pkg.sha256 == "" {
-		return "", "", fmt.Errorf("%s: the index carries no SHA-256 for it; refusing an unverifiable download", name)
+		return fetched{}, fmt.Errorf("%s: the index carries no SHA-256 for it; refusing an unverifiable download", name)
 	}
 	p, err := r.cache.keyed("sha256", pkg.sha256)
 	if err != nil {
-		return "", "", fmt.Errorf("%s: %w", name, err)
+		return fetched{}, fmt.Errorf("%s: %w", name, err)
 	}
 	// the digest and size the signed index gives, then the package's own signatures
 	verify := func(f string) error {
@@ -476,13 +477,13 @@ func (r *rpmRepo) download(pkg *rpmPackage) (string, string, error) {
 	}
 	switch err := r.cache.getVerified(pkg.repo+"/"+pkg.href, p, verify); err {
 	case nil:
-		return name, p, nil
+		return fetched{name, p, verify}, nil
 	case errDigest:
-		return "", "", errors.New(name + ": SHA-256 does not match the index")
+		return fetched{}, errors.New(name + ": SHA-256 does not match the index")
 	case errSize:
-		return "", "", errors.New(name + ": size does not match the index")
+		return fetched{}, errors.New(name + ": size does not match the index")
 	default:
-		return "", "", err
+		return fetched{}, err
 	}
 }
 
@@ -580,30 +581,6 @@ func fetchRpms(args []string) error {
 	for _, note := range notes {
 		log("note: " + note)
 	}
-	if err := os.MkdirAll(*out, 0o777); err != nil {
-		return err
-	}
-	names := make([]string, 0, len(selected))
-	for n := range selected {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	filenames, cached := make([]string, len(names)), make([]string, len(names))
-	errs := eachAtOnce(len(names), func(i int) (err error) {
-		filenames[i], cached[i], err = repo.download(selected[names[i]])
-		return err
-	})
-	for i, name := range names {
-		if errs[i] != nil {
-			return errs[i]
-		}
-		filename, cached, pkg := filenames[i], cached[i], selected[name]
-		if err := place(cached, filepath.Join(*out, filename), func(f string) error {
-			return checkFile(f, sha256.New, pkg.sha256, pkg.size)
-		}); err != nil {
-			return err
-		}
-	}
-	log(fmt.Sprintf("%d packages in %s", len(selected), *out))
-	return nil
+	names := slices.Sorted(maps.Keys(selected))
+	return fill(*out, len(names), func(i int) (fetched, error) { return repo.download(selected[names[i]]) })
 }

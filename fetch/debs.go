@@ -29,9 +29,10 @@ import (
 	"exclave/unpack/reader"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path"
-	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -396,36 +397,35 @@ func (r *debRepo) pick(name, op, ver string, selected map[string]stanza, choose 
 	return providers[0].st
 }
 
-// download fetches one package into the cache, checks it against the index, and returns the
-// cache's file and the check, which place makes again of a copy.
-func (r *debRepo) download(st stanza) (string, func(string) error, error) {
+// download fetches one package into the cache and checks it against the index.
+func (r *debRepo) download(st stanza) (fetched, error) {
 	filename := st["Filename"]
 	if st["SHA256"] == "" {
-		return "", nil, fmt.Errorf("%s: the index carries no SHA256 for it; refusing an unverifiable download",
+		return fetched{}, fmt.Errorf("%s: the index carries no SHA256 for it; refusing an unverifiable download",
 			filename)
 	}
 	size := int64(-1)
 	if s, ok := st["Size"]; ok {
 		n, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
-			return "", nil, fmt.Errorf("%s: the index gives its size as %q", filename, s)
+			return fetched{}, fmt.Errorf("%s: the index gives its size as %q", filename, s)
 		}
 		size = n
 	}
 	p, err := r.cache.keyed("sha256", st["SHA256"])
 	if err != nil {
-		return "", nil, fmt.Errorf("%s: %w", filename, err)
+		return fetched{}, fmt.Errorf("%s: %w", filename, err)
 	}
 	verify := func(f string) error { return checkFile(f, sha256.New, st["SHA256"], size) }
 	switch err := r.cache.getVerified(r.mirror+"/"+filename, p, verify); err {
 	case nil:
-		return p, verify, nil
+		return fetched{path.Base(filename), p, verify}, nil
 	case errDigest:
-		return "", nil, errors.New(filename + ": SHA256 does not match the index")
+		return fetched{}, errors.New(filename + ": SHA256 does not match the index")
 	case errSize:
-		return "", nil, errors.New(filename + ": size does not match the index")
+		return fetched{}, errors.New(filename + ": size does not match the index")
 	default:
-		return "", nil, err
+		return fetched{}, err
 	}
 }
 
@@ -487,29 +487,6 @@ func fetchDebs(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(*out, 0o777); err != nil {
-		return err
-	}
-	names := make([]string, 0, len(selected))
-	for n := range selected {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	cached := make([]string, len(names))
-	verify := make([]func(string) error, len(names))
-	errs := eachAtOnce(len(names), func(i int) (err error) {
-		cached[i], verify[i], err = repo.download(selected[names[i]])
-		return err
-	})
-	for i, name := range names {
-		if errs[i] != nil {
-			return errs[i]
-		}
-		dst := filepath.Join(*out, path.Base(selected[name]["Filename"]))
-		if err := place(cached[i], dst, verify[i]); err != nil {
-			return err
-		}
-	}
-	log(fmt.Sprintf("%d packages in %s", len(selected), *out))
-	return nil
+	names := slices.Sorted(maps.Keys(selected))
+	return fill(*out, len(names), func(i int) (fetched, error) { return repo.download(selected[names[i]]) })
 }
