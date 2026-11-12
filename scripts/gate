@@ -60,7 +60,8 @@ start=$(date +%s)
 # shellcheck disable=SC2329  # run through step, by name
 # the parser, the filter, the scratch pool, the cache's lock, the CPU check and the #! rules, just built for the
 # host under the sanitisers, the six builds one after the other (a build never loads the machine with more than
-# one compiler); the command's grammar and readers on hostile files, through build/exclave
+# one compiler); the command's grammar and readers on hostile files, through build/exclave; the tables the parts
+# share and the gate's own choice of steps
 unit() {
     sanitized "$out/manifest_test" -DHOST_TEST "$here/manifest_test.c" "$repo/src/manifest.c" "$repo/src/str.c" &&
         sanitized "$out/filter_test" -DHOST_TEST "$here/filter_test.c" "$repo/src/filter.c" "$repo/src/str.c" &&
@@ -70,7 +71,8 @@ unit() {
         sanitized "$out/str_test" -DHOST_TEST "$here/str_test.c" "$repo/src/str.c" &&
         "$out/manifest_test" && py "$here/grammar_test.py" --c-parser "$out/manifest_test" &&
         py "$here/readers_test.py" --work "$out/readers" &&
-        "$out/filter_test" && py "$here/syscalls.py" && py "$here/tables_test.py" && "$out/scratch_test" &&
+        "$out/filter_test" && py "$here/syscalls.py" && py "$here/tables_test.py" && py "$here/affected_test.py" &&
+        "$out/scratch_test" &&
         "$out/cache_test" && "$out/isa_test" && "$out/str_test"
 }
 # shellcheck disable=SC2329  # run through step, by name

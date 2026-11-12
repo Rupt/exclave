@@ -6477,11 +6477,11 @@ once before it is pushed.
 `test/affected.py` derives them from what each step runs: its drivers
 and the sources it builds, each Python driver followed through the
 sibling modules it imports and the repository paths it names
-(`build/exclave` is the command, so `tool/`, `unpack/` and `fetch/`;
-`build/launcher` the launcher, so `src/`; `test/progs/probe.c` the
-probe's program). So the command reaches every step whose driver runs
-it, unpack's and the fetchers' tests among them, and its packages reach
-the Go step;
+(`build/exclave` is the command, so `tool/` and `unpack/`;
+`build/exclave-fetch` the fetchers, so `fetch/`; `build/launcher` the
+launcher, so `src/`; `test/progs/probe.c` the probe's program). So the
+command reaches every step whose driver runs it, unpack's tests among
+them, the fetchers reach theirs, and their packages reach the Go step;
 a program reaches the suite, or the one oracle that compiles
 it; a helper reaches whatever imports it. A launcher source,
 `scripts/build`, `scripts/lib.sh`, `scripts/install-go`, `go.mod`,
@@ -6524,7 +6524,9 @@ its time, ok, SKIP or FAIL:
   (8.4), the volatile directories (8.1), the identity directories
   (8.1 rule 5) and the names the launcher
   logs for the syscalls the filter traps, from each source and fails
-  when they differ;
+  when they differ; and `test/affected_test.py`, which holds the
+  derivation above to changes whose steps are known, a fetcher's
+  source, a launcher's, a document, a path nothing names;
 - the stack budget of both launchers (the aarch64 one when it is
   built);
 - the Go step (`go test`, then `go mod verify`): the command's unit

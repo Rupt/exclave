@@ -3,7 +3,8 @@
     test/affected.py [--explain] PATH...
 
 Prints one step name per line: those of STEPS a changed path reaches, `every` and every step
-when a path reaches everything, and `matrix` when the change reaches the VMs. A step reaches a
+when a path reaches everything, and `matrix` when the change reaches the VMs; given no path, every
+step, since a change that names nothing is not known to be small. A step reaches a
 path when the path is one the step runs or builds from, or one its Python drivers import or name:
 a sibling module in test/ is followed, and a path under the repository
 named through `os.path.join(REPO, ...)` is what the driver runs there (`build/exclave` is the
@@ -32,6 +33,7 @@ STEPS: dict[str, tuple[str, ...]] = {
         "test/readers_test.py",
         "test/syscalls.py",
         "test/tables_test.py",
+        "test/affected_test.py",
         "src/*",
     ),
     "stack": ("test/stackcheck.py", "src/*"),
@@ -97,7 +99,8 @@ CHECK_ONLY = (
     ".gitignore",
     ".github/*",
 )
-# A path under build/ a driver names stands for the sources it is built from.
+# A path under build/ a driver names stands for the sources it is built from; the longest name it
+# starts with is the program's, so that build/exclave-fetch is not taken for build/exclave.
 BUILT = {
     "build/exclave": ("tool/*", "unpack/*"),
     "build/exclave-fetch": ("fetch/*",),
@@ -155,10 +158,9 @@ def dependencies(path: str, seen: dict[str, set[str]]) -> set[str]:
             if os.path.isfile(os.path.join(REPO, "test", top + ".py")):
                 deps |= dependencies("test/" + top + ".py", seen)
     for named in joined_paths(tree):
-        for built, source in BUILT.items():
-            if named == built or named.startswith(built):
-                deps.update(source)
-                break
+        built = max((b for b in BUILT if named.startswith(b)), key=len, default=None)
+        if built is not None:
+            deps.update(BUILT[built])
         else:
             deps.add(named + "/*" if os.path.isdir(os.path.join(REPO, named)) else named)
     return deps
@@ -183,15 +185,14 @@ def matches(path: str, patterns: set[str] | tuple[str, ...]) -> str | None:
     return next((p for p in sorted(patterns) if path == p or fnmatch.fnmatchcase(path, p)), None)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--explain", action="store_true", help="print why each step runs")
-    ap.add_argument("paths", nargs="*", help="the changed paths, relative to the repository")
-    args = ap.parse_args()
+def chosen(paths: list[str]) -> list[tuple[str, str]]:
+    """The steps a change to paths reaches, in STEPS' order, each with its reason."""
     steps = reach()
     why: dict[str, str] = {}
-    every = False
-    for path in args.paths:
+    every = not paths
+    if every:
+        why["every"] = "no path given"
+    for path in paths:
         if (p := matches(path, EVERY)) is not None:
             every = True
             why.setdefault("every", f"{path} is {p}")
@@ -207,11 +208,18 @@ def main() -> int:
         ):
             every = True
             why.setdefault("every", f"nothing names {path}")
-    chosen = [*STEPS, "every"] if every else [s for s in STEPS if s in why]
+    names = [*STEPS, "every"] if every else [s for s in STEPS if s in why]
     if "matrix" in why:
-        chosen.append("matrix")
-    for step in chosen:
-        reason = why.get(step, why.get("every", ""))
+        names.append("matrix")
+    return [(step, why.get(step, why.get("every", ""))) for step in names]
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--explain", action="store_true", help="print why each step runs")
+    ap.add_argument("paths", nargs="*", help="the changed paths, relative to the repository")
+    args = ap.parse_args()
+    for step, reason in chosen(args.paths):
         print(f"{step}: {reason}" if args.explain else step)
     return 0
 
