@@ -433,12 +433,20 @@ def licence_files(root: str) -> set[str]:
 
 
 def _unquote(field: str) -> str:
-    """Return a quoted string of the grammar (6.2) with its escapes undone."""
-    escapes = {"\\": "\\", '"': '"', "n": "\n", "t": "\t"}
-    return re.sub(
-        r"\\(x[0-9a-f]{2}|.)",
-        lambda m: chr(int(m.group(1)[1:], 16)) if len(m.group(1)) == 3 else escapes[m.group(1)],
-        field[1:-1],
+    """Return a quoted string of the grammar (6.2) with its escapes undone.
+
+    The escapes are undone in the string's bytes, which are then read as a path's are: a byte that
+    is not UTF-8, escaped or not, comes back as os.fsdecode gives it.
+    """
+    escapes = {b"\\": b"\\", b'"': b'"', b"n": b"\n", b"t": b"\t"}
+    return os.fsdecode(
+        re.sub(
+            rb"\\(x[0-9a-f]{2}|.)",
+            lambda m: (
+                bytes([int(m.group(1)[1:], 16)]) if len(m.group(1)) == 3 else escapes[m.group(1)]
+            ),
+            os.fsencode(field[1:-1]),
+        )
     )
 
 
