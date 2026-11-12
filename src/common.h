@@ -331,6 +331,22 @@ int elf_probe(const char *real, char *interp, int *is_launcher, int *filter_vers
 /* the kernel's checks of a program's interpreter once opened (load_elf_binary, before begin_new_exec): 0 or -errno,
  * EIO for a header the file does not hold whole, ELIBBAD for one that is not this machine's ELF; buf >= 208 bytes */
 int elf_interp_probe(const char *real, void *buf);
+/* 7.4.5: an exec's checks of a file before it reads it, in the kernel's order: the name's own error, EACCES for a
+ * directory or a special file, then the kernel's own answer to X_OK for this process, triads and search included; st
+ * gets its stat. A handler makes them of an exec inside and the start of its target, of a loader a header names and
+ * of a descriptor's file alike. */
+long exec_file_checks(const char *real, struct kstat *st);
+/* the same of a virtual path v, whose real path real gets: first EACCES for one under a data directory, which is
+ * never executed (6.2) */
+long exec_checks(const char *v, char *real, struct kstat *st);
+/* 7.4.2: while a program's own filter may be in force, a launcher whose filter has no judge rule, before version
+ * FILTER_JUDGE_SINCE, would re-issue every trapped call through the page unjudged, so it is not exec'd: EACCES, the
+ * kernel's answer for an exec a security policy refuses (security_bprm_check), and a line in the log. real is a
+ * launcher file, whose note says its version where version is negative; one that cannot be read is refused too. tmp
+ * and extra are the probe's buffers, elf_probe's interp and buf. 0 for a launcher that may run. */
+long launcher_unjudged(const char *real, int version, char *tmp, void *extra);
+#define UNJUDGED                                                                                                       \
+    "a launcher before filter version " ASM_STR(FILTER_JUDGE_SINCE) " is not run under a program's own seccomp filter"
 
 /* ---------- filter (filter.c) ---------- */
 struct sock_filter {

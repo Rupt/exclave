@@ -291,6 +291,33 @@ static int header_ok(const Ehdr *eh)
     return 0;
 }
 
+long exec_file_checks(const char *real, struct kstat *st)
+{
+    long e = sys_stat(real, st);
+    if (e < 0) return e;
+    if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
+    return sys_faccessat(AT_FDCWD, real, X_OK);
+}
+
+long exec_checks(const char *v, char *real, struct kstat *st)
+{
+    if (vis_in_data(v)) return -EACCES;
+    to_real_exec(v, real);
+    return exec_file_checks(real, st);
+}
+
+long launcher_unjudged(const char *real, int version, char *tmp, void *extra)
+{
+    if (!program_filters) return 0;
+    if (version < 0) {
+        int gen;
+        if (elf_probe(real, tmp, &gen, &version, extra) < 0) version = 0;
+    }
+    if (version >= FILTER_JUDGE_SINCE) return 0;
+    log_msg(UNJUDGED, real);
+    return -EACCES;
+}
+
 /* 1: dynamic (interp filled), 0: static, <0: -errno as load_elf_binary answers before its point of no return (7.4.5),
  * the program headers beyond the loader's own table counted as a header it cannot load; is_launcher: a launcher
  * note's page generation, 0 without one */

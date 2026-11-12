@@ -391,25 +391,19 @@ static __attribute__((noreturn)) void entry_exec(long argc, char **argv, char **
     die("cannot re-exec the launcher", C.launcher, r);
 }
 
-/* 7.4.5: what exec_target checks of a resolved file before it reads it, in its order: a data directory is EACCES (6.2),
- * then the name's own error, a directory or a special file EACCES, and the kernel's own answer to X_OK is final. The
- * exit status is a shell's: 126 for a file that exists and cannot run, 127 for one that does not. real receives the
- * file's real path. */
-static void exec_checks(const char *v, char *real)
+/* 7.4.5: the checks a handler's exec makes of a resolved file before it reads it (exec_checks), fatal here. The exit
+ * status is a shell's: 126 for a file that exists and cannot run, 127 for one that does not. real receives the file's
+ * real path. */
+static void must_exec(const char *v, char *real)
 {
-    if (vis_in_data(v)) die_status(126, "cannot execute", v, EACCES);
-    to_real_exec(v, real);
     struct kstat st;
-    long e = sys_stat(real, &st);
+    long e = exec_checks(v, real, &st);
     if (e < 0) die_status(e == -ENOENT ? 127 : 126, "cannot execute", v, e);
-    if ((st.st_mode & S_IFMT) != S_IFREG) die_status(126, "cannot execute", v, EACCES);
-    long ok = sys_faccessat(AT_FDCWD, real, X_OK);
-    if (ok < 0) die_status(126, "cannot execute", v, ok);
 }
 
 /* 7.4.5 for a target that arrived by EXCLAVE_EXEC, the positional entry's or a handler's: the checks exec_target makes
  * before loading anything, so that the entry refuses what an exec inside refuses: the target is resolved as an exec
- * resolves it and checked (exec_checks), and a wrapper is exec'd as itself so that the kernel gives the program its
+ * resolves it and checked (must_exec), and a wrapper is exec'd as itself so that the kernel gives the program its
  * identity. */
 static void loader_mode_check(struct scratch *S, char **argv, char **env2)
 {
@@ -417,19 +411,16 @@ static void loader_mode_check(struct scratch *S, char **argv, char **env2)
     long r = canon(S, C.program, AT_FDCWD, WALK_FOLLOW, S->v);
     if (r < 0) die_status(r == -ENOENT ? 127 : 126, "cannot execute", C.program, r);
     C.program = keep_path(S->v);
-    exec_checks(C.program, S->real);
+    must_exec(C.program, S->real);
     /* a wrapper: the kernel runs the launcher under the program's name, exec'd by the name the caller spelt, /bin/sh,
      * so that comm is the kernel's answer for that name, and the kernel follows the last link. It follows it on the
      * host, though, where an absolute link of the tree leads to the host's file: the spelling is exec'd only when it
      * reaches this wrapper, and the wrapper by its own path otherwise (13 item 39) */
     if (is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp)) {
         /* 7.4.2: under a program's own filter a launcher without the judge rule is not run, as a handler refuses it */
-        int gen, version;
-        if (program_filters &&
-            (elf_probe(S->real, S->rest, &gen, &version, S->extra) < 0 || version < FILTER_JUDGE_SINCE))
-            die("a launcher before filter version 10 is not run under a program's own seccomp filter", C.program, 0);
+        if (launcher_unjudged(S->real, -1, S->rest, S->extra)) die(UNJUDGED, C.program, 0);
         if (canon(S, S->arg, AT_FDCWD, 0, S->v2) < 0) scpy(S->v2, C.program, PATH_MAX);
-        /* canon walks in S->real, so the wrapper's real path is taken again, as exec_checks took it */
+        /* canon walks in S->real, so the wrapper's real path is taken again, as must_exec took it */
         to_real_exec(C.program, S->real);
         to_real_exec(S->v2, S->real2);
         long fd = sys_open(S->real2, O_PATH | O_CLOEXEC, 0);
@@ -548,13 +539,12 @@ static __attribute__((noreturn)) void run(struct scratch *S, const char *v, cons
     if (depth == 0 && C.boundary && !C.loader_mode) outside_spelling(S, v, auxv, script);
     else scpy(script, given, PATH_MAX);
     long k = shebang_argv(line, n, script, argv, argc, nargv, cap);
-    if (k == -1) die_status(126, "not an executable", v, ENOEXEC);
-    if (k == -2) die_status(126, "argument list too long", v, E2BIG);
+    if (k < 0) die_status(126, k == -E2BIG ? "argument list too long" : "not an executable", v, k);
     char *iv = arena_alloc(PATH_MAX);
     long r = canon(S, nargv[0], AT_FDCWD, WALK_FOLLOW, iv);
     if (r < 0) die_status(127, "cannot resolve interpreter", nargv[0], r == -ENOENT ? 0 : r);
     /* the interpreter is checked as an exec of it would be: one under a data directory is never run (6.2) */
-    exec_checks(iv, real);
+    must_exec(iv, real);
     run(S, iv, nargv[0], k, nargv, envp, auxv, depth + 1);
 }
 

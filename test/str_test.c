@@ -28,7 +28,7 @@ static void expect(const char *name, const char *text, size_t n, const char *wan
     if (k > 0) snprintf(got, sizeof got, "%s%s%s", nargv[0], k == 4 ? "|" : "", k == 4 ? nargv[1] : "");
     runs++;
     int ok = want ? k > 0 && strcmp(got, want) == 0 && strcmp(nargv[k - 2], "/s") == 0 && !strcmp(nargv[k - 1], "a1")
-                  : k == -1;
+                  : k == -ENOEXEC;
     if (!ok) {
         fails++;
         printf("FAIL %s: k=%ld got \"%s\", wanted %s\n", name, k, got, want ? want : "ENOEXEC");
@@ -74,12 +74,12 @@ int main(void)
     expect("newline in the last byte", buf, BINPRM_BUF_SIZE, want);
 
     /* nargv of cap entries, on the heap so that a write past it is ASan's: the interpreter, its argument, the script,
-     * argv[1] and the NULL take argc + 3, and one fewer is refused (-2) */
+     * argv[1] and the NULL take argc + 3, and one fewer is refused (E2BIG) */
     for (long cap = 4; cap <= 5; cap++) {
         static char line[BINPRM_BUF_SIZE + 1], script[] = "/s", arg0[] = "script", arg1[] = "a1";
         char *argv[] = {arg0, arg1, 0}, **nargv = (char **)malloc((size_t)cap * sizeof *nargv);
         snprintf(line, sizeof line, "#!/bin/sh -e\n");
-        long k = shebang_argv(line, 13, script, argv, 2, nargv, cap), w = cap == 4 ? -2 : 4;
+        long k = shebang_argv(line, 13, script, argv, 2, nargv, cap), w = cap == 4 ? -E2BIG : 4;
         runs++;
         if (k != w || (k == 4 && nargv[4] != NULL)) {
             fails++;

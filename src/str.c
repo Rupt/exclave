@@ -183,11 +183,11 @@ static int blank(char c) { return c == ' ' || c == '\t'; }
  * from the first n bytes of the file (n at most BINPRM_BUF_SIZE). line holds them and one byte more, is modified in
  * place and must outlive nargv. With no newline in the buffer, the line is its first BINPRM_BUF_SIZE - 1 bytes, and
  * an interpreter path that no blank or NUL ends within them is refused rather than cut short; the argument may be
- * cut. Returns the new argc, -1 for ENOEXEC (not a #! line, no interpreter, or one the buffer cuts), or -2 if nargv
+ * cut. Returns the new argc, -ENOEXEC (not a #! line, no interpreter, or one the buffer cuts), or -E2BIG if nargv
  * (cap entries) is too small. */
 long shebang_argv(char *line, long n, char *script, char **argv, long argc, char **nargv, long cap)
 {
-    if (n < 2 || line[0] != '#' || line[1] != '!') return -1;
+    if (n < 2 || line[0] != '#' || line[1] != '!') return -ENOEXEC;
     for (long i = n; i <= BINPRM_BUF_SIZE; i++) line[i] = 0; /* the kernel's buffer is padded with NULs */
     char *end = 0;
     for (long i = 0; i < BINPRM_BUF_SIZE && !end; i++)
@@ -195,15 +195,15 @@ long shebang_argv(char *line, long n, char *script, char **argv, long argc, char
     if (!end) {
         char *buf_end = line + BINPRM_BUF_SIZE - 1, *p = line + 2;
         while (p < buf_end && blank(*p)) p++;
-        if (p == buf_end) return -1;
+        if (p == buf_end) return -ENOEXEC;
         while (p < buf_end && *p && !blank(*p)) p++;
-        if (p == buf_end) return -1; /* the interpreter's path runs past the buffer */
+        if (p == buf_end) return -ENOEXEC; /* the interpreter's path runs past the buffer */
         end = buf_end;
     }
     while (blank(end[-1])) end--;
     char *name = line + 2;
     while (name < end && blank(*name)) name++;
-    if (name == end) return -1;
+    if (name == end) return -ENOEXEC;
     char *sep = name, *arg = 0;
     while (sep < end && *sep && !blank(*sep)) sep++;
     if (sep < end && *sep) {
@@ -213,7 +213,7 @@ long shebang_argv(char *line, long n, char *script, char **argv, long argc, char
     }
     *end = 0;
     if (sep < end) *sep = 0;
-    if (argc + 3 > cap) return -2;
+    if (argc + 3 > cap) return -E2BIG;
     long k = 0;
     nargv[k++] = name;
     if (arg) nargv[k++] = arg;

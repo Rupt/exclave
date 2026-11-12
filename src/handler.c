@@ -675,8 +675,7 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
         /* the script's path as the caller spelt it, as the kernel passes it (7.4.5) */
         scpy(vcopy, given, PATH_MAX);
         long k = shebang_argv(line, n, vcopy, av, argc, nargv, argc + 4);
-        if (k == -1) r = -ENOEXEC;
-        else if (k == -2) r = -E2BIG;
+        if (k < 0) r = k;
         else if ((r = canon(S, nargv[0], AT_FDCWD, WALK_FOLLOW, S->v)) >= 0)
             r = exec_target(S, S->v, nargv[0], nargv, envp, depth + 1, 0);
     }
@@ -688,38 +687,17 @@ static inline __attribute__((always_inline)) long exec_script(struct scratch *S,
 
 /* cloexec: the script came through a close-on-exec descriptor, which its interpreter could not open: the kernel refuses
  * such an exec with ENOENT before it runs anything (fs/exec.c, BINPRM_FLAGS_PATH_INACCESSIBLE) */
-/* 7.4.2: while a program's own filter may be in force, a launcher whose filter has no judge rule, before version
- * 10, would re-issue every trapped call through the page unjudged, so it is not exec'd: EACCES, the kernel's answer
- * for an exec a security policy refuses (security_bprm_check), and a line in the log. real is a launcher file, whose
- * note says; one that cannot be read is refused too. S->tmp and S->extra are the probe's buffers. */
-static long launcher_unjudged(struct scratch *S, const char *real, int version)
-{
-    if (!program_filters) return 0;
-    if (version < 0) {
-        int gen;
-        if (elf_probe(real, S->tmp, &gen, &version, S->extra) < 0) version = 0;
-    }
-    if (version >= FILTER_JUDGE_SINCE) return 0;
-    log_msg("a launcher before filter version 10 is not run under a program's own seccomp filter", real);
-    return -EACCES;
-}
-
 static long exec_target(struct scratch *S, const char *v, const char *given, char **argv, char **envp, int depth,
                         int cloexec)
 {
     /* binfmt_script: five interpreters may nest, the sixth is ELOOP (measured) */
     if (depth > 5) return -ELOOP;
-    if (vis_in_data(v)) return -EACCES; /* 6.2: a data directory is never executed */
-    to_real_exec(v, S->real);
     /* in the scratch, not the frame: six of these frames may nest (7.5.4) */
     struct kstat *st = &S->st;
     long e;
-    /* ENOENT, ENOTDIR for a trailing slash, the name's own error */
-    if ((e = sys_stat(S->real, st)) < 0) return e;
-    if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
-    /* the kernel's answer for this process, triads and search included */
-    long ok = sys_faccessat(AT_FDCWD, S->real, X_OK);
-    if (ok < 0) return ok;
+    /* a data directory's EACCES (6.2), the name's own error, ENOENT or ENOTDIR for a trailing slash, then the kernel's
+     * answer for this process (exec_checks) */
+    if ((e = exec_checks(v, S->real, st)) < 0) return e;
     /* remembered by the walk (7.4.4) */
     int wrapper =
         (is_exclave_path(v) ? cache_classify(v, S->real, S->tmp) == CK_WRAPPER : is_wrapper_real(S->real, S->tmp)) &&
@@ -736,7 +714,7 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     if (!S->comm[0] && elf) scpy(S->comm, base_name(v), sizeof S->comm);
     if (wrapper) {
         if (!script && !elf) return -ENOEXEC;
-        if ((e = launcher_unjudged(S, S->real, -1))) return e;
+        if ((e = launcher_unjudged(S->real, -1, S->tmp, S->extra))) return e;
         return exec_env(S, S->real, argv, envp, v, 0); /* the kernel runs the launcher under the program's name */
     }
     /* not a wrapper: a host program, or an unwrapped exclave file */
@@ -749,7 +727,7 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
      * cannot load, or an interpreter path without its NUL, EIO for one the file does not hold whole */
     if (pr < 0) return pr;
     if (another >= PAGE_GENERATION) {
-        if ((e = launcher_unjudged(S, S->real, version))) return e;
+        if ((e = launcher_unjudged(S->real, version, S->tmp, S->extra))) return e;
         return exec_env(S, S->real, argv, envp, v, 0);
     }
     /* a launcher whose page this filter traps: the child refuses it by name */
@@ -763,9 +741,7 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
         scpy(S->arg, S->tmp, PATH_MAX);
         if ((e = canon(S, S->arg, AT_FDCWD, WALK_FOLLOW, S->tmp)) < 0) return e;
         to_real(S->tmp, S->real, S->cur); /* through the wrapper redirect: ld.so is wrapped */
-        if ((e = sys_stat(S->real, st)) < 0) return e;
-        if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
-        if ((ok = sys_faccessat(AT_FDCWD, S->real, X_OK)) < 0) return ok;
+        if ((e = exec_file_checks(S->real, st)) < 0) return e;
         if ((e = elf_interp_probe(S->real, S->extra)) < 0) return e;
     }
     return exec_env(S, C.launcher, argv, envp, v, 1);
@@ -783,12 +759,8 @@ static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp)
     ltoa_(fd, n);
     scpy(S->real, "/proc/self/fd/", PATH_MAX);
     scat(S->real, n, PATH_MAX);
-    struct kstat *st = &S->st;
     long e;
-    if ((e = sys_stat(S->real, st)) < 0) return e;
-    if ((st->st_mode & S_IFMT) != S_IFREG) return -EACCES;
-    long ok = sys_faccessat(AT_FDCWD, S->real, X_OK);
-    if (ok < 0) return ok;
+    if ((e = exec_file_checks(S->real, &S->st)) < 0) return e;
     /* comm is the file's own name (7.6), which the link spells with " (deleted)" */
     long l = sys_readlink(S->real, S->tmp, PATH_MAX - 1);
     if (l < 0) return l;
