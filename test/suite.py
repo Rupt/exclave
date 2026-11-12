@@ -37,7 +37,7 @@ TOOL = tree.TOOL
 GCC = "x86_64-linux-gnu-gcc-13"
 
 
-VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
+VOLATILE = tree.VOLATILE
 
 
 # what every test shares and none may change: the exclave's manifest, its hashes file, its
@@ -410,43 +410,21 @@ def tree_facts(ctx: Ctx) -> None:
     assert interp, f"{true} names no loader"
     ctx.interp = interp
     ctx.ldso_dir, ctx.ldso_name = ctx.interp.split("/")[1], os.path.basename(ctx.interp)
-    ctx.musl = os.path.basename(ctx.interp).startswith("ld-musl")
+    ctx.musl = tree.musl(ctx.root, ctx.machine)
     ctx.musl_interp = f"/lib/ld-musl-{ctx.machine}.so.1"
     # a loader this exclave lacks, no longer than its own
     ctx.other_interp = f"/lib/ld-gnu-{ctx.machine}.so.2" if ctx.musl else ctx.musl_interp
     ctx.deb_arch = machines.HERE.deb
+    spellings = tree.Spellings.of(ctx.root)
     # what /proc/self/exe reads for a script: dash, bash or busybox by its path
-    ctx.sh_exe = vreal(vbin("sh"))
-    ctx.sh_link = (
-        os.readlink(os.path.join(ctx.root, vbin("sh").lstrip("/")))
-        if os.path.islink(os.path.join(ctx.root, vbin("sh").lstrip("/")))
-        else ""
-    )
+    ctx.sh_exe, ctx.sh_link = spellings.sh_exe, spellings.sh_link
     ctx.busybox = os.path.basename(ctx.sh_exe) == "busybox"
     # libc.so.6 as the loader names it; none on musl
-    ctx.libc = next(
-        (
-            v
-            for v in (
-                f"/lib/{ctx.triplet}/libc.so.6",
-                "/lib64/libc.so.6",
-                "/lib/libc.so.6",
-                "/usr/lib/libc.so.6",
-            )
-            if os.path.lexists(os.path.join(ctx.root, v.lstrip("/")))
-        ),
-        None,
-    )
+    ctx.libc = None if ctx.musl else spellings.libc
     ctx.ldso_cache = os.path.exists(os.path.join(ctx.root, "etc", "ld.so.cache"))
     # the test programs read the tree's spellings from the environment, which the border passes
     # through
-    ctx.env.update(
-        EXCLAVE_TEST_SH=vbin("sh"),
-        EXCLAVE_TEST_SH_EXE=ctx.sh_exe,
-        EXCLAVE_TEST_SH_LINK=ctx.sh_link,
-        EXCLAVE_TEST_TRUE=vbin("true"),
-        EXCLAVE_TEST_TRUE_PAYLOAD="/" + os.path.relpath(true, ctx.root),
-    )
+    ctx.env.update(spellings.env())
 
 
 # the test programs compile_progs builds, each from test/progs/NAME.c

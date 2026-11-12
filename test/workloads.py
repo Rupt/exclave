@@ -183,7 +183,7 @@ def run_launcher(
         "PATH": "/usr/bin:/bin",
         "HOME": work,
         "W": work,
-        **sp.env(),
+        **sp.workload_env(),
         "LANG": "en_GB.UTF-8",
         "TZ": "Asia/Tokyo",
         "EXCLAVE_LOG": log,

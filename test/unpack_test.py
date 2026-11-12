@@ -39,9 +39,8 @@ REPO = os.path.dirname(HERE)
 UNPACK = tree.UNPACK
 TOOL = tree.TOOL
 FORMATS = ("deb", "apk", "rpm")
-# the host's volatile directories (8.1), as unpack strips them; test/tables_test.py holds the
-# copies to one
-VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
+# the host's volatile directories (8.1), as unpack strips them
+VOLATILE = tree.VOLATILE
 
 
 @dataclasses.dataclass(frozen=True)

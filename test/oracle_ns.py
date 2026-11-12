@@ -12,7 +12,6 @@ against the launcher. Needs user namespaces and bwrap; says so and exits 77 when
 
 import argparse
 import concurrent.futures
-import dataclasses
 import errno
 import os
 import platform
@@ -35,40 +34,8 @@ IDENTITY = tree.IDENTITY_FILES
 TIMEOUT = 60
 
 
-@dataclasses.dataclass(frozen=True)
-class Spellings:
-    """The tree's own names for what the workloads use, passed to both worlds (test/tree.py)."""
-
-    gcc: str  # the C compiler
-    sh: str  # the shell's virtual path
-    shx: str  # the file behind the shell
-    libc: str
-    sh_link: str  # the text of the shell's link, or "" when it is no link
-
-    @classmethod
-    def of(cls, root: str) -> Spellings:
-        """Read the spellings from the tree at root."""
-        machine = platform.machine()
-        sh = tree.vbin(root, "sh")
-        real_sh = os.path.join(root, sh.lstrip("/"))
-        return cls(
-            gcc=tree.compiler(root, machine) or f"{machine}-linux-gnu-gcc-13",
-            sh=sh,
-            shx=tree.resolve(root, sh),
-            libc=tree.libc(root, machine),
-            sh_link=os.readlink(real_sh) if os.path.islink(real_sh) else "",
-        )
-
-    def env(self) -> dict[str, str]:
-        """Return the environment that names them to a workload."""
-        return {
-            "CC": self.gcc,
-            "SH": self.sh,
-            "SHX": self.shx,
-            "LIBC": self.libc,
-            "EXCLAVE_TEST_SH": self.sh,
-            "EXCLAVE_TEST_SH_LINK": self.sh_link,
-        }
+# the tree's own names for what the workloads use, passed to both worlds
+Spellings = tree.Spellings
 
 
 def lines(out: str) -> list[str]:
@@ -263,7 +230,7 @@ def run_bwrap(
         "SHELL",
         "/bin/sh",
     ]
-    for k, v in spellings.env().items():
+    for k, v in spellings.workload_env().items():
         args += ["--setenv", k, v]
     args += tree.identity_dir_binds(root, targets=identity_targets)
     for f in IDENTITY:
@@ -297,7 +264,7 @@ def run_launcher(
         "PATH": "/usr/bin:/bin",
         "HOME": work,
         "W": work,
-        **spellings.env(),
+        **spellings.workload_env(),
         # replaced, and TZ dropped, at the border (6.2)
         "LANG": "en_GB.UTF-8",
         "TZ": "Asia/Tokyo",
@@ -449,8 +416,7 @@ def judge(name: str, rc: int, out: str, hostdir: str, root: str) -> list[str]:
     elif name == "sigframe":
         wrong = kernel_answers.sigframe_wrong(out, by_the_kernel=True)
     elif name == "unwind_frame":
-        musl = not tree.libc(root, platform.machine()).endswith("libc.so.6")
-        wrong = kernel_answers.unwind_frame_wrong(out, musl=musl)
+        wrong = kernel_answers.unwind_frame_wrong(out, musl=tree.musl(root, platform.machine()))
     elif name == "seccomp_filter":
         wrong = kernel_answers.seccomp_filter_wrong(out, by_the_kernel=True)
     else:

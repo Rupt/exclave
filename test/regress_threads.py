@@ -162,8 +162,7 @@ def unwind_through_frames(ctx: Ctx) -> None:
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
     rc, out, err = inside(ctx, exe, [d], timeout=60)
-    musl = not tree.libc(ctx.tree, platform.machine()).endswith("libc.so.6")
-    wrong = kernel_answers.unwind_frame_wrong(out, musl=musl)
+    wrong = kernel_answers.unwind_frame_wrong(out, musl=ctx.musl)
     if wrong:
         wrong.append(f"rc {rc}, output {out!r}, stderr {err!r}")
     expect(rc == 0 and not wrong, "\n".join(wrong) + err)

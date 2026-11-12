@@ -10,6 +10,7 @@ kept_worlds keeps such a copy and an unwrapped tree between a driver's runs; and
 Go regression's programs, which the matrix builds on the host for VMs that have no go.
 """
 
+import dataclasses
 import fcntl
 import filecmp
 import functools
@@ -53,7 +54,9 @@ IDENTITY_FILES = (
 IDENTITY_DIRS = ("/etc/ssl/certs", "/etc/pki/tls/certs", "/var/lib/sss")
 
 
-VOLATILE_TOPS = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
+# The host's volatile directories (8.1), always the host's; test/tables_test.py holds the tuple to
+# the launcher's, the command's and unpack's.
+VOLATILE = ("/proc", "/dev", "/sys", "/tmp", "/var/tmp", "/run")
 
 
 def tree_real_dir(root: str, d: str) -> str | None:
@@ -90,7 +93,7 @@ def tree_real_dir(root: str, d: str) -> str | None:
         if text.startswith("/"):
             cur = ""
     cur = cur or "/"
-    if any(cur == v or cur.startswith(v + "/") for v in VOLATILE_TOPS):
+    if any(cur == v or cur.startswith(v + "/") for v in VOLATILE):
         return None
     return cur
 
@@ -247,6 +250,58 @@ def libc(root: str, machine: str) -> str:
         if os.path.lexists(os.path.join(root, v.lstrip("/"))):
             return v
     return "/lib/libc.so.6"
+
+
+def musl(root: str, machine: str) -> bool:
+    """Whether the tree's libc is musl, whose loader stands where a libc.so.6 would."""
+    return not libc(root, machine).endswith("libc.so.6")
+
+
+@dataclasses.dataclass(frozen=True)
+class Spellings:
+    """The tree's own names for what the tests' programs and workloads use (7.1).
+
+    Read once from an exclave's tree and passed through the environment to every world a program
+    runs in: the suite's exclave, the namespace oracle's two, an exercise's.
+    """
+
+    gcc: str  # the C compiler
+    sh: str  # the shell's virtual path
+    sh_exe: str  # the file behind the shell, which /proc/self/exe reads for a script
+    sh_link: str  # the text of the shell's link, or "" when it is no link
+    true: str  # true's virtual path
+    true_payload: str  # the original behind true's wrapper, a virtual path
+    libc: str  # libc.so.6 as the loader names it, or musl's loader, its libc
+
+    @classmethod
+    def of(cls, root: str) -> Spellings:
+        """Read the spellings from the tree at root."""
+        machine = platform.machine()
+        sh, true = vbin(root, "sh"), vbin(root, "true")
+        real_sh = os.path.join(root, sh.lstrip("/"))
+        return cls(
+            gcc=compiler(root, machine) or f"{machine}-linux-gnu-gcc-13",
+            sh=sh,
+            sh_exe=resolve(root, sh),
+            sh_link=os.readlink(real_sh) if os.path.islink(real_sh) else "",
+            true=true,
+            true_payload="/" + os.path.relpath(payload(root, resolve(root, true)), root),
+            libc=libc(root, machine),
+        )
+
+    def env(self) -> dict[str, str]:
+        """Return the environment that names them to a test program."""
+        return {
+            "EXCLAVE_TEST_SH": self.sh,
+            "EXCLAVE_TEST_SH_EXE": self.sh_exe,
+            "EXCLAVE_TEST_SH_LINK": self.sh_link,
+            "EXCLAVE_TEST_TRUE": self.true,
+            "EXCLAVE_TEST_TRUE_PAYLOAD": self.true_payload,
+        }
+
+    def workload_env(self) -> dict[str, str]:
+        """Return the environment of a shell workload: the names its commands spell, and env's."""
+        return {"CC": self.gcc, "SH": self.sh, "SHX": self.sh_exe, "LIBC": self.libc, **self.env()}
 
 
 def glibc_version(root: str, machine: str) -> tuple[int, int] | None:

@@ -3,8 +3,8 @@
     test/tables_test.py
 
 The host identity files (8.4) are listed in src/vis.c, tool/layout.go and test/tree.py; the
-volatile directories (8.1) in src/vis.c, tool/paths.go, unpack/steps.go, test/suite.py and
-test/unpack_test.py; the identity directories (8.1 rule 5) in src/vis.c,
+volatile directories (8.1) in src/vis.c, tool/paths.go, unpack/steps.go and test/tree.py, the
+one copy the tests share; the identity directories (8.1 rule 5) in src/vis.c,
 tool/paths.go and test/tree.py; and the syscalls
 src/filter.c traps are exactly the ones `dispatch` in src/handler.c has a case for, since a trapped
 call without one is answered ENOSYS (7.4.3), and the ones `sysname` there names for the log, but
@@ -13,7 +13,6 @@ one place fails the gate's unit step. Prints one line per table; the exit status
 that differ.
 """
 
-import ast
 import os
 import re
 import sys
@@ -54,17 +53,6 @@ def c_syscalls(path: str, name: str) -> set[str]:
     return set(re.findall(r"NR_(\w+)", c_block(path, name)))
 
 
-def py_tuple(path: str, name: str) -> tuple[str, ...]:
-    """The tuple assigned to `name` at the top level of the Python file, without importing it."""
-    for node in ast.parse(read(path), path).body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == name for t in node.targets
-        ):
-            return tuple(ast.literal_eval(node.value))
-    msg = f"{path} has no {name}"
-    raise ValueError(msg)
-
-
 def handler_cases(function: str) -> set[str]:
     """The syscalls a switch on the number in src/handler.c has cases for, up to its default."""
     src = read("src/handler.c")
@@ -102,8 +90,7 @@ def main() -> int:
             "src/vis.c": c_strings("src/vis.c", "volatile_dirs"),
             "tool/paths.go": go_strings("tool/paths.go", "volatileDirs"),
             "unpack/steps.go": go_strings("unpack/steps.go", "volatile"),
-            "test/suite.py": py_tuple("test/suite.py", "VOLATILE"),
-            "test/unpack_test.py": py_tuple("test/unpack_test.py", "VOLATILE"),
+            "test/tree.py": tree.VOLATILE,
         },
     )
     same(
