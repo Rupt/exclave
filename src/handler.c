@@ -1393,7 +1393,7 @@ static long do_stat(struct scratch *S, int nr, long *a)
         if (r == 0) dir_upstream(S, 1, a[4], RE_DFD(S), RE_PATH(S), is_exclave_path(S->v));
         return r;
     }
-    default: __builtin_trap(); /* dispatch sends only the syscalls above */
+    default: die_invariant("dispatch sent a handler another's syscall, number", nr);
     }
 }
 
@@ -1740,7 +1740,7 @@ static long do_xattr(struct scratch *S, int nr, long *a)
         if ((r = resolve(S, a, 0, -1, nr == NR_getxattr || nr == NR_listxattr, 0)) < 0) return r;
         to_real(S->v, S->real, S->tmp);
         return RE5(nr, S->real, a[1], a[2], a[3], 0);
-    default: __builtin_trap(); /* dispatch sends only the syscalls above */
+    default: die_invariant("dispatch sent a handler another's syscall, number", nr);
     }
 }
 
@@ -1774,7 +1774,7 @@ static long do_watch(struct scratch *S, int nr, long *a)
         to_real(S->v, S->real, S->tmp);
         return RE5(nr, a[0], a[1] | re_flag(S, FAN_MARK_DONT_FOLLOW), a[2], RE_DFD(S), RE_PATH(S));
     }
-    default: __builtin_trap(); /* dispatch sends only the syscalls above */
+    default: die_invariant("dispatch sent a handler another's syscall, number", nr);
     }
 }
 
@@ -2211,7 +2211,7 @@ static long judge(int nr, const long *a)
     long r = __sc6_judge(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
     /* the launcher's filter answers every call from the slot that it traps; a foreign outer filter's TRAP, which no
      * launcher filter answers, would end here, or in the nesting limit should the call trap again: loud either way */
-    if (r > 0) die("the judge call ran", 0, nr);
+    if (r > 0) die_invariant("the judge call ran for syscall", nr);
     return r;
 #else
     (void)nr;
@@ -2311,7 +2311,8 @@ void exclave_on_sigsys(int sig, void *info, void *uc, struct trap *rec)
     pid_t pid = (pid_t)sys_getpid(), tid = (pid_t)sys_gettid();
     unsigned long frame = (unsigned long)__builtin_frame_address(0);
     int depth = nest_enter(pid, tid, frame);
-    if (depth > 1 && ip >= C.text_lo && ip < C.text_hi) die("the launcher trapped its own syscall", 0, nr);
+    if (depth > 1 && ip >= C.text_lo && ip < C.text_hi)
+        die_invariant("the launcher trapped its own syscall, number", nr);
     if (depth > 64) die("signal handlers nested too deep (or left behind by longjmp on another stack)", 0, 0);
     long a[6] = {g[REG_ARG0], g[REG_ARG1], g[REG_ARG2], g[REG_ARG3], g[REG_ARG4], g[REG_ARG5]};
     struct scratch *S = scratch_get(pid, tid, frame);

@@ -444,7 +444,7 @@ long filter_wrap(const struct sock_filter *body, long n, struct sock_filter *out
     out[o++] = ins(RET_K, 0, 0, SECCOMP_RET_ALLOW);
     out[o++] = ins(RET_K, 0, 0, SECCOMP_RET_ERRNO | MARK_PRESENT);
     out[o++] = ins(AND_K, 0, 0, 0); /* A cleared by an instruction the action cache models (seccomp_is_const_allow) */
-    if (o != PROLOGUE) die("the prologue's length", 0, o);
+    if (o != PROLOGUE) die_invariant("a wrapped filter's prologue has length", o);
     for (long i = 0; i < n; i++, o++) {
         out[o] = body[i];
         if (body[i].code != RET_K || (body[i].k & SECCOMP_RET_ACTION_FULL) == SECCOMP_RET_ALLOW) continue;
@@ -458,7 +458,7 @@ long filter_wrap(const struct sock_filter *body, long n, struct sock_filter *out
         }
         out[o] = ins(JA, 0, 0, (uint32_t)(s - o - 1));
     }
-    if (stub != epi) die("the stubs' count", 0, stub);
+    if (stub != epi) die_invariant("a wrapped filter's stubs end at", stub);
     o = epi;
     out[o++] = ins(LD_ABS, 0, 0, OFF_IP + 4);
     out[o++] = ins(JEQ_K, 0, 6, (uint32_t)(SC_PAGE >> 32));
@@ -470,7 +470,7 @@ long filter_wrap(const struct sock_filter *body, long n, struct sock_filter *out
     out[o++] = ins(RET_K, 0, 0, SECCOMP_RET_ALLOW);
     out[o++] = ins(TXA, 0, 0, 0);
     out[o++] = ins(RET_A, 0, 0, 0);
-    if (o != total) die("the epilogue's length", 0, o);
+    if (o != total) die_invariant("a wrapped filter's epilogue ends at", o);
     return total;
 }
 #endif

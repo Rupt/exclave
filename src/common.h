@@ -324,6 +324,10 @@ __attribute__((noreturn)) void die(const char *what, const char *detail, long er
 __attribute__((noreturn)) void die_signal(int sig, const char *what, const char *detail, long err);
 /* 126 where a shell says so: found but not executable */
 __attribute__((noreturn)) void die_status(int status, const char *what, const char *detail, long err);
+/* An invariant of the launcher's own broken, as opposed to an input it refuses: what, then the number that shows it, a
+ * syscall's or a count, where die would print an errno's text. The process ends through the page, as for any die: a
+ * trap instruction in its place could be caught by a handler of the program's for SIGILL or SIGTRAP, and loop. */
+__attribute__((noreturn)) void die_invariant(const char *what, long n);
 
 /* ---------- manifest (manifest.c) ---------- */
 int manifest_parse(const char *buf, size_t len, struct exclave *c, char *err, size_t errn);

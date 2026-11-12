@@ -194,3 +194,15 @@ void die_signal(int sig, const char *what, const char *detail, long err)
     sys_exit(128 + sig); /* a disposition the signal could not reach */
 }
 void die(const char *what, const char *detail, long err) { die_status(127, what, detail, err); }
+void die_invariant(const char *what, long n)
+{
+    char num[24];
+    ltoa_(n, num);
+    outs(2, "launcher: an invariant of its own is broken: ");
+    outs(2, what);
+    outs(2, " ");
+    outs(2, num);
+    outs(2, "\n");
+    log_msg("fatal", what);
+    sys_exit(127);
+}

@@ -17,6 +17,11 @@ void die(const char *what, const char *detail, long err)
     fprintf(stderr, "die: %s %s %ld\n", what, detail ? detail : "", err);
     exit(99);
 }
+void die_invariant(const char *what, long n)
+{
+    fprintf(stderr, "die_invariant: %s %ld\n", what, n);
+    exit(99);
+}
 const void *filter_for_test(int *n);
 const int *filter_list_for_test(int which, int *n);
 

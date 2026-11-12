@@ -3,6 +3,7 @@
  * launcher's die is its refusal, one line and the end of the process, so here it ends the case: the arena the
  * manifest's strings go to is bounded, and a manifest that fills it is refused, not a finding. */
 #include <setjmp.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "../src/common.h"
@@ -17,6 +18,13 @@ void die(const char *what, const char *detail, long err)
     (void)detail;
     (void)err;
     longjmp(refused, 1);
+}
+
+/* a refusal is an answer to an input; an invariant of the launcher's own broken is a finding */
+void die_invariant(const char *what, long n)
+{
+    fprintf(stderr, "die_invariant: %s %ld\n", what, n);
+    abort();
 }
 
 void arena_reset(void);
