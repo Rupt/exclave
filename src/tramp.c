@@ -420,6 +420,8 @@ __asm__(".section exclave_tramp,\"ax\",@progbits\n"
         "exclave_hcall: .quad 0x7fe00030\n"
         ".text\n");
 _Static_assert(TRAMP_PRESENTED == 1040 && TRAMP_BLOCK == 112, "the assembly's offsets");
+_Static_assert(TRAMP_SLOTS == 256 && TRAMP_STUB == 16, "the assembly's stubs, their count and a stub's bytes");
+_Static_assert((TRAMP_SLOTS * TRAMP_STUB) == 4096, "the assembly's test of a counter among the stubs");
 _Static_assert(SC_HCALL == 0x7fe00030, "the assembly's handler-call slot");
 #elif defined(__aarch64__)
 __asm__(".section exclave_tramp,\"ax\",%progbits\n"
@@ -546,5 +548,7 @@ __asm__(".section exclave_tramp,\"ax\",%progbits\n"
         "  ret\n" /* through the kernel's frame, into the program's restorer */
         ".text\n");
 _Static_assert(TRAMP_PRESENTED == 4688 && TRAMP_BLOCK == 112, "the assembly's offsets");
+_Static_assert(TRAMP_SLOTS == 256 && TRAMP_STUB == 8, "the assembly's stubs, their count and a stub's bytes");
+_Static_assert((TRAMP_SLOTS * TRAMP_STUB) == 2048, "the assembly's test of a counter among the stubs");
 _Static_assert(SC_HCALL == 0x7fe00030, "the assembly's handler-call slot");
 #endif

@@ -2255,6 +2255,7 @@ __asm__(".text\n"
         "exclave_sigsys_ret:\n"
         "  ret\n"
         ".size exclave_sigsys_entry, . - exclave_sigsys_entry\n");
+_Static_assert(UC_GREGS_OFF + 8 * REG_RESULT == 144, "the stub's offset of the result's register in the frame");
 #elif defined(__aarch64__)
 __asm__(".text\n"
         ".globl exclave_sigsys_entry, exclave_sigsys_set, exclave_sigsys_tail\n"
@@ -2290,7 +2291,11 @@ __asm__(".text\n"
         "exclave_sigsys_ret:\n"
         "  ret\n"
         ".size exclave_sigsys_entry, . - exclave_sigsys_entry\n");
+_Static_assert(UC_GREGS_OFF + 8 * REG_RESULT == 184, "the stub's offset of the result's register in the frame");
 #endif
+/* what the stubs write of the record before the handler runs, and the room they take for it */
+_Static_assert((unsigned long)ANSWER_NONE == 0x8000000000000000UL, "the stubs' ANSWER_NONE");
+_Static_assert(sizeof(struct trap) == 32, "the stubs' record: four words on the stack");
 
 void exclave_on_sigsys(int sig, void *info, void *uc, struct trap *rec)
 {
