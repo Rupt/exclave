@@ -268,10 +268,11 @@ def main() -> int:
         f"{args.cases:d} byte strings: format idempotent, decode(encode(b)) == b: {bad:d} problems"
     )
     if not c_parser:
-        print(f"no C parser at {args.c_parser}: the two-parser comparison did not run")
-        return 1 if bad else 0
+        # the comparison is the test: without the launcher's parser it has not run, which is no pass
+        print(f"FAIL no C parser at {args.c_parser}: scripts/gate's unit step builds it")
+        return 1
     div = compare(rng, args.cases // 3, c_parser)
-    print(f"{args.cases // 3:d} near-manifests through both C parsers: {div:d} divergences")
+    print(f"{args.cases // 3:d} near-manifests through both parsers: {div:d} divergences")
     bad += positions(c_parser)
     print(f"{len(POSITIONS):d} errors at known places: both parsers name the line and column")
     return 1 if bad or div else 0
