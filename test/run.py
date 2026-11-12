@@ -16,6 +16,16 @@ test. The exit status is the number of failures, at most 255.
 The tests are in eight files, one per group of DESIGN.md 17 item 4, test/regress_*.py; the
 fixtures are made in test/suite.py, and test/harness.py runs them.
 
+What a file of test/ is shows in its name. regress_*.py is a group of this suite. oracle_*.py
+compares two worlds, the kernel's and the launcher's. *_test.py is a driver of its own that passes
+or fails, as docker_profile.py, stackcheck.py and syscalls.py are, and *_test.c a unit test of the
+launcher's C; the gate's steps run them (test/affected.py). A bare name is a module the drivers
+share (harness, suite, tree, kernel, machines, kernel_answers, packages, b3), a check or a tool
+(affected, figures, c_unused, bytecode, fuzz), or a run made when asked (matrix, vm_run, exercise,
+bench, profile_spawn, workloads, realsoft, sysroot). progs/ holds the C programs the tests compile
+with the tree's compiler; one that prints a line per case is registered once, with its judge, in
+kernel_answers.EXERCISERS.
+
 Tests are independent. Every test makes what it needs: the fixtures made at setup are the exclave,
 the compiled programs and the environment, never another test's output, so any one runs alone.
 """
