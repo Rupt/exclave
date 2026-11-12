@@ -86,7 +86,7 @@ jobs:
           name: gate-${{ matrix.runner }}
           path: |
             build/gate/*.log
-            ~/inputs/log/*.log
+            build/inputs/log/*.log
           if-no-files-found: ignore
   matrix:
     name: kernel matrix, the x86-64 rows
@@ -149,5 +149,5 @@ jobs:
           path: |
             build/matrix-results.md
             /mnt/matrix/work/*.log
-            ~/inputs/log/*.log
+            build/inputs/log/*.log
           if-no-files-found: ignore
