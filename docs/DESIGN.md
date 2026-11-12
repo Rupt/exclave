@@ -2148,7 +2148,14 @@ record is gone, and at the launcher's restorer, returning through the
 trap's frame, it is found from the interrupted stack pointer, and the
 call is made, its answer in the frame: on x86-64 the `ucontext` lies 8
 bytes above the stack pointer before the stub's last `ret` and at it
-after, at the restorer; on aarch64 128 bytes above it at each.
+after, at the restorer; on aarch64 128 bytes above it at each. The
+page's `ret` to which a redirect in the entry stub sends the thread
+(below) is such a place too, the frame as the redirecting handler left
+it, and a signal pending at that handler's return lands exactly there,
+the register still the program's. A call of the launcher's own returns
+through the same instruction, so the trampoline tells the two by where
+the `ret` returns: to the launcher's restorer, the word at the stack
+pointer on x86-64 and `x30` on aarch64, only on the way out.
 
 **The re-issue slot.** The call the handler makes on the program's
 behalf, the re-issued syscall in whatever form, the exec, goes through
@@ -6280,7 +6287,8 @@ together.
      signal that lands in a blocking trapped open with and without
      `SA_RESTART`, outside any trap and in a rain on stats of a long
      path, a handler that redirects a blocked call, one that redirects
-     at a listing's call, which is then not made, one that changes
+     at a listing's call, which is then not made, a second signal
+     landing as it returns, one that changes
      its mask in the frame, one that `siglongjmp`s out and one that
      unwinds, installs from a `vfork` child and from two threads at
      once, an install's old action as written and a query's the

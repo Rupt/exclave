@@ -170,10 +170,17 @@ TRAMP static int resolve(struct tramp_block *b, long *answer)
         b->resume = (char *)g2[R_ARG2];
         return seccomp_frame(b->resume) ? NOT_MADE : AS_IS;
     }
-    if (pc == (unsigned long)exclave_sigsys_ret || pc - SC_RESTORER < 16) {
+    /* the page's return about to return into the restorer: the way out of a trap that a handler landing in the entry
+     * stub ended, the reserved register still the program's; a call of the launcher's own returns into its text */
+#if defined(__x86_64__)
+    int ended = pc == SC_PAGE + INSN && *(const unsigned long *)g2[R_SP] == SC_RESTORER;
+#else
+    int ended = pc == SC_PAGE + INSN && g2[30] == SC_RESTORER;
+#endif
+    if (pc == (unsigned long)exclave_sigsys_ret || ended || pc - SC_RESTORER < 16) {
         b->kind = KIND_DONE;
 #if defined(__x86_64__)
-        b->resume = (char *)g2[R_SP] + (pc == (unsigned long)exclave_sigsys_ret ? 8 : 0);
+        b->resume = (char *)g2[R_SP] + (pc - SC_RESTORER < 16 ? 0 : 8);
 #else
         b->resume = (char *)g2[R_SP] + 128;
 #endif
@@ -289,10 +296,10 @@ TRAMP static void exclave_tramp_after(struct tramp_block *b)
     if (b->kind == KIND_ENTRY) {
         /* no record yet: the trap ends at once, through a return in the page to the launcher's restorer */
 #if defined(__x86_64__)
-        g2[R_PC] = SC_PAGE + 2;
+        g2[R_PC] = SC_PAGE + INSN;
         g2[R_SP] = (unsigned long)b->resume - 8;
 #else
-        g2[R_PC] = SC_PAGE + 4;
+        g2[R_PC] = SC_PAGE + INSN;
         g2[R_SP] = (unsigned long)b->resume - 128;
         g2[30] = SC_RESTORER;
 #endif

@@ -112,7 +112,8 @@ def signal_frames(ctx: Ctx) -> None:
     the action an install replaces as the program wrote it, and a handler called by another
     through the stub a query returned, which runs with the arguments given; handlers that move the
     counter, block a signal or every signal in their frame, or siglongjmp out, and one that moves
-    the counter when it finds it at a listing's call, which is then not made; installs from two
+    the counter when it finds it at a listing's call, which is then not made, with a second signal
+    that lands as it returns, on the launcher's way out of the trap; installs from two
     threads at once and from a vfork child, SA_RESETHAND, a bad oldact and an ignored signal
     across execve. The kernel's answers (test/kernel_answers.py), confirmed under bwrap by the
     namespace oracle.

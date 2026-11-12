@@ -5,7 +5,8 @@
  * spins in a loop of its own, outside any trap; and as a rain on a loop of stats of a long path, so that signals land
  * while the call's path is walked. Then what a query of an action reports of the mask and flags it was given, and
  * what a handler that decides leaves behind: one that moves the counter, edits the mask or jumps out during a blocking
- * open, and one that moves the counter when it finds it at a listing's call, which is then never made.
+ * open, and one that moves the counter when it finds it at a listing's call, which is then never made, a second
+ * signal landing as it returns.
  * usage: sigframe HOSTDIR. Prints one line per case, "<case>: <answer>", each field a relation to what the program
  * set, the same in every world where the kernel is the oracle. Exit 0 always. */
 #define _GNU_SOURCE
@@ -326,7 +327,9 @@ static void on_jump(int sig, siginfo_t *si, void *ucv)
     siglongjmp(back, 1);
 }
 /* a rain on listings of a directory, whose handler moves the counter away whenever it finds it at the call's
- * instruction: a call the program was moved away from is never made, so the directory is read from where it was */
+ * instruction: a call the program was moved away from is never made, so the directory is read from where it was.
+ * Before it moves the counter the handler sends its thread the signal again, which waits while the handler runs and
+ * lands as it returns, where the move takes effect: under the launcher, on its way out of the trap */
 static int list_fd;
 static volatile int list_armed, list_raining;
 static volatile long list_moved, list_late;
@@ -340,6 +343,7 @@ static void on_list(int sig, siginfo_t *si, void *ucv)
     ucontext_t *uc = ucv;
     if (!list_armed || frame_of(ucv).pc != (unsigned long)sf_insn) return;
     list_armed = 0;
+    syscall(SYS_tgkill, getpid(), list_tid, SIGUSR2);
 #if defined(__x86_64__)
     uc->uc_mcontext.gregs[REG_RSP] = (uc->uc_mcontext.gregs[REG_RSP] & ~15L) - 8;
     uc->uc_mcontext.gregs[REG_RIP] = (long)list_landing;
