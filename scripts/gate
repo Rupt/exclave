@@ -99,8 +99,9 @@ has() {
     case " $steps " in *" $1 "*) return 0 ;; esac
     return 1
 } # has STEP: whether the change reaches it
+# --full: every step by name, as test/affected.py lists them for a change that names no path
+if $full; then steps="$(py "$here/affected.py" | tr '\n' ' ')$steps" || exit 2; fi
 if $full || has every; then
-    steps="unit stack go unpack fetch suite oracles nss caches gdb compat $steps"
     # the resolution oracle's mazes from a seed of the moment rather than the commit's, printed on a failure
     $full && seed=$(($(date +%s) % 100000))
     echo "gate: every step ($what${changed:+: $(echo "$changed" | wc -l) paths})"
