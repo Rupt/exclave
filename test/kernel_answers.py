@@ -5,6 +5,13 @@ them of the kernel itself, on a read-only bind of the same tree (test/oracle_ns.
 expectation written by hand is checked against the kernel at every run (DESIGN.md 17 items 1
 and 4). What a kernel is and has, for an answer an older one gives otherwise, is test/kernel.py's
 to say.
+
+A table written now is a tuple of (case, answer) lines with its judge, NAME_wrong, which calls
+lines_wrong: the answers are the newest kernel's, since the handler answers as that kernel does;
+what a stated rule makes the launcher answer otherwise is in a NAME_LAUNCHER dict beside it; and an
+answer an older kernel gives otherwise is dropped or replaced in the judge, by kernel.has where the
+difference is a call or a feature the kernel can be asked for, by kernel.version where it is a
+change of behaviour. The earlier tables keep the shapes they were written in.
 """
 
 import errno
@@ -995,7 +1002,6 @@ def slash_links_wrong(out: str) -> list[str]:
 
 # magic_links pathless: the descriptors it checks, and the syscalls it makes that a kernel may lack
 MAGIC_LINKS_FDS = ("stdin", "pipe", "memfd", "inotify", "unlinked")
-SYS_FACCESSAT2 = 439
 AT_FDCWD = -100
 AT_EMPTY_PATH = 0x1000
 
@@ -1059,7 +1065,7 @@ def magic_links_missing(hostdir: str) -> set[str]:
     buf = ctypes.create_string_buffer(256)
     for call, args in (
         ("statx", (machines.nr("statx"), AT_FDCWD, b"/proc/self/fd/0", 0, 0x100, buf)),
-        ("faccessat2", (SYS_FACCESSAT2, AT_FDCWD, b"/proc/self/fd/0", os.F_OK, 0)),
+        ("faccessat2", (machines.nr("faccessat2"), AT_FDCWD, b"/proc/self/fd/0", os.F_OK, 0)),
     ):
         if libc.syscall(*args) < 0 and ctypes.get_errno() == errno.ENOSYS:
             lines |= {f"{fd} {call} errno {errno.ENOSYS}" for fd in MAGIC_LINKS_FDS}
