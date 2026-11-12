@@ -6987,7 +6987,10 @@ alone, from the package archives and GitHub (cached between runs,
 keyed on the inputs script and the fetchers), `scripts/gate --full`
 and `scripts/matrix`, adding only what a runner lacks and the
 reference machine has: packages, the KVM device opened to the runner,
-and the AppArmor sysctl. Every download, uv's and Go's, a package
+the AppArmor sysctl, and one compile by the runner's `rustc` before
+the gate, where no budget runs, since the Rust test's compile on a
+runner has outlasted the test's budget while its `rustc --version`
+answered at once. Every download, uv's and Go's, a package
 file's, a source's or an image's, tries a failed or stalled connection
 again over about a minute (`fetch/net.go`; curl's own retries in the
 scripts), since a runner has been refused

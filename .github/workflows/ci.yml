@@ -8,7 +8,8 @@
 # compatibility step holds the build to that release (SKIP before the first release and on aarch64, which has
 # none), and scripts/matrix. What
 # it adds is what the runner lacks and the reference machine has: packages, the KVM device
-# opened to the runner, and the AppArmor sysctl that denies user namespaces on Ubuntu 24.04.
+# opened to the runner, the AppArmor sysctl that denies user namespaces on Ubuntu 24.04, and a
+# first compile by the runner's rustc, made before the gate, where no test's budget runs.
 #
 # The gate runs on x86-64 and, natively, on aarch64, whose runner's kernel is the one the
 # emulated noble-arm64 row boots, so that row has no job here. The matrix's x86-64 rows run
@@ -48,6 +49,14 @@ jobs:
         run: sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: the pinned uv and Go and the development inputs, through their caches
         uses: ./.github/actions/setup
+      # the Rust test's compile on a runner has outlasted the test's budget while its rustc
+      # --version answered at once; a compile here leaves the toolchain read, its time in the log
+      - name: the runner's rustc, compiling once before a test's budget runs
+        run: |
+          rustc=$(command -v rustc || echo "$HOME/.cargo/bin/rustc")
+          [ -x "$rustc" ] || exit 0
+          mkdir -p build/tmp
+          time RUSTUP_AUTO_INSTALL=0 "$rustc" -O -o build/tmp/rs test/progs/rs.rs || true
       - name: the gate
         run: |
           case $(uname -m) in
