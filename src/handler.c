@@ -335,9 +335,9 @@ static long open_flags_check(long *flags, int nr)
     *flags = f;
     return 0;
 }
-/* open, creat, openat and openat2 of args[pi] relative to args[di], with the syscall's flags and mode: the read-only
+/* openat and openat2, and open and creat as openat, with the call's flags and mode: the read-only
  * answers, then the re-issue on the real path. Returns the descriptor or -errno. */
-static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long mode, int nr)
+static long do_open(struct scratch *S, int nr, long *a, long flags, long mode)
 {
     long r = open_flags_check(&flags, nr);
     if (r < 0) return r;
@@ -347,7 +347,7 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     int creat = (flags & O_CREAT) && !(flags & O_PATH);
     int follow = (flags & O_NOFOLLOW) || (creat && (flags & O_EXCL)) ? 0 : WALK_FOLLOW;
     if (creat) follow |= WALK_PARENT;
-    r = resolve(S, a, pi, di, follow, 0);
+    r = resolve(S, a, 1, 0, follow, 0);
     /* a walk that never touched the exclave is the kernel's own to make, with every
      * resolve flag, on the host's own mounts (13 item 22); RESOLVE_CACHED dropped */
     if (nr == NR_openat2 && r <= 0 && r != -EFAULT && r != -ENAMETOOLONG && !S->touched_exclave) {
@@ -427,6 +427,8 @@ static long do_open(struct scratch *S, long *a, int pi, int di, long flags, long
     return RE5(NR_openat, RE_DFD(S), RE_PATH(S), flags, mode, 0);
 }
 
+static long do_openat(struct scratch *S, long *a) { return do_open(S, NR_openat, a, a[2], a[3]); }
+
 /* openat2 (7.4.3): the kernel's checks on struct open_how first, in its order (build_open_flags), then the
  * same open as openat with the resolve flags honoured by the walk (canon.c) and dropped from the re-issue;
  * RESOLVE_CACHED refuses what no cached lookup can do, and is otherwise dropped, which openat2(2) permits,
@@ -492,7 +494,7 @@ static long do_openat2(struct scratch *S, long *a)
     }
     S->resolve = (unsigned)rf;
     S->touched_exclave = 1;
-    r = do_open(S, a, 1, 0, (long)flags, (long)mode, NR_openat2);
+    r = do_open(S, NR_openat2, a, (long)flags, (long)mode);
     S->resolve = 0;
     return r;
 }
@@ -793,22 +795,24 @@ static long exec_descriptor(struct scratch *S, int fd, char **argv, char **envp)
     return r;
 }
 
-static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, char **argv, char **envp)
+/* execveat, and execve as it */
+static long do_execve(struct scratch *S, long *a)
 {
-    long r;
+    long r, flags = a[4];
+    char **argv = (char **)a[2], **envp = (char **)a[3];
     /* execveat: a flag the kernel does not know is EINVAL before the name is read (oracle 17.7) */
     if (flags & ~(long)(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH | AT_EXECVE_CHECK)) return -EINVAL;
-    r = resolve(S, a, pi, di, !(flags & AT_SYMLINK_NOFOLLOW), (flags & AT_EMPTY_PATH) != 0);
+    r = resolve(S, a, 1, 0, !(flags & AT_SYMLINK_NOFOLLOW), (flags & AT_EMPTY_PATH) != 0);
     if (r < 0) return r;
     /* AT_EXECVE_CHECK (6.14) asks whether the file could be run and runs nothing: the kernel's own answer for the file
      * the walk found, re-issued with the flags as given, a wrapper answering as the launcher it is; a kernel before
      * 6.14 answers EINVAL for the flag (7.4.5) */
     if (flags & AT_EXECVE_CHECK) {
-        if (r == 1) return RE5(NR_execveat, a[di], empty_as_given(a[pi]), (long)argv, (long)envp, flags);
+        if (r == 1) return RE5(NR_execveat, a[0], empty_as_given(a[1]), (long)argv, (long)envp, flags);
         to_real(S->v, S->real, S->tmp);
         return RE5(NR_execveat, RE_DFD(S), RE_PATH(S), (long)argv, (long)envp, flags | re_flag(S, AT_SYMLINK_NOFOLLOW));
     }
-    int dfd = di < 0 ? AT_FDCWD : (int)a[di], byfd = r == 1, cloexec = 0;
+    int dfd = (int)a[0], byfd = r == 1, cloexec = 0;
     /* the name the program is exec'd by, spelt as the kernel spells it (fs/exec.c, alloc_bprm): the path as given, or
      * through a descriptor /dev/fd/N and /dev/fd/N/rel; a script's $0, AT_EXECFN and comm come from it (7.6) */
     if (dfd != AT_FDCWD && (byfd || S->given[0] != '/')) {
@@ -858,19 +862,21 @@ static long do_execve(struct scratch *S, long *a, int pi, int di, long flags, ch
 
 /* ---------- readlink: /proc links and identity files answer in virtual terms (8.4); any other link's text is
  * returned as stored, as the kernel returns it ---------- */
-static long do_readlink(struct scratch *S, long *a, int pi, int di, char *buf, long bufsiz)
+static long do_readlink(struct scratch *S, long *a)
 {
+    char *buf = (char *)a[2];
+    long bufsiz = (int)a[3]; /* an int: the kernel truncates, so must the copy's bound */
     if (bufsiz <= 0) return -EINVAL; /* do_readlinkat: before the path is read at all */
-    long r = resolve(S, a, pi, di, 0, di >= 0);
+    long r = resolve(S, a, 1, 0, 0, 1);
     if (r < 0) return r;
     const char *ans = 0;
-    /* readlinkat(fd, ""): the kernel reads the descriptor's own link */
+    /* readlinkat(fd, ""): the kernel reads the descriptor's own link, and answers ENOENT for the working directory */
     if (r == 1) {
-        r = RE5(NR_readlinkat, a[di], "", S->tmp, PATH_MAX - 1, 0);
+        r = RE5(NR_readlinkat, a[0], "", S->tmp, PATH_MAX - 1, 0);
         if (r < 0) return r;
         S->tmp[r] = 0;
         /* a descriptor on a /proc link reports a real path */
-        if (fd_real_path((int)a[di], S->real2) >= 0 && xstrncmp(S->real2, "/proc/", 6) == 0 && from_real(S->tmp) < 0)
+        if (fd_real_path((int)a[0], S->real2) >= 0 && xstrncmp(S->real2, "/proc/", 6) == 0 && from_real(S->tmp) < 0)
             return -ENAMETOOLONG;
         ans = S->tmp;
     }
@@ -1072,7 +1078,7 @@ static long do_pselect6(struct scratch *S, long *a)
     return RE6(NR_pselect6, a[0], a[1], a[2], a[3], a[4], &sp);
 }
 /* epoll_pwait and epoll_pwait2: mask in a[4], size in a[5] */
-static long do_epoll_pwait(struct scratch *S, long *a, int nr)
+static long do_epoll_pwait(struct scratch *S, int nr, long *a)
 {
     unsigned long m;
     long r = nr == NR_epoll_pwait2 ? check_timeout(S, (const void *)a[3], 1) : 0;
@@ -1132,7 +1138,7 @@ static long fd_exclave(struct scratch *S, int fd)
  * abstract name, an unnamed address or another family is re-issued as given; a bad length is the kernel's EINVAL. */
 #ifndef EXCLAVE_TEST_OLD /* build/launcher-old does not trap bind or connect */
 #define AF_UNIX 1
-static long do_sockaddr(struct scratch *S, long *a, int nr)
+static long do_sockaddr(struct scratch *S, int nr, long *a)
 {
     /* addrlen is an int: the kernel truncates, and a length past the word must not
      * turn an exclave path into one re-issued as written */
@@ -1289,13 +1295,6 @@ static long do_stat(struct scratch *S, int nr, long *a)
 {
     long r;
     switch (nr) {
-    case NR_stat:
-    case NR_lstat:
-        if ((r = resolve(S, a, 0, -1, nr == NR_stat, 0)) < 0) return r;
-        to_real(S->v, S->real, S->tmp);
-        r = RE5(NR_newfstatat, AT_FDCWD, S->real, a[1], nr == NR_stat ? 0 : nofollow(S, AT_SYMLINK_NOFOLLOW), 0);
-        if (r == 0) dir_upstream(S, 0, a[1], AT_FDCWD, S->real, is_exclave_path(S->v));
-        return r;
     case NR_newfstatat:
         /* vfs_fstatat: the flags before the name */
         if ((unsigned)a[3] & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_EMPTY_PATH | AT_STATX_SYNC_TYPE))
@@ -1331,17 +1330,16 @@ static long do_stat(struct scratch *S, int nr, long *a)
     }
 }
 
-/* access, faccessat and faccessat2: the kernel's answers, then a write the permission allows on the exclave's file is
- * EROFS */
+/* faccessat and faccessat2, and access as faccessat: the kernel's answers, then a write the permission
+ * allows on the exclave's file is EROFS */
 static long do_access(struct scratch *S, int nr, long *a)
 {
     long r;
-    int pi = nr == NR_access ? 0 : 1, di = nr == NR_access ? -1 : 0;
-    long mode = a[pi + 1], fl = nr == NR_faccessat2 ? a[3] : 0;
+    long mode = a[2], fl = nr == NR_faccessat2 ? a[3] : 0;
     /* do_faccessat: the mode, then the flags */
     if ((unsigned)mode & ~7U) return -EINVAL;
     if ((unsigned)fl & ~(unsigned)(AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) return -EINVAL;
-    if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
+    if ((r = resolve(S, a, 1, 0, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
     int empty = r == 1; /* AT_EMPTY_PATH: the descriptor's own file */
     if (empty) r = RE5(nr, a[0], "", mode, fl, 0);
     else {
@@ -1376,7 +1374,7 @@ static long do_getcwd(struct scratch *S, long *a)
 }
 
 /* truncate: the length, then vfs_truncate's answers for the exclave's file */
-static long do_truncate(struct scratch *S, int nr, long *a)
+static long do_truncate(struct scratch *S, long *a)
 {
     long r;
     if (a[1] < 0) return -EINVAL; /* do_sys_truncate: the length first */
@@ -1401,18 +1399,43 @@ static long do_truncate(struct scratch *S, int nr, long *a)
         return -EROFS;
     }
     to_real_exec(S->v, S->real);
-    return RE5(nr, S->real, a[1], 0, 0, 0);
+    return RE5(NR_truncate, S->real, a[1], 0, 0, 0);
 }
 
-/* rmdir, unlink and unlinkat */
-static long do_unlink(struct scratch *S, int nr, long *a)
+/* mkdirat, mknodat and symlinkat, and mkdir, mknod and symlink as them: the new name's parent, then the read-only
+ * rule */
+static long do_mkdir(struct scratch *S, long *a)
 {
     long r;
-    int pi = nr == NR_unlinkat ? 1 : 0, di = nr == NR_unlinkat ? 0 : -1;
-    long fl = nr == NR_rmdir ? AT_REMOVEDIR : nr == NR_unlinkat ? a[2] : 0;
+    if ((r = resolve(S, a, 1, 0, WALK_PARENT, 0)) < 0) return r;
+    if ((r = ro_create(S, S->v, 1))) return r;
+    return RE5(NR_mkdirat, RE_DFD(S), RE_PATH(S), a[2], 0, 0);
+}
+static long do_mknod(struct scratch *S, long *a)
+{
+    long r;
+    if ((r = may_mknod((unsigned short)a[2]))) return r;
+    if ((r = resolve(S, a, 1, 0, WALK_PARENT, 0)) < 0) return r;
+    if ((r = ro_create(S, S->v, 0))) return r;
+    return RE5(NR_mknodat, RE_DFD(S), RE_PATH(S), a[2], a[3], 0);
+}
+static long do_symlink(struct scratch *S, long *a)
+{
+    long r;
+    /* do_symlinkat: the target is read before the new name */
+    if ((r = copy_str_in(S->pid, S->extra, (const char *)a[0])) < 0) return r;
+    if (S->extra[0] == 0) return -ENOENT;
+    if ((r = resolve(S, a, 2, 1, WALK_PARENT, 0)) < 0) return r;
+    if ((r = ro_create(S, S->v, 0))) return r;
+    return RE5(NR_symlinkat, S->extra, RE_DFD(S), RE_PATH(S), 0, 0);
+}
+
+/* unlinkat, and rmdir and unlink as it */
+static long do_unlink(struct scratch *S, long *a)
+{
+    long r, fl = a[2];
     if ((unsigned)fl & ~(unsigned)AT_REMOVEDIR) return -EINVAL;
-    if ((r = resolve(S, a, pi, di, WALK_PARENT, 0)) < 0)
-        return r == -ENAMETOOLONG ? delete_overlong(S, di < 0 ? AT_FDCWD : (int)a[di]) : r;
+    if ((r = resolve(S, a, 1, 0, WALK_PARENT, 0)) < 0) return r == -ENAMETOOLONG ? delete_overlong(S, (int)a[0]) : r;
     int sp = last_special(S->given); /* do_rmdir, do_unlinkat: answered before any lookup */
     if (sp) return (fl & AT_REMOVEDIR) ? (sp == 1 ? -EINVAL : sp == 2 ? -ENOTEMPTY : -EBUSY) : -EISDIR;
     if ((r = ro_delete(S, S->v))) return r;
@@ -1443,17 +1466,15 @@ static long parent_kept(struct scratch *S, const char *given, int dfd, int sp, c
     return 0;
 }
 
-/* rename, renameat and renameat2, in do_renameat2's order */
+/* renameat and renameat2, and rename as renameat, in do_renameat2's order */
 static long do_rename(struct scratch *S, int nr, long *a)
 {
     long r;
-    int opi = nr == NR_rename ? 0 : 1, odi = nr == NR_rename ? -1 : 0, npi = nr == NR_rename ? 1 : 3,
-        ndi = nr == NR_rename ? -1 : 2;
     unsigned fl = nr == NR_renameat2 ? (unsigned)a[4] : 0;
     /* do_renameat2: the flags first */
     if (fl & ~(unsigned)(RENAME_NOREPLACE | RENAME_EXCHANGE | RENAME_WHITEOUT)) return -EINVAL;
     if ((fl & (RENAME_NOREPLACE | RENAME_WHITEOUT)) && (fl & RENAME_EXCHANGE)) return -EINVAL;
-    if ((r = resolve(S, a, opi, odi, WALK_PARENT, 0)) < 0) return r;
+    if ((r = resolve(S, a, 1, 0, WALK_PARENT, 0)) < 0) return r;
     int osp = last_special(S->given);
     scpy(S->v2, S->v, PATH_MAX); /* old */
     scpy(S->given2, S->given, PATH_MAX);
@@ -1461,7 +1482,7 @@ static long do_rename(struct scratch *S, int nr, long *a)
     /* a last component that is "." or "..": the parent is what the kernel compares, and what it is given back; the
      * root is the tree's */
     if ((osp == 1 || osp == 2) && (r = parent_kept(S, S->given2, odfd, osp, S->v2, S->real2)) < 0) return r;
-    if ((r = resolve(S, a, npi, ndi, WALK_PARENT, 0)) < 0) return r;
+    if ((r = resolve(S, a, 3, 2, WALK_PARENT, 0)) < 0) return r;
     int nsp = last_special(S->given);
     int new_given = as_given(S), ndfd = S->dfd;
     if ((nsp == 1 || nsp == 2) && (r = parent_kept(S, S->given, ndfd, nsp, S->v, S->real)) < 0) return r;
@@ -1486,19 +1507,16 @@ static long do_rename(struct scratch *S, int nr, long *a)
     return RE5(NR_renameat2, od, old, nd, new, fl);
 }
 
-/* link and linkat, in do_linkat's order */
-static long do_link(struct scratch *S, int nr, long *a)
+/* linkat, and link as it, in do_linkat's order */
+static long do_link(struct scratch *S, long *a)
 {
-    long r;
-    int opi = nr == NR_link ? 0 : 1, odi = nr == NR_link ? -1 : 0, npi = nr == NR_link ? 1 : 3,
-        ndi = nr == NR_link ? -1 : 2;
-    long fl = nr == NR_linkat ? a[4] : 0;
+    long r, fl = a[4];
     if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_FOLLOW | AT_EMPTY_PATH)) return -EINVAL; /* do_linkat: the flags first */
     struct kstat st;
     int pathless = 0;
-    if ((r = resolve(S, a, opi, odi, (fl & AT_SYMLINK_FOLLOW) != 0, (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
+    if ((r = resolve(S, a, 1, 0, (fl & AT_SYMLINK_FOLLOW) != 0, (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
     if (r == 1) {
-        r = dfd_virtual((int)a[odi], S->v);
+        r = dfd_virtual((int)a[0], S->v);
         /* a descriptor whose file has no path, a pipe, a socket, an anonymous inode, an unlinked file or directory,
          * names nothing the exclave owns: the old name is the descriptor's own, which the kernel links or refuses
          * through the descriptor as given (EPERM for a directory, EXDEV across mounts, or the link itself since 6.10
@@ -1515,7 +1533,7 @@ static long do_link(struct scratch *S, int nr, long *a)
     /* do_linkat: the old name is looked up before the new one is read at all: its own error, ENOTDIR for a slash on
      * a file */
     if (!pathless && !exists_exclave(S, S->v2, &st)) return absent_errno(S);
-    if ((r = resolve(S, a, npi, ndi, WALK_PARENT, 0)) < 0) return r;
+    if ((r = resolve(S, a, 3, 2, WALK_PARENT, 0)) < 0) return r;
     /* then the new name, in either domain (EEXIST, the name's own error), then the read-only rule for a
      * new name the exclave owns, then EXDEV for an old one it owns */
     scpy(S->cur, S->v, PATH_MAX);
@@ -1535,44 +1553,42 @@ static long do_link(struct scratch *S, int nr, long *a)
                (fl & ~AT_SYMLINK_FOLLOW & ~AT_EMPTY_PATH) | old_follow);
 }
 
-/* chmod, fchmodat and fchmodat2 */
+/* fchmodat and fchmodat2, and chmod as fchmodat */
 static long do_chmod(struct scratch *S, int nr, long *a)
 {
     long r;
-    int pi = nr == NR_chmod ? 0 : 1, di = nr == NR_chmod ? -1 : 0;
     long fl = nr == NR_fchmodat2 ? a[3] : 0;
     if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
         return -EINVAL; /* do_fchmodat: the flags first */
-    if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
+    if ((r = resolve(S, a, 1, 0, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
     /* AT_EMPTY_PATH: the descriptor's own file, read-only if it is the exclave's */
     if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], "", a[2], fl, 0);
     if ((r = ro_attr(S, S->v))) return r;
     to_real(S->v, S->real, S->tmp);
     if (nr == NR_fchmodat2) return RE5(nr, RE_DFD(S), RE_PATH(S), a[2], fl | re_flag(S, AT_SYMLINK_NOFOLLOW), 0);
-    return RE5(NR_fchmodat, RE_DFD(S), RE_PATH(S), a[pi + 1], 0, 0);
+    return RE5(NR_fchmodat, RE_DFD(S), RE_PATH(S), a[2], 0, 0);
 }
 
-/* chown, lchown and fchownat */
-static long do_chown(struct scratch *S, int nr, long *a)
+/* fchownat, and chown and lchown as it */
+static long do_chown(struct scratch *S, long *a)
 {
-    long r;
-    int pi = nr == NR_fchownat ? 1 : 0, di = nr == NR_fchownat ? 0 : -1;
-    long fl = nr == NR_fchownat ? a[4] : nr == NR_lchown ? AT_SYMLINK_NOFOLLOW : 0;
+    long r, fl = a[4];
     if ((unsigned)fl & ~(unsigned)(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
         return -EINVAL; /* do_fchownat: the flags first */
-    if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
-    if (r == 1) return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(nr, a[0], empty_as_given(a[1]), a[2], a[3], a[4]);
+    if ((r = resolve(S, a, 1, 0, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
+    if (r == 1)
+        return fd_exclave(S, (int)a[0]) ? -EROFS : RE5(NR_fchownat, a[0], empty_as_given(a[1]), a[2], a[3], a[4]);
     if ((r = ro_attr(S, S->v))) return r;
     to_real(S->v, S->real, S->tmp);
-    if (as_given(S)) return RE5(NR_fchownat, S->dfd, S->given, a[pi + 1], a[pi + 2], fl);
-    return RE5(NR_fchownat, AT_FDCWD, S->real, a[pi + 1], a[pi + 2], nofollow(S, AT_SYMLINK_NOFOLLOW));
+    if (as_given(S)) return RE5(NR_fchownat, S->dfd, S->given, a[2], a[3], fl);
+    return RE5(NR_fchownat, AT_FDCWD, S->real, a[2], a[3], nofollow(S, AT_SYMLINK_NOFOLLOW));
 }
 
-/* utime, utimes, futimesat and utimensat, in fs/utimes.c's order */
+/* utime, futimesat and utimensat, and utimes as futimesat, in fs/utimes.c's order */
 static long do_times(struct scratch *S, int nr, long *a)
 {
     long r;
-    int pi = nr == NR_utime || nr == NR_utimes ? 0 : 1, di = nr == NR_utime || nr == NR_utimes ? -1 : 0;
+    int pi = nr == NR_utime ? 0 : 1, di = nr == NR_utime ? -1 : 0;
     long fl = nr == NR_utimensat ? (int)a[3] : 0; /* an int: bits above the word are not flags */
     long ts[4] = {0, 0, 0, 0};
     int badns = 0;
@@ -1594,10 +1610,10 @@ static long do_times(struct scratch *S, int nr, long *a)
             if (!fd_exclave(S, (int)a[0])) return RE5(nr, a[0], 0, a[2], a[3], 0);
             return badns ? -EINVAL : -EROFS;
         }
-    } else if ((nr == NR_utimes || nr == NR_futimesat) && a[pi + 1]) {
+    } else if (nr == NR_futimesat && a[2]) {
         /* do_futimesat: a microsecond out of range is EINVAL before the lookup */
         long tv[4];
-        if ((r = copy_exact(S->pid, tv, (const void *)a[pi + 1], sizeof tv))) return r;
+        if ((r = copy_exact(S->pid, tv, (const void *)a[2], sizeof tv))) return r;
         if (tv[1] < 0 || tv[1] >= 1000000 || tv[3] < 0 || tv[3] >= 1000000) return -EINVAL;
     }
     if ((r = resolve(S, a, pi, di, !(fl & AT_SYMLINK_NOFOLLOW), (fl & AT_EMPTY_PATH) != 0)) < 0) return r;
@@ -1613,7 +1629,6 @@ static long do_times(struct scratch *S, int nr, long *a)
     }
     to_real(S->v, S->real, S->tmp);
     if (nr == NR_utime) return RE5(NR_utime, S->real, a[1], 0, 0, 0);
-    if (nr == NR_utimes) return RE5(NR_utimes, S->real, a[1], 0, 0, 0);
     if (nr == NR_futimesat) return RE5(NR_futimesat, RE_DFD(S), RE_PATH(S), a[2], 0, 0);
     return RE5(NR_utimensat, RE_DFD(S), RE_PATH(S), a[2], fl | re_flag(S, AT_SYMLINK_NOFOLLOW), 0);
 }
@@ -1894,79 +1909,73 @@ static __attribute__((noinline)) long do_seccomp(struct scratch *S, int nr, long
 }
 #endif
 
+/* ---------- the dispatch ----------
+ * A call from before the *at calls, which names a path with no directory beside it, is in the kernel its *at call
+ * relative to the working directory, with the flag its name stands for (fs/open.c, fs/stat.c, fs/namei.c, fs/exec.c,
+ * fs/utimes.c). The handlers know the *at shape only: at() puts the arguments of such a call in it, at the call's own
+ * case, which names the *at call it is handled as. a is the handler's copy of the arguments, never the frame's.
+ * truncate, chdir, statfs and the extended attributes by path have no such twin on every kernel, and utime gives its
+ * times in a structure of its own, so each of those is handled as itself. aarch64 has none of these calls but execve:
+ * its ABSENT numbers match nothing. */
+static long *at(long *a, long a0, long a1, long a2, long a3, long a4)
+{
+    a[0] = a0, a[1] = a1, a[2] = a2, a[3] = a3, a[4] = a4;
+    return a;
+}
+
 static long dispatch(struct scratch *S, int nr, long *a, void *uc)
 {
     long r;
     switch (nr) {
-    case NR_open: return do_open(S, a, 0, -1, a[1], a[2], NR_openat);
-    case NR_openat: return do_open(S, a, 1, 0, a[2], a[3], NR_openat);
+    case NR_open: return do_openat(S, at(a, AT_FDCWD, a[0], a[1], a[2], 0));
+    case NR_creat: return do_openat(S, at(a, AT_FDCWD, a[0], O_CREAT | O_WRONLY | O_TRUNC, a[1], 0));
+    case NR_openat: return do_openat(S, a);
     case NR_openat2:
         return do_openat2(S, a);
 /* build/launcher-old, filter version 3, traps neither (17.4) */
 #ifndef EXCLAVE_TEST_OLD
     case NR_bind:
-    case NR_connect: return do_sockaddr(S, a, nr);
+    case NR_connect: return do_sockaddr(S, nr, a);
 #endif
-    case NR_creat: return do_open(S, a, 0, -1, O_CREAT | O_WRONLY | O_TRUNC, a[1], NR_openat);
-    case NR_stat:
-    case NR_lstat:
+    case NR_stat: return do_stat(S, NR_newfstatat, at(a, AT_FDCWD, a[0], a[1], 0, 0));
+    case NR_lstat: return do_stat(S, NR_newfstatat, at(a, AT_FDCWD, a[0], a[1], AT_SYMLINK_NOFOLLOW, 0));
     case NR_newfstatat:
     case NR_statx: return do_stat(S, nr, a);
-    case NR_access:
+    case NR_access: return do_access(S, NR_faccessat, at(a, AT_FDCWD, a[0], a[1], 0, 0));
     case NR_faccessat:
     case NR_faccessat2: return do_access(S, nr, a);
-    /* bufsiz is an int: the kernel truncates, so must the copy's bound */
-    case NR_readlink: return do_readlink(S, a, 0, -1, (char *)a[1], (int)a[2]);
-    case NR_readlinkat: return do_readlink(S, a, 1, 0, (char *)a[2], (int)a[3]);
+    case NR_readlink: return do_readlink(S, at(a, AT_FDCWD, a[0], a[1], a[2], 0));
+    case NR_readlinkat: return do_readlink(S, a);
     case NR_getcwd: return do_getcwd(S, a);
     case NR_chdir:
         if ((r = resolve(S, a, 0, -1, WALK_FOLLOW, 0)) < 0) return r;
         to_real_exec(S->v, S->real);
         return RE5(NR_chdir, S->real, 0, 0, 0, 0);
-    case NR_execve: return do_execve(S, a, 0, -1, 0, (char **)a[1], (char **)a[2]);
-    case NR_execveat: return do_execve(S, a, 1, 0, a[4], (char **)a[2], (char **)a[3]);
-    case NR_truncate: return do_truncate(S, nr, a);
-    case NR_mkdir:
-    case NR_mkdirat: {
-        int pi = nr == NR_mkdir ? 0 : 1, di = nr == NR_mkdir ? -1 : 0;
-        if ((r = resolve(S, a, pi, di, WALK_PARENT, 0)) < 0) return r;
-        if ((r = ro_create(S, S->v, 1))) return r;
-        return RE5(NR_mkdirat, RE_DFD(S), RE_PATH(S), a[pi + 1], 0, 0);
-    }
-    case NR_mknod:
-    case NR_mknodat: {
-        int pi = nr == NR_mknod ? 0 : 1, di = nr == NR_mknod ? -1 : 0;
-        if ((r = may_mknod((unsigned short)a[pi + 1]))) return r;
-        if ((r = resolve(S, a, pi, di, WALK_PARENT, 0)) < 0) return r;
-        if ((r = ro_create(S, S->v, 0))) return r;
-        return RE5(NR_mknodat, RE_DFD(S), RE_PATH(S), a[pi + 1], a[pi + 2], 0);
-    }
-    case NR_rmdir:
-    case NR_unlink:
-    case NR_unlinkat: return do_unlink(S, nr, a);
-    case NR_symlink:
-    case NR_symlinkat: {
-        int pi = nr == NR_symlink ? 1 : 2, di = nr == NR_symlink ? -1 : 1;
-        /* do_symlinkat: the target is read before the new name */
-        if ((r = copy_str_in(S->pid, S->extra, (const char *)a[0])) < 0) return r;
-        if (S->extra[0] == 0) return -ENOENT;
-        if ((r = resolve(S, a, pi, di, WALK_PARENT, 0)) < 0) return r;
-        if ((r = ro_create(S, S->v, 0))) return r;
-        return RE5(NR_symlinkat, S->extra, RE_DFD(S), RE_PATH(S), 0, 0);
-    }
-    case NR_rename:
+    case NR_execve: return do_execve(S, at(a, AT_FDCWD, a[0], a[1], a[2], 0));
+    case NR_execveat: return do_execve(S, a);
+    case NR_truncate: return do_truncate(S, a);
+    case NR_mkdir: return do_mkdir(S, at(a, AT_FDCWD, a[0], a[1], 0, 0));
+    case NR_mkdirat: return do_mkdir(S, a);
+    case NR_mknod: return do_mknod(S, at(a, AT_FDCWD, a[0], a[1], a[2], 0));
+    case NR_mknodat: return do_mknod(S, a);
+    case NR_rmdir: return do_unlink(S, at(a, AT_FDCWD, a[0], AT_REMOVEDIR, 0, 0));
+    case NR_unlink: return do_unlink(S, at(a, AT_FDCWD, a[0], 0, 0, 0));
+    case NR_unlinkat: return do_unlink(S, a);
+    case NR_symlink: return do_symlink(S, at(a, a[0], AT_FDCWD, a[1], 0, 0));
+    case NR_symlinkat: return do_symlink(S, a);
+    case NR_rename: return do_rename(S, NR_renameat, at(a, AT_FDCWD, a[0], AT_FDCWD, a[1], 0));
     case NR_renameat:
     case NR_renameat2: return do_rename(S, nr, a);
-    case NR_link:
-    case NR_linkat: return do_link(S, nr, a);
-    case NR_chmod:
+    case NR_link: return do_link(S, at(a, AT_FDCWD, a[0], AT_FDCWD, a[1], 0));
+    case NR_linkat: return do_link(S, a);
+    case NR_chmod: return do_chmod(S, NR_fchmodat, at(a, AT_FDCWD, a[0], a[1], 0, 0));
     case NR_fchmodat:
     case NR_fchmodat2: return do_chmod(S, nr, a);
-    case NR_chown:
-    case NR_lchown:
-    case NR_fchownat: return do_chown(S, nr, a);
+    case NR_chown: return do_chown(S, at(a, AT_FDCWD, a[0], a[1], a[2], 0));
+    case NR_lchown: return do_chown(S, at(a, AT_FDCWD, a[0], a[1], a[2], AT_SYMLINK_NOFOLLOW));
+    case NR_fchownat: return do_chown(S, a);
+    case NR_utimes: return do_times(S, NR_futimesat, at(a, AT_FDCWD, a[0], a[1], 0, 0));
     case NR_utime:
-    case NR_utimes:
     case NR_futimesat:
     case NR_utimensat: return do_times(S, nr, a);
     case NR_setxattrat:
@@ -2010,7 +2019,7 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
     case NR_ppoll: return do_ppoll(S, a);
     case NR_pselect6: return do_pselect6(S, a);
     case NR_epoll_pwait:
-    case NR_epoll_pwait2: return do_epoll_pwait(S, a, nr);
+    case NR_epoll_pwait2: return do_epoll_pwait(S, nr, a);
     case NR_io_pgetevents:
         return do_io_pgetevents(S, a);
 /* build/launcher-old, filter version 3, does not trap it (17.4) */

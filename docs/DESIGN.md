@@ -1374,6 +1374,19 @@ shows as well as any later one would.
 Which error comes first on an exclave path, as the kernel orders them
 on a read-only bind mount, is 8.2's.
 
+**The legacy forms.** A call x86-64 keeps from before the `*at` calls,
+`open`, `stat`, `access`, `unlink` and the like, is in the kernel its
+`*at` call relative to the working directory with the flag its name
+stands for: `lstat` is `newfstatat` with `AT_SYMLINK_NOFOLLOW`, `rmdir`
+`unlinkat` with `AT_REMOVEDIR`, `creat` `openat` with `O_CREAT |
+O_WRONLY | O_TRUNC`, `utimes` `futimesat`. The handler's dispatch makes
+the same of it, so each call has one handler, written for the `*at`
+shape, and a legacy form cannot answer otherwise than its `*at` call
+does. `utime`, whose times are a structure of its own, and
+the calls with no such twin on every kernel, `truncate`, `chdir`,
+`statfs` and the extended attributes by path, are handled as
+themselves; aarch64 has none of the legacy forms.
+
 **Relative paths.** A relative path begins with the kernel's own search
 check on the directory it starts from, `faccessat(dfd, ".", X_OK)`,
 which the kernel makes before any lookup (`link_path_walk`) and an
