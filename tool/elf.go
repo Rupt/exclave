@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"math"
 	"os"
 
@@ -60,7 +61,7 @@ func le(p []byte, n int) uint64 {
 }
 
 // readAt is up to n bytes of the file from off, as many as there are.
-func readAt(f *os.File, off, n uint64) []byte {
+func readAt(f io.ReaderAt, off, n uint64) []byte {
 	var b []byte
 	chunk := make([]byte, 1<<16)
 	for n > 0 && off <= math.MaxInt64 {
@@ -92,14 +93,20 @@ func elfRead(path string) (e *elfFile, rc int, why string, err error) {
 		return nil, elfOS, "", err
 	}
 	defer f.Close()
+	e, rc, why = elfParse(f)
+	return e, rc, why, nil
+}
+
+// elfParse is elfRead of the bytes f holds: any bytes, answered with a verdict.
+func elfParse(f io.ReaderAt) (e *elfFile, rc int, why string) {
 	h := readAt(f, 0, 64)
 	switch {
 	case len(h) < 16 || string(h[:4]) != "\x7fELF":
-		return nil, elfBad, "not ELF64 LE", nil
+		return nil, elfBad, "not ELF64 LE"
 	case h[4] != 2 || h[5] != 1:
-		return nil, elfForeign, "ELF32 or big-endian: a foreign object, not checked (13)", nil
+		return nil, elfForeign, "ELF32 or big-endian: a foreign object, not checked (13)"
 	case len(h) < 64:
-		return nil, elfBad, "truncated ELF header", nil
+		return nil, elfBad, "truncated ELF header"
 	}
 	e = &elfFile{typ: int(le(h[16:], 2)), machine: int(le(h[18:], 2))}
 	phoff, phentsize, phnum := le(h[32:], 8), le(h[54:], 2), le(h[56:], 2)
@@ -108,7 +115,7 @@ func elfRead(path string) (e *elfFile, rc int, why string, err error) {
 	hasDyn := false
 	for i := range phnum {
 		if i*phentsize+56 > uint64(len(ph)) {
-			return nil, elfBad, "truncated or malformed ELF: its program headers run past the end of the file", nil
+			return nil, elfBad, "truncated or malformed ELF: its program headers run past the end of the file"
 		}
 		p := ph[i*phentsize:]
 		typ, off, vaddr, filesz := le(p, 4), le(p[8:], 8), le(p[16:], 8), le(p[32:], 8)
@@ -127,7 +134,7 @@ func elfRead(path string) (e *elfFile, rc int, why string, err error) {
 		}
 	}
 	if !hasDyn {
-		return e, elfOK, "", nil
+		return e, elfOK, ""
 	}
 	d := readAt(f, dynoff, dynsz)
 	ntags, strtab, strsz, hasStrtab := 0, uint64(0), uint64(1<<20), false
@@ -145,7 +152,7 @@ func elfRead(path string) (e *elfFile, rc int, why string, err error) {
 		}
 	}
 	if !hasStrtab {
-		return e, elfOK, "", nil
+		return e, elfOK, ""
 	}
 	var off uint64
 	found := false
@@ -156,7 +163,7 @@ func elfRead(path string) (e *elfFile, rc int, why string, err error) {
 		}
 	}
 	if !found {
-		return nil, elfBad, "address not in a loaded segment", nil
+		return nil, elfBad, "address not in a loaded segment"
 	}
 	table := readAt(f, off, strsz)
 	for i := range ntags {
@@ -176,7 +183,7 @@ func elfRead(path string) (e *elfFile, rc int, why string, err error) {
 			e.soname = new(s)
 		}
 	}
-	return e, elfOK, "", nil
+	return e, elfOK, ""
 }
 
 // ---------------------------------------------------------------- ld.so.cache
@@ -211,17 +218,21 @@ func readCache(root string) ([]cacheEntry, bool) {
 	if st, err := os.Stat(real); err != nil || !st.Mode().IsRegular() {
 		return nil, false
 	}
-	data := readFile(real)
+	return parseCache(readFile(real)), true
+}
+
+// parseCache is the entries of an ld.so.cache's bytes, as readCache gives them.
+func parseCache(data []byte) []cacheEntry {
 	n := uint64(len(data))
 	m := bytes.Index(data, []byte("glibc-ld.so.cache1.1"))
 	if m < 0 || uint64(m)+48 > n {
-		return nil, true
+		return nil
 	}
 	off := uint64(m)
 	entries := off + 48
 	nlibs := le(data[off+20:], 4)
 	if entries+24*nlibs > n {
-		return nil, true
+		return nil
 	}
 	// offsets are from the header; failing that, from the string table
 	var c []cacheEntry
@@ -247,5 +258,5 @@ func readCache(root string) ([]cacheEntry, bool) {
 			break
 		}
 	}
-	return c, true
+	return c
 }

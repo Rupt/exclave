@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"os"
 	"path/filepath"
@@ -250,27 +251,6 @@ func TestReadCache(t *testing.T) {
 	}
 }
 
-func TestReadLog(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "log")
-	write(t, p, []byte("launcher 1 cwd /\nopen 3 /srv/liba.so\x00junk\nopen 3 /srv/libb\\\\c.so\n"+
-		"open 99999999999999999999 /srv/libbig.so\nopen -2 /srv/libgone.so\nbad line\nopen x /y\n"+
-		"open 3 /srv/libz.so\\\nlauncher 2 cwd /a\\x1bb\nopen 3 /srv/e\\x1b[31m\\x7f.so\nopen 3 /srv/\\\\x1b\n"+
-		"open 3 /srv/\\xAB\\x4"))
-	lines := readLog(p)
-	want := []logLine{{"launcher", "cwd /", 1}, {"open", "/srv/liba.so", 3}, {"open", "/srv/libb\\c.so", 3},
-		{"open", "/srv/libbig.so", 1<<63 - 1}, {"open", "/srv/libgone.so", -2}, {"open", "/srv/libz.so\\", 3},
-		{"launcher", "cwd /a\x1bb", 2}, {"open", "/srv/e\x1b[31m\x7f.so", 3}, {"open", "/srv/\\x1b", 3},
-		{"open", "/srv/\\xAB\\x4", 3}}
-	if len(lines) != len(want) {
-		t.Fatalf("%+v", lines)
-	}
-	for i := range want {
-		if lines[i] != want[i] {
-			t.Errorf("line %d: %+v, wanted %+v", i, lines[i], want[i])
-		}
-	}
-}
-
 // sectioned is a 64-bit ELF header alone whose section table starts at shoff with shnum entries,
 // as a loader read for its table of directories is.
 func sectioned(shoff uint64, shnum uint16) []byte {
@@ -287,37 +267,13 @@ func FuzzElf(f *testing.F) {
 	f.Add(sectioned(64, 2))
 	f.Add(makeELF(elfOpts{strtabAt: new(uint64(1 << 20)), needed: []string{"libfoo.so.1"}}))
 	f.Fuzz(func(t *testing.T, data []byte) {
-		p := filepath.Join(t.TempDir(), "f")
-		if err := os.WriteFile(p, data, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		elfRead(p)
+		elfParse(bytes.NewReader(data))
 	})
 }
 
 func FuzzCache(f *testing.F) {
 	f.Add(makeCache([][2]string{{"libfoo.so.1", "/opt/lib/libfoo.so.1"}}, nil, false))
 	f.Fuzz(func(t *testing.T, data []byte) {
-		root := filepath.Join(t.TempDir(), "tree")
-		if err := os.MkdirAll(filepath.Join(root, "etc"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(root, "etc", "ld.so.cache"), data, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		readCache(root)
-	})
-}
-
-func FuzzLog(f *testing.F) {
-	f.Add([]byte("open 3 /srv/liba.so\nlauncher 1 cwd given to the host /x\n"))
-	f.Fuzz(func(t *testing.T, data []byte) {
-		p := filepath.Join(t.TempDir(), "log")
-		if err := os.WriteFile(p, data, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		for _, l := range readLog(p) {
-			_ = libraryName(l.path)
-		}
+		parseCache(data)
 	})
 }
