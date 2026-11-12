@@ -4006,7 +4006,20 @@ its own VM before the oracles.
 
 Each item states a limitation, what happens, why, and the workaround
 where there is one. The numbers are cited from the source and tests,
-and stay fixed.
+and stay fixed, so the items stand in the order they were found; by
+what they concern:
+
+| Concern | Items |
+|---|---|
+| Starting and exec, and what a debugger or the host sees of a program | 1, 10, 12, 16, 25, 28, 39, 46, 54, 62 |
+| Syscalls, the filter and the syscall page | 2, 4, 5, 15, 21, 22, 24, 31, 41, 45 |
+| Signals, stacks and threads | 20, 23, 26, 27, 30, 44, 49, 51, 52, 58 |
+| Paths, listings and the working directory | 6, 7, 11, 13, 14, 19, 29, 37, 40, 53, 57, 63, 64 |
+| Identity: users, trust, locale and time | 17, 18, 35, 55 |
+| Memory and limits | 33, 50, 59, 60, 61 |
+| Privilege and scope | 3, 8, 9 |
+| The tool, packages, caches and the log | 32, 34, 36, 38, 47, 48, 56 |
+| Kernels and filesystems, untested or raced | 42, 43 |
 
 1. **gdb sees an exclave's libraries only through the launcher's
    script.** External debugging works once the exclave is in gdb's
