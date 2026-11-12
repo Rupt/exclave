@@ -10,15 +10,15 @@ column is the expectation.
 
 HOSTDIR in ARGS is replaced by a fresh writable host directory.
 
-The work lives under build/exercise/<exclave>-<hashes file's hash>: a copy of the exclave relinked
-with build/launcher, and relinked again whenever the build has changed since, the unwrapped tree
-for bwrap, both with a socket file at /usr/share/exclave-test.sock and the suite's marker. Needs
+The work lives under build/kept/exercise/<exclave>-<hashes file's hash>, the two worlds the
+oracles keep too (tree.kept_worlds): a copy of the exclave relinked with build/launcher, and
+relinked again whenever the build has changed since, and the unwrapped tree for bwrap, both with a
+socket file at /usr/share/exclave-test.sock and the suite's marker. Needs
 bwrap and user namespaces; says so and exits 1 when it cannot run. Exit status: the number of lines
 that differ.
 """
 
 import argparse
-import hashlib
 import os
 import shutil
 import subprocess
@@ -29,23 +29,6 @@ import tree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-
-
-def setup(ex0: str, work: str) -> None:
-    """Make a wrapped copy for the launcher and an unwrapped tree for bwrap, once per exclave."""
-    shutil.rmtree(work, ignore_errors=True)
-    os.makedirs(work)
-    # a copy relinked with the build (17)
-    ex = tree.fresh_exclave(ex0, os.path.join(work, "exclave"))
-    root = os.path.join(work, "bare", "tree")
-    shutil.copytree(os.path.join(ex, "tree"), root, symlinks=True, copy_function=tree.link_or_copy)
-    tree.unwrap_tree(os.path.join(work, "bare"))
-    for r in (root, os.path.join(ex, "tree")):
-        tree.socket_file(os.path.join(r, "usr", "share", "exclave-test.sock"))
-        with open(os.path.join(r, "usr", "share", "exclave-test-marker"), "w") as f:
-            f.write("marker\n")
-    # as the oracles: the placeholders, the host's link text, a mount point for its target
-    tree.identity_links(root)
 
 
 def main() -> int:
@@ -64,28 +47,16 @@ def main() -> int:
         "args", nargs="*", help="arguments; HOSTDIR is replaced by a fresh writable host directory"
     )
     args = ap.parse_args()
-    if (
-        not shutil.which("bwrap")
-        or subprocess.run(
-            ["bwrap", "--ro-bind", "/", "/", "true"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        ).returncode
-    ):
-        sys.exit("bwrap or user namespaces unavailable; the kernel's world cannot be made here")
-    ex0 = os.path.abspath(args.exclave)
-    with open(os.path.join(ex0, ".exclave", "hashes"), "rb") as f:
-        key = hashlib.blake2b(f.read(), digest_size=6).hexdigest()
-    work = os.path.join(
-        REPO, "build", "exercise", os.path.basename(ex0).replace(".exclave", "") + "-" + key
-    )
-    if not os.path.exists(os.path.join(work, "exclave", ".exclave", "hashes")):
-        setup(ex0, work)
-    elif tree.relink_if_stale(os.path.join(work, "exclave")):
-        print("the build changed since this copy was made: relinked")
-    ex, root = os.path.join(work, "exclave"), os.path.join(work, "bare", "tree")
+    if why := tree.bwrap_unusable():
+        sys.exit(f"{why}; the kernel's world cannot be made here")
+    # the two worlds, kept between runs and held while this one lasts (tree.kept_worlds)
+    ex, root = tree.kept_worlds(os.path.abspath(args.exclave), "exercise")
+    work = os.path.dirname(ex)
     r = os.path.join(ex, "tree")
+    # as the oracles: the placeholders, the host's link text, a mount point for its target
+    tree.identity_links(root)
+    for world in (root, r):
+        tree.add_test_files(world)
     # the tree's spellings for both worlds
     sp = oracle_ns.Spellings.of(r)
     gcc = os.path.join(r, tree.vbin(r, sp.gcc).lstrip("/"))

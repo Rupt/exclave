@@ -8,7 +8,6 @@ import os
 import platform
 import re
 import shutil
-import subprocess
 lazy import ctypes
 
 import kernel
@@ -293,12 +292,7 @@ def casefold_alias(ctx: Ctx) -> str | None:
     must still see the tree there, read-only. Made on a casefold tmpfs (6.13) in a user namespace;
     skipped where either is missing.
     """
-    if subprocess.run(
-        ["unshare", "-Urm", "true"],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ).returncode:
+    if not tree.user_namespaces():
         skip("no user namespaces")
     mnt = os.path.join(ctx.work, f"casefold-{os.getpid()}")
     os.makedirs(mnt, exist_ok=True)
@@ -632,12 +626,7 @@ def new_xattr_syscalls(ctx: Ctx) -> str | None:
 @test
 def bind_mount_alias(ctx: Ctx) -> str | None:
     """A second spelling of the tree's root through a bind mount is the tree, read-only."""
-    if subprocess.run(
-        ["unshare", "-Urm", "true"],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ).returncode:
+    if not tree.user_namespaces():
         skip("no user namespaces")
     alias = os.path.join(ctx.work, "alias")
     os.makedirs(alias, exist_ok=True)

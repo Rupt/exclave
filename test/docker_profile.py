@@ -226,16 +226,8 @@ def main() -> int:
     ap.add_argument("--profile", required=True)
     ap.add_argument("--work", default=os.path.join(REPO, "build", "docker-work"))
     args = ap.parse_args()
-    if (
-        not shutil.which("bwrap")
-        or subprocess.run(
-            ["bwrap", "--ro-bind", "/", "/", "true"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        ).returncode
-    ):
-        return cannot_run("the Docker-profile run", "bwrap or user namespaces unavailable")
+    if why := tree.bwrap_unusable():
+        return cannot_run("the Docker-profile run", why)
     work = os.path.abspath(args.work)
     if os.path.exists(work):
         shutil.rmtree(work)

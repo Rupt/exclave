@@ -6825,8 +6825,9 @@ exclave's compiler and runs it under `bwrap` with the unwrapped tree
 read-only at `/`, and under the launcher. It prints the two outputs side
 by side and marks the lines that differ. The kernel's column is the
 expectation, and the marked lines are the work. `HOSTDIR` in the
-arguments becomes a fresh writable host directory. The work lives under
-`build/exercise/`, and the copy there is relinked whenever the build has
+arguments becomes a fresh writable host directory. The two worlds are
+the ones the oracles keep, under `build/kept/exercise/`, held by one
+run at a time, and the copy there is relinked whenever the build has
 changed. The program then becomes a named test asserting the kernel's
 answers, and a trapped syscall's cases join the probe. For the host's
 own mounts, which `bwrap` rebuilds, a test replays its host-only cases

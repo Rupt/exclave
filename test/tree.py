@@ -770,6 +770,45 @@ def identity_dir_binds(root: str, *, targets: bool = False) -> list[str]:
     return args
 
 
+def bwrap_unusable() -> str | None:
+    """Why the kernel's world cannot be made here, or None: bwrap missing or namespaces denied."""
+    if not shutil.which("bwrap"):
+        return "no bwrap"
+    if subprocess.run(
+        ["bwrap", "--ro-bind", "/", "/", "true"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode:
+        return "bwrap cannot create namespaces here (user namespaces denied)"
+    return None
+
+
+@functools.cache
+def user_namespaces() -> bool:
+    """Whether this user may make a user namespace with its own mounts, as unshare -Urm does."""
+    return not subprocess.run(
+        ["unshare", "-Urm", "true"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode
+
+
+def add_test_files(root: str) -> None:
+    """Add what the tests' programs expect of any world's tree: the marker and a socket file.
+
+    Each is made anew, never written through a link another tree shares (13 item 31 for the
+    socket).
+    """
+    marker = os.path.join(root, "usr", "share", "exclave-test-marker")
+    if os.path.lexists(marker):
+        os.remove(marker)
+    with open(marker, "w") as f:
+        f.write("marker\n")
+    socket_file(os.path.join(root, "usr", "share", "exclave-test.sock"))
+
+
 def kept_worlds(src: str, driver: str) -> tuple[str, str]:
     """The two worlds an oracle runs in, kept between its runs.
 

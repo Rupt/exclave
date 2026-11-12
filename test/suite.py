@@ -354,9 +354,7 @@ def make_exclave(ctx: Ctx) -> None:
             f.write(body)
         os.chmod(path, mode)
 
-    add(os.path.join(root, "usr", "share", "exclave-test-marker"), "marker\n")
-    # a socket file in the tree (13 item 31); a fixture carries one already
-    tree.socket_file(os.path.join(root, "usr", "share", "exclave-test.sock"))
+    tree.add_test_files(root)
     for name, body in (
         ("exclave-test-script", "#!/bin/sh\necho script ok $1 $#\n"),
         ("exclave-test-noshebang", "echo noshebang ok\n"),

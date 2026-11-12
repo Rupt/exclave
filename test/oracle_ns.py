@@ -285,20 +285,6 @@ def run_launcher(
     )
 
 
-def bwrap_unusable() -> str | None:
-    """Why the kernel's world cannot be made here, or None: bwrap missing or namespaces denied."""
-    if not shutil.which("bwrap"):
-        return "no bwrap"
-    if subprocess.run(
-        ["bwrap", "--ro-bind", "/", "/", "true"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    ).returncode:
-        return "bwrap cannot create namespaces here (user namespaces denied)"
-    return None
-
-
 def worlds(given: str, work: str) -> tuple[str, str]:
     """Make the two worlds under work from the exclave given: the launcher's and the kernel's.
 
@@ -459,7 +445,6 @@ def programs_under_the_kernel(ex: str, root: str, work: str, sp: Spellings) -> i
                 sys.exit(f"cannot compile {name} with the exclave's compiler: {e}")
     hostdir = os.path.join(work, "hostdir")
     os.makedirs(hostdir, exist_ok=True)
-    tree.socket_file(os.path.join(root, "usr", "share", "exclave-test.sock"))
     true = tree.vbin(root, "true")
     # unix_socket's: an absolute host directory in bwrap's own /tmp, short enough for sun_path, and
     # a working directory deeper than sun_path holds
@@ -541,7 +526,7 @@ def main() -> int:
     ap.add_argument("--work", default=os.path.join(REPO, "build", "oracle-work"))
     ap.add_argument("--keep", action="store_true")
     args = ap.parse_args()
-    why = bwrap_unusable()
+    why = tree.bwrap_unusable()
     if why:
         return cannot_run("the namespace oracle", why)
     work = os.path.abspath(args.work)
@@ -551,8 +536,8 @@ def main() -> int:
     # the two worlds, kept between runs (tree.kept_worlds)
     ex, root = tree.kept_worlds(os.path.abspath(args.exclave), "ns")
     tree.identity_links(root)
-    with open(os.path.join(root, "usr", "share", "exclave-test-marker"), "w") as f:
-        f.write("marker\n")
+    for world in (root, os.path.join(ex, "tree")):
+        tree.add_test_files(world)
     with open(os.path.join(work, "hello.c"), "w") as f:
         f.write(
             "#include <stdio.h>\n"

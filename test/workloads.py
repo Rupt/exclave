@@ -39,6 +39,7 @@ import tarfile
 import time
 
 import oracle_ns
+import tree
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -244,7 +245,7 @@ def main() -> int:
     ap.add_argument("--work", default=os.path.join(REPO, "build", "workloads"))
     ap.add_argument("-k", default="", help="only the workloads whose name contains this")
     args = ap.parse_args()
-    why = oracle_ns.bwrap_unusable()
+    why = tree.bwrap_unusable()
     if why:
         print(f"{why}; the workloads cannot be compared here")
         return 0

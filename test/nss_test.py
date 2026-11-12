@@ -104,7 +104,7 @@ def main() -> int:
     ap.add_argument("--musl", help="a musl exclave, whose check warns of musl's own case")
     ap.add_argument("--work", default=os.path.join(REPO, "build", "nss-work"))
     args = ap.parse_args()
-    if subprocess.run(["unshare", "-Urm", "true"], capture_output=True, check=False).returncode:
+    if not tree.user_namespaces():
         return cannot_run("the lookup test", "no user namespaces")
     work = os.path.abspath(args.work)
     shutil.rmtree(work, ignore_errors=True)

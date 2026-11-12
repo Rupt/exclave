@@ -134,12 +134,7 @@ def identity_retargeted(ctx: Ctx) -> None:
     over the link, and the shell reads it and tests for a link a third time. Skipped without user
     namespaces.
     """
-    if subprocess.run(
-        ["unshare", "-Urm", "true"],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ).returncode:
+    if not tree.user_namespaces():
         skip("no user namespaces")
     pid = os.getpid()
     base = os.path.join(ctx.work, f"retarget-{pid}")
@@ -796,12 +791,7 @@ def directory_service_state(ctx: Ctx) -> None:
     with a /var but no /var/lib reaches it all the same, its way made of directories as an identity
     file's is. Skipped without user namespaces.
     """
-    if subprocess.run(
-        ["unshare", "-Urm", "true"],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ).returncode:
+    if not tree.user_namespaces():
         skip("no user namespaces")
     pid = os.getpid()
     owned = os.path.join(ctx.work, "sss-own.exclave")
@@ -970,12 +960,7 @@ def trust_directory_rules(ctx: Ctx) -> str | None:
     openat2's cases are judged where the kernel has the call (test/kernel.py). Skipped
     without user namespaces.
     """
-    if subprocess.run(
-        ["unshare", "-Urm", "true"],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ).returncode:
+    if not tree.user_namespaces():
         skip("no user namespaces")
     pid = os.getpid()
     marks = os.path.join(ctx.work, f"trust-{pid}.exclave")

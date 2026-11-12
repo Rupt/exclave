@@ -2391,17 +2391,8 @@ def main() -> int:
         "--expected", action="store_true", help="print the differences accepted under a reason too"
     )
     args = ap.parse_args()
-    if not shutil.which("bwrap"):
-        return cannot_run("the syscall probe", "no bwrap")
-    if subprocess.run(
-        ["bwrap", "--ro-bind", "/", "/", "true"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    ).returncode:
-        return cannot_run(
-            "the syscall probe", "bwrap cannot create namespaces here (user namespaces denied)"
-        )
+    if why := tree.bwrap_unusable():
+        return cannot_run("the syscall probe", why)
     given, work = os.path.abspath(args.exclave), os.path.abspath(args.work)
     rmtree(work)
     os.makedirs(work)
