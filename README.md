@@ -63,6 +63,8 @@ kernel 7.0, glibc 2.39.
 ## First run
 
 You need an x86-64 or aarch64 Linux host with `gcc`, `curl` or `wget`,
+Ubuntu's archive keyring at `/usr/share/keyrings/ubuntu-archive-keyring.gpg`,
+which an Ubuntu host has and the `ubuntu-keyring` package gives another,
 and the network. `scripts/install-go` fetches a pinned, checksummed
 [Go](https://go.dev/dl/) into `.go/`, which builds the `exclave`
 command, and `scripts/install-uv` a pinned, checksummed
@@ -76,7 +78,7 @@ privilege, and nothing is installed outside the checkout.
 scripts/install-go
 scripts/install-uv
 scripts/build
-scripts/example ~/exclave-example
+scripts/example build/example
 ```
 
 `scripts/example` runs the whole path under the directory you name. It
@@ -428,7 +430,9 @@ machine, where a tampered archive and a tampered sums file are refused.
 
 ## Development
 
-Every command is a POSIX shell script in `scripts/`, run from anywhere.
+Every command is a POSIX shell script in `scripts/`, run from anywhere;
+all but the wrappers of the two built programs source `scripts/lib.sh`,
+which sets where everything is kept.
 `unpack` and the fetchers are Go, built by the pinned toolchain in
 `.go/` (`scripts/install-go`), their modules pinned by `go.sum`.
 Python runs only through the pinned uv in `.uv/` (`scripts/install-uv`):
@@ -442,7 +446,8 @@ Beyond the first run's requirements:
   and the syscall probe. Where `bwrap` cannot create a user namespace,
   as from a plain terminal on Ubuntu 23.10 and later, the gate marks
   those steps SKIP rather than ok.
-- `strace`, `gdb`, Go and `rustc`, for the suite's regressions.
+- `strace`, `gdb` and `rustc`, for the suite's regressions; the Go
+  one is built by the pinned Go.
 - `gpg` and `openssl`, for the fetchers' tests, which make keys and
   signatures with them.
 - Optionally `aarch64-linux-gnu-gcc`, for the aarch64 launcher, and
@@ -452,8 +457,9 @@ Beyond the first run's requirements:
 `scripts/inputs DIR` downloads every development input, pinned or
 verified, and keeps everything in `DIR`, the fetchers' cache included.
 Nothing the scripts make goes in the home directory: the pinned uv and
-Go keep themselves and their caches in `.uv/` and `.go/`, and the rest
-is under `build/` or the `DIR` given.
+Go keep themselves and their caches in `.uv/` and `.go/`, uv keeps the
+tools' environment in `.venv/`, and the rest is under `build/` or the
+`DIR` given.
 The tests take their inputs as paths; nothing else touches the network
 except the kernel matrix, which downloads cloud images and whose VMs
 install packages.
@@ -465,103 +471,33 @@ each test establishes, 19 the decisions a change is expected to respect.
 `CLAUDE.md` holds working notes for contributors and coding agents.
 
 ```
-scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, clang-format, clang-tidy and gcc's strict warnings; --fix lets them correct
+scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, clang-format, clang-tidy, gcc's strict warnings and analyser, gofmt, go vet, staticcheck and deadcode; --fix lets the formatters correct
 scripts/inputs build/inputs   # the test inputs: the four exclaves, the arm64 gcc exclave, the lookup, caches and gdb tests' exclaves, Docker's seccomp profile and the baseline release once one is recorded, from the package archives and GitHub; skips what is present
 scripts/inputs build/inputs examples   # the examples' inputs too, some from their authors' sites
-D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave   # the commit gate: of the code checks, unit tests, stack budget, the command's Go tests, unpack's and the fetchers' tests, the suite, the oracles, the syscall probe, the Docker profile run and the compatibility test against the baseline release in $D/baseline, the steps the change can affect, two at a time (--jobs N); --full runs all of them
+D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/gate $D/gcc13.exclave   # the commit gate: of its steps (docs/DESIGN.md 17), the ones the change can affect, two at a time (--jobs N); --full runs all of them, and a step whose input $D lacks is a SKIP
 D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave   # beyond the gate, when asked: the suite, the debug launcher, the oracles and the probe on every exclave given; the plain-label suite, the fuzz budget and the release test on the first
 scripts/test --exclave gcc.exclave       # the suite alone; -k NAME runs one test
 scripts/matrix --exclave gcc.exclave --docker-profile build/inputs/src/docker-seccomp.json   # the kernel matrix: cloud images under QEMU/KVM, one at a time (--jobs N); due when the gate says a change reaches the VMs
 gh workflow run ci.yml -f matrix=true    # the gate on GitHub's x86-64 and aarch64 runners, then the x86-64 rows under KVM, for the pushed main; -f matrix=false the gate alone. gh run list --workflow ci.yml, gh run watch ID --exit-status, gh run view ID --log-failed
 scripts/exercise --exclave gcc.exclave test/progs/fexec.c HOSTDIR   # one program under bwrap, where the kernel answers, and under the launcher, side by side
 scripts/clean-tmp                        # empty build/tmp, the scripts' TMPDIR, which a reboot does not; when nothing runs
-scripts/examples build/inputs/realsoft.exclave   # the example runs, each when its input is set: EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_ARM64 (the emulated aarch64 row), EXCLAVE_TEST_DOCKER (its Docker profile run)
+scripts/examples build/inputs/realsoft.exclave   # the example runs, each when its input is set: EXCLAVE_TEST_INPUTS (the workloads), EXCLAVE_TEST_SRC (realsoft), EXCLAVE_TEST_SQLITE (bench), EXCLAVE_TEST_RPMS (sysroot), EXCLAVE_TEST_ARM64 (the emulated aarch64 row), EXCLAVE_TEST_DOCKER (its Docker profile run)
 ```
 
-The repository's layout:
+The repository's layout, by directory; each file says what it is at its
+head, and `test/run.py` what each kind of file in `test/` is:
 
 ```
-scripts/install-go   the pinned Go into .go/, checked against a committed checksum per architecture, which builds the command
-scripts/install-uv   the pinned uv into .uv/, checked the same way, which provides the Python the tests run on; scripts/lib.sh what every script sources
-scripts/exclave      the exclave command, its unpack with it; scripts/exclave-fetch the fetchers, the step before
-scripts/example      the first run: from the build to a program built inside an exclave that runs on any glibc since 2.17, every command shown
-scripts/check        the code checks, gofmt, go vet, staticcheck and deadcode among them; scripts/gate the commit gate; scripts/extra the checks beyond it (scripts/steps.sh their step runner); scripts/inputs the development inputs; scripts/examples the example runs
-scripts/release      a signed release of exclaves with the command beside them; test/release_test.py, a step of scripts/extra, takes one as a consumer would
-scripts/reproduce    the launcher built inside a gcc exclave and the command from it, the same bytes wherever it runs
-scripts/test         the suite; scripts/matrix, exercise and sysroot the other test drivers
-.github/workflows/ci.yml  the gate on GitHub's x86-64 and aarch64 runners and the x86-64 rows under KVM, when dispatched by hand
-VERSION              the project's version, which every build names with its commit
-pyproject.toml       the Python project, the tests': no dependencies, the dev tools, ruff's and ty's settings; uv.lock pins them; .python-version the Python; go.mod the Go module, go.sum its pins
-scripts/build        the launchers: build/launcher, build/launcher-old for the nesting regression, build/launcher-debug with UBSan's checks; the command, build/exclave, carrying the launcher; the aarch64 ones with a cross compiler, for the matrix; nothing when they are up to date
-src/sys.h            syscall numbers and instruction per architecture, the syscall page, raw wrappers, a tiny libc subset
-src/elf.h            the ELF structures the loader needs
-src/common.h         constants, the run-time state (struct exclave), every module's interface
-src/launcher.c       entry: syscall page, self-relocation, find the exclave, manifest, border, env, load
-src/manifest.c       the strict grammar parser (6.2); also built for the host by the gate's unit step
-src/loader.c         userland ELF loader and the probe for a launcher's notes (7.3); the facts exported for gdb (7.6)
-src/gdb.py           the script the launcher carries in .debug_gdb_scripts and gdb auto-loads (7.6, 13.1)
-src/filter.c         the seccomp program (7.4.2)
-src/handler.c        the SIGSYS handler: translation, read-only rule, exec, signal masks (7.4.3, 7.5, 8.2)
-src/canon.c          canonicalisation in virtual space (7.4.4)
-src/cache.c          the per-process component cache (7.4.4)
-src/vis.c            the visibility rule, ownership read from the tree, identity files, wrapper redirect (8)
-src/scratch.c        handler memory: mmap'd chunks with liveness reclamation (7.5.4)
-src/isa.c            the CPU check (7.7): x86-64 psABI levels by cpuid and XCR0, aarch64 levels by AT_HWCAP
-src/str.c            string helpers, arena, the shebang parser
-src/log.c            EXCLAVE_LOG and fatal messages
-tool/main.go         the exclave command (10), Go, one static file: the command line, hash, format, refusals and files; unpack is its subcommand
-tool/grammar.go      the strict grammar of the manifest and the hashes file (6.2), and its canonical form
-tool/tree.go         the walks of a tree in the order of its names' bytes, the tree listed once on goroutines, and the tree hash (6.4), its files hashed on goroutines, the largest first
-tool/layout.go       the launcher, the README and the hashes file; wrap, unwrap and relink
-tool/paths.go        virtual paths resolved in the tree and spelt as posixpath does, the manifest's ownership (8.1)
-tool/elf.go          the ELF headers, PT_INTERP, the dynamic section and ld.so.cache the checks read
-tool/search.go       the loader's library search (10.3), the machines the command knows, a tree's glibc by its banner
-tool/check.go        the static and dynamic checks of 10.3, the wrappers and located links, check
-tool/prune.go        prune (10.4)
-tool/blob_*.go       the launcher the command carries, copied in by scripts/build; tool/README.txt the README every exclave gets
-unpack/main.go       exclave unpack: package files -> an unwrapped exclave, and `exclave unpack ldconfig TREE` for a tree made by hand (10.1)
-unpack/steps.go      extraction, the volatile directories, the dependency report, the pkg records; unpack/package.go a package file and its reader
-unpack/rules.go      the synthesis rules as a table, named in the log as they apply, and the notes on what no rule makes
-unpack/ldcache/      ld.so.cache as the tree's own ldconfig would write it, byte for byte, running nothing (10.1)
-unpack/reader/       the interface every package reader provides, the streams they read as they decompress, and the tar reader
-unpack/root/         the tree as a root: every path resolved inside it, every write through a directory descriptor
-unpack/deb/          the Debian reader: ar, tar, compression, control stanzas, dependency fields, version order
-unpack/apk/          the Alpine reader: gzip streams, .PKGINFO, apk's dependency and version syntax
-unpack/rpm/          the rpm reader: lead and headers, the cpio payload, rpm's flags and version order
-fetch/main.go        exclave-fetch, debs, apks or rpms, its own program (fetch/exclave-fetch); fetch/net.go the cache by digest and the retried fetch they share
-fetch/debs.go        resolve a closure from a Debian archive and download it: InRelease against the keyring, every file against the index
-fetch/apks.go        the same for an Alpine repository: the index against the key its signature names, each package's checksums as apk checks them
-fetch/rpms.go        the same for a yum or dnf repository: every rpm's own signatures as rpm checks them, repomd.xml's where the repository signs it
-fetch/verify.go      the signature checks the fetchers share: OpenPGP through go-crypto, its version 3 signatures and Alpine's RSA through Go's crypto, armoured keys decoded
-test/run.py          the regression suite: test/regress_*.py its tests in groups, test/suite.py its fixtures,
-                     test/harness.py the runner it shares with the unpack tests; test/progs/ its C, Rust and Go programs
-test/unpack_test.py  unpack's rules on hostile .deb, .apk and .rpm files; test/packages.py builds them
-test/fetch_test.py   the fetchers' signature checks, on repositories made and signed there
-test/tree.py         what a tree says about itself: its compiler, its shell, where a tool lives, its libc; the suite and the oracles ask it
-test/oracle_ns.py    the namespace oracle (bwrap); test/oracle_resolve.py the openat2 oracle
-test/oracle_syscalls.py  the differential syscall probe: every trapped path and descriptor syscall with every path form under bwrap and under the launcher; test/progs/probe.c its interpreter
-test/exercise.py     one program run under bwrap and under the launcher, the answers side by side: how a limitation is measured before it is fixed
-test/docker_profile.py   an exclave under Docker's default seccomp profile, which scripts/inputs fetches
-test/matrix.py       the kernel matrix in VMs, carrying the pinned Python for each; test/vm_run.py one VM
-test/sysroot.py      a glibc sysroot as a data directory and an output built against it with gcc and clang, for the matrix to run natively
-test/bytecode.py     Python's bytecode made by exclave caches, a cache only the tree's own binary can make, timed before and after
-test/caches_test.py  exclave caches on scripts/inputs's caches.exclave and alpine-caches.exclave: each cache it makes, used before and after
-test/nss_test.py     a user from SSSD looked up inside, through the exclave's own lookup module, in a user namespace
-test/realsoft.py     real projects built inside and outside an exclave; test/bench.py the performance table,
-                     test/profile_spawn.py a spawn's kernel side profiled in a matrix VM
-test/workloads.py    valgrind, poppler, cargo, CMake, Java, Python and TeX in their own exclaves, against the kernel
-test/syscalls.py     every kernel syscall classified; test/stackcheck.py the stack budget
-test/affected.py     the gate's steps a change reaches, derived from what each step runs; test/figures.py the figures the documents quote, checked against the tree
-test/tables_test.py  the tables the launcher, the command, unpack and the tests each carry, read from every source and compared
-test/manifest_test.c grammar tests; test/grammar_test.py the grammar properties; test/filter_test.c the filter against its rule
-test/readers_test.py the command's ELF, ld.so.cache and log readers on hostile files; tool/*_test.go the command's own tests and fuzz targets
-test/compat_test.py  this build against the baseline release's command and exclave, as docs/DESIGN.md 6.7 promises; a step of the gate, SKIP before the first release
-test/scratch_test.c  the scratch pool's sweep under the interleaving that once shared a chunk; test/cache_test.c the cache's growth and its lock across fork
-test/isa_test.c      the CPU level check against made-up cpuid and XCR0 values and against gcc's own answer
-test/fuzz.c          mutation fuzzing of the launcher's parsers; test/launcher_fuzz.c its target, test/fuzz.py the step of scripts/extra
-LICENSE              the MIT licence; the launcher carries its text
-docs/DESIGN.md       the design and specification
-CLAUDE.md            working notes for contributors and coding agents
+src/        the launcher, freestanding C: one source for x86-64 and aarch64, and the script gdb reads from it
+tool/       the exclave command, Go: its commands, and tool/format, the format's package
+unpack/     exclave unpack, the step before: a reader for each package format, the rules, the tree, ld.so.cache
+fetch/      exclave-fetch, the step before that: a fetcher for each kind of repository, and the signature checks
+test/       the suite, the oracles and the other drivers, the unit tests, and progs/, the programs they compile
+scripts/    every command: install-go, install-uv, build, check, gate, extra, matrix, inputs, test, exercise,
+            example, examples, release, reproduce, exclave, exclave-fetch, clean-tmp; lib.sh and steps.sh are sourced
+docs/       DESIGN.md, the design and specification, and PLAN.md, the working plan
+.github/    the workflow that runs the gate and the matrix on GitHub's runners, when dispatched by hand
+build/      everything a script makes, with .uv/, .go/ and .venv/, the pinned tools; none of it is tracked
 ```
 
 ## Reporting problems and contributing
@@ -572,9 +508,10 @@ exclave's `.exclave/hashes` file and the output of `exclave check` on
 it.
 
 Contributions are welcome. A change passes the gate on the gcc exclave
-above and `scripts/extra` on the four exclaves; a launcher change passes
-the kernel matrix too. The gate and the matrix run on GitHub's hosted
-runners when the workflow is dispatched. The design decisions in section
+above; `scripts/extra` on the four exclaves and the kernel matrix are
+the broader runs, made when a maintainer asks, and the gate says when a
+change reaches the matrix's VMs. The gate and the matrix run on
+GitHub's hosted runners when the workflow is dispatched. The design decisions in section
 19 of `docs/DESIGN.md` stand unless the change argues otherwise.
 
 ## Licence
