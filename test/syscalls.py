@@ -4,7 +4,8 @@ Every syscall in the kernel's table for this machine is classified here: x86-64'
 the generic table aarch64 uses. One at or below the filter's ceiling that this file does not know
 fails the test; one above it, which the running kernel is probed for, is a note, since the filter
 traps it and the handler answers ENOSYS until it is classified here and the ceiling moves (7.4.2).
-The launcher's trap list (src/filter.c) must equal TRAP, and its refusals must cover DENIED; the
+The launcher's trap list (src/filter.c) must equal TRAP, its refusals must cover DENIED and its
+ceiling must be HIGHEST_KNOWN; the
 numbers in src/sys.h's block for this machine must be the kernel's. The filter's trap set and the
 syscall page must be the ones its FILTER_VERSION shipped with (SHIPPED), and every path and
 descriptor syscall the filter traps must have a case in the syscall probe (test/oracle_syscalls.py).
@@ -576,8 +577,11 @@ def kernel_probe(lo: int, hi: int) -> list[int]:
     return present
 
 
-def launcher_lists() -> tuple[set[str], set[str], set[str], dict[str, int]]:
-    """The trap list, the refusal lists and the descriptor syscalls of src/filter.c, by name."""
+def launcher_lists() -> tuple[set[str], set[str], set[str], dict[str, int], int]:
+    """The trap list, the refusal lists and the descriptor syscalls of src/filter.c, by name.
+
+    Then the launcher's numbers for this machine, and the filter's ceiling.
+    """
     with open(os.path.join(REPO, "src", "filter.c")) as f:
         src = f.read()
     with open(os.path.join(REPO, "src", "sys.h")) as f:
@@ -601,12 +605,8 @@ def launcher_lists() -> tuple[set[str], set[str], set[str], dict[str, int]]:
     denied = block("enosys_syscalls") | block("eperm_syscalls")
     fd = block("fd_syscalls")
     m = re.search(r"#define HIGHEST_KNOWN_SYSCALL (\d+)", src)
-    if m and int(m.group(1)) != HIGHEST_KNOWN:
-        print(
-            f"FAIL src/filter.c's HIGHEST_KNOWN_SYSCALL is {m.group(1)}, "
-            f"this table's is {HIGHEST_KNOWN:d}"
-        )
-    return trap, denied, fd, numbers
+    assert m, "no HIGHEST_KNOWN_SYSCALL in src/filter.c"
+    return trap, denied, fd, numbers, int(m.group(1))
 
 
 def trap_digest() -> tuple[int, str]:
@@ -730,7 +730,14 @@ def main() -> int:
         if nr <= HIGHEST_KNOWN and name not in known:
             print(f"FAIL unclassified syscall {nr:d} {name} below the filter's ceiling")
             fails += 1
-    trap, denied, fd, numbers = launcher_lists()
+    trap, denied, fd, numbers, ceiling = launcher_lists()
+    if ceiling != HIGHEST_KNOWN:
+        # a ceiling raised in the filter alone would allow by number what is not classified here
+        print(
+            f"FAIL src/filter.c's HIGHEST_KNOWN_SYSCALL is {ceiling:d}, "
+            f"this table's is {HIGHEST_KNOWN:d}"
+        )
+        fails += 1
     trap_fixed = {"newfstatat" if n == "fstatat" else n for n in trap}
     for n in sorted(TRAP - trap_fixed):
         print(f"FAIL path syscall {n} is not in the launcher's trap list")
