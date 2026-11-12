@@ -494,7 +494,8 @@ unpack/     exclave unpack, the step before: a reader for each package format, t
 fetch/      exclave-fetch, the step before that: a fetcher for each kind of repository, and the signature checks
 test/       the suite, the oracles and the other drivers, the unit tests, and progs/, the programs they compile
 scripts/    every command: install-go, install-uv, build, check, gate, extra, matrix, inputs, test, exercise,
-            example, examples, release, reproduce, exclave, exclave-fetch, clean-tmp; lib.sh and steps.sh are sourced
+            example, examples, sysroot, figures, profile-spawn, release, reproduce, exclave, exclave-fetch,
+            clean-tmp; lib.sh and steps.sh are sourced
 docs/       DESIGN.md, the design and specification, and PLAN.md, the working plan
 .github/    the workflow that runs the gate and the matrix on GitHub's runners, when dispatched by hand
 build/      everything a script makes, with .uv/, .go/ and .venv/, the pinned tools; none of it is tracked
