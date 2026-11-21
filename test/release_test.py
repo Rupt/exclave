@@ -5,17 +5,21 @@
 The exclave is a gcc exclave, and the release's toolchain too: scripts/reproduce builds the
 launcher inside it and the command from that, and scripts/release makes a release of a copy of the
 exclave under WORK, wrapped again by that command, since a release is of what the command makes,
-signed with a key made here. A copy wrapped with another launcher is refused.
+signed with a key made here. A copy wrapped with another launcher is refused, as are a directory
+that is not empty and, without the allowance this test makes itself, a tree with changes its
+commit does not hold; a release of no exclave holds the two commands, named for the machine,
+the licences and the sums.
 Then, in a directory that holds nothing but the release's files, the README's recipe runs: the
 signature is verified against the key, the sums are checked, the archive is unpacked, the release's
 own `exclave` checks the exclave and its `exclave-fetch` runs, its tree hash is the one the hashes
-file records, a program in it runs, and NOTICES names every module go.mod requires with its
-licence. A tampered archive and a tampered sums file are refused. Prints one line per step; the
-exit status is the number of failures.
+file records, a program in it runs, and NOTICES names Go and every module go.mod requires with
+its licence. A tampered archive and a tampered sums file are refused. Prints one line per step;
+the exit status is the number of failures.
 """
 
 import argparse
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -28,8 +32,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
 
-def run(cmd: list[str], cwd: str, inp: bytes | None = None) -> tuple[int, str]:
-    p = subprocess.run(cmd, cwd=cwd, input=inp, capture_output=True, check=False, timeout=600)
+MACHINE = platform.machine()
+RELEASE = os.path.join(REPO, "scripts", "release")
+# scripts/release refuses a tree with uncommitted changes; the recipe is tested on the tree as it
+# stands
+ANY_TREE = dict(os.environ, EXCLAVE_RELEASE_UNCOMMITTED="1")
+
+
+def run(
+    cmd: list[str], cwd: str, inp: bytes | None = None, env: dict[str, str] | None = None
+) -> tuple[int, str]:
+    p = subprocess.run(
+        cmd, cwd=cwd, input=inp, capture_output=True, check=False, timeout=600, env=env
+    )
     return p.returncode, (p.stdout + p.stderr).decode("utf-8", "replace")
 
 
@@ -68,14 +83,41 @@ def main() -> int:
         os.path.join(work, "src", "two.exclave"),
         os.path.join(REPO, "build", "launcher-old"),
     )
-    rc, out = run(
-        [os.path.join(REPO, "scripts", "release"), key, release + "-other", toolchain, other], work
-    )
+    rc, out = run([RELEASE, key, release + "-other", toolchain, other], work, env=ANY_TREE)
     step("an exclave wrapped with another launcher is refused", rc and "relink" in out, out[-300:])
-    rc, out = run([os.path.join(REPO, "scripts", "release"), key, release, toolchain, ex], work)
+    rc, out = run([RELEASE, key, release, toolchain, ex], work, env=ANY_TREE)
     step("scripts/release", rc == 0, out[-500:])
     if rc:
         return len(FAILED)
+    rc, out = run([RELEASE, key, release, toolchain, ex], work, env=ANY_TREE)
+    step("a directory that is not empty is refused", rc == 2 and "is not empty" in out, out[-300:])
+    # a release of no exclave: the two commands, the licences and the sums
+    alone = release + "-commands"
+    rc, out = run([RELEASE, key, alone, toolchain], work, env=ANY_TREE)
+    files = sorted(os.listdir(alone)) if rc == 0 else []
+    wanted = sorted(
+        [
+            f"exclave-{MACHINE}",
+            f"exclave-fetch-{MACHINE}",
+            "LICENSE",
+            "NOTICES",
+            "SHA256SUMS",
+            "B3SUMS",
+            "SHA256SUMS.sig",
+        ]
+    )
+    step("a release of the commands alone", rc == 0 and files == wanted, f"{files} {out[-300:]}")
+    rc, out = run(["sha256sum", "-c", "SHA256SUMS"], alone)
+    step("its sums check", rc == 0, out)
+    # without the allowance a release is of a commit: refused where the tree holds more
+    rc, described = run(["git", "describe", "--always", "--dirty", "--exclude=*"], REPO)
+    if rc == 0 and described.strip().endswith("-dirty"):
+        rc, out = run([RELEASE, key, release + "-commit", toolchain], work)
+        step(
+            "a tree with uncommitted changes is refused",
+            rc == 1 and "a release is of a commit" in out,
+            out[-300:],
+        )
 
     # the consumer's directory: the release's files and nothing of the checkout
     consumer = os.path.join(work, "consumer")
@@ -104,7 +146,7 @@ def main() -> int:
     rc, out = run(["sha256sum", "-c", "SHA256SUMS"], consumer)
     step("the sha256 sums check", rc == 0, out)
     # b3sum where the machine has it, else the release's own command, file by file
-    tool = os.path.join(consumer, "exclave")
+    tool = os.path.join(consumer, f"exclave-{MACHINE}")
     os.chmod(tool, 0o755)
     if shutil.which("b3sum"):
         rc, out = run(["b3sum", "-c", "B3SUMS"], consumer)
@@ -118,7 +160,7 @@ def main() -> int:
     step("the archive unpacks", rc == 0, out)
     rc, out = run([tool, "check", name], consumer)
     step("the release's exclave checks the exclave", rc == 0, out[-500:])
-    fetcher = os.path.join(consumer, "exclave-fetch")
+    fetcher = os.path.join(consumer, f"exclave-fetch-{MACHINE}")
     os.chmod(fetcher, 0o755)
     rc, out = run([fetcher, "version"], consumer)
     step("the release's exclave-fetch runs", rc == 0 and out.startswith("exclave-fetch "), out)
@@ -141,10 +183,16 @@ def main() -> int:
         notices = f.read()
     missing = [m for m, v in required if f"\n== {m} {v}, " not in notices]
     step(
-        "NOTICES names every module go.mod requires, with its licence",
-        required and not missing and notices.count("Redistribution") >= len(required),
+        "NOTICES names Go and every module go.mod requires, with its licence",
+        required
+        and not missing
+        and "\n== Go " in notices
+        and notices.count("Redistribution") > len(required),
         f"missing {missing}" if missing else notices[:300],
     )
+    with open(os.path.join(consumer, "LICENSE"), encoding="utf-8") as f:
+        licence = f.read()
+    step("LICENSE is exclave's own", "MIT License" in licence, licence[:100])
 
     # tampering: a byte of the archive, and a sum in the sums file
     with open(os.path.join(consumer, name + ".tar.zst"), "r+b") as f:

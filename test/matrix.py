@@ -675,11 +675,13 @@ def make_release(ex: str, reproduced_command: str, work: str) -> str | None:
     key = os.path.join(rel, "key")
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
     copy = tree.copy_exclave(ex, os.path.join(rel, "src", os.path.basename(ex)))
+    # the recipe is run on the tree as it stands, committed or not
+    env = dict(os.environ, EXCLAVE_RELEASE_UNCOMMITTED="1")
     for cmd in (
         [reproduced_command, "relink", copy],
         [os.path.join(REPO, "scripts", "release"), key, os.path.join(rel, "out"), ex, copy],
     ):
-        p = subprocess.run(cmd, capture_output=True, check=False)
+        p = subprocess.run(cmd, capture_output=True, check=False, env=env)
         if p.returncode:
             log("the release was not made:", (p.stdout + p.stderr).decode()[-300:])
             return None
@@ -710,10 +712,11 @@ elif ../python/bin/python3 -c 'import sys, tarfile
 tarfile.open(sys.argv[1]).extractall(filter="fully_trusted")' NAME.tar.zst; then
     say "unpack: no zstd, unpacked by the matrix's Python"
 else say 'unpack: FAIL'; fi
-chmod +x exclave
-if ./exclave check NAME >check.out 2>&1; then say 'check: ok'
+command=./exclave-$(uname -m)
+chmod +x "$command"
+if "$command" check NAME >check.out 2>&1; then say 'check: ok'
 else say "check: FAIL $(tail -1 check.out)"; fi
-v=$(./exclave version 2>&1)
+v=$("$command" version 2>&1)
 case $v in "exclave "*) say "version: $v" ;; *) say "version: FAIL $v" ;; esac
 o=$(NAME/tree/usr/bin/sh -c 'echo from inside' 2>&1)
 if [ "$o" = 'from inside' ]; then say 'program: ok'; else say "program: FAIL $o"; fi

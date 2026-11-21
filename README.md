@@ -400,8 +400,10 @@ on exclaves pruned this way.
 ## Shipping an exclave, and taking one
 
 An exclave is a directory, and `tar` makes it one file. `scripts/release`
-makes a signed release of one or more exclaves with the `exclave`
-command beside them, so whoever takes it needs nothing of this checkout.
+makes a signed release of the `exclave` command and `exclave-fetch`,
+named for the machine, with any exclaves named beside them, so whoever
+takes it needs nothing of this checkout. It is a release of a commit: it
+refuses a tree with uncommitted changes and a directory that is not empty.
 The command and the launcher a release ships are built inside a gcc
 exclave, so anyone with that exclave builds the same bytes
 (`scripts/reproduce`); an exclave to release is wrapped with that
@@ -410,7 +412,8 @@ launcher, which the command built there carries:
 ```bash
 scripts/reproduce gcc.exclave build/reproduce               # build/reproduce/build/{launcher,exclave}, and their BLAKE3
 build/reproduce/build/exclave relink app.exclave           # app.exclave wrapped with the reproducible launcher
-scripts/release ~/.ssh/id_ed25519 release gcc.exclave app.exclave    # release/: app.exclave.tar.zst, exclave, exclave-fetch, NOTICES, SHA256SUMS, B3SUMS, SHA256SUMS.sig
+scripts/release ~/.ssh/id_ed25519 release gcc.exclave app.exclave    # release/: exclave-x86_64, exclave-fetch-x86_64, LICENSE, NOTICES, app.exclave.tar.zst, SHA256SUMS, B3SUMS, SHA256SUMS.sig
+scripts/release ~/.ssh/id_ed25519 commands gcc.exclave               # commands/: the same without an exclave
 ```
 
 Taking one, with the release's files in a directory and the releaser's
@@ -421,7 +424,8 @@ echo "exclave-release $(cat releaser.pub)" > allowed_signers
 ssh-keygen -Y verify -f allowed_signers -I exclave-release -n exclave -s SHA256SUMS.sig < SHA256SUMS
 sha256sum -c SHA256SUMS                                   # or b3sum -c B3SUMS
 tar --zstd -xf gcc.exclave.tar.zst                        # or, where tar has no --zstd: zstd -dc gcc.exclave.tar.zst | tar -xf -
-chmod +x exclave && ./exclave check gcc.exclave           # the tree against the hashes file, the wrappers, the static check
+mv exclave-$(uname -m) exclave && chmod +x exclave        # the command for this machine
+./exclave check gcc.exclave                               # the tree against the hashes file, the wrappers, the static check
 ./exclave version                                         # which build made it; the launcher inside says the same
 ```
 

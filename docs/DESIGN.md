@@ -3893,29 +3893,40 @@ supplies. Every x86-64 row of the kernel matrix builds the launcher
 again inside its copy of the gate's gcc exclave, with no Go in the VM,
 and compares it with the reference machine's (12.1).
 
-**A release.** `scripts/release KEY DIR TOOLCHAIN EXCLAVE...` builds
+**A release.** `scripts/release KEY DIR TOOLCHAIN [EXCLAVE...]` builds
 the launcher inside `TOOLCHAIN`, a gcc exclave, and the command from
-it, by `scripts/reproduce`, and puts under `DIR` each exclave as
+it, by `scripts/reproduce`, and puts under `DIR` the command as
+`exclave-ARCH` and `exclave-fetch-ARCH` beside it, `ARCH` the machine's
+as `uname -m` names it, so that a release holds each architecture's
+under a name of its own; `LICENSE`, exclave's own, and `NOTICES`, the
+licence texts of Go, whose library and runtime the commands link, and
+of the Go modules they link, written at the build from the pinned
+toolchain and module cache, since their BSD licences ask a binary
+distribution to carry them; each exclave named as
 `NAME.exclave.tar.zst`, zstd's level 19, the same bytes on any number
 of threads (on the Alpine exclave, 6% larger than xz's and unpacked in
 a tenth of its time, 0.19 s against 1.98 s, November 2026), an archive
 that keeps the hard links, sorted
 and without owners, made only after the exclave passes `check` and
-only if it is wrapped with that launcher; the command itself as
-`exclave`, and `exclave-fetch` beside it, with the licence texts of the
-Go modules they link as `NOTICES`, written at the build from the pinned module cache, since
-their BSD licences ask a binary distribution to carry them; `SHA256SUMS`
+only if it is wrapped with that launcher; `SHA256SUMS`
 and `B3SUMS`, as `b3sum` writes it, over every file there; and `SHA256SUMS.sig`, the sums signed with the ssh key `KEY`
-(`ssh-keygen -Y`, namespace `exclave`). A consumer needs nothing of the
+(`ssh-keygen -Y`, namespace `exclave`). With no exclave named the
+release is the two commands, which are all a person needs to make an
+exclave of their own (10.1). A release is of a commit and of nothing
+else: `DIR` must be empty, since every file in it is summed and
+signed, and a tree with changes its commit does not hold is refused,
+since the build would name itself `-dirty` (6.7); the release test
+and the matrix, which run the recipe on the tree as it stands, say so
+with `EXCLAVE_RELEASE_UNCOMMITTED=1`. A consumer needs nothing of the
 checkout: the signature is verified against the releaser's public key,
 obtained through a channel the consumer trusts; the sums are checked;
 the archive is unpacked; and the release's own `exclave check` compares
 the tree with the hashes file and runs the static check, so what runs
 is what was released. The README gives the commands, and
 `test/release_test.py`, a step of `scripts/extra`, runs them on a
-release of the gcc exclave, with a tampered archive and a tampered
-sums file refused, and `NOTICES` naming every module `go.mod` requires
-(17).
+release of the gcc exclave and on one of the commands alone, with a
+tampered archive and a tampered sums file refused, and `NOTICES`
+naming Go and every module `go.mod` requires (17).
 
 
 ## 11. Layers

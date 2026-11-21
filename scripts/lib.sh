@@ -80,10 +80,11 @@ go_build() {
     echo "built $out ($(stat -c %s "$out") bytes, $arch)"
 }
 
-# go_notices OUT PKG...: the licence texts of every module linked into the PKGs, for a release to ship beside them
-# (DESIGN.md 10.5), since the modules' BSD licences ask a binary distribution to carry their notices. The modules in
-# the order of their paths, each with the licence files at its root from the pinned cache, so the file is the same
-# from the same go.sum anywhere; a module without one fails the build, loudly.
+# go_notices OUT PKG...: the licence texts of Go itself, whose library and runtime every Go program links, and of
+# every module linked into the PKGs, for a release to ship beside them (DESIGN.md 10.5), since their BSD licences
+# ask a binary distribution to carry their notices. Go's from the pinned toolchain, then the modules in the order
+# of their paths, each with the licence files at its root from the pinned cache, so the file is the same from the
+# same go.sum and toolchain anywhere; a module without one fails the build, loudly.
 go_notices() {
     out=$1
     shift
@@ -94,8 +95,11 @@ go_notices() {
         return 1
     }
     {
-        echo "The exclave command and exclave-fetch link these Go modules, the versions go.mod pins, each under"
-        echo "the licence that follows its name. exclave itself is under the MIT licence (LICENSE)."
+        echo "The exclave command and exclave-fetch link Go's standard library and runtime and these Go modules,"
+        echo "the versions go.mod pins, each under the licence that follows its name. exclave itself is under the"
+        echo "MIT licence (LICENSE)."
+        printf '\n\n== Go %s, the standard library and runtime, LICENSE\n\n' "$(sed -n '1s/^go//p' "$GO_HOME/go/VERSION")"
+        cat "$GO_HOME/go/LICENSE"
         printf '%s\n' "$mods" | LC_ALL=C sort -u | while read -r path ver dir; do
             found=false
             for f in "$dir"/LICENSE* "$dir"/LICENCE* "$dir"/COPYING* "$dir"/NOTICE*; do
