@@ -81,8 +81,8 @@ tex.exclave/tree/usr/bin/pdflatex paper.tex   # by its path, through a symlink, 
 `/usr/share/keyrings/ubuntu-archive-keyring.gpg` on an Ubuntu host, and
 the `ubuntu-keyring` package gives it to another. Without `--cache DIR`
 it keeps nothing between runs, and `--snapshot DATE` is the one way to
-fetch the same files again later. The exclave is a directory of about
-300 MB that nothing outside it refers to; `exclave prune` with the log
+fetch the same files again later. The exclave is a directory that
+nothing outside it refers to; `exclave prune` with the log
 of a run cuts it to what the run touched. `./exclave help` lists the
 commands and `./exclave-fetch debs --help` a fetcher's options and
 defaults; "Making your own exclave" below says more, with
@@ -174,7 +174,7 @@ warning: this host's nsswitch.conf names sss; the exclave has no libnss_sss.so.2
 dynamic check: 1508 log lines, 0 errors
 ```
 
-The warnings of `wrap` are dangling symlinks, the first four by name
+The warnings of `wrap` are dangling symlinks, the first few by name
 and the rest as a count: `coreutils`' locale
 links, which point at translations Ubuntu moves into language packs the
 package does not ship, and a man-page link to a page no package in the

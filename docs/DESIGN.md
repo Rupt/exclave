@@ -1297,8 +1297,8 @@ order: the argument checks that can only allow (an `ioctl` other than
 seccomp's, the two `seccomp` queries) and the version
 probe; an `rt_sigreturn` from the handler-call slot, answered with an
 error, and every other `rt_sigreturn`, allowed; the judge slot and the
-syscall page; the refusals; then the trap. On x86-64 the program is
-298 instructions and 372 of the 472 numbers up to the ceiling are
+syscall page; the refusals; then the trap. On x86-64 four in five of
+the numbers up to the ceiling are
 allowed by number alone; `rt_sigreturn`, which the cache proves allowed
 no longer, runs the second stage at every signal's return, the trap's
 own included (16.2). 16.3 gives why a tree and what
@@ -5752,7 +5752,7 @@ per number.
 
 A `posix_spawn` of `/usr/bin/true` from inside an exclave costs twice
 the native time, 256 to 264 µs against 131 to 135, and each process it
-starts takes 90 page faults against 55 (`getrusage` of the children):
+starts takes two thirds more page faults (`getrusage` of the children):
 seven rounds of 2 000 spawns pinned to one CPU, November 2026,
 alternating native, this launcher and one that maps a program where
 `mmap` puts it and leaves the break (7.3), which takes 256 to 267 µs:
@@ -6025,7 +6025,7 @@ as a whole.
    (13 item 60). A reader uses the table it loaded,
    and a table replaced is never written again. Checks: the copy in
    `test/cache_test.c`, every entry answering after it, and the
-   page-fault row of 16.8.
+   page faults of a start (16.4).
 
 10. **The start's buffers are one scratch chunk's** (specified in 7.2).
     A buffer for a path is a page, and a page first touched is a fault,
@@ -6148,7 +6148,7 @@ which costs *n* traps for a path *n* deep.
 
 ### 16.8 Measured results
 
-November 2026, on this launcher, the machine otherwise idle. The rows
+November 2026, the machine otherwise idle. The rows
 are from two runs of `test/bench.py --launcher`, each the best of
 three, the better of the two taken (the `sqlite3.c` row from the second,
 with `--sqlite`), from its working directory nine components deep, the
@@ -6166,7 +6166,6 @@ pace.
 | `realpath()` of that working directory | 1.69 µs | 23.3 µs |
 | `getppid()`, untrapped | 45 ns | 54 ns |
 | `posix_spawn` of `/usr/bin/true`, alternated runs pinned to one CPU (16.4) | 131 to 135 µs | 256 to 264 µs |
-| page faults of each process `posix_spawn` starts (16.4) | 55 | 90 |
 | 100 000 `posix_spawn`s from one process, RSS | +200 to +236 kB | +232 to +280 kB |
 | thirty `gcc -O0 hello.c` | 0.74 s | 0.80 s |
 | a 61-file project, `-O1 -c` each then link | 0.61 s | 0.86 s |
@@ -6180,10 +6179,10 @@ compiler either way. The compute-bound compile runs within noise of
 native and produces an identical object, also on the kernels
 that would force the speculation mitigation (16.5). A `posix_spawn`
 costs twice native, from seven rounds of 2 000 spawns pinned to one
-CPU, alternating native, this launcher and one that places nothing,
-its page faults from the same rounds (16.4); those two rows are not
+CPU, alternating native, the launcher and one that places nothing
+(16.4); that row is not
 `test/bench.py`'s, and the syscall counts are its command's, run by
-hand on this launcher. The syscall count moves with the depth of the
+hand. The syscall count moves with the depth of the
 compiler's temporary directory, since its temporary files are walked on
 the host, not with the working directory's.
 What is left of a small compile's overhead, by `strace` and
@@ -6193,23 +6192,13 @@ item 8); five process starts, each more the kernel's exec, page faults
 and process creation than the launcher's code (16.4); and the launcher's
 own walk (16.7).
 
-**Real software.** An exclave of `gcc g++ make libc6-dev python3`
-(120 packages); four projects, each built from its source by the
-host's toolchain and by the exclave's through the exclave's own shell,
-`make -j4`, then the project's own test or a run of the result, by
-`test/realsoft.py`. Measured September 2026 with an earlier launcher,
-before the optimisations of 16.6:
-
-| Project | configure, host / exclave | make, host / exclave | result |
-|---|---|---|---|
-| zlib 1.3.1 | 0.3 s / 0.4 s | 0.9 s / 0.9 s | `make test` passes in both |
-| Lua 5.4.7 | none | 1.1 s / 1.1 s | the interpreter runs in both |
-| SQLite 3.46.1, autoconf and libtool | 2.2 s / 2.9 s | 51.8 s / 51.8 s | the shell answers in both |
-| re2c 3.1, autotools, C++ | 3.6 s / 4.9 s | 8.1 s / 9.6 s | the built re2c runs in both |
-
-Configure scripts, which spawn a process per test, cost about a third
-more; the compile-heavy builds nothing to a fifth more. Everything a
-build touched, `/tmp`, the source directory and the working directory,
+**Real software.** `test/realsoft.py` builds zlib, Lua, SQLite, with
+autoconf and libtool, and re2c, with autotools and C++, each from its
+source by the host's toolchain and by a gcc exclave's through the
+exclave's own shell, and runs the project's own test or its result,
+which pass in both. Configure scripts, which spawn a process for each
+test, are where the exclave's builds cost most. Everything a build
+touched, `/tmp`, the source directory and the working directory,
 resolved without a manifest record being added.
 
 **The command.** On the gate's gcc exclave (159 MB, 709 ELF files), best
