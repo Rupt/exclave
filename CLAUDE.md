@@ -225,7 +225,7 @@ The loop that has served well, in the order it pays:
 - **The gate.** `scripts/gate EXCLAVE` (`EXCLAVE_TEST_INPUTS=DIR`,
   the directory `scripts/inputs` filled, gives the steps that need
   more than the one exclave their inputs: the Docker profile, the SSSD
-  lookup, the caches test, the gdb tests and the compatibility test; a
+  lookup, the caches test and the gdb tests; a
   step without its input, or one that cannot run on the machine, is a
   SKIP, by exit status 77) runs, of its steps, the ones the changed
   paths can affect (`--full`: all of them), two steps at a time (`--jobs N`; this laptop is in use
@@ -292,8 +292,8 @@ Every development input is made by `scripts/inputs DIR`, which holds the
 exact fetch commands: the gcc exclave of the gate and the Alpine,
 Fedora and clang exclaves of `scripts/extra`, the arm64 gcc exclave,
 the SSSD lookup's `sss.exclave`, the caches test's `caches.exclave`
-and `alpine-caches.exclave`, the gdb tests' `gdb.exclave`, Docker's
-seccomp profile and, once there is one, the baseline release, from the
+and `alpine-caches.exclave`, the gdb tests' `gdb.exclave` and Docker's
+seccomp profile, from the
 package archives and GitHub alone, which is all the CI workflow
 fetches; `scripts/inputs DIR examples` adds the examples' inputs, the
 CentOS 7 rpms for `test/sysroot.py`, the workloads' exclaves and the

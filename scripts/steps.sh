@@ -33,7 +33,7 @@ cannot_run() {
 }
 
 # report WHAT START: one line per step, ok, SKIP (status 77: the step said it cannot run here, an oracle without
-# bwrap, namespaces or openat2, the compatibility test before a baseline release, a step whose input was not
+# bwrap, namespaces or openat2, a step whose input was not
 # given) or FAIL with its last line; prints the count and the time since START; returns the number of failed steps
 report() {
     fails=0 skips=0

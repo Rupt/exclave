@@ -45,8 +45,8 @@ def cannot_run(what: str, why: str) -> int:
     return CANNOT_RUN
 
 
-# The checks of a driver that is one run and not a list of tests (the compatibility, release and
-# caches tests): each is printed as it is made, and the names of those that failed are kept.
+# The checks of a driver that is one run and not a list of tests (the release and caches tests):
+# each is printed as it is made, and the names of those that failed are kept.
 FAILED: list[str] = []
 
 

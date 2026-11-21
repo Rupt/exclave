@@ -19,7 +19,7 @@ import affected
 CASES: tuple[tuple[str, frozenset[str], frozenset[str]], ...] = (
     ("fetch/debs.go", frozenset({"go", "fetch"}), frozenset({"every"})),
     ("unpack/rules.go", frozenset({"go", "unpack", "suite"}), frozenset({"every"})),
-    ("tool/check.go", frozenset({"go", "suite", "compat"}), frozenset({"every"})),
+    ("tool/check.go", frozenset({"go", "suite"}), frozenset({"every"})),
     ("test/progs/probe.c", frozenset({"oracles"}), frozenset({"every"})),
     ("src/handler.c", frozenset({*affected.STEPS, "every", "matrix"}), frozenset()),
     ("docs/DESIGN.md", frozenset(), frozenset({*affected.STEPS, "every", "matrix"})),

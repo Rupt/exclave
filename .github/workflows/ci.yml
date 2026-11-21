@@ -2,11 +2,9 @@
 # hand (workflow_dispatch: the Actions tab, or gh workflow run ci.yml -f matrix=true, false for
 # the gate alone; gh run watch ID --exit-status waits) and never at a push. The workflow only calls the
 # repository's scripts: scripts/install-uv for the pinned Python, scripts/install-go for the
-# pinned Go and scripts/inputs for the development inputs through cached package files and the
-# baseline release, the three in the one setup both jobs share (.github/actions/setup); then
-# scripts/gate --full, whose
-# compatibility step holds the build to that release (SKIP before the first release and on aarch64, which has
-# none), and scripts/matrix. What
+# pinned Go and scripts/inputs for the development inputs through cached package files, the
+# three in the one setup both jobs share (.github/actions/setup); then scripts/gate --full
+# and scripts/matrix. What
 # it adds is what the runner lacks and the reference machine has: packages, the KVM device
 # opened to the runner, the AppArmor sysctl that denies user namespaces on Ubuntu 24.04, and a
 # first compile by the runner's rustc, made before the gate, where no test's budget runs.

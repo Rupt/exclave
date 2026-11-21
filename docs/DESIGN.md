@@ -844,13 +844,6 @@ The rules every version keeps:
   version` and the hashes file's `tool` record give it with the commit
   (6.4), and the versions above say what the build reads.
 
-The baseline is the first release: `scripts/inputs` records its
-command and one exclave it ships by URL and BLAKE3-256 and puts them in
-its `DIR/baseline`, and `test/compat_test.py`, a step of the commit
-gate, holds every later build to these rules against them (17). Given an earlier build of another kind, it fails as
-it should: against a build from before the log carried its version, on
-the log.
-
 ## 7. The launcher
 
 The launcher is one static, freestanding, `ET_DYN` binary with no
@@ -6695,17 +6688,7 @@ its time, ok, SKIP or FAIL:
   is refused with nothing moved; and a generator that fails, one that
   writes into the read-only tree, one that makes a link to the copy and
   a run ended by `SIGTERM` leave the tree, its hash and `.exclave/` as
-  they were;
-- when `EXCLAVE_TEST_INPUTS` names that directory, the compatibility
-  test (`test/compat_test.py`) against the baseline it holds in
-  `baseline/`, the first release's command and an exclave it ships
-  (6.7): this command checks, hashes and reads the logs of the
-  exclave as the release made it, and unwraps and wraps it again with
-  every earlier path unchanged and only its identity placeholders
-  added; the release's command checks and hashes a copy this build
-  relinked; and the two launchers nest either way. Before the first
-  release, and on a machine the release is not for, there is no
-  baseline and the step is SKIP.
+  they were.
 
 Every driver runs `build/launcher` on a copy of its own, so the exclave
 given to the gate is never run as it is nor written. The suite wraps a
@@ -7119,10 +7102,7 @@ questions.
    and the kernel matrix (12.1) run on the reference machine, and on
    GitHub's hosted runners when a maintainer dispatches the workflow;
    nothing runs at a push. Before it nothing promises compatibility
-   between commits (2); from it on, the versions of 6.7 do, and the
-   first release is the baseline every later commit is held to: its
-   URL and hashes go into `scripts/inputs`, which fetches it, and the
-   gate's compatibility step runs against it (17).
+   between commits (2); from it on, the versions of 6.7 do.
 3. **aarch64 kernels with 16 KB or 64 KB pages.** The loader rounds to
    the kernel's page size and the launcher's own segments are 64 KB
    aligned (13 item 43). The matrix's `noble-arm64-64k` row, on

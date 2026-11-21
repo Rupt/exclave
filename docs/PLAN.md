@@ -23,10 +23,10 @@ Taken in November 2026 with the user, each with its reason:
   tested, and an aarch64 release follows later, made on an aarch64
   machine as its exclaves are. The emulated arm64 rows are costly and
   run when asked.
-- **The first release is the compatibility baseline.** From it on,
-  every commit is held to the release's files by the compatibility test,
-  which CI runs against the release's assets fetched from GitHub and
-  pinned by hash.
+- **No release is a compatibility baseline yet.** No version promises
+  to read what another wrote until a point declared later, so nothing
+  holds a commit to a release's files; the format versions stay, since
+  they make a build refuse by name what it does not know (DESIGN 6.7).
 - **The archive is zstd only** (`NAME.exclave.tar.zst`), for the reason
   DESIGN 10.5 gives. The consumer's recipe gives the portable form for
   hosts whose `tar` lacks `--zstd`.
@@ -61,11 +61,11 @@ documents, gate, one commit per item. Status is in brackets.
    the figures rule applied throughout `docs/DESIGN.md`, `README.md` and
    the exclave README.
 2. **Versioning `0.0.n`** [done]: `VERSION` is `0.0.1`.
-3. **The compatibility baseline** [done]: a record of the baseline
-   release's assets that `scripts/inputs` fetches, the compatibility
-   test a step of the gate, and so of CI, reporting SKIP until a release
-   exists; a later `wrap` may add only its identity placeholders to an
-   earlier exclave (DESIGN 6.7).
+3. **The compatibility baseline** [withdrawn]: the record of a baseline
+   release in `scripts/inputs` and the compatibility test, a step of
+   the gate that could only skip, are removed until a compatibility
+   point is declared; git keeps them, `test/compat_test.py` last at
+   7ad8079.
 4. **The consumer's recipe on every kernel of the matrix** [done, the
    matrix run on it due]: a release of the gcc exclave verified, unpacked and
    checked in each matrix VM with the release's own command, each
@@ -95,8 +95,7 @@ documents, gate, one commit per item. Status is in brackets.
 8. **The release point** [not decided]: the gate, the hosted workflow
    with the matrix, the emulated arm64 row and the release test all
    passing on one commit; `docs/DESIGN.md` and `README.md` consistent
-   with it; then `scripts/release` on that commit, and the baseline
-   record of item 3 filled from its assets.
+   with it; then `scripts/release` on that commit.
 9. **The suite on the Alpine exclave** [done]: the suite had not run on
    musl since an exerciser took glibc's stack-end symbol; that and four
    tests asserting glibc's wording, stack minimum and `raise` are fixed,
