@@ -3122,7 +3122,13 @@ exclave-fetch version               the build it is from, as exclave version
 
 `exclave` alone, or given a command it does not know, lists its
 commands with their arguments, and a command given the wrong arguments
-prints its own line; either is a usage error, status 2. `wrap` and
+prints its own line; either is a usage error, status 2. Asked for,
+by `exclave help`, `--help` or `-h`, or by a command's `--help`, the
+same lines are an answer, on standard output with status 0, and
+`--version` is `version`. `exclave-fetch` alone lists its three
+fetchers' lines, and each fetcher's `--help` says what it requires,
+the suites and archive it takes unasked, and every option with its
+default. `wrap` and
 `relink` also write the exclave's `README` (6.1) where it has none. Every command of the tool's own except `format` refuses,
 before reading or writing anything, a directory without `tree/`, and
 every one except `wrap` refuses one without `.exclave/`.
@@ -3729,7 +3735,9 @@ outside data directories, reading originals in place of wrappers.
   rule 5). The links a trust tool made there draw none, since the
   host's links replace them, and SSSD's directory draws none, since a
   tree that ships SSSD ships its empty state there.
-- A dangling symlink is a warning; a missing `ld.so.cache` on a glibc
+- A dangling symlink is a warning, the first few by name and the rest
+  as a count, since packages ship them by the dozen for files of
+  packages a tree leaves out; a missing `ld.so.cache` on a glibc
   tree is a warning; a file with an ELF magic that is not a well-formed
   ELF file is an error, by name.
 - A file the checking user cannot read is an error, with the advice to

@@ -389,18 +389,24 @@ func (r *apkRepo) check(name string, st stanza, p string) error {
 	return nil
 }
 
+const apksSynopsis = "--key FILE --out DIR [OPTION...] PACKAGE..."
+
 func fetchApks(args []string) error {
 	fs := flag.NewFlagSet("exclave-fetch apks", flag.ContinueOnError)
 	var keys multi
-	out := fs.String("out", "", "directory to fill with .apk files")
-	fs.Var(&keys, "key", "a PEM public key an index may be signed by, named as apk names it")
-	branch := fs.String("branch", "v3.21", "the branch")
-	repos := fs.String("repos", "main,community", "repositories, separated by commas")
-	arch := fs.String("arch", "x86_64", "architecture")
-	mirror := fs.String("mirror", apkMirror, "the mirror's URL")
-	cacheDir := fs.String("cache", "", "a directory to keep files in between runs, or none")
+	out := fs.String("out", "", "the `DIR` to fill with .apk files; required")
+	fs.Var(&keys, "key", "a `FILE` holding a PEM public key an index may be signed by, named as apk names "+
+		"it; required, and given again for another")
+	branch := fs.String("branch", "v3.21", "the branch, `NAME`")
+	repos := fs.String("repos", "main,community", "the repositories, `LIST`, separated by commas")
+	arch := fs.String("arch", "x86_64", "the architecture, `ARCH`, as apk names it")
+	mirror := fs.String("mirror", apkMirror, "the mirror's `URL`")
+	cacheDir := fs.String("cache", "", "a `DIR` to keep indexes and packages in between runs; "+
+		"without it nothing is kept")
 	noBase := fs.Bool("no-base", false, "leave the base set out")
-	packages, err := parseArgs(fs, args)
+	packages, err := parseArgs(fs, apksSynopsis, "Fills DIR with the .apk files of the packages named and of "+
+		"everything they depend on, the base\nset with them, each checked against an index one of the keys "+
+		"signed.", args)
 	if err != nil {
 		return err
 	}

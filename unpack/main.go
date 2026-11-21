@@ -63,7 +63,8 @@ func ldconfigCommand(path string, log logger) error {
 // packages mix formats, architectures or versions of one package.
 func unpack(out string, paths []string, log logger) error {
 	if _, err := os.Lstat(out); err == nil {
-		return refuse("refusing: %s exists", out)
+		return refuse("refusing: %s exists; an unpack makes a new directory from the whole set of package "+
+			"files, so to add a package, unpack it with the others to a new name", out)
 	}
 	if len(paths) == 0 {
 		return refuse("unpack needs at least one package file")
@@ -106,7 +107,7 @@ func unpack(out string, paths []string, log logger) error {
 	}
 	// a failed unpack leaves no output behind, whatever failed it: an error, or a panic that
 	// unwinds through here
-	done := false
+	done, caches := false, false // caches: a note named what exclave caches makes
 	defer func() {
 		if !done {
 			os.RemoveAll(out)
@@ -129,6 +130,7 @@ func unpack(out string, paths []string, log logger) error {
 		}
 		for _, line := range lines {
 			log(line)
+			caches = caches || strings.Contains(line, "exclave caches")
 		}
 		if err := stripVolatile(rootPath); err != nil {
 			return err
@@ -147,7 +149,11 @@ func unpack(out string, paths []string, log logger) error {
 		return err
 	}
 	done = true
-	log(fmt.Sprintf("unpacked %d packages into %s; exclave wrap %s makes it an exclave", len(packages), out, out))
+	next := fmt.Sprintf("exclave wrap %s makes it an exclave", out)
+	if caches {
+		next += fmt.Sprintf(", and exclave caches %s then makes what the notes above say is not generated", out)
+	}
+	log(fmt.Sprintf("unpacked %d packages into %s; %s", len(packages), out, next))
 	return nil
 }
 

@@ -17,6 +17,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -118,18 +119,35 @@ func commands() []command {
 // running is the name of the command that runs, for its usage line.
 var running string
 
+// printUsage writes every command's usage line and what it does, or the one named's.
+func printUsage(w io.Writer, name string) {
+	for _, c := range commands() {
+		if name == "" {
+			fmt.Fprintf(w, "usage: exclave %-27s %s\n", strings.TrimSpace(c.name+" "+c.args), c.does)
+		} else if c.name == name {
+			fmt.Fprintf(w, "usage: exclave %s\n", strings.TrimSpace(c.name+" "+c.args))
+		}
+	}
+}
+
 // usage ends the command that runs with its usage line, or, before one runs, with every
 // command's; either way the status is 2.
 func usage() {
+	printUsage(os.Stderr, running)
+	out.Flush()
+	os.Exit(2)
+}
+
+// help is the usage a person asked for: on standard output, and a success.
+func help(name string) {
+	printUsage(out, name)
 	for _, c := range commands() {
-		if running == "" {
-			fmt.Fprintf(os.Stderr, "usage: exclave %-27s %s\n", strings.TrimSpace(c.name+" "+c.args), c.does)
-		} else if c.name == running {
-			fmt.Fprintf(os.Stderr, "usage: exclave %s\n", strings.TrimSpace(c.name+" "+c.args))
+		if c.name == name {
+			fmt.Fprintf(out, "%s\n", c.does)
 		}
 	}
 	out.Flush()
-	os.Exit(2)
+	os.Exit(0)
 }
 
 // isErrno reports whether err is the errno given.
@@ -279,6 +297,12 @@ func main() {
 	if len(os.Args) < 2 {
 		usage()
 	}
+	switch os.Args[1] {
+	case "help", "--help", "-h":
+		help("")
+	case "--version":
+		os.Args[1] = "version"
+	}
 	var run func([]string) int
 	for _, c := range commands() {
 		if c.name == os.Args[1] {
@@ -288,6 +312,10 @@ func main() {
 	if run == nil {
 		fmt.Fprintf(os.Stderr, "exclave: unknown command %s\n", os.Args[1])
 		usage()
+	}
+	// a command asked for its help alone; unpack answers with its own
+	if len(os.Args) == 3 && os.Args[2] == "--help" && running != "unpack" {
+		help(running)
 	}
 	rc := run(os.Args[2:])
 	if err := out.Flush(); err != nil {

@@ -558,17 +558,24 @@ func sigValue(h rpm.Header, tags ...uint32) []byte {
 	return nil
 }
 
+const rpmsSynopsis = "--keyring FILE --repo URL --out DIR [OPTION...] PACKAGE..."
+
 func fetchRpms(args []string) error {
 	fs := flag.NewFlagSet("exclave-fetch rpms", flag.ContinueOnError)
 	var keyrings, repos, choose multi
-	out := fs.String("out", "", "directory to fill with .rpm files")
-	fs.Var(&keyrings, "keyring", "a keyring the packages must be signed by: an RPM-GPG-KEY file, or a binary keyring")
-	fs.Var(&repos, "repo", "a repository root holding repodata/")
-	arch := fs.String("arch", "x86_64", "architecture to take besides noarch")
-	cacheDir := fs.String("cache", "", "a directory to keep files in between runs, or none")
-	fs.Var(&choose, "choose", "VIRTUAL=PKG, the package to use for a capability")
+	out := fs.String("out", "", "the `DIR` to fill with .rpm files; required")
+	fs.Var(&keyrings, "keyring", "a `FILE` of keys the packages must be signed by, an RPM-GPG-KEY file or a "+
+		"binary keyring; required, and given again for another")
+	fs.Var(&repos, "repo", "the `URL` of a repository's root, which holds repodata/; required, and given "+
+		"again for another")
+	arch := fs.String("arch", "x86_64", "the architecture to take besides noarch, `ARCH`")
+	cacheDir := fs.String("cache", "", "a `DIR` to keep indexes and packages in between runs; "+
+		"without it nothing is kept")
+	fs.Var(&choose, "choose", "`VIRTUAL=PKG`: PKG is the package to use for the capability VIRTUAL")
 	noBase := fs.Bool("no-base", false, "leave the base set out")
-	packages, err := parseArgs(fs, args)
+	packages, err := parseArgs(fs, rpmsSynopsis, "Fills DIR with the .rpm files of the packages named and of "+
+		"everything they depend on, the base\nset with them, each signed by a key of the keyring and checked "+
+		"against its repository's index.", args)
 	if err != nil {
 		return err
 	}

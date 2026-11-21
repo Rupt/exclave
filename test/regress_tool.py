@@ -375,6 +375,21 @@ def unpack_and_wrap(ctx: Ctx) -> str | None:
             rc == 2 and all(f"usage: exclave {n} " in e for n in names),
             f"exclave {args} lists its commands and is a usage error: {rc} {o}{e}",
         )
+    # asked for, the same lines are an answer: on standard output, status 0
+    for args in (["help"], ["--help"], ["-h"]):
+        rc, o, e = run([*TOOL, *args])
+        expect(
+            rc == 0 and not e and all(f"usage: exclave {n} " in o for n in names),
+            f"exclave {args} lists its commands: {rc} {o}{e}",
+        )
+    rc, o, e = run([*TOOL, "wrap", "--help"])
+    expect(
+        rc == 0 and not e and o.startswith("usage: exclave wrap EXCLAVE [LAUNCHER]\n"),
+        f"a command's --help is its own line and what it does: {rc} {o}{e}",
+    )
+    rc, o, e = run([*TOOL, "--version"])
+    rc2, o2, _e = run([*TOOL, "version"])
+    expect(rc == 0 and rc2 == 0 and o == o2 and o.startswith("exclave "), f"--version: {rc} {o}{e}")
     return note
 
 

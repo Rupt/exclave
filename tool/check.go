@@ -64,6 +64,27 @@ type scan struct {
 	rep                          *report
 	executables, libraries       []object
 	interpR, interpText, interpV []string // each loader resolved, as named, and by whom, first come
+	dangling                     []string // each link that leads nowhere in the tree, and its text
+}
+
+// danglingShown is how many dangling links a report names one by one: packages ship them by the
+// dozen, to files of packages a tree leaves out, and beyond a few the count says as much.
+const danglingShown = 5
+
+// reportDangling warns of the links the scan found dangling: each by name while they are few,
+// else the first of them and how many there are in all.
+func (s *scan) reportDangling() {
+	shown := s.dangling
+	if len(shown) > danglingShown {
+		shown = shown[:danglingShown-1]
+	}
+	for _, d := range shown {
+		s.rep.warnf("dangling symlink %s", d)
+	}
+	if n := len(s.dangling) - len(shown); n > 0 {
+		s.rep.warnf("%d more dangling symlinks: links to files the tree's packages leave to others, harmless "+
+			"unless a program follows one; find %s -xtype l lists them", n, s.root)
+	}
 }
 
 func (s *scan) file(vpath string, st *unix.Stat_t, real string) {
@@ -71,7 +92,7 @@ func (s *scan) file(vpath string, st *unix.Stat_t, real string) {
 	if isLnk(st) {
 		if treeResolve(s.root, vpath, true, nil) == "" {
 			target, _ := os.Readlink(real)
-			rep.warnf("dangling symlink %s -> %s", vpath, target)
+			s.dangling = append(s.dangling, vpath+" -> "+target)
 		}
 		return
 	}
@@ -87,7 +108,7 @@ func (s *scan) file(vpath string, st *unix.Stat_t, real string) {
 				failErrno(pay, err)
 			}
 			rep.errorf("unreadable file %s: chmod u+r it; no copy of the exclave can carry it and the tree hash "+
-				"needs it (10.3)", vpath)
+				"needs it (docs/DESIGN.md 10.3)", vpath)
 			return
 		}
 		head := make([]byte, 4)
@@ -123,10 +144,10 @@ func (s *scan) file(vpath string, st *unix.Stat_t, real string) {
 			rep.errorf("%s wants interpreter %s, which does not resolve in the tree", vpath, *e.interp)
 		case underAny(r, s.data):
 			rep.errorf("%s wants interpreter %s, which resolves into the data directory %s: never executed or "+
-				"loaded (6.2)", vpath, *e.interp, r)
+				"loaded (docs/DESIGN.md 6.2)", vpath, *e.interp, r)
 		case hostOwned(r, s.own):
 			rep.errorf("%s wants interpreter %s, which resolves to %s, a path the exclave does not own: the launcher "+
-				"refuses a host loader (7.4.5)", vpath, *e.interp, r)
+				"refuses a host loader (docs/DESIGN.md 7.4.5)", vpath, *e.interp, r)
 		case !slices.Contains(s.interpR, r):
 			s.interpR = append(s.interpR, r)
 			s.interpText = append(s.interpText, *e.interp)
@@ -237,7 +258,8 @@ func (w *walkCtx) object(vpath string, e *elfFile, rpaths, chain []string) {
 			continue
 		}
 		if underAny(found, w.data) {
-			w.rep.errorf("%s needs %s, which resolves into the data directory %s: never loaded (6.2)", vpath, n, found)
+			w.rep.errorf("%s needs %s, which resolves into the data directory %s: never loaded "+
+				"(docs/DESIGN.md 6.2)", vpath, n, found)
 			continue
 		}
 		if strings.HasPrefix(n, "libc.") && n != w.libcSoname {
@@ -342,6 +364,7 @@ func staticCheck(ex string, own *ownership, data []string, l *listing) *report {
 	trustWarnings(root, valuesOf(manifestOf(ex), "own"), rep)
 	s := scan{root: root, data: data, own: own, rep: rep, l: l}
 	s.dir(root, "")
+	s.reportDangling()
 	// one loader, and so one libc, per exclave (7.3): read from the ELF files, not declared anywhere
 	if len(s.interpR) > 1 {
 		order := make([]int, len(s.interpR))
@@ -516,19 +539,20 @@ func dynamicCheck(ex string, logs []string, own *ownership) *report {
 			lack = append(lack, m)
 		} else if pkg, ok := nssPackages[m]; ok {
 			rep.warnf("this host's nsswitch.conf names %s; the exclave has no libnss_%s.so.2, so what it looks up "+
-				"is unknown inside: add %s (8.4)", m, m, pkg)
+				"is unknown inside: add %s (docs/DESIGN.md 8.4)", m, m, pkg)
 		} else {
 			rep.warnf("this host's nsswitch.conf names %s; the exclave has no libnss_%s.so.2, so what it looks up "+
-				"is unknown inside: add the package that ships it (8.4)", m, m)
+				"is unknown inside: add the package that ships it (docs/DESIGN.md 8.4)", m, m)
 		}
 	}
 	if len(lackUsers) > 0 {
 		rep.warnf("this host's nsswitch.conf names %s for users or groups; musl loads no NSS modules, so the users "+
-			"and groups they know are unknown inside unless the host runs nscd (8.4)", strings.Join(lackUsers, ", "))
+			"and groups they know are unknown inside unless the host runs nscd (docs/DESIGN.md 8.4)",
+			strings.Join(lackUsers, ", "))
 	}
 	if len(lack) > 0 {
 		rep.warnf("this host's nsswitch.conf names %s; musl loads no NSS modules, so what they look up is unknown "+
-			"inside (8.4)", strings.Join(lack, ", "))
+			"inside (docs/DESIGN.md 8.4)", strings.Join(lack, ", "))
 	}
 	return rep
 }

@@ -443,21 +443,31 @@ func (r *debRepo) download(st stanza) (fetched, error) {
 	}
 }
 
+const debsSynopsis = "--keyring FILE --out DIR [OPTION...] PACKAGE..."
+
 func fetchDebs(args []string) error {
 	fs := flag.NewFlagSet("exclave-fetch debs", flag.ContinueOnError)
 	var keyrings, suites, choose multi
-	out := fs.String("out", "", "directory to fill with .deb files")
-	fs.Var(&keyrings, "keyring", "a keyring InRelease must be signed by: binary, or a key file in ASCII armour")
-	distro := fs.String("distro", "ubuntu", "ubuntu or debian")
-	fs.Var(&suites, "suite", "a suite, or several separated by commas")
-	arch := fs.String("arch", "amd64", "architecture")
-	components := fs.String("components", "main,universe", "components, separated by commas")
-	mirror := fs.String("mirror", "", "the archive's URL")
-	snapshot := fs.String("snapshot", "", "a snapshot service date instead of a mirror")
-	cacheDir := fs.String("cache", "", "a directory to keep files in between runs, or none")
+	out := fs.String("out", "", "the `DIR` to fill with .deb files; required")
+	fs.Var(&keyrings, "keyring", "a `FILE` of keys InRelease must be signed by, binary or in ASCII armour; "+
+		"required, and given again for another")
+	distro := fs.String("distro", "ubuntu", "the distribution, `NAME`: ubuntu or debian")
+	fs.Var(&suites, "suite", "a `SUITE`, or several separated by commas")
+	arch := fs.String("arch", "amd64", "the architecture, `ARCH`, as dpkg names it")
+	components := fs.String("components", "main,universe", "the components, `LIST`, separated by commas")
+	mirror := fs.String("mirror", "", "the archive's `URL`")
+	snapshot := fs.String("snapshot", "", "the archive as its snapshot service had it at `DATE`, 2026-01-31 or "+
+		"20260131T000000Z, instead of a mirror: the one way to fetch the same files again later")
+	cacheDir := fs.String("cache", "", "a `DIR` to keep indexes and packages in between runs; "+
+		"without it nothing is kept")
 	noEssential := fs.Bool("no-essential", false, "leave the Essential set out")
-	fs.Var(&choose, "choose", "VIRTUAL=PKG, the package to use for a virtual package or an alternative")
-	packages, err := parseArgs(fs, args)
+	fs.Var(&choose, "choose", "`VIRTUAL=PKG`: PKG is the package to use for the virtual package or alternative VIRTUAL")
+	does := "Fills DIR with the .deb files of the packages named and of everything they depend on, the\n" +
+		"Essential set with them, each checked against an index a key of the keyring signed.\n" +
+		"Without --suite the suites are " + strings.Join(debSuites["ubuntu"], ", ") + " for ubuntu and " +
+		strings.Join(debSuites["debian"], ", ") + "\nfor debian; without --mirror the archive is " +
+		debMirrors["ubuntu"] + " or\n" + debMirrors["debian"] + "."
+	packages, err := parseArgs(fs, debsSynopsis, does, args)
 	if err != nil {
 		return err
 	}

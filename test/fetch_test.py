@@ -679,6 +679,52 @@ def apks_check_index(work: str) -> None:
         refused(f"{tamper} altered", fetch_apks(work, mirror, right.public, tamper), why)
 
 
+@test
+def usage_and_help(work: str) -> None:
+    """10.1: exclave-fetch says how it is called, and each fetcher what it needs and assumes.
+
+    Without arguments the usage is an error, on standard error; asked for with --help it is an
+    answer, on standard output. A fetcher's --help gives its line with what is required, the
+    suites and archive it takes unasked, and each option with its default; an option it does
+    not have is one line and a usage error.
+    """
+    del work
+
+    def says(args: list[str], status: int, wanted: Sequence[str], *, on_error: bool) -> str:
+        """What exclave-fetch ARGS says on the one stream, with the status and the texts wanted."""
+        p = subprocess.run([*FETCH, *args], capture_output=True, text=True, check=False, timeout=30)
+        said, other = (p.stderr, p.stdout) if on_error else (p.stdout, p.stderr)
+        if p.returncode != status or other or not all(x in said for x in wanted):
+            msg = f"exclave-fetch {args}: status {p.returncode}, {p.stdout!r} {p.stderr!r}"
+            raise AssertionError(msg)
+        return said
+
+    lines = (
+        "exclave-fetch debs --keyring FILE --out DIR [OPTION...] PACKAGE...",
+        "exclave-fetch apks --key FILE --out DIR [OPTION...] PACKAGE...",
+        "exclave-fetch rpms --keyring FILE --repo URL --out DIR [OPTION...] PACKAGE...",
+    )
+    says([], 2, lines, on_error=True)
+    says(["--help"], 0, lines, on_error=False)
+    for kind, line, defaults in (
+        ("debs", lines[0], ("noble-updates", "bookworm", "deb.debian.org", "(default amd64)")),
+        ("apks", lines[1], ("(default v3.21)", "(default main,community)")),
+        ("rpms", lines[2], ("--repo URL", "(default x86_64)")),
+    ):
+        wanted = (
+            "usage: " + line,
+            "--cache DIR",
+            "without it nothing is kept",
+            "required",
+            *defaults,
+        )
+        says([kind, "--help"], 0, wanted, on_error=False)
+        said = says([kind, "--no-such-option"], 2, ("not defined",), on_error=True)
+        if said.count("\n") != 1:
+            msg = f"an option {kind} does not have is one line: {said!r}"
+            raise AssertionError(msg)
+
+
 # ---------------------------------------------------------------- the runner
 def main() -> int:
     ap = argparse.ArgumentParser(

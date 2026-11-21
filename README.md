@@ -120,7 +120,7 @@ What it prints on the reference machine, abridged (`exclave` here is
 == 3. CentOS 7's glibc as a sysroot inside it
 + mkdir -p gcc.exclave/tree/opt
 + cp -a sysroot.exclave/tree gcc.exclave/tree/opt/sysroot-el7
-  gcc.exclave is wrapped (46 warnings; log/wrap.log)
+  gcc.exclave is wrapped (5 warnings; log/wrap.log)
 == 4. a program built inside, run on this host and inside the exclave
 + env EXCLAVE_LOG=/home/me/exclave/build/example/log/hello.log gcc.exclave/gcc --sysroot=/opt/sysroot-el7 -B/opt/sysroot-el7/usr/lib64/ -o hello hello.c
   log/hello.log: 1508 lines, one per trapped syscall; the first:
@@ -142,11 +142,12 @@ static check: 24 ELF files, 2 static executables, 0 warnings, 0 errors
 + exclave check hello.exclave log/pruned.log
 0 wrapper problems
 static check: 24 ELF files, 2 static executables, 0 warnings, 0 errors
-warning: this host's nsswitch.conf names sss; the exclave has no libnss_sss.so.2, so what it looks up is unknown inside: add libnss-sss on Debian and Ubuntu, sssd-client on Fedora (8.4)
+warning: this host's nsswitch.conf names sss; the exclave has no libnss_sss.so.2, so what it looks up is unknown inside: add libnss-sss on Debian and Ubuntu, sssd-client on Fedora (docs/DESIGN.md 8.4)
 dynamic check: 1508 log lines, 0 errors
 ```
 
-The warnings of `wrap` are dangling symlinks: `coreutils`' locale
+The warnings of `wrap` are dangling symlinks, the first four by name
+and the rest as a count: `coreutils`' locale
 links, which point at translations Ubuntu moves into language packs the
 package does not ship, and a man-page link to a page no package in the
 set ships. The warning says the tree has a link to

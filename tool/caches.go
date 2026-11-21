@@ -263,6 +263,22 @@ func pythonBytecode(c *cacheRun, root string) []cache {
 	return made
 }
 
+// generatorsHeld names the programs of the tree that exclave caches would run, one for each
+// generator below, for wrap's last line: a tree that holds one was packaged for what it makes.
+// What a generator needs besides its program, and whether its cache is there already, is the
+// generator's to say when it runs.
+func generatorsHeld(root string) []string {
+	var held []string
+	for _, n := range []string{"/usr/bin/python3", "/usr/bin/glib-compile-schemas", "/usr/bin/update-mime-database",
+		"/usr/bin/gio-querymodules", "/usr/bin/gdk-pixbuf-query-loaders", "/usr/bin/gtk-update-icon-cache",
+		"/usr/bin/update-desktop-database", "/usr/bin/fc-cache", "/usr/bin/fmtutil"} {
+		if findTool(root, n) != "" {
+			held = append(held, n[strings.LastIndexByte(n, '/')+1:])
+		}
+	}
+	return held
+}
+
 // findTool is the virtual path of the first of names the tree holds, or "".
 func findTool(root string, names ...string) string {
 	for _, n := range names {

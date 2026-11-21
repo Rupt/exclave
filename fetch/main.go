@@ -15,6 +15,7 @@ package fetch
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -36,12 +37,27 @@ func (m *multi) String() string     { return strings.Join(*m, ",") }
 func (m *multi) Set(s string) error { *m = append(*m, s); return nil }
 
 // parseArgs parses the flags of fs from args, in any order with the positional arguments,
-// which it returns; an argument the flags cannot take is a usage error.
-func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
+// which it returns; an argument the flags cannot take is a usage error, which the caller
+// prints, once. --help prints the fetcher's usage on standard output: its line, what it does
+// and needs, and every option with its default.
+func parseArgs(fs *flag.FlagSet, synopsis, does string, args []string) ([]string, error) {
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
 	var positional []string
 	for {
 		if err := fs.Parse(args); err != nil {
 			if err == flag.ErrHelp {
+				fmt.Printf("usage: %s %s\n\n%s\n\noptions:\n", fs.Name(), synopsis, does)
+				fs.VisitAll(func(f *flag.Flag) {
+					arg, text := flag.UnquoteUsage(f)
+					if arg != "" {
+						arg = " " + arg
+					}
+					if f.DefValue != "" && f.DefValue != "false" {
+						text += " (default " + f.DefValue + ")"
+					}
+					fmt.Printf("  --%s%s\n        %s\n", f.Name, arg, text)
+				})
 				return nil, err
 			}
 			return nil, &usageError{err.Error()}
@@ -72,8 +88,14 @@ func splitChoices(choose []string) (map[string]string, error) {
 // exit status.
 func Main(v string, args []string) int {
 	version = v
-	usage := "usage: exclave-fetch debs|apks|rpms [ARGS...] | version; " +
-		"exclave-fetch debs --help and the others say which"
+	usage := "usage: exclave-fetch debs " + debsSynopsis + "\n" +
+		"       exclave-fetch apks " + apksSynopsis + "\n" +
+		"       exclave-fetch rpms " + rpmsSynopsis + "\n" +
+		"       exclave-fetch version\n\n" +
+		"Each fills DIR with the package files named and everything they depend on, from a Debian or Ubuntu\n" +
+		"archive, an Alpine branch or rpm repositories, every file checked against an index a given key\n" +
+		"signed; exclave unpack takes the files. exclave-fetch debs --help, and the others', list the options\n" +
+		"and their defaults."
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, usage)
 		return 2

@@ -404,5 +404,10 @@ func cmdWrap(args []string) int {
 	writeReadme(ex)
 	recordWrapped(ex, format.HashText(mdata))
 	fmt.Fprintf(out, "%s is wrapped\n", ex)
+	// what installing the packages would have generated, the tree's own programs make (10.1)
+	if held := generatorsHeld(root); len(held) > 0 {
+		fmt.Fprintf(out, "its tree holds programs that generate caches (%s): exclave caches %s runs them, as "+
+			"installing its packages would have\n", strings.Join(held, ", "), ex)
+	}
 	return 0
 }

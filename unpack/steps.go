@@ -239,13 +239,14 @@ func extractInto(r *root.Root, packages []*Package, log logger) error {
 				}
 				if key, to, ok := literalDiversion(line, name); ok {
 					if d, dup := literal[key]; dup && d.pkg != name {
-						return refuse("%s and %s both divert /%s; diversions are refused (10.1)", d.pkg, name, key)
+						return refuse("%s and %s both divert /%s; diversions are refused (docs/DESIGN.md 10.1)",
+							d.pkg, name, key)
 					}
 					literal[key] = diversion{name, to}
 					continue
 				}
-				return refuse("%s adds a renaming diversion in its %s (%s); diversions are refused (10.1)",
-					name, sname, cut(strings.TrimSpace(line), 100))
+				return refuse("%s adds a renaming diversion in its %s (%s); diversions are refused "+
+					"(docs/DESIGN.md 10.1)", name, sname, cut(strings.TrimSpace(line), 100))
 			}
 		}
 	}
@@ -398,7 +399,7 @@ func extractPackage(r *root.Root, t reader.Archive, name string, replaces map[st
 			for _, p := range []string{prev, name} {
 				if line, ok := diverts[p]; ok && prev != "" && prev != name {
 					return refuse("%s adds a renaming diversion the rule cannot read (%s), and %s and %s both "+
-						"ship /%s; diversions are refused (10.1)", p, line, prev, name, rel)
+						"ship /%s; diversions are refused (docs/DESIGN.md 10.1)", p, line, prev, name, rel)
 				}
 			}
 			if m.Kind == reader.Symlink && r.IsLink(rel) {
