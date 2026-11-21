@@ -152,8 +152,7 @@ The loop that has served well, in the order it pays:
   before it is its subcommand, `unpack/` (`exclave unpack`,
   `scripts/exclave unpack`), which makes a tree from package files; the step
   before that is `exclave-fetch`, a program of its own from `fetch/`
-  (`build/exclave-fetch debs|apks|rpms`, `scripts/exclave-fetch`), whose
-  arguments and cache a release keeps (6.7). Their delicate parsers are Go's standard library's
+  (`build/exclave-fetch debs|apks|rpms`, `scripts/exclave-fetch`). Their delicate parsers are Go's standard library's
   where it has them, with
   xz, zstd and OpenPGP from the pure-Go modules `go.mod` pins and no
   cgo; `fetch/verify.go` checks signatures in-process under apt's rule,

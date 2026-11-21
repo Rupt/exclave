@@ -134,10 +134,10 @@ contributor wants 17, how a change is tested, and 19, what is settled.
 exclave is experimental software. It works and is tested as described
 below, but it has not been released: there is no release, the commit
 gate and the kernel matrix run on the reference machine or on GitHub's
-hosted runners when a maintainer dispatches the workflow (17), and
-nothing yet promises compatibility between one commit and the next.
-From the first release on, what one build reads that another wrote is
-versioned and kept as 6.7 says.
+hosted runners when a maintainer dispatches the workflow (17).
+Versions are ordinals, and no version yet promises to read what
+another wrote: what one build reads that another wrote carries a
+version by which it is refused rather than misread (6.7).
 
 What is built and tested:
 
@@ -712,7 +712,7 @@ call whose path reached the directory (13 item 64).
 ```
 hashes 1
 
-tool "0.0.1+1a2b3c4"
+tool "1+1a2b3c4"
 
 launcher "b3:<blake3-256 of .exclave/launcher>"
 
@@ -796,11 +796,25 @@ A launcher with an appended archive that extracts itself on first run
 would need a cache directory, which the format has none of (6.1), and
 a `noexec` temporary directory would make its failure ugly.
 
-### 6.7 Versions and compatibility
+### 6.7 Versions
 
-What one build of exclave reads that another build wrote carries a
-version of its own, and from the first release on each version keeps
-the promise below; builds before it promise nothing (2).
+exclave's versions are ordinals. The file `VERSION` holds a whole
+number, 0 until the first release; a release's commit sets the next
+number, N, and carries the tag `vN`. A build names itself by that
+number and its commit, `exclave N+COMMIT` (7, 10), so a build made
+between two releases has a name of its own.
+
+No version promises that a later build reads what an earlier one
+wrote, or an earlier one a later's: that promise waits for a point
+this document will declare. Until then an exclave made by one build
+may be refused by another, and is then made again from its package
+files, as it was made; where the versions below have not moved,
+`exclave relink` with the newer command is enough, since only the
+launcher differs (10).
+
+What a build never does is read another's files as its own: what one
+build reads that another wrote carries a version, by which it is
+refused.
 
 | What | Its version | Written by | Read by |
 |---|---|---|---|
@@ -809,10 +823,6 @@ the promise below; builds before it promise nothing (2).
 | The hashes file and the tree hash (6.4) | `hashes 1` | `unpack`, `wrap`, `unwrap`, `relink`, `prune` | `check`, `hash`, anyone with `b3sum` |
 | `EXCLAVE_LOG` (6.2) | the number in each `launcher` line, 2 | every launcher of a run | `check`, `prune`, which read 1 as well |
 | One launcher running another's programs (7.4.2) | the filter version, which the filter answers and the launcher's note carries (7) | each launcher | each launcher |
-| The `exclave` command's commands and their arguments (10) | the project's, `VERSION`'s | | people and scripts |
-| `exclave-fetch`'s commands, their arguments as `--help` lists them, its checks, and its cache's layout, `KIND/DIGEST` (10.1) | the project's, `VERSION`'s | `exclave-fetch` | people, scripts, a later `exclave-fetch` sharing the cache |
-
-The rules every version keeps:
 
 - **A reader refuses by name a version it does not know**, rather
   than reading it as one it does: both parsers refuse a manifest or
@@ -820,23 +830,14 @@ The rules every version keeps:
   launcher lines carry another number, and a launcher the filter of
   a launcher of another filter version, whichever of the two is
   the later (7.4.2, 13 item 45).
-- **A later build reads what every earlier build of the same version
-  wrote**: a later command checks, hashes, prunes, relinks, unwraps
-  and wraps an earlier one's exclave and reads its launchers' logs,
-  and launchers of one filter version nest (7.4.2).
-- **Within a version, only what an earlier reader passes over is
-  added**: a log line of a new kind.
-  Anything an earlier reader would refuse or read otherwise moves the
-  version: a new manifest key is `exclave 2`, since the strict
-  grammar refuses an unknown key, a new hashes key, hash function
-  or serialisation of the tree is `hashes 2`, and a change to the
+- **A version moves when a reader of the old one would misread the
+  new**: a new manifest key is `exclave 2`, since the strict
+  grammar refuses an unknown key; a new hashes key, hash function
+  or serialisation of the tree is `hashes 2`; a log line whose
+  meaning changes moves the log's number, where one of a new kind,
+  which a reader passes over, does not; and a change to the
   filter's trap set, to the syscall page or to the layout of its
   slots moves the filter version (7.4.2).
-- **A later `wrap` or `relink` adds only its placeholders**: an
-  earlier exclave wrapped again by a later build may gain the empty
-  files a later build ships at its identity paths (8.4), and the
-  directories that hold them, and every other path stays as the
-  earlier build wrote it; adding an identity file moves no version.
 - **The launcher reads only its own exclave's manifest**, wrapped with
   it, so a newer key reaches an older launcher only through `relink`
   with that launcher, which refuses the manifest by its version.
@@ -3565,9 +3566,7 @@ into `bin` and Fedora's p11-kit CA bundle. The package comments of
 a checkout as `scripts/exclave-fetch`). It
 is a program of its own, shipped beside the command in a release, the
 one program of exclave that opens a network connection, and nothing
-the tool's commands do depends on it; its arguments, as each fetcher's
-`--help` lists them, its cache's layout and its checks are part of
-what a release keeps (6.7). Each resolves a closure from a
+the tool's commands do depends on it. Each resolves a closure from a
 repository's index, chooses providers of virtual names by priority,
 verifies every download against the index's checksum, and fills a
 directory. They know about mirrors and snapshot services because those
@@ -7101,8 +7100,8 @@ questions.
    exclaves are (10.1). The commit gate (17)
    and the kernel matrix (12.1) run on the reference machine, and on
    GitHub's hosted runners when a maintainer dispatches the workflow;
-   nothing runs at a push. Before it nothing promises compatibility
-   between commits (2); from it on, the versions of 6.7 do.
+   nothing runs at a push. No version promises to read what another
+   wrote until a point declared later (6.7).
 3. **aarch64 kernels with 16 KB or 64 KB pages.** The loader rounds to
    the kernel's page size and the launcher's own segments are 64 KB
    aligned (13 item 43). The matrix's `noble-arm64-64k` row, on
@@ -7160,10 +7159,11 @@ specified.
 - **A strict manifest grammar with one canonical spelling**, the output
   of `exclave format`: both parsers refuse anything else (6.2).
 - **What one build reads that another wrote is versioned, each part by
-  its own number; a reader refuses a version it does not know, a later
-  build reads every earlier one of the same version, and anything an
-  earlier reader would refuse or misread moves the version**: an
-  exclave outlives the build that made it (6.7).
+  its own number; a reader refuses a version it does not know, and
+  anything an earlier reader would misread moves the version**: a
+  build never reads another's files as its own. Versions are
+  ordinals, and none promises to read what another wrote until a
+  point declared later (6.7).
 - **Hashes are BLAKE3-256, and the hashes file records and never
   locates**: BLAKE3 hashes one file on many cores, and `b3sum` checks
   a hash without the tool; locating belongs to the step before the tool
@@ -7298,8 +7298,7 @@ specified.
   step before them, with a trust argument of its own, the archive's keys
   and sums; `exclave-fetch` is that step, a program of its own beside
   the command, so that the command holds no network code at all, and a
-  defined part of a release, its arguments and checks kept as 6.7 keeps
-  the formats (10, 10.1).
+  defined part of a release (10, 10.1).
 - **The tool's input is a directory holding `tree/`, and `unpack` is
   the step before it**: what made the tree, package files, `tar` or a
   build, is not the tool's concern, so `unpack` is a subcommand apart

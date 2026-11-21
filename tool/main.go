@@ -28,12 +28,9 @@ import (
 	"exclave/unpack"
 )
 
-// toolVersion is the project's version, the file VERSION's, which scripts/check holds it to.
-const toolVersion = "0.0.1"
-
-// version is the build's (7, 10): the project's version and the commit, which scripts/build
-// sets; what `version` prints and the hashes file's tool record says (6.4).
-var version = toolVersion
+// version is the build's (7, 10): the project's version, the file VERSION's, and the commit,
+// which scripts/build sets; what `version` prints and the hashes file's tool record says (6.4).
+var version = "unversioned" // a build outside scripts/build, as go test makes
 
 // readmeBlob is the README every exclave gets (6.1); the launcher this command carries is
 // launcherBlob, embedded by the file for its architecture.

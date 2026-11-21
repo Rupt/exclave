@@ -6,7 +6,7 @@
 //	exclave-fetch rpms ...    an rpm closure, from yum or dnf repositories' primary indexes
 //	exclave-fetch version     the build, as exclave version prints the command's
 //
-// Each takes the arguments its --help lists, which are part of what a release keeps (6.7). It is
+// Each takes the arguments its --help lists. It is
 // the one program of exclave that opens a network connection: `exclave unpack OUT DIR/*` takes
 // whatever directory of package files this program, a package manager, a mirror or a person has
 // made. A refusal is one line, "exclave-fetch KIND: " and the reason.

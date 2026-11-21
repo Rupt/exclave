@@ -158,12 +158,6 @@ if grep -rnE '# (noqa: [A-Z0-9, ]+|ty: ignore\[[a-z0-9, -]+\])$' --include='*.py
     status=1
 fi
 
-# Every hashes file records the command's version, which is the project's, VERSION's.
-if ! grep -qxF "const toolVersion = \"$(cat VERSION)\"" tool/main.go; then
-    echo "check: tool/main.go's toolVersion differs from VERSION" >&2
-    status=1
-fi
-
 # Every figure a document quotes that the tree can produce is the tree's (test/figures.py).
 if ! "$UV" run --quiet python test/figures.py --check; then
     echo "check: a document quotes a figure the tree does not give" >&2

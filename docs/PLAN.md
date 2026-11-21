@@ -16,9 +16,10 @@ Taken in November 2026 with the user, each with its reason:
   the release should serve. Sandboxes that use seccomp's `TRAP` action
   (browsers, Electron, tor; DESIGN 13 items 5 and 23) are not part of
   the first release.
-- **Versions are `0.0.n`**, n incrementing from 1 (`VERSION`). The
-  version names a build, with its commit; the formats carry versions of
-  their own (DESIGN 6.7).
+- **Versions are ordinals**: `VERSION` holds a whole number, 0 until
+  the first release, and a release is tagged `vN`. The version names a
+  build, with its commit; the formats carry versions of their own
+  (DESIGN 6.7).
 - **The first release is x86-64.** The aarch64 launcher stays built and
   tested, and an aarch64 release follows later, made on an aarch64
   machine as its exclaves are. The emulated arm64 rows are costly and
@@ -60,7 +61,8 @@ documents, gate, one commit per item. Status is in brackets.
    of 12.1, the README's page-size and release-contents statements; then
    the figures rule applied throughout `docs/DESIGN.md`, `README.md` and
    the exclave README.
-2. **Versioning `0.0.n`** [done]: `VERSION` is `0.0.1`.
+2. **Versioning** [done]: ordinals; `VERSION` is `0` until the first
+   release.
 3. **The compatibility baseline** [withdrawn]: the record of a baseline
    release in `scripts/inputs` and the compatibility test, a step of
    the gate that could only skip, are removed until a compatibility
