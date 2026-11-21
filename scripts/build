@@ -9,10 +9,9 @@
 #   launcher        what every wrapper is a link to, stripped; launcher.debug
 #                   keeps the symbols, and launcher.debug-*.ci the call graph
 #                   and frames test/stackcheck.py reads
-#   launcher-old    the same sources at filter version 3, for the nesting
-#                   regression of 17.4: without the syscalls version 4 added,
-#                   so that a trap for one of them reaches a handler that must
-#                   answer ENOSYS rather than re-issue it
+#   launcher-old    the same sources under another filter version, 1, for
+#                   the regression of 17.4: launchers of different
+#                   versions refuse to nest, either way round
 #   launcher-debug  with gcc's undefined-behaviour checks, each a trap
 #                   instruction, since the launcher links no runtime to report
 #                   one: a failed check kills the program with SIGILL, which
@@ -149,11 +148,11 @@ rm -f "$stamp" build/launcher*.debug-*.ci
 # the machine's own launcher first, so that a compile error is told once
 launcher "$native" build/launcher -fcallgraph-info=su -dumpdir build/launcher.debug- || exit 1
 status=0
-launcher "$native" build/launcher-old -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD || status=1
+launcher "$native" build/launcher-old -DFILTER_VERSION=1 || status=1
 launcher "$native" build/launcher-debug -fsanitize=undefined -fsanitize-trap=undefined -fsanitize=bounds-strict || status=1
 for arch in $cross; do
     launcher "$arch" "build/launcher-$arch" -fcallgraph-info=su -dumpdir "build/launcher-$arch.debug-" || status=1
-    launcher "$arch" "build/launcher-old-$arch" -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD || status=1
+    launcher "$arch" "build/launcher-old-$arch" -DFILTER_VERSION=1 || status=1
 done
 if [ -n "$gobuilds" ]; then
     go_command "$native" build/exclave || status=1

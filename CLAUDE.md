@@ -126,14 +126,13 @@ The loop that has served well, in the order it pays:
   Program memory is read through `copy_in` and written through
   `copy_out`, paths and vectors alike. Environment strings the launcher
   hands a program should be writable.
-- **The filter's trap set is versioned.** `scripts/build` also builds
-  `build/launcher-old`, an older filter version without syscalls a later
-  one added (version 3, without version 4's `bind` and `connect`), for
-  the nesting regression; the version moves whenever the trap set
-  grows or the syscall page moves (`docs/DESIGN.md` 7.4.2 has each
-  version's reason), the move records the new set's digest in `SHIPPED`
-  (`test/syscalls.py`), and a version that adds syscalls moves that
-  build and the regression's trap with it. A new syscall the
+- **The filter's trap set is versioned.** A launcher runs under an
+  inherited filter of its own version alone and refuses another's by
+  name (`docs/DESIGN.md` 7.4.2); `scripts/build` also builds
+  `build/launcher-old`, the same sources under another version number,
+  for the regression of that refusal. The version moves whenever the
+  trap set changes or the syscall page or its slots do, and the move
+  records the new set's digest in `SHIPPED` (`test/syscalls.py`). A new syscall the
   kernel adds is trapped by the filter's ceiling and answered `ENOSYS`
   until it is classified in `test/syscalls.py` and, if it takes a path,
   handled in `src/handler.c` and listed in `src/filter.c`; the unit

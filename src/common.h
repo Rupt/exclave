@@ -8,17 +8,11 @@
 #include "sys.h"
 
 #ifndef FILTER_VERSION
-/* 7.4.2: versioned reuse; the version moves whenever the trap set grows or the syscall page moves. build/launcher-old
- * is these sources at version 3, without bind and connect, which version 4 added (EXCLAVE_TEST_OLD). */
+/* 7.4.2: the filter's version, which moves whenever the trap set changes or the syscall page does. A launcher runs
+ * under an inherited filter of this version alone and refuses another's by name; build/launcher-old is these
+ * sources under another number, for the regression of that refusal. */
 #define FILTER_VERSION 11
 #endif
-/* filters from this version answer a call from the syscall page's judge slot rather than allow it (7.4.2), so that a
- * program's own filter can be honoured: a launcher whose note names an older one is not exec'd while one exists */
-#define FILTER_JUDGE_SINCE 10
-/* an inherited filter older than this allows another page's syscalls and traps this launcher's */
-#define FILTER_PAGE_SINCE 6
-/* the word of the launcher's notes (launcher.c); 1 marks a launcher whose page is at 0x3f0000 */
-#define PAGE_GENERATION 2
 /* the EXCLAVE_LOG format's version, the number in every launcher line (6.2): one digit, as log_msg writes it */
 #define LOG_VERSION "2"
 #define PATH_MAX 4096
@@ -326,8 +320,8 @@ __attribute__((noreturn)) void loader_run(struct scratch *S, const char *vpath, 
  * when the program is at it (7.4.5): the descriptor or -errno */
 long open_borrowed(int dfd, const char *path, int flags);
 /* 1 has interp, 0 none, <0 -errno as load_elf_binary answers before its point of no return; buf >= 7680 bytes;
- * is_launcher: the note's page generation, 0 for no launcher, filter_version its filter version, 0 for none */
-int elf_probe(const char *real, char *interp, int *is_launcher, int *filter_version, void *buf);
+ * is_launcher: whether the file carries a launcher's note */
+int elf_probe(const char *real, char *interp, int *is_launcher, void *buf);
 /* the kernel's checks of a program's interpreter once opened (load_elf_binary, before begin_new_exec): 0 or -errno,
  * EIO for a header the file does not hold whole, ELIBBAD for one that is not this machine's ELF; buf >= 208 bytes */
 int elf_interp_probe(const char *real, void *buf);
@@ -339,14 +333,6 @@ long exec_file_checks(const char *real, struct kstat *st);
 /* the same of a virtual path v, whose real path real gets: first EACCES for one under a data directory, which is
  * never executed (6.2) */
 long exec_checks(const char *v, char *real, struct kstat *st);
-/* 7.4.2: while a program's own filter may be in force, a launcher whose filter has no judge rule, before version
- * FILTER_JUDGE_SINCE, would re-issue every trapped call through the page unjudged, so it is not exec'd: EACCES, the
- * kernel's answer for an exec a security policy refuses (security_bprm_check), and a line in the log. real is a
- * launcher file, whose note says its version where version is negative; one that cannot be read is refused too. tmp
- * and extra are the probe's buffers, elf_probe's interp and buf. 0 for a launcher that may run. */
-long launcher_unjudged(const char *real, int version, char *tmp, void *extra);
-#define UNJUDGED                                                                                                       \
-    "a launcher before filter version " ASM_STR(FILTER_JUDGE_SINCE) " is not run under a program's own seccomp filter"
 
 /* ---------- filter (filter.c) ---------- */
 struct sock_filter {
@@ -354,7 +340,7 @@ struct sock_filter {
     uint8_t jt, jf;
     uint32_t k;
 };
-/* 0: no filter of ours inherited; otherwise the newest inherited filter's version (7.4.2) */
+/* 0: no filter of ours inherited; otherwise the inherited filter's version (7.4.2) */
 int filter_probe(void);
 void filter_install(void);
 /* a program's own filter, body of n instructions, made into the one the handler installs for it (7.4.2): the

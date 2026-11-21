@@ -328,7 +328,7 @@ the design. Where they are available they serve as the test oracle
 | **original** | The original executable, at `<dir>/.real/<name>` beside its wrapper. |
 | **translator** | The launcher's resident part: the seccomp filter and the **handler**, its `SIGSYS` handler, together (7.4). |
 | **syscall page** | The page at the fixed address `0x7fe00000` through which the launcher makes every syscall of its own; the filter allows a call from it untranslated (7.4.2). |
-| **page generation** | The word in a launcher's ELF note that says which syscall page it uses, so that one launcher can refuse an incompatible other by name (7.4.2, 7.4.5). |
+| **filter version** | The number a launcher's filter answers the version probe with. A launcher runs under an inherited filter of its own version alone and refuses another's by name (7.4.2, 13 item 45). |
 | **handler-call slot** | The slot of the syscall page from which a trampoline calls a program's handler, its return address at the restorer's instructions that the filter answers from there with an error (7.4.2, 7.5.7). |
 | **re-issue slot** | The slot of the syscall page through which the handler makes every call on the program's behalf; it makes none once a program's handler has redirected the program (7.4.2, 7.5.7). |
 | **trampoline** | The launcher's code that the kernel runs in place of a program's signal handler: outside a trapped call it jumps to the handler as the kernel would; inside one it gives the handler the trap site's frame and ends the call as the handler decides (7.5.7). |
@@ -808,7 +808,7 @@ the promise below; builds before it promise nothing (2).
 | The manifest (6.2) | `exclave 1` | people, `wrap` | the launcher the exclave carries, every command |
 | The hashes file and the tree hash (6.4) | `hashes 1` | `unpack`, `wrap`, `unwrap`, `relink`, `prune` | `check`, `hash`, anyone with `b3sum` |
 | `EXCLAVE_LOG` (6.2) | the number in each `launcher` line, 2 | every launcher of a run | `check`, `prune`, which read 1 as well |
-| One launcher running another's programs (7.4.2) | the filter version and the page generation, which the launcher's note carries (7) | each launcher | each launcher |
+| One launcher running another's programs (7.4.2) | the filter version, which the filter answers and the launcher's note carries (7) | each launcher | each launcher |
 | The `exclave` command's commands and their arguments (10) | the project's, `VERSION`'s | | people and scripts |
 | `exclave-fetch`'s commands, their arguments as `--help` lists them, its checks, and its cache's layout, `KIND/DIGEST` (10.1) | the project's, `VERSION`'s | `exclave-fetch` | people, scripts, a later `exclave-fetch` sharing the cache |
 
@@ -817,28 +817,21 @@ The rules every version keeps:
 - **A reader refuses by name a version it does not know**, rather
   than reading it as one it does: both parsers refuse a manifest or
   hashes file of another version, `check` and `prune` a log whose
-  launcher lines carry another number, and of two launchers of
-  different page generations the later refuses the earlier, nested
-  either way (13 item 45).
+  launcher lines carry another number, and a launcher the filter of
+  a launcher of another filter version, whichever of the two is
+  the later (7.4.2, 13 item 45).
 - **A later build reads what every earlier build of the same version
   wrote**: a later command checks, hashes, prunes, relinks, unwraps
-  and wraps an earlier one's exclave, reads its launchers' logs, and a
-  later launcher nests with an earlier one either way, the newer
-  filter reused and the older stacked under it (7.4.2).
+  and wraps an earlier one's exclave and reads its launchers' logs,
+  and launchers of one filter version nest (7.4.2).
 - **Within a version, only what an earlier reader passes over is
-  added**: a log line of a new kind; a syscall the filter newly traps,
-  which an older handler under a newer filter answers `ENOSYS`, so only
-  one whose `ENOSYS` a library falls back from (7.4.2). A trap without
-  that fallback moves the page generation instead, as does any change to the
-  layout of the page's handler-call slot, whose return's address the
-  filter names (7.4.2), so that the two
-  launchers refuse each other's nesting by name rather than an older
-  one failing the call: the listings version 7 traps and the `fstat`
-  version 8 traps have none, and came before any release.
+  added**: a log line of a new kind.
   Anything an earlier reader would refuse or read otherwise moves the
   version: a new manifest key is `exclave 2`, since the strict
-  grammar refuses an unknown key, and a new hashes key, hash function
-  or serialisation of the tree is `hashes 2`.
+  grammar refuses an unknown key, a new hashes key, hash function
+  or serialisation of the tree is `hashes 2`, and a change to the
+  filter's trap set, to the syscall page or to the layout of its
+  slots moves the filter version (7.4.2).
 - **A later `wrap` or `relink` adds only its placeholders**: an
   earlier exclave wrapped again by a later build may gain the empty
   files a later build ships at its identity paths (8.4), and the
@@ -866,9 +859,10 @@ executable in an exclave's tree is a hard link to it, a *wrapper*, and
 the program a wrapper stands for, its *original*, sits beside it in
 `.real/` (6.1). Besides its code it carries:
 
-- **An ELF note** in a `.note.exclave` section, `exclave`, holding two
-  words, the *page generation* and the filter version (7.4.2), by which
-  one launcher recognises another (7.4.5).
+- **An ELF note** in a `.note.exclave` section, `exclave`, by which
+  one launcher recognises another in a file (7.4.5). Its word is the
+  launcher's filter version (7.4.2), for a person to read: `readelf
+  -n` shows it.
 - **The MIT licence text**, in a `.exclave.license` section that is not
   loaded, since the licence's text goes with every copy.
 - **Its version**, in `.exclave.version`: `exclave` and the build's
@@ -1101,8 +1095,8 @@ never trap. With `EXCLAVE_LOG` set the handler writes one line per trap
 
 #### 7.4.2 The filter
 
-One classic-BPF program, installed at the border or over an older
-version's, and inherited across `fork` and `execve`. A foreign syscall
+One classic-BPF program, installed at the border and inherited across
+`fork` and `execve`. A foreign syscall
 ABI, an `arch` other than the launcher's own or the x32 bit, kills the
 process: loud, never a silent host access.
 
@@ -1149,8 +1143,8 @@ program's own filter the bootstrap's `mmap` and `mremap` are judged by
 that filter, as a native program's first calls would be, and the probe
 is allowed by the filter's prologue (below).
 
-The address is a constant, so the filters of any number of ancestor
-generations agree after `execve`. It lies above program images, which
+The address is a constant, so the border's filter holds for every
+launcher an `execve` starts under it. It lies above program images, which
 linkers start low (GNU ld and Go's x86-64 linker at `0x400000`, Go's
 aarch64 linker at `0x10000`); below `0x7fff8000`, where ASan's x86-64
 shadow begins, so every sanitizer counts it as the program's own low
@@ -1247,16 +1241,13 @@ kernel judge each trapped call by it:
   and never cleared: a thread whose own chain lacks the filter, or an
   install that fails, costs a judge call that answers `-MARK_NONE`. A
   process that installs no filter makes no judge call. After an
-  `execve` the new launcher, under an inherited filter of version 10 or
-  later, issues the probe from the judge slot, which a program filter's
-  prologue answers `MARK_PRESENT`, and sets the flag. A launcher newer
-  than the filter it finds stacks its own over the program's, whose
-  judge answer would then be the newest and hide the program's
-  refusals, so it refuses to start under one, by name; and while the
-  flag is set, the handler refuses to exec a launcher whose note gives
-  a filter version below 10, or none, since its handler would re-issue
-  every trapped call through the page unjudged: `EACCES`, the kernel's
-  answer for an exec a security policy refuses, and a line in the log.
+  `execve` the new launcher, under an inherited filter, issues the
+  probe from the judge slot, which a program filter's prologue answers
+  `MARK_PRESENT`, and sets the flag. A launcher of another filter
+  version, whose handler might know no judge slot and re-issue every
+  trapped call through the page unjudged, never runs under the
+  filter: it refuses to start, as under any launcher's filter but its
+  own version's (below).
 - **Installed as given.** The re-issue is the form the program used,
   `seccomp` or `prctl`, so kernels before 3.17 keep working, with the
   program's flags: `TSYNC`, `TSYNC_ESRCH`, `LOG` and `SPEC_ALLOW`. Its
@@ -1329,42 +1320,32 @@ userspace header, which lags the kernel by years: a syscall the
 running kernel has and the table does not classify fails the gate's
 unit step until it is.
 
-**Versioned reuse.** The filter answers a `uname` whose argument is a
+**One filter version.** The filter answers a `uname` whose argument is a
 magic 64-bit value with `SECCOMP_RET_ERRNO` carrying `0x800` plus its
 version. The *version probe* at startup issues that `uname` with a
 bare syscall instruction, not through the page: an errno of that form
-names the newest inherited filter, `EFAULT` none. Since every filter in
-the stack runs on every syscall, a launcher installs its own only when
-nothing equal or newer is inherited. A launcher under a newer filter
-may then receive traps for syscalls it does not know; it answers them
-`ENOSYS` and never re-issues them, since every path-taking syscall the
-kernel has added has a libc fallback and a re-issue would be an
-untranslated host access.
+names the inherited filter's version, `EFAULT` none. A launcher
+installs its filter at the border alone. Under an inherited filter of
+its own version it installs nothing, and under one of another version
+it refuses to start, by name, before any other call: a filter cannot
+be removed, and under another version's a launcher would be sent
+traps it does not answer, or go without ones its handler relies on.
+The message says which of the two exclaves holds the older launcher,
+and `exclave relink` gives both one (13 item 45). From the host
+nothing nests: each wrapper starts at the border, under its own
+filter.
 
-The version moves whenever the trap set grows or the syscall page
-moves: 7 added the listings, `getdents64` and `getdents`,
-8 `fstat`, for a directory's `.real/` (8.3), 9
-`ptrace(PTRACE_TRACEME)`, for a `vfork` child's request (7.4.5), 10
-the judge slot and the installs of a program's own filter, which
-earlier versions refused in the filter, and 11 the page's handler-call
-and re-issue slots and the error for an `rt_sigreturn` from the
-handler-call slot (7.5.7); a launcher's note carries its
-filter version as a second word from 10 on. The filter names the handler-call slot's instruction pointer, so
-the slot's layout is fixed for the page generation, as the page's
-address is. `test/syscalls.py`
-records a digest of the set, the page and its judge slot each version
-shipped with and fails when any changes under the same version.
-Filters before 6 allow a page at another address, so
-neither launcher can run under the other's filter: a launcher under a
-filter older than 6 refuses by name at startup, and a handler sends a
-launcher whose note carries a page generation older than its own, or
-no word, to its own child, which refuses it by name (7.4.5, 13
-item 45). `scripts/build` also builds `build/launcher-old`, the same sources at
-version 3, without `bind` and `connect`, which version 4 added, and
-without the judge slot's rule and the installs, which it refuses; the
-regression of 17 item 4 nests it inside the current launcher, where it
-answers `ENOSYS` for every trap a later version added, which version 3
-shows as well as any later one would.
+The version moves whenever the trap set changes, or the syscall page
+or the layout of its slots, whose addresses the filter names.
+`test/syscalls.py` records a digest of the set, the page's address and
+the slots the filter names for the version, and fails when any
+changes under the same version: two builds of one version nest, and a
+set changed between them would send a call one of them translates to
+the host as it is. `scripts/build` also builds `build/launcher-old`,
+the same sources under another version number, and the regression of
+17 item 4 starts each launcher under the other's filter, where each
+refuses, a program's own filter in force or not, and runs both from
+the host.
 
 #### 7.4.3 Intercepted syscalls
 
@@ -1691,9 +1672,8 @@ never replaced. Then:
   program's name, and identity is the kernel's.
 - **A file carrying a launcher's note**, under either name, is another
   launcher and is `execve`d as it is, with the launcher's variables
-  below as for a wrapper; one whose note names an older
-  page generation goes to this launcher's child, which refuses it by
-  name (7.4.2).
+  below as for a wrapper; one of another filter version refuses the
+  filter it finds at its start, by name (7.4.2).
 - **Anything else** re-execs the launcher with the original `argv`
   unchanged and the virtual target path in `EXCLAVE_EXEC`; the child
   launcher resolves the target as an exec would and loads it with
@@ -2980,8 +2960,8 @@ root, hands a final link to the kernel with `RESOLVE_NO_MAGICLINKS` kept
 on its re-issue, since what a host link reaches may be one; a link with
 components after it the handler opens on the host itself, following
 magic links whatever the flag says. Identity directories add no trap, no
-log line and no manifest key, so neither the filter's version nor the
-page generation moves and launchers nest as before (6.7).
+log line and no manifest key, so the filter's version does not move
+and launchers nest as before (6.7).
 
 The translator never follows an identity file's host link, or a link in
 an identity directory, in virtual space, where `/usr` is the exclave's;
@@ -4149,10 +4129,6 @@ what they concern:
    - A `vfork` child's install marks its parent's memory too, which
      then makes a judge call per trap that answers that no filter
      refuses: a cost, not a difference.
-   - While a program's filter may be in force, a launcher before filter
-     version 10, which would re-issue every trapped call unjudged, is
-     not exec'd (`EACCES`), and a launcher newer than the filter it
-     finds refuses to start under one by name.
    - After an `execve` under the filter, the new launcher's bootstrap,
      `mmap` and `mremap`, is judged by it, as a native program's first
      calls would be, so a filter that kills `mmap` kills the new image
@@ -4341,8 +4317,7 @@ what they concern:
     small-code-model program with nearly 2 GB of static data, or one
     linked there on purpose. A Go aarch64 program linked from `0x10000`
     runs, and the `low_image` test runs a C program laid out the same
-    way on every exclave kind. A launcher built for an earlier address
-    and the current one cannot run under each other (item 45, 7.4.2).
+    way on every exclave kind.
     A break that starts below the page grows only up to it: a program
     linked at a low address, as one built without `-pie` is at
     `0x400000`, has 2 016 MB of break, grown in 16 MB steps and
@@ -4587,12 +4562,14 @@ what they concern:
 44. **Two handlers never share a scratch chunk**: a rule, not a
     limitation (7.5.4).
 
-45. **A launcher whose syscall page is elsewhere cannot nest with this
-    one.** A launcher of an earlier page generation (7.4.2), whose
-    syscall page sat at another address (item 24), and this one cannot
-    run under each other's filter: this launcher refuses either nesting
-    by name, and relinking the older exclave with the current launcher
-    fixes it.
+45. **Launchers of different filter versions do not nest.** A program
+    inside one exclave that runs a program of another, whose launcher
+    is of another filter version (7.4.2), finds it refused at its
+    start, by name: the first exclave's filter cannot be removed and
+    is not the second launcher's. The message says which exclave holds
+    the older launcher, and `exclave relink` of that exclave with the
+    newer command gives both one. From the host each exclave starts on
+    its own and nothing is refused.
 
 46. **The launcher's own variables stay in `/proc/<pid>/environ`.**
     `EXCLAVE_EXECFN`, `EXCLAVE_COMM`, `EXCLAVE_CWD` and, on the loader
@@ -6361,8 +6338,9 @@ together.
    - *the launcher and its filter*: a CET-marked program inside with the
      shadow-stack tunable set, reporting whether glibc enabled one (13
      item 49), a blocked or sent `SIGSYS`, a start under a policy
-     against memory made executable (`mem_policy`, 7.4.2), older
-     and newer launchers nested and side by side, a child that asks to be
+     against memory made executable (`mem_policy`, 7.4.2), launchers of
+     two filter versions refusing to nest and running side by side
+     (13 item 45), a child that asks to be
      traced and execs, by `vfork` and by `fork` (7.4.5, 13 item 54), a tracer's reading of its
      tracee's `exe` and gdb's breakpoints inside, given the launcher or the
      program itself, run after run (7.6), a program installing
@@ -6610,7 +6588,7 @@ its time, ok, SKIP or FAIL:
   go vet, staticcheck and deadcode over the Go; over the C,
   clang-format (`.clang-format`), gcc's strict warnings as errors (the
   flags `scripts/lib.sh` gives every C build: the launcher for each
-  architecture and as `build/launcher-old`, and the unit tests), gcc's
+  architecture, and the unit tests), gcc's
   analyser (`-fanalyzer`) on
   the same sources compiled at -O0, where it follows the paths of the
   code as written (null and uninitialised uses, memory freed twice or
@@ -7267,10 +7245,12 @@ specified.
   images; a bare syscall instruction appears in the launcher's text only
   in the bootstrap and the version probe, and the restorer lies in the
   page (7.4.2).
-- **The filter's trap set is versioned; an equal or newer inherited
-  filter is reused, an older one stacked under**: no syscall a launcher
-  needs translated goes untrapped, and a trap it does not know is
-  `ENOSYS`, never re-issued (7.4.2).
+- **The filter's trap set is versioned, and a launcher runs under an
+  inherited filter of its own version alone**: another version's it
+  refuses by name, so no call a launcher needs translated goes
+  untrapped and no trap reaches a handler that does not know it; one
+  the kernel adds later is `ENOSYS`, never re-issued (7.4.2, 13
+  item 45).
 - **The filter answers by number first and is installed with
   `SECCOMP_FILTER_FLAG_SPEC_ALLOW`**: the kernel's action cache allows
   most syscalls without running it, and an exclave is not a security

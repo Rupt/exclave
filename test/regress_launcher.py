@@ -7,7 +7,6 @@ import os
 import re
 import shutil
 import signal
-import struct
 import subprocess
 import time
 lazy import resource
@@ -406,105 +405,73 @@ def cross_exclave_distinct_launchers(ctx: Ctx) -> None:
 
 
 @test
-def nested_older_launcher(ctx: Ctx) -> str | None:
-    """7.4.2: an older launcher nested in a newer one answers ENOSYS for a trap it does not know.
+def other_filter_version_refused(ctx: Ctx) -> None:
+    """7.4.2, 13 item 45: launchers of different filter versions refuse to nest, either way round.
 
-    An older launcher nested inside a newer one reuses the newer filter and answers ENOSYS for a
-    trap it does not know, never re-issuing it to the host. build/launcher-old is the current
-    launcher built at filter version 3, without version 4's bind and connect in its filter or
-    handler (scripts/build builds it beside build/launcher). Across the syscall page's move (filter
-    version 6) neither direction can run, and each is refused by name: this launcher under a filter
-    older than 6, and a launcher whose note has the old page generation exec'd from inside.
+    A filter is inherited and cannot be removed, so a launcher that started under the filter of a
+    launcher of another version would meet traps it does not answer, or miss ones it needs. It
+    refuses by name instead, before anything else, saying which exclave to relink, and the program
+    that ran it goes on; under a program's own seccomp filter too, where a launcher that knew no
+    judge slot would otherwise run every trapped call past that filter. build/launcher-old is the
+    current launcher under another version number, 1 (scripts/build builds it beside
+    build/launcher). From the host each runs on its own, and the other exclave relinked with this
+    launcher nests.
     """
     old = os.path.join(os.path.dirname(ctx.launcher_src), "launcher-old")
     if not os.path.exists(old):
         skip("no build/launcher-old")
-    src = os.path.join(ctx.work, "nb.c")
-    sock = f"nest-sock-{os.getpid()}"  # relative to the work directory, whatever its depth
-    with open(src, "w") as f:  # a bind at a fresh host path: 0 from the kernel
-        f.write(
-            "#include <stdio.h>\n#include <errno.h>\n#include <string.h>\n#include <unistd.h>\n"
-            "#include <sys/socket.h>\n#include <sys/un.h>\n"
-            "int main(void) { struct sockaddr_un a; memset(&a, 0, sizeof a); "
-            'a.sun_family = AF_UNIX; strncpy(a.sun_path, "@PATH@", sizeof a.sun_path - 1);\n'
-            ' int s = socket(AF_UNIX, SOCK_STREAM, 0); unlink("@PATH@"); '
-            "long r = bind(s, (struct sockaddr *)&a, sizeof a);\n"
-            ' printf("%d %d\\n", r < 0 ? -1 : 0, r < 0 ? errno : 0); unlink("@PATH@"); '
-            "return 0; }\n".replace("@PATH@", sock)
-        )
-    prog = os.path.join(ctx.work, "nb")
-    rc, out, err = run([wrapper(ctx, ctx.gcc), "-O0", "-o", prog, src], cwd=ctx.work, env=ctx.env)
-    expect(rc == 0, "compile: " + err)
-    kernel = "0 0\n"
-    rc, outer, err = run([wrapper(ctx, "sh"), "-c", prog], cwd=ctx.work, env=ctx.env)
-    expect(
-        rc == 0 and outer == kernel,
-        "inside the current launcher the kernel's answer comes back: "
-        f"kernel {kernel!r} exclave {outer!r} {err!r}",
-    )
     ex2 = os.path.join(ctx.work, "old-exclave")
     copy_exclave(ctx.mini, ex2)
     tree.relink(ex2, old)
-    log = os.path.join(ctx.work, "nested-old.log")
-    rc, inner, err = run(
-        [wrapper(ctx, "sh"), "-c", "{}/tree{} -c {}".format(ex2, ctx.vbin("sh"), prog)],
-        cwd=ctx.work,
-        env=dict(ctx.env, EXCLAVE_LOG=log),
+    true1, sh1 = wrapper(ctx, "true"), wrapper(ctx, "sh")
+    true2 = os.path.join(ex2, "tree", ctx.vbin("true").lstrip("/"))
+    sh2 = os.path.join(ex2, "tree", ctx.vbin("sh").lstrip("/"))
+    for name, prog in (("this launcher", true1), ("the other", true2)):
+        rc, out, err = run([prog], cwd=ctx.work, env=ctx.env)
+        expect(rc == 0 and not err, f"{name} from the host, at the border: rc={rc} {err!r}")
+    refusal = "launchers of different filter versions do not nest"
+    newer, older = (
+        "the filter of a newer exclave launcher",
+        "the filter of an older exclave launcher",
     )
+    for how, outer, inner, said, which in (
+        ("the other launcher under this one's filter", sh1, true2, newer, "relink this exclave"),
+        ("this launcher under the other's filter", sh2, true1, older, "relink that exclave"),
+    ):
+        rc, out, err = run([outer, "-c", f"{inner}; echo rc=$?"], cwd=ctx.work, env=ctx.env)
+        expect(
+            rc == 0 and out == "rc=127\n" and refusal in err and said in err and which in err,
+            f"{how} is refused by name: rc={rc} {out!r} {err!r}",
+        )
+    src = os.path.join(ctx.work, "seccomp_exec.c")
+    with open(src, "w") as f:  # an ALLOW filter of the program's own, then an exec
+        f.write(
+            "#include <stdio.h>\n#include <errno.h>\n#include <unistd.h>\n#include <stddef.h>\n"
+            "#include <sys/prctl.h>\n#include <sys/syscall.h>\n#include <linux/filter.h>\n"
+            "#include <linux/seccomp.h>\n"
+            "int main(int c, char **v) { struct sock_filter f[] = "
+            "{BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW)}; struct sock_fprog p = {1, f};\n"
+            " prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);\n"
+            " if (syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &p)) return 3;\n"
+            ' execl(v[1], v[1], (char *)0); printf("%d\\n", errno); return 0; }\n'
+        )
+    prog = os.path.join(ctx.work, "seccomp_exec")
+    rc, _out, err = run([wrapper(ctx, ctx.gcc), "-O0", "-o", prog, src], cwd=ctx.work, env=ctx.env)
+    expect(rc == 0, "compile: " + err)
+    rc, out, err = inside(ctx, prog, [true2])
     expect(
-        rc == 0 and inner == "-1 38\n",
-        "the older launcher nested in the newer one answers ENOSYS (38) for the trap it does not "
-        f"know: {inner!r} {err!r}",
+        rc == 127 and out == "" and refusal in err and newer in err,
+        f"under a program's own filter the other launcher refuses the same way: rc={rc} {out!r} "
+        f"{err!r}",
     )
-    text = read_text(log)
+    rc, out, err = inside(ctx, prog, [true1])
+    expect(rc == 0 and out == "" and not err, f"and this one runs: rc={rc} {out!r} {err!r}")
+    tree.relink(ex2, ctx.launcher_src)
+    rc, out, err = run([sh1, "-c", f"{true2}; echo rc=$?"], cwd=ctx.work, env=ctx.env)
     expect(
-        f"launcher 2 inside {prog}" in text
-        and "trap -38 -" in text
-        and "border" not in text.split("launcher 2 inside", 1)[1],
-        f"the inner launcher reused the newer filter and answered the trap itself: {text[-400:]!r}",
+        rc == 0 and out == "rc=0\n" and not err,
+        f"relinked with this launcher the other exclave nests: rc={rc} {out!r} {err!r}",
     )
-    # the page's move: this launcher under launcher-old's version-3 filter refuses before its first
-    # trapped syscall
-    rc, out, err = run(
-        [
-            os.path.join(ex2, "tree", ctx.vbin("sh").lstrip("/")),
-            "-c",
-            "{}; echo rc=$?".format(wrapper(ctx, "true")),
-        ],
-        cwd=ctx.work,
-        env=ctx.env,
-    )
-    expect(
-        out == "rc=127\n" and "from before the syscall page moved runs this process" in err,
-        f"under a filter older than 6: {out!r} {err!r}",
-    )
-    # and a launcher whose note says page generation 1, exec'd from inside, is refused by this
-    # launcher's child
-    gen1 = os.path.join(ctx.work, "launcher-gen1")
-    blob = read_bytes(ctx.launcher_src)
-    notes = [(n, n + struct.pack("<I", 2)) for n in (b"exclave\0",)]
-    expect(
-        all(blob.count(w) == 1 for n, w in notes),
-        "each note's page generation is found once in the launcher",
-    )
-    for n, w in notes:
-        blob = blob.replace(w, n + struct.pack("<I", 1))
-    with open(gen1, "wb") as f:
-        f.write(blob + b"\0")  # a byte more: a launcher of its own size, not a copy of this one
-    os.chmod(gen1, 0o755)
-    ex3 = os.path.join(ctx.work, "gen1-exclave")
-    copy_exclave(ctx.mini, ex3)
-    tree.relink(ex3, gen1)
-    rc, out, err = run(
-        [wrapper(ctx, "sh"), "-c", "{}/tree{}; echo rc=$?".format(ex3, ctx.vbin("true"))],
-        cwd=ctx.work,
-        env=ctx.env,
-    )
-    expect(
-        out == "rc=127\n" and "from before the syscall page moved cannot run here" in err,
-        f"a launcher of page generation 1 from inside: {out!r} {err!r}",
-    )
-    return None
 
 
 @test
@@ -1171,46 +1138,14 @@ def gdb_given_program(ctx: Ctx) -> str | None:
 
 
 @test
-def own_seccomp_filter(ctx: Ctx) -> str | None:
+def own_seccomp_filter(ctx: Ctx) -> None:
     """7.4.2, 13 item 5: a program's own seccomp filter is honoured as the kernel applies it.
 
     test/progs/seccomp_filter.c installs ERRNO, LOG and ALLOW filters and an sshd-shaped allow-list
     whose default kills, in both forms, with TSYNC and without, and over fork, vfork and an exec of
     itself, and the answers are the kernel's under bwrap (test/kernel_answers.py), but for the
-    installs the launcher refuses with ENOSYS. While a program's filter is in force a launcher
-    before filter version 10, which would re-issue a trapped call unjudged, is not exec'd: EACCES.
-    A case an older kernel lacks answers as that kernel decides (SECCOMP_FILTER_SINCE).
+    installs the launcher refuses with ENOSYS. A case an older kernel lacks answers as that kernel
+    decides (SECCOMP_FILTER_SINCE).
     """
     bad = exerciser_wrong(ctx, "seccomp_filter")
     expect(not bad, "; ".join(bad))
-    old = os.path.join(os.path.dirname(ctx.launcher_src), "launcher-old")
-    if not os.path.exists(old):
-        return "no build/launcher-old: the refusal of an older launcher is untested"
-    ex2 = os.path.join(ctx.work, "seccomp-old-exclave")
-    copy_exclave(ctx.mini, ex2)
-    tree.relink(ex2, old)
-    src = os.path.join(ctx.work, "seccomp_exec.c")
-    with open(src, "w") as f:  # an ALLOW filter, then an exec of the older launcher's true
-        f.write(
-            "#include <stdio.h>\n#include <errno.h>\n#include <unistd.h>\n#include <stddef.h>\n"
-            "#include <sys/prctl.h>\n#include <sys/syscall.h>\n#include <linux/filter.h>\n"
-            "#include <linux/seccomp.h>\n"
-            "int main(int c, char **v) { struct sock_filter f[] = "
-            "{BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW)}; struct sock_fprog p = {1, f};\n"
-            " prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);\n"
-            " if (c > 2 && syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &p)) return 3;\n"
-            ' execl(v[1], v[1], (char *)0); printf("%d\\n", errno); return 0; }\n'
-        )
-    prog = os.path.join(ctx.work, "seccomp_exec")
-    rc, _out, err = run([wrapper(ctx, ctx.gcc), "-O0", "-o", prog, src], cwd=ctx.work, env=ctx.env)
-    expect(rc == 0, "compile: " + err)
-    true_old = f"{ex2}/tree{ctx.vbin('true')}"
-    log = os.path.join(ctx.work, "seccomp-old.log")
-    rc, out, err = inside(ctx, prog, [true_old, "filter"], env=dict(ctx.env, EXCLAVE_LOG=log))
-    expect(
-        rc == 0 and out == "13\n" and "before filter version 10" in read_text(log),
-        f"under a program's filter the older launcher is refused with EACCES: {out!r} {err!r}",
-    )
-    rc, out, err = inside(ctx, prog, [true_old])
-    expect(rc == 0 and out == "", f"without one it runs: rc={rc} {out!r} {err!r}")
-    return None

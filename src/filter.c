@@ -1,6 +1,6 @@
 /* filter.c — the seccomp filter (DESIGN.md 7.4.2).
  *
- * One classic-BPF program, installed at the border, or over an older version's, and inherited
+ * One classic-BPF program, installed at the border and inherited
  * by every descendant. The launcher's own syscalls are recognised by their
  * instruction address: all of them are issued from the syscall page, which
  * every launcher maps at the same fixed address, so the filter stays valid
@@ -54,81 +54,30 @@ static void on_nr(int n, uint32_t action)
 }
 /* the path syscalls the handler translates (7.4.3) */
 const int path_syscalls[] = {
-    NR_open,
-    NR_stat,
-    NR_lstat,
-    NR_access,
-    NR_execve,
-    NR_truncate,
-    NR_getcwd,
-    NR_chdir,
-    NR_rename,
-    NR_mkdir,
-    NR_rmdir,
-    NR_creat,
-    NR_link,
-    NR_unlink,
-    NR_symlink,
-    NR_readlink,
-    NR_chmod,
-    NR_chown,
-    NR_lchown,
-    NR_utime,
-    NR_mknod,
-    NR_statfs,
-    NR_setxattr,
-    NR_lsetxattr,
-    NR_getxattr,
-    NR_lgetxattr,
-    NR_listxattr,
-    NR_llistxattr,
-    NR_removexattr,
-    NR_lremovexattr,
-    NR_utimes,
-    NR_inotify_add_watch,
-    NR_openat,
-    NR_mkdirat,
-    NR_mknodat,
-    NR_fchownat,
-    NR_futimesat,
-    NR_newfstatat,
-    NR_unlinkat,
-    NR_renameat,
-    NR_linkat,
-    NR_symlinkat,
-    NR_readlinkat,
-    NR_fchmodat,
-    NR_faccessat,
-    NR_utimensat,
-    NR_renameat2,
-    NR_execveat,
-    NR_statx,
-    NR_faccessat2,
-    NR_fchmodat2,
-    NR_fanotify_mark,
-    NR_setxattrat,
-    NR_getxattrat,
-    NR_listxattrat,
-    NR_removexattrat,
-    NR_file_getattr,
-    NR_file_setattr,
-    NR_openat2,
-#ifndef EXCLAVE_TEST_OLD
-    /* version 4's addition: absent from build/launcher-old's filter and handler alike */
-    NR_bind,
+    NR_open,         NR_stat,         NR_lstat,       NR_access,
+    NR_execve,       NR_truncate,     NR_getcwd,      NR_chdir,
+    NR_rename,       NR_mkdir,        NR_rmdir,       NR_creat,
+    NR_link,         NR_unlink,       NR_symlink,     NR_readlink,
+    NR_chmod,        NR_chown,        NR_lchown,      NR_utime,
+    NR_mknod,        NR_statfs,       NR_setxattr,    NR_lsetxattr,
+    NR_getxattr,     NR_lgetxattr,    NR_listxattr,   NR_llistxattr,
+    NR_removexattr,  NR_lremovexattr, NR_utimes,      NR_inotify_add_watch,
+    NR_openat,       NR_mkdirat,      NR_mknodat,     NR_fchownat,
+    NR_futimesat,    NR_newfstatat,   NR_unlinkat,    NR_renameat,
+    NR_linkat,       NR_symlinkat,    NR_readlinkat,  NR_fchmodat,
+    NR_faccessat,    NR_utimensat,    NR_renameat2,   NR_execveat,
+    NR_statx,        NR_faccessat2,   NR_fchmodat2,   NR_fanotify_mark,
+    NR_setxattrat,   NR_getxattrat,   NR_listxattrat, NR_removexattrat,
+    NR_file_getattr, NR_file_setattr, NR_openat2,     NR_bind,
     NR_connect,
-#endif
 };
 const int n_path_syscalls = sizeof path_syscalls / sizeof path_syscalls[0];
 
 /* descriptor syscalls that could change an exclave file's attributes (8.2), need a read-only answer, or list or
  * stat a directory of the tree, whose .real/ upstream's tree does not have (8.3); the listings are version 7's
  * addition and fstat version 8's */
-static const int fd_syscalls[] = {NR_fchmod,     NR_fchown,   NR_fsetxattr, NR_fremovexattr, NR_fstatfs,
-#ifndef EXCLAVE_TEST_OLD
-                                  NR_getdents64, NR_getdents, NR_fstat
-#endif
-};
+static const int fd_syscalls[] = {NR_fchmod,  NR_fchown,     NR_fsetxattr, NR_fremovexattr,
+                                  NR_fstatfs, NR_getdents64, NR_getdents,  NR_fstat};
 /* signal-mask syscalls the handler scrubs (7.5.2) */
 static const int mask_syscalls[] = {NR_rt_sigprocmask, NR_rt_sigsuspend};
 /* refused with ENOSYS rather than emulated (7.4.3): each would bypass or confuse translation */
@@ -155,19 +104,13 @@ static const int arg_traps[][2] = {{NR_rt_sigaction, 1}, {NR_ppoll, 3},        {
                                    {NR_epoll_pwait, 4},  {NR_epoll_pwait2, 4}, {NR_io_pgetevents, 5}};
 /* ptrace(PTRACE_TRACEME), request 0, traps for a vfork child's deferral (7.4.5); every other request is allowed */
 static const int zero_traps[][2] = {
-#ifndef EXCLAVE_TEST_OLD
     {NR_ptrace, 0},
-#else
-    {-1, 0}, /* build/launcher-old, version 3, traps no request */
-#endif
 };
 
 static int singled(int nr)
 {
     if (nr == NR_uname || nr == NR_ioctl || nr == NR_seccomp || nr == NR_prctl) return 1;
-#ifndef EXCLAVE_TEST_OLD
     if (nr == NR_rt_sigreturn) return 1;
-#endif
     for (int i = 0; i < n_path_syscalls; i++)
         if (path_syscalls[i] == nr) return 1;
     for (unsigned i = 0; i < sizeof fd_syscalls / sizeof fd_syscalls[0]; i++)
@@ -245,7 +188,6 @@ static void build(void)
     /* the second stage, the number in A: the arguments that can only allow, and the probe */
     for (int i = 0; i < njumps; i++) prog[jumps[i]].k = (uint32_t)(np - jumps[i] - 1);
     int page[16], npage = 0;
-#ifndef EXCLAVE_TEST_OLD
     /* a program's handler returns into the trampoline: its rt_sigreturn from the handler-call slot, the one instruction
      * pointer, is answered with an error, and every other is allowed (7.5.7) */
     emit(JEQ_K, 0, 6, NR_rt_sigreturn);
@@ -255,7 +197,6 @@ static void build(void)
     emit(JEQ_K, 0, 1, (uint32_t)SC_HCALL_RET);
     ret(SECCOMP_RET_ERRNO | MARK_HANDLER_RETURN);
     ret(SECCOMP_RET_ALLOW);
-#endif
     /* only the two chattr requests are trapped (8.2) */
     emit(JEQ_K, 0, 5, NR_ioctl);
     emit(LD_ABS, 0, 0, OFF_ARG(1));
@@ -288,23 +229,17 @@ static void build(void)
         emit(JA, 0, 0, 0);
     }
     /* a program's own sandbox (7.4.2): prctl(PR_SET_SECCOMP), and seccomp(2) but its two queries, which stay allowed;
-     * version 10 traps them for the handler to install, build/launcher-old refuses them below */
+     * the rest trap for the handler to install */
     emit(JEQ_K, 0, 4, NR_prctl);
     emit(LD_ABS, 0, 0, OFF_ARG(0));
     emit(JEQ_K, 1, 0, PR_SET_SECCOMP);
     ret(SECCOMP_RET_ALLOW);
     page[npage++] = np;
     emit(JA, 0, 0, 0);
-#ifndef EXCLAVE_TEST_OLD
     emit(JEQ_K, 0, 5, NR_seccomp);
     emit(LD_ABS, 0, 0, OFF_ARG(0));
     emit(JEQ_K, 2, 0, SECCOMP_GET_ACTION_AVAIL);
     emit(JEQ_K, 1, 0, SECCOMP_GET_NOTIF_SIZES);
-#else
-    emit(JEQ_K, 0, 4, NR_seccomp);
-    emit(LD_ABS, 0, 0, OFF_ARG(0));
-    emit(JEQ_K, 1, 0, SECCOMP_GET_ACTION_AVAIL);
-#endif
     page[npage++] = np;
     emit(JA, 0, 0, 0);
     ret(SECCOMP_RET_ALLOW);
@@ -316,30 +251,21 @@ static void build(void)
     emit(JEQ_K, 0, 1, (uint32_t)(MAGIC >> 32));
     ret(SECCOMP_RET_ERRNO | PROBE_ERRNO(FILTER_VERSION));
     ret(SECCOMP_RET_ALLOW);
-    /* the launcher's own syscalls: issued from the syscall page; from version 10 a call from its judge slot is answered
-     * MARK_NONE first, which a program's filter, newer, overrides with its own ERRNO (7.4.2) */
+    /* the launcher's own syscalls: issued from the syscall page; a call from its judge slot is answered MARK_NONE
+     * first, which a program's filter, newer, overrides with its own ERRNO (7.4.2) */
     for (int i = 0; i < npage; i++) prog[page[i]].k = (uint32_t)(np - page[i] - 1);
     emit(LD_ABS, 0, 0, OFF_IP + 4);
-#ifndef EXCLAVE_TEST_OLD
     emit(JEQ_K, 0, 7, (uint32_t)(SC_PAGE >> 32));
     emit(LD_ABS, 0, 0, OFF_IP);
     emit(AND_K, 0, 0, ~0xfU);
     emit(JEQ_K, 0, 1, (uint32_t)SC_JUDGE);
     ret(SECCOMP_RET_ERRNO | MARK_NONE);
-#else
-    emit(JEQ_K, 0, 4, (uint32_t)(SC_PAGE >> 32));
-    emit(LD_ABS, 0, 0, OFF_IP);
-#endif
     emit(AND_K, 0, 0, ~0xfffU);
     emit(JEQ_K, 0, 1, (uint32_t)SC_PAGE);
     ret(SECCOMP_RET_ALLOW);
     /* the refusals; everything else that reaches here traps, and a syscall newer than this filter knows is answered
      * ENOSYS by the handler (7.4.2): a future path-taking syscall must not reach the host untranslated */
     emit(LD_ABS, 0, 0, OFF_NR);
-#ifdef EXCLAVE_TEST_OLD
-    on_nr(NR_seccomp, SECCOMP_RET_ERRNO | ENOSYS);
-    on_nr(NR_prctl, SECCOMP_RET_ERRNO | ENOSYS);
-#endif
     for (unsigned i = 0; i < sizeof enosys_syscalls / sizeof enosys_syscalls[0]; i++)
         on_nr(enosys_syscalls[i], SECCOMP_RET_ERRNO | ENOSYS);
     for (unsigned i = 0; i < sizeof eperm_syscalls / sizeof eperm_syscalls[0]; i++)
@@ -347,7 +273,7 @@ static void build(void)
     ret(SECCOMP_RET_TRAP);
 }
 
-/* 0: no filter of ours; otherwise the newest inherited filter's version */
+/* 0: no filter of ours; otherwise the inherited filter's version */
 int filter_probe(void)
 {
     long r = __sc6_raw(NR_uname, (long)MAGIC, 0, 0, 0, 0, 0); /* raw: the page would have it allowed */
@@ -371,7 +297,6 @@ void filter_install(void)
     if (r < 0) die("cannot install the seccomp filter", 0, r);
 }
 
-#ifndef EXCLAVE_TEST_OLD
 #define LDX_IMM 0x01 /* BPF_LDX | BPF_W | BPF_IMM */
 #define TXA 0x87 /* BPF_MISC | BPF_TXA */
 #define RET_A 0x16 /* BPF_RET | BPF_A */
@@ -473,7 +398,6 @@ long filter_wrap(const struct sock_filter *body, long n, struct sock_filter *out
     if (o != total) die_invariant("a wrapped filter's epilogue ends at", o);
     return total;
 }
-#endif
 
 #ifdef HOST_TEST
 /* test/filter_test.c: the built program and the lists it was built from, for the model of 7.4.2 */

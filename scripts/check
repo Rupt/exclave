@@ -65,8 +65,8 @@ run "$UV" run --quiet ty check --quiet
 
 # The C, formatted above (.clang-format), checked a process to a file. First
 # gcc's warnings as errors and its analyser, nothing kept: the launcher's
-# sources for each architecture there is a compiler for and as
-# build/launcher-old, and the unit tests' for the host (lib.sh's flags). Then
+# sources for each architecture there is a compiler for, and the unit tests'
+# for the host (lib.sh's flags). Then
 # clang-tidy (.clang-tidy) on the launcher for each architecture and on the
 # unit tests. A file's output is
 # shown only for a finding, since clang counts aloud the warnings it suppressed.
@@ -91,7 +91,6 @@ for f in src/*.c; do
     for arch in $(c_arches); do
         compiled launcher_cc "$arch" "$f"
     done
-    compiled launcher_cc "$(uname -m)" -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD "$f"
 done
 # the unit tests' and the fuzz target's own files, and the launcher's sources they are built with (lib.sh's unit_tests)
 for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c $(unit_tests | cut -d' ' -f2- | tr ' ' '\n' | sort -u); do
@@ -105,11 +104,6 @@ for target in x86_64 aarch64; do
     for f in src/*.c; do
         run quiet .venv/bin/clang-tidy --quiet "$f" -- --target=$target-linux-gnu -std=gnu11 -ffreestanding -fno-builtin -nostdlib
     done
-done
-# and build/launcher-old's variant of the two sources it changes
-for f in src/filter.c src/handler.c; do
-    run quiet .venv/bin/clang-tidy --quiet "$f" -- --target=x86_64-linux-gnu -std=gnu11 -ffreestanding -fno-builtin -nostdlib \
-        -DFILTER_VERSION=3 -DEXCLAVE_TEST_OLD
 done
 for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c; do
     run quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 -DHOST_TEST

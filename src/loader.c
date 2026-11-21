@@ -242,24 +242,16 @@ static unsigned long map_elf(int fd, const Ehdr *eh, const Phdr *ph, unsigned lo
     return bias;
 }
 
-/* a PT_NOTE segment's launcher note, exclave, read from fd into nb (512 bytes), through head when loading: its page
- * generation, 1 for a note without a word, 0 for no note of ours, and in *ver its filter version, 0 for a note without
- * the second word (7.4.2); the last such note counts */
-static int note_gen(int fd, const Phdr *p, unsigned char *nb, int loading, int *ver)
+/* whether a PT_NOTE segment, read from fd into nb (512 bytes), holds a launcher's note, exclave (7.4.5) */
+static int launcher_note(int fd, const Phdr *p, unsigned char *nb)
 {
-    long n = loading ? elf_read(fd, nb, p->p_filesz, p->p_offset) : sys_pread(fd, nb, p->p_filesz, (long)p->p_offset),
-         o = 0;
-    int g = 0;
+    long n = sys_pread(fd, nb, p->p_filesz, (long)p->p_offset), o = 0;
     while (n >= 12 && o + 12 <= n) {
         uint32_t nsz = *(uint32_t *)(nb + o), dsz = *(uint32_t *)(nb + o + 4);
-        long w = o + 12 + (long)((nsz + 3) & ~3U);            /* the word after the name, padded to 4 */
-        if (nsz == 8 && o + 20 <= n && xmemcmp(nb + o + 12, "exclave", 8) == 0) {
-            g = dsz >= 4 && w + 4 <= n && *(uint32_t *)(nb + w) ? (int)*(uint32_t *)(nb + w) : 1;
-            *ver = dsz >= 8 && w + 8 <= n ? (int)*(uint32_t *)(nb + w + 4) : 0;
-        }
+        if (nsz == 8 && o + 20 <= n && xmemcmp(nb + o + 12, "exclave", 8) == 0) return 1;
         o += 12 + ((nsz + 3) & ~3U) + ((dsz + 3) & ~3U);
     }
-    return g;
+    return 0;
 }
 
 long open_borrowed(int dfd, const char *path, int flags)
@@ -306,25 +298,12 @@ long exec_checks(const char *v, char *real, struct kstat *st)
     return exec_file_checks(real, st);
 }
 
-long launcher_unjudged(const char *real, int version, char *tmp, void *extra)
-{
-    if (!program_filters) return 0;
-    if (version < 0) {
-        int gen;
-        if (elf_probe(real, tmp, &gen, &version, extra) < 0) version = 0;
-    }
-    if (version >= FILTER_JUDGE_SINCE) return 0;
-    log_msg(UNJUDGED, real);
-    return -EACCES;
-}
-
 /* 1: dynamic (interp filled), 0: static, <0: -errno as load_elf_binary answers before its point of no return (7.4.5),
- * the program headers beyond the loader's own table counted as a header it cannot load; is_launcher: a launcher
- * note's page generation, 0 without one */
-int elf_probe(const char *real, char *interp, int *is_launcher, int *filter_version, void *buf)
+ * the program headers beyond the loader's own table counted as a header it cannot load; is_launcher: whether the
+ * file carries a launcher's note */
+int elf_probe(const char *real, char *interp, int *is_launcher, void *buf)
 {
     *is_launcher = 0;
-    *filter_version = 0;
     interp[0] = 0;
     long fd = open_borrowed(AT_FDCWD, real, O_RDONLY);
     if (fd < 0) return (int)fd;
@@ -354,12 +333,8 @@ int elf_probe(const char *real, char *interp, int *is_launcher, int *filter_vers
                     break;
                 }
                 ret = 1;
-            } else if (ph[i].p_type == PT_NOTE && ph[i].p_filesz <= 512) {
-                int v = 0, g = note_gen((int)fd, &ph[i], nb, 0, &v);
-                if (g) {
-                    *is_launcher = g;
-                    *filter_version = v;
-                }
+            } else if (ph[i].p_type == PT_NOTE && ph[i].p_filesz <= 512 && launcher_note((int)fd, &ph[i], nb)) {
+                *is_launcher = 1;
             }
         }
     }
@@ -434,24 +409,12 @@ void loader_run(struct scratch *S, const char *vpath, int fd, long argc, char **
     Ehdr eh;
     unsigned long entry, phdr_va, base = 0, jump;
     int has_interp;
-    /* the start's chunk (launcher.c): the file's real path is where run resolved it, its headers go to extra, its notes
-     * to comp and the loader's name, as the program spells it, to given, which no walk writes */
+    /* the start's chunk (launcher.c): the file's real path is where run resolved it, its headers go to extra and the
+     * loader's name, as the program spells it, to given, which no walk writes */
     const char *real = payload_path;
     Phdr *ph = (Phdr *)S->extra;
-    unsigned char *nb = (unsigned char *)S->comp;
     char *interp_v = S->given;
     read_elf(fd, real, &eh, ph, MAX_PHDRS);
-    /* another exclave's launcher of an older page generation, which a handler sends here (7.4.2) */
-    int gen = 0;
-    for (int i = 0; i < eh.e_phnum; i++)
-        if (ph[i].p_type == PT_NOTE && ph[i].p_filesz <= 512) {
-            int v, g = note_gen(fd, &ph[i], nb, 1, &v);
-            if (g) gen = g;
-        }
-    if (gen && gen < PAGE_GENERATION)
-        die("a launcher from before the syscall page moved cannot run here; relink its exclave with the current "
-            "launcher (docs/DESIGN.md 13 item 45)",
-            vpath, 0);
     /* the program's first stack, laid out below this frame once the program is mapped; where it starts and where the
      * kernel laid the strings are part of the kernel's record of the image: the arguments, the environment after them
      * and after that the name the kernel was given, a pointer short of the stack's end (bprm_mm_init,

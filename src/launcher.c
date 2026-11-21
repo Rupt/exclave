@@ -2,7 +2,7 @@
  *
  * The launcher is an ET_DYN object with no interpreter: it relocates itself, finds its exclave from its own path, reads
  * the manifest, decides whether it is at the border (no filter inherited) and prepares the environment accordingly,
- * installs the handler and, unless one of this version or newer is inherited, the filter, then loads the program it
+ * installs the handler and, at the border, the filter, then loads the program it
  * stands for: the original of the wrapper it was run as, or the EXCLAVE_EXEC target when re-exec'd in loader mode, by
  * a handler or by its own positional entry.
  */
@@ -22,14 +22,13 @@ __asm__(".text\n.globl _start\n.type _start,@function\n_start:\n"
 __asm__(".text\n.globl _start\n.type _start,%function\n_start:\n"
         " mov x0, sp\n bl start_c\n brk #0\n");
 #endif
-/* 7, 7.4.5: the note by which a launcher recognises another in a file; its first word is PAGE_GENERATION, its second
- * FILTER_VERSION, which a launcher before version 10 does not write and a reader of one word does not read (7.4.2) */
+/* 7, 7.4.5: the note by which a launcher recognises another in a file; its word is FILTER_VERSION, for a person to
+ * read (readelf -n): a launcher learns another's version from the filter it finds, not from a file (7.4.2) */
 #define NOTE_WORD_(g) #g
 #define NOTE_WORD(g) NOTE_WORD_(g)
 /* clang-format off */
 __asm__(".section .note.exclave,\"a\"\n .balign 4\n"
-        " .long 8\n .long 8\n .long 1\n .asciz \"exclave\"\n .balign 4\n .long " NOTE_WORD(PAGE_GENERATION) "\n .long "
-        NOTE_WORD(FILTER_VERSION) "\n .text\n");
+        " .long 8\n .long 4\n .long 1\n .asciz \"exclave\"\n .balign 4\n .long " NOTE_WORD(FILTER_VERSION) "\n .text\n");
 /* clang-format on */
 
 /* the launcher is the part of exclave every exclave holds, so it carries the licence's text, which the MIT licence asks
@@ -442,8 +441,6 @@ static void loader_mode_check(struct scratch *S, char **argv, char **env2)
      * host, though, where an absolute link of the tree leads to the host's file: the spelling is exec'd only when it
      * reaches this wrapper, and the wrapper by its own path otherwise (13 item 39) */
     if (is_wrapper_real(S->real, S->tmp) && payload_of(S->real, S->tmp)) {
-        /* 7.4.2: under a program's own filter a launcher without the judge rule is not run, as a handler refuses it */
-        if (launcher_unjudged(S->real, -1, S->rest, S->extra)) die(UNJUDGED, C.program, 0);
         if (canon(S, S->arg, AT_FDCWD, 0, S->v2) < 0) scpy(S->v2, C.program, PATH_MAX);
         /* canon walks in S->real, so the wrapper's real path is taken again, as must_exec took it */
         to_real_exec(C.program, S->real);
@@ -578,20 +575,23 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
     page_init();
     reloc_self();
     /* 7.4.2: the probe comes before any syscall an inherited filter could trap. have is the inherited
-     * filter's version, nonzero when exec'd from inside an exclave, by a handler or a program. A filter older
-     * than FILTER_PAGE_SINCE allows a launcher's syscalls from another page only and would trap every one of
-     * this launcher's, so it is refused by name */
+     * filter's version, nonzero when exec'd from inside an exclave, by a handler or a program. A filter cannot be
+     * removed, and one of another version traps calls this launcher does not answer or passes ones it would, so
+     * the launcher refuses it by name, before anything else: the two exclaves want one launcher (13 item 45) */
     int have = filter_probe();
-    if (have && have < FILTER_PAGE_SINCE) {
-        static const char old[] =
-            "launcher: a launcher from before the syscall page moved runs this process; relink its exclave with the "
-            "current launcher (docs/DESIGN.md 13 item 45)\n";
-        raw_fatal(old, sizeof old - 1);
+    if (have && have != FILTER_VERSION) {
+        static const char older[] =
+            "launcher: this process runs under the filter of an older exclave launcher, and launchers of different "
+            "filter versions do not nest: relink that exclave with the newer exclave command (exclave relink)\n";
+        static const char newer[] =
+            "launcher: this process runs under the filter of a newer exclave launcher, and launchers of different "
+            "filter versions do not nest: relink this exclave with the newer exclave command (exclave relink)\n";
+        if (have < FILTER_VERSION) raw_fatal(older, sizeof older - 1);
+        raw_fatal(newer, sizeof newer - 1);
     }
     /* 7.4.2: a program's own filter inherited, made by a launcher's handler: the probe from the judge slot, which its
      * prologue answers MARK_PRESENT, outranking the launcher filter's answer; every trapped call is then judged */
-    if (have >= FILTER_JUDGE_SINCE && __sc6_judge(NR_uname, (long)MAGIC, 0, 0, 0, 0, 0) == -MARK_PRESENT)
-        program_filters = 1;
+    if (have && __sc6_judge(NR_uname, (long)MAGIC, 0, 0, 0, 0, 0) == -MARK_PRESENT) program_filters = 1;
     long argc = (long)sp[0];
     char **argv = (char **)(sp + 1);
     char **envp = argv + argc + 1;
@@ -695,11 +695,8 @@ __attribute__((used)) static void start_c(unsigned long *sp) /* called by _start
     C.text_lo = (unsigned long)__ehdr_start;
     C.text_hi = (unsigned long)_etext;
     handler_install();
-    /* a filter of this version stacked over a program's would answer the judge slot newer than it, hiding its
-     * refusals (7.4.2) */
-    if (have < FILTER_VERSION && program_filters)
-        die("a launcher newer than the one that installed a program's own seccomp filter cannot run under it", 0, 0);
-    if (have < FILTER_VERSION) filter_install();
+    /* 7.4.2: at the border alone; inside, the filter is the inherited one, of this version */
+    if (!have) filter_install();
     log_msg(C.boundary ? "border" : "inside", C.program);
     run(S, C.program, C.execfn, argc, argv, env2, auxv, 0);
 }

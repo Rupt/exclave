@@ -716,24 +716,19 @@ static long exec_target(struct scratch *S, const char *v, const char *given, cha
     if (!S->comm[0] && elf) scpy(S->comm, base_name(v), sizeof S->comm);
     if (wrapper) {
         if (!script && !elf) return -ENOEXEC;
-        if ((e = launcher_unjudged(S->real, -1, S->tmp, S->extra))) return e;
         return exec_env(S, S->real, argv, envp, v, 0); /* the kernel runs the launcher under the program's name */
     }
     /* not a wrapper: a host program, or an unwrapped exclave file */
     if (script) return exec_script(S, given, argv, envp, depth);
     if (!elf) return -ENOEXEC;
-    /* 7.4.5: a file carrying a launcher's note is another launcher: exec it as it is, with the launcher's variables */
-    int another, version;
-    int pr = elf_probe(S->real, S->tmp, &another, &version, S->extra);
+    /* 7.4.5: a file carrying a launcher's note is another launcher: exec it as it is, with the launcher's variables;
+     * one of another filter version refuses this process's filter at its start, by name (7.4.2) */
+    int another;
+    int pr = elf_probe(S->real, S->tmp, &another, S->extra);
     /* load_elf_binary's answer before its point of no return: ENOEXEC for a type, a machine or program headers it
      * cannot load, or an interpreter path without its NUL, EIO for one the file does not hold whole */
     if (pr < 0) return pr;
-    if (another >= PAGE_GENERATION) {
-        if ((e = launcher_unjudged(S->real, version, S->tmp, S->extra))) return e;
-        return exec_env(S, S->real, argv, envp, v, 0);
-    }
-    /* a launcher whose page this filter traps: the child refuses it by name */
-    if (another) return exec_env(S, C.launcher, argv, envp, v, 1);
+    if (another) return exec_env(S, S->real, argv, envp, v, 0);
     /* the loader the header names, resolved as loader_run resolves it (7.3), checked as load_elf_binary checks it
      * before its point of no return: open_exec's answer first, the name's own error, EACCES for a directory, a special
      * file or one without execute permission, then its header, EIO for one the file does not hold whole and ELIBBAD
@@ -940,16 +935,6 @@ static long do_sigaction(struct scratch *S, long *a)
     void *old = (void *)a[2];
     long size = a[3];
     if (size != 8) return RE5(NR_rt_sigaction, sig, act, old, size, 0);
-#ifdef EXCLAVE_TEST_OLD
-    /* build/launcher-old: handlers installed directly, as before the trampolines */
-    if (!act) return RE5(NR_rt_sigaction, sig, 0, old, size, 0);
-    unsigned long k[4];
-    long r = copy_exact(S->pid, k, act, sizeof k);
-    if (r) return r;
-    if (sig == SIGSYS) return old ? RE5(NR_rt_sigaction, sig, 0, old, size, 0) : 0;
-    k[3] &= ~SIGSYS_BIT;
-    return RE5(NR_rt_sigaction, sig, k, old, size, 0);
-#else
     /* sa_handler, sa_flags, sa_restorer, sa_mask, the kernel's order on both architectures */
     unsigned long k[4], o[4] = {0, 0, 0, 0};
     if (act) {
@@ -1001,7 +986,6 @@ static long do_sigaction(struct scratch *S, long *a)
     }
     /* written last, as sys_rt_sigaction writes it: a bad pointer is EFAULT with the new action in force */
     return copy_out(S->pid, old, o, sizeof o);
-#endif
 }
 static long do_sigprocmask(struct scratch *S, long *a, void *uc)
 {
@@ -1136,7 +1120,6 @@ static long fd_exclave(struct scratch *S, int fd)
  * as EADDRINUSE, then EROFS; connect looks the name up (unix_find_bsd), needs write permission on what it finds,
  * and finds no listener behind a file in the tree, ECONNREFUSED, since nothing can bind there. A host path, an
  * abstract name, an unnamed address or another family is re-issued as given; a bad length is the kernel's EINVAL. */
-#ifndef EXCLAVE_TEST_OLD /* build/launcher-old does not trap bind or connect */
 #define AF_UNIX 1
 static long do_sockaddr(struct scratch *S, int nr, long *a)
 {
@@ -1221,7 +1204,6 @@ static long do_sockaddr(struct scratch *S, int nr, long *a)
     if (r < 0) return r;
     return -ECONNREFUSED;
 }
-#endif
 
 /* Whether the directory the stat named holds .real/: for a path, the exclave's virtual S->v, by the cache under
  * S->v/.real, which is the exclave's and so never changes (7.4.4), the kernel asked on a miss and the answer kept;
@@ -1828,7 +1810,6 @@ static long do_getdents(struct scratch *S, int nr, long *a)
     }
 }
 
-#ifndef EXCLAVE_TEST_OLD
 /* PTRACE_TRACEME, the one ptrace request the filter traps (7.4.2). A vfork child's is deferred to its exec (7.4.5):
  * made at once, it would have the child traced when its execve traps, and the kernel stops a traced task for its
  * tracer at the SIGSYS, before this handler runs, while the tracer, its parent, waits in vfork for that very exec.
@@ -1843,9 +1824,7 @@ static long do_ptrace(struct scratch *S, long *a)
     scratch_keep(S, ppid);
     return 0;
 }
-#endif
 
-#ifndef EXCLAVE_TEST_OLD /* build/launcher-old, version 3, refuses the install in its filter */
 /* A program's own filter (7.4.2): the kernel's answers for what it refuses, in its order (seccomp_set_mode_filter,
  * seccomp_prepare_filter, bpf_prog_create_from_user), ENOSYS for what the launcher refuses, and otherwise the filter
  * filter_wrap makes of it, installed through the page with the flags and in the form given. The body and the built
@@ -1907,7 +1886,6 @@ static __attribute__((noinline)) long do_seccomp(struct scratch *S, int nr, long
     sys_munmap(m, room);
     return r;
 }
-#endif
 
 /* ---------- the dispatch ----------
  * A call from before the *at calls, which names a path with no directory beside it, is in the kernel its *at call
@@ -1930,13 +1908,9 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
     case NR_open: return do_openat(S, at(a, AT_FDCWD, a[0], a[1], a[2], 0));
     case NR_creat: return do_openat(S, at(a, AT_FDCWD, a[0], O_CREAT | O_WRONLY | O_TRUNC, a[1], 0));
     case NR_openat: return do_openat(S, a);
-    case NR_openat2:
-        return do_openat2(S, a);
-/* build/launcher-old, filter version 3, traps neither (17.4) */
-#ifndef EXCLAVE_TEST_OLD
+    case NR_openat2: return do_openat2(S, a);
     case NR_bind:
     case NR_connect: return do_sockaddr(S, nr, a);
-#endif
     case NR_stat: return do_stat(S, NR_newfstatat, at(a, AT_FDCWD, a[0], a[1], 0, 0));
     case NR_lstat: return do_stat(S, NR_newfstatat, at(a, AT_FDCWD, a[0], a[1], AT_SYMLINK_NOFOLLOW, 0));
     case NR_newfstatat:
@@ -2020,16 +1994,10 @@ static long dispatch(struct scratch *S, int nr, long *a, void *uc)
     case NR_pselect6: return do_pselect6(S, a);
     case NR_epoll_pwait:
     case NR_epoll_pwait2: return do_epoll_pwait(S, nr, a);
-    case NR_io_pgetevents:
-        return do_io_pgetevents(S, a);
-/* build/launcher-old, filter version 3, does not trap it (17.4) */
-#ifndef EXCLAVE_TEST_OLD
+    case NR_io_pgetevents: return do_io_pgetevents(S, a);
     case NR_ptrace: return do_ptrace(S, a);
-#endif
-#ifndef EXCLAVE_TEST_OLD
     case NR_seccomp:
     case NR_prctl: return do_seccomp(S, nr, a);
-#endif
     default: return -ENOSYS; /* 7.4.3: a trapped syscall the handler does not know */
     }
 }
@@ -2042,10 +2010,8 @@ static const char *sysname(int nr)
     case NR_openat:
     case NR_creat:
     case NR_openat2: return "open";
-#ifndef EXCLAVE_TEST_OLD
     case NR_bind: return "bind";
     case NR_connect: return "connect";
-#endif
     case NR_stat:
     case NR_lstat:
     case NR_newfstatat:
@@ -2151,18 +2117,12 @@ volatile int program_filters;
  * which the kernel then applies. No call, and no cost, in a process where no program installed a filter. */
 static long judge(int nr, const long *a)
 {
-#ifndef EXCLAVE_TEST_OLD
     if (!program_filters) return -MARK_NONE;
     long r = __sc6_judge(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
     /* the launcher's filter answers every call from the slot that it traps; a foreign outer filter's TRAP, which no
      * launcher filter answers, would end here, or in the nesting limit should the call trap again: loud either way */
     if (r > 0) die_invariant("the judge call ran for syscall", nr);
     return r;
-#else
-    (void)nr;
-    (void)a;
-    return -MARK_NONE;
-#endif
 }
 
 /* The handler's entry (7.5.7): the trap's record made on the stack before anything else, its address in the reserved

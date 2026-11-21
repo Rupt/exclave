@@ -22,19 +22,18 @@ typedef unsigned int mode_t;
  * before anything else runs; only the bootstrap and the filter probe (7.4.2) use a raw instruction, and the signal
  * restorer lies in the page. It lies high in the low 2 GB, above program images, which every linker starts low and
  * grows upward (Go's on aarch64 from 0x10000, 13 item 24), and below 0x7fff8000, where ASan's shadow begins on
- * x86-64; 64K-aligned for kernels with 64K pages. Filters before version 6 allow a page at 0x3f0000 instead, so
- * neither launcher runs under the other's filter (FILTER_PAGE_SINCE). */
+ * x86-64; 64K-aligned for kernels with 64K pages. */
 #define SC_PAGE 0x7fe00000UL
 /* The page's layout (7.4.2): at 0 the launcher's syscall and a return; at 16 the judge slot, the same two
  * instructions, from which the handler re-issues a trapped call for the kernel to judge by the program's own filters,
- * and which every filter from version 10 answers rather than allows; at 32 the signal restorer, rt_sigreturn, jumped
+ * and which the filter answers rather than allows; at 32 the signal restorer, rt_sigreturn, jumped
  * to and never called, since the kernel reads the frame from the stack; at 48 the handler-call slot, 32 bytes, from
  * which a trampoline calls a program's handler with its return address at the restorer's own two instructions, whose
  * rt_sigreturn the filter answers with an error from that one address, SC_HCALL_RET, before a jump back into the
  * trampoline (7.5.7); at 80 the re-issue slot, 32 bytes, through which the handler makes the program's call: it makes
  * none when the trap's record says a program's handler redirected the program, and stores the answer in the record
  * (7.5.7). A call's instruction pointer, the address after its syscall instruction, lies in its slot on both
- * architectures. The filter names SC_HCALL_RET, so the handler-call slot's layout is fixed for the page generation. */
+ * architectures. The filter names SC_HCALL_RET, so the handler-call slot's layout is fixed for the filter version. */
 #define SC_JUDGE (SC_PAGE + 16)
 #define SC_RESTORER (SC_PAGE + 32)
 #define SC_HCALL (SC_PAGE + 48)
