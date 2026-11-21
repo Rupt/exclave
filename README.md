@@ -38,8 +38,7 @@ package files or from any filesystem tree.
   a program of its own beside it, downloads a package closure with every
   file checked against the repository's signatures.
 - **Compilers first.** A gcc exclave builds zlib, Lua, SQLite and re2c
-  from source with their configure scripts: the builds within a fifth of
-  native time, the configure scripts about a third slower. A clang
+  from source with their configure scripts. A clang
   exclave compiles C and C++; Alpine and Fedora exclaves compile and run
   C. A CentOS 7 glibc as a data directory gives outputs that run on every
   glibc since 2.17.
@@ -60,9 +59,38 @@ Figures here and in `docs/DESIGN.md` are measured on the reference
 machine: an AMD Ryzen AI 7 350 (8 cores, 16 threads), Ubuntu 24.04,
 kernel 7.0, glibc 2.39.
 
+## With the two commands alone
+
+`exclave` and `exclave-fetch` are static programs that need nothing of
+this checkout: `scripts/build` makes them as `build/exclave` and
+`build/exclave-fetch`, and a release holds them as `exclave-ARCH` and
+`exclave-fetch-ARCH` beside their licences and signed sums
+([taking a release](#shipping-an-exclave-and-taking-one) has the
+checks). With the two in a directory on an x86-64 Linux host, this makes
+an exclave of TeX Live's `pdflatex` from Ubuntu's packages:
+
+```bash
+./exclave-fetch debs --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --out debs texlive-latex-base   # the package and all it depends on, each file checked against the signed index
+./exclave unpack tex.exclave debs/*.deb       # the tree, and notes of what installing the packages would have generated
+./exclave wrap tex.exclave                    # every program a wrapper, the tree checked and its hash recorded
+./exclave caches tex.exclave                  # TeX's formats and indexes, made by the tree's own programs
+tex.exclave/tree/usr/bin/pdflatex paper.tex   # by its path, through a symlink, from a copy of the directory
+```
+
+`exclave-fetch` is given the archive's key and fetches none: Ubuntu's is
+`/usr/share/keyrings/ubuntu-archive-keyring.gpg` on an Ubuntu host, and
+the `ubuntu-keyring` package gives it to another. Without `--cache DIR`
+it keeps nothing between runs, and `--snapshot DATE` is the one way to
+fetch the same files again later. The exclave is a directory of about
+300 MB that nothing outside it refers to; `exclave prune` with the log
+of a run cuts it to what the run touched. `./exclave help` lists the
+commands and `./exclave-fetch debs --help` a fetcher's options and
+defaults; "Making your own exclave" below says more, with
+`scripts/exclave` there standing for `./exclave`.
+
 ## First run
 
-You need an x86-64 or aarch64 Linux host with `gcc`, `curl` or `wget`,
+You need an x86-64 Linux host with `gcc`, `curl` or `wget`,
 Ubuntu's archive keyring at `/usr/share/keyrings/ubuntu-archive-keyring.gpg`,
 which an Ubuntu host has and the `ubuntu-keyring` package gives another,
 and the network. `scripts/install-go` fetches a pinned, checksummed
@@ -422,7 +450,7 @@ public key from a channel you trust (not the release itself):
 ```bash
 echo "exclave-release $(cat releaser.pub)" > allowed_signers
 ssh-keygen -Y verify -f allowed_signers -I exclave-release -n exclave -s SHA256SUMS.sig < SHA256SUMS
-sha256sum -c SHA256SUMS                                   # or b3sum -c B3SUMS
+sha256sum -c SHA256SUMS                                   # or b3sum -c B3SUMS; with the commands alone: grep " exclave.*-$(uname -m)\$" SHA256SUMS | sha256sum -c -
 tar --zstd -xf gcc.exclave.tar.zst                        # or, where tar has no --zstd: zstd -dc gcc.exclave.tar.zst | tar -xf -
 mv exclave-$(uname -m) exclave && chmod +x exclave        # the command for this machine
 ./exclave check gcc.exclave                               # the tree against the hashes file, the wrappers, the static check
@@ -438,7 +466,7 @@ so unpacking it needs `zstd`, through `tar --zstd` where `tar` has that
 option or piped into any `tar` where it has not.
 
 The kernel matrix runs exactly this, with each host's own tools, on
-every distribution it boots (`docs/DESIGN.md` 12.1), and
+every x86-64 distribution it boots (`docs/DESIGN.md` 12.1), and
 `test/release_test.py`, a step of `scripts/extra`, on the reference
 machine, where a tampered archive and a tampered sums file are refused.
 

@@ -48,7 +48,10 @@ Inside, a program sees the top-level directories that tree/ fills,
 fails as on a read-only disk. Everything else is this system's: /home,
 /tmp, /proc, /dev, the working directory, and eleven files such as
 /etc/passwd, /etc/resolv.conf and /etc/localtime that say who you are,
-how network names are looked up and what the time zone is. PATH is the
+how network names are looked up and what the time zone is, with three
+directories, /etc/ssl/certs, /etc/pki/tls/certs and /var/lib/sss,
+that hold the authorities this system trusts and its directory
+service's state. PATH is the
 exclave's, so this system's commands are not found by name. The locale
 is C.UTF-8 by default, and sudo, su and other setuid programs do not
 work inside.
@@ -70,7 +73,8 @@ Checking it
 The hashes are BLAKE3-256, so "b3sum .exclave/launcher" prints
 the recorded launcher hash, and a package file fetched again its pkg
 hash. The exclave tool, which builds these directories, is not part
-of this one:
+of this one; it and its documents are at
+https://github.com/Rupt/exclave:
 
   exclave check DIR   every program wrapped, the libraries each needs
                       found inside, tree/ against its recorded hash

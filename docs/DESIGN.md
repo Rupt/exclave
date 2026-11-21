@@ -158,7 +158,8 @@ What is built and tested:
   run natively on any later glibc (9).
 - **aarch64**: the launcher runs there, tested in emulated rows of the
   kernel matrix on kernels with 4 KB and with 64 KB pages (12.1, 13
-  item 43); the exclave it runs is made on x86-64 (10.1).
+  item 43); the exclave it runs is made on either architecture
+  (10.1).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
 - **The command as one file**: `build/exclave`, static Go carrying its
@@ -1297,7 +1298,7 @@ seccomp's, the two `seccomp` queries) and the version
 probe; an `rt_sigreturn` from the handler-call slot, answered with an
 error, and every other `rt_sigreturn`, allowed; the judge slot and the
 syscall page; the refusals; then the trap. On x86-64 the program is
-291 instructions and 372 of the 472 numbers up to the ceiling are
+298 instructions and 372 of the 472 numbers up to the ceiling are
 allowed by number alone; `rt_sigreturn`, which the cache proves allowed
 no longer, runs the second stage at every signal's return, the trap's
 own included (16.2). 16.3 gives why a tree and what
@@ -3952,7 +3953,8 @@ another, or copy a sysroot into a data directory (9). The cost is disk space.
 | Ubuntu 23.10+ desktops, Docker and CI default profiles, RHEL 7, HPC, hardened kernels | Designed to work: no privilege, user namespace or mount is needed. Docker's default seccomp profile was checked syscall by syscall, and a workload runs under it, twice: as assembled for the running kernel and as Docker installs it before Linux 4.8, where `process_vm_readv` is refused (17) |
 | Read-only media, NFS, FUSE homes | Work: nothing is written |
 | `noexec` media, including a `noexec` `/tmp` in CI | Not supported: neither `execve` nor `mmap(PROT_EXEC)` of a file is allowed there |
-| Snap-confined terminals, gVisor-based CI, WSL1, SELinux `execmem` policies | Untested. snapd and gVisor install their own filters; WSL1 has no seccomp |
+| A policy against memory made executable: systemd's `MemoryDenyWriteExecute=`, SELinux's `deny_execmem` | Works: the syscall page is a page of the launcher's own file, never writable (7.4.2). Under the first, `prctl(PR_SET_MDWE)`, programs start as they do natively (`mem_policy`, 17); under the second, on Fedora 42 with SELinux enforcing, a wrapper, a compile and its output ran and that test passed (November 2026) |
+| Snap-confined terminals, gVisor-based CI, WSL1 | Untested. snapd and gVisor install their own filters; WSL1 has no seccomp |
 | `no_new_privs` | The filter requires it, and it also disables file capabilities and AppArmor transitions on exec: `sudo`, `su`, `pkexec`, `ping` and setcap binaries fail inside an exclave, including when run from build scripts |
 | Media without symlinks or hard links (FAT) | `cp -rL` copies the launcher once per wrapper and replaces symlinks with copies; the copy works, since whether a file is a wrapper is read from the file (7.4.4) |
 | Architectures | x86-64 and aarch64, from one source as two launchers (7.1). An exclave runs programs of its launcher's machine only. aarch64 is tested in the emulated matrix rows (12.1), on kernels with 4 KB and with 64 KB pages (Ubuntu's 64k kernel); kernels with 16 KB pages (Asahi's) are untested (13 item 43). Another 64-bit little-endian machine would need the same list: the syscall table, `_start`, the signal frame offsets, a restorer, the relocation type and the CPU check |
@@ -3988,7 +3990,7 @@ x86-64 row too, fetches Fedora's newest image, release 44 with kernel
 | Alpine 3.20 | 6.6 | all pass | musl host, busybox userland; the exclave's outputs run inside it only (9) |
 | Fedora 42 | 6.14 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
 | Ubuntu 26.10 | 7.3 | all pass | glibc 2.44 |
-| Ubuntu 24.04 arm64 | 6.8 | all pass | aarch64: natively on GitHub's aarch64 runner, where the gate runs this kernel (17), and under TCG on the reference machine, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed; the exclave is made on the reference machine and only run here (10.1) |
+| Ubuntu 24.04 arm64 | 6.8 | all pass | aarch64: natively on GitHub's aarch64 runner, where the gate runs on a kernel with 4 KB pages (17), and under TCG on the reference machine, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed; the exclave is made on the reference machine and only run here (10.1) |
 | Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | all pass | aarch64 under TCG: the VM installs the 64 KB kernel and reboots into it, and runs when asked (17); reproduced |
 | reference machine | 7.0 | all pass | Ubuntu 24.04, AppArmor |
 
@@ -7017,8 +7019,8 @@ scripts), since a runner has been refused
 by GitHub for two minutes at a time; a server's own answer, a 404, is
 final. The gate runs on an x86-64 runner on the gcc exclave
 and, natively, on an aarch64 runner on the arm64 gcc exclave
-made there, whose kernel is Ubuntu 24.04's 6.8, the one the emulated
-`noble-arm64` row boots: so that row has no job there, and the
+made there, on a kernel with 4 KB pages, as the emulated
+`noble-arm64` row's is: so that row has no job there, and the
 aarch64 build gets the unit tests and the stack budget,
 which the emulated row never ran (its code checks go without
 shellcheck and taplo, which have no aarch64 wheel; the shell and the
@@ -7160,7 +7162,7 @@ questions.
    boots such a kernel, so it has no job, and a lighter fixture is
    what would shorten it.
 5. **Hosts the matrix has not covered.** Snap-confined terminals,
-   gVisor-based CI, WSL1 and SELinux `execmem` policies are listed as
+   gVisor-based CI and WSL1 are listed as
    untested in the portability envelope (12); each is a matrix row to
    add, or a limitation to state.
 6. **The command's hashing.** The tree is listed once and hashed with
@@ -7402,8 +7404,8 @@ specified.
 - **The caches only a tree's own programs can make are made by
   `exclave caches`, after `wrap`, inside the exclave**: Python's
   bytecode, GSettings schemas, the MIME database, the GIO,
-  gdk-pixbuf, icon, desktop and font caches and graphviz's plugin
-  configuration have no writer but their generators, and running them under the exclave's launcher keeps
+  gdk-pixbuf, icon, desktop and font caches, graphviz's plugin
+  configuration and TeX Live's indexes and formats have no writer but their generators, and running them under the exclave's launcher keeps
   a package's programs inside an exclave, while a command of its own
   keeps `unpack` and `wrap` the same on every machine (10.1, 13 item
   48).

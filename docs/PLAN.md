@@ -68,8 +68,7 @@ documents, gate, one commit per item. Status is in brackets.
    the gate that could only skip, are removed until a compatibility
    point is declared; git keeps them, `test/compat_test.py` last at
    7ad8079.
-4. **The consumer's recipe on every kernel of the matrix** [done, the
-   matrix run on it due]: a release of the gcc exclave verified, unpacked and
+4. **The consumer's recipe on every kernel of the matrix** [done]: a release of the gcc exclave verified, unpacked and
    checked in each matrix VM with the release's own command, each
    host's answer recorded (old hosts lack `ssh-keygen -Y` and
    `tar --zstd`); the README's consumer section says what the recipe
@@ -103,8 +102,7 @@ documents, gate, one commit per item. Status is in brackets.
    tests asserting glibc's wording, stack minimum and `raise` are fixed,
    and the suite passes on every kind. The fifth failure was a launcher
    limitation, now 13 item 58.
-11. **A program handler's view of a trapped call** [done, the arm64 row on
-    it due]: a program's handlers are installed behind trampolines that
+11. **A program handler's view of a trapped call** [done]: a program's handlers are installed behind trampolines that
     present the trap site's frame, a frame of the kernel's layout from the
     page's handler-call slot so that unwinders walk into the program's
     frames, and carry what the handler decides back into the trapped call;
@@ -136,7 +134,7 @@ documents, gate, one commit per item. Status is in brackets.
     the late read needs a descriptor, which is a limitation of its own
     (DESIGN 8.1 rule 1, 16.4, 16.6 item 11, 13 item 64).
 14. **A program where the kernel's exec would put it** [done, the
-    kernel rows on it due]: of the limitations the defect hunt stated
+    64 KB-page row on it due]: of the limitations the defect hunt stated
     (item 7), the break. The kernel's record of the image it exec'd
     takes the program's through `PR_SET_MM_MAP`, which needs no
     capability, so the loader places a position-independent program
@@ -160,6 +158,30 @@ documents, gate, one commit per item. Status is in brackets.
     chunk and the reserve are one span, mapped in one call and opened
     in a second, two calls and one mapping fewer in every start
     (DESIGN 16.6 item 12).
+
+17. **The syscall page from the launcher's own file** [done, the arm64
+    rows on it due]: a page of the launcher's text moved into place,
+    never writable, so that a launcher starts under a policy against
+    memory made executable, systemd's `MemoryDenyWriteExecute` and
+    SELinux's `deny_execmem`, where every program once died without a
+    word (DESIGN 7.4.2).
+18. **One filter version** [done, the arm64 rows on it due]: a launcher
+    runs under an inherited filter of its own version alone and
+    refuses another's by name, in place of the rules by which launchers
+    of different versions nested (DESIGN 7.4.2, 13 item 45).
+19. **The environment** [done]: `PYTHONHOME` dropped at the border, and
+    what the home directory and the rest of the environment bring
+    stated (DESIGN 6.2, 13 item 65).
+20. **First use from the commands alone** [done]: `help`, `--help` and
+    `--version` answered, `exclave-fetch`'s usage written with its
+    defaults, `unpack` and `wrap` pointing at `exclave caches`,
+    dangling links counted, and the README's path for someone who
+    holds only the two commands.
+21. **A release of the commands alone** [done]: `scripts/release` with
+    no exclave, the commands named by machine, `LICENSE` and Go's
+    licence beside them, a directory that is not empty and a tree
+    with uncommitted changes refused (DESIGN 10.5). The releaser's
+    public key is not yet published in the repository.
 
 ## After the first release
 
