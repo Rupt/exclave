@@ -46,8 +46,8 @@ def speculation_unchanged(ctx: Ctx) -> None:
     )
 
 
-# 6.2: the variables the border drops, which steer the loader or libc to host files; LD_ is a
-# prefix, the rest whole names
+# 6.2: the variables the border drops, which steer the loader, libc, the compiler or Python to
+# host files; LD_ is a prefix, the rest whole names
 DROPPED = (
     "LD_PRELOAD",
     "LD_LIBRARY_PATH",
@@ -63,9 +63,10 @@ DROPPED = (
     "GCC_EXEC_PREFIX",
     "COMPILER_PATH",
     "LIBRARY_PATH",
+    "PYTHONHOME",
 )
 # names beside them that pass: no LD_ prefix, or a dropped name with more after it
-PASSED = ("LDFLAGS", "GCONV_PATHS", "LIBRARY_PATHX", "TZDIRX", "EXCLAVE_TESTVAR")
+PASSED = ("LDFLAGS", "GCONV_PATHS", "LIBRARY_PATHX", "TZDIRX", "PYTHONPATH", "EXCLAVE_TESTVAR")
 
 
 @test

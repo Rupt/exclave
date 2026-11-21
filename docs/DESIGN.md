@@ -588,7 +588,10 @@ launcher removes before a program runs, inside the exclave too
 It removes the variables which steer the loader or libc to host files:
 `LD_*`, `GLIBC_TUNABLES`, `GCONV_PATH`, `LOCPATH`, `NLSPATH`,
 `RESOLV_HOST_CONF`, `HOSTALIASES`, `TZDIR`, `GCC_EXEC_PREFIX`,
-`COMPILER_PATH` and `LIBRARY_PATH`. It removes `TZ` as well: a zone
+`COMPILER_PATH` and `LIBRARY_PATH`, and `PYTHONHOME`, which gives a
+Python a library in place of its own. Every other variable a language
+or a tool reads passes as the user set it (13 item 65). It removes
+`TZ` as well: a zone
 name in it selects data under `/usr/share/zoneinfo` that the exclave
 may lack, where glibc keeps the name with an offset of zero, so that
 `TZ=Europe/Paris date +%Z` prints `Europe` in a tree without `tzdata`,
@@ -5009,6 +5012,27 @@ what they concern:
     `top_level_unread_without_descriptor`, and the namespace oracle
     for the kernel's answers to the same program
     (`test/progs/top_reach.c`).
+
+65. **The home directory and the environment are the user's.** A
+    program in an exclave reads the host's home directory, a host
+    path like any the tree does not own (8.1), and inherits every
+    variable the border neither drops nor sets (6.2), so what a user
+    keeps there for the host's programs reaches the tree's. A tree's
+    Python reads the user site,
+    `~/.local/lib/pythonX.Y/site-packages`, wherever the host's Python
+    is of the same minor version: a `usercustomize` there runs, and
+    the packages `pip install --user` put there, built against the
+    host's libraries, are on its search path; `python3 -s` or
+    `PYTHONNOUSERSITE=1` leaves the site out. `PYTHONPATH`,
+    `PERL5LIB` and what local::lib sets beside it, `JAVA_HOME`,
+    `CLASSPATH`, `CPATH` and `PKG_CONFIG_PATH` pass as set, and a
+    path in one resolves as any path inside does, to the tree where
+    the tree owns its top-level directory and to the host otherwise.
+    Of such variables the border drops `PYTHONHOME` alone, which
+    would leave the tree's Python without its own library. A run
+    that must not depend on them is started with them unset, by
+    `env -u` or a wrapper script outside the exclave; no manifest
+    key fixes an exclave's environment.
 
 ### 13.1 Debugging and profiling recipe
 

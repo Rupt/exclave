@@ -202,6 +202,15 @@ ones a first user meets, with the rule behind each and what to do:
   need `tzdata` in the exclave. An exclave that wants another locale or
   shell ships the data and a wrapper script that sets the variable; one
   that wants a fixed zone takes `/etc/localtime` back with `own`.
+- **The home directory and most of the environment are the user's.**
+  The home is a host path, and every variable the border neither drops
+  nor sets passes through. A tree's Python therefore reads
+  `~/.local/lib/pythonX.Y/site-packages` wherever the host's Python is
+  of the same minor version, with whatever `pip install --user` put
+  there for the host; `python3 -s` or `PYTHONNOUSERSITE=1` leaves it
+  out. `PYTHONPATH`, `PERL5LIB`, `JAVA_HOME` and their like pass as
+  set, and `env -u NAME` starts a run without one; only `PYTHONHOME`
+  is dropped (`docs/DESIGN.md` 13 item 65).
 - **From the host, every executable in an exclave is the launcher.**
   `ldd`, `file` and `debsums` see the same small static binary at every
   wrapper path; the originals are beside them in `.real/`, byte for byte

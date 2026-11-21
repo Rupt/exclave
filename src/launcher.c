@@ -184,16 +184,20 @@ static const char *find_env(char **envp, const char *name)
     return v;
 }
 
-/* 6.2: at the border the host's environment passes through minus the variables that would rebind the loader, the libc
- * or the compiler to the host; minus three that name what the exclave decides for itself, the search path, the locale
- * and the shell, set to the same values in every exclave on every host, what a reproducible build fixes by hand; and
- * minus TZ, since a zone name in it selects data under /usr/share/zoneinfo that the exclave may lack, where the host's
- * /etc/localtime, an identity file (8.4), is read by any libc with TZ unset. What an exclave wants on PATH lives in its
- * own /usr/local/bin, and an exclave that wants another locale ships the data and a wrapper script. */
-static const char *denied[] = {"GLIBC_TUNABLES",   "GCONV_PATH",   "LOCPATH", "NLSPATH",
-                               "RESOLV_HOST_CONF", "HOSTALIASES",  "TZDIR",   "GCC_EXEC_PREFIX",
-                               "COMPILER_PATH",    "LIBRARY_PATH", "PATH",    "LANG",
-                               "LANGUAGE",         "TZ",           "SHELL",   0};
+/* 6.2: at the border the host's environment passes through minus the variables that would rebind the loader, the libc,
+ * the compiler or Python's own library to the host; minus three that name what the exclave decides for itself, the
+ * search path, the locale and the shell, set to the same values in every exclave on every host, what a reproducible
+ * build fixes by hand; and minus TZ, since a zone name in it selects data under /usr/share/zoneinfo that the exclave
+ * may lack, where the host's /etc/localtime, an identity file (8.4), is read by any libc with TZ unset. What an exclave
+ * wants on PATH lives in its own /usr/local/bin, and an exclave that wants another locale ships the data and a wrapper
+ * script. */
+/* clang-format off */
+static const char *denied[] = {
+    "GLIBC_TUNABLES", "GCONV_PATH", "LOCPATH", "NLSPATH", "RESOLV_HOST_CONF", "HOSTALIASES", "TZDIR",
+    "GCC_EXEC_PREFIX", "COMPILER_PATH", "LIBRARY_PATH", "PYTHONHOME",
+    "PATH", "LANG", "LANGUAGE", "TZ", "SHELL", 0,
+};
+/* clang-format on */
 static const char *fixed[] = {"PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8", "SHELL=/bin/sh", 0};
 /* which of the launcher's own variables a string of the environment is (internal_var), 0 for none */
 static int own_var(const char *e)
