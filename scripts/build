@@ -100,6 +100,18 @@ launcher() {
         echo "build: $out lost its note: the launcher carries exclave (7.4.5)" >&2
         return 1
     fi
+    # the syscall page's block (7.4.2): text, as large and as aligned as the
+    # architecture's largest page, so that the kernel's page the launcher
+    # moves holds nothing else
+    page=$("${tools}readelf" -S -W "$out" | sed -n 's/^ *\[ *[0-9]*\] *\.exclave\.page  *//p' | tr -s ' ')
+    case $arch in
+    aarch64) block='PROGBITS [0-9a-f]*0000 [0-9a-f]* 010000 00 AX 0 0 65536' ;;
+    *) block='PROGBITS [0-9a-f]*000 [0-9a-f]* 001000 00 AX 0 0 4096' ;;
+    esac
+    printf '%s\n' "$page" | grep -Eqx "$block ?" || {
+        echo "build: $out: the syscall page's block is not a page of text on its own: $page" >&2
+        return 1
+    }
     "${tools}readelf" -S -W "$out" | grep -q debug_gdb_scripts || {
         echo "build: $out lost the gdb script" >&2
         return 1

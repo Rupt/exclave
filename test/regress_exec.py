@@ -708,6 +708,23 @@ def mem_layout(ctx: Ctx) -> None:
     expect(not bad, "; ".join(bad))
 
 
+@test
+def mem_policy(ctx: Ctx) -> None:
+    """7.4.2: a launcher starts under a policy against memory made executable.
+
+    Under prctl(PR_SET_MDWE), which systemd's MemoryDenyWriteExecute sets and execve inherits, the
+    kernel refuses a mapping both writable and executable and an mprotect that makes a page
+    executable. The launcher's syscall page is a page of its own file's text moved into place,
+    never writable, so a program and a shell that runs one start under the policy as they do
+    natively, a handler runs, and what the policy refuses the process itself is refused inside as
+    outside. The launcher once wrote the page and made it executable, and every program run under
+    the policy died of SIGSEGV with no message. The kernel under bwrap measured these answers; one
+    without the policy refuses nothing.
+    """
+    bad = exerciser_wrong(ctx, "mem_policy")
+    expect(not bad, "; ".join(bad))
+
+
 def refusing(name: str, first: int | None, err: int) -> Callable[[], None]:
     """A function a child runs before its exec: a seccomp filter that answers err to one call.
 

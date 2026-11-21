@@ -54,11 +54,78 @@ static void raw_fatal(const char *msg, long len)
     for (;;) __sc6_raw(NR_exit_group, 127, 0, 0, 0, 0, 0);
 }
 
-/* 7.4.2: map the syscall page. Raw syscalls only: nothing else may run before this. */
+/* 7.4.2: the syscall page's bytes, a block of the launcher's own text that holds nothing else, as large and as aligned
+ * as the architecture's largest page, so that the kernel's page at its start is the block's alone whatever the
+ * kernel's page size. page_init moves that page to SC_PAGE: memory the kernel mapped from the launcher's file and that
+ * was never writable, which a policy against memory made executable has nothing to refuse (PR_SET_MDWE, SELinux's
+ * execmem). The slots lie at the offsets sys.h names, zeros between them, each spelled as its bytes, since an unwinder
+ * knows the restorer's. */
+_Static_assert(SC_JUDGE - SC_PAGE == 16 && SC_RESTORER - SC_PAGE == 32 && SC_HCALL - SC_PAGE == 48 &&
+                   SC_HCALL_RET - SC_PAGE == 60 && SC_REISSUE - SC_PAGE == 80,
+               "the block below lays the page out as sys.h names its slots");
+/* clang-format off */
+#if defined(__x86_64__)
+__asm__(".pushsection .exclave.page,\"ax\",@progbits\n"
+        " .balign 4096\n"
+        " .hidden exclave_page\n .globl exclave_page\n"
+        "exclave_page:\n"
+        /* syscall; ret */
+        " .byte 0x0f, 0x05, 0xc3\n"
+        /* the judge slot: the same two */
+        " .org exclave_page + 16, 0\n"
+        " .byte 0x0f, 0x05, 0xc3\n"
+        /* the restorer (sys.h): mov $15, %eax; syscall */
+        " .org exclave_page + 32, 0\n"
+        " .byte 0xb8, 15, 0, 0, 0, 0x0f, 0x05\n"
+        /* the handler-call slot (7.5.7): call *%r11; mov $15, %rax; syscall, the restorer's bytes an unwinder knows,
+         * whose rt_sigreturn the filter refuses from SC_HCALL_RET; jmp *TRAMP_PRESENTED(%rsp), the trampoline's
+         * re-entry, kept in its block above the presented frame */
+        " .org exclave_page + 48, 0\n"
+        " .byte 0x41, 0xff, 0xd3, 0x48, 0xc7, 0xc0, 0x0f, 0, 0, 0, 0x0f, 0x05, 0xff, 0xa4, 0x24\n"
+        " .long " ASM_STR(TRAMP_PRESENTED) "\n"
+        /* the re-issue slot (7.5.7), the record in r15: cmpq $0, 24(%r15); jne 1f; syscall; 2: mov %rax, 16(%r15);
+         * ret; 1: mov $-EINTR, %rax; jmp 2b */
+        " .org exclave_page + 80, 0\n"
+        " .byte 0x49, 0x83, 0x7f, 0x18, 0x00, 0x75, 0x07, 0x0f, 0x05, 0x49, 0x89, 0x47, 0x10, 0xc3\n"
+        " .byte 0x48, 0xc7, 0xc0, 0xfc, 0xff, 0xff, 0xff, 0xeb, 0xf2\n"
+        " .org exclave_page + 4096, 0\n"
+        ".popsection\n");
+#elif defined(__aarch64__)
+__asm__(".pushsection .exclave.page,\"ax\",@progbits\n"
+        " .balign 65536\n"
+        " .hidden exclave_page\n .globl exclave_page\n"
+        "exclave_page:\n"
+        /* svc #0; ret */
+        " .inst 0xd4000001, 0xd65f03c0\n"
+        /* the judge slot: the same two */
+        " .org exclave_page + 16, 0\n"
+        " .inst 0xd4000001, 0xd65f03c0\n"
+        /* the restorer (sys.h): mov x8, #139; svc #0 */
+        " .org exclave_page + 32, 0\n"
+        " .inst 0xd2801168, 0xd4000001\n"
+        /* the handler-call slot (7.5.7): blr x16; mov x8, #139; svc #0, the restorer's words an unwinder knows, whose
+         * rt_sigreturn the filter refuses from SC_HCALL_RET; ldr x16, [sp, #TRAMP_PRESENTED + 8]; br x16, the
+         * trampoline's re-entry, kept in its block above the presented frame */
+        " .org exclave_page + 48, 0\n"
+        " .inst 0xd63f0200, 0xd2801168, 0xd4000001\n"
+        " .inst 0xf94003f0 | (((" ASM_STR(TRAMP_PRESENTED) " + 8) / 8) << 10), 0xd61f0200\n"
+        /* the re-issue slot (7.5.7), the record in x27: ldr x16, [x27, #24]; cbnz x16, 1f; svc #0; 2: str x0,
+         * [x27, #16]; ret; 1: mov x0, #-EINTR; b 2b */
+        " .org exclave_page + 80, 0\n"
+        " .inst 0xf9400f70, 0xb5000090, 0xd4000001, 0xf9000b60, 0xd65f03c0, 0x92800060, 0x17fffffd\n"
+        " .org exclave_page + 65536, 0\n"
+        ".popsection\n");
+#endif
+/* clang-format on */
+extern const char exclave_page[] __attribute__((visibility("hidden")));
+
+/* 7.4.2: put the syscall page in place. Raw syscalls only: nothing else may run before this. The address is held
+ * first, by a mapping of no access, so that one already there is found, which a move would replace; then the page of
+ * the launcher's text that holds the slots is moved over it. */
 static void page_init(void)
 {
-    long m = __sc6_raw(NR_mmap, (long)SC_PAGE, 4096, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    long m =
+        __sc6_raw(NR_mmap, (long)SC_PAGE, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (m != (long)SC_PAGE) {
         if (m >= 0) __sc6_raw(NR_munmap, m, 4096, 0, 0, 0, 0);
         static const char msg[] = "launcher: cannot map the syscall page\n";
@@ -66,64 +133,22 @@ static void page_init(void)
         if (m == -EEXIST) raw_fatal(busy, sizeof busy - 1);
         raw_fatal(msg, sizeof msg - 1);
     }
-#if defined(__x86_64__)
-    unsigned char *p = (unsigned char *)SC_PAGE;
-    /* syscall; ret at the start and in the judge slot; mov $15, %eax; syscall, the restorer (sys.h) */
-    static const unsigned char call[3] = {0x0f, 0x05, 0xc3}, restorer[7] = {0xb8, 15, 0, 0, 0, 0x0f, 0x05};
-    for (unsigned long i = 0; i < 3; i++) p[i] = p[SC_JUDGE - SC_PAGE + i] = call[i];
-    for (unsigned long i = 0; i < 7; i++) p[SC_RESTORER - SC_PAGE + i] = restorer[i];
-    /* the handler-call slot (7.5.7): call *%r11; mov $15, %rax; syscall, the restorer's bytes an unwinder knows, whose
-     * rt_sigreturn the filter refuses from SC_HCALL_RET; jmp *TRAMP_PRESENTED(%rsp), the trampoline's re-entry, kept
-     * in its block above the presented frame */
-    static const unsigned char hcall[19] = {0x41,
-                                            0xff,
-                                            0xd3,
-                                            0x48,
-                                            0xc7,
-                                            0xc0,
-                                            0x0f,
-                                            0,
-                                            0,
-                                            0,
-                                            0x0f,
-                                            0x05,
-                                            0xff,
-                                            0xa4,
-                                            0x24,
-                                            TRAMP_PRESENTED & 0xff,
-                                            TRAMP_PRESENTED >> 8,
-                                            0,
-                                            0};
-    for (unsigned long i = 0; i < sizeof hcall; i++) p[SC_HCALL - SC_PAGE + i] = hcall[i];
-    /* the re-issue slot (7.5.7), the record in r15: cmpq $0, 24(%r15); jne 1f; syscall; 2: mov %rax, 16(%r15); ret;
-     * 1: mov $-EINTR, %rax; jmp 2b */
-    static const unsigned char reissue[23] = {0x49, 0x83, 0x7f, 0x18, 0x00, 0x75, 0x07, 0x0f, 0x05, 0x49, 0x89, 0x47,
-                                              0x10, 0xc3, 0x48, 0xc7, 0xc0, 0xfc, 0xff, 0xff, 0xff, 0xeb, 0xf2};
-    for (unsigned long i = 0; i < sizeof reissue; i++) p[SC_REISSUE - SC_PAGE + i] = reissue[i];
-#elif defined(__aarch64__)
-    uint32_t *w = (uint32_t *)SC_PAGE;
-    /* svc #0; ret at the start and in the judge slot; mov x8, #139; svc #0, the restorer (sys.h) */
-    w[0] = w[(SC_JUDGE - SC_PAGE) / 4] = 0xd4000001U;
-    w[1] = w[(SC_JUDGE - SC_PAGE) / 4 + 1] = 0xd65f03c0U;
-    w[(SC_RESTORER - SC_PAGE) / 4] = 0xd2801168U;
-    w[(SC_RESTORER - SC_PAGE) / 4 + 1] = 0xd4000001U;
-    /* the handler-call slot (7.5.7): blr x16; mov x8, #139; svc #0, the restorer's words an unwinder knows, whose
-     * rt_sigreturn the filter refuses from SC_HCALL_RET; ldr x16, [sp, #TRAMP_PRESENTED + 8]; br x16, the trampoline's
-     * re-entry, kept in its block above the presented frame */
-    static const uint32_t hcall[5] = {0xd63f0200U, 0xd2801168U, 0xd4000001U,
-                                      0xf94003f0U | (uint32_t)((TRAMP_PRESENTED + 8) / 8) << 10, 0xd61f0200U};
-    for (unsigned long i = 0; i < 5; i++) w[(SC_HCALL - SC_PAGE) / 4 + i] = hcall[i];
-    /* the re-issue slot (7.5.7), the record in x27: ldr x16, [x27, #24]; cbnz x16, 1f; svc #0; 2: str x0, [x27, #16];
-     * ret; 1: mov x0, #-EINTR; b 2b */
-    static const uint32_t reissue[7] = {0xf9400f70U, 0xb5000090U, 0xd4000001U, 0xf9000b60U,
-                                        0xd65f03c0U, 0x92800060U, 0x17fffffdU};
-    for (unsigned long i = 0; i < 7; i++) w[(SC_REISSUE - SC_PAGE) / 4 + i] = reissue[i];
-    /* the written words reach the instruction fetch, a slot at a time, whatever the cache line's size */
-    for (unsigned long a = SC_PAGE; a < SC_REISSUE + 32; a += 16)
-        __asm__ volatile("dc cvau, %0\n dsb ish\n ic ivau, %0\n dsb ish\n" : : "r"(a) : "memory");
-    __asm__ volatile("isb\n" : : : "memory");
-#endif
-    __sc6_raw(NR_mprotect, (long)SC_PAGE, 4096, PROT_READ | PROT_EXEC, 0, 0, 0);
+    /* one page of the kernel's, whatever its size: the kernel rounds both lengths up to it. The launcher's text stays
+     * one range of addresses no other mapping enters, so that an instruction pointer in it is the launcher's
+     * (handler.c, tramp.c): the kernel leaves the page mapped where it was as well, or, where it cannot (EINVAL
+     * before 5.13 for a file's mapping), the place the page left is held by a mapping of no access */
+    m = __sc6_raw(NR_mremap, (long)exclave_page, 4096, 4096, MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_DONTUNMAP,
+                  (long)SC_PAGE, 0);
+    if (m == -EINVAL) {
+        m = __sc6_raw(NR_mremap, (long)exclave_page, 4096, 4096, MREMAP_MAYMOVE | MREMAP_FIXED, (long)SC_PAGE, 0);
+        if (m == (long)SC_PAGE && __sc6_raw(NR_mmap, (long)exclave_page, 4096, PROT_NONE,
+                                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != (long)exclave_page)
+            m = -ENOMEM;
+    }
+    if (m != (long)SC_PAGE) {
+        static const char moved[] = "launcher: cannot move the syscall page into place\n";
+        raw_fatal(moved, sizeof moved - 1);
+    }
 }
 
 typedef struct {

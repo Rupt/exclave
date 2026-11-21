@@ -18,6 +18,7 @@ import machines
 
 CLOSE_RANGE_CLOEXEC = 4
 PR_GET_AUXV = 0x41555856
+PR_GET_MDWE = 66
 O_PATH = 0o10000000
 
 
@@ -50,6 +51,12 @@ def _get_auxv() -> bool:
     return libc.prctl(PR_GET_AUXV, buf, ctypes.c_ulong(16), 0, 0) >= 0
 
 
+def _mdwe() -> bool:
+    """prctl(PR_SET_MDWE) (6.3), asked by PR_GET_MDWE: setting it would bind this process."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    return libc.prctl(PR_GET_MDWE, 0, 0, 0, 0) >= 0
+
+
 # What is not a syscall's mere presence. The range of close_range's probe is one descriptor no
 # table holds, so nothing closes and nothing is marked.
 FEATURES: dict[str, Callable[[], bool]] = {
@@ -59,6 +66,7 @@ FEATURES: dict[str, Callable[[], bool]] = {
     ),
     "/proc/thread-self": lambda: os.path.lexists("/proc/thread-self"),
     "PR_GET_AUXV": _get_auxv,
+    "PR_SET_MDWE": _mdwe,
 }
 
 

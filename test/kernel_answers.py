@@ -1895,6 +1895,37 @@ def mem_layout_wrong(out: str, *, by_the_kernel: bool = False) -> list[str]:
     return lines_wrong(out, want, launcher, by_the_kernel=by_the_kernel)
 
 
+# mem_policy (test/progs/mem_policy.c), measured under bwrap on 7.0: under prctl(PR_SET_MDWE),
+# 6.3's, no mapping is both writable and executable and none becomes executable that was not
+# (map_deny_write_exec), a file's page mapped executable is neither, and the policy is inherited
+# across execve, so the programs the process then runs start under it. A kernel without the
+# policy answers the prctl EINVAL and refuses nothing.
+MEM_POLICY: tuple[tuple[str, str | tuple[str, ...] | None], ...] = (
+    ("the policy set", "ok"),
+    ("the policy read back", "1"),
+    ("a writable and executable mapping", "Permission denied"),
+    ("a written page made executable", "Permission denied"),
+    ("a file's page mapped executable", "ok"),
+    ("a handler under the policy", "ran"),
+    ("a program run under the policy", "exit 0"),
+    ("a shell running a program under the policy", "exit 7"),
+)
+MEM_POLICY_WITHOUT = {
+    "the policy set": "Invalid argument",
+    "the policy read back": "Invalid argument",
+    "a writable and executable mapping": "ok",
+    "a written page made executable": "ok",
+}
+
+
+def mem_policy_wrong(out: str) -> list[str]:
+    """The lines of mem_policy's output that differ from the kernel's answers."""
+    want = MEM_POLICY
+    if not kernel.has("PR_SET_MDWE"):
+        want = tuple((case, MEM_POLICY_WITHOUT.get(case, answer)) for case, answer in want)
+    return lines_wrong(out, want, {}, by_the_kernel=True)
+
+
 # mem_edge HOSTDIR (test/progs/mem_edge.c), measured under bwrap on 7.0: a path, an attribute's
 # name, a vector and a variable that end where their mapping does are read to their end and no
 # further, and a buffer that ends there is written; what is not ended before its mapping is, is
@@ -2289,6 +2320,7 @@ EXERCISERS: dict[str, Exerciser] = {
     "exec_state": Exerciser(("HOSTDIR",), _by_world(exec_state_wrong)),
     "mem_layout": Exerciser((), _by_world(mem_layout_wrong)),
     "mem_edge": Exerciser(("HOSTDIR",), _by_world(mem_edge_wrong)),
+    "mem_policy": Exerciser((), _plain(mem_policy_wrong)),
     "fd_procs": Exerciser(("HOSTDIR",), _by_world(fd_procs_wrong)),
     "sigcalls": Exerciser((), _plain(sigcalls_wrong)),
     "sigrain": Exerciser(("HOSTDIR",), _plain(sigrain_wrong)),

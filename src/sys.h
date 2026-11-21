@@ -123,7 +123,7 @@ enum {
     NR_rt_sigsuspend = 130, NR_ppoll = 271, NR_pselect6 = 270, NR_epoll_pwait = 281,
     NR_epoll_pwait2 = 441, NR_io_pgetevents = 333,
     NR_io_uring_setup = 425, NR_seccomp = 317, NR_fstatfs = 138,
-    NR_clone3 = 435, NR_mprotect = 10, NR_fcntl = 72,
+    NR_clone3 = 435, NR_mprotect = 10, NR_mremap = 25, NR_fcntl = 72,
     NR_open = 2, NR_stat = 4, NR_lstat = 6, NR_access = 21, NR_truncate = 76, NR_rename = 82,
     NR_mkdir = 83, NR_rmdir = 84, NR_creat = 85, NR_link = 86, NR_unlink = 87, NR_symlink = 88,
     NR_readlink = 89, NR_chmod = 90, NR_chown = 92, NR_lchown = 94, NR_utime = 132, NR_mknod = 133,
@@ -239,7 +239,7 @@ enum {   /* asm-generic/unistd.h: the *at forms only; the legacy forms are absen
     NR_rt_sigsuspend = 133, NR_ppoll = 73, NR_pselect6 = 72, NR_epoll_pwait = 22,
     NR_epoll_pwait2 = 441, NR_io_pgetevents = 292,
     NR_io_uring_setup = 425, NR_seccomp = 277, NR_fstatfs = 44,
-    NR_clone3 = 435, NR_mprotect = 226, NR_fcntl = 25,
+    NR_clone3 = 435, NR_mprotect = 226, NR_mremap = 216, NR_fcntl = 25,
     NR_open = ABSENT(4), NR_stat = ABSENT(5), NR_lstat = ABSENT(6), NR_access = ABSENT(7), NR_truncate = 45, NR_rename = ABSENT(8),
     NR_mkdir = ABSENT(9), NR_rmdir = ABSENT(10), NR_creat = ABSENT(11), NR_link = ABSENT(12), NR_unlink = ABSENT(13), NR_symlink = ABSENT(14),
     NR_readlink = ABSENT(15), NR_chmod = ABSENT(16), NR_chown = ABSENT(17), NR_lchown = ABSENT(18), NR_utime = ABSENT(19), NR_mknod = ABSENT(20),
@@ -444,6 +444,9 @@ long __sc6_judge_opaque(long n, long a, long b, long c, long d, long e, long f);
 #define MAP_NORESERVE 0x4000
 #define MADV_WIPEONFORK 18 /* 4.14+: the range reads as zero in a fork child; a vfork child shares it */
 #define MAP_FIXED_NOREPLACE 0x100000
+#define MREMAP_MAYMOVE 1
+#define MREMAP_FIXED 2
+#define MREMAP_DONTUNMAP 4 /* 5.7; of a mapping that is not anonymous, 5.13 */
 
 /* the ptrace request the filter traps (7.4.2): a vfork child's is deferred to its exec (7.4.5) */
 #define PTRACE_TRACEME 0

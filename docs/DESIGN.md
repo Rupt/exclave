@@ -1107,11 +1107,25 @@ ABI, an `arch` other than the launcher's own or the x32 bit, kills the
 process: loud, never a silent host access.
 
 **The syscall page.** A call whose instruction pointer lies in the page
-at `0x7fe00000` is allowed, but for its judge slot (below). Before
-anything else runs, every launcher maps that page with
-`MAP_FIXED_NOREPLACE`, writes five slots into it and makes it
-read-only and executable (on aarch64 after flushing the instruction
-cache): at offset 0 `syscall; ret` (`svc #0; ret`), through which every
+at `0x7fe00000` is allowed, but for its judge slot (below). The page's
+bytes are a block of the launcher's own text that holds nothing else,
+as large and as aligned as the architecture's largest page, 4 KB on
+x86-64 and 64 KB on aarch64, so that the kernel's page at the block's
+start is the block's alone whatever the kernel's page size. Before
+anything else runs, every launcher holds the address with a mapping of
+no access, made with `MAP_FIXED_NOREPLACE`, and moves that page of its
+text over it with `mremap`. The page is then the kernel's own mapping
+of the launcher's file and was never writable, so a policy that refuses
+memory made executable has nothing to refuse:
+`prctl(PR_SET_MDWE)`, which systemd's `MemoryDenyWriteExecute=` sets
+and `execve` inherits, under which a page written and then made
+executable would never run. The move leaves the page mapped where it
+was as well (`MREMAP_DONTUNMAP`, which Linux 5.13 takes for a file's
+mapping), and on an older kernel the place it left is held by a mapping
+of no access, so the launcher's text stays one range of addresses no
+other mapping enters, and an instruction pointer in that range is the
+launcher's (7.5.7). The page holds five slots:
+at offset 0 `syscall; ret` (`svc #0; ret`), through which every
 later syscall of the launcher is made by a `call` into the page, a
 `blr` on aarch64; at 16 the same two instructions, the *judge slot*;
 at 32 the signal restorer, `rt_sigreturn` by a bare instruction,
@@ -1128,12 +1142,12 @@ when a program's handler has redirected the program, makes no call and
 answers `EINTR`, and after the call it stores the answer in the record
 (7.5.7). A call's
 instruction pointer, the address after its syscall instruction, lies in
-its own slot on both architectures. Only the bootstrap that maps the
-page and the version probe below use a bare syscall instruction in the
-launcher's text; after an `execve` under a program's own filter the
-bootstrap's `mmap` and `mprotect` are judged by that filter as a
-native dynamic program's loader would be, and the probe is allowed by
-the filter's prologue (below).
+its own slot on both architectures. Only the bootstrap that puts the
+page in place and the version probe below use a bare syscall
+instruction in the launcher's text; after an `execve` under a
+program's own filter the bootstrap's `mmap` and `mremap` are judged by
+that filter, as a native program's first calls would be, and the probe
+is allowed by the filter's prologue (below).
 
 The address is a constant, so the filters of any number of ancestor
 generations agree after `execve`. It lies above program images, which
@@ -1141,9 +1155,10 @@ linkers start low (GNU ld and Go's x86-64 linker at `0x400000`, Go's
 aarch64 linker at `0x10000`); below `0x7fff8000`, where ASan's x86-64
 shadow begins, so every sanitizer counts it as the program's own low
 memory; outside the ranges Wine's preloader reserves; and 64
-KB-aligned, for aarch64 kernels with 64 KB pages. If the page cannot be
-mapped the launcher says so and exits (`EEXIST` meaning another
-launcher is resident); a program whose image covers it cannot run in an
+KB-aligned, for aarch64 kernels with 64 KB pages. If the address cannot
+be held or the page moved the launcher says so and exits (`EEXIST`
+meaning another launcher is resident); a program whose image covers it
+cannot run in an
 exclave (13 item 24). It is an address rather than a marker in a spare
 register, which a signal handler interrupting a launcher syscall would
 inherit, sending its own first path syscall to the host untranslated.
@@ -4139,10 +4154,11 @@ what they concern:
      not exec'd (`EACCES`), and a launcher newer than the filter it
      finds refuses to start under one by name.
    - After an `execve` under the filter, the new launcher's bootstrap,
-     `mmap` and `mprotect`, is judged by it, as a native dynamic
-     program's loader would be, so a filter that kills `mmap` kills the
-     new image at its start; the version probe is the prologue's to
-     allow.
+     `mmap` and `mremap`, is judged by it, as a native program's first
+     calls would be, so a filter that kills `mmap` kills the new image
+     at its start, and one that refuses `mremap`, which a native
+     program's start does not call, stops a launcher's with its message;
+     the version probe is the prologue's to allow.
 
    Programs that depend on the rest, container runtimes, browsers'
    sandboxes, `rr`, are out of scope. `strace` inside an exclave works
@@ -6344,7 +6360,8 @@ together.
      exclave's run with its own (`cwd_given_for_the_run`, 8.1 rule 4);
    - *the launcher and its filter*: a CET-marked program inside with the
      shadow-stack tunable set, reporting whether glibc enabled one (13
-     item 49), a blocked or sent `SIGSYS`, older
+     item 49), a blocked or sent `SIGSYS`, a start under a policy
+     against memory made executable (`mem_policy`, 7.4.2), older
      and newer launchers nested and side by side, a child that asks to be
      traced and execs, by `vfork` and by `fork` (7.4.5, 13 item 54), a tracer's reading of its
      tracee's `exe` and gdb's breakpoints inside, given the launcher or the
