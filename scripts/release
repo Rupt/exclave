@@ -1,33 +1,28 @@
 #!/bin/sh
-# scripts/release KEY DIR TOOLCHAIN [EXCLAVE...] — a release (docs/DESIGN.md 10.5): under DIR, the command as
+# scripts/release DIR TOOLCHAIN [EXCLAVE...] — a release (docs/DESIGN.md 10.5): under DIR, the command as
 # exclave-ARCH and exclave-fetch-ARCH, ARCH this machine's, with LICENSE and, as NOTICES, the licence texts of Go and
-# of the Go modules they link; each exclave named as NAME.exclave.tar.zst, zstd's level 19; SHA256SUMS and B3SUMS over
-# every file there, the second as b3sum writes it, by the command; and SHA256SUMS.sig, the sums signed with the ssh
-# private key KEY (ssh-keygen -Y, in the namespace "exclave"). The launcher is built inside TOOLCHAIN, a gcc exclave,
-# and the command here from it, by scripts/reproduce, so that anyone can build the same bytes; each exclave must be
-# wrapped with that launcher, and passes `exclave check` first. A release is of a commit and of nothing else: DIR must
-# be empty or absent, since every file in it is summed and signed, and a tree with changes its commit does not hold
-# is refused, since the build would name itself -dirty. The release test and the matrix, which run the recipe on the
-# tree as it stands, set EXCLAVE_RELEASE_UNCOMMITTED=1. The README says how a consumer verifies and takes a release
+# of the Go modules they link; each exclave named as NAME.exclave.tar.zst, zstd's level 19; and SHA256SUMS and B3SUMS
+# over every file there, the second as b3sum writes it, by the command. The launcher is built inside TOOLCHAIN, a gcc
+# exclave, and the command here from it, by scripts/reproduce, so that anyone can build the same bytes; each exclave
+# must be wrapped with that launcher, and passes `exclave check` first. A release is of a commit and of nothing else:
+# DIR must be empty or absent, since every file in it is summed, and a tree with changes its commit does not hold is
+# refused, since the build would name itself -dirty. The release test and the matrix, which run the recipe on the
+# tree as it stands, set EXCLAVE_RELEASE_UNCOMMITTED=1. The README says how a consumer checks and takes a release
 # with nothing but its own files; test/release_test.py runs that recipe.
 set -eu
 . "$(dirname -- "$0")/lib.sh"
-[ $# -ge 3 ] || {
-    echo "usage: scripts/release KEY DIR TOOLCHAIN [EXCLAVE...]" >&2
+[ $# -ge 2 ] || {
+    echo "usage: scripts/release DIR TOOLCHAIN [EXCLAVE...]" >&2
     exit 2
 }
-key=$1 dir=$2 toolchain=$3
-shift 3
+dir=$1 toolchain=$2
+shift 2
 [ $# -eq 0 ] || command -v zstd >/dev/null 2>&1 || {
     echo "release: no zstd here: the archives are zstd's" >&2
     exit 2
 }
-[ -r "$key" ] || {
-    echo "release: cannot read the key $key" >&2
-    exit 2
-}
 if [ -e "$dir" ] && [ -n "$(ls -A "$dir")" ]; then
-    echo "release: $dir is not empty: every file in it would be summed and signed with the release's" >&2
+    echo "release: $dir is not empty: every file in it would be summed with the release's" >&2
     exit 2
 fi
 # what scripts/reproduce copies, untracked files with it, and the name the build takes from the commit
@@ -91,5 +86,4 @@ cd "$dir"
 set -- *
 sha256sum "$@" >SHA256SUMS
 for f; do printf '%s  %s\n' "$("$command" hash "$f" | sed 's/^b3://')" "$f"; done >B3SUMS
-ssh-keygen -q -Y sign -f "$key" -n exclave SHA256SUMS
-echo "release: $dir holds $(($# + 3)) files, the sums signed; $("./exclave-$arch" version)"
+echo "release: $dir holds $(($# + 2)) files, the sums among them; $("./exclave-$arch" version)"

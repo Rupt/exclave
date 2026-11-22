@@ -70,7 +70,7 @@ documents, gate, one commit per item. Status is in brackets.
    7ad8079.
 4. **The consumer's recipe on every kernel of the matrix** [done]: a release of the gcc exclave verified, unpacked and
    checked in each matrix VM with the release's own command, each
-   host's answer recorded (old hosts lack `ssh-keygen -Y` and
+   host's answer recorded (old hosts lack
    `tar --zstd`); the README's consumer section says what the recipe
    needs.
 5. **The trust directory** [done]: three identity directories and eleven
@@ -180,8 +180,8 @@ documents, gate, one commit per item. Status is in brackets.
 21. **A release of the commands alone** [done]: `scripts/release` with
     no exclave, the commands named by machine, `LICENSE` and Go's
     licence beside them, a directory that is not empty and a tree
-    with uncommitted changes refused (DESIGN 10.5). The releaser's
-    public key is not yet published in the repository.
+    with uncommitted changes refused, and no signature: a release is
+    its files and their sums (DESIGN 10.5).
 
 ## After the first release
 

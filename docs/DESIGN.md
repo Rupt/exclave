@@ -3894,7 +3894,7 @@ supplies. Every x86-64 row of the kernel matrix builds the launcher
 again inside its copy of the gate's gcc exclave, with no Go in the VM,
 and compares it with the reference machine's (12.1).
 
-**A release.** `scripts/release KEY DIR TOOLCHAIN [EXCLAVE...]` builds
+**A release.** `scripts/release DIR TOOLCHAIN [EXCLAVE...]` builds
 the launcher inside `TOOLCHAIN`, a gcc exclave, and the command from
 it, by `scripts/reproduce`, and puts under `DIR` the command as
 `exclave-ARCH` and `exclave-fetch-ARCH` beside it, `ARCH` the machine's
@@ -3909,24 +3909,25 @@ of threads (on the Alpine exclave, 6% larger than xz's and unpacked in
 a tenth of its time, 0.19 s against 1.98 s, November 2026), an archive
 that keeps the hard links, sorted
 and without owners, made only after the exclave passes `check` and
-only if it is wrapped with that launcher; `SHA256SUMS`
-and `B3SUMS`, as `b3sum` writes it, over every file there; and `SHA256SUMS.sig`, the sums signed with the ssh key `KEY`
-(`ssh-keygen -Y`, namespace `exclave`). With no exclave named the
+only if it is wrapped with that launcher; and `SHA256SUMS`
+and `B3SUMS`, as `b3sum` writes it, over every file there. With no exclave named the
 release is the two commands, which are all a person needs to make an
 exclave of their own (10.1). A release is of a commit and of nothing
-else: `DIR` must be empty, since every file in it is summed and
-signed, and a tree with changes its commit does not hold is refused,
+else: `DIR` must be empty, since every file in it is summed,
+and a tree with changes its commit does not hold is refused,
 since the build would name itself `-dirty` (6.7); the release test
 and the matrix, which run the recipe on the tree as it stands, say so
 with `EXCLAVE_RELEASE_UNCOMMITTED=1`. A consumer needs nothing of the
-checkout: the signature is verified against the releaser's public key,
-obtained through a channel the consumer trusts; the sums are checked;
+checkout: the sums are checked;
 the archive is unpacked; and the release's own `exclave check` compares
 the tree with the hashes file and runs the static check, so what runs
-is what was released. The README gives the commands, and
+is what the sums file names. A release carries no signature of its
+own: the sums tell a damaged or altered file from the one they name,
+and that the sums are the releaser's is the channel's to say, a
+release page served over HTTPS. The README gives the commands, and
 `test/release_test.py`, a step of `scripts/extra`, runs them on a
 release of the gcc exclave and on one of the commands alone, with a
-tampered archive and a tampered sums file refused, and `NOTICES`
+tampered archive failing the sums, and `NOTICES`
 naming Go and every module `go.mod` requires (17).
 
 
@@ -4001,17 +4002,15 @@ each row:
 
 - **The release's recipe.** A release of the gcc exclave, made on the
   reference machine by `scripts/release` (10.5), is taken in the VM
-  as the README gives it, with the host's own tools: the signature
-  verified by `ssh-keygen -Y verify`, the sums checked by `sha256sum
+  as the README gives it, with the host's own tools: the sums checked
+  by `sha256sum
   -c`, the archive unpacked by `tar --zstd` or, where the host's `tar`
   lacks that option, by `zstd -dc` into `tar -xf -`, and then the
   release's own `exclave check` and `exclave version`, and a program
   of the unpacked exclave run. The sums, the check, the version and
-  the program pass on every row. A host without `ssh-keygen -Y`
-  records that as its answer, as the sysroot check records the musl
-  host's: measured November 2026, CentOS 7's OpenSSH 7.4, Ubuntu
-  18.04's 7.6 and Rocky Linux 8's 8.0 have none, and Ubuntu 20.04's
-  8.2 verifies; a host without zstd would record that too, and the
+  the program pass on every row. A host without zstd would record
+  that as its answer, as the sysroot check records the musl host's,
+  and the
   matrix would unpack the archive with its own Python so that the
   suite still runs. The exclave the release unpacks is the one the
   row's suite then runs.
@@ -6774,10 +6773,10 @@ steps:
   `testdata/fuzz`, which the gate's Go step then runs as a case;
 - the release test (`test/release_test.py`): a release of the exclave
   made by `scripts/release`, the launcher built inside it and the
-  command from that by `scripts/reproduce`, signed with a key made there, and taken
+  command from that by `scripts/reproduce`, and taken
   as a consumer takes it, the README's recipe step by step, with a
-  tampered archive and a tampered sums file refused and `NOTICES`
-  naming the modules the command links (10.5).
+  tampered archive failing the sums and `NOTICES`
+  naming Go and the modules the command links (10.5).
 
 **The suite** (`scripts/test --exclave EXCLAVE`, or `--tree DIR` for an
 unwrapped tree) makes an exclave under its work directory, compiles
@@ -6949,8 +6948,8 @@ date, and the pinned Python are copied in, and the exclave is relinked there
 by the command, which runs as it is on every kernel of
 the matrix, CentOS 7's 3.10 included. For the rows of the reference
 machine's architecture the exclave goes in as a release of it,
-made on the reference machine by `scripts/release` with a key made
-there, and the row takes the release as a consumer does before
+made on the reference machine by `scripts/release`,
+and the row takes the release as a consumer does before
 anything else runs (12.1); the exclave the release unpacks is the
 row's, so the payload carries it once. The
 Python is built for the VM's machine and libc and
@@ -6963,7 +6962,7 @@ given the profile, the Docker profile run, first lifting the AppArmor
 sysctl that denies unprivileged user namespaces on Ubuntu 24.04's
 image. Three checks run outside the suite: the release's recipe, the
 README's commands for taking a release run in the VM with the host's
-own `ssh-keygen`, `sha256sum`, `tar` and `zstd`; a program built by the
+own `sha256sum`, `tar` and `zstd`; a program built by the
 exclave's gcc on a `noexec` tmpfs the VM mounts as root, run by the
 VM's shell, the positional entry and the exclave's shell; and the
 output of `test/sysroot.py` run natively. The results go to

@@ -4,16 +4,16 @@
 
 The exclave is a gcc exclave, and the release's toolchain too: scripts/reproduce builds the
 launcher inside it and the command from that, and scripts/release makes a release of a copy of the
-exclave under WORK, wrapped again by that command, since a release is of what the command makes,
-signed with a key made here. A copy wrapped with another launcher is refused, as are a directory
+exclave under WORK, wrapped again by that command, since a release is of what the command makes.
+A copy wrapped with another launcher is refused, as are a directory
 that is not empty and, without the allowance this test makes itself, a tree with changes its
 commit does not hold; a release of no exclave holds the two commands, named for the machine,
 the licences and the sums.
 Then, in a directory that holds nothing but the release's files, the README's recipe runs: the
-signature is verified against the key, the sums are checked, the archive is unpacked, the release's
+sums are checked, the archive is unpacked, the release's
 own `exclave` checks the exclave and its `exclave-fetch` runs, its tree hash is the one the hashes
 file records, a program in it runs, and NOTICES names Go and every module go.mod requires with
-its licence. A tampered archive and a tampered sums file are refused. Prints one line per step;
+its licence. A tampered archive fails the sums. Prints one line per step;
 the exit status is the number of failures.
 """
 
@@ -73,8 +73,6 @@ def main() -> int:
             sys.exit(f"{cmd} {ex}: {out[-400:]}")
         if cmd == "unwrap":  # wrap installs the launcher it carries where there is none
             os.remove(os.path.join(ex, ".exclave", "launcher"))
-    key = os.path.join(work, "key")
-    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
     release = os.path.join(work, "release")
     # an exclave wrapped with another launcher is refused, the files the release would ship being
     # another build's
@@ -83,17 +81,17 @@ def main() -> int:
         os.path.join(work, "src", "two.exclave"),
         os.path.join(REPO, "build", "launcher-old"),
     )
-    rc, out = run([RELEASE, key, release + "-other", toolchain, other], work, env=ANY_TREE)
+    rc, out = run([RELEASE, release + "-other", toolchain, other], work, env=ANY_TREE)
     step("an exclave wrapped with another launcher is refused", rc and "relink" in out, out[-300:])
-    rc, out = run([RELEASE, key, release, toolchain, ex], work, env=ANY_TREE)
+    rc, out = run([RELEASE, release, toolchain, ex], work, env=ANY_TREE)
     step("scripts/release", rc == 0, out[-500:])
     if rc:
         return len(FAILED)
-    rc, out = run([RELEASE, key, release, toolchain, ex], work, env=ANY_TREE)
+    rc, out = run([RELEASE, release, toolchain, ex], work, env=ANY_TREE)
     step("a directory that is not empty is refused", rc == 2 and "is not empty" in out, out[-300:])
     # a release of no exclave: the two commands, the licences and the sums
     alone = release + "-commands"
-    rc, out = run([RELEASE, key, alone, toolchain], work, env=ANY_TREE)
+    rc, out = run([RELEASE, alone, toolchain], work, env=ANY_TREE)
     files = sorted(os.listdir(alone)) if rc == 0 else []
     wanted = sorted(
         [
@@ -103,7 +101,6 @@ def main() -> int:
             "NOTICES",
             "SHA256SUMS",
             "B3SUMS",
-            "SHA256SUMS.sig",
         ]
     )
     step("a release of the commands alone", rc == 0 and files == wanted, f"{files} {out[-300:]}")
@@ -112,7 +109,7 @@ def main() -> int:
     # without the allowance a release is of a commit: refused where the tree holds more
     rc, described = run(["git", "describe", "--always", "--dirty", "--exclude=*"], REPO)
     if rc == 0 and described.strip().endswith("-dirty"):
-        rc, out = run([RELEASE, key, release + "-commit", toolchain], work)
+        rc, out = run([RELEASE, release + "-commit", toolchain], work)
         step(
             "a tree with uncommitted changes is refused",
             rc == 1 and "a release is of a commit" in out,
@@ -122,27 +119,6 @@ def main() -> int:
     # the consumer's directory: the release's files and nothing of the checkout
     consumer = os.path.join(work, "consumer")
     shutil.copytree(release, consumer)
-    with open(key + ".pub", encoding="utf-8") as f:
-        pub = f.read().split()
-    with open(os.path.join(consumer, "allowed_signers"), "w", encoding="utf-8") as f:
-        f.write(f"exclave-release {pub[0]} {pub[1]}\n")
-    verify = [
-        "ssh-keygen",
-        "-Y",
-        "verify",
-        "-f",
-        "allowed_signers",
-        "-I",
-        "exclave-release",
-        "-n",
-        "exclave",
-        "-s",
-        "SHA256SUMS.sig",
-    ]
-    with open(os.path.join(consumer, "SHA256SUMS"), "rb") as f:
-        sums = f.read()
-    rc, out = run(verify, consumer, sums)
-    step("the signature verifies against the key", rc == 0, out)
     rc, out = run(["sha256sum", "-c", "SHA256SUMS"], consumer)
     step("the sha256 sums check", rc == 0, out)
     # b3sum where the machine has it, else the release's own command, file by file
@@ -194,7 +170,7 @@ def main() -> int:
         licence = f.read()
     step("LICENSE is exclave's own", "MIT License" in licence, licence[:100])
 
-    # tampering: a byte of the archive, and a sum in the sums file
+    # tampering: a byte of the archive
     with open(os.path.join(consumer, name + ".tar.zst"), "r+b") as f:
         f.seek(64)
         b = f.read(1)
@@ -202,15 +178,6 @@ def main() -> int:
         f.write(bytes([b[0] ^ 1]))
     rc, out = run(["sha256sum", "-c", "SHA256SUMS"], consumer)
     step("a changed archive fails the sums", rc != 0 and "FAILED" in out, out)
-    with open(os.path.join(consumer, "SHA256SUMS"), "r+b") as f:
-        f.seek(0)
-        b = f.read(1)
-        f.seek(0)
-        f.write(b"0" if b != b"0" else b"1")
-    with open(os.path.join(consumer, "SHA256SUMS"), "rb") as f:
-        sums = f.read()
-    rc, out = run(verify, consumer, sums)
-    step("a changed sums file fails the signature", rc != 0, out)
     print(f"release: {'every step passed' if not FAILED else f'{len(FAILED)} steps failed'}")
     return len(FAILED)
 

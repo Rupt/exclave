@@ -64,7 +64,7 @@ kernel 7.0, glibc 2.39.
 `exclave` and `exclave-fetch` are static programs that need nothing of
 this checkout: `scripts/build` makes them as `build/exclave` and
 `build/exclave-fetch`, and a release holds them as `exclave-ARCH` and
-`exclave-fetch-ARCH` beside their licences and signed sums
+`exclave-fetch-ARCH` beside their licences and sums
 ([taking a release](#shipping-an-exclave-and-taking-one) has the
 checks). With the two in a directory on an x86-64 Linux host, this makes
 an exclave of TeX Live's `pdflatex` from Ubuntu's packages:
@@ -428,7 +428,7 @@ on exclaves pruned this way.
 ## Shipping an exclave, and taking one
 
 An exclave is a directory, and `tar` makes it one file. `scripts/release`
-makes a signed release of the `exclave` command and `exclave-fetch`,
+makes a release of the `exclave` command and `exclave-fetch`,
 named for the machine, with any exclaves named beside them, so whoever
 takes it needs nothing of this checkout. It is a release of a commit: it
 refuses a tree with uncommitted changes and a directory that is not empty.
@@ -440,16 +440,13 @@ launcher, which the command built there carries:
 ```bash
 scripts/reproduce gcc.exclave build/reproduce               # build/reproduce/build/{launcher,exclave}, and their BLAKE3
 build/reproduce/build/exclave relink app.exclave           # app.exclave wrapped with the reproducible launcher
-scripts/release ~/.ssh/id_ed25519 release gcc.exclave app.exclave    # release/: exclave-x86_64, exclave-fetch-x86_64, LICENSE, NOTICES, app.exclave.tar.zst, SHA256SUMS, B3SUMS, SHA256SUMS.sig
-scripts/release ~/.ssh/id_ed25519 commands gcc.exclave               # commands/: the same without an exclave
+scripts/release release gcc.exclave app.exclave            # release/: exclave-x86_64, exclave-fetch-x86_64, LICENSE, NOTICES, app.exclave.tar.zst, SHA256SUMS, B3SUMS
+scripts/release commands gcc.exclave                       # commands/: the same without an exclave
 ```
 
-Taking one, with the release's files in a directory and the releaser's
-public key from a channel you trust (not the release itself):
+Taking one, with the release's files in a directory:
 
 ```bash
-echo "exclave-release $(cat releaser.pub)" > allowed_signers
-ssh-keygen -Y verify -f allowed_signers -I exclave-release -n exclave -s SHA256SUMS.sig < SHA256SUMS
 sha256sum -c SHA256SUMS                                   # or b3sum -c B3SUMS; with the commands alone: grep " exclave.*-$(uname -m)\$" SHA256SUMS | sha256sum -c -
 tar --zstd -xf gcc.exclave.tar.zst                        # or, where tar has no --zstd: zstd -dc gcc.exclave.tar.zst | tar -xf -
 mv exclave-$(uname -m) exclave && chmod +x exclave        # the command for this machine
@@ -457,10 +454,9 @@ mv exclave-$(uname -m) exclave && chmod +x exclave        # the command for this
 ./exclave version                                         # which build made it; the launcher inside says the same
 ```
 
-The signature check needs an `ssh-keygen` with `-Y`: Ubuntu 20.04's
-OpenSSH 8.2 has it, and CentOS 7's 7.4, Ubuntu 18.04's 7.6 and Rocky
-Linux 8's 8.0 have none (measured November 2026), so on those hosts
-verify the signature on another machine and carry `SHA256SUMS` across.
+The sums tell a damaged or altered file from the one they name; a
+release carries no signature, so that the sums are the releaser's is
+for the place you took them from to say.
 The archive is zstd only, for the reason `docs/DESIGN.md` 10.5 gives,
 so unpacking it needs `zstd`, through `tar --zstd` where `tar` has that
 option or piped into any `tar` where it has not.
@@ -468,7 +464,7 @@ option or piped into any `tar` where it has not.
 The kernel matrix runs exactly this, with each host's own tools, on
 every x86-64 distribution it boots (`docs/DESIGN.md` 12.1), and
 `test/release_test.py`, a step of `scripts/extra`, on the reference
-machine, where a tampered archive and a tampered sums file are refused.
+machine, where a tampered archive fails the sums.
 
 ## Development
 

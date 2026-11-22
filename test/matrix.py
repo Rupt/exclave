@@ -649,7 +649,6 @@ def pack_payload(
             out = os.path.join(release, "out")
             for f in sorted(os.listdir(out)):
                 t.add(os.path.join(out, f), arcname="rel/" + f)
-            t.add(os.path.join(release, "key.pub"), arcname="releaser.pub")
         else:
             t.add(exclave, arcname="ex")
         t.add(built("launcher", arch), arcname="repo/build/launcher")
@@ -663,23 +662,21 @@ def pack_payload(
 
 
 def make_release(ex: str, reproduced_command: str, work: str) -> str | None:
-    """A release of a copy of ex as scripts/release makes one (10.5), signed with a key made here.
+    """A release of a copy of ex as scripts/release makes one (10.5).
 
     The copy is wrapped with the launcher scripts/reproduce built, by the command built from it,
-    as the README has a releaser do. Returns the directory holding the release, `out/`, and the
-    public key, `key.pub`, or None when the release could not be made.
+    as the README has a releaser do. Returns the directory holding the release, `out/`, or None
+    when the release could not be made.
     """
     rel = os.path.join(work, "release")
     shutil.rmtree(rel, ignore_errors=True)
     os.makedirs(rel)
-    key = os.path.join(rel, "key")
-    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", key], check=True)
     copy = tree.copy_exclave(ex, os.path.join(rel, "src", os.path.basename(ex)))
     # the recipe is run on the tree as it stands, committed or not
     env = dict(os.environ, EXCLAVE_RELEASE_UNCOMMITTED="1")
     for cmd in (
         [reproduced_command, "relink", copy],
-        [os.path.join(REPO, "scripts", "release"), key, os.path.join(rel, "out"), ex, copy],
+        [os.path.join(REPO, "scripts", "release"), os.path.join(rel, "out"), ex, copy],
     ):
         p = subprocess.run(cmd, capture_output=True, check=False, env=env)
         if p.returncode:
@@ -690,18 +687,11 @@ def make_release(ex: str, reproduced_command: str, work: str) -> str | None:
 
 # The README's recipe for taking a release, run in a VM in the directory holding the release's
 # files, for the exclave NAME. Each line it prints is `recipe STEP: ANSWER`. What an old host lacks
-# is its answer, not a failure: an ssh-keygen without -Y, and a tar without --zstd, where the
+# is its answer, not a failure: a tar without --zstd, where the
 # recipe's portable form pipes zstd into tar; a host with no zstd at all is unpacked by the
 # matrix's own Python, so that its suite still runs, and says so.
 RECIPE = r"""
 say() { echo "recipe $*"; }
-echo "exclave-release $(cat ../releaser.pub)" >allowed_signers
-if ! command -v ssh-keygen >/dev/null 2>&1; then say 'signature: no ssh-keygen'
-elif ssh-keygen -Y verify -f allowed_signers -I exclave-release -n exclave -s SHA256SUMS.sig \
-    <SHA256SUMS >sig.out 2>&1; then say 'signature: verified'
-elif grep -q 'option -- .\{0,1\}Y' sig.out; then
-    say "signature: no ssh-keygen -Y, $(ssh -V 2>&1 | cut -d, -f1)"
-else say "signature: FAIL $(tail -1 sig.out)"; fi
 if sha256sum -c SHA256SUMS >sums.out 2>&1; then say 'sums: ok'
 else say "sums: FAIL $(grep -v ': OK$' sums.out | head -1)"; fi
 if tar --help 2>&1 | grep -q -- --zstd; then
@@ -730,14 +720,14 @@ def take_release(answers: str) -> tuple[str, list[str]]:
     pass on every row.
     """
     found = dict(re.findall(r"^recipe (\w+): (.*)$", answers, re.MULTILINE))
-    steps = ("signature", "sums", "unpack", "check", "version", "program")
+    steps = ("sums", "unpack", "check", "version", "program")
     fails = [
         f"FAIL recipe {k}: {found.get(k, 'no answer: ' + answers[-120:])}"
         for k in steps
         if k not in found or found[k].startswith("FAIL")
     ]
     note = "recipe: " + ", ".join(
-        found[k] for k in ("signature", "unpack") if k in found and not found[k].startswith("FAIL")
+        found[k] for k in ("unpack",) if k in found and not found[k].startswith("FAIL")
     )
     return note + ("" if fails else ", sums, check, version and a program pass"), fails
 
