@@ -135,7 +135,7 @@ file https://src.fedoraproject.org/rpms/fedora-repos/raw/f42/f/RPM-GPG-KEY-fedor
 mirror=http://gb.archive.ubuntu.com/ubuntu
 # the gate's: its four exclaves, the arm64 gcc exclave, and Docker's default seccomp profile
 item both gcc13 debs-gcc13 debs gcc-13 libc6-dev
-item both alpine apks apks gcc musl-dev binutils make linux-headers
+item both alpine apks apks --branch v3.21 gcc musl-dev binutils make linux-headers
 item both f42 rpms-f42 rpms --keyring "$dir/src/RPM-GPG-KEY-fedora-42-primary" --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make
 item both clang debs-clang debs clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils
 # the aarch64 launcher this machine builds: its own on aarch64, the cross-built one on x86-64 with the cross compiler
@@ -170,7 +170,7 @@ item both caches debs-caches debs $here_debs python3-minimal libglib2.0-bin shar
 # and Alpine's, whose shell is busybox, on x86-64
 case $(uname -m) in
 x86_64)
-    item both alpine-caches apks-caches apks python3 glib shared-mime-info gsettings-desktop-schemas \
+    item both alpine-caches apks-caches apks --branch v3.21 python3 glib shared-mime-info gsettings-desktop-schemas \
         gdk-pixbuf dconf desktop-file-utils gtk-update-icon-cache hicolor-icon-theme htop fontconfig font-dejavu graphviz
     ;;
 *) echo "alpine-caches.exclave: made on x86-64 alone; skipped" ;;

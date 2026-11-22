@@ -3588,7 +3588,9 @@ are locators; the tool does not, because a hash is not a locator.
   keyring, Ubuntu's or Debian's, which it carries, or against the
   keyrings it is given in their place (`--keyring`), and the index
   against the digests that signed file lists.
-- `fetch apks` resolves `D:` dependencies through the index's
+- `fetch apks` takes the branch it is given (`--branch`, which has no
+  default, since a branch named here would age with the build),
+  resolves `D:` dependencies through the index's
   `p:` provides, checks the `APKINDEX` signature against the public key
   its signature names, one of Alpine's for x86-64 or aarch64, which it
   carries, or of the keys given in their place (`--key`, a file named

@@ -1,6 +1,6 @@
 // Resolve a package closure from an Alpine repository and download its .apk files.
 //
-//	fetch apks --key FILE... [--branch v3.21] [--repos main,community] [--arch x86_64]
+//	fetch apks --branch NAME [--key FILE...] [--repos main,community] [--arch x86_64]
 //	           [--mirror URL] [--cache DIR] [--no-base] --out DIR PACKAGE...
 //
 // The fetcher reads each repository's APKINDEX and follows the `D:` dependencies from the
@@ -401,7 +401,7 @@ func (r *apkRepo) check(name string, st stanza, p string) error {
 	return nil
 }
 
-const apksSynopsis = "--out DIR [OPTION...] PACKAGE..."
+const apksSynopsis = "--branch NAME --out DIR [OPTION...] PACKAGE..."
 
 func fetchApks(args []string) error {
 	fs := flag.NewFlagSet("exclave-fetch apks", flag.ContinueOnError)
@@ -409,7 +409,7 @@ func fetchApks(args []string) error {
 	out := fs.String("out", "", "the `DIR` to fill with .apk files; required")
 	fs.Var(&keys, "key", "a `FILE` holding a PEM public key an index may be signed by, named as apk names "+
 		"it, in place of Alpine's keys, which this program carries; given again for another")
-	branch := fs.String("branch", "v3.21", "the branch, `NAME`")
+	branch := fs.String("branch", "", "the branch, `NAME`, such as v3.21 or edge; required")
 	repos := fs.String("repos", "main,community", "the repositories, `LIST`, separated by commas")
 	arch := fs.String("arch", "x86_64", "the architecture, `ARCH`, as apk names it")
 	mirror := fs.String("mirror", apkMirror, "the mirror's `URL`")
@@ -422,8 +422,8 @@ func fetchApks(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(packages) == 0 || *out == "" {
-		return &usageError{"--out and at least one PACKAGE are required"}
+	if len(packages) == 0 || *out == "" || *branch == "" {
+		return &usageError{"--branch, --out and at least one PACKAGE are required"}
 	}
 	cdir, done, err := cacheIn(*cacheDir, *out)
 	if err != nil {

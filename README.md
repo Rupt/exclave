@@ -323,7 +323,7 @@ a maker's own stays.
 
 ```
 scripts/exclave-fetch debs --out debs gcc-13 libc6-dev make   # Ubuntu or Debian: the closure of the packages named; InRelease checked against the archive keyring the fetcher carries (--keyring FILE for another repository's), every file against the index
-scripts/exclave-fetch apks --out apks gcc musl-dev binutils  # Alpine: the index checked against the key its signature names, one of Alpine's that the fetcher carries (--key FILE for another)
+scripts/exclave-fetch apks --branch v3.21 --out apks gcc musl-dev binutils  # Alpine, the branch named: the index checked against the key its signature names, one of Alpine's that the fetcher carries (--key FILE for another)
 scripts/exclave-fetch rpms --keyring RPM-GPG-KEY-fedora-42-primary --repo URL --out rpms gcc glibc-devel   # Fedora, Rocky, CentOS: any repository with repodata/; every rpm checked against the key, repomd.xml where signed
 scripts/exclave unpack gcc.exclave debs/*.deb                     # package files -> an unwrapped exclave, a directory you may edit; .apk and .rpm files likewise
 scripts/exclave wrap gcc.exclave                          # wrap every executable, run the static check, record the hashes in .exclave/hashes

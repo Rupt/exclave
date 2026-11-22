@@ -713,14 +713,14 @@ def usage_and_help(work: str) -> None:
 
     lines = (
         "exclave-fetch debs --out DIR [OPTION...] PACKAGE...",
-        "exclave-fetch apks --out DIR [OPTION...] PACKAGE...",
+        "exclave-fetch apks --branch NAME --out DIR [OPTION...] PACKAGE...",
         "exclave-fetch rpms --keyring FILE --repo URL --out DIR [OPTION...] PACKAGE...",
     )
     says([], 2, lines, on_error=True)
     says(["--help"], 0, lines, on_error=False)
     for kind, line, defaults in (
         ("debs", lines[0], ("noble-updates", "bookworm", "deb.debian.org", "(default amd64)")),
-        ("apks", lines[1], ("(default v3.21)", "(default main,community)")),
+        ("apks", lines[1], ("--branch NAME", "(default main,community)")),
         ("rpms", lines[2], ("--repo URL", "(default x86_64)")),
     ):
         wanted = (
