@@ -431,13 +431,14 @@ named for the machine, with any exclaves named beside them, so whoever
 takes it needs nothing of this checkout. It is a release of a commit: it
 refuses a tree with uncommitted changes and a directory that is not empty.
 The command and the launcher a release ships are built inside a gcc
-exclave, so anyone with that exclave builds the same bytes
-(`scripts/reproduce`); an exclave to release is wrapped with that
+exclave, so their bytes are the same on any machine that holds that
+exclave (`scripts/reproduce`); a release neither ships nor records
+the exclave, so no one else can build them again. An exclave to release is wrapped with that
 launcher, which the command built there carries:
 
 ```bash
 scripts/reproduce gcc.exclave build/reproduce               # build/reproduce/build/{launcher,exclave}, and their BLAKE3
-build/reproduce/build/exclave relink app.exclave           # app.exclave wrapped with the reproducible launcher
+build/reproduce/build/exclave relink app.exclave           # app.exclave wrapped with the launcher built there
 scripts/release release gcc.exclave app.exclave            # release/: exclave-x86_64, exclave-fetch-x86_64, LICENSE, NOTICES, app.exclave.tar.zst, SHA256SUMS
 scripts/release commands gcc.exclave                       # commands/: the same without an exclave
 ```

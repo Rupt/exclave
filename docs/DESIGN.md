@@ -3894,18 +3894,24 @@ an original. `unpack` (10.1) is its subcommand, the package `unpack/`:
 the command and `exclave-fetch` carry every step from the repository
 to a wrapped exclave, and only the second opens a connection.
 
-**A reproducible build.** `scripts/reproduce EXCLAVE DIR` builds the
+**The launcher built inside an exclave.** `scripts/reproduce EXCLAVE DIR` builds the
 launcher inside a gcc exclave, from a copy of the sources under `DIR`,
 with the exclave's compiler, binutils and shell alone on `PATH`:
 nothing of the machine takes part, so the file is the same bytes
 wherever the exclave runs. Then it builds the command here, with the
 pinned Go, from that launcher: the toolchain gives the same bytes from
-the same sources anywhere, so the two files are reproducible together.
+the same sources anywhere, so the two files follow from the sources
+and that exclave alone.
 The launcher's build was already free of its checkout's path and of
 time; what the machine supplied was its gcc, which the exclave now
 supplies. Every x86-64 row of the kernel matrix builds the launcher
 again inside its copy of the gate's gcc exclave, with no Go in the VM,
-and compares it with the reference machine's (12.1).
+and compares it with the reference machine's (12.1). The bytes are
+the same for whoever holds that exclave and for no one else: it is
+made from the archive as it stood, a release neither ships it nor
+records the package files it held, and the archive moves on, so a
+release's launcher is built again only from the exclave it was built
+in.
 
 **A release.** `scripts/release DIR TOOLCHAIN [EXCLAVE...]` builds
 the launcher inside `TOOLCHAIN`, a gcc exclave, and the command from
@@ -4005,7 +4011,7 @@ x86-64 row too, fetches Fedora's newest image, release 44 with kernel
 | Fedora 42 | 6.14 | all pass | SELinux enforcing; a btrfs root, where the one-step host check is off (7.4.4) and the walk goes from the root |
 | Ubuntu 26.10 | 7.3 | all pass | glibc 2.44 |
 | Ubuntu 24.04 arm64 | 6.8 | all pass | aarch64: natively on GitHub's aarch64 runner, where the gate runs on a kernel with 4 KB pages (17), and under TCG on the reference machine, `-cpu max`, 4 vCPUs and a translation cache of 256 MB, at about a tenth of native speed; the exclave is made on the reference machine and only run here (10.1) |
-| Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | all pass | aarch64 under TCG: the VM installs the 64 KB kernel and reboots into it, and runs when asked (17); reproduced |
+| Ubuntu 24.04 arm64, 64 KB pages | 6.8 (`generic-64k`) | all pass | aarch64 under TCG: the VM installs the 64 KB kernel and reboots into it, and runs when asked (17) |
 | reference machine | 7.0 | all pass | Ubuntu 24.04, AppArmor |
 
 Every row passes the full suite, and every oracle that its kernel can
@@ -7140,7 +7146,7 @@ questions.
    lacks from the packages' trigger interests, and failed opens in an
    `EXCLAVE_LOG` show where an exclave misses one (10.1).
 2. **Releases.** There is no public release yet. A release has its
-   shape, `scripts/release` (10.5), its binaries built reproducibly
+   shape, `scripts/release` (10.5), its launcher built
    inside a gcc exclave, and every build is named by the project's
    version and its commit (7, 10). The first release is x86-64; an
    aarch64 release comes later, made on an aarch64 machine, as its
@@ -7153,8 +7159,7 @@ questions.
    the kernel's page size and the launcher's own segments are 64 KB
    aligned (13 item 43). The matrix's `noble-arm64-64k` row, on
    Ubuntu's `linux-image-generic-64k`, passes the suite and every
-   oracle, and rebuilds the launcher and the command to the same
-   bytes (12.1); no 16 KB kernel has run it (13 item 43).
+   oracle (12.1); no 16 KB kernel has run it (13 item 43).
 4. **The emulated arm64 rows' speed.** The arm64 rows run under QEMU's
    TCG emulation at about a tenth of native speed (12.1), so they run
    when asked rather than at every commit; the exclave they run is made

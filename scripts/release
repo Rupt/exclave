@@ -3,7 +3,7 @@
 # exclave-ARCH and exclave-fetch-ARCH, ARCH this machine's, with LICENSE and, as NOTICES, the licence texts of Go and
 # of the Go modules they link; each exclave named as NAME.exclave.tar.zst, zstd's level 19; and SHA256SUMS over
 # every file there. The launcher is built inside TOOLCHAIN, a gcc
-# exclave, and the command here from it, by scripts/reproduce, so that anyone can build the same bytes; each exclave
+# exclave, and the command here from it, by scripts/reproduce, so that its bytes are that compiler's; each exclave
 # must be wrapped with that launcher, and passes `exclave check` first. A release is of a commit and of nothing else:
 # DIR must be empty or absent, since every file in it is summed, and a tree with changes its commit does not hold is
 # refused, since the build would name itself -dirty. The release test and the matrix, which run the recipe on the
