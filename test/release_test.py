@@ -94,14 +94,7 @@ def main() -> int:
     rc, out = run([RELEASE, alone, toolchain], work, env=ANY_TREE)
     files = sorted(os.listdir(alone)) if rc == 0 else []
     wanted = sorted(
-        [
-            f"exclave-{MACHINE}",
-            f"exclave-fetch-{MACHINE}",
-            "LICENSE",
-            "NOTICES",
-            "SHA256SUMS",
-            "B3SUMS",
-        ]
+        [f"exclave-{MACHINE}", f"exclave-fetch-{MACHINE}", "LICENSE", "NOTICES", "SHA256SUMS"]
     )
     step("a release of the commands alone", rc == 0 and files == wanted, f"{files} {out[-300:]}")
     rc, out = run(["sha256sum", "-c", "SHA256SUMS"], alone)
@@ -121,17 +114,8 @@ def main() -> int:
     shutil.copytree(release, consumer)
     rc, out = run(["sha256sum", "-c", "SHA256SUMS"], consumer)
     step("the sha256 sums check", rc == 0, out)
-    # b3sum where the machine has it, else the release's own command, file by file
     tool = os.path.join(consumer, f"exclave-{MACHINE}")
     os.chmod(tool, 0o755)
-    if shutil.which("b3sum"):
-        rc, out = run(["b3sum", "-c", "B3SUMS"], consumer)
-    else:
-        with open(os.path.join(consumer, "B3SUMS"), encoding="utf-8") as f:
-            listed = [line.split("  ", 1) for line in f.read().splitlines()]
-        bad = [n for h, n in listed if run([tool, "hash", n], consumer)[1].strip() != "b3:" + h]
-        rc, out = (1 if bad or not listed else 0), f"differ: {bad}"
-    step("the BLAKE3 sums check", rc == 0, out)
     rc, out = run(["tar", "--zstd", "-xf", name + ".tar.zst"], consumer)
     step("the archive unpacks", rc == 0, out)
     rc, out = run([tool, "check", name], consumer)

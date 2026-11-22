@@ -3921,7 +3921,7 @@ a tenth of its time, 0.19 s against 1.98 s, November 2026), an archive
 that keeps the hard links, sorted
 and without owners, made only after the exclave passes `check` and
 only if it is wrapped with that launcher; and `SHA256SUMS`
-and `B3SUMS`, as `b3sum` writes it, over every file there. With no exclave named the
+over every file there. With no exclave named the
 release is the two commands, which are all a person needs to make an
 exclave of their own (10.1). A release is of a commit and of nothing
 else: `DIR` must be empty, since every file in it is summed,

@@ -438,14 +438,14 @@ launcher, which the command built there carries:
 ```bash
 scripts/reproduce gcc.exclave build/reproduce               # build/reproduce/build/{launcher,exclave}, and their BLAKE3
 build/reproduce/build/exclave relink app.exclave           # app.exclave wrapped with the reproducible launcher
-scripts/release release gcc.exclave app.exclave            # release/: exclave-x86_64, exclave-fetch-x86_64, LICENSE, NOTICES, app.exclave.tar.zst, SHA256SUMS, B3SUMS
+scripts/release release gcc.exclave app.exclave            # release/: exclave-x86_64, exclave-fetch-x86_64, LICENSE, NOTICES, app.exclave.tar.zst, SHA256SUMS
 scripts/release commands gcc.exclave                       # commands/: the same without an exclave
 ```
 
 Taking one, with the release's files in a directory:
 
 ```bash
-sha256sum -c SHA256SUMS                                   # or b3sum -c B3SUMS; with the commands alone: grep " exclave.*-$(uname -m)\$" SHA256SUMS | sha256sum -c -
+sha256sum -c SHA256SUMS                                   # with the commands alone: grep " exclave.*-$(uname -m)\$" SHA256SUMS | sha256sum -c -
 tar --zstd -xf gcc.exclave.tar.zst                        # or, where tar has no --zstd: zstd -dc gcc.exclave.tar.zst | tar -xf -
 mv exclave-$(uname -m) exclave && chmod +x exclave        # the command for this machine
 ./exclave check gcc.exclave                               # the tree against the hashes file, the wrappers, the static check
