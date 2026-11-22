@@ -545,7 +545,7 @@ A problem report is most useful with the failing lines of an
 exclave's `.exclave/hashes` file and the output of `exclave check` on
 it.
 
-Contributions are welcome. A change passes the gate on the gcc exclave
+A change passes the gate on the gcc exclave
 above; `scripts/extra` on the four exclaves and the kernel matrix are
 the broader runs, made when a maintainer asks, and the gate says when a
 change reaches the matrix's VMs. The gate and the matrix run on
