@@ -41,9 +41,8 @@ sysroot=--sysroot=/opt/sysroot-el7 sysroot_b=-B/opt/sysroot-el7/usr/lib64/ # hea
 echo "== 1. the launcher"
 run "$here/scripts/build"
 
-# the archives' signing keys, which every index and package is checked against (10.1): Ubuntu's from the
-# machine's own keyring package, CentOS 7's fetched once and checked against the hash scripts/inputs pins
-ubuntu=/usr/share/keyrings/ubuntu-archive-keyring.gpg
+# the archives' signing keys, which every index and package is checked against (10.1): Ubuntu's the fetcher
+# carries, CentOS 7's is fetched once and checked against the hash scripts/inputs pins
 centos=$dir/RPM-GPG-KEY-CentOS-7
 [ -e "$centos" ] || {
     url=https://vault.centos.org/7.9.2009/os/x86_64/RPM-GPG-KEY-CentOS-7
@@ -55,7 +54,7 @@ centos=$dir/RPM-GPG-KEY-CentOS-7
 }
 
 echo "== 2. a gcc exclave from Ubuntu 24.04 packages"
-[ -n "$(ls debs 2>/dev/null)" ] || logged fetch-debs "$here/build/exclave-fetch" debs --keyring "$ubuntu" --out debs gcc-13 libc6-dev
+[ -n "$(ls debs 2>/dev/null)" ] || logged fetch-debs "$here/build/exclave-fetch" debs --out debs gcc-13 libc6-dev
 logged unpack unpack gcc.exclave debs/*.deb
 
 echo "== 3. CentOS 7's glibc as a sysroot inside it"

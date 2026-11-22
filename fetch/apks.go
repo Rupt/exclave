@@ -56,7 +56,8 @@ type apkRepo struct {
 	repos    []string
 	arch     string
 	cache    *cache
-	keys     map[string]string // the key files given, by name, as apk names them in /etc/apk/keys
+	keys     map[string][]byte // the keys, PEM, by name, as apk names them in /etc/apk/keys
+	given    bool              // --key gave them; else they are the ones this program carries
 	index    map[string]stanza // each package, from the first repository that lists it
 	provides map[string][]provider
 }
@@ -68,10 +69,17 @@ func newApkRepo(mirror, branch string, repos []string, arch, cacheDir string, ke
 	}
 	r := &apkRepo{
 		mirror: strings.TrimRight(mirror, "/"), branch: branch, repos: repos, arch: arch, cache: c,
-		keys: map[string]string{}, index: map[string]stanza{}, provides: map[string][]provider{},
+		keys: carriedApkKeys(), index: map[string]stanza{}, provides: map[string][]provider{},
 	}
-	for _, k := range keys {
-		r.keys[filepath.Base(k)] = k
+	if len(keys) > 0 { // the keys given are the whole statement of trust
+		r.keys, r.given = map[string][]byte{}, true
+		for _, k := range keys {
+			data, err := os.ReadFile(k)
+			if err != nil {
+				return nil, err
+			}
+			r.keys[filepath.Base(k)] = data
+		}
 	}
 	return r, nil
 }
@@ -140,14 +148,18 @@ func (r *apkRepo) signedIndex(u string) ([]byte, error) {
 	if !ok {
 		return nil, r.cache.reject(u, fmt.Sprintf("%s: a signature of an unknown kind, .SIGN.%s", u, kind))
 	}
-	keyFile, ok := r.keys[keyname]
-	if !ok {
+	key, ok := r.keys[keyname]
+	if !ok && r.given {
 		return nil, r.cache.reject(u, fmt.Sprintf("%s: signed by %s, which no --key gives", u, keyname))
+	}
+	if !ok {
+		return nil, r.cache.reject(u, fmt.Sprintf("%s: signed by %s, which is not a key exclave-fetch carries; "+
+			"--key gives another", u, keyname))
 	}
 	if signature == nil {
 		return nil, r.cache.reject(u, u+": the signature is not a file")
 	}
-	if err := checkRSA(data[first:], signature, keyFile, digest); err != nil {
+	if err := checkRSA(data[first:], signature, key, keyname, digest); err != nil {
 		return nil, r.cache.reject(u, fmt.Sprintf("%s: %s", u, err))
 	}
 	log(fmt.Sprintf("%s: signature verified against %s", u, keyname))
@@ -389,14 +401,14 @@ func (r *apkRepo) check(name string, st stanza, p string) error {
 	return nil
 }
 
-const apksSynopsis = "--key FILE --out DIR [OPTION...] PACKAGE..."
+const apksSynopsis = "--out DIR [OPTION...] PACKAGE..."
 
 func fetchApks(args []string) error {
 	fs := flag.NewFlagSet("exclave-fetch apks", flag.ContinueOnError)
 	var keys multi
 	out := fs.String("out", "", "the `DIR` to fill with .apk files; required")
 	fs.Var(&keys, "key", "a `FILE` holding a PEM public key an index may be signed by, named as apk names "+
-		"it; required, and given again for another")
+		"it, in place of Alpine's keys, which this program carries; given again for another")
 	branch := fs.String("branch", "v3.21", "the branch, `NAME`")
 	repos := fs.String("repos", "main,community", "the repositories, `LIST`, separated by commas")
 	arch := fs.String("arch", "x86_64", "the architecture, `ARCH`, as apk names it")
@@ -405,13 +417,13 @@ func fetchApks(args []string) error {
 		"without it nothing is kept")
 	noBase := fs.Bool("no-base", false, "leave the base set out")
 	packages, err := parseArgs(fs, apksSynopsis, "Fills DIR with the .apk files of the packages named and of "+
-		"everything they depend on, the base\nset with them, each checked against an index one of the keys "+
-		"signed.", args)
+		"everything they depend on, the base\nset with them, each checked against an index one of Alpine's keys "+
+		"signed, which this program carries.", args)
 	if err != nil {
 		return err
 	}
-	if len(packages) == 0 || *out == "" || len(keys) == 0 {
-		return &usageError{"--out, --key and at least one PACKAGE are required"}
+	if len(packages) == 0 || *out == "" {
+		return &usageError{"--out and at least one PACKAGE are required"}
 	}
 	cdir, done, err := cacheIn(*cacheDir, *out)
 	if err != nil {

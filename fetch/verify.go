@@ -83,6 +83,22 @@ type keyring struct {
 	keys openpgp.EntityList
 }
 
+// add takes the keys of a keyring's bytes, binary or in ASCII armour; name is the keyring's, for a refusal.
+func (k *keyring) add(name string, data []byte) error {
+	if bytes.HasPrefix(bytes.TrimLeft(data, " \t\r\n"), []byte("-----BEGIN PGP ")) {
+		var err error
+		if data, err = dearmor(data); err != nil {
+			return err
+		}
+	}
+	keys, err := openpgp.ReadKeyRing(bytes.NewReader(data))
+	if err != nil {
+		return verifyErrorf("%s: cannot read the keyring: %s", name, err)
+	}
+	k.keys = append(k.keys, keys...)
+	return nil
+}
+
 // readKeyrings reads the keyring files given, binary or in ASCII armour.
 func readKeyrings(paths []string) (*keyring, error) {
 	if len(paths) == 0 {
@@ -94,16 +110,9 @@ func readKeyrings(paths []string) (*keyring, error) {
 		if err != nil {
 			return nil, err
 		}
-		if bytes.HasPrefix(bytes.TrimLeft(data, " \t\r\n"), []byte("-----BEGIN PGP ")) {
-			if data, err = dearmor(data); err != nil {
-				return nil, err
-			}
+		if err := k.add(given, data); err != nil {
+			return nil, err
 		}
-		keys, err := openpgp.ReadKeyRing(bytes.NewReader(data))
-		if err != nil {
-			return nil, verifyErrorf("%s: cannot read the keyring: %s", given, err)
-		}
-		k.keys = append(k.keys, keys...)
 	}
 	return k, nil
 }
@@ -377,12 +386,8 @@ func (k *keyring) detached(data, signature []byte) error {
 // the digest each of apk's signature kinds uses, by the name's prefix (apk-tools' .SIGN.RSA*.)
 var apkDigests = map[string]crypto.Hash{"RSA": crypto.SHA1, "RSA256": crypto.SHA256, "RSA512": crypto.SHA512}
 
-// checkRSA checks an RSA signature over data against the PEM public key file.
-func checkRSA(data, signature []byte, keyFile string, digest crypto.Hash) error {
-	raw, err := os.ReadFile(keyFile)
-	if err != nil {
-		return err
-	}
+// checkRSA checks an RSA signature over data against a PEM public key, raw, which keyFile names.
+func checkRSA(data, signature, raw []byte, keyFile string, digest crypto.Hash) error {
 	block, _ := pem.Decode(raw)
 	if block == nil {
 		return verifyErrorf("the RSA signature does not verify against %s: not a PEM public key", keyFile)

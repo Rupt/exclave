@@ -3137,7 +3137,7 @@ every one except `wrap` refuses one without `.exclave/`.
 ### 10.1 From packages
 
 ```
-exclave-fetch debs --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --out debs gcc-13 libc6-dev   # or apt, a mirror, a hand-made directory
+exclave-fetch debs --out debs gcc-13 libc6-dev   # or apt, a mirror, a hand-made directory
 exclave unpack gcc-13.exclave debs/*.deb
 exclave wrap gcc-13.exclave
 ln -s tree/usr/bin/gcc-13 gcc-13.exclave/gcc
@@ -3584,12 +3584,15 @@ are locators; the tool does not, because a hash is not a locator.
 
 - `fetch debs` resolves `Depends` and `Pre-Depends` from an
   archive's `Packages` index, adds the Essential set, checks the
-  suite's `InRelease` signature against the keyrings it is given
-  (`--keyring`, the archive's signing keys), and the index against the
-  digests that signed file lists.
+  suite's `InRelease` signature against the distribution's archive
+  keyring, Ubuntu's or Debian's, which it carries, or against the
+  keyrings it is given in their place (`--keyring`), and the index
+  against the digests that signed file lists.
 - `fetch apks` resolves `D:` dependencies through the index's
   `p:` provides, checks the `APKINDEX` signature against the public key
-  its signature names (`--key`, a file named as apk names it in
+  its signature names, one of Alpine's for x86-64 or aarch64, which it
+  carries, or of the keys given in their place (`--key`, a file named
+  as apk names it in
   `/etc/apk/keys`), and checks each package's checksums as apk does: the
   index's checksum against the control section, and `.PKGINFO`'s
   `datahash` against the data section. A package's sections are split
@@ -3643,8 +3646,16 @@ it does not read, whose hash is computed there and checked with Go's
 RSA; Alpine's RSA is Go's. The rule is apt's for a file signed by
 several keys, as the archives' `InRelease` files are: one good
 signature by a key of the keyring, and no bad one. The keys are the
-caller's, the machine's own keyrings or the key files `scripts/inputs`
-pins by hash, and the fetchers never fetch one; every key in a keyring
+ones the program carries (`fetch/keys`): Ubuntu's and Debian's archive
+keyrings, the files their `ubuntu-keyring` and `debian-archive-keyring`
+packages ship, and Alpine's keys for x86-64 and aarch64, from its
+`alpine-keys` package, so that a fetch from a distribution's own
+archive needs no key of the machine it runs on. A `--keyring` or
+`--key` given takes their place whole, for a repository that is not
+the distribution's. No rpm key is carried, since one signs a single
+release of a single distribution and the repository is the caller's
+to name: `fetch rpms` is always given its keyring. The fetchers never
+fetch a key; every key in a keyring
 is taken as valid, as `gpgv` takes it, neither expiry nor revocation
 consulted, so the keyring is the whole statement of trust. What remains trusted is the keys' provenance, an
 unsigned `repomd.xml` for which versions a repository offers, and SHA-1
@@ -4454,9 +4465,13 @@ what they concern:
     its index's digest and the index against the archive's signature
     (10): the `InRelease` file's, the `APKINDEX`'s, and every rpm's own,
     with `repomd.xml`'s where the repository signs it. The keys are
-    given, never fetched, so a wrong key file is trusted as a right one
-    would be, and the fetchers consult neither a key's expiry nor its
-    revocation, as `gpgv` does not; `scripts/inputs` pins each by its
+    the ones the fetchers carry for Ubuntu, Debian and Alpine, the
+    files those distributions' own keyring packages ship, or the ones
+    given, and never fetched; a key given is trusted as given, so a
+    wrong key file is trusted as a right one would be, the carried
+    keys are as old as the build that carries them, and the fetchers
+    consult neither a key's expiry nor its revocation, as `gpgv` does
+    not; `scripts/inputs` pins each rpm key it gives by its
     hash. A repository that
     does not sign `repomd.xml`, as Fedora's do not, leaves which
     versions it offers to the mirror, every package still verified.
@@ -6565,15 +6580,12 @@ index's checksum and keep it in `DIR/packages`, their cache: nothing is
 kept outside `DIR`. Every other third-party
 file is pinned by its BLAKE3-256 in the script, checked by `exclave hash`. An item `DIR` already
 has is skipped, and whatever is missing is fetched again. The items
-run three at a time once the signing keys are fetched, each a fetch,
-an unpack and a wrap of a few hundred megabytes on mostly one core; on
-the reference machine, with the fetchers' caches warm, the gate's
-inputs are made in 10 s, 25 s one item after another (November 2026),
-when the mirrors answer at once. Every run fetches each suite's signed
-index again, a 256 KB `InRelease` for each of a deb fetch's three
-suites, which archive.ubuntu.com served in 2.5 to 3 s each on a slower
-afternoon, when the same run took 17 to 30 s.
-The repository holds no third-party input.
+run three at a time once the rpm repositories' keys are fetched, each
+a fetch, an unpack and a wrap of a few hundred megabytes on mostly one
+core. Every run fetches each suite's signed index again, an
+`InRelease` for each of a deb fetch's three suites.
+The repository holds no third-party input but the archive keys the
+fetchers carry (10.1).
 
 **The gate** (`scripts/gate [--full] [--since REV] [--jobs N] EXCLAVE`)
 is the one check run before a commit, and it is fast: every step is a
@@ -7429,7 +7441,8 @@ specified.
   own**: an exclave carries the launcher it was wrapped with (17).
 - **Tests take their inputs as paths**: only `scripts/inputs` fetches,
   each third-party input pinned by its hash, and the VM drivers, which
-  download cloud images; the repository holds no third-party file (17).
+  download cloud images; the repository holds no third-party file but
+  the archive keys the fetchers carry (10.1, 17).
 - **Tests are independent**: any order, any single test, several suites
   at once (17).
 - **The emulated arm64 rows run when asked**, not at every commit (18);

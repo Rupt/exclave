@@ -154,11 +154,12 @@ def deb_mirror(d: str, sign: Callable[[bytes], bytes] | None, *, tamper: str = "
 
 
 def fetch_debs(
-    work: str, mirror: str, keyring: str, name: str, *, cache: bool = True
+    work: str, mirror: str, keyring: str | None, name: str, *, cache: bool = True
 ) -> tuple[int, str, list[str]]:
     """Run the deb fetcher on the mirror; return its status, stderr and what it fetched.
 
-    It has a home directory of its own, and a cache of its own unless cache is false.
+    It has a home directory of its own, and a cache of its own unless cache is false. Without a
+    keyring it is given none, and checks against the one it carries.
     """
     out = os.path.join(work, f"out-{name}")
     home = os.path.join(work, f"home-{name}")
@@ -169,8 +170,7 @@ def fetch_debs(
             "debs",
             "--out",
             out,
-            "--keyring",
-            keyring,
+            *(["--keyring", keyring] if keyring else []),
             "--mirror",
             "file://" + mirror,
             "--arch",
@@ -344,7 +344,8 @@ def apk_mirror(d: str, key: RsaKey, signer: str, *, kind: str = "RSA", tamper: s
     return d
 
 
-def fetch_apks(work: str, mirror: str, key: str, name: str) -> tuple[int, str, list[str]]:
+def fetch_apks(work: str, mirror: str, key: str | None, name: str) -> tuple[int, str, list[str]]:
+    """Run the apk fetcher on the mirror, with the key or, given none, the ones it carries."""
     out = os.path.join(work, f"out-{name}")
     p = subprocess.run(
         [
@@ -352,8 +353,7 @@ def fetch_apks(work: str, mirror: str, key: str, name: str) -> tuple[int, str, l
             "apks",
             "--out",
             out,
-            "--key",
-            key,
+            *(["--key", key] if key else []),
             "--mirror",
             "file://" + mirror,
             "--branch",
@@ -398,7 +398,9 @@ def debs_check_inrelease(work: str) -> None:
 
     Signed: fetched, with a binary keyring or one in ASCII armour, and when the file carries two
     signatures, as the archives' do, with a keyring holding either key. Signed by another key,
-    altered after signing, or with a Release file alone: refused, nothing fetched.
+    altered after signing, or with a Release file alone: refused, nothing fetched. Given no
+    keyring the fetcher checks against the archive keyring it carries, which did not sign this
+    mirror: refused.
     Below the signature, an index the Release file does not list, a package its index does not
     list, by its SHA256 or its size: refused.
     """
@@ -409,6 +411,9 @@ def debs_check_inrelease(work: str) -> None:
     good = deb_mirror(os.path.join(work, "good"), right.clearsign)
     accepted("signed", fetch_debs(work, good, keyring, "signed"), deb, "signature verified")
     accepted("armoured", fetch_debs(work, good, armoured, "armoured"), deb, "signature verified")
+    refused(
+        "no keyring given", fetch_debs(work, good, None, "carried"), "signature does not verify"
+    )
 
     def twice(data: bytes) -> bytes:
         """Clearsigned by right and by second: the two signatures one after the other."""
@@ -653,7 +658,9 @@ def apks_check_index(work: str) -> None:
     """10: fetch-apks takes an index only when the key its signature names verifies it.
 
     Signed by the key given, SHA-1 as Alpine signs or SHA-256: fetched. Signed under a name no
-    --key has, by another key under the same name, or altered after signing: refused. Below the
+    --key has, by another key under the same name, or altered after signing: refused. Given no
+    key the fetcher checks against Alpine's, which it carries and which did not sign this
+    mirror: refused. Below the
     signature, a package whose control section the index's checksum does not name, whose data
     its .PKGINFO's datahash does not, or whose signature section holds a file beside the
     signature, which no digest covers: refused.
@@ -666,6 +673,11 @@ def apks_check_index(work: str) -> None:
     accepted("sha256", fetch_apks(work, sha256, right.public, "sha256"), apk, "signature verified")
     unknown = apk_mirror(os.path.join(work, "unknown"), right, "other.rsa.pub")
     refused("unknown", fetch_apks(work, unknown, right.public, "unknown"), "which no --key gives")
+    refused(
+        "no key given",
+        fetch_apks(work, good, None, "carried"),
+        "which is not a key exclave-fetch carries",
+    )
     other = apk_mirror(os.path.join(work, "other"), wrong, "right.rsa.pub")
     refused("other key", fetch_apks(work, other, right.public, "other"), "does not verify")
     altered = apk_mirror(os.path.join(work, "altered"), right, "right.rsa.pub", tamper="signed")
@@ -700,8 +712,8 @@ def usage_and_help(work: str) -> None:
         return said
 
     lines = (
-        "exclave-fetch debs --keyring FILE --out DIR [OPTION...] PACKAGE...",
-        "exclave-fetch apks --key FILE --out DIR [OPTION...] PACKAGE...",
+        "exclave-fetch debs --out DIR [OPTION...] PACKAGE...",
+        "exclave-fetch apks --out DIR [OPTION...] PACKAGE...",
         "exclave-fetch rpms --keyring FILE --repo URL --out DIR [OPTION...] PACKAGE...",
     )
     says([], 2, lines, on_error=True)

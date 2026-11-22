@@ -9,8 +9,6 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/pem"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -157,10 +155,7 @@ func TestRSA(t *testing.T) {
 		t.Fatal(err)
 	}
 	der, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
-	keyFile := filepath.Join(t.TempDir(), "k.rsa.pub")
-	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	keyFile, pub := "k.rsa.pub", pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
 	data := []byte("APKINDEX")
 	for kind, h := range apkDigests {
 		w := h.New()
@@ -169,10 +164,10 @@ func TestRSA(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := checkRSA(data, sig, keyFile, h); err != nil {
+		if err := checkRSA(data, sig, pub, keyFile, h); err != nil {
 			t.Errorf("%s: %v", kind, err)
 		}
-		if err := checkRSA(append(data, 'x'), sig, keyFile, h); err == nil {
+		if err := checkRSA(append(data, 'x'), sig, pub, keyFile, h); err == nil {
 			t.Errorf("%s: altered data verified", kind)
 		}
 	}
@@ -208,4 +203,37 @@ func tarOf(t *testing.T, name string, kind byte) []byte {
 	}
 	w.Close()
 	return b.Bytes()[:b.Len()-1024]
+}
+
+// The keys the program carries are read as a key given is: each keyring holds keys, and each of
+// Alpine's is an RSA public key under the name its file has.
+func TestCarriedKeys(t *testing.T) {
+	for _, distro := range []string{"ubuntu", "debian"} {
+		k, err := carriedKeyring(distro)
+		if err != nil || len(k.keys) == 0 {
+			t.Errorf("%s: %d keys, %v", distro, len(k.keys), err)
+		}
+	}
+	if _, err := carriedKeyring("fedora"); err == nil {
+		t.Error("a keyring carried for a distribution that has none")
+	}
+	keys := carriedApkKeys()
+	for _, name := range []string{
+		"alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub", // x86_64
+		"alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub", // aarch64
+	} {
+		block, _ := pem.Decode(keys[name])
+		if block == nil {
+			t.Errorf("%s: not carried, or not PEM", name)
+			continue
+		}
+		if parsed, err := x509.ParsePKIXPublicKey(block.Bytes); err != nil {
+			t.Errorf("%s: %v", name, err)
+		} else if _, ok := parsed.(*rsa.PublicKey); !ok {
+			t.Errorf("%s: not an RSA key", name)
+		}
+	}
+	if len(keys) != 2 {
+		t.Errorf("%d Alpine keys carried", len(keys))
+	}
 }

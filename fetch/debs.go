@@ -443,14 +443,14 @@ func (r *debRepo) download(st stanza) (fetched, error) {
 	}
 }
 
-const debsSynopsis = "--keyring FILE --out DIR [OPTION...] PACKAGE..."
+const debsSynopsis = "--out DIR [OPTION...] PACKAGE..."
 
 func fetchDebs(args []string) error {
 	fs := flag.NewFlagSet("exclave-fetch debs", flag.ContinueOnError)
 	var keyrings, suites, choose multi
 	out := fs.String("out", "", "the `DIR` to fill with .deb files; required")
-	fs.Var(&keyrings, "keyring", "a `FILE` of keys InRelease must be signed by, binary or in ASCII armour; "+
-		"required, and given again for another")
+	fs.Var(&keyrings, "keyring", "a `FILE` of keys InRelease must be signed by, binary or in ASCII armour, in "+
+		"place of the distribution's archive keyring, which this program carries; given again for another")
 	distro := fs.String("distro", "ubuntu", "the distribution, `NAME`: ubuntu or debian")
 	fs.Var(&suites, "suite", "a `SUITE`, or several separated by commas")
 	arch := fs.String("arch", "amd64", "the architecture, `ARCH`, as dpkg names it")
@@ -463,7 +463,8 @@ func fetchDebs(args []string) error {
 	noEssential := fs.Bool("no-essential", false, "leave the Essential set out")
 	fs.Var(&choose, "choose", "`VIRTUAL=PKG`: PKG is the package to use for the virtual package or alternative VIRTUAL")
 	does := "Fills DIR with the .deb files of the packages named and of everything they depend on, the\n" +
-		"Essential set with them, each checked against an index a key of the keyring signed.\n" +
+		"Essential set with them, each checked against an index a key of the distribution's archive\n" +
+		"keyring signed, which this program carries.\n" +
 		"Without --suite the suites are " + strings.Join(debSuites["ubuntu"], ", ") + " for ubuntu and " +
 		strings.Join(debSuites["debian"], ", ") + "\nfor debian; without --mirror the archive is " +
 		debMirrors["ubuntu"] + " or\n" + debMirrors["debian"] + "."
@@ -472,8 +473,8 @@ func fetchDebs(args []string) error {
 		return err
 	}
 	switch {
-	case len(packages) == 0 || *out == "" || len(keyrings) == 0:
-		return &usageError{"--out, --keyring and at least one PACKAGE are required"}
+	case len(packages) == 0 || *out == "":
+		return &usageError{"--out and at least one PACKAGE are required"}
 	case *distro != "ubuntu" && *distro != "debian":
 		return &usageError{"--distro takes ubuntu or debian"}
 	case *mirror != "" && *snapshot != "":
@@ -486,7 +487,13 @@ func fetchDebs(args []string) error {
 	if len(suiteList) == 0 {
 		suiteList = debSuites[*distro]
 	}
-	keys, err := readKeyrings(keyrings)
+	// the keyrings given are the whole statement of trust; without one, the distribution's own
+	var keys *keyring
+	if len(keyrings) > 0 {
+		keys, err = readKeyrings(keyrings)
+	} else {
+		keys, err = carriedKeyring(*distro)
+	}
 	if err != nil {
 		return err
 	}

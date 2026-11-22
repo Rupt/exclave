@@ -299,7 +299,8 @@ CentOS 7 rpms for `test/sysroot.py`, the workloads' exclaves and the
 sources of `test/realsoft.py`, `test/bench.py` and `test/workloads.py`,
 some from their authors' sites, which CI must not fetch. It is the one
 script that downloads: a test takes its inputs as paths and touches no
-network, and the repository holds no file of someone else's, so a
+network, and the repository holds no file of someone else's but the
+distributions' archive keys `exclave-fetch` carries (`fetch/keys`), so a
 third-party input is fetched there, pinned by its hash.
 `build/inputs` is a good `DIR`; the fetchers cache in `DIR/packages`,
 and nothing goes in the home directory unless the user asks. Nothing

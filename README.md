@@ -70,16 +70,16 @@ checks). With the two in a directory on an x86-64 Linux host, this makes
 an exclave of TeX Live's `pdflatex` from Ubuntu's packages:
 
 ```bash
-./exclave-fetch debs --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --out debs texlive-latex-base   # the package and all it depends on, each file checked against the signed index
+./exclave-fetch debs --out debs texlive-latex-base   # the package and all it depends on, each file checked against the signed index
 ./exclave unpack tex.exclave debs/*.deb       # the tree, and notes of what installing the packages would have generated
 ./exclave wrap tex.exclave                    # every program a wrapper, the tree checked and its hash recorded
 ./exclave caches tex.exclave                  # TeX's formats and indexes, made by the tree's own programs
 tex.exclave/tree/usr/bin/pdflatex paper.tex   # by its path, through a symlink, from a copy of the directory
 ```
 
-`exclave-fetch` is given the archive's key and fetches none: Ubuntu's is
-`/usr/share/keyrings/ubuntu-archive-keyring.gpg` on an Ubuntu host, and
-the `ubuntu-keyring` package gives it to another. Without `--cache DIR`
+`exclave-fetch` carries Ubuntu's, Debian's and Alpine's archive keys and
+checks every index against them; `--keyring` gives the key of a
+repository that is not theirs, and an rpm repository's always. Without `--cache DIR`
 it keeps nothing between runs, and `--snapshot DATE` is the one way to
 fetch the same files again later. The exclave is a directory that
 nothing outside it refers to; `exclave prune` with the log
@@ -91,8 +91,6 @@ defaults; "Making your own exclave" below says more, with
 ## First run
 
 You need an x86-64 Linux host with `gcc`, `curl` or `wget`,
-Ubuntu's archive keyring at `/usr/share/keyrings/ubuntu-archive-keyring.gpg`,
-which an Ubuntu host has and the `ubuntu-keyring` package gives another,
 and the network. `scripts/install-go` fetches a pinned, checksummed
 [Go](https://go.dev/dl/) into `.go/`, which builds the `exclave`
 command, and `scripts/install-uv` a pinned, checksummed
@@ -324,8 +322,8 @@ and how to check it. The tool writes one where the exclave has none, so
 a maker's own stays.
 
 ```
-scripts/exclave-fetch debs --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --out debs gcc-13 libc6-dev make   # Ubuntu or Debian: the closure of the packages named; InRelease checked against the keyring, every file against the index
-scripts/exclave-fetch apks --key alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub --out apks gcc musl-dev binutils  # Alpine: the index checked against the key its signature names (https://alpinelinux.org/keys/)
+scripts/exclave-fetch debs --out debs gcc-13 libc6-dev make   # Ubuntu or Debian: the closure of the packages named; InRelease checked against the archive keyring the fetcher carries (--keyring FILE for another repository's), every file against the index
+scripts/exclave-fetch apks --out apks gcc musl-dev binutils  # Alpine: the index checked against the key its signature names, one of Alpine's that the fetcher carries (--key FILE for another)
 scripts/exclave-fetch rpms --keyring RPM-GPG-KEY-fedora-42-primary --repo URL --out rpms gcc glibc-devel   # Fedora, Rocky, CentOS: any repository with repodata/; every rpm checked against the key, repomd.xml where signed
 scripts/exclave unpack gcc.exclave debs/*.deb                     # package files -> an unwrapped exclave, a directory you may edit; .apk and .rpm files likewise
 scripts/exclave wrap gcc.exclave                          # wrap every executable, run the static check, record the hashes in .exclave/hashes

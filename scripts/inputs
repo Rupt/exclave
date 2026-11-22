@@ -126,28 +126,25 @@ file() { # file URL NAME HASH: one file into DIR/src, verified by its BLAKE3-256
 
 fedora=https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/42/Everything/x86_64/os
 centos=https://vault.centos.org/7.9.2009/os/x86_64
-# the archives' signing keys, which the fetchers check every index and package against (10); each pinned here by
-# its BLAKE3-256, so that the key is this file's and not the network's
-file https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg ubuntu-archive-keyring.gpg b64faba2f5f4999ac818dbd0ea927cc7f76ca7b31d1aa9510bfb8c0f34eb54e4
+# Ubuntu's and Alpine's archive keys the fetchers carry (fetch/keys). An rpm repository's signing key, which
+# they check every package against (10), is pinned here by its BLAKE3-256, so that the key is this file's and
+# not the network's
 file https://src.fedoraproject.org/rpms/fedora-repos/raw/f42/f/RPM-GPG-KEY-fedora-42-primary RPM-GPG-KEY-fedora-42-primary 70651cbc2e636a74c6c70a010b7b33f1fafb58922ee3756f29549e7e3195bc43
-file https://alpinelinux.org/keys/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub 279148f0c681a0da044bbc988c7d7a4078e00fe597011c66fe49414ea70e9c63
-ubuntu=$dir/src/ubuntu-archive-keyring.gpg
 # any Ubuntu mirror serves, every index being checked against the archive's key; archive.ubuntu.com has served the
 # reference machine at 13 kB/s
 mirror=http://gb.archive.ubuntu.com/ubuntu
-alpine=$dir/src/alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub
 # the gate's: its four exclaves, the arm64 gcc exclave, and Docker's default seccomp profile
-item both gcc13 debs-gcc13 debs --keyring "$ubuntu" gcc-13 libc6-dev
-item both alpine apks apks --key "$alpine" gcc musl-dev binutils make linux-headers
+item both gcc13 debs-gcc13 debs gcc-13 libc6-dev
+item both alpine apks apks gcc musl-dev binutils make linux-headers
 item both f42 rpms-f42 rpms --keyring "$dir/src/RPM-GPG-KEY-fedora-42-primary" --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make
-item both clang debs-clang debs --keyring "$ubuntu" clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils
+item both clang debs-clang debs clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils
 # the aarch64 launcher this machine builds: its own on aarch64, the cross-built one on x86-64 with the cross compiler
 case $(uname -m) in
 aarch64) aarch64_launcher=$repo/build/launcher ;;
 *) aarch64_launcher=$repo/build/launcher-aarch64 ;;
 esac
 arm64() {
-    fetch debs-arm64 debs --keyring "$ubuntu" --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev &&
+    fetch debs-arm64 debs --arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports gcc-13 libc6-dev &&
         if [ -x "$aarch64_launcher" ]; then
             make_exclave gcc13-arm64 debs-arm64 "$aarch64_launcher"
         else
@@ -163,20 +160,20 @@ aarch64) here_debs="--arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports" 
 *) here_debs="" ;;
 esac
 # shellcheck disable=SC2086  # the architecture's arguments, several words or none
-item both sss debs-sss debs --keyring "$ubuntu" $here_debs libnss-sss
+item both sss debs-sss debs $here_debs libnss-sss
 # the suite's gdb tests (13 item 1), which the gate's gcc exclave cannot run for want of a gdb
 # shellcheck disable=SC2086  # the architecture's arguments, several words or none
-item both gdb debs-gdb debs --keyring "$ubuntu" $here_debs gcc-13 libc6-dev gdb
+item both gdb debs-gdb debs $here_debs gcc-13 libc6-dev gdb
 # shellcheck disable=SC2086  # the architecture's arguments, several words or none
-item both caches debs-caches debs --keyring "$ubuntu" $here_debs python3-minimal libglib2.0-bin shared-mime-info gsettings-desktop-schemas \
+item both caches debs-caches debs $here_debs python3-minimal libglib2.0-bin shared-mime-info gsettings-desktop-schemas \
     libgdk-pixbuf2.0-bin dconf-gsettings-backend desktop-file-utils gtk-update-icon-cache hicolor-icon-theme vim-common fontconfig fonts-dejavu-core graphviz
-# and Alpine's, whose shell is busybox, on x86-64, whose Alpine signing key is the one pinned above
+# and Alpine's, whose shell is busybox, on x86-64
 case $(uname -m) in
 x86_64)
-    item both alpine-caches apks-caches apks --key "$alpine" python3 glib shared-mime-info gsettings-desktop-schemas \
+    item both alpine-caches apks-caches apks python3 glib shared-mime-info gsettings-desktop-schemas \
         gdk-pixbuf dconf desktop-file-utils gtk-update-icon-cache hicolor-icon-theme htop fontconfig font-dejavu graphviz
     ;;
-*) echo "alpine-caches.exclave: Alpine's x86-64 key alone is pinned here; skipped" ;;
+*) echo "alpine-caches.exclave: made on x86-64 alone; skipped" ;;
 esac
 item file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json b5b6b32d9b6c410d6e8c00639ead764745bd4eaf9cb662d2ec25b656e3f17f75
 counted
@@ -188,16 +185,16 @@ counted
 # the examples': test/realsoft.py's packages and sources, the sysroot's CentOS 7 glibc, test/workloads.py's exclaves
 # and files, and test/bench.py's SQLite, some from their authors' own sites
 file https://vault.centos.org/7.9.2009/os/x86_64/RPM-GPG-KEY-CentOS-7 RPM-GPG-KEY-CentOS-7 0f486068ef5f812ec4780aa667408c34cc2a66e7ac15e66d29cc9c534dfe79ca
-item both realsoft debs-realsoft debs --keyring "$ubuntu" gcc g++ make libc6-dev python3
+item both realsoft debs-realsoft debs gcc g++ make libc6-dev python3
 item fetch el7 rpms --keyring "$dir/src/RPM-GPG-KEY-CentOS-7" --repo $centos --no-base glibc glibc-devel glibc-headers kernel-headers libgcc
-item both valgrind debs-valgrind-gcc debs --keyring "$ubuntu" --mirror $mirror valgrind gcc libc6-dev
-item both poppler debs-poppler debs --keyring "$ubuntu" --mirror $mirror poppler-utils poppler-data fonts-urw-base35
-item both rust debs-rust debs --keyring "$ubuntu" --mirror $mirror cargo rustc gcc libc6-dev
-item both cmake debs-cmake debs --keyring "$ubuntu" --mirror $mirror cmake ninja-build gcc g++ libc6-dev
-item both java debs-java debs --keyring "$ubuntu" --mirror $mirror openjdk-17-jdk-headless ca-certificates-java libfreetype6 libharfbuzz0b libasound2t64
+item both valgrind debs-valgrind-gcc debs --mirror $mirror valgrind gcc libc6-dev
+item both poppler debs-poppler debs --mirror $mirror poppler-utils poppler-data fonts-urw-base35
+item both rust debs-rust debs --mirror $mirror cargo rustc gcc libc6-dev
+item both cmake debs-cmake debs --mirror $mirror cmake ninja-build gcc g++ libc6-dev
+item both java debs-java debs --mirror $mirror openjdk-17-jdk-headless ca-certificates-java libfreetype6 libharfbuzz0b libasound2t64
 # TeX Live, whose indexes and formats exclave caches makes (13 item 56), once
 tex() {
-    both tex debs-tex debs --keyring "$ubuntu" --mirror "$mirror" texlive-latex-base texlive-latex-recommended texlive-fonts-recommended &&
+    both tex debs-tex debs --mirror "$mirror" texlive-latex-base texlive-latex-recommended texlive-fonts-recommended &&
         # the real file, not through the link a killed run of exclave caches leaves at the directory
         if [ -L "$dir/tex.exclave/tree/var/lib/texmf" ] || [ ! -f "$dir/tex.exclave/tree/var/lib/texmf/ls-R" ]; then
             if exclave caches "$dir/tex.exclave" >>"$dir/log/tex.exclave.log" 2>&1; then
@@ -210,7 +207,7 @@ tex() {
 }
 item tex
 # the packages cmix-neif 1.0's install.sh installs, at the snapshot it pins (test/workloads.py buildimage)
-item both buildimage debs-buildimage debs --keyring "$ubuntu" --snapshot 20260927T160000Z clang-18 lld-18 llvm-18 libclang-rt-18-dev build-essential gawk python3
+item both buildimage debs-buildimage debs --snapshot 20260927T160000Z clang-18 lld-18 llvm-18 libclang-rt-18-dev build-essential gawk python3
 item file https://marwoelk.de/cmix-neif-1.0/cmix-neif-1.0.tar.gz cmix-neif-1.0.tar.gz 656180fdcf33b407502de2abba2098a29ef58aac947c49b8a88e89805a1d40b5
 item file https://arxiv.org/pdf/1706.03762v7 attention.pdf 8110b31b13b21ea79c3cf668f3c5dc2aa20a20927d9956343f2442f0536d6600
 item file https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1.tar.gz 207c3b0862cb4e3686f8405f76a98c38dbad9c94bcf4be4b9efca0716aba51ec
