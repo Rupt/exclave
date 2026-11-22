@@ -7368,6 +7368,16 @@ specified.
   wrapped exclave; `wrap` takes the other architecture's launcher,
   since the checks read the tree as the launcher's machine (10, 10.1,
   10.5).
+- **exclave publishes two programs, and a new function is a subcommand
+  of one of them**: `exclave` works on the files it is given, and
+  `exclave-fetch` is the one program that trusts a repository and opens
+  a connection. The second name marks that property and not a verb, so
+  a script that runs only `exclave` touches no network, by its name
+  alone; a third program would want a property of its own to mark, and
+  a name for each verb is what the subcommands prevent. One name in
+  front of the two, a script or the command running the fetchers
+  beside it, would cost that reading, and one program would put the
+  network code in the command (10, 10.1).
 - **Building software is the build system's job**: an exclave of built
   software is a staging directory plus runtime packages, with no
   recipes (10.2).
