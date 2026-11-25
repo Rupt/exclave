@@ -663,9 +663,8 @@ def host(args: argparse.Namespace) -> None:
     commit = run(
         ["git", "-C", REPO, "describe", "--always", "--dirty", "--exclude=*"]
     ).stdout.strip()
-    payload = matrix.pack_payload(
-        work, "x86_64", "gnu", os.path.abspath(args.exclave), commit=commit
-    )
+    payload = matrix.pack_payload(work, "x86_64", os.path.abspath(args.exclave), commit=commit)
+    python = matrix.pack_python(work, "x86_64", "gnu")
     conditions = [
         f"row {row.name}, commit {commit}",
         "host " + " ".join(platform.uname()),
@@ -683,10 +682,12 @@ def host(args: argparse.Namespace) -> None:
             sys.exit(f"the VM did not boot: {why}")
         log("booted; kernel", vm.ssh("uname -r")[1].strip())
         vm.scp(payload, "payload.tar.gz")
+        vm.scp(python, "python.tar.gz")
         must(
             vm,
             "unpacking",
-            "mkdir -p m && cd m && tar xzf ../payload.tar.gz && echo unpacked",
+            "mkdir -p m && cd m && tar xzf ../payload.tar.gz && tar xzf ../python.tar.gz "
+            "&& echo unpacked",
             "unpacked",
         )
         must(

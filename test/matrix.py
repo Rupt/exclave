@@ -568,10 +568,17 @@ class VM:
                     os.remove(f)
 
 
+def pack_python(work: str, arch: str, libc: str) -> str:
+    """The pinned Python built for arch and libc, which a VM unpacks beside the payload."""
+    packed = os.path.join(work, f"python-{arch}-{libc}.tar.gz")
+    with tarfile.open(packed, "w:gz", compresslevel=1) as t:
+        t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
+    return packed
+
+
 def pack_payload(
     work: str,
     arch: str,
-    libc: str,
     exclave: str,
     *,
     commit: str,
@@ -579,14 +586,14 @@ def pack_payload(
     release: str | None = None,
     fixture: str | None = None,
 ) -> str:
-    """The payload a VM of arch and libc unpacks: the test tree, the pinned Python and the builds.
+    """The payload a VM of arch unpacks: the test tree and the builds, whatever the VM's libc.
 
-    It carries the repository's test, src and tool, the pinned Python built for the VM, the
-    launchers and the command built here for arch, the Go regression's programs, the exclave, the
+    It carries the repository's test, src and tool, the launchers and the command built here for
+    arch, the Go regression's programs, the exclave, the
     suite's pruned fixture of it as `fixture` where one was made here, and, given release
     (make_release's directory) for this machine, the release.
     """
-    payload = os.path.join(work, f"payload-{arch}-{libc}.tar.gz")
+    payload = os.path.join(work, f"payload-{arch}.tar.gz")
     # packed afresh every run, so the VMs never test a stale tree
     log("packing the test tree for", arch)
     with tarfile.open(payload, "w:gz", compresslevel=1) as t:
@@ -601,7 +608,6 @@ def pack_payload(
         info = tarfile.TarInfo("repo/COMMIT")
         info.size = len(commit) + 1
         t.addfile(info, io.BytesIO(commit.encode() + b"\n"))
-        t.add(pinned_python(arch, libc), arcname="python", filter=without_tk)
         if docker_profile:
             t.add(docker_profile, arcname="docker-seccomp.json")
         # the Go regression's programs, built here for the VM's machine: the VMs have no go
@@ -745,7 +751,8 @@ def main() -> int:
     # the payload: the row's machine's exclave (hard links preserved by tar), the repository's
     # test tree, the launchers and command built here for that machine, and, where the host has
     # go, the Go regression's programs built for it
-    payloads: dict[tuple[str, str], str] = {}
+    payloads: dict[str, str] = {}
+    pythons: dict[tuple[str, str], str] = {}
 
     # 10.5: a release of the commands, which each row of this machine takes as docs/RELEASE.md has
     # a consumer take it, built with this machine's exclave as its toolchain; the launcher
@@ -773,19 +780,23 @@ def main() -> int:
         .strip()
     )
 
-    def payload_for(arch: str, libc: str) -> str:
-        if (arch, libc) not in payloads:
-            payloads[arch, libc] = pack_payload(
+    def payload_for(arch: str) -> str:
+        if arch not in payloads:
+            payloads[arch] = pack_payload(
                 work,
                 arch,
-                libc,
                 exclaves[arch],
                 commit=commit,
                 docker_profile=args.docker_profile,
                 release=release if arch == MACHINE else None,
                 fixture=fixture_of(exclaves[arch]),
             )
-        return payloads[arch, libc]
+        return payloads[arch]
+
+    def python_for(arch: str, libc: str) -> str:
+        if (arch, libc) not in pythons:
+            pythons[arch, libc] = pack_python(work, arch, libc)
+        return pythons[arch, libc]
 
     start_lock = threading.Lock()
 
@@ -793,7 +804,8 @@ def main() -> int:
         """One VM's row: boot, copy in, run the suite and the oracles, stop."""
         name, arch, notes = row.name, row.arch, row.notes
         slow = 10 if arch != "x86_64" else 1
-        payload = payload_for(arch, "musl" if row.family == "apk" else "gnu")
+        payload = payload_for(arch)
+        python = python_for(arch, "musl" if row.family == "apk" else "gnu")
 
         def failure(kernel: str, why: str) -> Row:
             return Row(name, kernel, why, "", notes, failed=True)
@@ -806,8 +818,10 @@ def main() -> int:
             uname = uname.strip()
             log(name, "kernel", uname)
             vm.scp(payload, "payload.tar.gz")
+            vm.scp(python, "python.tar.gz")
             _rc, out = vm.ssh(
-                "mkdir -p m && cd m && tar xzf ../payload.tar.gz && echo unpacked",
+                "mkdir -p m && cd m && tar xzf ../payload.tar.gz && tar xzf ../python.tar.gz "
+                "&& echo unpacked",
                 timeout=600 * slow,
             )
             if "unpacked" not in out:
@@ -966,7 +980,8 @@ def main() -> int:
 
     # packed before the VMs start, once each, so no two rows pack at once
     for arch, libc in {(r.arch, "musl" if r.family == "apk" else "gnu") for r in rows}:
-        payload_for(arch, libc)
+        payload_for(arch)
+        python_for(arch, libc)
     # several VMs at a time, each with its own overlay, seed and port; the table keeps VMS's order
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         results = list(pool.map(run_row, rows))
