@@ -61,6 +61,12 @@ jobs:
           path: build/fixtures
           key: fixtures-${{ runner.arch }}-${{ hashFiles('test/regress_*.py', 'test/run.py', 'test/harness.py', 'test/suite.py', 'test/tree.py', 'test/packages.py', 'test/progs/**', 'src/**', 'tool/**', 'unpack/**') }}
           restore-keys: fixtures-${{ runner.arch }}-
+      - name: the C checks that passed, recorded by a key of their inputs (scripts/check)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/check
+          key: check-${{ runner.arch }}-${{ hashFiles('src/**', 'test/*.c', 'test/*.h', 'test/progs/**', 'scripts/check', 'scripts/lib.sh', '.clang-tidy', 'uv.lock') }}
+          restore-keys: check-${{ runner.arch }}-
       # the Rust test's compile on a runner has outlasted the test's budget while its rustc
       # --version answered at once; a compile here leaves the toolchain read, its time in the log
       - name: the runner's rustc, compiling once before a test's budget runs

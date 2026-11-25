@@ -93,6 +93,11 @@ run "$UV" run --quiet ty check --quiet
 # clang-tidy's paths on aarch64 only for a source that holds aarch64's own
 # code, since elsewhere they are x86-64's paths again. A file's output is
 # shown only for a finding, since clang counts aloud the warnings it suppressed.
+# Each check that passes is recorded under build/check/ by a key of all it
+# reads: the file, every header, the flags lib.sh gives, this script, the
+# tools' settings and versions, and the check's own command. A check whose key
+# is recorded has passed on these very inputs and is not run again, so a
+# change reanalyses the files it touches, every one for a header.
 # shellcheck disable=SC2329  # run through run, by name
 quiet() { # quiet CMD...: CMD's output only when it fails
     out=$("$@" 2>&1) || {
@@ -100,14 +105,44 @@ quiet() { # quiet CMD...: CMD's output only when it fails
         return 1
     }
 }
-# compiled CC ARGS... FILE: FILE compiled with CC's flags and ARGS as a check, twice, one after the other, as
+# compiled FILE CC ARGS...: FILE compiled with CC's flags and ARGS as a check, twice, one after the other, as
 # every compile and clang-tidy run below is, so that the check never loads the machine with more than one
 # process (the laptop is in use beside it): once as built, for the warnings, and once at -O0 under gcc's analyser, which follows the paths of the code as written
 # (null and uninitialised uses, memory and descriptors freed twice or never, writes past a bound), since
 # optimisation folds some of them away first. gcc 14 defines __ANALYZER__ under the analyser; gcc 13 is given
 # it, and sys.h makes the syscalls opaque calls under it, as the analyser cannot see what the kernel writes.
-warned() { run quiet "$@" -Werror -c -o /dev/null; }
-analysed() { run quiet "$@" -O0 -fanalyzer -D__ANALYZER__ -Werror -c -o /dev/null; }
+stamps=$ROOT/build/check
+# what every C check reads besides its own file
+inputs=$(
+    {
+        cat src/*.h test/*.h scripts/lib.sh scripts/check .clang-tidy
+        "${CC:-gcc}" --version
+        ! command -v aarch64-linux-gnu-gcc >/dev/null || aarch64-linux-gnu-gcc --version
+        .venv/bin/clang-tidy --version
+    } 2>&1 | sha256sum | cut -c1-64
+)
+# recorded FILE CMD...: CMD, a check of FILE, unless it passed before on the same inputs; a pass is recorded
+# shellcheck disable=SC2329  # run through run, by name
+recorded() {
+    key=$({
+        echo "$inputs $*"
+        cat "$1"
+    } | sha256sum | cut -c1-64)
+    shift
+    [ -e "$stamps/$key" ] && return 0
+    "$@" && mkdir -p "$stamps" && : >"$stamps/$key"
+}
+# warned FILE CC ARGS...: FILE compiled with CC's flags and ARGS for the warnings; analysed, under the analyser
+warned() {
+    f=$1
+    shift
+    run recorded "$f" quiet "$@" "$f" -Werror -c -o /dev/null
+}
+analysed() {
+    f=$1
+    shift
+    run recorded "$f" quiet "$@" "$f" -O0 -fanalyzer -D__ANALYZER__ -Werror -c -o /dev/null
+}
 compiled() {
     warned "$@"
     analysed "$@"
@@ -117,27 +152,27 @@ own() { [ "$2" = "$(uname -m)" ] || grep -qE "__(x86_64|aarch64)__" "$1"; }
 if $c; then
     for f in src/*.c; do
         for arch in $(c_arches); do
-            warned launcher_cc "$arch" "$f"
-            if own "$f" "$arch"; then analysed launcher_cc "$arch" "$f"; fi
+            warned "$f" launcher_cc "$arch"
+            if own "$f" "$arch"; then analysed "$f" launcher_cc "$arch"; fi
         done
     done
     # the unit tests' and the fuzz target's own files, and the launcher's sources they are built with (lib.sh's unit_tests)
     for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c $(unit_tests | cut -d' ' -f2- | tr ' ' '\n' | sort -u); do
-        compiled host_cc -DHOST_TEST "$f"
+        compiled "$f" host_cc -DHOST_TEST
     done
     # the test programs too, but for string literals in an exec's argv, its natural spelling
     for f in test/progs/*.c; do
-        run quiet host_cc -pthread -Wno-discarded-qualifiers "$f" -Werror -c -o /dev/null
+        run recorded "$f" quiet host_cc -pthread -Wno-discarded-qualifiers "$f" -Werror -c -o /dev/null
     done
     for target in x86_64 aarch64; do
         for f in src/*.c; do
             if own "$f" "$target"; then
-                run quiet .venv/bin/clang-tidy --quiet "$f" -- --target=$target-linux-gnu -std=gnu11 -ffreestanding -fno-builtin -nostdlib
+                run recorded "$f" quiet .venv/bin/clang-tidy --quiet "$f" -- --target=$target-linux-gnu -std=gnu11 -ffreestanding -fno-builtin -nostdlib
             fi
         done
     done
     for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c; do
-        run quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 -DHOST_TEST
+        run recorded "$f" quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 -DHOST_TEST
     done
     # no C line over 120 columns, a table between clang-format off and on aside:
     # clang-format leaves comments as written, so it does not hold them to it

@@ -6662,7 +6662,11 @@ its time, ok, SKIP or FAIL:
   compared with the documents by `test/figures.py`, which
   `scripts/figures` prints. Given the changed paths, as the gate gives
   them, the C's and the Go's checks run only where a path reaches them,
-  so a document's change runs no compiler;
+  so a document's change runs no compiler; and a C check that passed is
+  recorded under `build/check/` by a key of all it reads, the file,
+  every header, the flags, the tools' settings and versions and its own
+  command, and not run again on the same inputs, so a change reanalyses
+  the files it touches, or all of them for a header;
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py`, the scratch-pool test, the cache's
   growth and its lock across `fork` (`test/cache_test.c`), the test of
