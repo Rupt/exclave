@@ -3953,7 +3953,7 @@ tampered archive failing the sums, and `NOTICES`
 naming Go and every module `go.mod` requires (17). A release of the
 commands alone is made by two scripts in turn (`docs/RELEASE.md`):
 `scripts/release-prepare N`, on the reference machine, commits
-`VERSION` set to `N`, runs the gate and `scripts/extra` and makes and
+`VERSION` set to `N`, runs every step of the gate and makes and
 checks the files; `scripts/release-publish N` pushes, waits for the
 workflow with the kernel matrix to pass on that commit, and tags and
 publishes it.

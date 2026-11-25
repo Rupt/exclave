@@ -1,12 +1,12 @@
 #!/bin/sh
 # scripts/release-prepare N — the first half of release N (docs/RELEASE.md), everything on this machine: the commit
-# that sets VERSION to N, on top of main as origin has it and not pushed; the gate, every step of it, and
-# scripts/extra on the four exclaves of the inputs, each with nothing failed and nothing skipped; and the release's
-# files, made by scripts/release in build/release-vN and checked. Nothing leaves the machine, so a failure is undone
-# here: take the version commit off (git reset --hard HEAD^), fix the cause in a commit of its own, and run this
-# again. A version commit already at HEAD is kept. The inputs are EXCLAVE_TEST_INPUTS's, build/inputs when it is
-# not set, as scripts/inputs makes them; logs go under build/release-prepare/. scripts/release-publish N then
-# publishes what this made.
+# that sets VERSION to N, on top of main as origin has it and not pushed; the gate, every step of it, with nothing
+# failed and nothing skipped; and the release's files, made by scripts/release in build/release-vN and checked.
+# scripts/extra is not run: what it finds becomes a test in the gate, and a release waits on nothing the gate would
+# not. Nothing leaves the machine, so a failure is undone here: take the version commit off (git reset --keep HEAD^),
+# fix the cause in a commit of its own, and run this again. A version commit already at HEAD is kept. The inputs are
+# EXCLAVE_TEST_INPUTS's, build/inputs when it is not set, as scripts/inputs makes them; logs go under
+# build/release-prepare/. scripts/release-publish N then publishes what this made.
 set -eu
 . "$(dirname -- "$0")/lib.sh"
 [ $# -eq 1 ] || {
@@ -16,12 +16,10 @@ set -eu
 n=$1
 release_head "$n"
 inputs=${EXCLAVE_TEST_INPUTS:-$ROOT/build/inputs}
-for ex in gcc13 alpine f42 clang; do
-    [ -d "$inputs/$ex.exclave" ] || {
-        echo "release-prepare: no $inputs/$ex.exclave: run scripts/inputs $inputs" >&2
-        exit 2
-    }
-done
+[ -d "$inputs/gcc13.exclave" ] || {
+    echo "release-prepare: no $inputs/gcc13.exclave: run scripts/inputs $inputs" >&2
+    exit 2
+}
 git -C "$ROOT" fetch -q origin main
 ! git -C "$ROOT" ls-remote --exit-code --tags origin "refs/tags/v$n" >/dev/null || {
     echo "release-prepare: origin already has the tag v$n" >&2
@@ -43,22 +41,15 @@ else
 fi
 logs=$ROOT/build/release-prepare
 rm -rf "$logs" && mkdir -p "$logs"
-# step NAME COMMAND...: runs the command into NAME.log; it passes on the summary line scripts/gate and scripts/extra
-# end with, "NAME: 0 failed, 0 skipped, T s", since a skipped step is a check that did not run
-step() {
-    name=$1
-    shift
-    echo "release-prepare: $name"
-    EXCLAVE_TEST_INPUTS=$inputs "$@" >"$logs/$name.log" 2>&1 || :
-    tail -n 1 "$logs/$name.log" | grep -q "^$name: 0 failed, 0 skipped," || {
-        grep -v -e '^built ' -e ' ok ' "$logs/$name.log" >&2
-        echo "release-prepare: $name did not pass; $logs/$name.log has its output" >&2
-        exit 1
-    }
+# the gate passes on its summary line, "gate: 0 failed, 0 skipped, T s", since a skipped step is a check that did not
+# run
+echo "release-prepare: the gate"
+EXCLAVE_TEST_INPUTS=$inputs "$ROOT/scripts/gate" --full "$inputs/gcc13.exclave" >"$logs/gate.log" 2>&1 || :
+tail -n 1 "$logs/gate.log" | grep -q "^gate: 0 failed, 0 skipped," || {
+    grep -v -e '^built ' -e ' ok ' "$logs/gate.log" >&2
+    echo "release-prepare: the gate did not pass; $logs/gate.log has its output" >&2
+    exit 1
 }
-step gate "$ROOT/scripts/gate" --full "$inputs/gcc13.exclave"
-step extra "$ROOT/scripts/extra" "$inputs/gcc13.exclave" "$inputs/alpine.exclave" "$inputs/f42.exclave" \
-    "$inputs/clang.exclave"
 echo "release-prepare: the files"
 rm -rf "$release_dir"
 "$ROOT/scripts/release" "$release_dir" "$inputs/gcc13.exclave" >"$logs/release.log" 2>&1 || {

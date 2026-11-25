@@ -26,9 +26,10 @@ scripts/release-publish N
    and the machine is x86-64.
 2. Commits `VERSION` set to `N`, "Set the version to N", and does not
    push it; a commit that already does so at `HEAD` is kept.
-3. Runs every step of the gate on the gcc exclave, then `scripts/extra`
-   on the gcc, Alpine, Fedora and clang exclaves. Each must end with
-   nothing failed and nothing skipped.
+3. Runs every step of the gate on the gcc exclave, which must end with
+   nothing failed and nothing skipped. `scripts/extra` is not run: a
+   release waits on nothing the gate would not, and what `scripts/extra`
+   finds becomes a test in the gate.
 4. Makes the files with `scripts/release build/release-vN
    build/inputs/gcc13.exclave`, the launcher and commands built inside
    the gcc exclave, and checks them: the five files, every sum, and the
@@ -37,7 +38,7 @@ scripts/release-publish N
 
 Logs go under `build/release-prepare/`. Nothing has left the machine, so
 a failure is undone here: take the version commit off (`git reset
---hard HEAD^`), fix the cause in a commit of its own, and run the script
+--keep HEAD^`), fix the cause in a commit of its own, and run the script
 again.
 
 ## `scripts/release-publish N`: on GitHub
