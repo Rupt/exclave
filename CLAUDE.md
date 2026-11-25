@@ -46,28 +46,28 @@ The loop that has served well, in the order it pays:
    the regression list (17 item 4), performance (16) and section 19 are
    where a change is recorded; figures there are measured rather than
    guessed, because the documents are what a reader trusts.
-5. **Gate, commit; the rest when the user asks.** `scripts/gate
+5. **Gate, commit, push; the rest when it is worth it.** `scripts/gate
    EXCLAVE` on the gcc exclave at zero failures, then the commit. It is
    the one gate, and it is fast: every step is a test, which fails on a
    case with the answer expected, in seconds (`docs/DESIGN.md` 17 lists
    the steps and `test/affected.py` names them); it runs the steps the
    change can affect, in seconds for a
    document or a script, `--full` all of them, and says when the
-   change reaches the VMs. Everything else is separate, optional and
-   discretionary, run only when the user asks for it in so many words:
+   change reaches the VMs. Pushing a gated series is an agent's to do.
+   The workflow `.github/workflows/ci.yml` is too: dispatched as
+   `gh workflow run ci.yml -f matrix=true` (`false`: the gate alone) on
+   the pushed `main`, it runs the gate on x86-64 and natively on
+   aarch64 and the x86-64 rows under KVM, never at a push, and is
+   worth a dispatch when a pushed series reaches the VMs or before the
+   work is called done; it is read as failures and the end (`gh run
+   view ID --json jobs`, `--log-failed`). What runs on this laptop
+   stays the user's to start, since the laptop is in use meanwhile:
    `scripts/extra EXCLAVE...` (the suite on the other exclaves, on the
    debug launcher and under the plain terminal's label, the fuzz
    budget and the release test), `scripts/matrix --exclave EXCLAVE` (the
-   kernels), the examples, and
-   the workflow `.github/workflows/ci.yml`, dispatched from the
-   Actions tab or as `gh workflow run ci.yml -f matrix=true` (`false`:
-   the gate alone) on the pushed `main`, which runs the gate on x86-64
-   and natively on aarch64 and the x86-64 rows under KVM, and never
-   runs at a push; the emulated arm64 rows run only here. Reading a run is always
-   fine (`gh run list --workflow ci.yml`, `gh run watch ID
-   --exit-status` in the background, `gh run view ID --log-failed`),
-   reported as failures and the end. A commit does not wait for any of
-   them, and asking names the commits they have not seen. When one of
+   kernels; the emulated arm64 rows run only here) and the examples;
+   a hand VM to settle one kernel is fine. A commit does not wait for
+   any of them, and asking names the commits they have not seen. When one of
    them finds a bug, the bug gets a fast reproduction as a test in the
    gate, an exerciser and then a named test; the run that found it
    stays where it is and never becomes a gate step, since a long
@@ -80,9 +80,9 @@ The loop that has served well, in the order it pays:
   subject line and not a paragraph folded onto one line, no body, no
   `Co-Authored-By`. Name what changed and let the diff, the design
   and the tests carry the detail; much of the history here is
-  overlong, so match the intent rather than that habit. Pushing is the
-  user's to do. Committing when asked, or when the instruction clearly
-  implies it, keeps the history the user's.
+  overlong, so match the intent rather than that habit. Commit each
+  gated item, push the series to `main` and dispatch the workflow
+  without asking; a rewrite of pushed history stays the user's call.
 - **Documents stay self-contained and canonical.** `docs/DESIGN.md`
   should read without the conversation that produced it, so a design
   change goes into it rather than a side note, and earlier states live
