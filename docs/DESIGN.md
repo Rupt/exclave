@@ -6985,7 +6985,12 @@ the maintainer approves it, usually once before a series of commits is
 pushed, rather than before each commit. Each VM
 boots its distribution's cloud image under QEMU with KVM behind a
 copy-on-write overlay; cloud-init installs strace and, where the
-distribution has it, bubblewrap. The exclave, the suite's pruned
+distribution has it, bubblewrap. A row named by `--prepare` is kept
+once it passes, its packages installed and the run's files removed,
+as `NAME-ready.qcow2` beside the images, and later runs boot it as a
+new instance that installs nothing, as the workflow does for Rocky's
+and CentOS 7's, whose mirrors made their boots the slowest, with the
+kept images renewed every week. The exclave, the suite's pruned
 fixture of it where the reference machine has one, the test tree, the
 checkout's launcher, command and `unpack`, built for the VM's machine
 by `scripts/build` first, which takes no time when they are up to

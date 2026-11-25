@@ -1,7 +1,7 @@
 """Run an exclave built here in virtual machines, one per kernel (DESIGN.md 12, 17 item 5).
 
     scripts/matrix --exclave EXCLAVE... [--only NAME,...] [--work DIR] [--images DIR] [--memory MB]
-                   [--jobs N] [--arm64] [--docker-profile FILE]
+                   [--jobs N] [--arm64] [--docker-profile FILE] [--prepare NAME,...]
 
 Each row of VMS names a distribution cloud image. The image is downloaded once, booted under QEMU
 with KVM behind a copy-on-write overlay and a cloud-init seed that installs strace (and bubblewrap
@@ -316,13 +316,19 @@ def boot(
     """
     name = row.name
     image = os.path.join(images, (row.image or name) + ".qcow2")
-    if not any(fetch(u, image) for u in row.urls):
+    # a VM kept with its packages installed (--prepare) boots as a new instance, so that cloud-init
+    # takes this run's key, and installs nothing
+    prepared = os.path.exists(ready_image(images, name))
+    if prepared:
+        image = ready_image(images, name)
+    elif not any(fetch(u, image) for u in row.urls):
         return None, "image not available"
     seed = os.path.join(work, name + "-seed.iso")
     with open(os.path.join(work, name + "-user-data"), "w") as f:
-        f.write(user_data(row.family, pubkey, row.kernel_package))
+        f.write(user_data(row.family, pubkey, row.kernel_package, prepared=prepared))
     with open(os.path.join(work, name + "-meta-data"), "w") as f:
-        f.write(f"instance-id: exclave-{name}\nlocal-hostname: {name}\n")
+        instance = f"exclave-{name}" + ("-ready" if prepared else "")
+        f.write(f"instance-id: {instance}\nlocal-hostname: {name}\n")
     subprocess.run(
         [
             "cloud-localds",
@@ -346,7 +352,23 @@ def boot(
     return vm, ""
 
 
-def user_data(family: str, pubkey: str, kernel_package: str = "") -> str:
+def ready_image(images: str, name: str) -> str:
+    """Where --prepare keeps the row's VM with its packages installed."""
+    return os.path.join(images, name + "-ready.qcow2")
+
+
+def user_data(family: str, pubkey: str, kernel_package: str = "", *, prepared: bool = False) -> str:
+    if prepared:
+        return "\n".join(
+            [
+                "#cloud-config",
+                "ssh_authorized_keys:",
+                "  - " + pubkey,
+                "runcmd:",
+                "  - touch /var/tmp/exclave-ready",
+                "",
+            ]
+        )
     pk = PACKAGES[family]
     if family == "centos7":
         return "\n".join(
@@ -550,11 +572,11 @@ class VM:
             time.sleep(5)
         return False
 
-    def stop(self) -> None:
-        """Power the VM off and remove its disks.
+    def stop(self, keep: str = "") -> None:
+        """Power the VM off and remove its disks, its disk first kept whole as keep, if given.
 
         The overlay grows to gigabytes over a row and says nothing afterwards that the console log
-        and the row's logs do not; the image stays.
+        and the row's logs do not; the image stays. A disk is kept only from a VM that powered off.
         """
         with contextlib.suppress(Exception):
             self.ssh("sudo poweroff || doas poweroff || poweroff", timeout=20)
@@ -562,6 +584,20 @@ class VM:
             self.proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
             self.proc.kill()
+            keep = ""
+        if keep:
+            # the overlay and its image as one file, uncompressed: the cache compresses it
+            tmp = keep + ".tmp"
+            p = subprocess.run(
+                ["qemu-img", "convert", "-O", "qcow2", self.overlay, tmp],
+                capture_output=True,
+                check=False,
+            )
+            if p.returncode == 0:
+                os.replace(tmp, keep)
+                log(self.name, "kept with its packages as", os.path.basename(keep))
+            else:
+                log(self.name, "not kept:", p.stderr.decode()[-200:])
         for f in (self.overlay, self.seed, self.varstore):
             if f:
                 with contextlib.suppress(FileNotFoundError):
@@ -718,12 +754,19 @@ def main() -> int:
         help="include the emulated aarch64 VM (slow); --only names it too",
     )
     ap.add_argument(
+        "--prepare",
+        default="",
+        help="rows whose VM, once it passes, is kept in --images with its packages installed as "
+        "NAME-ready.qcow2, which later runs boot from; remove the file to install afresh",
+    )
+    ap.add_argument(
         "--docker-profile",
         help="Docker's default seccomp profile (scripts/inputs fetches it); "
         "without it the Docker-profile run is left out",
     )
     args = ap.parse_args()
     only = args.only.split(",") if args.only else []
+    prepare = set(args.prepare.split(",")) if args.prepare else set()
     rows = [
         r
         for r in VMS
@@ -810,9 +853,15 @@ def main() -> int:
         def failure(kernel: str, why: str) -> Row:
             return Row(name, kernel, why, "", notes, failed=True)
 
+        # a row named by --prepare, booted from its image, is kept once it passes, without the run's
+        # files, for later runs to boot with its packages installed
+        kept = ""
+        if name in prepare and not os.path.exists(ready_image(args.images, name)):
+            kept = ready_image(args.images, name)
         vm, why = boot(row, args.images, work, pubkey, memory=args.memory, lock=start_lock)
         if vm is None:
             return failure(row.kernel, why)
+        result: Row | None = None
         try:
             _rc, uname = vm.ssh("uname -r")
             uname = uname.strip()
@@ -965,7 +1014,7 @@ def main() -> int:
                 log(name, oracle)
             else:
                 oracle = "no user namespaces"
-            return Row(
+            result = Row(
                 name,
                 uname,
                 suite + ("; " + "; ".join(f[:80] for f in fails[:4]) if fails else ""),
@@ -974,9 +1023,17 @@ def main() -> int:
                 failed=bool(suite_rc or fails or oracle_failed),
             )
         except Exception as e:  # noqa: BLE001 -- a row's failure is reported in its row
-            return failure(row.kernel, f"error: {e}")
+            result = failure(row.kernel, f"error: {e}")
         finally:
-            vm.stop()
+            if kept and result and not result.failed:
+                vm.ssh(
+                    "S=sudo; command -v sudo >/dev/null 2>&1 || S=doas; "
+                    "rm -rf m payload.tar.gz python.tar.gz nx.c nxprog; "
+                    "$S rm -f /var/tmp/exclave-ready; sync",
+                    timeout=120,
+                )
+            vm.stop(keep=kept if result and not result.failed else "")
+        return result
 
     # packed before the VMs start, once each, so no two rows pack at once
     for arch, libc in {(r.arch, "musl" if r.family == "apk" else "gnu") for r in rows}:

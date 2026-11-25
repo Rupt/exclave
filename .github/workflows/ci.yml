@@ -151,23 +151,30 @@ jobs:
           path: build/fixtures
           key: fixtures-${{ runner.arch }}-${{ hashFiles('test/regress_*.py', 'test/run.py', 'test/harness.py', 'test/suite.py', 'test/tree.py', 'test/packages.py', 'test/progs/**', 'src/**', 'tool/**', 'unpack/**') }}
           restore-keys: fixtures-${{ runner.arch }}-
-      # Rocky's image is 2 GB, which its mirror serves in minutes and the cache in seconds; kept a
-      # week, so that the row still meets the image's updates
-      - name: the week, which names Rocky's image in the cache
+      # Rocky's and CentOS 7's VMs spend most of a boot installing packages through their slow
+      # mirrors: each is kept once it passes, packages installed (scripts/matrix --prepare), and
+      # cached for the week, so that the row still meets its distribution's updates
+      - name: the week, which names the prepared images in the cache
         if: steps.due.outputs.due == 'true'
         id: week
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
-      - name: Rocky's image, from the cache this week
+      - name: Rocky's VM with its packages, from the cache this week
         if: steps.due.outputs.due == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: build/images/rocky-8.qcow2
-          key: image-rocky-8-${{ steps.week.outputs.week }}
+          path: build/images/rocky-8-ready.qcow2
+          key: image-rocky-8-ready-${{ steps.week.outputs.week }}
+      - name: CentOS 7's VM with its packages, from the cache this week
+        if: steps.due.outputs.due == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/images/centos-7-ready.qcow2
+          key: image-centos-7-ready-${{ steps.week.outputs.week }}
       - name: the matrix
         if: steps.due.outputs.due == 'true'
         run: >
           scripts/matrix --exclave "$INPUTS/gcc13.exclave"
-          --jobs 2 --work /mnt/matrix/work
+          --jobs 2 --work /mnt/matrix/work --prepare rocky-8,centos-7
           --docker-profile "$INPUTS/src/docker-seccomp.json"
       - name: the rows' results and logs
         if: always() && steps.due.outputs.due == 'true'
