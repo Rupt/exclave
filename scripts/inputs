@@ -1,8 +1,10 @@
 #!/bin/sh
-# scripts/inputs DIR [examples] — the development inputs, remade from the network (DESIGN.md 17): the exclaves
-# the gate runs on and Docker's seccomp profile, from the distributions' package archives and GitHub alone, and
-# with the word examples the files the examples take too, some from their authors' own sites, which a
-# continuous-integration run has no business fetching. Nothing is kept anywhere but DIR, the fetchers'
+# scripts/inputs DIR [examples | NAME...] — the development inputs, remade from the network (DESIGN.md 17): the
+# exclaves the gate runs on and Docker's seccomp profile, from the distributions' package archives and GitHub alone,
+# and with the word examples the files the examples take too, some from their authors' own sites, which a
+# continuous-integration run has no business fetching. Given NAMEs, only those of the gate's inputs are made, each
+# named as its file is without .exclave or .json (gcc13, alpine, f42, clang, gcc13-arm64, sss, gdb, caches,
+# alpine-caches, docker-seccomp), so that a job makes no more than it uses. Nothing is kept anywhere but DIR, the fetchers'
 # caches included (DIR/packages), and DIR may be empty at any time: whatever is missing is fetched again, and an item
 # DIR already has is skipped, so a rerun costs nothing. Afterwards:
 #   EXCLAVE_TEST_INPUTS=DIR scripts/gate DIR/gcc13.exclave
@@ -26,12 +28,33 @@
 set -u
 . "$(dirname -- "$0")/lib.sh"
 repo=$ROOT
-{ [ $# -eq 1 ] || { [ $# -eq 2 ] && [ "$2" = examples ]; }; } || {
-    echo "usage: scripts/inputs DIR [examples]" >&2
+[ $# -ge 1 ] || {
+    echo "usage: scripts/inputs DIR [examples | NAME...]" >&2
     exit 2
 }
+dir=$1
+shift
+examples='' names=''
+if [ "$*" = examples ]; then
+    examples=yes
+else
+    for n; do
+        case $n in
+        gcc13 | alpine | f42 | clang | gcc13-arm64 | sss | gdb | caches | alpine-caches | docker-seccomp) ;;
+        *)
+            echo "inputs: no input is named $n" >&2
+            exit 2
+            ;;
+        esac
+    done
+    names=" $* "
+fi
+# wanted NAME: the input was named, or none were
+wanted() {
+    [ -z "$names" ] || case $names in *" $1 "*) ;; *) return 1 ;; esac
+}
 "$repo/scripts/build" || exit 2 # the launchers and the command, which wrap the exclaves; nothing when up to date
-dir=$(mkdir -p "$1" && cd "$1" && pwd) || exit 2
+dir=$(mkdir -p "$dir" && cd "$dir" && pwd) || exit 2
 mkdir -p "$dir/log" "$dir/src" || exit 2
 fails=0
 # The items, a fetch and the exclave made from it or a file, run three at a time, each in the background with its
@@ -134,10 +157,10 @@ file https://src.fedoraproject.org/rpms/fedora-repos/raw/f42/f/RPM-GPG-KEY-fedor
 # reference machine at 13 kB/s
 mirror=http://gb.archive.ubuntu.com/ubuntu
 # the gate's: its four exclaves, the arm64 gcc exclave, and Docker's default seccomp profile
-item both gcc13 debs-gcc13 debs gcc-13 libc6-dev
-item both alpine apks apks --branch v3.21 gcc musl-dev binutils make linux-headers
-item both f42 rpms-f42 rpms --keyring "$dir/src/RPM-GPG-KEY-fedora-42-primary" --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make
-item both clang debs-clang debs clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils
+! wanted gcc13 || item both gcc13 debs-gcc13 debs gcc-13 libc6-dev
+! wanted alpine || item both alpine apks apks --branch v3.21 gcc musl-dev binutils make linux-headers
+! wanted f42 || item both f42 rpms-f42 rpms --keyring "$dir/src/RPM-GPG-KEY-fedora-42-primary" --repo $fedora --choose glibc-langpack=glibc-minimal-langpack gcc glibc-devel binutils make
+! wanted clang || item both clang debs-clang debs clang-18 libc6-dev libgcc-13-dev libstdc++-13-dev binutils
 # the aarch64 launcher this machine builds: its own on aarch64, the cross-built one on x86-64 with the cross compiler
 case $(uname -m) in
 aarch64) aarch64_launcher=$repo/build/launcher ;;
@@ -151,7 +174,7 @@ arm64() {
             echo "gcc13-arm64.exclave: no aarch64 launcher built here (aarch64-linux-gnu-gcc missing); skipped"
         fi
 }
-item arm64
+! wanted gcc13-arm64 || item arm64
 # the exclaves of the gate's tests of a host's directory service and of a tree's caches (13 items 17 and 48), whose
 # programs run on this machine, so made for its architecture: Ubuntu's Essential set with SSSD's lookup module, and
 # with Python and the generators exclave caches runs
@@ -160,24 +183,24 @@ aarch64) here_debs="--arch arm64 --mirror http://ports.ubuntu.com/ubuntu-ports" 
 *) here_debs="" ;;
 esac
 # shellcheck disable=SC2086  # the architecture's arguments, several words or none
-item both sss debs-sss debs $here_debs libnss-sss
+! wanted sss || item both sss debs-sss debs $here_debs libnss-sss
 # the suite's gdb tests (13 item 1), which the gate's gcc exclave cannot run for want of a gdb
 # shellcheck disable=SC2086  # the architecture's arguments, several words or none
-item both gdb debs-gdb debs $here_debs gcc-13 libc6-dev gdb
+! wanted gdb || item both gdb debs-gdb debs $here_debs gcc-13 libc6-dev gdb
 # shellcheck disable=SC2086  # the architecture's arguments, several words or none
-item both caches debs-caches debs $here_debs python3-minimal libglib2.0-bin shared-mime-info gsettings-desktop-schemas \
+! wanted caches || item both caches debs-caches debs $here_debs python3-minimal libglib2.0-bin shared-mime-info gsettings-desktop-schemas \
     libgdk-pixbuf2.0-bin dconf-gsettings-backend desktop-file-utils gtk-update-icon-cache hicolor-icon-theme vim-common fontconfig fonts-dejavu-core graphviz
 # and Alpine's, whose shell is busybox, on x86-64
 case $(uname -m) in
 x86_64)
-    item both alpine-caches apks-caches apks --branch v3.21 python3 glib shared-mime-info gsettings-desktop-schemas \
+    ! wanted alpine-caches || item both alpine-caches apks-caches apks --branch v3.21 python3 glib shared-mime-info gsettings-desktop-schemas \
         gdk-pixbuf dconf desktop-file-utils gtk-update-icon-cache hicolor-icon-theme htop fontconfig font-dejavu graphviz
     ;;
-*) echo "alpine-caches.exclave: made on x86-64 alone; skipped" ;;
+*) ! wanted alpine-caches || echo "alpine-caches.exclave: made on x86-64 alone; skipped" ;;
 esac
-item file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json b5b6b32d9b6c410d6e8c00639ead764745bd4eaf9cb662d2ec25b656e3f17f75
+! wanted docker-seccomp || item file https://raw.githubusercontent.com/moby/profiles/3c28324314729dbade8287e868eef6338c42807a/seccomp/default.json docker-seccomp.json b5b6b32d9b6c410d6e8c00639ead764745bd4eaf9cb662d2ec25b656e3f17f75
 counted
-[ "${2-}" = examples ] || {
+[ -n "$examples" ] || {
     echo "inputs: $fails failed (the gate's; scripts/inputs DIR examples fetches the examples' too)"
     exit "$fails"
 }

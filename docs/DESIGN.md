@@ -6590,8 +6590,9 @@ there, and on x86-64 `alpine-caches.exclave`, Alpine 3.21's
 `python3`, `glib`, `shared-mime-info` and GNOME's schemas, for the
 same test; and
 Docker's default seccomp profile, from the distributions' package archives and
-GitHub alone, which is all a continuous-integration run fetches.
-`scripts/inputs DIR examples` makes what the example runs take as
+GitHub alone, which is all a continuous-integration run fetches;
+`scripts/inputs DIR NAME...` makes only those named, as each job of
+the workflow makes only what it uses. `scripts/inputs DIR examples` makes what the example runs take as
 well: the packages `test/realsoft.py` builds with, CentOS 7's glibc for
 the sysroot of 9, the workloads' exclaves, and the source tarballs of
 `test/realsoft.py`, `test/bench.py` and `test/workloads.py`, some from

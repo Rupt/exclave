@@ -2,9 +2,11 @@
 # hand (workflow_dispatch: the Actions tab, or gh workflow run ci.yml -f matrix=true, false for
 # the gate alone; gh run watch ID --exit-status waits) and never at a push. The workflow only calls the
 # repository's scripts: scripts/install-uv for the pinned Python, scripts/install-go for the
-# pinned Go and scripts/inputs for the development inputs through cached package files, the
-# three in the one setup both jobs share (.github/actions/setup); then scripts/gate --full
-# and scripts/matrix. What
+# pinned Go and scripts/inputs for the development inputs a job uses through cached package files,
+# the three in the one setup both jobs share (.github/actions/setup); then scripts/gate --full
+# and scripts/matrix. The suite's pruned fixture (docs/DESIGN.md 17) is kept in the cache by the
+# gate, which makes or refreshes it, and restored by the matrix, which carries it into its VMs; a
+# fixture made with other sources serves too, as it does on the reference machine. What
 # it adds is what the runner lacks and the reference machine has: packages, the KVM device
 # opened to the runner, the AppArmor sysctl that denies user namespaces on Ubuntu 24.04, and a
 # first compile by the runner's rustc, made before the gate, where no test's budget runs.
@@ -33,7 +35,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        include:
+          - runner: ubuntu-24.04
+            inputs: gcc13 sss gdb caches alpine-caches docker-seccomp
+          - runner: ubuntu-24.04-arm
+            inputs: gcc13-arm64 sss gdb caches docker-seccomp
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
@@ -47,6 +53,14 @@ jobs:
         run: sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: the pinned uv and Go and the development inputs, through their caches
         uses: ./.github/actions/setup
+        with:
+          names: ${{ matrix.inputs }}
+      - name: the suite's pruned fixture, from the last run with the same sources or another
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/fixtures
+          key: fixtures-${{ runner.arch }}-${{ hashFiles('test/regress_*.py', 'test/run.py', 'test/harness.py', 'test/suite.py', 'test/tree.py', 'test/packages.py', 'test/progs/**', 'src/**', 'tool/**', 'unpack/**') }}
+          restore-keys: fixtures-${{ runner.arch }}-
       # the Rust test's compile on a runner has outlasted the test's budget while its rustc
       # --version answered at once; a compile here leaves the toolchain read, its time in the log
       - name: the runner's rustc, compiling once before a test's budget runs
@@ -94,6 +108,24 @@ jobs:
           df -h / /mnt
       - name: the pinned uv and Go and the development inputs, through their caches
         uses: ./.github/actions/setup
+        with:
+          names: gcc13 docker-seccomp
+      - name: the suite's pruned fixture the gate kept, which the VMs run on
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/fixtures
+          key: fixtures-${{ runner.arch }}-${{ hashFiles('test/regress_*.py', 'test/run.py', 'test/harness.py', 'test/suite.py', 'test/tree.py', 'test/packages.py', 'test/progs/**', 'src/**', 'tool/**', 'unpack/**') }}
+          restore-keys: fixtures-${{ runner.arch }}-
+      # Rocky's image is 2 GB, which its mirror serves in minutes and the cache in seconds; kept a
+      # week, so that the row still meets the image's updates
+      - name: the week, which names Rocky's image in the cache
+        id: week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - name: Rocky's image, from the cache this week
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/images/rocky-8.qcow2
+          key: image-rocky-8-${{ steps.week.outputs.week }}
       - name: the matrix
         run: >
           scripts/matrix --exclave "$INPUTS/gcc13.exclave"

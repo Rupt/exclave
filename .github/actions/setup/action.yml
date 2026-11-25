@@ -3,6 +3,10 @@
 # through a cache of what that script downloads. $INPUTS is the workflow's.
 name: setup
 description: the pinned uv and Go and the development inputs, through their caches
+inputs:
+  names:
+    description: the inputs the job uses, as scripts/inputs names them
+    required: true
 runs:
   using: composite
   steps:
@@ -33,4 +37,4 @@ runs:
         restore-keys: packages-by-digest-
     - name: the development inputs
       shell: bash
-      run: scripts/inputs "$INPUTS"
+      run: scripts/inputs "$INPUTS" ${{ inputs.names }}
