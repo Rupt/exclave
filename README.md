@@ -42,9 +42,12 @@ package files or from any filesystem tree.
   exclave compiles C and C++; Alpine and Fedora exclaves compile and run
   C. A CentOS 7 glibc as a data directory gives outputs that run on every
   glibc since 2.17.
-- **Where it runs.** x86-64 and aarch64 Linux, kernel 3.10 or later as
-  tested, glibc or musl software inside, 4 KB and 64 KB pages (16 KB
-  pages are untested). One source builds both launchers.
+- **Where it runs.** x86-64 Linux, kernel 3.10 or later as tested,
+  glibc or musl software inside. aarch64 is experimental and not
+  fully supported: one source builds both launchers and the aarch64
+  one passes the gate on GitHub's aarch64 runner and the suite in
+  emulated machines with 4 KB and 64 KB pages, but a release carries
+  x86-64 alone.
 - **gdb** debugs a program in an exclave; the launcher carries the script
   gdb needs.
 - **Tested against the kernel.** A suite of named tests, oracles that
@@ -52,8 +55,7 @@ package files or from any filesystem tree.
   mount, and a differential probe of every trapped syscall pass on gcc,
   clang, Alpine and Fedora exclaves. An exclave also runs under Docker's
   default seccomp profile, and the gcc exclave passes the suite in
-  virtual machines from CentOS 7 at kernel 3.10 to Ubuntu 26.10 at 7.3,
-  and on an emulated arm64 Ubuntu.
+  virtual machines from CentOS 7 at kernel 3.10 to Ubuntu 26.10 at 7.3.
 
 Figures here and in `docs/DESIGN.md` are measured on the reference
 machine: an AMD Ryzen AI 7 350 (8 cores, 16 threads), Ubuntu 24.04,

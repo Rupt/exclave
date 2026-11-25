@@ -66,7 +66,10 @@ The loop that has served well, in the order it pays:
    debug launcher and under the plain terminal's label, the fuzz
    budget and the release test), `scripts/matrix --exclave EXCLAVE` (the
    kernels; the emulated arm64 rows run only here) and the examples;
-   a hand VM to settle one kernel is fine. A commit does not wait for
+   a hand VM to settle one x86-64 kernel is fine. arm64 emulation, a
+   row, a hand VM or a named test under TCG, is very expensive here
+   and runs only with the user's permission; aarch64 is experimental
+   (`docs/DESIGN.md` 13 item 66), and a release is x86-64's. A commit does not wait for
    any of them, and asking names the commits they have not seen. When one of
    them finds a bug, the bug gets a fast reproduction as a test in the
    gate, an exerciser and then a named test; the run that found it

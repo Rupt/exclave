@@ -156,10 +156,12 @@ What is built and tested:
 - **A glibc sysroot as a data directory**: CentOS 7's glibc inside the
   gcc exclave, never executed, links outputs against glibc 2.17, which
   run natively on any later glibc (9).
-- **aarch64**: the launcher runs there, tested in emulated rows of the
-  kernel matrix on kernels with 4 KB and with 64 KB pages (12.1, 13
-  item 43); the exclave it runs is made on either architecture
-  (10.1).
+- **aarch64, experimental**: the launcher runs there, tested by the
+  gate on GitHub's aarch64 runner and in emulated rows of the kernel
+  matrix on kernels with 4 KB and with 64 KB pages (12.1, 13 item
+  43); the exclave it runs is made on either architecture (10.1). It
+  is not fully supported, and a release does not carry it (13 item
+  66).
 - **gdb** debugs a program in an exclave through a script the launcher
   carries, once the exclave is in gdb's auto-load safe-path (7.6, 13.1).
 - **The command as one file**: `build/exclave`, static Go carrying its
@@ -200,8 +202,9 @@ How it is tested (17):
 - **The kernel matrix**: the gcc exclave passes the suite in QEMU
   virtual machines of distributions from CentOS 7 at kernel 3.10
   to Ubuntu 26.10 at 7.3, Alpine 3.20's musl userland and Fedora's
-  enforcing SELinux among them; an arm64 gcc exclave passes it in an
-  emulated arm64 Ubuntu 24.04. Every oracle a row's kernel can run
+  enforcing SELinux among them; on experimental aarch64 (13 item 66),
+  an arm64 gcc exclave passes it in an emulated arm64 Ubuntu 24.04.
+  Every oracle a row's kernel can run
   passes; CentOS 7, without user namespaces, runs none (12.1).
 
 **The reference machine.** Figures in this document were measured,
@@ -3917,8 +3920,8 @@ in.
 the launcher inside `TOOLCHAIN`, a gcc exclave, and the command from
 it, by `scripts/reproduce`, and puts under `DIR` the command as
 `exclave-ARCH` and `exclave-fetch-ARCH` beside it, `ARCH` the machine's
-as `uname -m` names it, so that a release holds each architecture's
-under a name of its own; `LICENSE`, exclave's own, and `NOTICES`, the
+as `uname -m` names it, made on x86-64 while aarch64 is experimental
+(13 item 66); `LICENSE`, exclave's own, and `NOTICES`, the
 licence texts of Go, whose library and runtime the commands link, and
 of the Go modules they link, written at the build from the pinned
 toolchain and module cache, since their BSD licences ask a binary
@@ -3977,7 +3980,7 @@ another, or copy a sysroot into a data directory (9). The cost is disk space.
 | Snap-confined terminals, gVisor-based CI, WSL1 | Untested. snapd and gVisor install their own filters; WSL1 has no seccomp |
 | `no_new_privs` | The filter requires it, and it also disables file capabilities and AppArmor transitions on exec: `sudo`, `su`, `pkexec`, `ping` and setcap binaries fail inside an exclave, including when run from build scripts |
 | Media without symlinks or hard links (FAT) | `cp -rL` copies the launcher once per wrapper and replaces symlinks with copies; the copy works, since whether a file is a wrapper is read from the file (7.4.4) |
-| Architectures | x86-64 and aarch64, from one source as two launchers (7.1). An exclave runs programs of its launcher's machine only. aarch64 is tested in the emulated matrix rows (12.1), on kernels with 4 KB and with 64 KB pages (Ubuntu's 64k kernel); kernels with 16 KB pages (Asahi's) are untested (13 item 43). Another 64-bit little-endian machine would need the same list: the syscall table, `_start`, the signal frame offsets, a restorer, the relocation type and the CPU check |
+| Architectures | x86-64, and aarch64 as experimental (13 item 66), from one source as two launchers (7.1). An exclave runs programs of its launcher's machine only. aarch64 is tested in the emulated matrix rows (12.1), on kernels with 4 KB and with 64 KB pages (Ubuntu's 64k kernel); kernels with 16 KB pages (Asahi's) are untested (13 item 43). Another 64-bit little-endian machine would need the same list: the syscall table, `_start`, the signal frame offsets, a restorer, the relocation type and the CPU check |
 | Overhead | Within noise on a compute-bound compile; a tenth to two fifths more on small compiles; about twice native per `posix_spawn`; 6 to 11 times native on a tight `stat` loop (16) |
 
 What remains host-dependent is the same set that static linking leaves:
@@ -5076,6 +5079,14 @@ what they concern:
     that must not depend on them is started with them unset, by
     `env -u` or a wrapper script outside the exclave; no manifest
     key fixes an exclave's environment.
+66. **aarch64 is experimental.** Its launcher is built from the same
+    source, and the gate passes natively on GitHub's aarch64 runner on
+    a 4 KB-page kernel (17), but aarch64 has less of the testing
+    x86-64 has: its matrix rows are emulated at about a tenth of
+    native speed and run rarely (18 item 4), and the other exclave
+    kinds, the examples and the kernels of the matrix run on x86-64
+    alone. aarch64 is therefore not fully supported, and a release
+    carries x86-64's commands alone (10.5).
 
 ### 13.1 Debugging and profiling recipe
 
@@ -7471,8 +7482,9 @@ specified.
   program that wants to bypass it (3).
 - **Namespaces are not part of the design**; they are the test oracle
   where available (4.3).
-- **Little-endian 64-bit Linux only**, x86-64 and aarch64; no
-  cross-architecture emulation and no 32-bit programs (3, 12).
+- **Little-endian 64-bit Linux only**, x86-64, and aarch64 as
+  experimental; no cross-architecture emulation and no 32-bit programs
+  (3, 12, 13 item 66).
 - **No host drivers**: GPU and other host-driver software are out of
   scope (13).
 - **`noexec` media are not supported**: the kernel allows neither

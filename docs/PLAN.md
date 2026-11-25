@@ -20,10 +20,12 @@ Taken in November 2026 with the user, each with its reason:
   the first release, and a release is tagged `vN`. The version names a
   build, with its commit; the formats carry versions of their own
   (DESIGN 6.7).
-- **The first release is x86-64.** The aarch64 launcher stays built and
-  tested, and an aarch64 release follows later, made on an aarch64
-  machine as its exclaves are. The emulated arm64 rows are costly and
-  run when asked.
+- **The first release is x86-64, and aarch64 is experimental.** The
+  aarch64 launcher stays built and gated on GitHub's aarch64 runner,
+  and is labelled experimental and not fully supported (DESIGN 13
+  item 66); an aarch64 release follows later, made on an aarch64
+  machine as its exclaves are. The emulated arm64 rows are very
+  costly on the laptop and run only with the user's permission.
 - **No release is a compatibility baseline yet.** No version promises
   to read what another wrote until a point declared later, so nothing
   holds a commit to a release's files; the format versions stay, since
@@ -94,7 +96,7 @@ documents, gate, one commit per item. Status is in brackets.
    charged against a small data limit, now mapped as it fills, and
    stated what remains (DESIGN 13 items 59 to 63).
 8. **The release point** [not decided]: the gate, the hosted workflow
-   with the matrix, the emulated arm64 row and the release test all
+   with the matrix and the release test all
    passing on one commit; `docs/DESIGN.md` and `README.md` consistent
    with it; then `scripts/release` on that commit.
 9. **The suite on the Alpine exclave** [done]: the suite had not run on
@@ -159,13 +161,13 @@ documents, gate, one commit per item. Status is in brackets.
     in a second, two calls and one mapping fewer in every start
     (DESIGN 16.6 item 12).
 
-17. **The syscall page from the launcher's own file** [done, the arm64
-    rows on it due]: a page of the launcher's text moved into place,
+17. **The syscall page from the launcher's own file** [done; on aarch64 the gate and
+    named tests]: a page of the launcher's text moved into place,
     never writable, so that a launcher starts under a policy against
     memory made executable, systemd's `MemoryDenyWriteExecute` and
     SELinux's `deny_execmem`, where every program once died without a
     word (DESIGN 7.4.2).
-18. **One filter version** [done, the arm64 rows on it due]: a launcher
+18. **One filter version** [done; on aarch64 the gate and named tests]: a launcher
     runs under an inherited filter of its own version alone and
     refuses another's by name, in place of the rules by which launchers
     of different versions nested (DESIGN 7.4.2, 13 item 45).
