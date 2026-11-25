@@ -19,8 +19,8 @@ syscall inside the process, and the launcher itself loads the program and
 the exclave's own `ld.so`. The **`exclave` command** builds exclaves from
 package files or from any filesystem tree.
 
-> **Experimental.** exclave works and is tested widely (below), but has
-> no release yet. Versions are ordinals, and a build is named by its
+> **Experimental.** exclave works and is tested widely (below).
+> Versions are ordinals, and a build is named by its
 > number and commit (`exclave version`; the launcher and the hashes
 > file carry the same name). No version yet promises to read what
 > another wrote: everything one build reads that another wrote is
@@ -46,8 +46,7 @@ package files or from any filesystem tree.
   glibc or musl software inside. aarch64 is experimental and not
   fully supported: one source builds both launchers and the aarch64
   one passes the gate on GitHub's aarch64 runner and the suite in
-  emulated machines with 4 KB and 64 KB pages, but a release carries
-  x86-64 alone.
+  emulated machines with 4 KB and 64 KB pages.
 - **gdb** debugs a program in an exclave; the launcher carries the script
   gdb needs.
 - **Tested against the kernel.** A suite of named tests, oracles that
@@ -65,10 +64,7 @@ kernel 7.0, glibc 2.39.
 
 `exclave` and `exclave-fetch` are static programs that need nothing of
 this checkout: `scripts/build` makes them as `build/exclave` and
-`build/exclave-fetch`, and a release holds them as `exclave-ARCH` and
-`exclave-fetch-ARCH` beside their licences and sums
-([taking a release](#shipping-an-exclave-and-taking-one) has the
-checks). With the two in a directory on an x86-64 Linux host, this makes
+`build/exclave-fetch`. With the two in a directory on an x86-64 Linux host, this makes
 an exclave of TeX Live's `pdflatex` from Ubuntu's packages:
 
 ```bash
@@ -425,47 +421,18 @@ open in a new log names what pruning removed, so the cycle is: prune,
 run the whole workload, add back from an unpruned copy. The suite runs
 on exclaves pruned this way.
 
-## Shipping an exclave, and taking one
+## Shipping an exclave
 
-An exclave is a directory, and `tar` makes it one file. `scripts/release`
-makes a release of the `exclave` command and `exclave-fetch`,
-named for the machine, with any exclaves named beside them, so whoever
-takes it needs nothing of this checkout. It is a release of a commit: it
-refuses a tree with uncommitted changes and a directory that is not empty.
-The command and the launcher a release ships are built inside a gcc
-exclave, so their bytes are the same on any machine that holds that
-exclave (`scripts/reproduce`); a release neither ships nor records
-the exclave, so no one else can build them again. An exclave to release is wrapped with that
-launcher, which the command built there carries:
+An exclave is a directory that nothing outside it refers to, so `tar`
+makes it one file, kept with its hard links so that the wrappers stay
+links to the launcher, and `exclave check` on the other side compares
+the tree with its hashes file:
 
 ```bash
-scripts/reproduce gcc.exclave build/reproduce               # build/reproduce/build/{launcher,exclave}, and their BLAKE3
-build/reproduce/build/exclave relink app.exclave           # app.exclave wrapped with the launcher built there
-scripts/release release gcc.exclave app.exclave            # release/: exclave-x86_64, exclave-fetch-x86_64, LICENSE, NOTICES, app.exclave.tar.zst, SHA256SUMS
-scripts/release commands gcc.exclave                       # commands/: the same without an exclave
+tar -cf - app.exclave | zstd > app.exclave.tar.zst   # on one machine
+zstd -dc app.exclave.tar.zst | tar -xf -             # on another
+./exclave check app.exclave                          # the tree against its hashes file, the wrappers, the static check
 ```
-
-Taking one, with the release's files in a directory:
-
-```bash
-sha256sum -c SHA256SUMS                                   # with the commands alone: grep " exclave.*-$(uname -m)\$" SHA256SUMS | sha256sum -c -
-tar --zstd -xf gcc.exclave.tar.zst                        # or, where tar has no --zstd: zstd -dc gcc.exclave.tar.zst | tar -xf -
-mv exclave-$(uname -m) exclave && chmod +x exclave        # the command for this machine
-./exclave check gcc.exclave                               # the tree against the hashes file, the wrappers, the static check
-./exclave version                                         # which build made it; the launcher inside says the same
-```
-
-The sums tell a damaged or altered file from the one they name; a
-release carries no signature, so that the sums are the releaser's is
-for the place you took them from to say.
-The archive is zstd only, for the reason `docs/DESIGN.md` 10.5 gives,
-so unpacking it needs `zstd`, through `tar --zstd` where `tar` has that
-option or piped into any `tar` where it has not.
-
-The kernel matrix runs exactly this, with each host's own tools, on
-every x86-64 distribution it boots (`docs/DESIGN.md` 12.1), and
-`test/release_test.py`, a step of `scripts/extra`, on the reference
-machine, where a tampered archive fails the sums.
 
 ## Development
 
@@ -507,7 +474,7 @@ install packages.
 the format, 7 the launcher, 8 the visibility rule, 10 the `exclave`
 command, 12 where it runs, 13 the limitations, 16 performance, 17 what
 each test establishes, 19 the decisions a change is expected to respect.
-`CLAUDE.md` holds working notes for contributors and coding agents.
+`docs/RELEASE.md` is how a release is made. `CLAUDE.md` holds working notes for contributors and coding agents.
 
 ```
 scripts/check                            # ruff, ty, shellcheck, shfmt, taplo, clang-format, clang-tidy, gcc's strict warnings and analyser, gofmt, go vet, staticcheck and deadcode; --fix lets the formatters correct
@@ -566,4 +533,5 @@ own licences, and an exclave passed on passes their terms on with it:
 does, names its packages' licences in apk's database, `/lib/apk/db/installed`,
 and holds few texts. The Go modules `go.mod` pins
 carry their own licences, BSD and MIT; `scripts/build` writes their
-texts to `build/NOTICES`, and a release ships it beside the command.
+texts to `build/NOTICES`, which goes beside the commands wherever they
+are passed on.

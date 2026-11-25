@@ -98,7 +98,7 @@ documents, gate, one commit per item. Status is in brackets.
 8. **The release point** [not decided]: the gate, the hosted workflow
    with the matrix and the release test all
    passing on one commit; `docs/DESIGN.md` and `README.md` consistent
-   with it; then `scripts/release` on that commit.
+   with it; then the steps of `docs/RELEASE.md` on that commit.
 9. **The suite on the Alpine exclave** [done]: the suite had not run on
    musl since an exerciser took glibc's stack-end symbol; that and four
    tests asserting glibc's wording, stack minimum and `raise` are fixed,

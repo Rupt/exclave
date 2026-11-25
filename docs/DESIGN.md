@@ -3946,7 +3946,7 @@ the tree with the hashes file and runs the static check, so what runs
 is what the sums file names. A release carries no signature of its
 own: the sums tell a damaged or altered file from the one they name,
 and that the sums are the releaser's is the channel's to say, a
-release page served over HTTPS. The README gives the commands, and
+release page served over HTTPS. `docs/RELEASE.md` gives the commands, and
 `test/release_test.py`, a step of `scripts/extra`, runs them on a
 release of the gcc exclave and on one of the commands alone, with a
 tampered archive failing the sums, and `NOTICES`
@@ -6805,7 +6805,7 @@ steps:
 - the release test (`test/release_test.py`): a release of the exclave
   made by `scripts/release`, the launcher built inside it and the
   command from that by `scripts/reproduce`, and taken
-  as a consumer takes it, the README's recipe step by step, with a
+  as a consumer takes it, the recipe of `docs/RELEASE.md` step by step, with a
   tampered archive failing the sums and `NOTICES`
   naming Go and the modules the command links (10.5).
 
@@ -6992,7 +6992,7 @@ VM. Where `bwrap` works it then runs the two oracles, the probe and,
 given the profile, the Docker profile run, first lifting the AppArmor
 sysctl that denies unprivileged user namespaces on Ubuntu 24.04's
 image. Three checks run outside the suite: the release's recipe, the
-README's commands for taking a release run in the VM with the host's
+commands of `docs/RELEASE.md` for taking a release run in the VM with the host's
 own `sha256sum`, `tar` and `zstd`; a program built by the
 exclave's gcc on a `noexec` tmpfs the VM mounts as root, run by the
 VM's shell, the positional entry and the exclave's shell; and the

@@ -9,8 +9,8 @@ A copy wrapped with another launcher is refused, as are a directory
 that is not empty and, without the allowance this test makes itself, a tree with changes its
 commit does not hold; a release of no exclave holds the two commands, named for the machine,
 the licences and the sums.
-Then, in a directory that holds nothing but the release's files, the README's recipe runs: the
-sums are checked, the archive is unpacked, the release's
+Then, in a directory that holds nothing but the release's files, the recipe of docs/RELEASE.md
+runs: the sums are checked, the archive is unpacked, the release's
 own `exclave` checks the exclave and its `exclave-fetch` runs, its tree hash is the one the hashes
 file records, a program in it runs, and NOTICES names Go and every module go.mod requires with
 its licence. A tampered archive fails the sums. Prints one line per step;

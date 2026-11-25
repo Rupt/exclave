@@ -7,7 +7,7 @@
 # must be wrapped with that launcher, and passes `exclave check` first. A release is of a commit and of nothing else:
 # DIR must be empty or absent, since every file in it is summed, and a tree with changes its commit does not hold is
 # refused, since the build would name itself -dirty. The release test and the matrix, which run the recipe on the
-# tree as it stands, set EXCLAVE_RELEASE_UNCOMMITTED=1. The README says how a consumer checks and takes a release
+# tree as it stands, set EXCLAVE_RELEASE_UNCOMMITTED=1. docs/RELEASE.md says how a release is made, checked and taken
 # with nothing but its own files; test/release_test.py runs that recipe.
 set -eu
 . "$(dirname -- "$0")/lib.sh"

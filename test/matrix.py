@@ -9,8 +9,8 @@ bubblewrap where it exists), the exclave of the row's machine (one --exclave per
 need, each told by its launcher: scripts/inputs makes gcc13.exclave and gcc13-arm64.exclave), the
 pinned Python built for the VM's machine and libc, and this repository's test tree and launcher are
 copied in over SSH, and the regression suite runs there. For this machine's rows the exclave goes
-in as a release of it, made here by scripts/release, which the VM first takes as the README has a
-consumer take it (RECIPE), the exclave it unpacks then the row's;
+in as a release of it, made here by scripts/release, which the VM first takes as docs/RELEASE.md
+has a consumer take it (RECIPE), the exclave it unpacks then the row's;
 the oracles, the syscall probe and, given the profile, the Docker-profile run follow where
 bubblewrap works. One VM at a time, or --jobs N, 1 GB each, 2 GB for the emulated row, so that the
 machine stays usable. Results go to build/matrix-results.md. The exit status is 1 when any row
@@ -665,7 +665,7 @@ def make_release(ex: str, reproduced_command: str, work: str) -> str | None:
     """A release of a copy of ex as scripts/release makes one (10.5).
 
     The copy is wrapped with the launcher scripts/reproduce built, by the command built from it,
-    as the README has a releaser do. Returns the directory holding the release, `out/`, or None
+    as docs/RELEASE.md has a releaser do. Returns the directory holding the release, `out/`, or None
     when the release could not be made.
     """
     rel = os.path.join(work, "release")
@@ -685,11 +685,11 @@ def make_release(ex: str, reproduced_command: str, work: str) -> str | None:
     return rel
 
 
-# The README's recipe for taking a release, run in a VM in the directory holding the release's
-# files, for the exclave NAME. Each line it prints is `recipe STEP: ANSWER`. What an old host lacks
-# is its answer, not a failure: a tar without --zstd, where the
-# recipe's portable form pipes zstd into tar; a host with no zstd at all is unpacked by the
-# matrix's own Python, so that its suite still runs, and says so.
+# The recipe for taking a release (docs/RELEASE.md), run in a VM in the directory holding the
+# release's files, for the exclave NAME. Each line it prints is `recipe STEP: ANSWER`. What an old
+# host lacks is its answer, not a failure: a tar without --zstd, where the recipe's portable form
+# pipes zstd into tar; a host with no zstd at all is unpacked by the matrix's own Python, so that
+# its suite still runs, and says so.
 RECIPE = r"""
 say() { echo "recipe $*"; }
 if sha256sum -c SHA256SUMS >sums.out 2>&1; then say 'sums: ok'
@@ -810,9 +810,9 @@ def main() -> int:
                 "scripts/reproduce failed here; the rows do not compare builds:",
                 p.stderr.decode()[-200:],
             )
-    # 10.5: a release of this machine's exclave, which each row of the machine takes as the README
-    # has a consumer take it; the exclave the release's archive holds is then the row's exclave, so
-    # the payload carries the exclave once
+    # 10.5: a release of this machine's exclave, which each row of the machine takes as
+    # docs/RELEASE.md has a consumer take it; the exclave the release's archive holds is then the
+    # row's exclave, so the payload carries the exclave once
     release = (
         make_release(exclaves[MACHINE], os.path.join(work, "reproduce", "build", "exclave"), work)
         if reproduced

@@ -5,7 +5,8 @@ Everything below is a preference with its reason beside it; weigh the
 cost and the benefit and use your judgement.
 
 Start with `README.md`, then `docs/DESIGN.md` in full; `docs/PLAN.md` is
-the working plan towards the first release, edited as items land. The design
+the working plan towards the first release, edited as items land, and
+`docs/RELEASE.md` the steps of a release, the README holding none. The design
 document is the specification, written for the public: it states what
 is true, not how it came to be, so it carries no revision markers,
 change lists or review IDs, and history lives in git. Section 19 lists
