@@ -12,8 +12,9 @@ command -v gh >/dev/null || {
     echo "matrix-due: no gh here, which reads the workflow's runs" >&2
     exit 2
 }
-runs=$(gh run list --workflow ci.yml --branch main --status success --limit 50 \
-    --json databaseId,headSha --jq '.[] | "\(.databaseId) \(.headSha)"') || exit 2
+# the runs that passed, told by their conclusion here: GitHub's own --status filter has left passed runs out
+runs=$(gh run list --workflow ci.yml --branch main --limit 50 --json databaseId,headSha,conclusion \
+    --jq '.[] | select(.conclusion == "success") | "\(.databaseId) \(.headSha)"') || exit 2
 base=''
 while read -r id sha; do
     [ -n "$id" ] || continue
