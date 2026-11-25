@@ -20,15 +20,16 @@ theme's cache does not exist, then validates, names every icon of the theme and 
 the theme's directory; a cursor theme, whose index names no directory, gets none; the desktop
 database does not exist, then maps each MIME type to the desktop files that name it; fc-list
 writes fontconfig's caches under the home, then lists the same fonts and writes none; and dot
-refuses svg, not recognising the format, then draws a one-edge graph as an SVG document. exclave
-check passes on the tree hash recorded; a second run changes no file and leaves the tree hash as
-it was; font directories given new times, as a copy that loses them gives them, leave the
-font caches stale until a run remakes them; a tree changed since its hash was recorded is refused;
-and the given exclave, whose files the copy shares by hard links, is left as it was. On a second
-copy, a generator that fails, the MIME generator on a package that is a directory, leaves the
-tree, its hash and the exclave's directory as they were. On a third copy of the first exclave,
-without the other generators, stand-ins for TeX Live's at their names, which write in place: the
-cases of in_place.
+refuses svg, not recognising the format, then draws a one-edge graph as an SVG document; and
+exclave check passes on the tree hash recorded. What exclave caches itself does, the same on every
+distribution, is shown on the first exclave alone: a second run changes no file and leaves the
+tree hash as it was; font directories given new times, as a copy that loses them gives them,
+leave the font caches stale until a run remakes them; a tree changed since its hash was recorded
+is refused; and the given exclave, whose files the copy shares by hard links, is left as it was.
+On a second copy, a generator that fails, the MIME generator on a package that is a directory,
+leaves the tree, its hash and the exclave's directory as they were. On a third copy, without the
+other generators, stand-ins for TeX Live's at their names, which write in place: the cases of
+in_place.
 """
 
 import argparse
@@ -366,10 +367,9 @@ class Generators:
             )
 
 
-def one(given: str, work: str) -> None:
-    """Every case on copies of the exclave given."""
+def one(given: str, work: str, *, machinery: bool) -> None:
+    """The generators' cases on a copy of the exclave given, and with machinery exclave caches'."""
     name = os.path.basename(given)
-    given_hash = recorded(given)
     ex = tree.fresh_exclave(given, os.path.join(work, name))
     root = os.path.join(ex, "tree")
     pys = [
@@ -464,6 +464,17 @@ def one(given: str, work: str) -> None:
     )
     rc, out = tool("check", ex)
     holds(rc == 0, f"{name}: exclave check passes on the tree hash recorded", out[-300:])
+    if machinery:
+        runs_again(given, ex, work, gens=gens, made=made, pyc=pyc)
+
+
+def runs_again(
+    given: str, ex: str, work: str, *, gens: Generators, made: list[str], pyc: str
+) -> None:
+    """The cases of exclave caches' own on ex, which one run has made caches in, and on a copy."""
+    name = os.path.basename(given)
+    root = os.path.join(ex, "tree")
+    given_hash = recorded(given)
     first_hash = recorded(ex)
     rc, again = tool("caches", ex)
     counts = re.findall(r", (\d+) new or changed$", again, re.MULTILINE)
@@ -796,7 +807,7 @@ def main() -> int:
     with open(os.path.join(work, "page.html"), "w") as f:
         f.write("<html><body>an exclave</body></html>\n")
     for ex in args.exclave:
-        one(os.path.abspath(ex), work)
+        one(os.path.abspath(ex), work, machinery=ex == args.exclave[0])
         if ex == args.exclave[0]:
             in_place(os.path.abspath(ex), work)
     print(f"caches: {len(FAILED)} failures")

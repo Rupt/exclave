@@ -6742,12 +6742,14 @@ its time, ok, SKIP or FAIL:
   cursor theme whose index names no directory gets none, the
   desktop database maps each MIME type to the desktop files that name
   it, and `fc-list` writes font caches under the home and then lists
-  the same fonts and writes none; `exclave check` passes on the tree hash recorded, a second run
-  changes no file and records the same hash, a tree changed since is
-  refused, and the given exclave, whose files the copy shares by hard
-  links, is left as it was; a generator that fails, on a MIME package
-  that is a directory, leaves the tree, its hash and `.exclave/` as
-  they were; and on a copy of the first exclave without the other
+  the same fonts and writes none; `exclave check` passes on the tree hash recorded; and
+  on the first exclave alone, since they are `exclave caches`' own and
+  the same on every distribution, a second run changes no file and
+  records the same hash, a tree changed since is refused, and the
+  given exclave, whose files the copy shares by hard links, is left as
+  it was; a generator that fails, on a MIME package that is a
+  directory, leaves the tree, its hash and `.exclave/` as they were;
+  and on a copy of the first exclave without the other
   generators, stand-ins for TeX Live's at their names, which write in
   place (10.1): what they write, through a link into a directory among
   it, is in the tree and the directories are the tree's again; a
