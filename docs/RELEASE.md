@@ -43,13 +43,13 @@ commit of its own, and the script run again, which keeps `VERSION`.
 ## `scripts/release-publish N`: on GitHub
 
 1. Refuses unless `VERSION` is `N` and `build/release-vN` holds the
-   files of `HEAD`, checked as above. `gh` runs with its own
-   configuration, which `scripts/lib.sh`'s for Go would otherwise hide.
+   files of `HEAD`, checked as above.
 2. Pushes `main`.
 3. Takes the newest workflow run on `HEAD`, or dispatches
    one with the kernel matrix (`gh workflow run ci.yml -f
    matrix=true`), waits for it, and stops unless every job passed, the
-   matrix's among them.
+   matrix's among them, which runs the rows or finds them not due since
+   a commit they passed on (`scripts/matrix-due`).
 4. Makes the annotated tag `vN` on `HEAD` and pushes it.
 5. Creates the GitHub release of `vN`, titled "exclave N", with the
    files and `docs/release-notes.md` as its text.

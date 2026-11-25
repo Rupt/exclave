@@ -22,11 +22,12 @@ on:
   workflow_dispatch:
     inputs:
       matrix:
-        description: the kernel matrix too, after the gate
+        description: the kernel matrix too, after the gate, when the changes since it last passed reach the VMs
         type: boolean
         default: true
 permissions:
   contents: read
+  actions: read
 env:
   INPUTS: ${{ github.workspace }}/build/inputs
 jobs:
@@ -98,25 +99,53 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
+      # the whole history, which scripts/matrix-due reads back to where the matrix last passed
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: the pinned uv, for test/affected.py
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .uv
+          key: uv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-uv', '.python-version', 'uv.lock') }}
+      - run: scripts/install-uv
+      # the rows run only when the changes since the matrix last passed reach the VMs; the job passes
+      # either way, saying which
+      - name: whether the matrix is due
+        id: due
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if scripts/matrix-due; then
+            echo due=true >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            [ "$rc" -eq 1 ] || exit "$rc"
+            echo due=false >> "$GITHUB_OUTPUT"
+          fi
       - name: packages the matrix needs
+        if: steps.due.outputs.due == 'true'
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils
       - name: the KVM device, opened to the runner
+        if: steps.due.outputs.due == 'true'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
       - name: the runner's second disk, for the VMs' overlays; the images stay on the first
+        if: steps.due.outputs.due == 'true'
         run: |
           sudo mkdir -p /mnt/matrix && sudo chown "$(id -u):$(id -g)" /mnt/matrix
           df -h / /mnt
       - name: the pinned uv and Go and the development inputs, through their caches
+        if: steps.due.outputs.due == 'true'
         uses: ./.github/actions/setup
         with:
           names: gcc13 docker-seccomp
       - name: the suite's pruned fixture the gate kept, which the VMs run on
+        if: steps.due.outputs.due == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/fixtures
@@ -125,20 +154,23 @@ jobs:
       # Rocky's image is 2 GB, which its mirror serves in minutes and the cache in seconds; kept a
       # week, so that the row still meets the image's updates
       - name: the week, which names Rocky's image in the cache
+        if: steps.due.outputs.due == 'true'
         id: week
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
       - name: Rocky's image, from the cache this week
+        if: steps.due.outputs.due == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/images/rocky-8.qcow2
           key: image-rocky-8-${{ steps.week.outputs.week }}
       - name: the matrix
+        if: steps.due.outputs.due == 'true'
         run: >
           scripts/matrix --exclave "$INPUTS/gcc13.exclave"
           --jobs 2 --work /mnt/matrix/work
           --docker-profile "$INPUTS/src/docker-seccomp.json"
       - name: the rows' results and logs
-        if: always()
+        if: always() && steps.due.outputs.due == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: matrix

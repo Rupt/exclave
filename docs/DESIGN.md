@@ -7059,7 +7059,10 @@ aarch64 build gets the unit tests and the stack budget,
 which the emulated row never ran (its code checks go without
 shellcheck and taplo, which have no aarch64 wheel; the shell and the
 TOML are text, checked on x86-64). The x86-64 rows run under KVM, two
-VMs at a time. The 64 KB-page row has no job: no hosted runner boots
+VMs at a time, and only when they are due: `scripts/matrix-due` finds
+the newest commit on which the workflow's matrix ran and passed, and
+the matrix job boots no VM when the changes since reach none, as
+`test/affected.py` tells them, saying so and passing. The 64 KB-page row has no job: no hosted runner boots
 such a kernel or offers KVM on aarch64, and it would be emulated there
 too, so it runs from the reference machine when asked, like the other emulated
 row. The results are the jobs' logs and the matrix job's results

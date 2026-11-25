@@ -7,9 +7,6 @@
 # a run that failed is dispatched again, which is how one that failed by chance is retried; a defect is fixed in a
 # commit of its own, and the release made again from scripts/release-prepare.
 set -eu
-# gh keeps its login in the caller's configuration, which lib.sh's XDG_CONFIG_HOME, set for Go, would hide
-GH_CONFIG_DIR=${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}
-export GH_CONFIG_DIR
 . "$(dirname -- "$0")/lib.sh"
 [ $# -eq 1 ] || {
     echo "usage: scripts/release-publish N" >&2
@@ -44,7 +41,8 @@ newest() {
     gh run list --workflow ci.yml --commit "$head" --event workflow_dispatch --limit 1 \
         --json databaseId --jq '.[0].databaseId // empty'
 }
-# passed RUN: every job of the run passed, the matrix's among them, which a run dispatched with matrix=false skips
+# passed RUN: every job of the run passed, the matrix's among them, which ran the rows or found them not due since a
+# commit they passed on (scripts/matrix-due); a run dispatched with matrix=false skips it
 passed() {
     gh run view "$1" --json jobs --jq '(.jobs | length > 0) and all(.jobs[]; .conclusion == "success")
         and any(.jobs[]; .name | startswith("kernel matrix"))' | grep -qx true

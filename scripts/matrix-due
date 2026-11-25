@@ -1,0 +1,47 @@
+#!/bin/sh
+# scripts/matrix-due [COMMIT] — whether the kernel matrix is due for COMMIT (HEAD by default): it is not when the
+# newest commit on which the workflow's matrix ran and passed is COMMIT or an ancestor of it, and the changes since
+# reach no VM, as test/affected.py tells them; it is otherwise. Prints one line, "due: WHY" or "not due: WHY", and
+# exits 0 when due, 1 when not, 2 when it cannot tell. The workflow's matrix job asks it first and runs the rows only
+# when due, so that a change no kernel answers differently boots no VM (docs/DESIGN.md 17); it needs gh, with a
+# token that reads the repository's workflow runs, and the history back to that commit.
+set -u
+. "$(dirname -- "$0")/lib.sh"
+commit=$(git -C "$ROOT" rev-parse "${1:-HEAD}") || exit 2
+command -v gh >/dev/null || {
+    echo "matrix-due: no gh here, which reads the workflow's runs" >&2
+    exit 2
+}
+runs=$(gh run list --workflow ci.yml --branch main --status success --limit 50 \
+    --json databaseId,headSha --jq '.[] | "\(.databaseId) \(.headSha)"') || exit 2
+base=''
+while read -r id sha; do
+    [ -n "$id" ] || continue
+    git -C "$ROOT" merge-base --is-ancestor "$sha" "$commit" 2>/dev/null || continue
+    # a run whose matrix job passed over the rows, not one whose matrix was not due
+    ran=$(gh run view "$id" --json jobs --jq '.jobs[] | select(.name | startswith("kernel matrix"))
+        | .steps[] | select(.name == "the matrix") | .conclusion') || exit 2
+    if [ "$ran" = success ]; then
+        base=$sha
+        break
+    fi
+done <<EOF
+$runs
+EOF
+[ -n "$base" ] || {
+    echo "due: no run of the matrix passed on this commit or an ancestor of it"
+    exit 0
+}
+short=$(git -C "$ROOT" rev-parse --short "$base")
+changed=$(git -C "$ROOT" diff --name-only "$base" "$commit")
+[ -n "$changed" ] || {
+    echo "not due: the matrix passed on this commit, $short"
+    exit 1
+}
+# shellcheck disable=SC2086  # the changed paths, one word each
+if py "$ROOT/test/affected.py" $changed | grep -qx matrix; then
+    echo "due: the changes since $short, where the matrix last passed, reach the VMs"
+    exit 0
+fi
+echo "not due: the changes since $short, where the matrix last passed, reach no VM"
+exit 1
