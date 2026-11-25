@@ -6653,11 +6653,16 @@ its time, ok, SKIP or FAIL:
   code as written (null and uninitialised uses, memory freed twice or
   never, writes past a bound; the syscalls are opaque calls to it,
   since it cannot see what the kernel writes), and clang-tidy with its
-  static analyser on the launcher for each architecture and on the unit
-  tests (`.clang-tidy`); and the
+  static analyser on the launcher and on the unit tests (`.clang-tidy`);
+  the warnings are asked for every source on each architecture, whose
+  headers' types and numbers differ, and the two analysers' paths on the
+  second architecture only for a source that holds an architecture's own
+  code; and the
   figures the documents quote that the tree itself can produce,
   compared with the documents by `test/figures.py`, which
-  `scripts/figures` prints;
+  `scripts/figures` prints. Given the changed paths, as the gate gives
+  them, the C's and the Go's checks run only where a path reaches them,
+  so a document's change runs no compiler;
 - the unit step: the manifest parser, the grammar comparison, the
   filter test, `test/syscalls.py`, the scratch-pool test, the cache's
   growth and its lock across `fork` (`test/cache_test.c`), the test of

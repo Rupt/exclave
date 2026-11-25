@@ -112,7 +112,11 @@ gostep() { # the command's unit tests and fuzz seeds, and the modules in the cac
 }
 
 n=$(basename "$ex" .exclave)
-step check "$ROOT/scripts/check" # ruff, ty, shellcheck, shfmt and taplo, silent when clean
+# the code checks, given the changed paths unless every step runs, so that a document's change runs no compiler
+checked=$changed
+if $full || has every; then checked=''; fi
+# shellcheck disable=SC2086  # the changed paths, one word each
+step check "$ROOT/scripts/check" $checked
 has unit && step unit unit
 has stack && step stack stack
 has go && step go gostep                                                 # the command's Go tests, go.sum verified

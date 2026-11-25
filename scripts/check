@@ -4,18 +4,38 @@
 # group) or go.mod's tool directives but gcc, the machine's, which builds the
 # launcher and is asked for its warnings. scripts/gate runs this as a step.
 #
-#   scripts/check          report; exit non-zero on any finding
-#   scripts/check --fix    let ruff and the formatters write their corrections
+#   scripts/check [PATH...]        report; exit non-zero on any finding
+#   scripts/check --fix [PATH...]  let ruff and the formatters write their corrections
 #
 # Every check runs, whatever an earlier one found. A pass says nothing: each
-# tool is asked for its quietest form.
+# tool is asked for its quietest form. Given the changed PATHs, as the gate
+# gives them, the C's and the Go's checks run only where a path reaches them
+# (a source, a header, the flags or a tool's settings); the Python's, the
+# shell's and the TOML's, which take seconds, and the figures always run.
 set -u
 
 . "$(dirname -- "$0")/lib.sh"
 cd "$ROOT" || exit 2
 
 fix=false
-[ "${1-}" = --fix ] && fix=true
+[ "${1-}" = --fix ] && fix=true && shift
+# reaches PATTERN...: no PATH was given, or one matches a PATTERN (a case pattern)
+reaches() {
+    [ -z "$paths" ] && return 0
+    for p in $paths; do
+        for pat; do
+            # shellcheck disable=SC2254  # the pattern is meant to match
+            case $p in $pat) return 0 ;; esac
+        done
+    done
+    return 1
+}
+paths=$*
+c=false go=false
+# what every check rests on: this script, the flags lib.sh gives, the toolchains' pins
+reaches scripts/check scripts/lib.sh uv.lock pyproject.toml && c=true go=true
+reaches 'src/*' 'test/*.c' 'test/*.h' 'test/progs/*' .clang-format .clang-tidy && c=true
+reaches 'tool/*' 'fetch/*' 'unpack/*' go.mod go.sum scripts/install-go 'src/*' && go=true
 
 # Bring .venv up to date once; every run below then uses it as it is.
 need_uv || exit 2
@@ -44,13 +64,13 @@ if $fix; then
     run "$UV" run --quiet ruff check --fix .
     run "$UV" run --quiet ruff format .
     run "$UV" run --quiet shfmt --indent 4 --posix --simplify --write "$@"
-    run "$UV" run --quiet clang-format -i src/*.[ch] test/*.c test/progs/*.c
+    ! $c || run "$UV" run --quiet clang-format -i src/*.[ch] test/*.c test/progs/*.c
     if [ -x .venv/bin/taplo ]; then run env RUST_LOG=warn "$UV" run --quiet taplo fmt pyproject.toml; fi
 else
     run "$UV" run --quiet ruff format --check --quiet .
     run "$UV" run --quiet ruff check --quiet .
     run "$UV" run --quiet shfmt --indent 4 --posix --simplify --diff "$@"
-    run "$UV" run --quiet clang-format --dry-run --Werror src/*.[ch] test/*.c test/progs/*.c
+    ! $c || run "$UV" run --quiet clang-format --dry-run --Werror src/*.[ch] test/*.c test/progs/*.c
     if [ -x .venv/bin/taplo ]; then run env RUST_LOG=warn "$UV" run --quiet taplo fmt --check --diff pyproject.toml; fi
 fi
 # on an aarch64 machine neither is installed (pyproject.toml): the shell and the TOML are checked on x86-64
@@ -67,8 +87,11 @@ run "$UV" run --quiet ty check --quiet
 # gcc's warnings as errors and its analyser, nothing kept: the launcher's
 # sources for each architecture there is a compiler for, and the unit tests'
 # for the host (lib.sh's flags). Then
-# clang-tidy (.clang-tidy) on the launcher for each architecture and on the
-# unit tests. A file's output is
+# clang-tidy (.clang-tidy) on the launcher and on the unit tests. The
+# warnings are asked for every source on every architecture, since the
+# headers' types and numbers differ by architecture; the analyser's and
+# clang-tidy's paths on aarch64 only for a source that holds aarch64's own
+# code, since elsewhere they are x86-64's paths again. A file's output is
 # shown only for a finding, since clang counts aloud the warnings it suppressed.
 # shellcheck disable=SC2329  # run through run, by name
 quiet() { # quiet CMD...: CMD's output only when it fails
@@ -83,38 +106,47 @@ quiet() { # quiet CMD...: CMD's output only when it fails
 # (null and uninitialised uses, memory and descriptors freed twice or never, writes past a bound), since
 # optimisation folds some of them away first. gcc 14 defines __ANALYZER__ under the analyser; gcc 13 is given
 # it, and sys.h makes the syscalls opaque calls under it, as the analyser cannot see what the kernel writes.
+warned() { run quiet "$@" -Werror -c -o /dev/null; }
+analysed() { run quiet "$@" -O0 -fanalyzer -D__ANALYZER__ -Werror -c -o /dev/null; }
 compiled() {
-    run quiet "$@" -Werror -c -o /dev/null
-    run quiet "$@" -O0 -fanalyzer -D__ANALYZER__ -Werror -c -o /dev/null
+    warned "$@"
+    analysed "$@"
 }
-for f in src/*.c; do
-    for arch in $(c_arches); do
-        compiled launcher_cc "$arch" "$f"
-    done
-done
-# the unit tests' and the fuzz target's own files, and the launcher's sources they are built with (lib.sh's unit_tests)
-for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c $(unit_tests | cut -d' ' -f2- | tr ' ' '\n' | sort -u); do
-    compiled host_cc -DHOST_TEST "$f"
-done
-# the test programs too, but for string literals in an exec's argv, its natural spelling
-for f in test/progs/*.c; do
-    run quiet host_cc -pthread -Wno-discarded-qualifiers "$f" -Werror -c -o /dev/null
-done
-for target in x86_64 aarch64; do
+# own FILE ARCH: ARCH is the machine's, or FILE holds code of an architecture's own
+own() { [ "$2" = "$(uname -m)" ] || grep -qE "__(x86_64|aarch64)__" "$1"; }
+if $c; then
     for f in src/*.c; do
-        run quiet .venv/bin/clang-tidy --quiet "$f" -- --target=$target-linux-gnu -std=gnu11 -ffreestanding -fno-builtin -nostdlib
+        for arch in $(c_arches); do
+            warned launcher_cc "$arch" "$f"
+            if own "$f" "$arch"; then analysed launcher_cc "$arch" "$f"; fi
+        done
     done
-done
-for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c; do
-    run quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 -DHOST_TEST
-done
-# no C line over 120 columns, a table between clang-format off and on aside:
-# clang-format leaves comments as written, so it does not hold them to it
-if awk '/clang-format off/ { off = 1 } /clang-format on/ { off = 0 }
-    !off && length > 120 { print FILENAME ":" FNR ": over 120 columns"; bad = 1 } END { exit bad }' \
-    src/*.[ch] test/*.c test/progs/*.c; then :; else status=1; fi
-# a definition in a shared header that nothing uses, which no compiler reports
-run "$UV" run --quiet python test/c_unused.py
+    # the unit tests' and the fuzz target's own files, and the launcher's sources they are built with (lib.sh's unit_tests)
+    for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c $(unit_tests | cut -d' ' -f2- | tr ' ' '\n' | sort -u); do
+        compiled host_cc -DHOST_TEST "$f"
+    done
+    # the test programs too, but for string literals in an exec's argv, its natural spelling
+    for f in test/progs/*.c; do
+        run quiet host_cc -pthread -Wno-discarded-qualifiers "$f" -Werror -c -o /dev/null
+    done
+    for target in x86_64 aarch64; do
+        for f in src/*.c; do
+            if own "$f" "$target"; then
+                run quiet .venv/bin/clang-tidy --quiet "$f" -- --target=$target-linux-gnu -std=gnu11 -ffreestanding -fno-builtin -nostdlib
+            fi
+        done
+    done
+    for f in test/*_test.c test/sanitize.c test/fuzz.c test/*_fuzz.c; do
+        run quiet .venv/bin/clang-tidy --quiet "$f" -- -std=gnu11 -DHOST_TEST
+    done
+    # no C line over 120 columns, a table between clang-format off and on aside:
+    # clang-format leaves comments as written, so it does not hold them to it
+    if awk '/clang-format off/ { off = 1 } /clang-format on/ { off = 0 }
+        !off && length > 120 { print FILENAME ":" FNR ": over 120 columns"; bad = 1 } END { exit bad }' \
+        src/*.[ch] test/*.c test/progs/*.c; then :; else status=1; fi
+    # a definition in a shared header that nothing uses, which no compiler reports
+    run "$UV" run --quiet python test/c_unused.py
+fi
 
 # The Go, the command's packages (go.mod; copies under build/ are left out): gofmt's layout
 # simplified, go fix's modernisations, then go vet, staticcheck and deadcode, the last two the
@@ -122,7 +154,9 @@ run "$UV" run --quiet python test/c_unused.py
 # the other. A line over 120 columns, a tab counted as four, is held to the C's rule. The
 # command embeds the launcher scripts/build copies to tool/, so the Go is checked after a build.
 gopkgs="./tool/... ./fetch/... ./unpack/..."
-if [ -e "tool/launcher-$(uname -m)" ]; then
+if ! $go; then
+    :
+elif [ -e "tool/launcher-$(uname -m)" ]; then
     # shellcheck disable=SC2086  # the packages, one word each
     godirs=$("$GO" list -f '{{.Dir}}' $gopkgs) || status=1
     if $fix; then
