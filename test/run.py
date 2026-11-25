@@ -9,10 +9,11 @@ tree, compiles test/progs/*.c with the tree's own C compiler (test/tree.py), and
 test. Given --exclave, it refuses an exclave whose tree is not the one its hashes file records, and
 runs on the pruned fixture kept under build/fixtures/ when there is one (17), or on the one
 --fixture names, which the matrix carries into its VMs: one made elsewhere, from the same exclave,
-for a run that will make none, since a run without a fixture makes one only for the runs after it.
-With
---kernel it runs only the groups whose answers a kernel can change, as the matrix does: every group
-but the tool's own, unpack, wrap, check and prune, which are the command's logic.
+for a run that will make none, since a run without a fixture makes one only for the runs after it;
+a test that fails on it is rechecked on the whole exclave, and one that skips is not, since the
+skips it records are the other machine's. With --kernel it runs only the groups whose answers a
+kernel can change, as the matrix does: every group but the tool's own, unpack, wrap, check and
+prune, which are the command's logic.
 
 It runs on the pinned Python (scripts/test) and needs a tree with a C compiler (see README.md).
 strace is optional, for the isolation test, and so is /usr/bin/gcc-13, for the identical-object
@@ -177,7 +178,11 @@ def main() -> int:
     # a test that skipped when the fixture was made and passes now is expected to skip no more
     ran = {t.__name__ for t in order if t not in failed and t not in skipped} & made_skips
     made_skips -= ran
-    recheck += [t for t in skipped if on_fixture and t.__name__ not in made_skips]
+    # A fixture another machine made (--fixture) records that machine's skips, not this one's, which
+    # skip for its own tools and kernel: only a failure is rechecked there.
+    recheck += [
+        t for t in skipped if on_fixture and not args.fixture and t.__name__ not in made_skips
+    ]
     if recheck and fixture:
         for t in recheck:
             what = "failed on a fixture made with other sources" if t in failed else "skipped"
