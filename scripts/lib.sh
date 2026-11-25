@@ -244,13 +244,6 @@ release_head() {
     release_dir=$ROOT/build/release-v$1
 }
 
-# release_commit N: HEAD is the commit that sets VERSION to N, from N-1, and changes nothing else.
-release_commit() {
-    [ "$(git -C "$ROOT" diff --name-only HEAD^ HEAD)" = VERSION ] &&
-        [ "$(git -C "$ROOT" show HEAD:VERSION)" = "$1" ] &&
-        [ "$(git -C "$ROOT" show HEAD^:VERSION)" = "$(($1 - 1))" ]
-}
-
 # release_files N: release_dir holds release N's files, built from HEAD: the two commands, the licences and the
 # sums, each sum right, and the command naming itself exclave N+COMMIT, COMMIT as scripts/build names HEAD.
 release_files() {

@@ -25,7 +25,8 @@ scripts/release-publish N
    tracked file, `HEAD` holds origin's `main`, origin has no tag `vN`,
    and the machine is x86-64.
 2. Commits `VERSION` set to `N`, "Set the version to N", and does not
-   push it; a commit that already does so at `HEAD` is kept.
+   push it; where `VERSION` is `N` already, from a run before, it is
+   kept.
 3. Runs every step of the gate on the gcc exclave, which must end with
    nothing failed and nothing skipped. `scripts/extra` is not run: a
    release waits on nothing the gate would not, and what `scripts/extra`
@@ -33,32 +34,30 @@ scripts/release-publish N
 4. Makes the files with `scripts/release build/release-vN
    build/inputs/gcc13.exclave`, the launcher and commands built inside
    the gcc exclave, and checks them: the five files, every sum, and the
-   command naming itself `exclave N+COMMIT`, `COMMIT` the version
-   commit.
+   command naming itself `exclave N+COMMIT`, `COMMIT` the commit at
+   `HEAD`.
 
-Logs go under `build/release-prepare/`. Nothing has left the machine, so
-a failure is undone here: take the version commit off (`git reset
---keep HEAD^`), fix the cause in a commit of its own, and run the script
-again.
+Logs go under `build/release-prepare/`. A failure is met by a fix in a
+commit of its own, and the script run again, which keeps `VERSION`.
 
 ## `scripts/release-publish N`: on GitHub
 
-1. Refuses unless `HEAD` is the commit that sets `VERSION` to `N` and
-   `build/release-vN` holds its files, checked as above.
+1. Refuses unless `VERSION` is `N` and `build/release-vN` holds the
+   files of `HEAD`, checked as above. `gh` runs with its own
+   configuration, which `scripts/lib.sh`'s for Go would otherwise hide.
 2. Pushes `main`.
-3. Takes the newest workflow run on the version commit, or dispatches
+3. Takes the newest workflow run on `HEAD`, or dispatches
    one with the kernel matrix (`gh workflow run ci.yml -f
    matrix=true`), waits for it, and stops unless every job passed, the
    matrix's among them.
-4. Makes the annotated tag `vN` and pushes it.
+4. Makes the annotated tag `vN` on `HEAD` and pushes it.
 5. Creates the GitHub release of `vN`, titled "exclave N", with the
    files and `docs/release-notes.md` as its text.
 
 Run again, it passes over what is done. A run that failed is
 dispatched again, which is how one that failed by chance is retried; a
 defect is fixed in a commit of its own, which takes the release back to
-`scripts/release-prepare N`, since `main` then moves past the version
-commit.
+`scripts/release-prepare N`, whose files are then of the new `HEAD`.
 
 The notes, `docs/release-notes.md`, are the release page's text: how
 the files are checked and taken. They name no version and no figure,

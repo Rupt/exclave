@@ -3,10 +3,10 @@
 # that sets VERSION to N, on top of main as origin has it and not pushed; the gate, every step of it, with nothing
 # failed and nothing skipped; and the release's files, made by scripts/release in build/release-vN and checked.
 # scripts/extra is not run: what it finds becomes a test in the gate, and a release waits on nothing the gate would
-# not. Nothing leaves the machine, so a failure is undone here: take the version commit off (git reset --keep HEAD^),
-# fix the cause in a commit of its own, and run this again. A version commit already at HEAD is kept. The inputs are
-# EXCLAVE_TEST_INPUTS's, build/inputs when it is not set, as scripts/inputs makes them; logs go under
-# build/release-prepare/. scripts/release-publish N then publishes what this made.
+# not. Where VERSION is N already, from a run before, it is kept, so a failure is met by a fix in a commit of its own
+# and this run again, pushed or not. The inputs are EXCLAVE_TEST_INPUTS's, build/inputs when it is not set, as
+# scripts/inputs makes them; logs go under build/release-prepare/. scripts/release-publish N then publishes what this
+# made.
 set -eu
 . "$(dirname -- "$0")/lib.sh"
 [ $# -eq 1 ] || {
@@ -29,8 +29,8 @@ git -C "$ROOT" merge-base --is-ancestor origin/main HEAD || {
     echo "release-prepare: HEAD lacks commits of origin's main: pull them first" >&2
     exit 1
 }
-if release_commit "$n"; then
-    echo "release-prepare: the commit that sets VERSION to $n is HEAD"
+if [ "$(cat "$ROOT/VERSION")" = "$n" ]; then
+    echo "release-prepare: VERSION is $n already"
 elif [ "$(cat "$ROOT/VERSION")" = "$((n - 1))" ]; then
     printf '%s\n' "$n" >"$ROOT/VERSION"
     git -C "$ROOT" commit -q -m "Set the version to $n" -- VERSION

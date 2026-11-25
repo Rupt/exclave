@@ -1,12 +1,15 @@
 #!/bin/sh
 # scripts/release-publish N — the second half of release N (docs/RELEASE.md), everything that leaves this machine,
-# in the order that keeps a release from going out unchecked. HEAD must be the commit scripts/release-prepare N made
-# and build/release-vN its files. Then: main pushed; the workflow run with the kernel matrix on that commit, one that
+# in the order that keeps a release from going out unchecked. VERSION must be N, as scripts/release-prepare N set it,
+# and build/release-vN the files of HEAD. Then: main pushed; the workflow run with the kernel matrix on that commit, one that
 # already passed or one dispatched and waited for, every job passing; the tag vN, made and pushed; and the GitHub
 # release of vN, with the files and docs/release-notes.md as its text. Run again, it passes over what is done, and
 # a run that failed is dispatched again, which is how one that failed by chance is retried; a defect is fixed in a
 # commit of its own, and the release made again from scripts/release-prepare.
 set -eu
+# gh keeps its login in the caller's configuration, which lib.sh's XDG_CONFIG_HOME, set for Go, would hide
+GH_CONFIG_DIR=${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}
+export GH_CONFIG_DIR
 . "$(dirname -- "$0")/lib.sh"
 [ $# -eq 1 ] || {
     echo "usage: scripts/release-publish N" >&2
@@ -18,8 +21,8 @@ command -v gh >/dev/null || {
     echo "release-publish: no gh here, GitHub's command, which the workflow and the release need" >&2
     exit 2
 }
-release_commit "$n" || {
-    echo "release-publish: HEAD is not the commit that sets VERSION to $n: run scripts/release-prepare $n" >&2
+[ "$(cat "$ROOT/VERSION")" = "$n" ] || {
+    echo "release-publish: VERSION is $(cat "$ROOT/VERSION"), not $n: run scripts/release-prepare $n" >&2
     exit 1
 }
 release_files "$n"
@@ -27,7 +30,7 @@ head=$(git -C "$ROOT" rev-parse HEAD)
 
 git -C "$ROOT" fetch -q origin main
 if [ "$(git -C "$ROOT" rev-parse origin/main)" = "$head" ]; then
-    echo "release-publish: origin's main is the version commit"
+    echo "release-publish: origin's main is HEAD"
 elif git -C "$ROOT" merge-base --is-ancestor origin/main HEAD; then
     git -C "$ROOT" push -q origin HEAD:main
     echo "release-publish: pushed main"
@@ -36,7 +39,7 @@ else
     exit 1
 fi
 
-# newest: the newest dispatched run of the workflow on the version commit, or nothing
+# newest: the newest dispatched run of the workflow on HEAD, or nothing
 newest() {
     gh run list --workflow ci.yml --commit "$head" --event workflow_dispatch --limit 1 \
         --json databaseId --jq '.[0].databaseId // empty'
@@ -49,7 +52,7 @@ passed() {
 run=$(newest)
 old=
 if [ -n "$run" ] && [ "$(gh run view "$run" --json status --jq .status)" = completed ] && ! passed "$run"; then
-    echo "release-publish: run $run on the version commit did not pass; dispatching another"
+    echo "release-publish: run $run on HEAD did not pass; dispatching another"
     old=$run run=
 fi
 if [ -z "$run" ]; then
@@ -80,7 +83,7 @@ if tag=$(git -C "$ROOT" rev-parse -q --verify "refs/tags/v$n^{commit}"); then
         exit 1
     }
 else
-    git -C "$ROOT" tag -a "v$n" -m "exclave $n"
+    git -C "$ROOT" tag -a "v$n" -m "exclave $n" "$head"
 fi
 # an annotated tag's commit is listed under NAME^{}
 remote=$(git -C "$ROOT" ls-remote --tags origin "refs/tags/v$n^{}" | cut -f1)
@@ -88,7 +91,7 @@ if [ -z "$remote" ] && ! git -C "$ROOT" ls-remote --exit-code --tags origin "ref
     git -C "$ROOT" push -q origin "refs/tags/v$n"
     echo "release-publish: pushed the tag v$n"
 elif [ "$remote" != "$head" ]; then
-    echo "release-publish: origin's tag v$n is not the version commit's annotated tag" >&2
+    echo "release-publish: origin's tag v$n is not an annotated tag of HEAD" >&2
     exit 1
 fi
 
