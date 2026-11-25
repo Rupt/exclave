@@ -3950,7 +3950,13 @@ release page served over HTTPS. `docs/RELEASE.md` gives the commands, and
 `test/release_test.py`, a step of `scripts/extra`, runs them on a
 release of the gcc exclave and on one of the commands alone, with a
 tampered archive failing the sums, and `NOTICES`
-naming Go and every module `go.mod` requires (17).
+naming Go and every module `go.mod` requires (17). A release of the
+commands alone is made by two scripts in turn (`docs/RELEASE.md`):
+`scripts/release-prepare N`, on the reference machine, commits
+`VERSION` set to `N`, runs the gate and `scripts/extra` and makes and
+checks the files; `scripts/release-publish N` pushes, waits for the
+workflow with the kernel matrix to pass on that commit, and tags and
+publishes it.
 
 
 ## 11. Layers

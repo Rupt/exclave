@@ -219,3 +219,53 @@ isa_test src/isa.c src/str.c
 str_test src/str.c
 EOF
 }
+
+# release_head N: the checks scripts/release-prepare and scripts/release-publish share (docs/RELEASE.md): N is a whole
+# number above 0, the machine is x86-64, the one a release carries (DESIGN.md 13 item 66), and the tree is main with
+# no uncommitted change to a tracked file. Sets release_dir, where the release's files go.
+release_head() {
+    case $1 in '' | *[!0-9]* | 0*)
+        echo "release: N is the release's number, a whole number above 0, not '$1'" >&2
+        return 2
+        ;;
+    esac
+    [ "$(uname -m)" = x86_64 ] || {
+        echo "release: a release is made on x86-64, and this machine is $(uname -m)" >&2
+        return 2
+    }
+    [ "$(git -C "$ROOT" symbolic-ref -q --short HEAD)" = main ] || {
+        echo "release: a release is made on main" >&2
+        return 1
+    }
+    git -C "$ROOT" diff-index --quiet HEAD -- || {
+        echo "release: the tree has changes its commit does not hold" >&2
+        return 1
+    }
+    release_dir=$ROOT/build/release-v$1
+}
+
+# release_commit N: HEAD is the commit that sets VERSION to N, from N-1, and changes nothing else.
+release_commit() {
+    [ "$(git -C "$ROOT" diff --name-only HEAD^ HEAD)" = VERSION ] &&
+        [ "$(git -C "$ROOT" show HEAD:VERSION)" = "$1" ] &&
+        [ "$(git -C "$ROOT" show HEAD^:VERSION)" = "$(($1 - 1))" ]
+}
+
+# release_files N: release_dir holds release N's files, built from HEAD: the two commands, the licences and the
+# sums, each sum right, and the command naming itself exclave N+COMMIT, COMMIT as scripts/build names HEAD.
+release_files() {
+    [ "$(find "$release_dir" -mindepth 1 -maxdepth 1 -printf "%f\n" 2>/dev/null | LC_ALL=C sort | tr "\n" " ")" = \
+        "LICENSE NOTICES SHA256SUMS exclave-fetch-x86_64 exclave-x86_64 " ] || {
+        echo "release: $release_dir does not hold release $1's five files: run scripts/release-prepare $1" >&2
+        return 1
+    }
+    (cd "$release_dir" && sha256sum --quiet -c SHA256SUMS) || {
+        echo "release: a file in $release_dir does not match its sum" >&2
+        return 1
+    }
+    release_name="exclave $1+$(git -C "$ROOT" describe --always --exclude='*')"
+    [ "$("$release_dir/exclave-x86_64" version)" = "$release_name" ] || {
+        echo "release: $release_dir is not of $release_name: run scripts/release-prepare $1" >&2
+        return 1
+    }
+}

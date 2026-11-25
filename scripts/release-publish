@@ -1,0 +1,99 @@
+#!/bin/sh
+# scripts/release-publish N — the second half of release N (docs/RELEASE.md), everything that leaves this machine,
+# in the order that keeps a release from going out unchecked. HEAD must be the commit scripts/release-prepare N made
+# and build/release-vN its files. Then: main pushed; the workflow run with the kernel matrix on that commit, one that
+# already passed or one dispatched and waited for, every job passing; the tag vN, made and pushed; and the GitHub
+# release of vN, with the files and docs/release-notes.md as its text. Run again, it passes over what is done, and
+# a run that failed is dispatched again, which is how one that failed by chance is retried; a defect is fixed in a
+# commit of its own, and the release made again from scripts/release-prepare.
+set -eu
+. "$(dirname -- "$0")/lib.sh"
+[ $# -eq 1 ] || {
+    echo "usage: scripts/release-publish N" >&2
+    exit 2
+}
+n=$1
+release_head "$n"
+command -v gh >/dev/null || {
+    echo "release-publish: no gh here, GitHub's command, which the workflow and the release need" >&2
+    exit 2
+}
+release_commit "$n" || {
+    echo "release-publish: HEAD is not the commit that sets VERSION to $n: run scripts/release-prepare $n" >&2
+    exit 1
+}
+release_files "$n"
+head=$(git -C "$ROOT" rev-parse HEAD)
+
+git -C "$ROOT" fetch -q origin main
+if [ "$(git -C "$ROOT" rev-parse origin/main)" = "$head" ]; then
+    echo "release-publish: origin's main is the version commit"
+elif git -C "$ROOT" merge-base --is-ancestor origin/main HEAD; then
+    git -C "$ROOT" push -q origin HEAD:main
+    echo "release-publish: pushed main"
+else
+    echo "release-publish: origin's main has commits HEAD lacks; run scripts/release-prepare $n again" >&2
+    exit 1
+fi
+
+# newest: the newest dispatched run of the workflow on the version commit, or nothing
+newest() {
+    gh run list --workflow ci.yml --commit "$head" --event workflow_dispatch --limit 1 \
+        --json databaseId --jq '.[0].databaseId // empty'
+}
+# passed RUN: every job of the run passed, the matrix's among them, which a run dispatched with matrix=false skips
+passed() {
+    gh run view "$1" --json jobs --jq '(.jobs | length > 0) and all(.jobs[]; .conclusion == "success")
+        and any(.jobs[]; .name | startswith("kernel matrix"))' | grep -qx true
+}
+run=$(newest)
+old=
+if [ -n "$run" ] && [ "$(gh run view "$run" --json status --jq .status)" = completed ] && ! passed "$run"; then
+    echo "release-publish: run $run on the version commit did not pass; dispatching another"
+    old=$run run=
+fi
+if [ -z "$run" ]; then
+    gh workflow run ci.yml --ref main -f matrix=true >/dev/null
+    tries=0
+    while run=$(newest) && { [ -z "$run" ] || [ "$run" = "$old" ]; }; do
+        tries=$((tries + 1))
+        [ $tries -le 30 ] || {
+            echo "release-publish: the dispatched run did not appear within five minutes" >&2
+            exit 1
+        }
+        sleep 10
+    done
+    echo "release-publish: dispatched run $run"
+fi
+echo "release-publish: waiting for run $run, about half an hour"
+gh run watch "$run" --interval 60 >/dev/null 2>&1 || :
+passed "$run" || {
+    gh run view "$run" --json jobs --jq '.jobs[] | "\(.name): \(.conclusion)"' >&2
+    echo "release-publish: run $run did not pass; gh run view $run --log-failed says why" >&2
+    exit 1
+}
+echo "release-publish: run $run passed"
+
+if tag=$(git -C "$ROOT" rev-parse -q --verify "refs/tags/v$n^{commit}"); then
+    [ "$tag" = "$head" ] || {
+        echo "release-publish: the tag v$n is on another commit, $tag" >&2
+        exit 1
+    }
+else
+    git -C "$ROOT" tag -a "v$n" -m "exclave $n"
+fi
+# an annotated tag's commit is listed under NAME^{}
+remote=$(git -C "$ROOT" ls-remote --tags origin "refs/tags/v$n^{}" | cut -f1)
+if [ -z "$remote" ] && ! git -C "$ROOT" ls-remote --exit-code --tags origin "refs/tags/v$n" >/dev/null; then
+    git -C "$ROOT" push -q origin "refs/tags/v$n"
+    echo "release-publish: pushed the tag v$n"
+elif [ "$remote" != "$head" ]; then
+    echo "release-publish: origin's tag v$n is not the version commit's annotated tag" >&2
+    exit 1
+fi
+
+if ! gh release view "v$n" >/dev/null 2>&1; then
+    gh release create "v$n" --verify-tag --title "exclave $n" --notes-file "$ROOT/docs/release-notes.md" \
+        "$release_dir"/* >/dev/null
+fi
+echo "release-publish: release $n is published: $(gh release view "v$n" --json url --jq .url)"

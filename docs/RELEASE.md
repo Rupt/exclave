@@ -3,72 +3,61 @@
 A release is the `exclave` command and `exclave-fetch` for x86-64, with
 their licences and sums, attached to a GitHub release of the tag `vN`
 (`docs/DESIGN.md` 6.7 and 10.5). aarch64 is experimental and is not
-released (`docs/DESIGN.md` 13 item 66). The steps run on the reference
-machine from a clean checkout of `main`, with `R` its path and `N` the
-next ordinal, 1 for the first release.
+released (`docs/DESIGN.md` 13 item 66). `N` is the next ordinal, 1 for
+the first release; `VERSION` holds the last release's, 0 before the
+first.
 
-## 1. The version
-
-`VERSION` holds the number of the last release, 0 before the first. The
-release's commit sets it to `N`, and nothing else:
+Two scripts make it, run in turn on the reference machine from `main`,
+with the inputs `scripts/inputs build/inputs` makes
+(`EXCLAVE_TEST_INPUTS` names another directory):
 
 ```bash
-cd "$R" && git switch main && git pull --ff-only && git status --short   # nothing listed
+scripts/release-prepare N
 ```
 
 ```bash
-echo N > "$R/VERSION" && git -C "$R" commit -q -m "Set the version to N" VERSION && git -C "$R" push
+scripts/release-publish N
 ```
 
-## 2. The checks, on that commit
+## `scripts/release-prepare N`: on this machine
 
-Each must pass on the commit of step 1; a failure is fixed in a commit
-of its own, and the release starts again at step 1 on the new `main`.
+1. Refuses unless the tree is `main` with no uncommitted change to a
+   tracked file, `HEAD` holds origin's `main`, origin has no tag `vN`,
+   and the machine is x86-64.
+2. Commits `VERSION` set to `N`, "Set the version to N", and does not
+   push it; a commit that already does so at `HEAD` is kept.
+3. Runs every step of the gate on the gcc exclave, then `scripts/extra`
+   on the gcc, Alpine, Fedora and clang exclaves. Each must end with
+   nothing failed and nothing skipped.
+4. Makes the files with `scripts/release build/release-vN
+   build/inputs/gcc13.exclave`, the launcher and commands built inside
+   the gcc exclave, and checks them: the five files, every sum, and the
+   command naming itself `exclave N+COMMIT`, `COMMIT` the version
+   commit.
 
-```bash
-cd "$R" && EXCLAVE_TEST_INPUTS=build/inputs scripts/gate --full build/inputs/gcc13.exclave
-```
+Logs go under `build/release-prepare/`. Nothing has left the machine, so
+a failure is undone here: take the version commit off (`git reset
+--hard HEAD^`), fix the cause in a commit of its own, and run the script
+again.
 
-```bash
-cd "$R" && gh workflow run ci.yml -f matrix=true   # the gate on x86-64 and aarch64 and the x86-64 kernel matrix
-```
+## `scripts/release-publish N`: on GitHub
 
-```bash
-cd "$R" && D=build/inputs; EXCLAVE_TEST_INPUTS=$D scripts/extra $D/gcc13.exclave $D/alpine.exclave $D/f42.exclave $D/clang.exclave
-```
+1. Refuses unless `HEAD` is the commit that sets `VERSION` to `N` and
+   `build/release-vN` holds its files, checked as above.
+2. Pushes `main`.
+3. Takes the newest workflow run on the version commit, or dispatches
+   one with the kernel matrix (`gh workflow run ci.yml -f
+   matrix=true`), waits for it, and stops unless every job passed, the
+   matrix's among them.
+4. Makes the annotated tag `vN` and pushes it.
+5. Creates the GitHub release of `vN`, titled "exclave N", with the
+   files and `docs/release-notes.md` as its text.
 
-The workflow's run is read with `gh run list --workflow ci.yml` and
-`gh run view ID`; every job must succeed. `scripts/extra` ends with
-`0 failed`.
-
-## 3. The files
-
-`scripts/release` builds the launcher inside the gcc exclave and the
-commands from it (`scripts/reproduce`), and refuses a directory that is
-not empty and a tree its commit does not hold:
-
-```bash
-cd "$R" && scripts/release build/release-vN build/inputs/gcc13.exclave
-```
-
-```bash
-cd "$R/build/release-vN" && ls && sha256sum -c SHA256SUMS && ./exclave-x86_64 version
-```
-
-The directory holds `exclave-x86_64`, `exclave-fetch-x86_64`, `LICENSE`,
-`NOTICES` and `SHA256SUMS`, every sum is `OK`, and the version is
-`exclave N+COMMIT`, `COMMIT` the commit of step 1
-(`git -C "$R" describe --always --exclude='*'`).
-
-## 4. The tag and the release
-
-```bash
-git -C "$R" tag -a vN -m "exclave N" && git -C "$R" push origin vN
-```
-
-```bash
-cd "$R" && gh release create vN --verify-tag --title "exclave N" --notes-file docs/release-notes.md build/release-vN/*
-```
+Run again, it passes over what is done. A run that failed is
+dispatched again, which is how one that failed by chance is retried; a
+defect is fixed in a commit of its own, which takes the release back to
+`scripts/release-prepare N`, since `main` then moves past the version
+commit.
 
 The notes, `docs/release-notes.md`, are the release page's text: how
 the files are checked and taken. They name no version and no figure,
@@ -77,15 +66,17 @@ so that they serve every release unchanged.
 ## An exclave in a release
 
 `scripts/release` also takes exclaves after the toolchain, each wrapped
-with the launcher built inside it, which the command built there
-carries, and puts each in the release as `NAME.exclave.tar.zst`:
+with the launcher built inside the toolchain, which the command built
+there carries, and puts each in the release as `NAME.exclave.tar.zst`.
+The two scripts make a release of the commands alone; one with an
+exclave is made by hand with the same steps:
 
 ```bash
-cd "$R" && scripts/reproduce build/inputs/gcc13.exclave build/reproduce && build/reproduce/build/exclave relink APP.exclave
+scripts/reproduce build/inputs/gcc13.exclave build/reproduce && build/reproduce/build/exclave relink APP.exclave
 ```
 
 ```bash
-cd "$R" && scripts/release build/release-vN build/inputs/gcc13.exclave APP.exclave
+scripts/release build/release-vN build/inputs/gcc13.exclave APP.exclave
 ```
 
 Its notes then add how an exclave is taken, as `test/release_test.py`
