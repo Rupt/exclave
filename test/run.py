@@ -1,13 +1,18 @@
 """Run the regression suite: the part of DESIGN.md 17.4 that a single machine can run.
 
     scripts/test [--tree DIR | --exclave EXCLAVE] [--work DIR] [--keep] [-k NAME|SUBSTRING]
-                 [--launcher FILE] [--budget SECONDS]
+                 [--launcher FILE] [--budget SECONDS] [--fixture DIR] [--kernel]
 
 The suite makes an exclave under WORK (default build/test-work) from TREE (default
 $EXCLAVE_TEST_TREE) or from the unwrapped tree of an existing EXCLAVE, adds a few test files to its
 tree, compiles test/progs/*.c with the tree's own C compiler (test/tree.py), and runs every named
 test. Given --exclave, it refuses an exclave whose tree is not the one its hashes file records, and
-runs on the pruned fixture kept under build/fixtures/ when there is one (17).
+runs on the pruned fixture kept under build/fixtures/ when there is one (17), or on the one
+--fixture names, which the matrix carries into its VMs: one made elsewhere, from the same exclave,
+for a run that will make none, since a run without a fixture makes one only for the runs after it.
+With
+--kernel it runs only the groups whose answers a kernel can change, as the matrix does: every group
+but the tool's own, unpack, wrap, check and prune, which are the command's logic.
 
 It runs on the pinned Python (scripts/test) and needs a tree with a C compiler (see README.md).
 strace is optional, for the isolation test, and so is /usr/bin/gcc-13, for the identical-object
@@ -62,6 +67,8 @@ if TYPE_CHECKING:
     from harness import Test
     from suite import Ctx
 
+# the groups whose tests are the command's logic, which no kernel changes: --kernel leaves them out
+COMMAND = ("regress_tool", "regress_check")
 # the groups of DESIGN.md 17 item 4; importing one registers its tests, in this order
 GROUPS = (
     regress_threads,
@@ -99,6 +106,15 @@ def main() -> int:
         default=30,
         help="seconds a test may take before it fails (default 30)",
     )
+    ap.add_argument(
+        "--fixture",
+        help="the pruned fixture to run on; where absent, the whole exclave, and none is made",
+    )
+    ap.add_argument(
+        "--kernel",
+        action="store_true",
+        help="only the groups a kernel can change: all but the tool's and check's",
+    )
     args = ap.parse_args()
     if args.exclave:
         args.tree = os.path.join(args.exclave, "tree")
@@ -118,6 +134,8 @@ def main() -> int:
     if keys:
         name = os.path.basename(os.path.abspath(args.exclave)).replace(".exclave", "")
         fixture, sources = os.path.join(REPO, "build", "fixtures", f"{name}-{keys[0]}"), keys[1]
+        if args.fixture:
+            fixture = os.path.abspath(args.fixture)
     if fixture and os.path.isdir(os.path.join(fixture, "tree")):
         tree_ = os.path.join(fixture, "tree")
         made, made_skips = read_stamp(fixture)
@@ -125,6 +143,8 @@ def main() -> int:
             f"fixture: {fixture}"
             + (" (made with other sources: a failure is rechecked)" if made != sources else "")
         )
+    elif fixture and args.fixture:
+        print(f"fixture: no {fixture}; the whole exclave, and none is made")
     elif fixture:
         logging = True
         print("fixture: none yet for this exclave; this run makes it")
@@ -148,7 +168,7 @@ def main() -> int:
             True,
         )
         ctx = prepare(args, tree_, os.path.abspath(args.work), logging=logging)
-    order = select(TESTS, args.k)
+    order = select([t for t in TESTS if not args.kernel or t.__module__ not in COMMAND], args.k)
     failed, skipped = suite_run(ctx, order, args.budget)
     # The whole exclave decides for a test the fixture may have misled: one that fails on a fixture
     # made with other sources, which may lack a file these sources touch, and one that skips on the

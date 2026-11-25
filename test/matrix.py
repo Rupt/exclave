@@ -4,18 +4,20 @@
                    [--jobs N] [--arm64] [--docker-profile FILE]
 
 Each row of VMS names a distribution cloud image. The image is downloaded once, booted under QEMU
-with KVM behind a copy-on-write overlay and a cloud-init seed that installs strace and zstd (and
-bubblewrap where it exists), the exclave of the row's machine (one --exclave per machine the rows
-need, each told by its launcher: scripts/inputs makes gcc13.exclave and gcc13-arm64.exclave), the
-pinned Python built for the VM's machine and libc, and this repository's test tree and launcher are
-copied in over SSH, and the regression suite runs there. For this machine's rows the exclave goes
-in as a release of it, made here by scripts/release, which the VM first takes as docs/RELEASE.md
-has a consumer take it (RECIPE), the exclave it unpacks then the row's;
-the oracles, the syscall probe and, given the profile, the Docker-profile run follow where
-bubblewrap works. One VM at a time, or --jobs N, 1 GB each, 2 GB for the emulated row, so that the
-machine stays usable. Results go to build/matrix-results.md. The exit status is 1 when any row
-failed: its image could not be fetched, its VM did not boot, or its suite, the release's recipe,
-its sysroot check or one of its oracles failed.
+with KVM behind a copy-on-write overlay and a cloud-init seed that installs strace (and bubblewrap
+where it exists), the exclave of the row's machine (one --exclave per machine the rows need, each
+told by its launcher: scripts/inputs makes gcc13.exclave and gcc13-arm64.exclave), the suite's
+pruned fixture of it where one was made here, the pinned Python built for the VM's machine and
+libc, and this repository's test tree and launcher are copied in over SSH, and the regression
+suite's groups a kernel can change run there (test/run.py --kernel). For this machine's rows a
+release of the commands, made here by scripts/release, goes in too, which the VM first takes as
+docs/RELEASE.md has a consumer take it (RECIPE), and one row, the oldest, builds the launcher again
+inside its copy of the exclave (REPRODUCE_ROW); the oracles, the syscall probe and, given the
+profile, the Docker-profile run follow where bubblewrap works. One VM at a time, or --jobs N, 1 GB
+each, 2 GB for the emulated row, so that the machine stays usable. Results go to
+build/matrix-results.md. The exit status is 1 when any row failed: its image could not be fetched,
+its VM did not boot, or its suite, the release's recipe, its sysroot check or one of its oracles
+failed.
 """
 
 import argparse
@@ -37,6 +39,7 @@ import urllib.request
 
 import machines
 import tree
+from suite import fixture_keys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -116,37 +119,6 @@ VMS: list[VmRow] = [
         arch="x86_64",
     ),
     VmRow(
-        name="debian-11",
-        kernel="5.10",
-        user="debian",
-        urls=[
-            "https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2"
-        ],
-        family="apt",
-        notes="",
-        arch="x86_64",
-    ),
-    VmRow(
-        name="ubuntu-22.04",
-        kernel="5.15",
-        user="ubuntu",
-        urls=["https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"],
-        family="apt",
-        notes="",
-        arch="x86_64",
-    ),
-    VmRow(
-        name="debian-12",
-        kernel="6.1",
-        user="debian",
-        urls=[
-            "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2"
-        ],
-        family="apt",
-        notes="",
-        arch="x86_64",
-    ),
-    VmRow(
         name="fedora",
         kernel="6.x",
         user="fedora",
@@ -210,16 +182,17 @@ VMS: list[VmRow] = [
     ),
 ]
 
-# what a VM installs for the oracles, and zstd for the release's recipe, which unpacks a .tar.zst;
-# Python is not among them: the pinned one, which pinned_python makes, is in the payload. CentOS 7
-# has zstd only in EPEL, which user_data adds from Fedora's archive of it
+# what a VM installs for the oracles; Python is not among them: the pinned one, which pinned_python
+# makes, is in the payload
 PACKAGES: dict[str, list[str]] = {
-    "apt": ["strace", "bubblewrap", "zstd"],
-    "dnf": ["strace", "bubblewrap", "zstd"],
-    "apk": ["strace", "bubblewrap", "bash", "zstd"],
+    "apt": ["strace", "bubblewrap"],
+    "dnf": ["strace", "bubblewrap"],
+    "apk": ["strace", "bubblewrap", "bash"],
     "centos7": ["strace"],
 }
-EPEL7 = "https://dl.fedoraproject.org/pub/archive/epel"
+# 10.5: the row that builds the launcher again inside its copy of the exclave and compares the bytes
+# with the build here; the bytes are the exclave's toolchain's, so one host shows it, the oldest
+REPRODUCE_ROW = "centos-7"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -389,20 +362,13 @@ def user_data(family: str, pubkey: str, kernel_package: str = "") -> str:
                     "/etc/yum.repos.d/CentOS-*.repo"
                 ),
                 "  - yum install -y " + " ".join(pk),
-                (
-                    "  - printf '[epel]\\nname=EPEL 7, archived\\n"
-                    f"baseurl={EPEL7}/7/x86_64/\\ngpgcheck=1\\n"
-                    "gpgkey=https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-7\\n' "
-                    "> /etc/yum.repos.d/epel-archive.repo"
-                ),
-                "  - yum install -y zstd",
                 "  - touch /var/tmp/exclave-ready",
                 "",
             ]
         )
     # apt installs the list in one transaction, so one package the mirror has dropped fails them
-    # all: Debian 11's security suite, winding down after its LTS, still lists a bubblewrap whose
-    # file is gone. Each package again on its own, then from the release's main suite
+    # all, as a security suite winding down after its LTS can list a file that is gone. Each
+    # package again on its own, then from the release's main suite
     retry = (
         [
             "  - for p in {}; do dpkg -s $p >/dev/null 2>&1 || apt-get install -y $p || "
@@ -612,12 +578,14 @@ def pack_payload(
     commit: str,
     docker_profile: str | None = None,
     release: str | None = None,
+    fixture: str | None = None,
 ) -> str:
     """The payload a VM of arch and libc unpacks: the test tree, the pinned Python and the builds.
 
     It carries the repository's test, src and tool, the pinned Python built for the VM, the
-    launchers and the command built here for arch, the Go regression's programs, and the exclave,
-    or, given release (make_release's directory) for this machine, the release that holds it.
+    launchers and the command built here for arch, the Go regression's programs, the exclave, the
+    suite's pruned fixture of it as `fixture` where one was made here, and, given release
+    (make_release's directory) for this machine, the release.
     """
     payload = os.path.join(work, f"payload-{arch}-{libc}.tar.gz")
     # packed afresh every run, so the VMs never test a stale tree
@@ -649,8 +617,9 @@ def pack_payload(
             out = os.path.join(release, "out")
             for f in sorted(os.listdir(out)):
                 t.add(os.path.join(out, f), arcname="rel/" + f)
-        else:
-            t.add(exclave, arcname="ex")
+        t.add(exclave, arcname="ex")
+        if fixture:
+            t.add(fixture, arcname="fixture")
         t.add(built("launcher", arch), arcname="repo/build/launcher")
         t.add(built("exclave", arch), arcname="repo/build/exclave")
         if os.path.exists(built("launcher-old", arch)):
@@ -661,54 +630,46 @@ def pack_payload(
     return payload
 
 
-def make_release(ex: str, reproduced_command: str, work: str) -> str | None:
-    """A release of a copy of ex as scripts/release makes one (10.5).
+def make_release(ex: str, work: str) -> tuple[str | None, list[str]]:
+    """A release of the commands as scripts/release makes one, with ex its toolchain (10.5).
 
-    The copy is wrapped with the launcher scripts/reproduce built, by the command built from it,
-    as docs/RELEASE.md has a releaser do. Returns the directory holding the release, `out/`, or None
-    when the release could not be made.
+    Returns the directory holding the release, `out/`, or None when it could not be made, and the
+    line scripts/reproduce printed for the launcher it built inside ex, `HASH launcher`, which a VM
+    building it again inside its copy must print too.
     """
     rel = os.path.join(work, "release")
     shutil.rmtree(rel, ignore_errors=True)
     os.makedirs(rel)
-    copy = tree.copy_exclave(ex, os.path.join(rel, "src", os.path.basename(ex)))
     # the recipe is run on the tree as it stands, committed or not
     env = dict(os.environ, EXCLAVE_RELEASE_UNCOMMITTED="1")
-    for cmd in (
-        [reproduced_command, "relink", copy],
-        [os.path.join(REPO, "scripts", "release"), os.path.join(rel, "out"), ex, copy],
-    ):
-        p = subprocess.run(cmd, capture_output=True, check=False, env=env)
-        if p.returncode:
-            log("the release was not made:", (p.stdout + p.stderr).decode()[-300:])
-            return None
-    return rel
+    p = subprocess.run(
+        [os.path.join(REPO, "scripts", "release"), os.path.join(rel, "out"), ex],
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    if p.returncode:
+        log("the release was not made:", (p.stdout + p.stderr).decode()[-300:])
+        return None, []
+    built = [x.split() for x in p.stdout.decode().splitlines()]
+    return rel, next((x for x in built if x[1:] == ["launcher"]), [])
 
 
-# The recipe for taking a release (docs/RELEASE.md), run in a VM in the directory holding the
-# release's files, for the exclave NAME. Each line it prints is `recipe STEP: ANSWER`. What an old
-# host lacks is its answer, not a failure: a tar without --zstd, where the recipe's portable form
-# pipes zstd into tar; a host with no zstd at all is unpacked by the matrix's own Python, so that
-# its suite still runs, and says so.
+# The recipe for taking a release (docs/RELEASE.md, docs/release-notes.md), run in a VM in the
+# directory holding the release's files, with the host's own sha256sum: the sums, the commands made
+# runnable, the version, and the release's command checking the row's exclave, ../ex, one of whose
+# programs then runs. Each line it prints is `recipe STEP: ANSWER`.
 RECIPE = r"""
 say() { echo "recipe $*"; }
 if sha256sum -c SHA256SUMS >sums.out 2>&1; then say 'sums: ok'
 else say "sums: FAIL $(grep -v ': OK$' sums.out | head -1)"; fi
-if tar --help 2>&1 | grep -q -- --zstd; then
-    tar --zstd -xf NAME.tar.zst && say 'unpack: tar --zstd' || say 'unpack: FAIL'
-elif command -v zstd >/dev/null 2>&1; then
-    zstd -dcq NAME.tar.zst | tar -xf - && say 'unpack: zstd -dc | tar' || say 'unpack: FAIL'
-elif ../python/bin/python3 -c 'import sys, tarfile
-tarfile.open(sys.argv[1]).extractall(filter="fully_trusted")' NAME.tar.zst; then
-    say "unpack: no zstd, unpacked by the matrix's Python"
-else say 'unpack: FAIL'; fi
 command=./exclave-$(uname -m)
-chmod +x "$command"
-if "$command" check NAME >check.out 2>&1; then say 'check: ok'
-else say "check: FAIL $(tail -1 check.out)"; fi
+chmod +x "$command" "./exclave-fetch-$(uname -m)"
 v=$("$command" version 2>&1)
 case $v in "exclave "*) say "version: $v" ;; *) say "version: FAIL $v" ;; esac
-o=$(NAME/tree/usr/bin/sh -c 'echo from inside' 2>&1)
+if "$command" check ../ex >check.out 2>&1; then say 'check: ok'
+else say "check: FAIL $(tail -1 check.out)"; fi
+o=$(../ex/tree/usr/bin/sh -c 'echo from inside' 2>&1)
 if [ "$o" = 'from inside' ]; then say 'program: ok'; else say "program: FAIL $o"; fi
 """
 
@@ -720,16 +681,13 @@ def take_release(answers: str) -> tuple[str, list[str]]:
     pass on every row.
     """
     found = dict(re.findall(r"^recipe (\w+): (.*)$", answers, re.MULTILINE))
-    steps = ("sums", "unpack", "check", "version", "program")
+    steps = ("sums", "version", "check", "program")
     fails = [
         f"FAIL recipe {k}: {found.get(k, 'no answer: ' + answers[-120:])}"
         for k in steps
         if k not in found or found[k].startswith("FAIL")
     ]
-    note = "recipe: " + ", ".join(
-        found[k] for k in ("unpack",) if k in found and not found[k].startswith("FAIL")
-    )
-    return note + ("" if fails else ", sums, check, version and a program pass"), fails
+    return "recipe: " + ("failed" if fails else "sums, version, check and a program pass"), fails
 
 
 def main() -> int:
@@ -790,34 +748,22 @@ def main() -> int:
     # go, the Go regression's programs built for it
     payloads: dict[tuple[str, str], str] = {}
 
-    # 10.5: the launcher built inside this machine's exclave here, which each VM of the same
-    # machine builds again inside its copy and must match byte for byte; the command, built from
-    # it by the pinned Go, is listed after it, and the VMs, with no Go, build the launcher alone
-    reproduced: list[str] = []
-    if MACHINE in exclaves:
-        p = subprocess.run(
-            [
-                os.path.join(REPO, "scripts", "reproduce"),
-                exclaves[MACHINE],
-                os.path.join(work, "reproduce"),
-            ],
-            capture_output=True,
-            check=False,
-        )
-        reproduced = p.stdout.decode().split() if p.returncode == 0 else []
-        if not reproduced:
-            log(
-                "scripts/reproduce failed here; the rows do not compare builds:",
-                p.stderr.decode()[-200:],
-            )
-    # 10.5: a release of this machine's exclave, which each row of the machine takes as
-    # docs/RELEASE.md has a consumer take it; the exclave the release's archive holds is then the
-    # row's exclave, so the payload carries the exclave once
-    release = (
-        make_release(exclaves[MACHINE], os.path.join(work, "reproduce", "build", "exclave"), work)
-        if reproduced
-        else None
+    # 10.5: a release of the commands, which each row of this machine takes as docs/RELEASE.md has
+    # a consumer take it, built with this machine's exclave as its toolchain; the launcher
+    # scripts/reproduce built inside it there is the one REPRODUCE_ROW builds again inside its copy
+    release, reproduced = (
+        make_release(exclaves[MACHINE], work) if MACHINE in exclaves else (None, [])
     )
+    if MACHINE in exclaves and not reproduced:
+        log("no launcher was built inside the exclave here; REPRODUCE_ROW compares no build")
+
+    def fixture_of(ex: str) -> str | None:
+        """The suite's pruned fixture of ex made here (17), whatever sources it was made with."""
+        keys = fixture_keys(ex)
+        name = os.path.basename(ex).replace(".exclave", "")
+        path = os.path.join(REPO, "build", "fixtures", f"{name}-{keys[0]}") if keys else ""
+        return path if keys and os.path.isdir(os.path.join(path, "tree")) else None
+
     commit = (
         subprocess.run(
             ["git", "-C", REPO, "describe", "--always", "--dirty", "--exclude=*"],
@@ -838,6 +784,7 @@ def main() -> int:
                 commit=commit,
                 docker_profile=args.docker_profile,
                 release=release if arch == MACHINE else None,
+                fixture=fixture_of(exclaves[arch]),
             )
         return payloads[arch, libc]
 
@@ -868,12 +815,8 @@ def main() -> int:
                 return failure(uname, "cannot unpack: " + out[-200:])
             recipe_fails: list[str] = []
             if arch == MACHINE and release:
-                # the release taken as a consumer takes it; what it unpacked is the row's exclave
-                exname = os.path.basename(exclaves[arch])
-                _rc, out = vm.ssh(
-                    "cd m/rel && " + RECIPE.replace("NAME", exname) + f"mv {exname} ../ex",
-                    timeout=600 * slow,
-                )
+                # the release taken as a consumer takes it, with the host's own tools
+                _rc, out = vm.ssh("cd m/rel && " + RECIPE, timeout=600 * slow)
                 with open(os.path.join(work, name + "-recipe.log"), "w") as f:
                     f.write(out)
                 recipe, recipe_fails = take_release(out)
@@ -893,9 +836,11 @@ def main() -> int:
                 return failure(
                     uname, "cannot relink the exclave: " + out[-200:].replace("\n", " | ")
                 )
+            # the groups a kernel can change, on the fixture made here: a VM's run is its only one,
+            # so a fixture it made would serve no run after it
             suite_rc, out = vm.ssh(
-                "cd m && $PWD/python/bin/python3 repo/test/run.py --exclave $PWD/ex "
-                f"--work $PWD/work --budget {60 * slow:d} 2>&1",
+                "cd m && $PWD/python/bin/python3 repo/test/run.py --exclave $PWD/ex --kernel "
+                f"--fixture $PWD/fixture --work $PWD/work --budget {60 * slow:d} 2>&1",
                 timeout=2400 * slow,
             )
             with open(os.path.join(work, name + "-suite.log"), "w") as f:
@@ -948,7 +893,7 @@ def main() -> int:
             notes += "; sysroot: " + sysroot + ("" if ok else " FAIL")
             if not ok:
                 fails.append("FAIL sysroot output did not run natively: " + sysroot)
-            if arch == MACHINE and reproduced:
+            if arch == MACHINE and reproduced and name == REPRODUCE_ROW:
                 # 10.5: the exclave's own toolchain builds the same launcher on this kernel's host
                 _rc, out = vm.ssh(
                     "cd m && sh repo/scripts/reproduce $PWD/ex $PWD/repro 2>&1 | tail -1",
