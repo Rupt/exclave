@@ -63,9 +63,22 @@ kernel 7.0, glibc 2.39.
 ## With the two commands alone
 
 `exclave` and `exclave-fetch` are static programs that need nothing of
-this checkout: `scripts/build` makes them as `build/exclave` and
-`build/exclave-fetch`. With the two in a directory on an x86-64 Linux host, this makes
-an exclave of TeX Live's `pdflatex` from Ubuntu's packages:
+this checkout. A [release](https://github.com/Rupt/exclave/releases)
+holds the two for x86-64 in one archive, `exclave-N-x86_64.tar.gz`,
+with `SHA256SUMS` beside it; with both files in a directory:
+
+```bash
+sha256sum -c SHA256SUMS
+tar -xzf exclave-N-x86_64.tar.gz
+exclave-N-x86_64/exclave version
+```
+
+The archive unpacks to `exclave-N-x86_64/`, the two commands
+executable as they unpack, beside `LICENSE` and `NOTICES`; from a
+checkout, `scripts/build` makes them as `build/exclave` and
+`build/exclave-fetch`. With the two in a directory on an x86-64 Linux
+host, this makes an exclave of TeX Live's `pdflatex` from Ubuntu's
+packages:
 
 ```bash
 ./exclave-fetch debs --out debs texlive-latex-base   # the package and all it depends on, each file checked against the signed index
