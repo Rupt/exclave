@@ -7,13 +7,13 @@ launcher inside it and the command from that, and scripts/release makes a releas
 exclave under WORK, wrapped again by that command, since a release is of what the command makes.
 A copy wrapped with another launcher is refused, as are a directory
 that is not empty and, without the allowance this test makes itself, a tree with changes its
-commit does not hold; a release of no exclave holds the two commands, named for the machine,
-the licences and the sums.
+commit does not hold; a release of no exclave holds the commands' archive, named for the version
+and the machine, and the sums.
 Then, in a directory that holds nothing but the release's files, the recipe of docs/RELEASE.md
-runs: the sums are checked, the archive is unpacked, the release's
-own `exclave` checks the exclave and its `exclave-fetch` runs, its tree hash is the one the hashes
-file records, a program in it runs, and NOTICES names Go and every module go.mod requires with
-its licence. A tampered archive fails the sums. Prints one line per step;
+runs: the sums are checked, the archives are unpacked, the commands executable as they unpack,
+the release's own `exclave` checks the exclave and its `exclave-fetch` runs, its tree hash is the
+one the hashes file records, a program in it runs, and NOTICES names Go and every module go.mod
+requires with its licence. A tampered archive fails the sums. Prints one line per step;
 the exit status is the number of failures.
 """
 
@@ -34,6 +34,9 @@ REPO = os.path.dirname(HERE)
 
 MACHINE = platform.machine()
 RELEASE = os.path.join(REPO, "scripts", "release")
+with open(os.path.join(REPO, "VERSION"), encoding="utf-8") as _f:
+    # the commands' archive and the directory it holds, as scripts/release names them
+    PKG = f"exclave-{_f.read().strip()}-{MACHINE}"
 # scripts/release refuses a tree with uncommitted changes; the recipe is tested on the tree as it
 # stands
 ANY_TREE = dict(os.environ, EXCLAVE_RELEASE_UNCOMMITTED="1")
@@ -89,13 +92,11 @@ def main() -> int:
         return len(FAILED)
     rc, out = run([RELEASE, release, toolchain, ex], work, env=ANY_TREE)
     step("a directory that is not empty is refused", rc == 2 and "is not empty" in out, out[-300:])
-    # a release of no exclave: the two commands, the licences and the sums
+    # a release of no exclave: the commands' archive and the sums
     alone = release + "-commands"
     rc, out = run([RELEASE, alone, toolchain], work, env=ANY_TREE)
     files = sorted(os.listdir(alone)) if rc == 0 else []
-    wanted = sorted(
-        [f"exclave-{MACHINE}", f"exclave-fetch-{MACHINE}", "LICENSE", "NOTICES", "SHA256SUMS"]
-    )
+    wanted = sorted([PKG + ".tar.gz", "SHA256SUMS"])
     step("a release of the commands alone", rc == 0 and files == wanted, f"{files} {out[-300:]}")
     rc, out = run(["sha256sum", "-c", "SHA256SUMS"], alone)
     step("its sums check", rc == 0, out)
@@ -114,14 +115,24 @@ def main() -> int:
     shutil.copytree(release, consumer)
     rc, out = run(["sha256sum", "-c", "SHA256SUMS"], consumer)
     step("the sha256 sums check", rc == 0, out)
-    tool = os.path.join(consumer, f"exclave-{MACHINE}")
-    os.chmod(tool, 0o755)
+    rc, out = run(["tar", "-xzf", PKG + ".tar.gz"], consumer)
+    unpacked = sorted(os.listdir(os.path.join(consumer, PKG))) if rc == 0 else []
+    step(
+        "the commands' archive unpacks to its directory",
+        unpacked == ["LICENSE", "NOTICES", "exclave", "exclave-fetch"],
+        f"{unpacked} {out}",
+    )
+    tool = os.path.join(consumer, PKG, "exclave")
+    fetcher = os.path.join(consumer, PKG, "exclave-fetch")
+    step(
+        "the commands are executable as they unpack",
+        all(os.access(p, os.X_OK) for p in (tool, fetcher)),
+        str(unpacked),
+    )
     rc, out = run(["tar", "--zstd", "-xf", name + ".tar.zst"], consumer)
-    step("the archive unpacks", rc == 0, out)
+    step("the exclave's archive unpacks", rc == 0, out)
     rc, out = run([tool, "check", name], consumer)
     step("the release's exclave checks the exclave", rc == 0, out[-500:])
-    fetcher = os.path.join(consumer, f"exclave-fetch-{MACHINE}")
-    os.chmod(fetcher, 0o755)
     rc, out = run([fetcher, "version"], consumer)
     step("the release's exclave-fetch runs", rc == 0 and out.startswith("exclave-fetch "), out)
     rc, out = run([tool, "hash", name], consumer)
@@ -139,7 +150,7 @@ def main() -> int:
     # the modules go.mod requires directly, each named in NOTICES with a licence's conditions
     with open(os.path.join(REPO, "go.mod"), encoding="utf-8") as f:
         required = re.findall(r"^\t(\S+) (v\S+)$", f.read(), re.MULTILINE)
-    with open(os.path.join(consumer, "NOTICES"), encoding="utf-8") as f:
+    with open(os.path.join(consumer, PKG, "NOTICES"), encoding="utf-8") as f:
         notices = f.read()
     missing = [m for m, v in required if f"\n== {m} {v}, " not in notices]
     step(
@@ -150,7 +161,7 @@ def main() -> int:
         and notices.count("Redistribution") > len(required),
         f"missing {missing}" if missing else notices[:300],
     )
-    with open(os.path.join(consumer, "LICENSE"), encoding="utf-8") as f:
+    with open(os.path.join(consumer, PKG, "LICENSE"), encoding="utf-8") as f:
         licence = f.read()
     step("LICENSE is exclave's own", "MIT License" in licence, licence[:100])
 

@@ -3,7 +3,7 @@
 # in the order that keeps a release from going out unchecked. VERSION must be N, as scripts/release-prepare N set it,
 # and build/release-vN the files of HEAD. Then: main pushed; the workflow run with the kernel matrix on that commit, one that
 # already passed or one dispatched and waited for, every job passing; the tag vN, made and pushed; and the GitHub
-# release of vN, with the files and docs/release-notes.md as its text. Run again, it passes over what is done, and
+# release of vN, with the files and no text. Run again, it passes over what is done, and
 # a run that failed is dispatched again, which is how one that failed by chance is retried; a defect is fixed in a
 # commit of its own, and the release made again from scripts/release-prepare.
 set -eu
@@ -94,7 +94,7 @@ elif [ "$remote" != "$head" ]; then
 fi
 
 if ! gh release view "v$n" >/dev/null 2>&1; then
-    gh release create "v$n" --verify-tag --title "exclave $n" --notes-file "$ROOT/docs/release-notes.md" \
+    gh release create "v$n" --verify-tag --title "exclave $n" --notes '' \
         "$release_dir"/* >/dev/null
 fi
 echo "release-publish: release $n is published: $(gh release view "v$n" --json url --jq .url)"

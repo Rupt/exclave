@@ -3918,14 +3918,18 @@ in.
 
 **A release.** `scripts/release DIR TOOLCHAIN [EXCLAVE...]` builds
 the launcher inside `TOOLCHAIN`, a gcc exclave, and the command from
-it, by `scripts/reproduce`, and puts under `DIR` the command as
-`exclave-ARCH` and `exclave-fetch-ARCH` beside it, `ARCH` the machine's
-as `uname -m` names it, made on x86-64 while aarch64 is experimental
-(13 item 66); `LICENSE`, exclave's own, and `NOTICES`, the
-licence texts of Go, whose library and runtime the commands link, and
-of the Go modules they link, written at the build from the pinned
-toolchain and module cache, since their BSD licences ask a binary
-distribution to carry them; each exclave named as
+it, by `scripts/reproduce`, and puts under `DIR`
+`exclave-N-ARCH.tar.gz`, `N` the version and `ARCH` the machine's as
+`uname -m` names it, made on x86-64 while aarch64 is experimental (13
+item 66): an archive of the directory `exclave-N-ARCH` holding the
+command and `exclave-fetch`, executable as they unpack, since an
+archive keeps the mode a download loses, with `LICENSE`, exclave's
+own, and `NOTICES`, the licence texts of Go, whose library and
+runtime the commands link, and of the Go modules they link, written at
+the build from the pinned toolchain and module cache, since their BSD
+licences ask a binary distribution to carry them; gzip's, which every
+host's `tar` unpacks, and the same bytes from the same files, names
+sorted, without owners and at the commit's time; each exclave named as
 `NAME.exclave.tar.zst`, zstd's level 19, the same bytes on any number
 of threads (on the Alpine exclave, 6% larger than xz's and unpacked in
 a tenth of its time, 0.19 s against 1.98 s, November 2026), an archive
@@ -3933,15 +3937,15 @@ that keeps the hard links, sorted
 and without owners, made only after the exclave passes `check` and
 only if it is wrapped with that launcher; and `SHA256SUMS`
 over every file there. With no exclave named the
-release is the two commands, which are all a person needs to make an
-exclave of their own (10.1). A release is of a commit and of nothing
+release is the commands' archive, which is all a person needs to make
+an exclave of their own (10.1). A release is of a commit and of nothing
 else: `DIR` must be empty, since every file in it is summed,
 and a tree with changes its commit does not hold is refused,
 since the build would name itself `-dirty` (6.7); the release test
 and the matrix, which run the recipe on the tree as it stands, say so
 with `EXCLAVE_RELEASE_UNCOMMITTED=1`. A consumer needs nothing of the
 checkout: the sums are checked;
-the archive is unpacked; and the release's own `exclave check` compares
+the archives are unpacked; and the release's own `exclave check` compares
 the tree with the hashes file and runs the static check, so what runs
 is what the sums file names. A release carries no signature of its
 own: the sums tell a damaged or altered file from the one they name,
@@ -3956,7 +3960,7 @@ commands alone is made by two scripts in turn (`docs/RELEASE.md`):
 `VERSION` set to `N`, runs every step of the gate and makes and
 checks the files; `scripts/release-publish N` pushes, waits for the
 workflow with the kernel matrix to pass on that commit, and tags and
-publishes it.
+publishes it, with no text of its own beside the files.
 
 
 ## 11. Layers

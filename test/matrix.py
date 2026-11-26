@@ -696,16 +696,18 @@ def make_release(ex: str, work: str) -> tuple[str | None, list[str]]:
     return rel, next((x for x in built if x[1:] == ["launcher"]), [])
 
 
-# The recipe for taking a release (docs/RELEASE.md, docs/release-notes.md), run in a VM in the
-# directory holding the release's files, with the host's own sha256sum: the sums, the commands made
-# runnable, the version, and the release's command checking the row's exclave, ../ex, one of whose
-# programs then runs. Each line it prints is `recipe STEP: ANSWER`.
+# The recipe for taking a release (docs/RELEASE.md), run in a VM in the directory holding the
+# release's files, with the host's own sha256sum and tar: the sums, the commands' archive unpacked,
+# the version of the command it holds, which runs as it unpacks, and that command checking the row's
+# exclave, ../ex, one of whose programs then runs. Each line it prints is `recipe STEP: ANSWER`.
 RECIPE = r"""
 say() { echo "recipe $*"; }
 if sha256sum -c SHA256SUMS >sums.out 2>&1; then say 'sums: ok'
 else say "sums: FAIL $(grep -v ': OK$' sums.out | head -1)"; fi
-command=./exclave-$(uname -m)
-chmod +x "$command" "./exclave-fetch-$(uname -m)"
+pkg=$(ls exclave-*-"$(uname -m)".tar.gz 2>/dev/null)
+if tar -xzf "$pkg" 2>tar.out; then say 'unpack: ok'
+else say "unpack: FAIL $(tail -1 tar.out)"; fi
+command=./${pkg%.tar.gz}/exclave
 v=$("$command" version 2>&1)
 case $v in "exclave "*) say "version: $v" ;; *) say "version: FAIL $v" ;; esac
 if "$command" check ../ex >check.out 2>&1; then say 'check: ok'
@@ -722,13 +724,15 @@ def take_release(answers: str) -> tuple[str, list[str]]:
     pass on every row.
     """
     found = dict(re.findall(r"^recipe (\w+): (.*)$", answers, re.MULTILINE))
-    steps = ("sums", "version", "check", "program")
+    steps = ("sums", "unpack", "version", "check", "program")
     fails = [
         f"FAIL recipe {k}: {found.get(k, 'no answer: ' + answers[-120:])}"
         for k in steps
         if k not in found or found[k].startswith("FAIL")
     ]
-    return "recipe: " + ("failed" if fails else "sums, version, check and a program pass"), fails
+    return "recipe: " + (
+        "failed" if fails else "sums, unpack, version, check and a program pass"
+    ), fails
 
 
 def main() -> int:

@@ -1,8 +1,10 @@
 #!/bin/sh
-# scripts/release DIR TOOLCHAIN [EXCLAVE...] — a release (docs/DESIGN.md 10.5): under DIR, the command as
-# exclave-ARCH and exclave-fetch-ARCH, ARCH this machine's, with LICENSE and, as NOTICES, the licence texts of Go and
-# of the Go modules they link; each exclave named as NAME.exclave.tar.zst, zstd's level 19; and SHA256SUMS over
-# every file there. The launcher is built inside TOOLCHAIN, a gcc
+# scripts/release DIR TOOLCHAIN [EXCLAVE...] — a release (docs/DESIGN.md 10.5): under DIR, exclave-N-ARCH.tar.gz, N
+# the version and ARCH this machine's, an archive of the directory exclave-N-ARCH holding the command, exclave, and
+# exclave-fetch, executable as they unpack, with LICENSE and, as NOTICES, the licence texts of Go and of the Go
+# modules they link; each exclave named as NAME.exclave.tar.zst, zstd's level 19; and SHA256SUMS over every file
+# there. The commands' archive is gzip's, which every host's tar unpacks, and the same bytes from the same files:
+# names sorted, no owner, the commit's time. The launcher is built inside TOOLCHAIN, a gcc
 # exclave, and the command here from it, by scripts/reproduce, so that its bytes are that compiler's; each exclave
 # must be wrapped with that launcher, and passes `exclave check` first. A release is of a commit and of nothing else:
 # DIR must be empty or absent, since every file in it is summed, and a tree with changes its commit does not hold is
@@ -78,11 +80,23 @@ for ex; do
     echo "release: $name ($(stat -c %s "$dir/$name.tar.zst") bytes)"
 done
 arch=$(uname -m)
-cp "$command" "$dir/exclave-$arch"
-cp "$built/build/exclave-fetch" "$dir/exclave-fetch-$arch"
-cp "$built/build/NOTICES" "$dir/NOTICES"
-cp "$ROOT/LICENSE" "$dir/LICENSE"
+version=$("$command" version)
+n=${version#exclave }
+n=${n%%+*}
+pkg=exclave-$n-$arch
+stage=$(mktemp -d)
+mkdir "$stage/$pkg"
+cp "$command" "$stage/$pkg/exclave"
+cp "$built/build/exclave-fetch" "$stage/$pkg/exclave-fetch"
+cp "$built/build/NOTICES" "$stage/$pkg/NOTICES"
+cp "$ROOT/LICENSE" "$stage/$pkg/LICENSE"
+chmod 755 "$stage/$pkg" "$stage/$pkg/exclave" "$stage/$pkg/exclave-fetch"
+chmod 644 "$stage/$pkg/NOTICES" "$stage/$pkg/LICENSE"
+when=$(git -C "$ROOT" log -1 --format=%ct 2>/dev/null) || when=0
+tar -C "$stage" --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$when" -cf - "$pkg" |
+    gzip -n -9 >"$dir/$pkg.tar.gz"
+rm -rf "$stage"
 cd "$dir"
 set -- *
 sha256sum "$@" >SHA256SUMS
-echo "release: $dir holds $(($# + 1)) files, their sums among them; $("./exclave-$arch" version)"
+echo "release: $dir holds $(($# + 1)) files, their sums among them; $version"

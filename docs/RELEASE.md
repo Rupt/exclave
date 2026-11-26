@@ -1,7 +1,8 @@
 # Making a release
 
-A release is the `exclave` command and `exclave-fetch` for x86-64, with
-their licences and sums, attached to a GitHub release of the tag `vN`
+A release is the `exclave` command and `exclave-fetch` for x86-64 in one
+archive with their licences, `exclave-N-x86_64.tar.gz`, and its sums,
+`SHA256SUMS`, attached to a GitHub release of the tag `vN`
 (`docs/DESIGN.md` 6.7 and 10.5). aarch64 is experimental and is not
 released (`docs/DESIGN.md` 13 item 66). `N` is the next ordinal, 1 for
 the first release; `VERSION` holds the last release's, 0 before the
@@ -33,9 +34,9 @@ scripts/release-publish N
    finds becomes a test in the gate.
 4. Makes the files with `scripts/release build/release-vN
    build/inputs/gcc13.exclave`, the launcher and commands built inside
-   the gcc exclave, and checks them: the five files, every sum, and the
-   command naming itself `exclave N+COMMIT`, `COMMIT` the commit at
-   `HEAD`.
+   the gcc exclave, and checks them: the archive and the sums, every
+   sum, and the command it holds naming itself `exclave N+COMMIT`,
+   `COMMIT` the commit at `HEAD`.
 
 Logs go under `build/release-prepare/`. A failure is met by a fix in a
 commit of its own, and the script run again, which keeps `VERSION`.
@@ -52,16 +53,30 @@ commit of its own, and the script run again, which keeps `VERSION`.
    a commit they passed on (`scripts/matrix-due`).
 4. Makes the annotated tag `vN` on `HEAD` and pushes it.
 5. Creates the GitHub release of `vN`, titled "exclave N", with the
-   files and `docs/release-notes.md` as its text.
+   files and no text: the README says what the commands do.
 
 Run again, it passes over what is done. A run that failed is
 dispatched again, which is how one that failed by chance is retried; a
 defect is fixed in a commit of its own, which takes the release back to
 `scripts/release-prepare N`, whose files are then of the new `HEAD`.
 
-The notes, `docs/release-notes.md`, are the release page's text: how
-the files are checked and taken. They name no version and no figure,
-so that they serve every release unchanged.
+## Taking a release
+
+With the release's files in a directory, the archive unpacks to
+`exclave-N-x86_64/`, its commands executable as they unpack, since an
+archive keeps the mode a download would lose:
+
+```bash
+sha256sum -c SHA256SUMS
+tar -xzf exclave-N-x86_64.tar.gz
+exclave-N-x86_64/exclave version
+```
+
+`test/release_test.py` and the kernel matrix take a release so, the
+matrix with each host's own `sha256sum` and `tar`. The sums tell a
+damaged or altered file from the one they name; a release carries no
+signature, so that the sums are the releaser's is the release page's
+to say.
 
 ## An exclave in a release
 
@@ -79,11 +94,10 @@ scripts/reproduce build/inputs/gcc13.exclave build/reproduce && build/reproduce/
 scripts/release build/release-vN build/inputs/gcc13.exclave APP.exclave
 ```
 
-Its notes then add how an exclave is taken, as `test/release_test.py`
-and the kernel matrix take one:
+An exclave is taken as `test/release_test.py` takes one:
 
 ```bash
 sha256sum -c SHA256SUMS
 tar --zstd -xf APP.exclave.tar.zst     # or, where tar has no --zstd: zstd -dc APP.exclave.tar.zst | tar -xf -
-./exclave check APP.exclave            # the tree against its hashes file, the wrappers, the static check
+exclave-N-x86_64/exclave check APP.exclave
 ```

@@ -246,12 +246,13 @@ release_head() {
     release_dir=$ROOT/build/release-v$1
 }
 
-# release_files N: release_dir holds release N's files, built from HEAD: the two commands, the licences and the
-# sums, each sum right, and the command naming itself exclave N+COMMIT, COMMIT as scripts/build names HEAD.
+# release_files N: release_dir holds release N's files, built from HEAD: the commands' archive and the sums, each
+# sum right, and the command in the archive naming itself exclave N+COMMIT, COMMIT as scripts/build names HEAD.
 release_files() {
+    pkg=exclave-$1-x86_64
     [ "$(find "$release_dir" -mindepth 1 -maxdepth 1 -printf "%f\n" 2>/dev/null | LC_ALL=C sort | tr "\n" " ")" = \
-        "LICENSE NOTICES SHA256SUMS exclave-fetch-x86_64 exclave-x86_64 " ] || {
-        echo "release: $release_dir does not hold release $1's five files: run scripts/release-prepare $1" >&2
+        "SHA256SUMS $pkg.tar.gz " ] || {
+        echo "release: $release_dir does not hold release $1's files: run scripts/release-prepare $1" >&2
         return 1
     }
     (cd "$release_dir" && sha256sum --quiet -c SHA256SUMS) || {
@@ -259,8 +260,12 @@ release_files() {
         return 1
     }
     release_name="exclave $1+$(git -C "$ROOT" describe --always --exclude='*')"
-    [ "$("$release_dir/exclave-x86_64" version)" = "$release_name" ] || {
-        echo "release: $release_dir is not of $release_name: run scripts/release-prepare $1" >&2
+    unpacked=$(mktemp -d)
+    tar -C "$unpacked" -xzf "$release_dir/$pkg.tar.gz"
+    got=$("$unpacked/$pkg/exclave" version 2>&1) || got="no command that runs"
+    rm -rf "$unpacked"
+    [ "$got" = "$release_name" ] || {
+        echo "release: $release_dir is not of $release_name but $got: run scripts/release-prepare $1" >&2
         return 1
     }
 }
